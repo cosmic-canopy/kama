@@ -1,0 +1,100 @@
+// std::fs — the directory and metadata half: createDir / createDirAll / rename / exists / OpenMode::Append,
+// and the two new Metadata fields. Everything happens under one temp directory in the cwd (the harness
+// gives each fixture its own), removed on the way out. The eight flags sum to 255.
+import { std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::stat, std::fs::exists,
+         std::fs::createDir, std::fs::createDirAll, std::fs::removeDir, std::fs::removeDirAll,
+         std::fs::rename, std::fs::remove,
+         std::fs::readDir, std::fs::writeFile, std::fs::readFile,
+         std::io::IoError, std::io::writeAll, std::collections::DynamicArray,
+         std::path::join, std::time::SystemTime, std::time::Duration, std::time::unixNow };
+
+fn bool ok(Result<Unit, IoError> r) {
+    return match (r) { case Ok(value: u): true; case Err(error: e): false; };
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    isize i = 0;
+    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
+    return give d;
+}
+
+// Append twice through OpenMode::Append and report the resulting size.
+fn isize appendTwice(const ref string path) {
+    isize total = -1;
+    DynamicArray<uint8> chunk = bytesOf(s: "abcd");
+    match (File.open(path: path, mode: OpenMode::Append)) {
+        case Err(error: e): { return -1; }
+        case Ok(value: f): { match (f.writeAll(bytes: chunk)) { case Ok(value: n): { } case Err(error: e2): { return -2; } }; }
+    };
+    match (File.open(path: path, mode: OpenMode::Append)) {
+        case Err(error: e): { return -3; }
+        case Ok(value: f): { match (f.writeAll(bytes: chunk)) { case Ok(value: n): { } case Err(error: e2): { return -4; } }; }
+    };
+    match (stat(path: path)) {
+        case Err(error: e): { return -5; }
+        case Ok(value: m): { total = cast<isize>(m.size); }
+    };
+    return total;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    string root = "_fs_dirs.tmp";
+    string deep = join(path: join(path: root, with: "a"), with: "b");
+
+    // createDirAll makes every missing parent, and is happy to be told twice (`mkdir -p`).
+    if (ok(r: createDirAll(path: deep)) && exists(path: deep) && ok(r: createDirAll(path: deep))) { r = r + 1; }
+
+    // createDir makes exactly one, and refuses when the parent is missing.
+    string sibling = join(path: root, with: "c");
+    string orphan = join(path: join(path: root, with: "nope"), with: "d");
+    if (ok(r: createDir(path: sibling)) && exists(path: sibling) && !ok(r: createDir(path: orphan))) { r = r + 2; }
+
+    // exists says no for what is not there, and is not confused by a directory.
+    if (!exists(path: join(path: root, with: "ghost")) && exists(path: root)) { r = r + 4; }
+
+    // A file: write, stat, and check the two new Metadata fields.
+    string f1 = join(path: root, with: "one.txt");
+    DynamicArray<uint8> body = bytesOf(s: "hello");
+    match (writeFile(path: f1, bytes: body)) { case Ok(value: n): { r = r + 8; } case Err(error: e): { } };
+
+    SystemTime now = unixNow();
+    match (stat(path: f1)) {
+        case Err(error: e): { }
+        case Ok(value: m): {
+            // Written just now: the stamp is within an hour of the clock, in either direction, and the
+            // file is not read-only. A one-second stat resolution makes an exact compare wrong.
+            Duration age = m.modified.durationSince(earlier: now);
+            int64 skew = age.asSecs();
+            if (!m.isDir && m.size == cast<usize>(5) && skew < 3600i64 && skew > -3600i64 && !m.readOnly) {
+                r = r + 16;
+            }
+        }
+    };
+
+    // A directory's own metadata says so.
+    match (stat(path: sibling)) {
+        case Err(error: e): { }
+        case Ok(value: m): { if (m.isDir) { r = r + 32; } }
+    };
+
+    // Append: two 4-byte writes onto a 5-byte file, without truncating it.
+    if (appendTwice(path: f1) == 13) { r = r + 64; }
+
+    // rename moves the file, and the old name is gone.
+    string f2 = join(path: root, with: "two.txt");
+    if (ok(r: rename(from: f1, to: f2)) && exists(path: f2) && !exists(path: f1)) { r = r + 128; }
+
+    // Removal, and the tidy-up, are the same assertion: `removeDir` takes an EMPTY directory and refuses
+    // a populated one (it must not empty it), and `removeDirAll` takes the whole tree. This one SUBTRACTS
+    // on failure rather than adding — the eight flags above already sum to a full byte, and a fixture
+    // that does not clean up fails on its second run, which is a worse way to find out.
+    bool emptyGone = ok(r: removeDir(path: deep)) && !exists(path: deep);   // "…/a/b" holds nothing
+    bool fullRefused = !ok(r: removeDir(path: root));                        // …but the root holds files
+    if (!(emptyGone && fullRefused && ok(r: removeDirAll(path: root)) && !exists(path: root))) {
+        r = r - 1;
+    }
+
+    return r;   // 255
+}

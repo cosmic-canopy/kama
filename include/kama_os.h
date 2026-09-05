@@ -55,6 +55,7 @@
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
 #include <windows.h>      // FindFirstFileA / HANDLE / MAX_PATH
 #include <io.h>           // _open, _read, _write, _close, _unlink
+#include <direct.h>       // _mkdir  (kama_mkdir)
 #include <fcntl.h>        // _O_*
 #include <sys/stat.h>     // _stat64, _S_IFDIR
 #include <errno.h>        // ENOENT, ECONNREFUSED, ... (UCRT defines the POSIX supplemental codes)
@@ -103,18 +104,55 @@ static inline void kama__capture_wsa(void) {
 // _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data.
 static inline int32_t   kama_open_read(const char* path)   { return (int32_t)_open(path, _O_RDONLY | _O_BINARY); }
 static inline int32_t   kama_open_create(const char* path) { return (int32_t)_open(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE); }
+static inline int32_t   kama_open_append(const char* path) { return (int32_t)_open(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, (unsigned int)n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, (unsigned int)n); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)fd); }
 static inline int32_t   kama_unlink(const char* path) { return (int32_t)_unlink(path); }
 
-static inline int32_t kama_fstat_size(int32_t fd, uint64_t* outSize, int32_t* outIsDir) {
+// `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
+// mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::SystemTime` with no conversion at the
+// kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here.
+// `readOnly` is the write PERMISSION BIT, not an access check: it says what the file's mode records, and
+// says nothing about this process (root ignores it; an ACL can deny a writable-looking file).
+static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* outIsDir,
+                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct _stat64 st; if (_fstat64((int)fd, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0; return 0;
+    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
+    return 0;
 }
-static inline int32_t kama_path_stat(const char* path, uint64_t* outSize, int32_t* outIsDir) {
+static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
+                                     int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct _stat64 st; if (_stat64(path, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0; return 0;
+    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
+    return 0;
+}
+// Directory creation, rename and existence. `_mkdir` takes no mode on Windows; `MoveFileExA` with
+// REPLACE_EXISTING is what makes rename overwrite as POSIX's does (plain MoveFileA fails on an existing
+// destination, which would have made the same kama call behave differently per platform).
+static inline int32_t kama_mkdir(const char* path) { return (int32_t)_mkdir(path); }
+static inline int32_t kama_rmdir(const char* path) { return (int32_t)_rmdir(path); }
+// Is this path a symlink (a reparse point here), WITHOUT following it? The distinction only matters to a
+// recursive delete, which must not walk through a link and empty a directory somewhere else.
+static inline int32_t kama_is_symlink(const char* path) {
+    DWORD a = GetFileAttributesA(path);
+    if (a == INVALID_FILE_ATTRIBUTES) return 0;
+    return (a & FILE_ATTRIBUTE_REPARSE_POINT) ? 1 : 0;
+}
+static inline int32_t kama_rename(const char* from, const char* to) {
+    if (!MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+        errno = (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND)
+              ? ENOENT : EACCES;
+        return -1;
+    }
+    return 0;
+}
+static inline int32_t kama_exists(const char* path) {
+    return GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;
 }
 
 // ---- directory iteration (Win32 FindFirstFile) -----------------------------
@@ -576,6 +614,8 @@ extern int  close(int);
 extern int  unlink(const char*);
 // std::process (fork/exec/pipe): hand-declared for the same reason as read/write above. These have no
 // asm-label alias on macOS, so redeclaring is safe even if a socket header transitively pulls <unistd.h>.
+extern int   rename(const char*, const char*);   // <stdio.h>'s, and the only thing this file wants from it
+extern int   rmdir(const char*);                 // <unistd.h>'s, which this file deliberately does not pull
 extern int   pipe(int[2]);
 extern int   dup2(int, int);
 extern int   chdir(const char*);
@@ -608,19 +648,54 @@ static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 // ---- files -----------------------------------------------------------------
 static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY); }
 static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644); }
+static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)write((int)fd, buf, n); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)close((int)fd); }
 static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(path); }
 
-// `struct stat` stays opaque: fold size + S_ISDIR into scalar out-params. 0 = ok, -1 = error (errno set).
-static inline int32_t kama_fstat_size(int32_t fd, uint64_t* outSize, int32_t* outIsDir) {
+// `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
+// 0 = ok, -1 = error (errno set). mtime is NANOSECONDS from the UNIX epoch, so it IS a
+// `std::time::SystemTime` at the kama end with no conversion.
+//
+// ⚠️ `st_mtime` (whole seconds) rather than `st_mtim.tv_nsec`: the sub-second field is spelled three ways
+// across the platforms this branch serves — `st_mtim` (POSIX 2008/Linux), `st_mtimespec` (macOS/BSD), and
+// neither under a strict feature set — while `st_mtime` is the one spelling every one of them has. A
+// second of resolution is what a portable mtime can promise; a build-time detection of three spellings is
+// not worth the sub-second precision nothing in `std` compares on.
+// `readOnly` is the owner's write PERMISSION BIT, not an access check for this process (root ignores it,
+// and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
+static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* outIsDir,
+                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct stat st; if (fstat((int)fd, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0; return 0;
+    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
+    return 0;
 }
-static inline int32_t kama_path_stat(const char* path, uint64_t* outSize, int32_t* outIsDir) {
+static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
+                                     int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct stat st; if (stat(path, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0; return 0;
+    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
+    return 0;
+}
+// Directory creation, rename and existence. 0777 is the POSIX default — the process umask narrows it,
+// which is the one place a mode belongs. `rename` already replaces an existing destination here; the
+// Windows branch has to ask for that explicitly to match.
+static inline int32_t kama_mkdir(const char* path) { return (int32_t)mkdir(path, 0777); }
+static inline int32_t kama_rmdir(const char* path) { return (int32_t)rmdir(path); }
+// Is this path a symlink, WITHOUT following it? `lstat`, not `stat`, and the distinction is the whole
+// point: a recursive delete that follows a link empties a directory somewhere else entirely. That is
+// CVE-2022-21658 in Rust's `remove_dir_all` and the same bug in Go, Python and npm before it.
+static inline int32_t kama_is_symlink(const char* path) {
+    struct stat st; if (lstat(path, &st) != 0) return 0;
+    return S_ISLNK(st.st_mode) ? 1 : 0;
+}
+static inline int32_t kama_rename(const char* from, const char* to) { return (int32_t)rename(from, to); }
+static inline int32_t kama_exists(const char* path) {
+    struct stat st; return stat(path, &st) == 0 ? 1 : 0;
 }
 
 // Directory iteration: `DIR*` stays opaque (void*); each entry's `d_name` (inline char[]) is copied into

@@ -7,34 +7,59 @@ import {
     std::collections::DynamicArray,
     std::collections::FixedArray,
     std::collections::View,
+    std::time::SystemTime,
+    std::path::parent,
+    std::path::join,
 };
 
-export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
+export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove,
+         createDir, createDirAll, removeDir, removeDirAll, rename, exists };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
 extern "kama_os.h";
 extern fn int32  kama_open_read(UnsafePtr<int8> path);
 extern fn int32  kama_open_create(UnsafePtr<int8> path);
+extern fn int32  kama_open_append(UnsafePtr<int8> path);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize  kama_write(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
-extern fn int32  kama_fstat_size(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir);
-extern fn int32  kama_path_stat(UnsafePtr<int8> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir);
+extern fn int32  kama_fstat_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
+                                 UnsafePtr<int64> outMtimeNs, UnsafePtr<int32> outReadOnly);
+extern fn int32  kama_path_meta(UnsafePtr<int8> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
+                                UnsafePtr<int64> outMtimeNs, UnsafePtr<int32> outReadOnly);
 extern fn int32  kama_unlink(UnsafePtr<int8> path);
+extern fn int32  kama_mkdir(UnsafePtr<int8> path);
+extern fn int32  kama_rmdir(UnsafePtr<int8> path);
+extern fn int32  kama_is_symlink(UnsafePtr<int8> path);
+extern fn int32  kama_rename(UnsafePtr<int8> from, UnsafePtr<int8> to);
+extern fn int32  kama_exists(UnsafePtr<int8> path);
 extern fn UnsafePtr    kama_diropen(UnsafePtr<int8> path);
 extern fn string kama_dirnext(UnsafePtr dirp);
 extern fn int32  kama_dirclose(UnsafePtr dirp);
 extern fn int32  kama_last_error();
 extern fn int32  kama_EINTR();
 
-type enum OpenMode { Read, Write }
+// How `File.open` opens. `Write` CREATES and TRUNCATES; `Append` creates and seeks to the end on every
+// write, which is the only way concurrent appenders (a log from two processes) do not overwrite each
+// other — a seek-then-write cannot promise that, because the two steps are not one operation.
+type enum OpenMode { Read, Write, Append }
 
-// File metadata (extensible — mtime/permissions later).
+// What the filesystem records about a path.
+//
+// `modified` is a wall-clock stamp, so comparing two of them tells you which is newer and nothing about
+// how long ago; it also moves backward when the clock does (see `std::time::SystemTime`). Resolution is
+// one second — the sub-second `stat` field is spelled three different ways across the platforms this
+// supports, and kama_os.h says why it takes the one they share.
+//
+// `readOnly` is the file's write PERMISSION BIT, not "this process cannot write it": root ignores it, and
+// an ACL can deny a file whose mode looks writable. It answers what is recorded, not what would happen.
 @generate(of)
 type value Metadata {
     public usize size;
     public bool isDir;
+    public SystemTime modified;
+    public bool readOnly;
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
@@ -60,8 +85,9 @@ type resource File implements Reader, Writer {
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
     public unsafe ctor Result<File, IoError> open(const ref string path, OpenMode mode) {
         int32 fd = match (mode) {
-            case Read:  kama_open_read(path: path.cstr());
-            case Write: kama_open_create(path: path.cstr());
+            case Read:   kama_open_read(path: path.cstr());
+            case Write:  kama_open_create(path: path.cstr());
+            case Append: kama_open_append(path: path.cstr());
         };
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
@@ -160,13 +186,119 @@ fn Result<isize, IoError> writeFile(const ref string path, ref DynamicArray<uint
     };
 }
 
-// Size + directory flag for a path.
+// Everything the filesystem records about a path, in one call.
 unsafe fn Result<Metadata, IoError> stat(const ref string path) {
     uint64 sz = 0ui64;
     int32 isdir = 0;
-    int32 rc = kama_path_stat(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir));
+    int64 mtime = 0i64;
+    int32 ro = 0;
+    int32 rc = kama_path_meta(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir),
+                              outMtimeNs: addr(of: mtime), outReadOnly: addr(of: ro));
     if (rc != 0) { return Result::Err(error: lastError()); }
-    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), isDir: isdir != 0));
+    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), isDir: isdir != 0,
+                                         modified: SystemTime.fromUnixNanos(n: mtime), readOnly: ro != 0));
+}
+
+// Does the path exist? A plain `bool`, not a `Result`: "no" and "the lookup failed" are the same answer
+// to this question, and a caller that needs to tell them apart wants `stat`.
+//
+// ⚠️ It is a SNAPSHOT, and acting on it is the time-of-check/time-of-use race every language's docs warn
+// about: between `exists` and the `open` that follows, another process can create or delete the path. To
+// use a file, open it and handle the error; `exists` is for reporting, not for guarding.
+unsafe fn bool exists(const ref string path) {
+    return kama_exists(path: path.cstr()) != 0;
+}
+
+// Create ONE directory. Err(AddrInUse-free) — an existing path reports the platform's error (POSIX EEXIST
+// surfaces as `Other`), and a missing PARENT reports `NotFound`; `createDirAll` is the one that makes
+// parents.
+unsafe fn Result<Unit, IoError> createDir(const ref string path) {
+    if (kama_mkdir(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Create a directory and every missing parent, and report success when it already exists — the
+// `mkdir -p` contract, which is what makes it usable at start-up without a check first.
+//
+// Recursion walks PARENTS, so its depth is the path's component count, not the tree's size.
+unsafe fn Result<Unit, IoError> createDirAll(const ref string path) {
+    if (path.isEmpty()) { return Result::Ok(value: Unit::Unit); }
+    if (kama_exists(path: path.cstr()) != 0) { return Result::Ok(value: Unit::Unit); }
+    match (parent(path: path)) {
+        case None: { }
+        case Some(value: up): {
+            match (createDirAll(path: up)) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: u): { }
+            };
+        }
+    };
+    if (kama_mkdir(path: path.cstr()) != 0) {
+        // Another process may have made it between the check and the call — that race is exactly what
+        // `mkdir -p` is expected to absorb, so an existing directory is still success.
+        if (kama_exists(path: path.cstr()) != 0) { return Result::Ok(value: Unit::Unit); }
+        return Result::Err(error: lastError());
+    }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Remove ONE empty directory. A non-empty one is refused by the platform rather than emptied — that is
+// `rmdir`, and `removeDirAll` is the one that recurses.
+unsafe fn Result<Unit, IoError> removeDir(const ref string path) {
+    if (kama_rmdir(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Remove a directory and everything under it — `rm -rf`, and the one function in this module that can
+// destroy data it was not pointed at, so it is worth saying exactly what it will and will not do.
+//
+// ⚠️ It does NOT follow a symlink. An entry that is a link is UNLINKED, never descended into. Without
+// that check a link inside the tree pointing anywhere at all — `/`, a home directory — gets emptied
+// instead: that is CVE-2022-21658 in Rust's `remove_dir_all`, and the same bug in Go, Python and npm.
+// The check is `lstat`-based, so it is honest about the type without resolving it.
+//
+// ⚠️ What it still cannot promise is atomicity against a racing attacker: between the type check and the
+// recursion, a directory could be swapped for a link. Closing that needs `openat`/`unlinkat` against a
+// directory HANDLE rather than a path, which this seam does not carry. Safe for your own temp trees;
+// do not aim it at a directory another user can write to.
+unsafe fn Result<Unit, IoError> removeDirAll(const ref string path) {
+    match (readDir(path: path)) {
+        case Err(error: e): { return Result::Err(error: e); }
+        case Ok(value: names): {
+            isize i = 0;
+            while (i < names.length()) {
+                string child = join(path: path, with: names[i]);
+                i = i + 1;
+                if (kama_is_symlink(path: child.cstr()) != 0) {
+                    // A link: remove the LINK. Descending would delete whatever it points at.
+                    if (kama_unlink(path: child.cstr()) != 0) { return Result::Err(error: lastError()); }
+                    continue;
+                }
+                bool isDir = false;
+                match (stat(path: child)) {
+                    case Err(error: e2): { return Result::Err(error: e2); }
+                    case Ok(value: m): { isDir = m.isDir; }
+                };
+                if (isDir) {
+                    match (removeDirAll(path: child)) {
+                        case Err(error: e3): { return Result::Err(error: e3); }
+                        case Ok(value: u): { }
+                    };
+                } else if (kama_unlink(path: child.cstr()) != 0) {
+                    return Result::Err(error: lastError());
+                }
+            }
+        }
+    };
+    return removeDir(path: path);
+}
+
+// Rename or move a path, REPLACING an existing destination — POSIX `rename`'s behaviour, which the
+// Windows branch asks for explicitly so the same call does the same thing on both. Both ends must be on
+// the same filesystem; a cross-device move reports the platform error rather than silently copying.
+unsafe fn Result<Unit, IoError> rename(const ref string from, const ref string to) {
+    if (kama_rename(from: from.cstr(), to: to.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
 }
 
 // Delete a file. Ok on success; Err(NotFound) if the path did not exist.
