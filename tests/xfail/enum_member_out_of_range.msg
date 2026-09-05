@@ -1,0 +1,1 @@
+does not fit the enum's `uint8` tag

@@ -1,0 +1,4 @@
+// A forward reference to a later sibling is fine (tests/enum_derived_member.kama); a member defined in
+// terms of itself, through any chain, is not.
+type enum K { A = K::B + 1, B = K::A - 1 }
+fn int32 main() { return cast<int32>(K::A); }

@@ -7851,8 +7851,13 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // `: IntType`
         if (ed->body)
             for (auto& m : *ed->body)
-                if (m->identifier && m->identifier->value)
-                    ei.members.push_back({*m->identifier->value, m->constantExpression});
+                if (m->identifier && m->identifier->value) {
+                    EnumMember em;
+                    em.name  = *m->identifier->value;
+                    em.value = m->constantExpression;   // folded later, by foldEnumMembers
+                    em.line  = m->line;
+                    ei.members.push_back(em);
+                }
         ei.declFile = _collectingUnitPath;
         _enums[ei.name] = ei;
     }
@@ -7903,7 +7908,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
         for (auto& m : ei.members) {
             indent(1);
             *_out << ei.name << "_" << m.name;
-            if (m.value) *_out << " = " << emitExpression(m.value);
+            if (m.value && m.hasFolded) *_out << " = " << m.folded;   // the FOLDED value — see EnumMember
             *_out << ",\n";
         }
         *_out << "};\n\n";
@@ -7913,7 +7918,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
     for (auto& m : ei.members) {
         indent(1);
         *_out << ei.name << "_" << m.name;
-        if (m.value) *_out << " = " << emitExpression(m.value);
+        if (m.value && m.hasFolded) *_out << " = " << m.folded;
         *_out << ",\n";
     }
     *_out << "} " << ei.name << ";\n\n";
@@ -26480,6 +26485,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
+    foldEnumMembers();     // every plain enum's member values — after the consts, which an initializer may read
     evalComptimeConsts();  // const-eval 6b-3: run `comptime fn`-initialized module constants now that all
                            // comptime fns are registered — before const-generic sizes so a baked scalar can size an array.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)

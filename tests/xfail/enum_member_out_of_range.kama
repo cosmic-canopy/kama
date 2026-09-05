@@ -1,0 +1,4 @@
+// A member's value must fit the pinned tag. This built before 0.9.186 — `enum { K_A = 300 }` under a
+// `typedef uint8_t K;` — and `K::A` was silently 44.
+type enum K : uint8 { A = 300, B = 2 }
+fn int32 main() { return cast<int32>(K::B); }

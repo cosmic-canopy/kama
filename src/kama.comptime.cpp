@@ -177,11 +177,23 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     if (id->qualifier && !id->qualifier->empty()) {
         auto tq = std::make_shared<StringList>();
         for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
-        std::string key = resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value;
+        const std::string owner = resolveUserName(*id->qualifier->back(), tq);
+        std::string key = owner + "::" + *id->value;
         auto cv = _comptimeConstVals.find(key);
         if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
         auto tc = _typeConsts.find(key);
         if (tc != _typeConsts.end() && tc->second.hasValue) { asInt(tc->second.value); return true; }
+        // A plain enum's member (`K::A`), folded ON DEMAND — so an enum initializer may name a sibling
+        // declared after it, or another enum's member, whatever order the enums are collected in.
+        auto ei = _enums.find(owner);
+        if (ei != _enums.end())
+            for (size_t i = 0; i < ei->second.members.size(); ++i)
+                if (ei->second.members[i].name == *id->value) {
+                    int64_t v;
+                    if (!enumMemberValue(ei->second, i, v)) return false;
+                    asInt(v);
+                    return true;
+                }
         // …and if it is not a type-associated constant, it may be a MODULE one reached by its module
         // path (`cfg::CAP`). The two spellings are indistinguishable here — both are a qualifier and a
         // name — so the type reading is tried first and this is the fallback, not a competing arm.
@@ -703,4 +715,123 @@ void CEmitter::evalComptimeConsts()
             _moduleConsts[dc.cName] = v.i;   // mirror for const-generic array sizing
     }
     _nsCtx = saved;
+}
+
+// ---------------------------------------------------------------------------
+// Plain enum member values
+//
+// `type enum K { A = 1, B = K::A + 1 }` had no spelling that built: the initializer went to the RUNTIME
+// expression emitter, so `K::A + 1` was refused by the enum-arithmetic rule (right for a VALUE, beside
+// the point when the member is being DEFINED as an integer), `cast<int32>(K::A) + 1` reached clang as
+// `KAMA_ADD(...)` — a `_Generic` function call in a debug build, not a constant expression, and a plain
+// `+` in release: a build-mode divergence — and a cross-enum alias or a `comptime` constant emitted a C
+// token that `_enums`' map order had not declared yet. Folding here, with the interpreter that already
+// evaluates every `comptime` initializer, takes the initializer out of the emitter's reach entirely: the
+// value-side rules never see it, and what is emitted is a decimal.
+//
+// A member is folded on demand and memoised, so a forward reference to a later sibling and a reference
+// into another enum both work, and the only order that matters is the one C also imposes: an implicit
+// member is one more than the member before it.
+bool CEmitter::enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out)
+{
+    EnumMember& m = ei.members[idx];
+    if (m.hasFolded) { out = m.folded; return true; }
+    if (m.folding)
+        return ctFail(("enum member `" + demangleForDisplay(ei.name) + "::" + m.name
+                       + "` is defined in terms of itself").c_str(), m.line);
+    m.folding = true;
+    bool ok = false;
+    if (!m.value) {
+        int64_t prev = -1;
+        ok = (idx == 0) || enumMemberValue(ei, idx - 1, prev);
+        if (ok) m.folded = prev + 1;
+    } else {
+        // Under the DECLARING enum's scope and file: an initializer reached on demand from another
+        // enum's fold must still resolve its names where it was written, and blame its own file.
+        NsCtx savedCtx = _nsCtx;
+        std::string savedFile = _collectingUnitPath;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ei.scope; _nsCtx.usings = ei.usings;
+        _collectingUnitPath = ei.declFile;
+
+        // A sibling is spelled `K::A`, as a variant is everywhere else. Said here, with the hint the
+        // identifier arm already gives, rather than left to the interpreter's "unknown identifier".
+        std::function<bool(const SharedExpression&)> bareSibling = [&](const SharedExpression& e) -> bool {
+            ASTNode* n = e.get();
+            if (!n) return false;
+            if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+                if (id->value && (!id->qualifier || id->qualifier->empty()))
+                    for (auto& s : ei.members)
+                        if (s.name == *id->value) {
+                            unsupported(("`" + s.name + "` is a variant of `" + ei.name + "` — write `"
+                                         + ei.name + "::" + s.name + "`").c_str(), m.line);
+                            return true;
+                        }
+                return false;
+            }
+            if (auto* b = dynamic_cast<BinaryExpressionNode*>(n))      return bareSibling(b->LHS) || bareSibling(b->RHS);
+            if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return bareSibling(u->expression);
+            if (auto* c = dynamic_cast<CastNode*>(n))                  return bareSibling(c->unaryExpression);
+            if (auto* l = dynamic_cast<LogicalAndOrNode*>(n))          return bareSibling(l->LHS) || bareSibling(l->RHS);
+            if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))
+                return bareSibling(t->condition) || bareSibling(t->LHS) || bareSibling(t->RHS);
+            return false;
+        };
+        if (!bareSibling(m.value)) {
+            CTEnv env; CTValue v;
+            if (ctEvalExpr(m.value, env, v)) {
+                const std::string member = "`" + ei.name + "::" + m.name + "`";
+                if (v.kind != CTValue::Int) {
+                    unsupported(("enum member " + member + " must be an integer — its initializer is a "
+                                 + std::string(v.kind == CTValue::Float ? "float" : "bool")).c_str(), m.line);
+                } else {
+                    // It must fit the tag: the pinned `IntType`, or C's `int` for an unpinned enum. C
+                    // would truncate a pinned one in silence (`: uint8 { A = 300 }` built, and `A` was 44).
+                    const bool pinned = !ei.underlyingCType.empty();
+                    int  bits = 32;
+                    bool sgn  = true;
+                    auto dn = _enumDeclNodes.find(ei.name);
+                    CTValue tag;
+                    if (pinned && dn != _enumDeclNodes.end() && dn->second
+                        && ctTypeInfo(dn->second->underlyingType, tag) && tag.kind == CTValue::Int) {
+                        bits = tag.width; sgn = tag.isSigned;
+                    }
+                    bool fits = true;
+                    if (bits > 0 && bits < 64) {
+                        const int64_t hi = sgn ? ((int64_t)1 << (bits - 1)) - 1 : ((int64_t)1 << bits) - 1;
+                        const int64_t lo = sgn ? -((int64_t)1 << (bits - 1)) : 0;
+                        fits = v.i >= lo && v.i <= hi;
+                    } else if (bits == 64 && !sgn) {
+                        fits = v.i >= 0;   // held in int64; a `uint64` value past INT64_MAX has no spelling here
+                    }
+                    if (!fits)
+                        unsupported(("enum member " + member + " is " + std::to_string((long long)v.i)
+                                     + ", which does not fit the enum's `"
+                                     + (pinned ? primKeyOfCType(ei.underlyingCType) : std::string("int32"))
+                                     + "` tag" + (pinned ? "" : " (an unpinned enum's tag is `int32`; pin it with "
+                                                                 "`type enum E : IntType`)")).c_str(), m.line);
+                    else { m.folded = v.i; ok = true; }
+                }
+            }
+        }
+        _nsCtx = savedCtx;
+        _collectingUnitPath = savedFile;
+    }
+    m.folding = false;
+    // A member that failed counts as folded (to 0) from here on: its diagnostic has been emitted and the
+    // build is refused, and re-evaluating it from every member that names it would only repeat the message.
+    m.hasFolded = true;
+    out = m.folded;
+    return ok;
+}
+
+// Every plain enum, every member, after the module `comptime` constants are baked (an initializer may
+// read one). Each top-level evaluation resets the interpreter's budget the way evalComptimeConsts does.
+void CEmitter::foldEnumMembers()
+{
+    for (auto& kv : _enums)
+        for (size_t i = 0; i < kv.second.members.size(); ++i) {
+            _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+            int64_t v;
+            enumMemberValue(kv.second, i, v);
+        }
 }

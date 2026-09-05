@@ -1,0 +1,56 @@
+// An enum member's value is a compile-time integer expression. Before 0.9.186 none of these built: a
+// sibling reference was refused by the value-side enum-arithmetic rule, `cast<int32>(K::A) + 1` passed
+// `kama check` and died in clang (`KAMA_ADD` is a function call in a debug build), a cross-enum alias
+// emitted a C token that map order had not declared yet, and a `comptime` constant did the same. Every
+// member below is read back through `cast<int32>` to prove the folded value, and the pinned enum goes
+// through `try cast` and `match` to prove the fold reaches the membership test and the arms.
+comptime int32 BASE = 100;
+
+type enum Flag : uint8 {
+    None  = 0,
+    Read  = 1,
+    Write = Flag::Read << 1,                 // 2
+    Exec  = Flag::Write << 1,                // 4
+    All   = Flag::Read | Flag::Write | Flag::Exec,   // 7
+    Last  = Flag::Later - 1,                 // 199 — a FORWARD reference to a later sibling
+    Later = 200
+}
+
+type enum Signed {
+    Minus = -Signed::Plus,                   // -5
+    Plus  = 5,
+    Next,                                    // 6 — implicit: one more than the member before it
+    Big   = BASE * 2 + Signed::Next,         // 206 — a `comptime` constant and a sibling
+    Mask  = ~Signed::Plus & 0xFF             // 250
+}
+
+// `Alias` sorts BEFORE `Flag`, so its emission used to name `Flag_All` before C had seen it.
+type enum Alias { Everything = Flag::All, Nothing = Flag::None }
+
+fn int32 code(Flag f) {
+    return match (f) {
+        case All:   7;
+        case Last:  199;
+        case Later: 200;
+        case _:     1;
+    };
+}
+
+fn int32 fromWire(uint8 b) {
+    Optional<Flag> f = try cast<Flag>(b);
+    return match (f) {
+        case Some(value: v): code(f: v);
+        case None: 0;
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+    r = r + cast<int32>(Flag::Write) + cast<int32>(Flag::Exec) + cast<int32>(Flag::All);   // 13
+    r = r + cast<int32>(Flag::Last) - cast<int32>(Flag::Later);                             // -1  → 12
+    r = r + cast<int32>(Signed::Minus) + cast<int32>(Signed::Next);                          // +1  → 13
+    r = r + cast<int32>(Signed::Big) - cast<int32>(Signed::Mask);                            // -44 → -31
+    r = r + cast<int32>(Alias::Everything) + cast<int32>(Alias::Nothing);                    // +7  → -24
+    r = r + fromWire(b: 7ui8) + fromWire(b: 199ui8) + fromWire(b: 3ui8);                     // 7+199+0 → 182
+    return r - 140;   // 42
+}

@@ -1,0 +1,4 @@
+// A member's value is folded at compile time; a runtime call is not a value.
+fn int32 pick() { return 3; }
+type enum K { A = pick(), B = 2 }
+fn int32 main() { return cast<int32>(K::B); }

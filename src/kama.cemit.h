@@ -610,7 +610,19 @@ struct InterfaceInfo {
 };
 
 // An enum: lowered to a C `enum` with members mangled `Enum_Member`.
-struct EnumMember { std::string name; SharedExpression value; };  // value optional
+// A member's value is a compile-time integer expression, FOLDED (foldEnumMembers) rather than emitted:
+// handing `value` to the runtime expression emitter produced `KAMA_ADD(...)` — a `_Generic` function call
+// in a debug build, so not a C constant expression — and ran the value-side enum-arithmetic rule against
+// an initializer that is defining an integer. `folded` is what `emitEnum` writes; `value` stays for the
+// fold and for `emitTryCast`'s contiguity probe, which only asks whether one was written.
+struct EnumMember {
+    std::string      name;
+    SharedExpression value;          // the initializer as written; null for an implicit member
+    int              line = 0;
+    int64_t          folded = 0;     // the value (an implicit member is one more than its predecessor)
+    bool             hasFolded = false;
+    bool             folding = false;   // the cycle guard — set while this member's initializer evaluates
+};
 struct EnumInfo   {
     std::string name;
     std::vector<EnumMember> members;
@@ -2651,6 +2663,8 @@ private:
     std::vector<CTDeferredConst> _ctDeferredConsts;
 
     void evalComptimeConsts();                                                    // the deferred-const evaluation pass
+    void foldEnumMembers();                                                       // every plain enum's member values, after the consts
+    bool enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out);                 // one member, on demand (memoised, cycle-guarded)
     bool ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out);
     bool ctEvalBody(SharedParameterList params, SharedBlock body, SharedIdentifier retType,
                     const std::vector<CTValue>& args, int line, CTValue& out);    // shared core for free fns + methods

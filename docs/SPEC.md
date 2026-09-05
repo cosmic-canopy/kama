@@ -3618,6 +3618,26 @@ Color c = Color::Blue;                        // variants are scope-resolved wit
 type enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (payloads)
 ```
 
+**A member's value is a compile-time integer expression.** It may combine integer literals, the enum's
+own members, another enum's members, `comptime` constants and `cast<…>` with `+ - * / % << >> & | ^ ~`,
+and it is folded by the compiler — what reaches C is a number. A member without a value is one more than
+the member before it (the first is `0`), so a derived member may be followed by implicit ones, and a
+member may refer to a sibling declared after it:
+
+```kama
+type enum Flag : uint8 { None = 0, Read = 1, Write = Flag::Read << 1, All = Flag::Read | Flag::Write }
+comptime int32 BASE = 100;
+type enum Code { Ok = BASE, Warn, Bad = Code::Ok + 50 }        // 100, 101, 150
+```
+
+A sibling is spelled `Flag::Read`, as a variant is everywhere else — the bare `Read` C allows is an error. <!-- xfail: enum_member_bare_sibling -->
+The value must fit the tag — the pinned `IntType`'s range, or `int32` when unpinned — so `: uint8 { A = 300 }` is an error, not a silent 44. <!-- xfail: enum_member_out_of_range -->
+A member defined in terms of itself is an error, <!-- xfail: enum_member_cycle -->
+and so is an initializer that does not fold or is not an integer. <!-- xfail: enum_member_not_const, enum_member_float -->
+Two members may share a value (`B = K::A` is an alias). This is the one place enum arithmetic is written:
+a *value* of the enum is still not a number, and `Flag f = Flag::Read + 1;` stays refused (see *Type identity*). <!-- xfail: identity_enum_arith -->
+(`tests/enum_derived_member.kama`.)
+
 An enum is a type kind like any other, so it **declares its contracts inline** and carries the methods that
 satisfy them — the variants come first, then a `;`, then ordinary members:
 

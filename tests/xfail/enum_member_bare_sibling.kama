@@ -1,0 +1,5 @@
+// An enum initializer names a sibling as `K::A`, the way a variant is spelled everywhere else — the bare
+// form C allows is refused with the hint. The same message already answered this before members could be
+// derived at all; now it is right about the outcome too.
+type enum K { A = 1, B = A + 1 }
+fn int32 main() { return cast<int32>(K::B); }
