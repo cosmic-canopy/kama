@@ -61,7 +61,7 @@ SPAN='type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntyp
 # The names are deliberately unique across the whole session, because `expect` matches the transcript as
 # one string and cannot scope a substring to the response that produced it.
 IIURI="file:///intrinsic.kama"
-IIB='type contract Weighable { fn int32 weight(ref This wpeer); }\ntype intrinsic <int8, int16> implements Weighable {\n    public fn int32 weight(ref This wpeer) { int32 wshared = 1; return wshared + cast<int32>(wp); }\n}\ntype intrinsic <float32, float64> implements Weighable {\n    <float32> { public fn int32 weight(ref This wpeer) { int32 wsection = 2; return wsection + cast<int32>(wp); } }\n    <float64> { public fn int32 weight(ref This wpeer) { return 4; } }\n}\n'
+IIB='type contract Weighable { fn int32 weight(ref This wpeer); }\ntype intrinsic <int8, int16> implements Weighable {\n    public fn int32 weight(ref This wpeer) { int32 wshared = 1; return wshared + cast<int32>(wpeer); }\n}\ntype intrinsic <float32, float64> implements Weighable {\n    <float32> { public fn int32 weight(ref This wpeer) { int32 wsection = 2; return wsection + cast<int32>(wpeer); } }\n    <float64> { public fn int32 weight(ref This wpeer) { return 4; } }\n}\n'
 
 # M5.3/M5.4 fixture: THREE independent syntax errors at three grains — a malformed class member (LSP
 # line 2), and a missing semicolon in each of two DIFFERENT functions (LSP lines 6 and 10). Before error
