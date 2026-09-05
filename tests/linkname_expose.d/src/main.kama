@@ -1,0 +1,13 @@
+// `@linkName("sym") expose fn` — the definition is emitted under the link name, so a host that only knows
+// `host_tick` links against it. Proved through the linker on every leg: the C in csrc/caller.c declares
+// `host_tick` itself and calls it, and this file reaches that C through an ordinary extern.
+extern "caller.h";
+extern fn int32 kama_test_call_tick();
+
+@linkName("host_tick") expose fn int32 tick() { return 41; }
+
+unsafe fn int32 viaHost() { return kama_test_call_tick(); }
+
+fn int32 main() {
+    return viaHost();   // 42
+}

@@ -1,0 +1,4 @@
+// The link name is a C symbol: letters, digits and `_`, not starting with a digit.
+extern "<stdlib.h>";
+@linkName("not-a-symbol") extern fn int32 abs(int32 x);
+fn int32 main() { return 0; }

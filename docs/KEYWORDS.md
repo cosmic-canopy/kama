@@ -66,6 +66,16 @@ C `__attribute__((...))` **only** on the exact declaration they annotate; `@nohe
 | `@section(".name")` | a **module static** or a **function** | `__attribute__((section(".name")))` | one string-literal section name — vector table (`.isr_vector`), flash const table (`.rodata`), DMA RAM bank, `.ramfunc`. The board's linker script owns the actual addresses |
 | `@noheap` | any declaration with a **body** — a free `fn`, and equally a method, `ctor`, destructor or operator (`@noheap public fn int32 fill(…) { … }`) | **nothing** — a *checker* flag, not codegen | Makes every emitter-visible heap allocation a **compile error** (`new`/`try new`, `parallel_for`/`spawn` boxing, `Owned<Error>` boxing, string interpolation's `Formatter`). No args. Target-independent — an ISR / game frame-tick / real-time audio callback allocates nothing. **Transitive**: the body may not call anything that allocates, at any depth, including a local's destructor; `GlobalAllocator` is the leaf, so a container drawing from it is rejected while the same container over an arena is not. Where the callee is unknowable — a `fnptr`, or a contract/`virtual` slot — the call is rejected unless the CONTRACT member declares `@noheap`, which every implementation is then checked against. The whole-program equivalent is the `--no-heap` build flag <!-- xfail: noheap_new, noheap_transitive_new, noheap_dtor_of_local, noheap_container_growth, noheap_fnptr_call, noheap_contract_member, noheap_contract_impl --> |
 
+## Symbol-name attribute (`@linkName`)
+
+Not a keyword — a declaration attribute. The peer of Rust's `#[link_name]` / `#[export_name]`, one
+attribute for both directions of the C boundary; named for the concept rather than the backend, because
+the 2.0 bytecode VM has no C names.
+
+| Attribute | On | Lowers to | Rules |
+|---|---|---|---|
+| `@linkName("symbol")` | an **`extern fn`** (the C symbol it binds) or an **`expose fn`** (the symbol it exports) | the symbol at every call site / as the definition's name — no `__attribute__` | exactly one string literal; a C symbol (letters, digits, `_`; not a C keyword — a *kama* keyword is fine, that is the point); one C symbol has ONE kama binding per program; exported symbols stay unique. Rejected on an ordinary `fn`, a member, a `static`, a `fnptr` or an `extern "<h>";` — none has a symbol to rename. See [SPEC.md](SPEC.md) *FFI — calling C* and *Exposing to a host* <!-- xfail: linkname_on_fn, linkname_on_fnptr, linkname_bad_symbol, linkname_c_keyword, linkname_no_arg, linkname_dup_expose, linkname_rebound_extern --> |
+
 ## Layout-control attributes (`@align`, `@packed`)
 
 The same passthrough mechanism applied to a **type** rather than a declaration, and the companion to

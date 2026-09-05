@@ -19,8 +19,9 @@ esac
 
 # A reload-module: exposed entry points, no `main`.
 cat > "$tmp/mod.kama" <<'KAMA'
-expose fn int add(int a, int b) { return a + b; }
-expose fn int mul(int a, int b) { return a * b; }
+expose fn int32 add(int32 a, int32 b) { return a + b; }
+expose fn int32 mul(int32 a, int32 b) { return a * b; }
+@linkName("renamed") expose fn int32 sub(int32 a, int32 b) { return a - b; }   // exported as `renamed`
 KAMA
 
 "$KAMA" build --shared "$tmp/mod.kama" -o "$tmp/libmod.$ext"
@@ -35,8 +36,10 @@ int main(void) {
     if (!h) { fprintf(stderr, "dlopen failed: %s\n", dlerror()); return 2; }
     binop add = (binop)dlsym(h, "add");
     binop mul = (binop)dlsym(h, "mul");
-    if (!add || !mul) { fprintf(stderr, "dlsym failed: %s\n", dlerror()); return 3; }
-    int r = add(40, 2) + mul(0, 0);   /* 42 */
+    binop sub = (binop)dlsym(h, "renamed");   /* the `@linkName`, not the kama name `sub` */
+    if (!add || !mul || !sub) { fprintf(stderr, "dlsym failed: %s\n", dlerror()); return 3; }
+    if (dlsym(h, "sub")) { fprintf(stderr, "`sub` is exported under its kama name despite @linkName\n"); return 4; }
+    int r = add(40, 2) + mul(0, 0) + sub(5, 5);   /* 42 */
     dlclose(h);
     return r;
 }
@@ -47,7 +50,7 @@ set +e
 "$tmp/host"; got=$?
 set -e
 if [ "$got" = 42 ]; then
-    echo "PASS expose_shared_check (dlsym add/mul -> $got)"
+    echo "PASS expose_shared_check (dlsym add/mul/renamed -> $got)"
     exit 0
 fi
 echo "FAIL expose_shared_check (got $got, expected 42)"

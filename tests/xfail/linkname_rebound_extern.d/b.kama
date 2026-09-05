@@ -1,0 +1,3 @@
+extern "<stdlib.h>";
+@linkName("abs") extern fn int32 magnitude(int32 x);
+unsafe fn int32 b() { return magnitude(x: -2); }

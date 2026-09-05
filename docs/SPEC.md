@@ -630,7 +630,10 @@ the exception, and by the same property rather than in spite of it: it declares 
 body to satisfy, so the promise has somewhere to land (above). `@interrupt` and `@section` remain rejected <!-- xfail: attr_on_fnptr -->
 on all three, because they attach to emitted code and a `fnptr` emits only a typedef. `@interrupt` stays
 free-function-only (a vector table reaches its handler by **bare** symbol, and a member's C name is
-mangled and takes a receiver); `@section(".name")` is legal on a free `fn` and a member.
+mangled and takes a receiver); `@section(".name")` is legal on a free `fn` and a member. The other
+attribute a bodyless form accepts is `@linkName("…")` on an `extern fn` — it names a *symbol*, not a
+body, and an `extern fn` is the one bodyless form that has one (*FFI — calling C*); on a `fnptr` it is <!-- xfail: linkname_on_fnptr -->
+rejected, as it is on an ordinary `fn`, whose C name is kama's to choose. <!-- xfail: linkname_on_fn -->
 
 ```kama
 @noheap fn int32 tick(int32 n) { /* new / "${x}" / spawn here is a compile error */ ... }
@@ -992,7 +995,25 @@ missing include is a plain C error, never a silent guess.
 
 **An `extern` is DECLARED in every file that names it — never exported, never imported.** It keeps its
 literal C spelling and is therefore not a module symbol: there is no surface for an `export` to put it on
-and nothing for an `import` to bind. Repeating `extern fn UnsafePtr malloc(usize n);` in each file that
+and nothing for an `import` to bind.
+
+**`@linkName("symbol")` binds an `extern fn` to a C symbol spelled differently from its kama name** —
+Rust's `#[link_name]`. The kama name is what the file calls; the string is what the call emits. It is
+how a C function whose name is a kama *keyword* gets a binding at all, and how a binding takes a
+name the API's own is not:
+
+```kama
+extern "adder.h";
+@linkName("match") extern fn int32 cMatch(int32 a, int32 b);          // C's `match` — a kama keyword
+@linkName("kama_test_add") extern fn int32 plus(int32 a, int32 b);
+```
+
+The string is a C symbol — letters, digits and `_`, not starting with a digit — and not a C keyword; <!-- xfail: linkname_bad_symbol, linkname_c_keyword -->
+it takes exactly one string literal, like `@section`. <!-- xfail: linkname_no_arg -->
+**One C symbol has one kama binding in a program**: `extern fn abs` in one file and
+`@linkName("abs") extern fn magnitude` in another is an error, because the agreement rule below compares <!-- xfail: linkname_rebound_extern -->
+declarations by kama name and two names for one symbol would let them disagree in silence.
+(`tests/linkname_extern.d/`.) Repeating `extern fn UnsafePtr malloc(usize n);` in each file that
 calls `malloc` is the idiom, not a smell — it is what a C header does, and a declaration is not a
 definition. A file that would rather not repeat it wraps the extern in an ordinary `fn` and exports **that**;
 the wrapper costs nothing, because `--release` folds the program into one translation unit and a
@@ -1032,7 +1053,8 @@ silently. The engine helpers that have no libm counterpart stay float32 under th
 `pi`/`tau`/`halfPi`/`epsilon`/`radians`/`degrees`/`lerp`/`clampf`/`minf`/`maxf`/`signf` — constants are
 zero-arg functions because a zero-argument generic has nothing to infer from. The seam is `kama_math.h`:
 a kama function cannot share a name with the **extern** it calls, so the binding is renamed rather than
-the API.
+the API (the same rename is now spelled in kama as `@linkName("sqrt") extern fn … cSqrt(…)`; the header
+predates it).
 
 Two limits worth knowing. A **nested generic call cannot infer** — `log(x: exp(x: 1.0))` fails because
 the inner call's return type is the very `T` being resolved; bind it to a local (kama's usual "bind it to
@@ -2218,13 +2240,18 @@ qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cas
 `extern` is the *host→kama* direction (kama calls C); **`expose` is the reverse** — it gives a **free
 function** a stable, host-callable entry point. `expose fn …` emits the function under its **bare,
 unmangled** C name (no `Namespace__` prefix — mirroring how `extern` keeps a literal name) decorated with
-`KAMA_EXPORT` for external linkage that survives dead-code elimination:
+`KAMA_EXPORT` for external linkage that survives dead-code elimination. **`@linkName("symbol")`** exports
+it under that symbol instead — Rust's `#[export_name]`, the same attribute an `extern fn` uses to bind one
+(*FFI — calling C*), so a host that knows the module by `host_tick` links against a kama `tick`:
 
 ```kama
 // gameplay.kama — a hot-reload module (note: no `main`)
 expose fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }
 expose fn int32 version() { return 3; }
+@linkName("host_tick") expose fn int32 tick() { return 41; }   // dlsym("host_tick"); there is no `tick`
 ```
+
+(`tests/linkname_expose.d/` proves the exported name through the linker; `tests/support/expose_shared_check.sh` through `dlsym`.)
 
 - **Native shared library:** `kama build --shared gameplay.kama -o libgameplay.so` (→ `.dylib`/`.dll` per
   platform) builds a `-fPIC -shared -fvisibility=hidden` library where **only** the `expose`d symbols are
@@ -2240,8 +2267,9 @@ expose fn int32 version() { return 3; }
 - **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a <!-- xfail: expose_bad_abi -->
   collection (`DynamicArray`/`FixedArray`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
   refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead.
-- **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **bare names are unique**
-  across the program (they share the C namespace — clashes with libc are yours to avoid, as with `extern`).
+- **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **exported symbols are
+  unique** across the program, whether a symbol is the kama name or a `@linkName` (they share the C <!-- xfail: linkname_dup_expose -->
+  namespace — clashes with libc are yours to avoid, as with `extern`).
 
 `expose` is distinct from `export` (module public-surface visibility) and `public`/`private` (member
 access): three boundaries, three keywords. *(The full 2.0 `expose` — richer wasm module exports and the

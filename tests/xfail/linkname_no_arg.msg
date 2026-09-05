@@ -1,0 +1,1 @@
+requires exactly one string-literal symbol name

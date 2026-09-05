@@ -1,0 +1,5 @@
+// Two exposed functions cannot share an exported symbol, whether the symbol comes from the kama name or
+// from `@linkName` — uniqueness is over what the host sees.
+expose fn int32 update() { return 1; }
+@linkName("update") expose fn int32 tick() { return 2; }
+fn int32 main() { return 0; }

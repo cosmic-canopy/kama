@@ -1,0 +1,3 @@
+// A `fnptr` signature is a TYPE. It names no symbol, so there is nothing for `@linkName` to rename.
+@linkName("cb") fnptr int32 Callback(int32 x);
+fn int32 main() { return 0; }

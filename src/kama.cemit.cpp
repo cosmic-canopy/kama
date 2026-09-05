@@ -4091,7 +4091,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // pointer — enables binding/passing a free function to a FunctionPtr.
         if (!_localTypes.count(nm)) {
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
-            if (fit != _funcs.end()) return fit->second.cName;
+            if (fit != _funcs.end()) return symbolOf(fit->second);
             // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
             // The file rung applies here exactly as it does to a type or a call: a module-scope name
             // reaches another file only through that file's `export { … };`. Without this the reference
@@ -7217,7 +7217,10 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 {
     std::string name = (fn->name && fn->name->value) ? *fn->name->value : "anon";
     isEntryPoint = (name == "main");
-    if (isExposed(fn)) return name;   // kama→host boundary: bare, unmangled C-ABI symbol (mirrors extern)
+    if (isExposed(fn)) {   // kama→host boundary: bare, unmangled C-ABI symbol (mirrors extern) — or the `@linkName`
+        auto it = _funcs.find(name);
+        return (it != _funcs.end() && !it->second.linkName.empty()) ? it->second.linkName : name;
+    }
     return qualify(name);   // scope-prefixed (main -> kama_main); _nsCtx set per file
 }
 
@@ -7288,6 +7291,8 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             continue;
         }
 
+        // The boundary symbol: the kama name, unless `@linkName("…")` says otherwise (extern/expose only).
+        const std::string link = (isExtern(fn) || isExposed(fn)) ? linkNameOf(fn) : std::string();
         if (isExposed(fn)) {
             // The kama→host boundary needs ONE concrete, C-ABI-callable symbol. A generic
             // template has none (its `T` is unbound), and a `fn ref T` place-return has no
@@ -7299,8 +7304,9 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             if (fn->isRef)
                 unsupported("`expose` cannot mark a `fn ref T` place-returning function — its "
                             "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn->line);
-            if (!_exposedNames.insert(*fn->name->value).second)
-                unsupported(("`expose`d function name '" + *fn->name->value + "' is already exposed — "
+            const std::string& exported = link.empty() ? *fn->name->value : link;
+            if (!_exposedNames.insert(exported).second)
+                unsupported(("`expose`d symbol '" + exported + "' is already exposed — "
                              "the bare C-ABI symbol must be unique").c_str(), fn->line);
         }
 
@@ -7327,6 +7333,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // extern (host->kama FFI) and expose (kama->host) both keep their literal, unmangled
         // C name — the boundary symbol must be predictable. Others are scope-prefixed (main -> kama_main).
         sig.cName   = (isExtern(fn) || isExposed(fn)) ? *fn->name->value : qualify(*fn->name->value);
+        sig.linkName = link;             // the symbol, when `@linkName` renamed it — see FuncSig
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
@@ -7455,6 +7462,32 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // own — the set can. Recorded before the table write, which overwrites the previous declaration.
         if (isExtern(fn) && !_collectingUnitPath.empty())
             _externDeclSites[sig.cName].insert(_collectingUnitPath);
+        // ONE C SYMBOL, ONE KAMA BINDING. `@linkName` lets two kama names reach one symbol, and the
+        // agreement rule above is keyed on the kama name, so `extern fn add` in one file and
+        // `@linkName("add") extern fn plus` in another would never be compared — the silent last-wins
+        // that rule exists to prevent, back through another door. Comparing signatures across kama names
+        // is machinery for a program that has two names for one thing; refuse it and name the binding
+        // that already exists.
+        if (isExtern(fn)) {
+            const std::string& sym = symbolOf(sig);
+            auto own = _externSymbolOwner.find(sym);
+            if (own != _externSymbolOwner.end() && own->second != sig.cName) {
+                std::string where;
+                auto prev = _funcs.find(own->second);
+                if (prev != _funcs.end()) {
+                    where = " (declared in " + (prev->second.declFile.empty() ? std::string("another file")
+                                                                              : "`" + prev->second.declFile + "`");
+                    if (prev->second.node && prev->second.node->name)
+                        where += ":" + std::to_string(prev->second.node->name->line);
+                    where += ")";
+                }
+                unsupported(("the C symbol `" + sym + "` is already bound as `" + own->second + "`" + where
+                             + " — one C symbol has one kama binding in a program; declare `extern fn "
+                             + own->second + "` here and call that").c_str(), fn->name->line);
+            } else {
+                _externSymbolOwner[sym] = sig.cName;
+            }
+        }
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -13957,16 +13990,16 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
         // No heap box, no free, no move (the caller keeps the local and drops it after the join).
-        if (_isolateTrampolines.insert(sig.cName).second) {
+        if (_isolateTrampolines.insert(symbolOf(sig)).second) {
             std::ostringstream tr;
-            tr << "static void* __kama_iso_" << sig.cName << "(void* __p) {\n"
-               << "    " << sig.cName << "((" << cls << "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
+            tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
+               << "    " << symbolOf(sig) << "((" << cls << "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
                << "    return (void*)0;\n"
                << "}\n";
             _fileScopeHelpers.push_back(tr.str());
         }
         val = "(void*)&(" + emitExpression(argNode->expression) + ")";
-        return sig.cName;
+        return symbolOf(sig);
     }
 
     // ── M2/M4.1: a by-value MOVED `resource` bundle ─────────────────────────────────────────────────
@@ -13985,12 +14018,12 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     SharedExpression src = h->value;
 
     // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
-    if (_isolateTrampolines.insert(sig.cName).second) {
+    if (_isolateTrampolines.insert(symbolOf(sig)).second) {
         std::ostringstream tr;
-        tr << "static void* __kama_iso_" << sig.cName << "(void* __p) {\n"
+        tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
            << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of the heap box */\n"
            << "    free(__p);\n"
-           << "    " << sig.cName << "(__v);                   /* callee owns __v and drops it at fn-end */\n"
+           << "    " << symbolOf(sig) << "(__v);                   /* callee owns __v and drops it at fn-end */\n"
            << "    return (void*)0;\n"
            << "}\n";
         _fileScopeHelpers.push_back(tr.str());
@@ -14000,7 +14033,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // moveOnlySource rejects a field/element move, matching every other `give` site.
     val = emitExpression(src);
     std::string mv = moveOnlySource(src, iso->line); if (!mv.empty()) markMoved(mv);
-    return sig.cName;
+    return symbolOf(sig);
 }
 
 // `spawn worker(p: give x);` — a bare `spawn` STATEMENT, which is a **deferred-join child of the
@@ -16658,6 +16691,46 @@ bool CEmitter::isExposed(FunctionDeclarationNode* fn)
     return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "expose";
 }
 
+// `@linkName("sym")` on an `extern fn` or an `expose fn`: the C symbol, validated — Rust's `#[link_name]`
+// and `#[export_name]` in one attribute, named for the concept rather than the backend (the 2.0 bytecode
+// VM has no C names). The shape rule is C's identifier, deliberately NOT `kamaIsIdentifier`: that one
+// also rejects kama's keywords, and a C symbol spelled like one (`type`, `match`) is precisely what this
+// attribute exists to bind. A C keyword is refused because no C symbol can be spelled as one; the
+// wrapper that emits the call would not compile. Empty when the attribute is absent or invalid (the
+// diagnostic has been emitted); read once, at collection, so an invalid name is reported once.
+std::string CEmitter::linkNameOf(FunctionDeclarationNode* fn)
+{
+    if (!fn || !fn->attributes) return "";
+    for (auto& at : *fn->attributes) {
+        if (!at || !at->name || *at->name != "linkName") continue;
+        std::string sym;
+        if (at->args && at->args->size() == 1) {
+            auto& a = (*at->args)[0];
+            if (a && !a->name && a->expression)
+                if (auto* s = dynamic_cast<StringNode*>(a->expression.get()))
+                    if (s->value) sym = *s->value;
+        }
+        if (sym.empty()) {
+            unsupported("`@linkName(\"...\")` requires exactly one string-literal symbol name", fn->line);
+            return "";
+        }
+        bool shape = isalpha((unsigned char)sym[0]) || sym[0] == '_';
+        for (char ch : sym) if (!(isalnum((unsigned char)ch) || ch == '_')) shape = false;
+        if (!shape) {
+            unsupported(("`@linkName(\"" + sym + "\")` is not a C symbol — a symbol is letters, digits and "
+                         "`_`, and does not start with a digit").c_str(), fn->line);
+            return "";
+        }
+        if (cIsReservedWord(sym.c_str())) {
+            unsupported(("`@linkName(\"" + sym + "\")` names a C keyword, and no C symbol can be spelled as "
+                         "one").c_str(), fn->line);
+            return "";
+        }
+        return sym;
+    }
+    return "";
+}
+
 // Emit `cName(leadArg, <args reordered to declared param order>)`.
 //
 // NOTE: arguments are emitted in declared (param) order, which can differ from
@@ -18926,7 +18999,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end()) {
                 out.kind    = FnPtrTarget::Function;
-                out.cName   = fit->second.cName;   // the C function name decays to a pointer
+                out.cName   = symbolOf(fit->second);   // the C function name decays to a pointer
                 out.sig     = fit->second;
                 out.display = "function '" + *id->value + "'";
                 out.noHeap  = fnHasNoHeap(fit->second.node);
@@ -20729,7 +20802,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         auto fit = _funcs.find(resolveFunc(name, qual, call->identifier.get()));
         if (fit != _funcs.end()) {
             gateExternCall(fit->second, name, call->line);
-            return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
+            return placeWrap(emitReorderedCall(symbolOf(fit->second), "", fit->second.params, call->args, call->line),
                              fit->second.isPlaceReturn);
         }
         // The head names a GENERIC template with no turbofish (`Box::tag()`). `typeName` is the bare
@@ -20774,7 +20847,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return s + ")";
     }
     gateExternCall(it->second, name, call->line);
-    return placeWrap(emitReorderedCall(it->second.cName, "", it->second.params, call->args, call->line),
+    return placeWrap(emitReorderedCall(symbolOf(it->second), "", it->second.params, call->args, call->line),
                      it->second.isPlaceReturn);
 }
 
@@ -20893,6 +20966,16 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (sec.empty())
                 unsupported("`@section(\"...\")` requires exactly one string-literal section name", line);
             parts.push_back("section(\"" + sec + "\")");
+        } else if (an == "linkName") {
+            // Validated and recorded at collection (`linkNameOf`, `FuncSig::linkName`); here it only has
+            // to be on the right kind of declaration. It emits no `__attribute__` — the symbol IS the
+            // definition's name (`mangledFunctionName`). An `extern fn` never reaches this emitter.
+            if (!fn || !isExposed(fn))
+                unsupported((std::string("`@linkName` names the symbol of an `extern fn` or an `expose fn`, and ")
+                             + (onMember ? "a member has none to rename — its C name is mangled and takes a receiver"
+                                : !fn    ? "a `static` is not a function"
+                                         : "an ordinary `fn` has none — its C name is kama's to choose; `expose` it "
+                                           "to fix the symbol")).c_str(), line);
         } else if (an == "noheap") {
             // `@noheap` (MCU step 5): a CHECKER flag, not codegen — the body rejects every emitter-visible
             // heap allocation (activated per-body in emitFunction via `_noHeapActive`). Contributes NO
@@ -26188,6 +26271,16 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                 if (!f->block) { isFnPtr = !isExtern(f); what = isFnPtr ? "a `fnptr`" : "an `extern fn`"; }
             for (auto& at : *filtered) {
                 if (!at || !at->name) continue;
+                if (*at->name == "linkName") {
+                    // Names a SYMBOL, not a body, so the property above admits it on the one bodyless
+                    // form that HAS one: an `extern fn`. A `fnptr` is a type and an `extern "<h>";` an
+                    // include — neither is a symbol to rename. Validated at collection (`linkNameOf`);
+                    // a bodied declaration is judged by `declAttrPrefix`.
+                    if (!what || (!isFnPtr && !dynamic_cast<IncludeNode*>(decl.get()))) continue;
+                    unsupported(("`@linkName` names the symbol of an `extern fn` or an `expose fn`, and "
+                                 + std::string(what) + " has no symbol to rename").c_str(), decl->line);
+                    continue;
+                }
                 if (isFnPtr && (*at->name == "noheap" || *at->name == "foreignEntry"
                                                       || *at->name == "callerThread")) {
                     // Same exception, same reason: none of the three attaches to emitted code, each

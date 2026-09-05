@@ -1,0 +1,13 @@
+// `@linkName("sym") extern fn` — the kama name is what this file calls; the string is the C symbol the
+// call emits. The first binds a C function named `match`, a kama keyword, which had no binding at all
+// before the attribute; the second merely prefers a shorter name. Both are called by their kama names,
+// and both link against csrc/adder.c through the manifest's `csources`.
+extern "adder.h";
+@linkName("match") extern fn int32 cMatch(int32 a, int32 b);
+@linkName("kama_test_add") extern fn int32 plus(int32 a, int32 b);
+
+unsafe fn int32 compute() { return cMatch(a: 6, b: 4) + plus(a: 17, b: 1); }   // 24 + 18
+
+fn int32 main() {
+    return compute();   // 42
+}

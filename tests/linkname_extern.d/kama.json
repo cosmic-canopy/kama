@@ -1,0 +1,9 @@
+{
+  "name": "linkextern",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/adder.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

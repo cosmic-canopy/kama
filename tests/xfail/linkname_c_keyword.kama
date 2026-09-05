@@ -1,0 +1,5 @@
+// A kama keyword is a legal link name (that is the point of the attribute); a C keyword is not, because
+// no C symbol can be spelled as one and the emitted call would not compile.
+extern "<stdlib.h>";
+@linkName("switch") extern fn int32 abs(int32 x);
+fn int32 main() { return 0; }

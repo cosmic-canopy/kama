@@ -1,0 +1,7 @@
+// One C symbol has ONE kama binding in a program. The extern agreement rule compares declarations by
+// kama name, so a second kama name for the same symbol would slip past it — and two files could then
+// disagree about `abs`'s signature in silence, the last-wins miscompile that rule exists to prevent.
+extern "<stdlib.h>";
+extern fn int32 abs(int32 x);
+unsafe fn int32 a() { return abs(x: -1); }
+fn int32 main() { return a(); }

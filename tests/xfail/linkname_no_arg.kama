@@ -1,0 +1,4 @@
+// Exactly one string literal, the way `@section("...")` takes one.
+extern "<stdlib.h>";
+@linkName extern fn int32 abs(int32 x);
+fn int32 main() { return 0; }

@@ -94,6 +94,11 @@ struct ParamSig {
 
 struct FuncSig {
     std::string            cName;    // mangled C name (e.g. main -> kama_main)
+    // `@linkName("sym")` — the C symbol an `extern fn` binds or an `expose fn` exports, when it differs
+    // from the kama name. `cName` stays the kama-derived name because it is ALSO the `_funcs` key, the
+    // name every call site resolves, and what `kama query` and the LSP label a function by; only EMISSION
+    // reads the symbol, through `symbolOf`. Empty when the attribute is absent.
+    std::string            linkName;
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
@@ -109,6 +114,8 @@ struct FuncSig {
     // by comparing this against the referencing unit (see `checkReach`).
     std::string            declFile;
 };
+// The C symbol a call, a decay to a function pointer or a definition emits for a free function.
+inline const std::string& symbolOf(const FuncSig& s) { return s.linkName.empty() ? s.cName : s.linkName; }
 
 // A function-pointer signature type: a bodiless `fn ret Name(params);`.
 // Lowers to `typedef ret (*cName)(paramtypes);`. FunctionPtr<Name> spells `cName`.
@@ -1527,6 +1534,8 @@ private:
     // idiom SPEC prescribes, so the answer is a SET of declaring files per C name rather than one
     // `declFile`, and `checkReach` asks whether the referencing file is in it.
     std::map<std::string, std::set<std::string>> _externDeclSites;   // literal C name -> files declaring it
+    std::map<std::string, std::string> _externSymbolOwner;           // C symbol -> the kama name bound to it (one per program)
+    std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx

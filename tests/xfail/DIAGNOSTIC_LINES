@@ -396,6 +396,13 @@ lex_comment_unterminated	lex_comment_unterminated.kama:2
 lex_string_badchar	lex_string_badchar.kama:4
 lex_string_unterminated	lex_string_unterminated.kama:3
 lex_verbatim_unterminated	lex_verbatim_unterminated.kama:3
+linkname_bad_symbol	linkname_bad_symbol.kama:3
+linkname_c_keyword	linkname_c_keyword.kama:4
+linkname_dup_expose	linkname_dup_expose.kama:4
+linkname_no_arg	linkname_no_arg.kama:3
+linkname_on_fn	linkname_on_fn.kama:4
+linkname_on_fnptr	linkname_on_fnptr.kama:2
+linkname_rebound_extern	b.kama:2
 lit_negative_into_usize	lit_negative_into_usize.kama:7
 lit_oob_argument	lit_oob_argument.kama:4
 lit_oob_assign	lit_oob_assign.kama:5
