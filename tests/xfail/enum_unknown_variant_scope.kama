@@ -1,0 +1,7 @@
+// `K::ZZZ` on an enum with no such variant. The `::` arm used to accept ANY tail once the head resolved
+// to an enum, and emitted `K_ZZZ` for the C compiler to refuse.
+type enum K { A, B }
+fn int32 main() {
+    K k = K::ZZZ;   // ERROR: `K` has no variant `ZZZ`
+    return 0;
+}

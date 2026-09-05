@@ -27,7 +27,7 @@ fn int32 main() {
         for (int32 k = 0; k < 8; k = k + 1) {
             c = ((c & 1) != 0) ? cast<uint8>((c >> 1) ^ 0x8C) : cast<uint8>(c >> 1);
         }
-        if (CRC.get(index: i) != c) { mismatches = mismatches + 1; }
+        if (CRC.get(index: cast<isize>(i)) != c) { mismatches = mismatches + 1; }
     }
     return mismatches;   // 0 — the baked (comptime) table equals the runtime computation
 }

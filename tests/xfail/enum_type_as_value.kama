@@ -1,0 +1,6 @@
+// An enum TYPE where a value is expected. It is not a value of itself; a variant is.
+type enum K { A, B }
+fn int32 main() {
+    K k = K;   // ERROR: `K` is an enum type, not a value — name a variant (`K::A`)
+    return 0;
+}

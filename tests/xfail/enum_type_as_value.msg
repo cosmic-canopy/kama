@@ -1,0 +1,1 @@
+is an enum type, not a value

@@ -1,0 +1,6 @@
+// The same unresolved name as an assignment TARGET: the place path (`emitPlace`) reuses the expression
+// path, so one rule covers both — pinned separately because a write is where a typo most often lands.
+fn int32 main() {
+    nope = 3;   // ERROR: cannot resolve `nope`
+    return 0;
+}

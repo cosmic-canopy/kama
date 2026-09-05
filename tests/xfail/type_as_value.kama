@@ -1,0 +1,6 @@
+// A class TYPE where a value is expected. The old path emitted the bare type name into the C.
+type value V {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+}
+fn int32 main() { return V; }   // ERROR: `V` is a type, not a value

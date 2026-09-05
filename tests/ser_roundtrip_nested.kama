@@ -22,7 +22,7 @@ type resource Parent {
         int32 s = this.id + this.main.weight();
         int32 m = match (this.maybe) { case Some(value: c): c.weight(); case None: 0; };
         s = s + m;
-        for (isize i = 0; i < cast<int32>(this.kids.length()); i = i + 1) { s = s + this.kids[i].weight(); }
+        for (isize i = 0; i < this.kids.length(); i = i + 1) { s = s + this.kids[i].weight(); }
         return cast<int32>(s);
     }
 }

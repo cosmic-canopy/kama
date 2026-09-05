@@ -1,0 +1,1 @@
+is a variant of `K` — write `K::A`

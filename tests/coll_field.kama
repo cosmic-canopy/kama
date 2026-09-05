@@ -8,7 +8,7 @@ type resource Bag {
     public fn void add(int32 v) { this.items.add(item: v); }
     public fn int32 sum() {
         int32 s = 0;
-        for (int32 i = 0; i < this.items.length(); i = i + 1) { s = s + this.items[i]; }
+        for (isize i = 0; i < this.items.length(); i = i + 1) { s = s + this.items[i]; }
         return s;
     }
 }

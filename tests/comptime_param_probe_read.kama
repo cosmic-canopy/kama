@@ -1,0 +1,12 @@
+// A `comptime` parameter read as a VALUE inside a template that nothing instantiates. The
+// uninstantiated-template probe walks these bodies with the parameter deliberately unbound (a probe has no
+// argument to bind), so `N` is the one name that may legitimately reach the identifier arm with nothing
+// binding it — the arm must DEFER it (counted, like every other probe residual), never report it as
+// unresolved. Both halves of the probe are pinned: a generic function and a generic type.
+fn int32 scaled<T>(T x) comptime(int32 N) { return N + 1; }
+type value Buf<T> comptime(int32 N) {
+    T v;
+    public ctor of(T v) { this.v = v; }
+    public fn int32 cap() { return N; }
+}
+fn int32 main() { return 0; }

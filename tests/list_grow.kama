@@ -11,7 +11,7 @@ fn int32 main()
 
     int32 total = 0;
     isize n = xs.length();
-    for (int32 j = 0; j < n; j = j + 1)
+    for (isize j = 0; j < n; j = j + 1)
     {
         total = total + xs[j];
     }

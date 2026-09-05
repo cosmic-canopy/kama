@@ -3857,7 +3857,10 @@ dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called wi
 (`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. The same holds for a *read*: a
 variant, a field, a `comptime` constant or a static reached through a type with `.` (`Color.Blue`, `V.N`)
 is rejected naming the `::` spelling <!-- xfail: enum_variant_dot, union_variant_dot, dot_on_type_const_read, dot_on_type_field_read, dot_on_type_static_read -->
-(`tests/xfail/enum_variant_dot.kama`). A `ctor` is static (it takes no
+(`tests/xfail/enum_variant_dot.kama`). And a name that resolves to *nothing* — a bare `Nope`, a `Foo::Bar`
+with no such member, a `K::ZZZ` with no such variant, a type where a value is expected — is kama's own
+error: it is rejected by `kama check`, in kama's vocabulary, before any C compiler runs <!-- xfail: unresolved_name, unresolved_qualified_name, enum_unknown_variant_scope, enum_type_as_value, bare_variant_name -->
+(`tests/xfail/unresolved_name.kama`). A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and for a
 `ctor` added to a primitive by a `type intrinsic` block. Every spelling is pinned by

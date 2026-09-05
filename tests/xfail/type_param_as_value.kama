@@ -1,0 +1,5 @@
+// A generic's type parameter used as a VALUE inside its body. The template is never instantiated, so
+// this is the uninstantiated-template probe reporting it — a type parameter is wrong as a value at every
+// instantiation, which is exactly the class of defect the probe exists to report (not to defer).
+fn T pick<T>(T a) { return T; }   // ERROR: `T` is a type parameter, not a value
+fn int32 main() { return 0; }

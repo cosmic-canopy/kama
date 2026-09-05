@@ -2106,6 +2106,112 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
                      + " — no such type is declared or imported").c_str(), line, name);
 }
 
+bool CEmitter::isComptimeParamHere(const std::string& nm) const
+{
+    // Function half of the probe: every param of the template is in _probeTypeParams, and only the TYPE
+    // params receive an opaque binding in _typeSubst (buildOpaqueParams) — so "probed and unbound" is
+    // exactly "const".
+    if (_probingTemplate && _probeTypeParams.count(nm) && !_typeSubst.count(nm)) return true;
+    // An instantiated generic function: its template says which of its params are const.
+    auto gi = _genericInsts.find(_currentFunc);
+    if (gi != _genericInsts.end()) {
+        auto t = _generics.find(gi->second.templateKey);
+        if (t != _generics.end() && t->second && t->second->comptimeParams)
+            for (auto& p : *t->second->comptimeParams) if (p && *p == nm) return true;
+    }
+    // A generic TYPE's method — instantiated, or the probe's opaque instance (whose `N` slot holds the
+    // valueless probeConstArg placeholder): the template's const slots say which names are values.
+    if (_currentClass && _currentClass->isGenericInst) {
+        auto of = _genericTypeInstOf.find(_currentClass->name);
+        if (of != _genericTypeInstOf.end()) {
+            auto ps = _genericTypeParams.find(of->second);
+            auto ct = _genericTypeConstTypes.find(of->second);
+            if (ps != _genericTypeParams.end() && ct != _genericTypeConstTypes.end())
+                for (size_t i = 0; i < ps->second.size() && i < ct->second.size(); ++i)
+                    if (ps->second[i] == nm && ct->second[i]) return true;
+        }
+    }
+    return false;
+}
+
+void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
+{
+    const int line = v->line;
+    if (v->qualifier && !v->qualifier->empty()) {
+        const std::string& head = *(*v->qualifier)[0];
+        const std::string& last = *v->qualifier->back();
+        std::string path = head;
+        for (size_t i = 1; i < v->qualifier->size(); ++i) path += "::" + *(*v->qualifier)[i];
+        path += "::" + nm;
+        // A value-headed `::` was already refused (it names the `.` spelling); one sentence per line.
+        if (isValueName(head, nullptr)) return;
+        auto rest = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) rest->push_back((*v->qualifier)[i]);
+        const std::string t = resolveUserName(last, rest);
+        ClassInfo* ci = nullptr;
+        if (_classes.count(t))            ci = &_classes[t];
+        else if (_genericTypes.count(t))  ci = &_genericTypes[t];
+        if (_enums.count(t) || (ci && ci->isVariant)) {
+            unsupported(("`" + last + "` has no variant `" + nm + "`").c_str(), line, nm);
+            return;
+        }
+        if (ci) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = nullptr;
+            if (findFieldOwner(ci, nm))
+                unsupported(("`" + path + "` — " + dotOnTypeAdvice(DotMemberKind::Field, last, t, nm)).c_str(), line);
+            else if ((mi = findMethod(ci, nm, &owner)))
+                unsupported(("`" + path + "` — " + dotOnTypeAdvice(mi->isCtor ? DotMemberKind::Ctor
+                                                                  : mi->isStatic ? DotMemberKind::Static
+                                                                  : DotMemberKind::Method, last, t, nm)).c_str(), line);
+            else if (!rejectUnprovenBound(t, nm, line))
+                unsupported(("`" + last + "` has no member `" + nm + "`").c_str(), line, nm);
+            return;
+        }
+        // `Natural<T>::compare` under a probe names an instance that does not exist yet — the existing
+        // bucket for that shape.
+        if (_probeTypeParams.count(head) || _probeTypeParams.count(last)) { deferUnknownWhileProbing(DK_ScopeQual); return; }
+        unsupported(("cannot resolve `" + path + "` — `" + head + "` is not a type or module in reach here").c_str(),
+                    line, head);
+        return;
+    }
+    // Bare. A TYPE where a value is expected says which kind of type, and what a value of it looks like.
+    const std::string t = resolveUserName(nm, nullptr);
+    auto ei = _enums.find(t);
+    if (ei != _enums.end()) {
+        const std::string ex = ei->second.members.empty() ? "…" : ei->second.members.front().name;
+        unsupported(("`" + nm + "` is an enum type, not a value — name one of its variants (`" + nm + "::" + ex + "`)").c_str(), line);
+        return;
+    }
+    if (_classes.count(t) || _genericTypes.count(t)) {
+        unsupported(("`" + nm + "` is a type, not a value — construct one (`" + nm + ".<ctor>(...)`) or name an "
+                     "associated item (`" + nm + "::NAME`)").c_str(), line);
+        return;
+    }
+    if (_interfaces.count(t)) { unsupported(("`" + nm + "` is a contract, not a value").c_str(), line); return; }
+    if (_sigs.count(t))       { unsupported(("`" + nm + "` is a function signature, not a value").c_str(), line); return; }
+    if (_typeSubst.count(nm) || _probeTypeParams.count(nm)) {
+        unsupported(("`" + nm + "` is a type parameter, not a value — a type has no value of its own; construct one "
+                     "through a bound (`" + nm + ".<ctor>(...)`) or take a `" + nm + "` parameter").c_str(), line);
+        return;
+    }
+    // Not a type either. The two likeliest misspellings of something that DOES exist come first.
+    if (_currentClass && _typeConsts.count(_currentClass->name + "::" + nm)) {
+        unsupported(("`" + nm + "` is a `comptime` constant of `" + _currentClass->name + "` — read it as `"
+                     + _currentClass->name + "::" + nm + "`").c_str(), line);
+        return;
+    }
+    for (auto& kv : _enums)
+        for (auto& m : kv.second.members)
+            if (m.name == nm) {
+                unsupported(("`" + nm + "` is a variant of `" + kv.first + "` — write `" + kv.first + "::" + nm
+                             + "`").c_str(), line);
+                return;
+            }
+    unsupported(("cannot resolve `" + nm + "` — no local, parameter, field, function, module `static`/`comptime` "
+                 "or type of that name is in reach here").c_str(), line, nm);
+}
+
 // A type node the emitter invents. Lazily creates the shared synth context on first use (several call
 // sites used to do that inline). See ASTNode::synthesized for what the flag buys.
 SharedIdentifier CEmitter::synthId(const std::string& name, int builtInVal)
@@ -3912,7 +4018,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
             // `v`'s span is just the MEMBER name (qualified_identifier reuses the basic_identifier node),
             // so recording the use here points find-references/rename at `Member`, not at `Enum::Member`.
-            if (_enums.count(en)) { recordRef(enumMemberKey(en, nm), v); return en + "_" + nm; }
+            // Only a MEMBER of the enum resolves here; `K::ZZZ` used to be emitted as `K_ZZZ` for the C
+            // compiler to refuse. A miss falls through (an enum can carry `Type::NAME` constants and
+            // contract methods, resolved below) and ends in rejectUnresolvedName, which names the enum.
+            if (_enums.count(en))
+                for (auto& m : _enums[en].members)
+                    if (m.name == nm) { recordRef(enumMemberKey(en, nm), v); return en + "_" + nm; }
             // `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
             // (`Optional<int32>::None` resolves the instance via the target-type context).
             if (ClassInfo* vt = resolveVariantType(en))
@@ -3956,11 +4067,15 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             std::string cpv = constParamCValue(nm);
             if (!cpv.empty()) return cpv;
         }
+        // A QUALIFIED name resolves through its qualifier and nothing else. The two arms below used to
+        // ignore it, so `S::x` inside a method of a class with a field `x` resolved to `self->x` — and
+        // built, and ran (tests/xfail/scope_op_field_leak).
+        const bool qualified = v->qualifier && !v->qualifier->empty();
         // A ref/out parameter is a pointer in C; reads dereference it.
-        if (_refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + nm + ")"; }
+        if (!qualified && _refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + nm + ")"; }
         // An unqualified name that is a field of the enclosing class (or an
         // ancestor) and not a local/param resolves to self->[__base.]…field.
-        if (_currentClass && !_localTypes.count(nm)) {
+        if (!qualified && _currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) {
                 if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
@@ -3994,6 +4109,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
                 return key;
             }
+        }
+        // Nothing above bound the name, and it is not a local, a parameter or a ref-param either: it
+        // resolves to NOTHING. This is the arm that was missing — the spelling used to be written into the
+        // C for the C compiler to refuse ("use of undeclared identifier"), on the right line and in the
+        // wrong language, while `kama check` said OK. The one name allowed through is a `comptime` param
+        // a probe left unbound (deferred and counted, like every probe residual).
+        const bool bound = !qualified && (_localTypes.count(nm) || _paramNames.count(nm) || _refParams.count(nm));
+        if (!v->synthesized && v->builtInVal == 0 && !bound) {
+            if (isComptimeParamHere(nm)) { deferUnknownWhileProbing(DK_ConstParam); return nm; }
+            rejectUnresolvedName(v, nm);
+            return "0";
         }
         checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
         recordRef(bindingKeyOf(nm), v);   // a local, a param, or an unindexed name (empty key => dropped)
@@ -7037,13 +7163,25 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
     ASTNode* n = stmt.get();
 
     if (auto* decl = dynamic_cast<LocalVariableDeclaration*>(n)) {
-        std::string s = cType(decl->type) + " ";
+        const std::string ty = cType(decl->type);
+        std::string s = ty + " ";
         bool first = true;
         if (decl->variables) {
             for (auto& d : *decl->variables) {
                 if (!first) s += ", ";
                 first = false;
-                s += (d->name && d->name->value) ? *d->name->value : "";
+                const std::string nm = (d->name && d->name->value) ? *d->name->value : "";
+                s += nm;
+                // A `for` init declares a LOCAL. Record it in the binding tables exactly as emitDeclarator
+                // does — it used to be invisible to all of them, so the counter of every `for` loop in the
+                // corpus reached the identifier arm as a name nothing bound. Not pushed onto the scope's
+                // `declaredNames`: two sequential loops over `i` in one function are ordinary, not shadowing.
+                if (!nm.empty()) {
+                    _localTypes[nm]     = (isClass(ty) || isInterface(ty)) ? ty : "";
+                    _localCTypes[nm]    = ty;
+                    _localTypeNodes[nm] = decl->type;
+                    registerBinding(d->name.get(), SymKind::Local);
+                }
                 if (d->initializer) s += " = " + emitExpression(d->initializer);
             }
         }
@@ -11947,6 +12085,7 @@ const char* CEmitter::deferKindName(int k)
         case DK_ScopeQual:   return "scope-qual";
         case DK_DotCtor:     return "dot-ctor";
         case DK_OpaqueScalar: return "opaque-scalar";
+        case DK_ConstParam:  return "const-param";
     }
     return "?";
 }

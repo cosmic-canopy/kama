@@ -1,0 +1,7 @@
+// A FIELD reached through its type with `::`. A field belongs to a value; the `::` head is a type, so the
+// advice names the value spelling. Twin of xfail/scope_op_on_value (a `::` whose HEAD is a value).
+type value V {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+}
+fn int32 main() { return V::n; }   // ERROR: `n` is a field. Read it from a value (`obj.n`)

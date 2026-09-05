@@ -1,0 +1,7 @@
+// The tagged twin of xfail/enum_unknown_variant_scope: a payload-less variant name that does not exist.
+// The variant loop missed and the name fell through to the unqualified paths, qualifier and all ignored.
+type enum S { Y(int32 v), Z }
+fn int32 main() {
+    S s = S::Zzz;   // ERROR: `S` has no variant `Zzz`
+    return 0;
+}

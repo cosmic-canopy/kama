@@ -1,0 +1,7 @@
+// A variant named bare, without its enum. C and C++ readers expect this to work; in kama a variant is
+// an associated item of its type and is always spelled through it. The hint names the enum that has it.
+type enum K { A, B }
+fn int32 main() {
+    K k = A;   // ERROR: `A` is a variant of `K` — write `K::A`
+    return 0;
+}

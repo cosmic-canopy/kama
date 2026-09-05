@@ -1,0 +1,3 @@
+// `Nope::Bar` where nothing is named `Nope`: the head is the defect, and the message says so instead of
+// blaming the tail (which is what dropping the qualifier used to do).
+fn int32 main() { return Nope::Bar; }   // ERROR: `Nope` is not a type or module in reach here

@@ -1,0 +1,7 @@
+// `Type::name` where the type is real and the name is not a member of it. The old path DROPPED the
+// qualifier and emitted bare `Bar`, so the C compiler's message named a spelling nobody wrote.
+type value Foo {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+}
+fn int32 main() { return Foo::Bar; }   // ERROR: `Foo` has no member `Bar`

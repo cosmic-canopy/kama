@@ -1258,6 +1258,7 @@ private:
         DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
         DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
         DK_OpaqueScalar,     // `cast<T>(…)` — kama has NO bound that says "an integer primitive"
+        DK_ConstParam,       // `return N;` — a `comptime` param read as a value; a probe binds no argument to it
         DK_Count
     };
     static const char* deferKindName(int k);
@@ -2256,6 +2257,16 @@ private:
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
     std::string namespaceOfType(const std::string& value) const;  // `ns::path` of a registered type with bare name `value`, else "" (missing-import diagnostic)
     bool isTypeParamName(const std::string& n) const;              // `n` is a generic type-param (any template's, or an active binding)
+    // The VALUE-position twin of checkTypeResolves: a bare or `::`-qualified name that no binding table,
+    // function, module static, enum, type constant or type resolved. Says what the name IS when it is a
+    // type, a variant of some enum, a member reached with the wrong operator — and "cannot resolve" only
+    // when it is nothing at all. Never called for a name a table bound.
+    void rejectUnresolvedName(IdentifierNode* v, const std::string& nm);
+    // `nm` is a `comptime` parameter of the function or type being emitted, read while nothing binds it —
+    // the uninstantiated-template probe leaves every const param unbound on purpose, and a real
+    // instantiation whose argument did not fold was already reported at its call site. Neither is a defect
+    // of the body, so the identifier arm defers (probe) or stays silent (cascade) instead of rejecting.
+    bool isComptimeParamHere(const std::string& nm) const;
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)

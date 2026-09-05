@@ -1,0 +1,10 @@
+// The silent one. Inside a method of a class with a field `x`, `S::x` — `S` an unrelated enum — used to
+// resolve to `self->x`: the implicit-`this` field arm never looked at the qualifier, so the program built
+// and RAN with a spelling that names nothing. A qualified name must resolve THROUGH its qualifier.
+type enum S { Z, Y(int32 v) }
+type value V {
+    public int32 x;
+    public ctor make() { this.x = 7; }
+    public fn int32 g() { return S::x; }   // ERROR: `S` has no variant `x`
+}
+fn int32 main() { V v = V.make(); return v.g(); }

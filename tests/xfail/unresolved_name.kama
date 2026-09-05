@@ -1,0 +1,6 @@
+// A name that exists nowhere, in expression position. `kama check` promises name resolution, and until
+// this fixture the promise was false: the emitter wrote the spelling straight into the C and the C
+// compiler reported "use of undeclared identifier" — the right line, the wrong language.
+fn int32 main() {
+    return Nope;   // ERROR: cannot resolve `Nope`
+}
