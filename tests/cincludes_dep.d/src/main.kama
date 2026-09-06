@@ -1,0 +1,7 @@
+// A dependency's `cincludes` puts its OWN include tree on the consumer's include path. The header here
+// is not beside the .c (which the csources rule would find on its own) — it sits in include/cinc/, the
+// way a real C library lays itself out, and both the package's C and the kama file that externs it
+// reach it through the manifest key. Without it: `cinc/cinc.h` not found, from the C compiler.
+import { cinc::eleven };
+
+fn int32 main() { return eleven(n: 3); }   // 33

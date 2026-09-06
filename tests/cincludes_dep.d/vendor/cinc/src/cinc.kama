@@ -1,0 +1,7 @@
+// The kama face. `extern "cinc/cinc.h"` resolves through the same `cincludes` entry the C does.
+export { eleven };
+
+extern "cinc/cinc.h";
+extern fn int32 kama_test_cinc_eleven(int32 n);
+
+unsafe fn int32 eleven(int32 n) { return kama_test_cinc_eleven(n: n); }

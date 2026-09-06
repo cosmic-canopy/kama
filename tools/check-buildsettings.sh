@@ -327,6 +327,55 @@ mkdir -p "$tmp/objkind/csrc"; printf 'int kama_objkind_x(void) { return 1; }\n' 
          || { bad "OUTPUT=OBJECT failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: \`cincludes\` puts a package's include tree on the path, under the path rules"
+
+# The runnable proof is tests/cincludes_dep.d/: a dependency whose header lives in include/, not beside
+# its .c, reached by both the C and the kama extern. What lives here is the refusals — the same three
+# every file-naming key shares — and that a directory which is not there is named by kama.
+app incabs <<'JSON'
+{ "name": "incabs", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cincludes": ["/usr/include"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/incabs/kama.json" -o "$tmp/incabs/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "an absolute \`cincludes\` path was accepted" \
+    || { grep -qF 'relocatable' "$tmp/e" \
+         && ok "an absolute include dir is refused — a manifest must stay relocatable" \
+         || { bad "an absolute include dir was refused for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+app incdot <<'JSON'
+{ "name": "incdot", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cincludes": ["../include"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/incdot/kama.json" -o "$tmp/incdot/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a \`cincludes\` path escaping with .. was accepted" \
+    || { grep -qF 'escapes the project' "$tmp/e" \
+         && ok "an include dir escaping the package with .. is refused" \
+         || { bad "the .. include dir was refused for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+app incmiss <<'JSON'
+{ "name": "incmiss", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cincludes": ["include"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/incmiss/kama.json" -o "$tmp/incmiss/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a \`cincludes\` directory that does not exist was accepted" \
+    || { grep -qF 'is not a directory' "$tmp/e" \
+         && ok "a directory that is not there is named by kama, not by a missing header three steps later" \
+         || { bad "a missing include dir failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+# A non-array is refused by shape, like every other list key.
+app incshape <<'JSON'
+{ "name": "incshape", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cincludes": "include",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/incshape/kama.json" -o "$tmp/incshape/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a string \`cincludes\` was accepted" \
+    || ok "\`cincludes\` must be an array"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: \`emSettings\` MERGES with kama's own, instead of losing to them"
 
 # The defect: emcc is LAST-WINS on a repeated `-s`, and kama emitted its own

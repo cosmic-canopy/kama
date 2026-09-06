@@ -221,6 +221,26 @@ project with `..`. A path that simply is not there is named by kama, not by the 
 `OUTPUT=OBJECT` builds one translation unit by definition, so it refuses a build that has a `csources`
 entry beside the program — `OUTPUT=STATIC` is the shape that takes several.
 
+### `cincludes` — a package's include tree
+
+A header beside its `.c` is found on its own (above). A library whose headers live in their own tree —
+which is most of them — names the tree:
+
+```json
+{
+  "csources":  ["third_party/foo/src/foo.c"],
+  "cincludes": ["third_party/foo/include"]
+}
+```
+
+Each entry is a directory, **relative to the manifest that declares it**, put on the include path for
+every translation unit of the build — the package's own C and the kama file that `extern "foo/foo.h";`s
+it alike. A dependency's `cincludes` reach its consumer's build the way its `csources` do, which is what
+lets a package vendor a C library whole. The same three refusals as `csources` (absolute, escaping with
+`..`, not there — a missing directory is named by kama, with the package that declared it, rather than
+surfacing as a missing header three steps later). This is the structured route for what a raw `-I` in a
+dependency's `cflags` cannot say, and why that is refused below.
+
 ### `jsLibraries` and `emSettings` — the emscripten pair
 
 ```json
@@ -283,12 +303,13 @@ What a dependency **cannot** do is redefine your build:
 
 | it contributes | it does not |
 |---|---|
-| `cflags`, `ldflags`, `link`, `csources`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| `cflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | `reproducible-float` — it can only turn contraction off, and its own arithmetic is what you compile | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
-resolve against *your* working directory rather than against the package — make it absolute. And a
+resolve against *your* working directory rather than against the package — a package's own include tree
+is `cincludes`, which kama resolves against the declaring manifest; a machine path stays absolute. And a
 dependency whose manifest does not parse stops the build, naming that file: silently skipping it would
 silently drop whatever it was contributing. (`kama query` and `kama lsp` stay lenient — an editor sits
 above trees you do not own.)

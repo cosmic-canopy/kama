@@ -1,0 +1,9 @@
+{
+  "name": "cincdep",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "cinc": { "path": "./vendor/cinc" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

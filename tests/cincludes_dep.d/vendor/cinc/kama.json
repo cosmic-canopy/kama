@@ -1,0 +1,9 @@
+{
+  "name": "cinc",
+  "version": "1.0.0",
+  "kind": "library",
+  "source": "src",
+  "csources": ["csrc/cinc.c"],
+  "cincludes": ["include"],
+  "modules": { ".": { "visibility": "public" } }
+}

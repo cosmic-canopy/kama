@@ -2630,6 +2630,7 @@ struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
     std::vector<std::string> cflags, ldflags, link;
     std::vector<std::string> csources, jsLibraries;   // as written, relative to `manifestPath`
+    std::vector<std::string> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
     // The one boolean that travels. `no-heap` and `webgpu` are whole-artifact decisions a dependency
     // must not make for its consumer (one changes what compiles, the other demands an SDK) and are read
@@ -2644,6 +2645,11 @@ struct BuildSettings {
 // shipping `shim.c` from writing the same object file (and racing for it under `-j`).
 struct CSourceRef { std::string owner, path; };
 static std::vector<CSourceRef> g_csources;
+// `cincludes`, resolved the same way: a package's include DIRECTORIES. A raw relative `-I` in a
+// dependency's cflags is refused (it would resolve against the consumer's cwd), and a header beside a
+// `.c` is found through that entry's own directory — this is the structured route for the case in
+// between: a library whose headers live in their own `include/` tree, which is most of them.
+static std::vector<CSourceRef> g_cincludes;
 // The emscripten pair, resolved and merged across every manifest in the build. Both are inert on a
 // non-wasm target; the SHAPE is still validated everywhere, because the same manifest builds both.
 static std::vector<CSourceRef> g_jsLibraries;
@@ -2689,6 +2695,7 @@ struct ManifestReader {
     std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
     std::vector<std::string>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
+    std::vector<std::string>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
     // A VECTOR, not a map: the file's own order is the order a conflict names its settings in, and the
     // order they reach the command line.
     std::vector<std::pair<std::string, EmValue>>* emSettingsOut = nullptr;
@@ -3444,6 +3451,16 @@ struct ManifestReader {
                 if (!stringArray(into, "jsLibraries")) return false;
                 for (const std::string& p : into) if (!validRelPath(p, "jsLibraries")) return false;
             }
+            // Include directories, under the path rules every file-naming key shares (inside the
+            // package, relative to the manifest that names them). Whether each is actually a directory
+            // is checked where the command line is built, which is the one place that can name the
+            // declaring package too.
+            else if (key == "cincludes") {
+                std::vector<std::string> scratch;
+                std::vector<std::string>& into = cincludesOut ? *cincludesOut : scratch;
+                if (!stringArray(into, "cincludes")) return false;
+                for (const std::string& p : into) if (!validRelPath(p, "cincludes")) return false;
+            }
             else if (key == "emSettings") {
                 std::vector<std::pair<std::string, EmValue>> scratch;
                 if (!emSettingsObject(emSettingsOut ? *emSettingsOut : scratch)) return false;
@@ -4132,7 +4149,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.linkOut = &out.link; r.cflagsOut = &out.cflags; r.ldflagsOut = &out.ldflags;
-    r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries;
+    r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
     r.reproFloatOut = &out.reproFloat;
     if (!r.parse()) {
@@ -4477,7 +4494,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
-    g_csources.clear(); g_jsLibraries.clear(); g_emSettings.clear();
+    g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_strictFlags = false;
     g_logDefault.clear();
@@ -4737,6 +4754,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs) });
                 for (const std::string& js : bs.jsLibraries)
                     g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
+                for (const std::string& inc : bs.cincludes)
+                    g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc) });
                 if (!mergeEmSettings(bs.emSettings, n, derr)) {
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
@@ -4760,6 +4779,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs) });
         for (const std::string& js : g_rootSettings.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        for (const std::string& inc : g_rootSettings.cincludes)
+            g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc) });
         // The project merges LAST, which is what makes "the project wins" true of a scalar — including
         // over a conflict two dependencies could not settle between themselves.
         std::string merr;
@@ -10165,6 +10186,22 @@ int main(int argc, char** argv)
             for (const CSourceRef& cs : g_csources) {
                 std::string d = dirName(cs.path);
                 if (!d.empty() && seenDirs.insert(d).second) cmd << "-I\"" << d << "\" ";
+            }
+            // `cincludes` — a package's own include tree, resolved against its manifest. After the
+            // csources dirs, so the shadowing order above still holds. A directory that is not there is
+            // named by kama (with the package that declared it) rather than silently skipped by the C
+            // compiler, which is how a typo'd `include` would otherwise surface: as a missing header,
+            // three steps later, in a file the consumer does not own.
+            for (const CSourceRef& inc : g_cincludes) {
+                if (!dirExists(inc.path)) {
+                    fprintf(stderr,
+                        "kama: `cincludes` names '%s', which is not a directory%s%s.\n",
+                        inc.path.c_str(),
+                        inc.owner.empty() ? "" : " (declared by dependency `",
+                        inc.owner.empty() ? "" : (inc.owner + "`)").c_str());
+                    return 2;
+                }
+                if (seenDirs.insert(inc.path).second) cmd << "-I\"" << inc.path << "\" ";
             }
         }
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
