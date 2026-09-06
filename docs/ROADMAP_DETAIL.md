@@ -1220,6 +1220,29 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ## 3. Open design questions (settle before the work they gate)
 
+- **Audit every "waiting on a consumer" deferral (raised 2026-09-06).** The const-pointer row was a
+  *declared* deferral: the emitter's own comment on `const fn ref T` says a read-only place "needs a
+  const-place type kama does not have, and the corpus asks for it nowhere" — true until the first package
+  held a key `const` and wanted C to read it. kama is a general-purpose systems language, and **YAGNI is
+  not a rule it can apply to its own surface**: a feature a consumer will need is decided on its merits,
+  not deferred until the corpus happens to ask. The audit is a **read, not a grep** — this file's §2 and §3,
+  every "non-goal" / "not in the language" / "deliberately not" sentence in [SPEC.md](SPEC.md), the
+  emitter's "asks for it nowhere" / "deliberately not answered here" comments, and the language-holes
+  list — producing one verdict per item: *schedule* (it becomes its own row, sized), *genuinely optional*
+  (say why a consumer never needs it), or *non-goal* (say what answers the need instead). Seed list, found
+  while shipping the const pointer:
+  - **a read-only PLACE** (C#'s `ref readonly`) — the `const fn ref T` refusal is the workaround, and a
+    read-only view over a non-`Copyable` element cannot be indexed without it;
+  - **`Copyable.copy(ref T source)` takes a mutable borrow** — a `string` copies out of a `const ref
+    DynamicArray<string>` fine (measured), whether a `Copyable` *resource* does is unmeasured;
+  - **capturing closures** (the *No capturing closures* row) — the textbook case: deferred because the
+    first consumer "says it bites at their UI milestone, not before";
+  - **member visibility per type vs per file** (the next item in this section);
+  - default parameters (a declared non-goal in SPEC § *Construction*); the `Optional`-of-everything ctor
+    pattern (§4 below); "removing fences nobody has asked to remove" (§2, the generic-body fences); the
+    `const`-param shadowing ban "deliberately not answered here" (`checkConstParamBinder`); the C++ half
+    of `csources` (its own row).
+
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
   types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
