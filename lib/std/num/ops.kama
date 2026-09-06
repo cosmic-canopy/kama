@@ -1,18 +1,54 @@
 
-// Integer min/max/clamp/abs/sign for the two common signed widths (parallel to std::math's float32
-// `minf`/`maxf`/`clampf`/`absf`/`signf`). No overloading, so the width is in the name. `absI*` of the
-// type minimum overflows (no positive counterpart) — the caller's responsibility, like C.
-export { minI32, maxI32, clampI32, absI32, signI32,
-         minI64, maxI64, clampI64, absI64, signI64 };
+// `min`/`max`/`clamp` over anything `Comparable` — every integer width, `float32`/`float64` (a TOTAL
+// order: NaN sorts after every number), `string`, and a user type that implements `Comparable<This>`.
+// One generic each, in place of the `minI32`/`minI64`/`minf` ladder that spelled the width in the name.
+// `min` and `max` answer `a` when the two compare `Equal` (stable, like `sort`); `clamp` compares twice.
+// The integer `abs`/`sign` stay per width below: no contract names "an integer that can be negated".
+export { min, max, clamp, absI32, signI32, absI64, signI64 };
 
-fn int32 minI32(int32 a, int32 b) { return a < b ? a : b; }
-fn int32 maxI32(int32 a, int32 b) { return a > b ? a : b; }
-fn int32 clampI32(int32 x, int32 lo, int32 hi) { return x < lo ? lo : (x > hi ? hi : x); }
+// Statement matches with a `return` in every arm, not a value-producing match: `T` may OWN (a `string`),
+// and the move analysis wants each parameter moved on all paths or none — at a match EXPRESSION's merge
+// `a` is moved on one arm and not the other; a `return` per arm has no merge.
+fn T min<T: Comparable<T>>(T a, T b) {
+    Ordering o = a.compareTo(other: b);
+    match (o) {
+        case Greater: { return b; }
+        case Less:    { return a; }
+        case Equal:   { return a; }
+    };
+}
+
+fn T max<T: Comparable<T>>(T a, T b) {
+    Ordering o = a.compareTo(other: b);
+    match (o) {
+        case Less:    { return b; }
+        case Greater: { return a; }
+        case Equal:   { return a; }
+    };
+}
+
+// `x` held to [lo, hi]. `lo` above `hi` is a contract violation and panics rather than answering either.
+fn T clamp<T: Comparable<T>>(T x, T lo, T hi) {
+    Ordering bounds = lo.compareTo(other: hi);
+    match (bounds) { case Greater: { panic(msg: "clamp: lo is above hi"); } case Less: { } case Equal: { } };
+    Ordering low = x.compareTo(other: lo);
+    match (low) {
+        case Less:    { return lo; }
+        case Equal:   { return x; }
+        case Greater: {
+            Ordering high = x.compareTo(other: hi);
+            match (high) {
+                case Greater: { return hi; }
+                case Less:    { return x; }
+                case Equal:   { return x; }
+            };
+        }
+    };
+}
+
+// Integer abs/sign for the two common signed widths. `absI*` of the type minimum overflows (no positive
+// counterpart) — the caller's responsibility, like C.
 fn int32 absI32(int32 x)  { return x < 0i32 ? 0i32 - x : x; }
 fn int32 signI32(int32 x) { return x > 0i32 ? 1i32 : (x < 0i32 ? 0i32 - 1i32 : 0i32); }
-
-fn int64 minI64(int64 a, int64 b) { return a < b ? a : b; }
-fn int64 maxI64(int64 a, int64 b) { return a > b ? a : b; }
-fn int64 clampI64(int64 x, int64 lo, int64 hi) { return x < lo ? lo : (x > hi ? hi : x); }
 fn int64 absI64(int64 x)  { return x < 0i64 ? 0i64 - x : x; }
 fn int64 signI64(int64 x) { return x > 0i64 ? 1i64 : (x < 0i64 ? 0i64 - 1i64 : 0i64); }

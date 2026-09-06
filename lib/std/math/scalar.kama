@@ -24,12 +24,12 @@
 // implementer writes `public fn MyFixed sqrt()`, not a prefixed hook. Callers need not import `Real` for
 // the bound to resolve: a generic's bounds resolve in the module where the generic was WRITTEN.
 //
-// The engine helpers (`pi`/`lerp`/`clampf`/`minf`/`maxf`/`signf`/`radians`/`degrees`) stay float32 under
-// their kama names — they have no libm counterpart, and their genericization belongs with the
-// `minI32`/`minf` reconcile, not here. Constants are zero-arg functions (`pi()`) because a zero-argument
-// generic would have nothing to infer from and would force `pi::<float64>()` at every use.
+// The engine helpers (`pi`/`lerp`/`signf`/`radians`/`degrees`) stay float32 under their kama names — they
+// have no libm counterpart. `min`/`max`/`clamp` are `std::num`'s generics over `Comparable` (the float32
+// `minf`/`maxf`/`clampf` ladder went with `minI32`'s). Constants are zero-arg functions (`pi()`) because a
+// zero-argument generic would have nothing to infer from and would force `pi::<float64>()` at every use.
 export { Real,
-         pi, tau, halfPi, epsilon, radians, degrees, lerp, clampf, minf, maxf, signf,
+         pi, tau, halfPi, epsilon, radians, degrees, lerp, signf,
          sqrt, cbrt, sin, cos, tan, asin, acos, atan, exp, log, log2, log10,
          floor, ceil, round, trunc, abs, pow, fmod, atan2, hypot };
 
@@ -151,7 +151,4 @@ fn float32 epsilon() { return 0.000001f32; }
 fn float32 radians(float32 deg) { return deg * 0.0174532925f32; }   // deg * PI/180
 fn float32 degrees(float32 rad) { return rad * 57.2957795f32; }     // rad * 180/PI
 fn float32 lerp(float32 a, float32 b, float32 t) { return a + (b - a) * t; }
-fn float32 clampf(float32 x, float32 lo, float32 hi) { return x < lo ? lo : (x > hi ? hi : x); }
-fn float32 minf(float32 a, float32 b) { return a < b ? a : b; }
-fn float32 maxf(float32 a, float32 b) { return a > b ? a : b; }
 fn float32 signf(float32 x) { return x > 0.0f32 ? 1.0f32 : (x < 0.0f32 ? -1.0f32 : 0.0f32); }

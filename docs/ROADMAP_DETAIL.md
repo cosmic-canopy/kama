@@ -197,40 +197,6 @@ Everything else here is library or toolchain work that does **not** gate the tag
      `HostUnreachable` rather than an empty list). *(UDP and ephemeral-port `getsockname` ship —
      `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2 — and DNS is the first
      concrete reason to want that row: the resolver already sees the AAAA records it has to drop.)*
-   - **`std::math` has no INTEGER `min`/`max`/`clamp`.** `minf`/`maxf`/`clampf` ship and are `float64`
-     only (`lib/std/math/scalar.kama`), so `min(cpuCount(), xs.length())` — the obvious thing to write for a
-     `parallel_for (…, workers:)` count — has no function behind it and needs a local plus an `if`. Found
-     2026-08-29 while spelling that clause. A generic over the existing `Comparable<T>` contract is the
-     obvious shape, which would also cover `string` and user types; the alternative is a per-width family
-     matching `minf`'s style. Small, and it is the kind of hole that only shows up when someone reaches
-     for it.
-   - **`std::fs` / `std::io` — SHIPPED `0.9.193`–`0.9.195`**: `Metadata.modified`/`readOnly`, `std::path`,
-     `createDir[All]`/`removeDir[All]`/`rename`/`exists`, `OpenMode::Append`, `stdin()`/`stdout()`/`stderr()`,
-     `readLine` and a `foreach`-able `Lines<R>`. ⚠️ Two things worth keeping from the work: `Iterator<T>`
-     had to admit a `resource` (an iterator that OWNS its source was a case that had never existed, not
-     one SPEC had ruled out — the widening cost no emitter change and the corpus was green first run), and
-     `removeDirAll` does not follow a symlink but cannot promise atomicity against a racing writer without
-     `openat`/`unlinkat`, which the seam does not carry — that residue is where a future `std::fs` row
-     starts. *(Buffered readers/writers ship — `BufReader`/`BufWriter` in `lib/std/io/streams.kama`.)*
-   - **`std::io` transform adapters (compression et al.)** — `Writer`/`Reader` *wrappers* that transform bytes
-     in flight, composing with serde and net (Go/Rust `io`-wrapper style): `DeflateWriter<W>`/`InflateReader<R>`
-     (gzip/deflate), later checksums/hashing/framing. On the **web target** these are a near-free ride — wrap
-     the browser's built-in `CompressionStream`/`DecompressionStream` (no wasm code-size cost); on native, wrap
-     zlib/zstd. Composes as `encodeTo(v, into: DeflateWriter(sink))`. The *transport* free-rides too
-     (WebSocket `permessage-deflate`, HTTP `Content-Encoding`). Pairs naturally with the binary serde backend
-     (crushes its field-name redundancy). (Engine-level replication — snapshots/deltas/dirty-tracking — stays
-     above this, in the engine.)
-   - **Windows suite wall-clock — the residual now that Windows itself is closed.** ~906 s there vs
-     ~75 s in the container. `kama build -j` parallelizes on Windows (1.65x on 17 TUs), but
-     `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out per fixture, so that win does not reach the
-     suite. The per-fixture cost is the C compile plus Windows process startup, not — as previously
-     recorded here — a connect/accept timeout: `net_addr_ctor` opens no socket at all and cost the same
-     40 s as `net_refused`. Defender exclusion on the runner temp dir is the cheapest untried lever.
-     Platform record: [platforms/windows.md](platforms/windows.md).
-3. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
-   ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
-   flash pass — detail in §5 (embedded "Toolchain / build" row).
-
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
    later tool rides on; the residuals are in §10.
@@ -255,33 +221,6 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
-
-- **Generic inference reads only the arguments — an unsuffixed literal binds `T` as `int32` before a
-  typed sibling is seen, and a receiver call cannot bind `T` at all.** Measured 2026-09-05 writing
-  `std::random`: `range(rng: g, lo: 0, hi: n)` with `isize n` fails ("cannot unify `T` (int32 vs isize)"),
-  `range(rng: g, lo: lo, hi: xs.length())` fails ("argument `hi` is not a literal or a locally-typed
-  value"), and a turbofish does not rescue either — `explicitGenericInst` seeds the binding and hands off to
-  the same unify with the conflict check intact (`inferGenericInst`, `src/kama.cemit.cpp` ~11555–11730;
-  `exprTypeNode` answers only a receiver-less non-generic call). The two fixes are small and separable:
-  **(a)** treat an unsuffixed integer literal as *deferrable* — bind `T` from every other argument first,
-  then retype the literal to it, the same "literal is typed by its destination" rule the isize campaign
-  taught ternary arms, mixed binaries and `match` arms; **(b)** let `exprTypeNode` answer a method call on a
-  typed local from the method's declared return type. Fixtures: the two failing shapes above, plus the
-  existing `generic_wide_literal`. Until then the spelling is two typed locals, which is why `std::random`
-  has `below(n:)` beside `range` — keep `below` regardless; an index and a value are different jobs.
-- **Layout control does not reach an `enum`.** `@align(N)`/`@packed` ship on a type with a struct
-  (`type value`/`type resource`) and are REFUSED on both enum shapes, with a diagnostic that says so — this
-  is a tracked deferral, not an oversight, and it is deliberately not a half-answer. A payload-less enum has
-  no struct at all: it lowers to an integer (`typedef uint8_t E;` when pinned), and what it can already say
-  about its layout is its tag width, `type enum E : IntType`. A **tagged** enum is the real gap, and the
-  reason it waits is that `emitVariantStruct` emits an outer struct wrapping a per-variant payload
-  `struct` and a `union` — so `__attribute__((packed))` on the outer one does **not** reach the payloads,
-  and "packed except where it matters" is worse than refused. Settling it means deciding whether `packed`
-  propagates inward and pinning that with a fixture that reads real `sizeof`s, which is a different piece
-  of work from the passthrough that shipped. `@align(N)` alone would reach a tagged enum today, but
-  shipping align-yes/packed-no is a worse rule than one line that covers both. Nothing needs it: the
-  motivating cases (a vertex buffer, an `std140` block, an MMIO register block, a wire struct) are all
-  `type value`. Reopen when a real wire-format union appears.
 
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
@@ -1938,36 +1877,14 @@ rather than here, so there is one number to keep current. Forward work:
   without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.
   User docs (including the registry protocol a host must serve): [packages.md](packages.md). What remains is
   hosted-services and ops work:
-  - **Official vs community packages — DECIDED 2026-09-05: the `@kama` scope is the mark, and it is also
-    the channel.** The mechanism already ships (`packages.md` § *Scopes*: `@scope/name`, a scope binds to a
-    registry, the package imports under its bare last segment — probed: `kama seed --name @kama/sodium`
-    seeds, checks and builds, and the artifact drops the scope). So an official package is `@kama/<name>`,
-    served from the official registry, imported as `<name>::…`; a community package is unscoped or under its
-    own scope; the repo is `kama-<name>` under the org. This is where npm (`@angular/`), JSR (`@std/`), NuGet
-    (reserved `Microsoft.*` prefixes with a badge) and Go (`golang.org/x/`) all landed, and the ecosystems
-    that put nothing in the name — crates.io, PyPI — have debated namespacing for years because names were
-    first-come. Two follow-throughs: **reserve `@kama` and `@std`** at the registry the day M3.3's host
-    exists (a policy the static index can enforce by refusing the scope from any other publisher), and one
-    sentence in `packages.md` § *Scopes* saying so. **`@kama/sodium` is the first** — a libsodium binding
-    (ISC, so MIT-licensable) living OUTSIDE this repo as a peer, seeded with `kama seed --kind library
-    --agents --claude --skill` so it is also the worked example of the recommended project bundle; the one
-    thing `seed` cannot write today is a LICENSE, so **`kama seed --license mit`** lands first (the bundle a
-    package publishes with must be complete). Scope for the first cut: `secretbox`/`box`/`sign`/
-    `randombytes` — the first consumer's encrypted UDP channel and nothing above it; a binding writes no
-    cryptography of its own, and an encrypted channel with sequence numbers is the engine's layer.
-  - **Both gated on hosted services / the repo being public + the website staged:**
-    - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host (Cloudflare
-      Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI (`kDefaultRegistry`,
-      deliberately **empty** today so an unconfigured registry dep errors rather than reaching a dead URL) to the
-      live URL, add publish auth (a token model — the one M3.1/M3.2a open question left for the remote), and
-      extend a PUBLISHING.md release process. A dynamic Workers/KV/R2-or-Node service is an *optional* drop-in
-      speaking the same M3.1 protocol.
-    - **Mandatory verification + the trust model.** Signing ships but proves less than it looks like:
-      `ssh-keygen -Y check-novalidate` validates the signature against *the key inside the signature*, so
-      **nothing binds that key to a publisher** — and verification runs only on a cold url fetch (a warm
-      store hit and every git dep are unchecked). [packages.md](packages.md) now says so plainly; content
-      integrity (tree-hash store keys, pinned `integrity`, the confusion guard) is the guarantee that
-      actually carries weight today.
+  - **Official vs community packages — DECIDED and SHIPPED (2026-09-06).** The `@kama` scope is the mark
+    and the channel (`packages.md` § Scopes says so); `@kama`/`@std` get reserved the day M3.3's host
+    exists. **`@kama/sodium` shipped** as `../kama-sodium` — libsodium 1.0.20 vendored through
+    `csources`/`cincludes`, six modules, proven native (debug/release), wasm and through a file-registry
+    publish→install round trip. What it forced in-tree: `kama seed --license`, the `cincludes` key,
+    the move-only propagation fix, `csources` as gnu11, `std::digest`; what it rowed: the four rows above
+    NOW and the member-visibility question in §3. Its AGENTS.md § "This package" is the first draft of
+    the library-kind guidance addendum.
 
       **Decided direction:** follow where the ecosystem landed rather than per-developer signing keys.
       Go ships no package signatures at all and leans on the `sum.golang.org` transparency log; PyPI

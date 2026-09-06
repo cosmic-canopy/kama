@@ -1,0 +1,37 @@
+// std::num's generic min/max/clamp over Comparable<T>: every integer width, floats, string, a user type.
+// Replaces the minI32/minI64/minf ladders. Bits sum to 255.
+import { std::num::min, std::num::max, std::num::clamp };
+
+type value Version implements Comparable<This> {
+    public int32 major;
+    public int32 minor;
+    public ctor of(int32 major, int32 minor) { this.major = major; this.minor = minor; }
+    public const fn Ordering compareTo(const ref This other) {
+        if (this.major != other.major) { return this.major < other.major ? Ordering::Less : Ordering::Greater; }
+        if (this.minor == other.minor) { return Ordering::Equal; }
+        return this.minor < other.minor ? Ordering::Less : Ordering::Greater;
+    }
+}
+
+fn int32 main() {
+    int32 r = 0;
+    if (min(a: 3, b: 7) == 3 && max(a: 3, b: 7) == 7)                          { r = r + 1; }
+    isize n = 40;
+    isize m = min(a: n, b: 9);                       // a literal beside a typed sibling (row 2 shipped)
+    if (m == 9)                                                                 { r = r + 2; }
+    if (clamp(x: 12, lo: 0, hi: 10) == 10 && clamp(x: -3, lo: 0, hi: 10) == 0) { r = r + 4; }
+    if (clamp(x: 5, lo: 0, hi: 10) == 5)                                        { r = r + 8; }
+    if (min(a: 3.5, b: 2.25) == 2.25 && max(a: 3.5, b: 2.25) == 3.5)            { r = r + 16; }
+    float32 f = clamp(x: 42.0f32, lo: 0.0f32, hi: 7.0f32);
+    if (f == 7.0f32)                                                            { r = r + 32; }
+    string s = min(a: "pear", b: "apple");
+    if (s.equals(other: "apple"))                                               { r = r + 64; }
+    Version v1 = Version.of(major: 1, minor: 9);
+    Version v2 = Version.of(major: 2, minor: 0);
+    Version lo = min(a: v1, b: v2);
+    Version hi = max(a: v1, b: v2);
+    Version v3 = Version.of(major: 3, minor: 1);   // a ctor call is not inferable as an argument — bind it
+    Version c = clamp(x: v3, lo: v1, hi: v2);
+    if (lo.major == 1 && hi.major == 2 && c.major == 2 && c.minor == 0)         { r = r + 128; }
+    return r;   // 255
+}

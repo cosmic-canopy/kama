@@ -1050,7 +1050,7 @@ function above works on it. Its methods carry the same names as the free functio
 `Float::sqrt` and Swift's `squareRoot()` do), so an implementer writes `public fn MyFixed sqrt()`.
 `atan2` keeps C's `(y, x)` meaning, but the arguments are **named**, so the classic mix-up cannot happen
 silently. The engine helpers that have no libm counterpart stay float32 under their kama names:
-`pi`/`tau`/`halfPi`/`epsilon`/`radians`/`degrees`/`lerp`/`clampf`/`minf`/`maxf`/`signf` — constants are
+`pi`/`tau`/`halfPi`/`epsilon`/`radians`/`degrees`/`lerp`/`signf` — constants are
 zero-arg functions because a zero-argument generic has nothing to infer from. The seam is `kama_math.h`:
 a kama function cannot share a name with the **extern** it calls, so the binding is renamed rather than
 the API (the same rename is now spelled in kama as `@linkName("sqrt") extern fn … cSqrt(…)`; the header
@@ -1089,12 +1089,14 @@ want of them.)*
 
 Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Max`, `uint8Max` … `uint64Max`,
 `float32Max`/`float32MinNormal`/`float32Epsilon` (signed min is `-max - 1`) — and per-width integer
-**operations** `minI32/maxI32/clampI32/absI32/signI32` (+ the `I64` set), parallel to `std::math`'s float32
-`minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
-`wrappingNegI32` (+ `I64`) for intentional overflow. `import { std::num::int32Max, std::num::minI32,
-std::num::wrappingAddI32, … };`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
-— `const fn Ordering compareTo(const ref T other)` with `type intrinsic` conformances for every int/float/string — the bound for
-`PriorityQueue` + the sorted containers.)
+**operations** — `min`/`max`/`clamp`, ONE generic each over `Comparable<T>` (every integer width, `float32`/`float64`
+under their total order, `string`, a user type implementing `Comparable<This>`; `min`/`max` answer `a` on `Equal`,
+`clamp` panics on `lo > hi`), plus per-width `absI32/signI32` (+ `I64`: no contract names an integer that can be
+negated) — and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
+`wrappingNegI32` (+ `I64`) for intentional overflow. `import { std::num::int32Max, std::num::min,
+std::num::wrappingAddI32, … };`. The `minI32`/`minI64`/`minf` ladder that spelled the width in the name is gone:
+<!-- test: generic_min_max_clamp --> a literal beside a typed sibling now binds `T` (generic inference defers an
+unsuffixed literal), so `min(a: n, b: 9)` with `isize n` is the whole spelling.
 
 ### Sorting & searching (`std::collections`) ✅
 
@@ -1228,6 +1230,7 @@ are all conversions. What is **not** a conversion, and needs no cast:
 | arithmetic over literals, which is still the literal | `int8 a = 2 + 3;` |
 | arithmetic on one type, which yields that type | `a + b` on two `uint8`s |
 | a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
+| a literal handed to a generic `T`, which takes the width its typed siblings bind | `pick(a: 0, b: n)` on an `isize n` |
 
 A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
 cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local, lit_oob_constref_argument -->
@@ -1642,11 +1645,12 @@ same way. It is `Sendable`, so an isolate can own one.
 width — `int8`…`int64`, `uint8`…`uint64`, `isize`/`usize`, `float32`/`float64` — through the same
 marker-contract mechanism as `parse::<T>` (`Ranged`). It is half-open, **unbiased** (rejection sampling;
 there is no `uint128`, so Lemire's trick is out), and the signed span is computed in wrapping unsigned
-arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. Both bounds must
-agree in type: two literals are `int32`, `0.0`/`1.0` are `float64`, and a *size* wants two `isize`
-locals, because generic inference reads only the arguments — it types an unsuffixed literal as `int32`
-before a typed sibling can bind `T`, and cannot type a receiver call such as `xs.length()`. That gap is
-why `g.below(n:)` exists: its parameter is a plain `isize`, so a length or a literal goes straight in. <!-- test: random_range -->
+arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. `T` comes from
+the bounds: a typed one binds it and an unsuffixed literal follows (`range(rng: g, lo: 0, hi: xs.length())`
+is an `isize` draw — generic inference defers an unsuffixed literal until its typed siblings have bound
+`T`, and a method call on a typed local answers with its declared return type); two bare literals are
+`int32`, `0.0`/`1.0` are `float64`. <!-- test: random_range, generic_infer_literal_defers, generic_infer_receiver_call -->
+`g.below(n:)` stays beside it because an index and a value are different jobs.
 An empty range (`hi <= lo`) panics rather than answering `lo`. <!-- test: random_range_empty -->
 `nextFloat()` is a `float64` in [0, 1) from the top 53 bits, `chance(p:)` is `true` with probability `p`,
 and a float `range` interpolates convexly so two finite bounds cannot overflow.

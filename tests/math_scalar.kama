@@ -2,15 +2,15 @@ import {
     std::math::radians,
     std::math::lerp,
     std::math::sqrt,
-    std::math::clampf,
-    std::math::minf,
-    std::math::maxf,
+    std::num::clamp,
+    std::num::min,
+    std::num::max,
 };
 fn int32 main() {
     float32 l = lerp(a: 0.0f32, b: 10.0f32, t: 0.5f32);   // 5
     float32 s = sqrt(x: 25.0f32);                          // 5
     float32 r = radians(deg: 180.0f32);                    // ~3.14159 -> 3
-    float32 c = clampf(x: 42.0f32, lo: 0.0f32, hi: 7.0f32); // 7
-    float32 m = minf(a: 3.0f32, b: 9.0f32) + maxf(a: 3.0f32, b: 9.0f32); // 12
+    float32 c = clamp(x: 42.0f32, lo: 0.0f32, hi: 7.0f32);  // 7
+    float32 m = min(a: 3.0f32, b: 9.0f32) + max(a: 3.0f32, b: 9.0f32); // 12
     return cast<int32>(l) + cast<int32>(s) + cast<int32>(r) + cast<int32>(c) + cast<int32>(m); // 5+5+3+7+12=32
 }

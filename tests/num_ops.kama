@@ -1,29 +1,11 @@
-// std::num integer min/max/clamp/abs/sign (int32 + int64), parallel to std::math's float32 helpers.
-import {
-    std::num::minI32,
-    std::num::maxI32,
-    std::num::clampI32,
-    std::num::absI32,
-    std::num::signI32,
-    std::num::minI64,
-    std::num::maxI64,
-    std::num::clampI64,
-    std::num::absI64,
-    std::num::signI64,
-};
+// std::num integer abs/sign (int32 + int64); min/max/clamp are the generics in tests/generic_min_max_clamp.
+import { std::num::absI32, std::num::signI32, std::num::absI64, std::num::signI64 };
 fn int32 main() {
     int32 r = 0;
-    if (minI32(a: 3, b: 7) == 3)               { r = r + 4; }
-    if (maxI32(a: 3, b: 7) == 7)               { r = r + 4; }
-    if (clampI32(x: 12, lo: 0, hi: 10) == 10)  { r = r + 4; }
-    if (clampI32(x: 0 - 3, lo: 0, hi: 10) == 0){ r = r + 4; }
-    if (absI32(x: 0 - 9) == 9)                 { r = r + 4; }
-    if (signI32(x: 0 - 4) == 0 - 1)            { r = r + 4; }
-    if (signI32(x: 0) == 0)                    { r = r + 2; }
-    if (minI64(a: 20i64, b: 10i64) == 10i64)   { r = r + 4; }
-    if (maxI64(a: 10i64, b: 20i64) == 20i64)   { r = r + 4; }
-    if (clampI64(x: 5i64, lo: 6i64, hi: 9i64) == 6i64) { r = r + 4; }
-    if (absI64(x: 0i64 - 100i64) == 100i64)    { r = r + 2; }
-    if (signI64(x: 7i64) == 1i64)              { r = r + 2; }
+    if (absI32(x: 0 - 9) == 9)                 { r = r + 8; }
+    if (signI32(x: 0 - 4) == 0 - 1)            { r = r + 8; }
+    if (signI32(x: 0) == 0)                    { r = r + 10; }
+    if (absI64(x: 0i64 - 100i64) == 100i64)    { r = r + 8; }
+    if (signI64(x: 7i64) == 1i64)              { r = r + 8; }
     return r;   // 42
 }
