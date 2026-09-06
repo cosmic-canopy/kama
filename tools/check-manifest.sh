@@ -101,6 +101,18 @@ proj typo <<'JSON'
 JSON
 accept typo "the correctly spelled key builds"
 
+# `license` is registry metadata (an SPDX id, what `kama seed --license` writes) that the compiler never
+# reads — but the reader is closed, so it has to be KNOWN, and its shape is held to a string like every
+# other key rather than skipped.
+proj lic <<'JSON'
+{ "name": "lic", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "license": "MIT", "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept lic "\`license\` is a known key"
+proj licbad <<'JSON'
+{ "name": "licbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "license": 1, "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject licbad 'expected a string' "a non-string \`license\` is refused, not skipped"
+
 # Recognition is split from storage, so a key the READER was not asked to capture must still be
 # recognized. `kama build` never captures `entry`/`version`, and before the split those fell down the
 # same path as a typo — this is the case that would regress if the two were re-fused.

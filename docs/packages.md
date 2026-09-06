@@ -20,9 +20,12 @@ kama seed myapp --yes      # take every default; also what a script or CI gets
 It asks for a name, a version, and a **kind** — `executable`, `library`, or `monorepo` — then writes the
 manifest, a starter source file, a `.gitignore`, and a README stub. Prompting happens only when it has a
 terminal to prompt on; a pipe, a script or a CI runner behaves as `--yes`, so `kama seed` never hangs a
-build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), and `--agents` adds
-the [AI-agent guidance](agents.md). It refuses to touch a directory that already has a `kama.json`, and
-if any other file it would write already exists it writes **nothing** rather than half a project.
+build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), `--agents` adds
+the [AI-agent guidance](agents.md), and `--license mit` writes a `LICENSE` and records `"license": "MIT"`
+in the manifest — the bundle a package publishes with. A license is a flag and never a prompt, because it
+is a decision the author brings, and `mit` is the one body `seed` can write: any other value is refused by
+name. It refuses to touch a directory that already has a `kama.json`, and if any other file it would
+write already exists it writes **nothing** rather than half a project.
 
 What `--kind executable` produces:
 
@@ -576,7 +579,10 @@ immutable** — re-publishing an existing version is refused; bump the `version`
 
 A package name may be **scoped** as `@scope/name`. A scoped dependency **imports under its bare last
 segment** — `@acme/geo` is `import { geo::X };` in your code — the scope only selects which registry serves
-it. Bind scopes (and the default) with a top-level `registries` object:
+it. **`@kama` is the official scope**: a package named `@kama/<name>` is maintained alongside the compiler
+and served from the official registry, and a community package is unscoped or under its own scope; `@kama`
+and `@std` are reserved the day a hosted registry exists, which refuses them from any other publisher. Bind
+scopes (and the default) with a top-level `registries` object:
 
 ```json
 {
@@ -772,7 +778,7 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 
 | Command | What it does |
 |---|---|
-| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--force`. |
+| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit` (a `LICENSE` plus the manifest's `license`), `--force`. |
 | `kama run <kama.json> [-- <args>]` | Build the project and run it; native-only. A workspace errors and names its members. |
 | `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
 | `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |

@@ -3535,6 +3535,11 @@ struct ManifestReader {
                 if (nameOut) *nameOut = nm;
             }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
+            // `license`: an SPDX identifier ("MIT"), written by `kama seed --license` and read by nobody in
+            // the compiler — it is registry metadata, the way npm's and cargo's are. Held to a STRING so a
+            // typo'd shape is caught here like every other key; the identifier itself is not validated,
+            // because the SPDX list is not a table kama should carry.
+            else if (key == "license") { std::string lic; if (!str(lic)) return false; }
             else return fail("unknown key `" + key + "`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -6952,6 +6957,8 @@ struct SeedOpts {
     bool agents = false, agentsGiven = false;
     std::vector<std::string> tools;
     bool allTools = false, skill = false, yes = false, force = false;
+    std::string license;                 // `--license mit`: the one body seed can write today
+    bool licenseGiven = false;
 };
 
 void seedUsage()
@@ -6961,6 +6968,7 @@ void seedUsage()
         "  kama seed [<dir>] [--kind executable|library|monorepo] [--name <n>] [--version <v>]\n"
         "            [--members <a,b,c>]        the members of a monorepo (required for that kind)\n"
         "            [--agents|--no-agents] [--claude] [--tool <name>]... [--all-tools] [--skill]\n"
+        "            [--license mit]            write a LICENSE and record it in kama.json\n"
         "            [--yes|-y] [--force]\n"
         "\n"
         "  Interactive when stdin is a terminal; a pipe or a script behaves as --yes.\n");
@@ -7152,11 +7160,15 @@ static std::vector<std::string> seedSplitMembers(const std::string& s)
 // such key was silently unimportable — it built for its author and failed for every consumer. `source`
 // now defaults to exactly "src", which is the layout seed writes, so emitting it would be emitting the
 // default. One way to do a thing.
-static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version)
+static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version,
+                                const std::string& license)
 {
     std::string m = "{\n";
     m += "  \"name\": \""    + jsonEscape(name)    + "\",\n";
     m += "  \"version\": \"" + jsonEscape(version) + "\"";
+    // The SPDX identifier, only when `--license` wrote a body to match: a `license` key with no LICENSE
+    // file beside it would be a claim the tree does not back.
+    if (!license.empty()) m += ",\n  \"license\": \"" + jsonEscape(license) + "\"";
     if (kind == SeedKind::Executable)
         m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
     else
@@ -7170,6 +7182,36 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     m += (kind == SeedKind::Library ? "public" : "internal");
     m += "\" }\n  }";
     return m + "\n}\n";
+}
+
+// The MIT body — the text this repo's own LICENSE carries, with the two blanks filled. Generated here
+// like seedManifest rather than embedded from `seed/`: the embedding is four named roles wired through
+// tools/embed_seed.sh, the Makefile and kama.seed.h, and a fifth for twenty fixed lines is not worth
+// the wiring. `--license` accepts `mit` alone today; a second body is a second function beside this
+// one, and the refusal at the flag names the list.
+static std::string seedLicense(const std::string& holder, const std::string& year)
+{
+    return "MIT License\n"
+           "\n"
+           "Copyright (c) " + year + " " + holder + "\n"
+           "\n"
+           "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+           "of this software and associated documentation files (the \"Software\"), to deal\n"
+           "in the Software without restriction, including without limitation the rights\n"
+           "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+           "copies of the Software, and to permit persons to whom the Software is\n"
+           "furnished to do so, subject to the following conditions:\n"
+           "\n"
+           "The above copyright notice and this permission notice shall be included in all\n"
+           "copies or substantial portions of the Software.\n"
+           "\n"
+           "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+           "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+           "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+           "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+           "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+           "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+           "SOFTWARE.\n";
 }
 
 // `kama_workspace.json`. NO name and NO version, and that is the model rather than an omission: a
@@ -7281,27 +7323,57 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     bool agents = o.agents;
     if (ask && !o.agentsGiven) agents = seedAskYesNo("write AGENTS.md so AI agents know this project?", false);
 
+    // `--license`: a flag, not a question — a license is a decision the author brings, and a default
+    // would be kama choosing one for somebody else's code. `mit` is the one body seed can write, so any
+    // other value is refused BY NAME with the way through, rather than recording an SPDX id the tree does
+    // not back. Case-insensitive on the way in; the SPDX spelling ("MIT") on the way out.
+    std::string license;
+    if (o.licenseGiven) {
+        std::string l = o.license;
+        for (char& c : l) c = (char)tolower((unsigned char)c);
+        if (l != "mit") {
+            fprintf(stderr, "kama seed: --license can write `mit` only; for '%s' add the LICENSE file "
+                            "yourself and set \"license\" in kama.json\n", o.license.c_str());
+            return 2;
+        }
+        license = "MIT";
+    }
+
     // (4) THE WHOLE FILE LIST, built up front and pre-flighted for collisions, so a seed lands entirely
     // or not at all. embeddedWrite checks per file as it writes, which stops halfway — fine for one file,
     // wrong for a monorepo whose fourth member collides after three have landed.
     const std::string ident = importNameOf(name);
     std::vector<std::pair<std::string, std::string>> files;
     if (kind == SeedKind::Executable) {
-        files.push_back({ "kama.json", seedManifest(kind, name, version) });
+        files.push_back({ "kama.json", seedManifest(kind, name, version, license) });
         files.push_back({ "src/app.kama", seedSubst(KAMA_SEED_APP, name, ident) });
     } else if (kind == SeedKind::Library) {
-        files.push_back({ "kama.json", seedManifest(kind, name, version) });
+        files.push_back({ "kama.json", seedManifest(kind, name, version, license) });
         files.push_back({ "src/" + ident + ".kama", seedSubst(KAMA_SEED_LIB, name, ident) });
     } else {
+        // One LICENSE at the root of the workspace, and every member's manifest says which one — the
+        // members are the sharable units, and each is what a registry reads.
         files.push_back({ kWorkspaceFile, seedWorkspace(members) });
         for (const auto& m : members) {
             const std::string mi = importNameOf(m);
-            files.push_back({ m + "/kama.json", seedManifest(SeedKind::Library, m, version) });
+            files.push_back({ m + "/kama.json", seedManifest(SeedKind::Library, m, version, license) });
             files.push_back({ m + "/src/" + mi + ".kama", seedSubst(KAMA_SEED_LIB, m, mi) });
         }
     }
     files.push_back({ ".gitignore", seedSubst(KAMA_SEED_GITIGNORE, name, ident) });
     files.push_back({ "README.md",  seedSubst(KAMA_SEED_README,    name, ident) });
+    if (!license.empty()) {
+        // The holder is git's `user.name` when there is one — the name the commits will carry — and the
+        // project's name otherwise, which is at least true. stderr goes to the null device: without git
+        // the shell's own "not found" would land in the middle of seed's output.
+        int rc = 0;
+        std::string holder = runCmdCapture(std::string("git config --get user.name 2>") + KAMA_DEVNULL, &rc);
+        if (rc != 0 || holder.empty()) holder = name;
+        const time_t now = time(nullptr);
+        char year[8] = "";
+        if (const struct tm* t = localtime(&now)) strftime(year, sizeof year, "%Y", t);
+        files.push_back({ "LICENSE", seedLicense(holder, year) });
+    }
 
     if (!o.force) {
         int clash = 0;
@@ -7383,7 +7455,8 @@ void usage()
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
         "  kama seed      [<dir>] [--kind executable|library|monorepo]   turn a directory into a kama project\n"
         "                  ([--name N] [--version V] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
-        "                   [--yes] [--force]; interactive when stdin is a terminal, else it takes the defaults)\n"
+        "                   [--license mit] [--yes] [--force]; interactive when stdin is a terminal, else it\n"
+        "                   takes the defaults)\n"
         "  kama agents install <kama.json>     write AGENTS.md so an AI agent knows this project + `kama query`\n"
         "                  ([--claude] [--tool <name>]... [--all-tools] [--skill] [--force];\n"
         "                   `kama agents list` shows the tools, `kama agents print` writes to stdout)\n"
@@ -8621,6 +8694,7 @@ int main(int argc, char** argv)
             else if (a == "--tool" && i + 1 < argc) { o.tools.push_back(argv[++i]); o.agents = true; o.agentsGiven = true; }
             else if (a == "--all-tools") { o.allTools = true; o.agents = true; o.agentsGiven = true; }
             else if (a == "--skill")     { o.skill = true;    o.agents = true; o.agentsGiven = true; }
+            else if (a == "--license" && i + 1 < argc) { o.license = argv[++i]; o.licenseGiven = true; }
             else if (a == "--yes" || a == "-y")        o.yes = true;
             else if (a == "--force")                   o.force = true;
             else if (!a.empty() && a[0] == '-') {

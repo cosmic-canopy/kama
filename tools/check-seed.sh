@@ -243,6 +243,44 @@ h="$tmp/noag"
                       || ok "a plain seed writes no AGENTS.md"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-seed: --license writes the body AND records the id, or refuses by name"
+
+# The bundle a package publishes with has to be complete, and a LICENSE was the one file seed could
+# not write. Both halves are asserted: the file, and the manifest key that points at it — a `license`
+# in kama.json with no LICENSE beside it would be a claim the tree does not back.
+lic="$tmp/lic"
+"$KAMA" seed "$lic" --yes --kind library --name liclib --license mit >/dev/null 2>&1 || bad "seed --license mit failed"
+[ -f "$lic/LICENSE" ] && ok "--license mit writes LICENSE" || bad "--license mit wrote no LICENSE"
+grep -q '^MIT License$' "$lic/LICENSE" && ok "the body is the MIT text" || bad "LICENSE is not the MIT body"
+# The holder is git's user.name — the name the commits carry — or the project name without one; the
+# guard resolves it the same way seed does, from the same cwd.
+holder=$(git config --get user.name 2>/dev/null || true); [ -n "$holder" ] || holder=liclib
+grep -qF "Copyright (c) $(date +%Y) $holder" "$lic/LICENSE" \
+    && ok "the copyright line carries this year and the holder" \
+    || bad "unexpected copyright line: $(sed -n 3p "$lic/LICENSE")"
+grep -q '"license": "MIT"' "$lic/kama.json" && ok "the manifest records the SPDX id" \
+                                            || bad "no \`license\` key in the seeded manifest"
+"$KAMA" check "$lic/kama.json" >/dev/null 2>&1 && ok "a manifest carrying \`license\` loads" \
+                                                  || bad "the manifest with \`license\` does not load"
+# Case-insensitive on the way in; the SPDX spelling on the way out.
+lic2="$tmp/lic2"
+"$KAMA" seed "$lic2" --yes --license MIT >/dev/null 2>&1 && grep -q '"license": "MIT"' "$lic2/kama.json" \
+    && ok "--license MIT is the same answer" || bad "--license MIT was not accepted as mit"
+# A monorepo: one LICENSE at the root, and every member manifest says which.
+licw="$tmp/licw"
+"$KAMA" seed "$licw" --yes --kind monorepo --members a,b --license mit >/dev/null 2>&1 || bad "monorepo --license failed"
+[ -f "$licw/LICENSE" ] && grep -q '"license": "MIT"' "$licw/a/kama.json" && grep -q '"license": "MIT"' "$licw/b/kama.json" \
+    && ok "a monorepo gets one LICENSE at the root and the id in every member" \
+    || bad "monorepo --license: root LICENSE or a member's key is missing"
+# Only `mit` has a body; anything else is refused by name, writing nothing, and says the way through.
+reject "a license seed cannot write" --license gpl-3.0
+grep -q 'can write `mit` only' "$tmp/rej$n.out" && ok "the refusal says what it can write" \
+                                                || bad "the license refusal does not name \`mit\`"
+# And it is opt-in: a plain seed writes no LICENSE and no key.
+[ -f "$h/LICENSE" ] && bad "a plain seed wrote a LICENSE" || ok "a plain seed writes no LICENSE"
+grep -q '"license"' "$h/kama.json" && bad "a plain seed recorded a license" || ok "a plain seed records no license"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-seed: template hygiene"
 
 # Only the two documented placeholders may appear, or a template silently ships a literal token.
