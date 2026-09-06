@@ -67,7 +67,7 @@ grep -oE '^#define IDENTIFIER_[A-Z0-9]+_VAL' "$ROOT/src/kama.ast.h" \
 # assertion below would be asserting the very special-casing that change deleted. Being on this list was
 # the whole defect: a type the emitter knows only by spelling is invisible to every `switch` over a
 # builtin, which is why they could not appear in a `type intrinsic <…>` conformance list.
-IDENT_BUILTINS='UnsafePtr InlineArray BindableFunctionPtr Simd'
+IDENT_BUILTINS='UnsafePtr UnsafeConstPtr InlineArray BindableFunctionPtr Simd'
 for n in $IDENT_BUILTINS; do echo "$n"; done | sort -u >> "$tmp/registered"
 sort -u -o "$tmp/registered" "$tmp/registered"
 

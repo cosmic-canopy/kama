@@ -1,0 +1,9 @@
+// A module `comptime` is real `static const` storage, so its address is an `UnsafeConstPtr<int32>` —
+// binding it to an `UnsafePtr<int32>` is the launder the const pointer exists to refuse. Until 0.9.204
+// this built, and only clang's `-Wdiscards-qualifiers` (a warning) ever saw it. The read-only twin is
+// tests/mod_export_const.d.
+import { cfg::CAP };
+
+unsafe fn int32 viaAddr() { UnsafePtr<int32> p = addr(of: CAP); return p[0]; }   // -> REJECT
+
+fn int32 main() { return viaAddr(); }

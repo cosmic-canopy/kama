@@ -12,6 +12,7 @@ access_base_private	access_base_private.kama:2 access_base_private.kama:4 access
 access_private_ctor	access_private_ctor.kama:3
 access_private_field	access_private_field.kama:3
 access_private_method	access_private_method.kama:2 access_private_method.kama:3
+addr_comptime_to_mut	main.kama:7
 addr_of_temporary	addr_of_temporary.kama:7
 align_no_argument	align_no_argument.kama:4
 align_not_power_of_two	align_not_power_of_two.kama:5
@@ -103,7 +104,7 @@ comptime_fn_runtime_call	comptime_fn_runtime_call.kama:6
 comptime_fn_visibility	comptime_fn_visibility.kama:8
 comptime_value_in_angles	comptime_value_in_angles.kama:4
 cond_move_live	cond_move_live.kama:4 cond_move_live.kama:7 cond_move_live.kama:9
-const_addr	const_addr.kama:8
+const_addr	const_addr.kama:9
 const_contract_impl	const_contract_impl.kama:9
 const_contract_recv	const_contract_recv.kama:11
 const_escape_obj	const_escape_obj.kama:2 const_escape_obj.kama:3 const_escape_obj.kama:4
@@ -112,6 +113,12 @@ const_give	const_give.kama:7 const_give.kama:8
 const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14
 const_place_return	const_place_return.kama:8
+const_ptr_call_nonconst	const_ptr_call_nonconst.kama:14
+const_ptr_ref_arg	const_ptr_ref_arg.kama:8
+const_ptr_store	const_ptr_store.kama:6
+const_ptr_store_field	const_ptr_store_field.kama:11
+const_ptr_to_mut_arg	const_ptr_to_mut_arg.kama:9
+const_ptr_to_mut_local	const_ptr_to_mut_local.kama:6
 const_this_write	const_this_write.kama:12 const_this_write.kama:7
 constgen_arity	constgen_arity.kama:4 constgen_arity.kama:5
 constgen_count	constgen_count.kama:3

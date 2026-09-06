@@ -1,1 +1,1 @@
-applies only to an `UnsafePtr<T>` parameter
+applies only to an `UnsafePtr<T>` or `UnsafeConstPtr<T>` parameter

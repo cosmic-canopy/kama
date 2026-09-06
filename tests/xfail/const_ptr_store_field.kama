@@ -1,0 +1,15 @@
+// The store rule walks the whole place: `q[0].n = …` writes a FIELD of the element the read-only pointer
+// reaches, and is refused exactly as `q[0] = …` is (tests/xfail/const_ptr_store).
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 1; }
+}
+
+unsafe fn int32 run() {
+    Cell c = Cell.make();
+    UnsafeConstPtr<Cell> q = addr(of: c);
+    q[0].n = 2;                                           // -> REJECT
+    return q[0].n;
+}
+
+fn int32 main() { return run(); }

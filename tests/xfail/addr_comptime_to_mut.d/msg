@@ -1,0 +1,1 @@
+a local's initializer would make a read-only pointer writable

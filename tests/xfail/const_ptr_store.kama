@@ -1,0 +1,10 @@
+// Storing through the read-only raw pointer is the one thing `UnsafeConstPtr<T>` exists to refuse. The
+// root binding `q` is an ordinary mutable local — it is the `[i]` step that reaches memory it only reads.
+unsafe fn int32 run() {
+    int32 x = 1;
+    UnsafeConstPtr<int32> q = addr(of: x);
+    q[0] = 2;                                             // -> REJECT
+    return q[0];
+}
+
+fn int32 main() { return run(); }

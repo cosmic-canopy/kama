@@ -1,0 +1,1 @@
+cannot store through `UnsafeConstPtr<T>`

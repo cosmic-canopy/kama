@@ -1,0 +1,12 @@
+// A `ref` borrow of `q[0]` is a write to memory the pointer only reads — the same store rule, reached
+// through the argument path the const-write check already guards.
+fn void bump(ref int32 n) { n = n + 1; }
+
+unsafe fn int32 run() {
+    int32 x = 1;
+    UnsafeConstPtr<int32> q = addr(of: x);
+    bump(n: ref q[0]);                                    // -> REJECT
+    return x;
+}
+
+fn int32 main() { return run(); }

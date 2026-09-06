@@ -1,0 +1,28 @@
+// `UnsafeConstPtr<T>` — the read-only raw pointer, C's `T const*`. Widening from `UnsafePtr<T>` is
+// implicit (as in C), reading through it is the ordinary `unsafe` read, and a `const T*` C API takes
+// either pointer with no cast. The reverse conversion and every store are compile errors —
+// tests/xfail/const_ptr_*.
+extern fn usize strlen(UnsafeConstPtr<char> s);
+
+// `addr(of:)` on a const root hands back the read-only pointer, so a `const fn` can honestly return one
+// (returning it as `UnsafePtr<int32>` is tests/xfail/const_addr).
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 3; }
+    public unsafe const fn UnsafeConstPtr<int32> peek() { return addr(of: this.n); }
+}
+
+unsafe fn int32 run() {
+    int32 x = 40;
+    UnsafePtr<int32> p = addr(of: x);
+    UnsafeConstPtr<int32> q = p;                          // UnsafePtr<T> -> UnsafeConstPtr<T>: implicit
+    UnsafeConstPtr<int32> r = cast<UnsafeConstPtr<int32>>(p);
+    int32 sum = q[0] + r[0];                              // 80 — reads are ordinary
+    string s = "ab";
+    usize n = strlen(s: s.cstr());                        // a mutable pointer reaches a const parameter
+    const Cell c = Cell.make();
+    UnsafeConstPtr<Cell> k = addr(of: c);                 // a const local's address is read-only too
+    return sum - 80 + cast<int32>(n) + c.peek()[0] + k[0].n - 1;   // 80-80+2+3+3-1 = 7
+}
+
+fn int32 main() { return run(); }

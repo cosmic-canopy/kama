@@ -88,7 +88,7 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 - An **empty `resource`** (`Token`) is valid: "move" is decoupled from "has-a-dtor." It's the linear
   / capability / witness pattern. (A genuinely-unused one is caught by the general dead-code lint, not
   a special rule.)
-- A non-owning member does **not** make you a resource: a raw `UnsafePtr<T>` (unsafe borrow) or a borrowed
+- A non-owning member does **not** make you a resource: a raw `UnsafePtr<T>` / `UnsafeConstPtr<T>` (unsafe borrow) or a borrowed
   `contract` value confers no ownership → still a `value`.
 
 ### `view` — borrows a range it doesn't own, stack-only

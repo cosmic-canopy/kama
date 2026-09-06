@@ -1,1 +1,1 @@
-hands back a writable pointer into a const binding
+this `return` would make a read-only pointer writable

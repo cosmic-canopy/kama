@@ -1,9 +1,11 @@
 // Every way a consumer can reach a published constant, in one program: imported by name, named through
 // its module, used where a COMPILE-TIME value is required (an InlineArray size), and addressed — SPEC
-// promises a `comptime` is real `static const` storage, not a macro.
+// promises a `comptime` is real `static const` storage, not a macro. CONST storage: its address is an
+// `UnsafeConstPtr<int32>`, and taking it as an `UnsafePtr<int32>` is refused (it was accepted until
+// 0.9.204, and clang's `-Wdiscards-qualifiers` was the only thing that ever saw it).
 import { cfg::CAP };
 
-unsafe fn int32 viaAddr() { UnsafePtr<int32> p = addr(of: CAP); return p[0]; }   // 8
+unsafe fn int32 viaAddr() { UnsafeConstPtr<int32> p = addr(of: CAP); return p[0]; }   // 8
 
 fn int32 main() {
     InlineArray<int32>#(CAP) buf = [1; (CAP)];     // the constant sizes a type, across modules

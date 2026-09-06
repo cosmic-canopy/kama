@@ -104,6 +104,13 @@ type value string {
 // is safe, and only DEREFERENCING it needs `unsafe`.
 type value UnsafePtr<T> { }
 
+// The read-only raw pointer: C's `const T*` (bare, `const void*`). Reading through it is the same `unsafe`
+// as `UnsafePtr`; STORING through it is a compile error, and it does not convert to `UnsafePtr<T>` (the
+// reverse conversion is implicit, as in C). It is what a `const fn` hands out — `dataPtr()`, `cstr()` —
+// so a buffer held `const` can reach C without laundering deep const: Rust's `*const T`, Swift's
+// `UnsafePointer<T>`, kama's `get`/`getRef` split applied at the FFI seam.
+type value UnsafeConstPtr<T> { }
+
 // The const-generic value array: `struct { T v[N]; }`, sized at compile time. It owns no heap, copies by
 // value and has no destructor, which is what makes it — unlike every other container — a `value`.
 type value InlineArray<T> comptime(int32 N) { }

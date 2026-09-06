@@ -108,7 +108,7 @@ feature.
   safe type is a compile error. A **constructor may fail** — the return type goes between `ctor` and
   the name: `public ctor Result<Buffer, SizeError> create(int32 size)`, and an infallible ctor returns
   the bare type. Do NOT write a `static fn` returning its own type; that is rejected as a disguised
-  constructor. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
+  constructor. `null` exists only for `UnsafePtr<T>` / `UnsafeConstPtr<T>` at the FFI boundary.
 - **A `type resource`'s fields are always private.** Expose behavior, not state. (A `type value`
   owns nothing, so its fields may be public.)
 - **`.` constructs, `::` resolves scope.** `Box.make(v: 10)` builds; `Plain::tag()` is a static.

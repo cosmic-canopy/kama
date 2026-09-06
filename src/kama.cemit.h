@@ -2099,6 +2099,22 @@ private:
     // Holding a raw pointer is legal (an `UnsafePtr` FIELD is legal by design); it is naming one in a
     // signature, and producing or handling one in a body, that the marker exists to make greppable.
     static bool namesUnsafePtr(SharedIdentifier type);
+    // The two raw-pointer spellings. `UnsafePtr<T>` is `T*`; `UnsafeConstPtr<T>` is `T const*` — the
+    // read-only capability, which is what lets a `const fn` hand a buffer to C without laundering deep
+    // const (rejectConstPtrWiden / checkConstWrite). ONE predicate, so a site that means "any raw pointer"
+    // cannot know about one spelling and forget the other.
+    // (Defined in the .cpp: the spellings are named THERE, which is what tools/check-builtin-doc.sh holds
+    // the prelude's `type value UnsafeConstPtr<T>` line against — and IdentifierNode is incomplete here.)
+    static bool isRawPtrName(const std::string& v);
+    static bool isConstRawPtrName(const std::string& v);
+    static bool isRawPtrName(const SharedIdentifier& t);
+    static bool isConstRawPtrName(const SharedIdentifier& t);
+    // The same two questions of a RESOLVED C type, for the sites where the source spelling is gone.
+    static bool isConstRawCType(const std::string& ct);   // `T const*` — a read-only raw pointer
+    bool        isMutRawCType(const std::string& ct);     // `T*` and not a struct/view — a writable one
+    bool        exprIsConstRawPtr(SharedExpression e);    // the expression's type is a const raw pointer (a place goes through lvalueCType)
+    bool        chainThroughConstRawPtr(SharedExpression e);   // some `[i]` step of the place derefs a const raw pointer
+    void        rejectConstPtrWiden(const std::string& dstCType, SharedExpression src, const char* what, int line);
     // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
     // No-op inside one. Returns true if it rejected.
     bool grantedMint(const ClassInfo& ci, const std::string& member) const;  // `member` is a nullary member of a `@viewable` contract `ci` implements
@@ -2740,7 +2756,7 @@ private:
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
     // name of a comptime param bound in this instantiation — see the definition for why.
     void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);
-    bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction
+    bool        isConstReceiver(SharedExpression receiver);             // const-call restriction (a const root, or a const raw pointer step)
     // Never-null definite assignment for `Owned`/`Shared` fields (Stage 1): each must be set before the
     // ctor returns and never read before it is set. `Weak` is exempt (nullable). v1 = straight-line.
     std::string ctorFieldRef(SharedExpression e, ClassInfo& owner, const std::set<std::string>& locals);

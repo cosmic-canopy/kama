@@ -10063,7 +10063,15 @@ int main(int argc, char** argv)
         // / definite-assignment analysis yet): a non-void function that falls off the end,
         // and a read of an uninitialized local. The #line directives map these back to the
         // .kama source. (Audit Step 2 — "no silent surprises".)
-        cmd << compiler << crossFlags << " -std=c11 -Werror=return-type -Werror=uninitialized ";
+        //
+        // The third is the C-level BACKSTOP for `UnsafeConstPtr<T>` (`T const*`): the emitter refuses a
+        // const→mutable pointer conversion at every sink it knows (kama.cemit.cpp rejectConstPtrWiden),
+        // and this catches whatever shape it does not — clang's `-discards-qualifiers` is a sub-flag of
+        // this group. Spelled the way BOTH compilers accept: gcc hard-errors on an unknown `-Werror=`
+        // option, and a cross toolchain here can be gcc. On gcc the qualifier case is a separate
+        // `-Wdiscarded-qualifiers` this does not promote, so there the kama-side check carries it alone.
+        cmd << compiler << crossFlags << " -std=c11 -Werror=return-type -Werror=uninitialized"
+                                         " -Werror=incompatible-pointer-types ";
         // `reproducible-float`: forbid the C compiler contracting `a*b + c` into a single fused
         // multiply-add. clang's default is `on`, which contracts within one expression — so the same
         // source gives different bits on a target WITH an FMA (arm64) than on one without (wasm32 MVP,

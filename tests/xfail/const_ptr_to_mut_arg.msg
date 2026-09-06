@@ -1,0 +1,1 @@
+argument `dst` would make a read-only pointer writable

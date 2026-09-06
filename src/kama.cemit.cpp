@@ -2946,9 +2946,15 @@ std::string CEmitter::cType(SharedIdentifier type)
     // editor could see nothing at — no hover, no jump, while `bool` and `float32` on the lines around it
     // both answered. `usize`/`isize` sat in this same arm until 0.9.136 for the same reason; they are
     // reserved words now, so they take the ordinary path and the switch below spells them.
-    if (type->value && *type->value == "UnsafePtr") {
+    //
+    // `UnsafeConstPtr<T>` -> `T const*`, EAST-const on purpose: `UnsafeConstPtr<UnsafePtr<uint8>>` is then
+    // `uint8_t* const*` (a pointer to a const pointer — what it says), where a left `const` would spell
+    // `const uint8_t**` (a pointer to a pointer to const — something else). It also makes "is this C type a
+    // const raw pointer" an exact suffix test (isConstRawCType), which every resolved-type site relies on.
+    if (type->value && isRawPtrName(*type->value)) {
         recordBuiltinRef(*type->value, type.get());
-        return type->genericArg ? (cType(type->genericArg) + "*") : "void*";
+        const std::string base = type->genericArg ? cType(type->genericArg) : std::string("void");
+        return isConstRawPtrName(*type->value) ? base + " const*" : base + "*";
     }
 
     // `InlineArray<T,N>` spells `InlineArray_<mangleT>_<N>`, and `Simd<T,N>` spells `Simd_<mangleT>_<N>` —
@@ -4213,6 +4219,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
         checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
+        if (v->token == EQ) rejectConstPtrWiden(lvalueCType(v->unaryExpression), v->expression, "this assignment", v->line);
         // A plain `=` STORES to its target: the LHS mention that follows is a write, not a read, and the
         // foreign-entry walk must not count it (writing a static inside the region is per-thread scratch).
         // A compound `+=` reads first, so it keeps the read; `recordStaticRead` consumes this once.
@@ -5726,7 +5733,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (lvd && lvd->variables)
                 for (auto& d : *lvd->variables)
                     if (d) { rejectNullInit(declType, d->initializer, "a local", n->line);
-                             rejectInitKindMismatch(declType, d->initializer, "a local", n->line); }
+                             rejectInitKindMismatch(declType, d->initializer, "a local", n->line);
+                             rejectConstPtrWiden(ty, d->initializer, "a local's initializer", n->line); }
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {
@@ -6314,6 +6322,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         SharedExpression retExpr = ret->expression;
         if (retExpr)
             if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) retExpr = h->value;
+        rejectConstPtrWiden(_currentReturnCType, retExpr, "this `return`", n->line);
         // A `ref T operator[]` returns a PLACE: address the lvalue directly (`return &(place)`) — no
         // by-value return-temp (you can't copy a place). The place borrows `self`, which outlives the
         // call, so it's valid for the caller's enclosing statement (used transiently, never stored).
@@ -10466,7 +10475,7 @@ SharedIdentifier CEmitter::absolutizeType(SharedIdentifier t)
     // A user class/enum/contract NAME is rebound to its use-site mangle (qualifier dropped); primitives
     // (`isize`/`usize` among them since 0.9.136), `UnsafePtr` and `This` keep their spelling — they resolve
     // context-free. Generic args recurse either way (`UnsafePtr<Counter>`, `List<Counter>`, `Owned<Counter>`).
-    bool contextFree = (t->builtInVal != 0) || *t->value == "UnsafePtr" || *t->value == "This";
+    bool contextFree = (t->builtInVal != 0) || isRawPtrName(*t->value) || *t->value == "This";
     if (!contextFree) {
         clone->value = std::make_shared<std::string>(resolveUserName(*t->value, t->qualifier));
         clone->qualifier = SharedStringList();                   // now an absolute name — no qualifier
@@ -10493,7 +10502,7 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
     }
     if (a->builtInVal != 0) return false;                       // a primitive
     const std::string& v = *a->value;
-    if (v == "This" || v == "UnsafePtr") return false;
+    if (v == "This" || isRawPtrName(v)) return false;
     std::string r = resolveUserName(v, a->qualifier);
     return !_classes.count(r) && !_enums.count(r) && !_genericTypes.count(r)
         && !_interfaces.count(r) && !_genericContracts.count(r);
@@ -10573,7 +10582,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // platform-varying pair, deliberately appended after it in kama.ast.h. They are still lock-free
         // machine words, so they are named here on purpose rather than by widening the span.
         bool isSize = el->builtInVal == IDENTIFIER_ISIZE_VAL || el->builtInVal == IDENTIFIER_USIZE_VAL;
-        bool isPtr  = el->value && *el->value == "UnsafePtr";
+        bool isPtr  = isRawPtrName(el);
         // `bool` is a lock-free byte too — the done-flag the docs advertise. What it cannot do is
         // `fetchAdd`/`fetchSub`: the shim adds the raw bytes, and `true + 1` is the byte 2, which is not a
         // `_Bool`. Those two are refused at the CALL on a `bool` cell (emitDispatch), where `swap`/
@@ -11554,7 +11563,7 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
     // `InlineArray<UnsafePtr>#(1)` was enough to fail the build, because `InlineArray` materialises its
     // `view()` for every instantiation and `View<T>.swap` calls the generic `relocate<T>`. The typed form
     // is concrete exactly when its ELEMENT is, so `UnsafePtr<T>` inside a template stays parameterized.
-    if (t->value && *t->value == "UnsafePtr")
+    if (isRawPtrName(t))
         return !t->genericArg || isConcreteTypeArg(t->genericArg);
     // A generic type argument (`DynamicArray<int32>`, `Shared<Node>`) is concrete exactly when it has
     // already been REGISTERED as an instance — then it names a real struct and can be mangled into an
@@ -15299,7 +15308,7 @@ void CEmitter::computeDeeplyImmutable()
 bool CEmitter::namesUnsafePtr(SharedIdentifier type)
 {
     if (!type || !type->value) return false;
-    if (*type->value == "UnsafePtr") return true;
+    if (isRawPtrName(*type->value)) return true;
     if (type->genericArgs) {
         for (auto& a : *type->genericArgs) if (namesUnsafePtr(a)) return true;
     } else if (namesUnsafePtr(type->genericArg)) return true;
@@ -15442,7 +15451,7 @@ bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& 
     if (p->modifier && p->modifier->value
         && (*p->modifier->value == "ref" || *p->modifier->value == "out")) return true;   // cf. paramByRef
     const std::string& t = *p->type->value;
-    if (t == "UnsafePtr") return true;                     // a raw non-owning pointer into caller memory
+    if (isRawPtrName(t)) return true;                      // a raw non-owning pointer into caller memory
     if (t == selfParam) return true;                 // the pinned self-type — another view of this kind
     return _viewTypeNames.count(t) > 0;              // any other `type view`
 }
@@ -16620,7 +16629,7 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     if (!owner) return "";
     for (auto& f : owner->fields)
         if (f.name == *ma->identifier->value && f.type && f.type->value
-            && *f.type->value == "UnsafePtr" && f.type->genericArg)
+            && isRawPtrName(*f.type->value) && f.type->genericArg)
             return cType(f.type->genericArg);
     return "";
 }
@@ -17121,6 +17130,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // A CONTRACT param is exempt for the same reason a contract destination is: `hashVia(h: 22)` widens
         // a primitive into a fat pointer, so it accepts every kind by design.
         const std::string& pKindCType = p.kindCType.empty() ? p.className : p.kindCType;
+        // A `const UnsafePtr<T>` parameter lowers to `const T*` and so accepts the read-only pointer; a
+        // plain `UnsafePtr<T>` one is a writable sink.
+        if (!p.isConst) rejectConstPtrWiden(pKindCType, argExpr, ("argument `" + p.name + "`").c_str(), srcLine);
         if (!pKindCType.empty() && !isInterface(pKindCType))
             rejectValueKindMismatch(pKindCType, argExpr,
                                     ("argument `" + p.name + "`").c_str(), srcLine);
@@ -18014,12 +18026,84 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
     else if (!_inNamedCtorBody && isConstFieldWrite(target))
         unsupported("cannot assign to a `const` field outside the constructor", srcLine);
+    // The read-only raw pointer. The root binding may be perfectly mutable — `UnsafeConstPtr<uint8> p`
+    // is an ordinary local — and it is the `[i]` step that reaches memory this pointer only reads.
+    else if (chainThroughConstRawPtr(target))
+        unsupported("cannot store through `UnsafeConstPtr<T>` — it is a read-only pointer. Take the "
+                    "mutable form where the pointer was made (`dataPtrMut()`, `viewMut()`), or "
+                    "`cast<UnsafePtr<T>>(…)` in an `unsafe fn` to say the launder out loud", srcLine);
 }
 
-// a non-const method may not be invoked on a const receiver (it could mutate).
-bool CEmitter::isConstReceiver(SharedExpression receiver) const
+// a non-const method may not be invoked on a const receiver (it could mutate). A receiver reached
+// THROUGH a const raw pointer (`p[i].bump()`) is one too: the method would take `&p[i]` as a writable
+// `self` out of memory the pointer only reads.
+bool CEmitter::isConstReceiver(SharedExpression receiver)
 {
-    return receiver && rootIsConst(rootBinding(receiver));
+    return receiver && (rootIsConst(rootBinding(receiver)) || chainThroughConstRawPtr(receiver));
+}
+
+// ---- `UnsafeConstPtr<T>` — the read-only raw pointer ----------------------------------------------
+// It lowers to `T const*` (see the cType arm, which explains the east-const), which is what makes "is
+// this C type a const raw pointer" an exact suffix test — `uint8_t const*` yes, `uint8_t const**` no
+// (that is a mutable pointer to const pointers, and storing through it is fine).
+bool CEmitter::isRawPtrName(const std::string& v)           { return v == "UnsafePtr" || v == "UnsafeConstPtr"; }
+bool CEmitter::isConstRawPtrName(const std::string& v)      { return v == "UnsafeConstPtr"; }
+bool CEmitter::isRawPtrName(const SharedIdentifier& t)      { return t && t->value && isRawPtrName(*t->value); }
+bool CEmitter::isConstRawPtrName(const SharedIdentifier& t) { return t && t->value && isConstRawPtrName(*t->value); }
+
+bool CEmitter::isConstRawCType(const std::string& ct)
+{
+    static const std::string suf = " const*";
+    return ct.size() > suf.size() && ct.compare(ct.size() - suf.size(), suf.size(), suf) == 0;
+}
+
+// A WRITABLE raw pointer: `T*` that is not const, not a view (a view is a struct) and not one of the
+// struct pointers the emitter uses for its own plumbing. Mirrors the acquisition gate's test (emitInvocation).
+bool CEmitter::isMutRawCType(const std::string& ct)
+{
+    return ct.size() > 1 && ct.back() == '*' && !isConstRawCType(ct) && !isViewCType(ct)
+        && !isClass(ct) && !isInterface(ct);
+}
+
+// Does the expression's TYPE say "const raw pointer"? A cast names it, a call answers through the same
+// resolver `exprClass` uses (`addr(of:)` included — see callReturnTypeRaw), and anything else is a place,
+// typed by `lvalueCType` so a field resolves under its owner instance's type args. A "" from either means
+// the rules stay silent and the C backstop (`-Werror=incompatible-pointer-types`, kama.driver.cpp) speaks.
+bool CEmitter::exprIsConstRawPtr(SharedExpression e)
+{
+    if (!e) return false;
+    if (auto* h = dynamic_cast<HandoffNode*>(e.get())) return exprIsConstRawPtr(h->value);
+    if (auto* c = dynamic_cast<CastNode*>(e.get())) return isConstRawPtrName(c->type);
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) return isConstRawCType(callReturnTypeRaw(inv));
+    return isConstRawCType(lvalueCType(e));
+}
+
+// Does some `[i]` step of this place dereference a const raw pointer? `p[i]`, `p[i].f`, `this.p[i]`,
+// `obj.p[i].g[j]` — a write there, or a non-const call on it, lands in memory the pointer only reads.
+bool CEmitter::chainThroughConstRawPtr(SharedExpression e)
+{
+    if (!e) return false;
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
+        SharedExpression base = ea->expression ? ea->expression
+                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (isConstRawCType(lvalueCType(base))) return true;
+        return chainThroughConstRawPtr(base);
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) return chainThroughConstRawPtr(ma->expression);
+    return false;
+}
+
+// `UnsafeConstPtr<T>` -> `UnsafePtr<T>` is the one raw-pointer conversion kama refuses (the reverse is
+// implicit, as in C). Asked at every sink a raw pointer can land in — a local's initializer, an
+// assignment, an argument, a `return` — the same list the containment rule enumerates. `dstCType` is the
+// DECLARED destination; empty or unknown means stay silent and let the C backstop speak.
+void CEmitter::rejectConstPtrWiden(const std::string& dstCType, SharedExpression src, const char* what, int line)
+{
+    if (dstCType.empty() || !isMutRawCType(dstCType) || !exprIsConstRawPtr(src)) return;
+    unsupported((std::string("`UnsafeConstPtr<T>` does not convert to `UnsafePtr<T>` — ") + what
+                 + " would make a read-only pointer writable. Take the mutable form where the pointer was "
+                   "made (`dataPtrMut()`, `viewMut()`), or `cast<UnsafePtr<T>>(…)` in an `unsafe fn` to "
+                   "say the launder out loud").c_str(), line);
 }
 
 // --- Never-null definite assignment for `Owned`/`Shared` fields (Stage 1) ------------------------------
@@ -18414,7 +18498,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
 
     std::set<std::string> borrowFields;                      // fields that can dangle: raw `UnsafePtr<T>` or a `type view`
     for (auto& f : owner.fields)
-        if (f.type && f.type->value && (*f.type->value == "UnsafePtr" || isViewCType(cType(f.type))))
+        if (f.type && f.type->value && (isRawPtrName(*f.type->value) || isViewCType(cType(f.type))))
             borrowFields.insert(f.name);
     if (borrowFields.empty()) return;                        // nothing borrowable -> nothing to check
 
@@ -20566,8 +20650,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     //
     // `callReturnTypeRaw` is the same resolver `exprClass` uses, so a method, a free function and a
     // `Type::factory()` all answer here rather than at three separate sites.
+    //
+    // `addr(of:)` answers a pointer type there too now (callReturnTypeRaw types it, const or not, for the
+    // sinks) — and it has its own arm below with its own message, so it is skipped here or one `addr`
+    // outside an `unsafe fn` would be reported twice.
     {
-        std::string rc = callReturnTypeRaw(call);
+        const bool isAddr = call->identifier && call->identifier->value && *call->identifier->value == "addr"
+                         && !call->expression;
+        std::string rc = isAddr ? std::string() : callReturnTypeRaw(call);
         if (!rc.empty() && rc.size() > 1 && rc.back() == '*' && !isViewCType(rc)
             && !isClass(rc) && !isInterface(rc))
             rejectRawOutsideUnsafe("this call's result", call->line);
@@ -20793,17 +20883,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1) {
         rejectRawOutsideUnsafe("`addr(of: …)`", call->line);
         SharedExpression a = (*call->args)[0]->expression;
-        // …and it may not launder const. The pointer that comes back is writable, so taking it from a
-        // const root would hand out exactly the mutable alias every other rule here denies — `addr` is
-        // just the spelling that skips the assignment LHS `checkConstWrite` watches. There is no
-        // expression-level `const UnsafePtr<T>` to hand back instead (the const pointer type exists only
-        // as a PARAMETER, for const-correct FFI), so the honest answer is to reject rather than to widen
-        // the type system for it. This is also what keeps a `mods`-counter iterator factory — which is
-        // `addr(of: this.mods)` — correctly outside the const surface.
-        if (rootIsConst(rootBinding(a)))
-            unsupported(("`addr(of: …)` on `const " + rootBinding(a) + "` hands back a writable pointer "
-                         "into a const binding — const is deep, and a raw address is not an exception")
-                            .c_str(), call->line);
+        // …and it does not launder const. On a const root the pointer that comes back is an
+        // `UnsafeConstPtr<T>` (callReturnTypeRaw types it `T const*`), so `addr` is no longer the spelling
+        // that skips the assignment-LHS `checkConstWrite` watches: a store through it is refused there, and
+        // handing it to an `UnsafePtr<T>` local, argument or return is refused at that sink
+        // (rejectConstPtrWiden). It used to be rejected outright, because there was no expression-level
+        // const pointer to hand back; now the honest answer is to hand one back. A `mods`-counter iterator
+        // factory (`addr(of: this.mods)` into an `UnsafePtr<uint32> modsp`) stays correctly outside the
+        // const surface — by the widen rule at its ctor call, not by a refusal here.
         // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
         // UnsafePtr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
         // storage by hand, so the hole becomes a live value and its destructor comes back. Restricted to
@@ -21080,12 +21167,16 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // `const UnsafePtr<T>`/`const UnsafePtr` emits `const T*`/`const void*` (FFI const
             // pointers — to match C const callback/API signatures). Only pointer types:
             // a `const ref <class>` stays plain (its methods take a non-const `self`).
-            bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "UnsafePtr";
+            // An `UnsafeConstPtr<T>` already spells its `const` in its C type (`T const*`), so the prefix is
+            // for the `const UnsafePtr<T>` form alone — a const BINDING of a mutable pointer, kept lowering
+            // to `const T*` as it always has.
+            bool constPtr = p->isConst && isRawPtrName(p->type) && !isConstRawPtrName(p->type);
             // `hardware UnsafePtr<T>` emits `volatile T*` — a pointer to an MMIO register (mirrors `const UnsafePtr<T>`).
-            // `const hardware UnsafePtr<T>` → `const volatile T*` (a read-only status register). UnsafePtr-only.
-            bool hwPtr = p->isHardware && p->type && p->type->value && *p->type->value == "UnsafePtr";
+            // `const hardware UnsafePtr<T>` / `hardware UnsafeConstPtr<T>` → `const volatile T*` (a read-only
+            // status register). Raw pointers only.
+            bool hwPtr = p->isHardware && isRawPtrName(p->type);
             if (p->isHardware && !hwPtr)
-                unsupported("`hardware` applies only to an `UnsafePtr<T>` parameter (a pointer to an MMIO register)", p->line);
+                unsupported("`hardware` applies only to an `UnsafePtr<T>` or `UnsafeConstPtr<T>` parameter (a pointer to an MMIO register)", p->line);
             // a `ref`/`const ref` parameter may not name a smart pointer — you borrow
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
@@ -24112,6 +24203,32 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         if (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) return rn;
     }
     // Free / qualified function call — its C return type, if that names a class.
+    // `addr(of: place)` — the builtin's result is a pointer to the place's type, and it is READ-ONLY when
+    // the place roots in a const binding: that is how `addr(of:)` on `const this` / a `const` local hands
+    // back an `UnsafeConstPtr<T>` instead of being refused, and the sinks (rejectConstPtrWiden) are what
+    // keep it from becoming a writable one. Typed by `lvalueCType`, so an element place (`addr(of:
+    // this.data[i])`) answers "" and stays silent, exactly as it did before this arm existed.
+    if (inv->identifier && inv->identifier->value && *inv->identifier->value == "addr" && !inv->expression
+        && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+        && inv->args && inv->args->size() == 1 && (*inv->args)[0] && (*inv->args)[0]->expression) {
+        SharedExpression a = (*inv->args)[0]->expression;
+        std::string ct = lvalueCType(a);
+        bool isConst = rootIsConst(rootBinding(a));
+        // A module `static` / `comptime` is neither a local nor a field, so `lvalueCType` does not know
+        // it. A `comptime` is real `static const` storage (SPEC § Compile-time constants), so its address
+        // is read-only — `addr(of: CAP)` into an `UnsafePtr<int32>` was accepted until 0.9.204, and
+        // clang's `-Wdiscards-qualifiers` was the only thing that ever saw the launder
+        // (tests/mod_export_const.d).
+        if (ct.empty())
+            if (auto* id = dynamic_cast<IdentifierNode*>(a.get()))
+                if (id->value) {
+                    const std::string key = resolveModuleVar(*id->value, id->qualifier);
+                    auto ms = key.empty() ? _moduleStatics.end() : _moduleStatics.find(key);
+                    if (ms != _moduleStatics.end() && ms->second) { ct = cType(ms->second); isConst = _constStatics.count(key) > 0; }
+                }
+        if (ct.empty()) return "";
+        return ct + (isConst ? " const*" : "*");
+    }
     if (inv->identifier && inv->identifier->value) {
         auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
         if (f != _funcs.end()) return f->second.retCType;
@@ -27023,7 +27140,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             const ParamSig& p = si.params[i];
             // const pointer params -> `const T*` (FFI). className already ends
             // in `*` for an UnsafePtr<T>/UnsafePtr; a const-ref class param keeps its self mutable.
-            bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*';
+            bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
             bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
             *_out << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "") << p.className << (p.byRef ? "*" : "");
         }
@@ -27410,7 +27527,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
     if (!mv || !mv->type || !mv->variables) return;
     if (declOnly && mv->isComptime) return;
     std::string ty = cType(mv->type);
-    bool isPtr = mv->type->value && *mv->type->value == "UnsafePtr";
+    bool isPtr = isRawPtrName(mv->type);
     // `hardware` (MMIO/ISR) is valid on a scalar value (`volatile T`) or an `UnsafePtr<T>` handle (`volatile T*`).
     // An InlineArray/collection static with `hardware` has murky element-volatility — reject it in v1.
     if (mv->isHardware && !isPtr && _classes.count(ty) && _classes[ty].isIntrinsicColl) {

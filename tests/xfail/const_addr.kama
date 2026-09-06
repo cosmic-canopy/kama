@@ -1,7 +1,8 @@
-// `addr(of: …)` is the spelling that skips the assignment LHS the const-write check watches: the
-// pointer it returns is writable, so taking it from a const root hands out the mutable alias every
-// other rule denies. There is no expression-level `const UnsafePtr<T>` to hand back instead (the const
-// pointer type exists only as a PARAMETER, for const-correct FFI), so this is rejected outright.
+// `addr(of: …)` on a const root hands back an `UnsafeConstPtr<T>` — a read-only pointer, which is what a
+// `const fn` may honestly return. Returning it AS an `UnsafePtr<T>` is the launder deep const forbids,
+// and it is refused at the `return`, by the same rule that refuses it at a local, an assignment or an
+// argument (tests/xfail/const_ptr_to_mut_*). The const-typed twin — `const fn UnsafeConstPtr<int32>
+// peek()` — is tests/unsafe_const_ptr.kama.
 type value Cell {
     int32 n;
     public ctor make() { this.n = 5; }

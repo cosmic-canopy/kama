@@ -1,0 +1,25 @@
+// A receiver reached THROUGH the read-only pointer is a const receiver: the method would take
+// `&this.data[0]` as a writable `self` out of memory the pointer only reads. A `const fn` on the same
+// place is fine (`peek`).
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 1; }
+    public fn void bump() { this.n = this.n + 1; }
+    public const fn int32 get() { return this.n; }
+}
+
+type value Holder {
+    UnsafeConstPtr<Cell> data;
+    public unsafe ctor over(UnsafeConstPtr<Cell> at) { this.data = at; }
+    public unsafe fn void poke() { this.data[0].bump(); }          // -> REJECT
+    public unsafe const fn int32 peek() { return this.data[0].get(); }
+}
+
+unsafe fn int32 run() {
+    Cell c = Cell.make();
+    Holder h = Holder.over(at: addr(of: c));
+    h.poke();
+    return h.peek();
+}
+
+fn int32 main() { return run(); }

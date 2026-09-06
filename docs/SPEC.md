@@ -1027,7 +1027,9 @@ holds for a `type extern value` — matching field names and types. A disagreeme
 files.
 
 `UnsafePtr` is `void*`; `UnsafePtr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
-**no dereference** in kama outside an `unsafe fn`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
+**no dereference** in kama outside an `unsafe fn`). `UnsafeConstPtr<T>` is the read-only twin, `T const*`
+(bare, `const void*`): same carrier, no store through it, no conversion back to `UnsafePtr<T>` (see
+*`unsafe fn`*). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).
 
 ### Math (`std::math`) ✅
@@ -1860,7 +1862,7 @@ hygienic, one grammar (the `"${x}"`/`assert`/`print` shape), exactly like Rust `
 
 ### `unsafe fn` — raw pointer memory access
 
-The **only** place kama can touch arbitrary memory through a raw pointer. Raw `UnsafePtr<T>` index/store is a
+The **only** place kama can touch arbitrary memory through a raw pointer. Raw `UnsafePtr<T>` / `UnsafeConstPtr<T>` index/store is a
 **compile error outside** an `unsafe fn` — so the entire dangerous surface is explicit and greppable, and
 greppable *at the declaration* (`grep -rn 'unsafe fn'`) rather than buried in a body. Everything else
 (collections, smart pointers, FFI structs/handles/out-params, `addr`) stays safe.
@@ -1909,7 +1911,7 @@ pointers*). A raw pointer is the foreign boundary, never general-purpose escape 
 #### What requires an `unsafe fn` — the decision table
 
 **One rule, and it keys on the TYPE, not the spelled token: an expression, declaration, or binding whose
-type IS or CONTAINS `UnsafePtr<T>` may only occur inside an `unsafe fn`.** Plus one more: **calling an
+type IS or CONTAINS `UnsafePtr<T>` or `UnsafeConstPtr<T>` may only occur inside an `unsafe fn`.** Plus one more: **calling an
 `extern fn` requires one too.**
 
 | construct | example | verdict |
@@ -1928,6 +1930,20 @@ type IS or CONTAINS `UnsafePtr<T>` may only occur inside an `unsafe fn`.** Plus 
 | **declare** an `extern fn` | `extern fn int32 abs(int32)` | no marker — bodiless |
 | **call** an `extern fn`, **scalar-only included** | `kama_close_socket(fd: fd)` | `unsafe fn` only |
 | inline `asm(…)` | | `unsafe fn` only |
+
+**The read-only raw pointer — `UnsafeConstPtr<T>`.** C's `const T*` (bare, `const void*`), lowered
+east-const as `T const*` so that `UnsafeConstPtr<UnsafePtr<uint8>>` is `uint8_t* const*` — a pointer to a
+const pointer, which is what it says. It obeys the containment rule above exactly as `UnsafePtr<T>` does,
+reading through it is the same `unsafe` read, and it differs in three ways: a
+**store** through it — `q[i] = x`, `q[i].f = x`, a `ref`/`out` borrow of `q[i]` — is rejected; <!-- xfail: const_ptr_store, const_ptr_store_field, const_ptr_ref_arg -->
+a **non-`const fn` call** on `q[i]` is rejected as a call on a const receiver; and it <!-- xfail: const_ptr_call_nonconst -->
+**does not convert to `UnsafePtr<T>`** — at a local's initializer, an assignment, an argument, a `return` — <!-- xfail: const_ptr_to_mut_local, const_ptr_to_mut_arg, const_addr -->
+while `UnsafePtr<T>` → `UnsafeConstPtr<T>` is implicit, as in C, and `cast<UnsafePtr<T>>(q)` inside an
+`unsafe fn` is the explicit launder. It is what a `const fn` may honestly hand out: `addr(of: …)` on a
+const root yields one, so a buffer held `const` reaches a `const T*` C API with no cast and no mutable
+borrow — Rust's `*const T`, Swift's `UnsafePointer<T>`, the stdlib's own `get`/`getRef` split applied at
+the FFI seam. A `const UnsafePtr<T>` *parameter* is unchanged: a const binding of a mutable pointer, <!-- test: unsafe_const_ptr -->
+still lowered `const T*`, which is why it accepts either pointer.
 | **call** an `unsafe fn` | | unrestricted |
 | `unsafe` on **`main`** | `unsafe fn int32 main()` | **rejected** — see below |
 
@@ -2221,8 +2237,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   library owner over `UnsafePtr<T>` drop its heap pointee before `free` — through `deref()`'s `ref T`,
   never through a bare raw element (`drop(value: p[0])` is refused: the element is untyped to ownership, <!-- xfail: unsafe_ptr_elem_drop -->
   so it would drop nothing).
-- **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`. Taking an address
-  is safe (an `UnsafePtr` is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
+- **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`, or as an
+  `UnsafeConstPtr<T>` when the place roots in a `const` binding (a const local or parameter, `this` inside
+  a `const fn`). Taking an address is safe (either pointer is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
@@ -2831,7 +2848,7 @@ is compile-time evaluation; see *Compile-time constants*.) It appears in exactly
 | `const T x = init;` | a **local** — no reassign, no write through it, no `++`/`--` |
 | `const T f;` in a type body | a **field** — write-once, assignable only in a constructor |
 | `const T x` / `const ref T x` parameter | a **read-only** argument; `const ref` is a read-only borrow |
-| `const UnsafePtr<T> p` parameter | lowers to C `const T*`, for const-correct FFI |
+| `const UnsafePtr<T> p` parameter | lowers to C `const T*`, for const-correct FFI — a const *binding* of a mutable pointer; the read-only pointer *type* is `UnsafeConstPtr<T>` (see *`unsafe fn`*) |
 | `const fn` on a method | the method does not mutate its receiver |
 | `comptime(int32 N)` parameter list | a **comptime parameter** — a compile-time value, an unrelated feature |
 
@@ -2844,7 +2861,8 @@ does not.
 Inside a `const fn` the receiver is immutable, deeply. Writing `this.f`, writing a bare field name, writing
 through `this.a.b[i]`, `++`/`--` on any of those, and passing any of them to a non-const `ref`/`out`
 parameter are all rejected. So is **moving** out of it — `give` leaves its source holding a moved-from
-value, which is a mutation — and so is `addr(of: …)`, which would hand back a writable pointer into it.
+value, which is a mutation. `addr(of: …)` into it hands back an `UnsafeConstPtr<T>`, never a writable
+pointer, and returning that as an `UnsafePtr<T>` is rejected at the `return`. <!-- xfail: const_addr -->
 
 Symmetrically, a **const receiver** — a `const` local, a `const`/`const ref` parameter, or `this` inside a
 `const fn` — may call only `const fn` methods. That gate is the point of the marker: it is what lets a
@@ -2871,7 +2889,8 @@ the receiver, so `c.place() = 99` would mutate a `const` binding with no `unsafe
 take separate names instead — `get`/`getRef`, `iterator`/`iterMut`, `peek`/`peekRef` — which is the split
 the standard library already spelled and now the one the compiler enforces. (This is Rust's
 `get`/`get_mut`, not C++'s const-overloading, which would need every accessor written twice. A read-only
-place — C#'s `ref readonly` — would be more expressive; it is not in the language.)
+place — C#'s `ref readonly` — would be more expressive; it is not in the language. The raw-pointer seam
+has its read-only form, `UnsafeConstPtr<T>`; a read-only *place* is a roadmap item.)
 
 Operators cannot be `const fn`, and need not be: a write through `operator[]` on a const receiver is
 already rejected at the assignment, since its root is const.

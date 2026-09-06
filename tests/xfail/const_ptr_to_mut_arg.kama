@@ -1,0 +1,13 @@
+// The argument sink of the same rule: a `UnsafePtr<T>` parameter is a writable destination. (A
+// `const UnsafePtr<T>` parameter lowers to `const T*` and accepts the read-only pointer — that is
+// tests/unsafe_const_ptr.kama.)
+unsafe fn void poke(UnsafePtr<int32> dst) { dst[0] = 9; }
+
+unsafe fn int32 run() {
+    int32 x = 1;
+    UnsafeConstPtr<int32> q = addr(of: x);
+    poke(dst: q);                                         // -> REJECT
+    return x;
+}
+
+fn int32 main() { return run(); }

@@ -1,0 +1,10 @@
+// `UnsafeConstPtr<T>` -> `UnsafePtr<T>` is the one raw-pointer conversion kama refuses: the reverse is
+// implicit, as in C, and this direction is exactly the launder deep const forbids.
+unsafe fn int32 run() {
+    int32 x = 1;
+    UnsafeConstPtr<int32> q = addr(of: x);
+    UnsafePtr<int32> p = q;                               // -> REJECT
+    return p[0];
+}
+
+fn int32 main() { return run(); }
