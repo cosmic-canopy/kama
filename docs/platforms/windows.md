@@ -58,14 +58,20 @@ not usually available on a Windows box, so `./dev test` and `./dev check` are th
 
 ```sh
 make -j4                    # ~100 s here
-./run_tests.sh              # ~906 s; the cost is per-fixture C compilation, not the tests
+./run_tests.sh              # ~1819 s; the cost is per-fixture C compilation, not the tests
 ./dev fixture <name>...     # the inner loop
 ```
 
-If the suite looks slow, it is not hung. It is ~906 s here against ~75 s in the Linux container, and
+If the suite looks slow, it is not hung. It is ~1819 s here against ~75 s in the Linux container, and
 what it is spending that on is process startup plus the C compile — **not** a network or socket
 timeout, whatever an older note may have said. `net_addr_ctor` opens no socket at all and cost the
 same 40 s as `net_refused`.
+
+⚠️ Both halves of that comparison are of their own date, and only the first is current. This page read
+`~906 s` from 2026-08-11 until 2026-09-06, when the same box measured `~1819 s` — a corpus that grew
+from 972 assertions to 1583 over the same weeks, not a regression. Per-assertion the box got slightly
+*faster*. Re-measure before reading any trend into these, and re-measure the container leg too: `~75 s`
+is the older figure and has not been taken against today's corpus.
 
 ⚠️ **Do not compare against a CI number to size this up.** A `~1837 s` figure for the CI runner was
 briefly recorded here as if it were the native-x86_64 control. It is not usable as one: it was taken
@@ -167,6 +173,34 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `tools/check-lsp.sh` covers the third. A `/c/Users/…` that reaches native kama unrewritten resolves
   against the CURRENT DRIVE as `C:\c\Users\…`, which exists nowhere, and the failure is silent: the
   server finds no manifest and answers under defaults rather than reporting a path it cannot open.
+- **`getaddrinfo` is a Winsock call and needs `WSAStartup`**, exactly like `socket`. Every other entry
+  point in `kama_os.h` reaches it through a socket that already called `kama_net_init()`; the resolver
+  does not, so it needs its own call. Without one, a resolve performed *before* the program's first
+  `bind`/`connect` fails with `WSANOTINITIALISED` while the same call after one succeeds — and it fails as
+  `HostUnreachable`, which reads like a network answer rather than a missing init. `tests/net_resolve`
+  scored 111 of 127 on exactly that: the flag lost was the `resolve("localhost")` that ran before its
+  listener bound.
+- **`abort()` exits 127; it is not a death by signal.** So the POSIX `>= 128` trap predicate matches
+  nothing here, and 127 is a value a program can also *return* — the runtime's own message on stderr is
+  the discriminator. `run_tests.sh` (trap fixtures) and `tools/check-release-arith.sh` each carry this
+  branch. A bare `__builtin_trap` *does* surface as `128 + SIGILL`, which is why the two are not one rule.
+- **A binary that has just aborted stays locked**, so the next link over the same path dies with
+  "cannot open output file: Permission denied" — the running-executable rule, extended by however long
+  the OS or a crash reporter holds the image. Give each build its own output path rather than retrying.
+- **There is no `<dlfcn.h>` and no `-ldl`.** mingw-w64 ships neither, so a POSIX `dlopen` host does not
+  fail at load time — it fails to COMPILE, and a guard around it reports the feature as broken when what
+  broke is the harness. `LoadLibraryA`/`GetProcAddress`/`FreeLibrary` are the same three operations
+  (`tests/support/expose_shared_check.sh`).
+- **A directory junction stores an ABSOLUTE path**, by definition of its reparse point. `kama pkg install`
+  materializes `.kama/deps/<name>` with `mklink /J` because the relative alternative — a directory
+  *symlink* — needs `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary
+  install cannot depend on. So a resolved dependency tree is **not relocatable here**, and
+  `tools/check-packages.sh`'s KB-6 case asserts only what survives: the link is made, and the tree builds
+  where it was resolved.
+- **`system()` is cmd.exe, and cmd's `echo` does not strip quotes** the way `/bin/sh` does. That matters
+  to any guard using `--cc "echo <compiler>"` to read a command line back: kama quotes every input path,
+  so the identical, correct command reads `…app.c ` on POSIX and `…app.c" ` here. Match on a
+  quote-stripped copy, or the ordering assertion fails on the platform whose quotes survived.
 - **`_fullpath` does not resolve reparse points**, where POSIX `realpath` resolves symlinks. Directory
   junctions (`mklink /J`, how `kama install` materializes `.kama/deps/<name>`) therefore stayed
   unresolved, and every "which package owns this file?" test answered differently than on macOS.
@@ -203,8 +237,9 @@ Worth knowing before debugging, because each of these produced a confident wrong
 
 ## Where the remaining work is
 
-**The suite is green here: 972 passed, 0 failed** (`./run_tests.sh`, ~906 s), the guards pass, and the
-`windows-test` CI leg is no longer `continue-on-error`. Windows is a supported platform, not a
+**The suite is green here: 1583 passed, 0 failed** (`./run_tests.sh`, ~1819 s — 1409 s of fixtures after
+410 s of guards; measured 2026-09-06 at 0.9.209), and the `windows-test` CI leg is no longer
+`continue-on-error`. Windows is a supported platform, not a
 best-effort one, and a program kama builds here is distributable as it stands.
 
 **What shape a Windows *application* is, as opposed to a Windows console tool**, used to be two open
@@ -253,7 +288,8 @@ entries here. One has shipped:
 - **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Surfaces only on a deep
   working directory. Still open, and parked in [ROADMAP.md](../ROADMAP.md); not a regression.
 
-The **wall clock** is the other thing to know: the suite is ~906 s here against ~75 s in the Linux
-container. The cost is per-fixture C compilation plus Windows process startup — `kama build -j`
+The **wall clock** is the other thing to know: the suite is ~1819 s here against ~75 s in the Linux
+container (read the vintage note under [Running things](#running-things) before comparing those two).
+The cost is per-fixture C compilation plus Windows process startup — `kama build -j`
 parallelizes, but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out per fixture instead. A Defender
 exclusion on the runner's temp dir is the cheapest untried lever.

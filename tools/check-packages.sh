@@ -1124,17 +1124,31 @@ cat > "$rl/app/kama.json" <<'JSON'
 JSON
 printf 'import { rldep::dv };\nfn int32 main() { return dv(); }\n' > "$rl/app/src/app.kama"
 "$KAMA" pkg install "$rl/app/kama.json" >/dev/null 2>&1
-lnk=$(readlink "$rl/app/.kama/deps/rldep" || true)
-case "$lnk" in
-    /*) echo "check-packages: FAIL — a path dependency was linked ABSOLUTELY ($lnk)." >&2
-        echo "                 A resolved tree must be relocatable: relative links are correct under" >&2
-        echo "                 every mount point at once, absolute ones dangle on the first move." >&2; exit 1 ;;
-    "") echo "check-packages: FAIL — no dependency link at $rl/app/.kama/deps/rldep" >&2; exit 1 ;;
-esac
-# The real assertion is not the string — it is that the tree still builds somewhere else.
-mv "$rl" "$tmp/rl-moved"
-"$KAMA" build "$tmp/rl-moved/app/kama.json" >"$tmp/rl.out" 2>&1 \
-    || { echo "check-packages: FAIL — the resolved tree does not build after being MOVED:" >&2
+# ⚠️ Windows is exempt from the RELATIVE half, and the exemption is the platform's rather than kama's:
+# `linkDir` materializes the view with `mklink /J`, a directory JUNCTION, and a junction's reparse point
+# stores an absolute path by definition. The relative alternative is a directory SYMLINK, which needs
+# SeCreateSymbolicLinkPrivilege — Developer Mode or elevation — and so cannot be what an ordinary
+# `pkg install` depends on. A resolved tree therefore does not survive a move there, and this case
+# asserts what does hold: the link is made, and the tree builds where it was resolved.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) relocatable=0 ;; *) relocatable=1 ;; esac
+if [ "$relocatable" = 1 ]; then
+    lnk=$(readlink "$rl/app/.kama/deps/rldep" || true)
+    case "$lnk" in
+        /*) echo "check-packages: FAIL — a path dependency was linked ABSOLUTELY ($lnk)." >&2
+            echo "                 A resolved tree must be relocatable: relative links are correct under" >&2
+            echo "                 every mount point at once, absolute ones dangle on the first move." >&2; exit 1 ;;
+        "") echo "check-packages: FAIL — no dependency link at $rl/app/.kama/deps/rldep" >&2; exit 1 ;;
+    esac
+    # The real assertion is not the string — it is that the tree still builds somewhere else.
+    mv "$rl" "$tmp/rl-moved"
+    rlbuild="$tmp/rl-moved/app/kama.json"; rlwhere="after being MOVED"
+else
+    [ -d "$rl/app/.kama/deps/rldep" ] \
+        || { echo "check-packages: FAIL — no dependency link at $rl/app/.kama/deps/rldep" >&2; exit 1; }
+    rlbuild="$rl/app/kama.json"; rlwhere="through its path-dependency link"
+fi
+"$KAMA" build "$rlbuild" >"$tmp/rl.out" 2>&1 \
+    || { echo "check-packages: FAIL — the resolved tree does not build $rlwhere:" >&2
          sed 's/^/  /' "$tmp/rl.out" >&2; exit 1; }
 
 
@@ -1168,4 +1182,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

@@ -27,25 +27,47 @@ KAMA
 "$KAMA" build --shared "$tmp/mod.kama" -o "$tmp/libmod.$ext"
 
 # A tiny C host that loads the library and calls the bare symbols.
+#
+# ⚠️ Windows has no <dlfcn.h> and no -ldl: mingw-w64 ships neither, so the POSIX spelling does not fail
+# at load time — it fails to COMPILE, and the guard reads as "the --shared proof did not pass" when what
+# it means is "this host was written for one of the two platforms". LoadLibrary/GetProcAddress is the
+# same three operations under different names, so the branch is in the host rather than in the script.
 cat > "$tmp/host.c" <<'C'
-#include <dlfcn.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <windows.h>
+#define OPEN(p)     ((void*)LoadLibraryA(p))
+#define SYM(h, n)   ((void*)GetProcAddress((HMODULE)(h), (n)))
+#define CLOSE(h)    FreeLibrary((HMODULE)(h))
+#define WHY         "GetLastError %lu", (unsigned long)GetLastError()
+#else
+#include <dlfcn.h>
+#define OPEN(p)     dlopen((p), RTLD_NOW)
+#define SYM(h, n)   dlsym((h), (n))
+#define CLOSE(h)    dlclose(h)
+#define WHY         "%s", dlerror()
+#endif
 typedef int (*binop)(int, int);
 int main(void) {
-    void* h = dlopen(LIBPATH, RTLD_NOW);
-    if (!h) { fprintf(stderr, "dlopen failed: %s\n", dlerror()); return 2; }
-    binop add = (binop)dlsym(h, "add");
-    binop mul = (binop)dlsym(h, "mul");
-    binop sub = (binop)dlsym(h, "renamed");   /* the `@linkName`, not the kama name `sub` */
-    if (!add || !mul || !sub) { fprintf(stderr, "dlsym failed: %s\n", dlerror()); return 3; }
-    if (dlsym(h, "sub")) { fprintf(stderr, "`sub` is exported under its kama name despite @linkName\n"); return 4; }
+    void* h = OPEN(LIBPATH);
+    if (!h) { fprintf(stderr, "load failed: "); fprintf(stderr, WHY); fprintf(stderr, "\n"); return 2; }
+    binop add = (binop)SYM(h, "add");
+    binop mul = (binop)SYM(h, "mul");
+    binop sub = (binop)SYM(h, "renamed");   /* the `@linkName`, not the kama name `sub` */
+    if (!add || !mul || !sub) { fprintf(stderr, "symbol lookup failed: "); fprintf(stderr, WHY); fprintf(stderr, "\n"); return 3; }
+    if (SYM(h, "sub")) { fprintf(stderr, "`sub` is exported under its kama name despite @linkName\n"); return 4; }
     int r = add(40, 2) + mul(0, 0) + sub(5, 5);   /* 42 */
-    dlclose(h);
+    CLOSE(h);
     return r;
 }
 C
 
-"$CC" -DLIBPATH="\"$tmp/libmod.$ext\"" "$tmp/host.c" -ldl -o "$tmp/host"
+# -ldl is glibc's, and only glibc's: mingw-w64 resolves LoadLibrary out of kernel32 with no extra library.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) dl= ;;
+  *) dl=-ldl ;;
+esac
+"$CC" -DLIBPATH="\"$tmp/libmod.$ext\"" "$tmp/host.c" ${dl:+$dl} -o "$tmp/host"
 set +e
 "$tmp/host"; got=$?
 set -e

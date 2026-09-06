@@ -1080,6 +1080,13 @@ static inline int32_t kama_resolve_host(const char* host, uint32_t* outIps, int3
     int32_t n = 0;
     int rc;
     if (!host || !*host || !outIps || max <= 0) { errno = ENOENT; return -1; }
+    // ⚠️ `getaddrinfo` is a WINSOCK call, so it needs WSAStartup like every socket here does — and this
+    // is the one entry point that reaches it without creating a socket first. Without this, a resolve
+    // performed before the program's first `bind`/`connect` failed with WSANOTINITIALISED (carried out
+    // as HostUnreachable), while the same call AFTER one succeeded: `tests/net_resolve` scored 111 of
+    // 127 on Windows, missing exactly the `resolve("localhost")` that ran before its listener bound.
+    // No-op on POSIX, where kama_net_init() returns 0.
+    if (kama_net_init() != 0) return -1;
     memset(&hints, 0, sizeof hints);
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;   // one entry per address, not one per (address, socket type)

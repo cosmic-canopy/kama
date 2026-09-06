@@ -416,7 +416,14 @@ printf '%s' "$line" | grep -qF -- "-sALLOW_MEMORY_GROWTH=1" \
     || bad "a boolean setting did not render"
 # ...and every -s is in the LINK tail, after the inputs, because that is what it is. (Before this they
 # sat among the compile flags, which is exactly how the collision above went unnoticed.)
-case "$line" in
+#
+# ⚠️ Matched on a quote-STRIPPED copy. kama quotes every input path, and `--cc "echo emcc"` — the
+# instrument that makes this line readable at all — goes through the platform's system(): /bin/sh strips
+# those quotes before `echo` sees them, cmd.exe does not. So the same correct ordering reads `…app.c `
+# on POSIX and `…app.c" ` on Windows, and a pattern written against one reports the OTHER as "the
+# setting is still among the compile flags". The order is what is under test; the quoting is the
+# instrument's.
+case "$(printf '%s' "$line" | tr -d '"')" in
     *".c "*"-sEXIT_RUNTIME"*) ok "the settings are emitted in the link tail, after the inputs" ;;
     *) bad "an -s setting is still emitted among the compile flags" ;;
 esac

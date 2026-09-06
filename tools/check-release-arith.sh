@@ -63,10 +63,19 @@ EOF
 # `trapped` is "killed by a signal or aborted". ⚠️ NOT a bare `>= 128` test: these programs RETURN
 # values, and a returned value's low byte can land there on its own — the exact ambiguity that made two
 # trap fixtures in tests/trap/ need a return offset to stay honest.
+#
+# ⚠️ Windows has no signal to be killed by: msys2's `abort()` exits 127, which is the same fact
+# run_tests.sh records for its trap fixtures. 127 is also a value a program can return, so the exit code
+# alone proves nothing there and the runtime's own message on stderr carries the discriminator — every
+# trap this guard provokes prints one ("kama: arithmetic overflow -- …"), which is why that is enough
+# here and why the trap-fixture leg, where a bare __builtin_trap prints nothing, weakens to "nonzero".
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_STYLE=windows ;; *) TRAP_STYLE=posix ;; esac
 run() {  # run <binary>; echoes "trap" or the exit code
-    "$1" >/dev/null 2>&1 && { echo 0; return; }
+    "$1" >/dev/null 2>"$tmp/run.err" && { echo 0; return; }
     rc=$?
-    if [ "$rc" -ge 128 ] && [ "$rc" -le 165 ]; then echo trap; else echo "$rc"; fi
+    if [ "$TRAP_STYLE" = windows ]; then
+        if grep -q '^kama: ' "$tmp/run.err"; then echo trap; else echo "$rc"; fi
+    elif [ "$rc" -ge 128 ] && [ "$rc" -le 165 ]; then echo trap; else echo "$rc"; fi
 }
 build() { "$KAMA" build "$1" -o "$2" $3 >/dev/null 2>"$tmp/err" || {
     echo "check-release-arith: FAIL — build failed: $1 $3" >&2; sed 's/^/  /' "$tmp/err" >&2; exit 1; }; }
@@ -97,8 +106,13 @@ fi
 # INT64_MIN / -1 overflows the very `long long` such a check would compute it in.
 for w in div div64; do
     for tier in "" "--release"; do
-        build "$tmp/$w.kama" "$tmp/${w}_b" "$tier"
-        got=$(run "$tmp/${w}_b")
+        # ⚠️ One output path per tier. Both tiers used to build over `${w}_b`, and on Windows the second
+        # link then failed with "cannot open output file: Permission denied" — a binary that has just
+        # ABORTED is still open (the OS, or a crash reporter attached to it), and a running image cannot
+        # be replaced there. Nothing needed the reuse.
+        bin="$tmp/${w}_$([ -n "$tier" ] && echo r || echo d)"
+        build "$tmp/$w.kama" "$bin" "$tier"
+        got=$(run "$bin")
         [ "$got" = trap ] || {
             echo "check-release-arith: FAIL — ${tier:-debug} $w did not trap (got $got); SPEC says" >&2
             echo "                    TYPE_MIN / -1 traps in EVERY build." >&2; fail=1; }
