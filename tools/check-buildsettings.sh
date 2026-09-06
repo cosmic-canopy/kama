@@ -684,6 +684,29 @@ fi
     || { bad "\`kama query\` refused over a broken dependency manifest"; head -2 "$tmp/e" >&2; }
 
 [ "$fail" = 0 ] || { echo "check-buildsettings: FAILED" >&2; exit 1; }
+# ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: the section-GC link flags ride the link line only"
+# `--release` adds `-Wl,-dead_strip` (ld64) / `-Wl,--gc-sections -s` (GNU). They were appended to the
+# flag prefix every per-TU `-c` job shares, and clang says "'linker' input unused" once per compile-only
+# job — 121 lines for a package vendoring libsodium, the first thing its consumer saw (ROADMAP row 3).
+# A `csources` entry is what makes the build per-TU (two inputs), and `--cc "echo CC:"` prints each job.
+app gcl <<'JSON'
+{ "name": "gcl", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/shim.c"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/gcl/csrc"; printf 'int gcl_shim(void) { return 1; }\n' > "$tmp/gcl/csrc/shim.c"
+lines=$("$KAMA" build "$tmp/gcl/kama.json" --release --cc "echo CC:" -o "$tmp/gcl/app" 2>/dev/null | grep "^CC:" || true)
+if printf '%s\n' "$lines" | grep -- " -c " | grep -qE -- "dead_strip|gc-sections"; then
+    bad "a per-TU compile line carries the section-GC LINK flag ('linker' input unused, once per TU)"
+    printf '%s\n' "$lines" | sed 's/^/    /' >&2
+else ok "no per-TU compile line carries a link flag"; fi
+if printf '%s\n' "$lines" | grep -v -- " -c " | grep -qE -- "dead_strip|gc-sections"; then
+    ok "the link line carries the section-GC flag"
+else
+    bad "the link line lost the section-GC flag"; printf '%s\n' "$lines" | sed 's/^/    /' >&2
+fi
+
 echo "check-buildsettings: PASS (a dependency contributes cflags/ldflags/link, before the project and
   deduped for link, resolved per-manifest so its target's \`link\` replaces only its own; and it cannot
-  reach the consumer's no-heap, webgpu or working directory)"
+  reach the consumer's no-heap, webgpu or working directory; the section-GC flags ride the link line only)"

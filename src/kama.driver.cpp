@@ -10189,6 +10189,7 @@ int main(int argc, char** argv)
         // Guarded by tools/check-simd-wasm.sh, which greps a real .wasm — and which runs ONLY on the
         // container wasm leg, never in `./dev check`.
         if (wasm) cmd << "-msimd128 ";
+        std::string linkGc;                  // the section-GC LINK flags — appended to the link line only
         if (release) {
             // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
             // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +
@@ -10198,8 +10199,12 @@ int main(int argc, char** argv)
             if (!wasm && !stopsAtObject) {   // -Wl,* is link-time; OBJECT/STATIC stop at -c (see below)
                 // ld64 spells section GC differently from GNU ld/lld, and treats `-s` as obsolete (it
                 // warns on every release link), so the strip flag is for the GNU-style linkers only.
-                if (g_target.isMacOS()) cmd << "-Wl,-dead_strip ";
-                else                    cmd << "-Wl,--gc-sections -s ";
+                //
+                // Into `linkGc`, NOT `cmd`: `cmd` is the prefix of every per-TU `-c` job too, and clang
+                // says "-Wl,-dead_strip: 'linker' input unused" once per compile-only job — 121 lines
+                // for a package vendoring libsodium (ROADMAP row 3). The link line appends it below.
+                if (g_target.isMacOS()) linkGc = "-Wl,-dead_strip ";
+                else                    linkGc = "-Wl,--gc-sections -s ";
             }
         } else {
             // Debug: faithful stepping + breakpoints in .kama via #line (DWARF `-g`). We intentionally do
@@ -10699,7 +10704,7 @@ int main(int argc, char** argv)
                     // name: `--cc "clang -fsanitize=address,undefined"` (the sanitizer leg) needs those
                     // flags on the link too, or the runtime is never pulled in.
                     std::ostringstream ld;
-                    ld << base;
+                    ld << base << linkGc;
                     for (auto& o : objs) ld << "\"" << o << "\" ";
                     ld << link.str() << "-o \"" << outPath << "\"";
                     rc = runCmd(ld.str());
@@ -10707,7 +10712,7 @@ int main(int argc, char** argv)
             }
         } else {
             for (auto& in : ccInputs) cmd << in.tok;
-            cmd << link.str() << "-o \"" << outPath << "\"";
+            cmd << linkGc << link.str() << "-o \"" << outPath << "\"";
             rc = runCmd(cmd.str());
         }
 
