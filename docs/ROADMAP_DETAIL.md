@@ -178,7 +178,9 @@ Everything else here is library or toolchain work that does **not** gate the tag
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
-   [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
+   [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a and M2b shipped** — M2b `0.9.190`–`0.9.195`,
+   2026-09-05: sleep + wall clock, DNS, fs completion, `std::path`, stdio handles + `readLine`/`Lines`;
+   only M2c remains, and that file is deleted when it ships).
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
    regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager.
    ⚠️ **So TLS, regex, HTTP and crypto are DECLARED NON-GOALS for `std`, not unscheduled work**, and this
@@ -189,8 +191,11 @@ Everything else here is library or toolchain work that does **not** gate the tag
    surface; pure library/codegen. Split M2a (parse · sort · math completion · `char` classification) /
    M2b (fs + path · io handles + `lines()` · sleep + wall clock · DNS) / M2c (`std::random` ·
    `std::encoding`). The items below are that campaign's contents:
-   - **`std::net`** — DNS/`getaddrinfo` (numeric hosts only today). *(UDP and ephemeral-port `getsockname`
-     ship — `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2.)*
+   - **`std::net`** — DNS **shipped `0.9.192`** as explicit `resolve`/`resolveOne` + `TcpStream.connectTo`
+     (IPv4 only, because every socket seam is `AF_INET`; a name resolving to IPv6 alone reports
+     `HostUnreachable` rather than an empty list). *(UDP and ephemeral-port `getsockname` ship —
+     `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2 — and DNS is the first
+     concrete reason to want that row: the resolver already sees the AAAA records it has to drop.)*
    - **`std::math` has no INTEGER `min`/`max`/`clamp`.** `minf`/`maxf`/`clampf` ship and are `float64`
      only (`lib/std/math/scalar.kama`), so `min(cpuCount(), xs.length())` — the obvious thing to write for a
      `parallel_for (…, workers:)` count — has no function behind it and needs a local plus an `if`. Found
@@ -198,9 +203,14 @@ Everything else here is library or toolchain work that does **not** gate the tag
      obvious shape, which would also cover `string` and user types; the alternative is a per-width family
      matching `minf`'s style. Small, and it is the kind of hole that only shows up when someone reaches
      for it.
-   - **`std::fs` / `std::io`** — richer `Metadata` (mtime/perms), path helpers, `mkdir`/`rename`/`exists`,
-     `OpenMode.Append`, stdin/stdout/stderr as `Reader`/`Writer` handles, `readLine`/`lines()`.
-     *(Buffered readers/writers ship — `BufReader`/`BufWriter` in `lib/std/io/streams.kama`.)*
+   - **`std::fs` / `std::io` — SHIPPED `0.9.193`–`0.9.195`**: `Metadata.modified`/`readOnly`, `std::path`,
+     `createDir[All]`/`removeDir[All]`/`rename`/`exists`, `OpenMode::Append`, `stdin()`/`stdout()`/`stderr()`,
+     `readLine` and a `foreach`-able `Lines<R>`. ⚠️ Two things worth keeping from the work: `Iterator<T>`
+     had to admit a `resource` (an iterator that OWNS its source was a case that had never existed, not
+     one SPEC had ruled out — the widening cost no emitter change and the corpus was green first run), and
+     `removeDirAll` does not follow a symlink but cannot promise atomicity against a racing writer without
+     `openat`/`unlinkat`, which the seam does not carry — that residue is where a future `std::fs` row
+     starts. *(Buffered readers/writers ship — `BufReader`/`BufWriter` in `lib/std/io/streams.kama`.)*
    - **`std::io` transform adapters (compression et al.)** — `Writer`/`Reader` *wrappers* that transform bytes
      in flight, composing with serde and net (Go/Rust `io`-wrapper style): `DeflateWriter<W>`/`InflateReader<R>`
      (gzip/deflate), later checksums/hashing/framing. On the **web target** these are a near-free ride — wrap

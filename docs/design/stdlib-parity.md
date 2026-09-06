@@ -3,7 +3,15 @@
 *In-flight campaign doc. **Delete this file when M2 ships**, once SPEC + the module docs carry the
 record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
-> ### ►► M2a is SHIPPED. M2b and M2c remain — read this first
+> ### ►► M2a and M2b are SHIPPED. M2c remains — read this first
+>
+> **M2b (sleep + wall clock · DNS · fs completion · `std::path` · stdio handles + `readLine`/`Lines`)
+> landed 2026-09-05** (`0.9.190`–`0.9.195`), and the record is in SPEC (§ *Time*, § *Paths*, § *Standard
+> I/O*). Three compiler defects surfaced from writing its fixtures and were fixed on the way — a `match`
+> subject that could not materialize a `const ref` literal, an owning subject that leaked on `return`
+> (and the latent double free that fix exposed), and a false "cannot `give` out of a field" inside an
+> uninstantiated template — plus one language change: `Iterator<T>` admits a `resource`, so an iterator
+> that OWNS its source (`std::io::Lines`) is `foreach`-able. Delete this file when M2c ships.
 >
 > **M2a (parse · sort · `std::math` completion · `char` classification) landed 2026-08-04.** The record is
 > in SPEC (§ *Sorting & searching*, § *Parsing*, § *ASCII*, § *Math*); the three spikes below are resolved
@@ -84,11 +92,11 @@ ships three things Rust `std` does not: JSON + binary serialization, `std::log`,
 | `slice::sort`, `binary_search` | ✅ **shipped** — `std::collections` free fns over `View<T>` | M2a |
 | `f32`/`f64` math: trig, `powf`, `floor`, `ceil`, `round`, `exp`, `ln` | ✅ **shipped** — both widths, C's names | M2a |
 | `char::is_alphabetic` / `is_numeric` / … | ✅ **shipped** — `std::ascii` | M2a |
-| `thread::sleep` | ✗ — `kama_sleep_ms` exists in `kama_os.h`, reachable only from a test helper | M2b |
-| `SystemTime` (wall clock / UNIX epoch) | ✗ — `std::time` is monotonic-only | M2b |
-| `std::path` + `fs::create_dir` / `rename` / `metadata` | ✗ no path helpers, no `mkdir`; `Metadata` is `{size, isDir}` | M2b |
-| `io::stdin/stdout/stderr`, `BufRead::lines` | ✗ no stream handles, no `lines()` | M2b |
-| `ToSocketAddrs` (DNS) | ✗ numeric hosts only | M2b |
+| `thread::sleep` | ✅ **shipped** — `std::time::sleep(Duration)`; busy-waits on wasm, and says so | M2b |
+| `SystemTime` (wall clock / UNIX epoch) | ✅ **shipped** — `std::time::SystemTime` + `unixNow()`, no calendar by design | M2b |
+| `std::path` + `fs::create_dir` / `rename` / `metadata` | ✅ **shipped** — `std::path` (six functions, Rust-shaped names); `createDir[All]`/`removeDir[All]`/`rename`/`exists`/`Append`; `Metadata` gains `modified`/`readOnly` | M2b |
+| `io::stdin/stdout/stderr`, `BufRead::lines` | ✅ **shipped** — three non-owning handles; `BufReader.readLine()` + a `foreach`-able `Lines<R>` (which needed `Iterator<T>` to admit a `resource`) | M2b |
+| `ToSocketAddrs` (DNS) | ✅ **shipped** — explicit `resolve`/`resolveOne` + `TcpStream.connectTo`; `connect` stays numeric on purpose; strict `parseIp` | M2b |
 | `sync::{Mutex, RwLock, Once}` | **by design** — shared-nothing model; `Atomic<T>` is the one shared-mutable seam | — |
 
 Two modules go **past** Rust `std`, toward the Go/Python battery, because they are cheap and constantly
@@ -110,8 +118,8 @@ Each of the three below is one session ending at a commit. Order otherwise matte
 
 - **M2a — language-adjacent primitives.** parse · sort/binarySearch · `std::math` completion · `char`
   classification.
-- **M2b — the OS surface.** `std::fs` completion + path helpers · `std::io` stream handles + `lines()` ·
-  `std::time` sleep + wall clock · DNS.
+- **M2b — the OS surface — SHIPPED.** `std::fs` completion + path helpers · `std::io` stream handles +
+  `lines()` · `std::time` sleep + wall clock · DNS.
 - **M2c — the two new modules.** `std::random` · `std::encoding`.
 
 ## Open questions
@@ -121,10 +129,13 @@ decided and why, and SPEC for the surface itself. What follows is what M2b/M2c s
 
 ### Still open — M2b / M2c (leans only)
 
-4. **Path helpers: free functions on `string`, or a `Path` type?** *Lean: free functions*
+4. **Path helpers: free functions on `string`, or a `Path` type?** ✅ *Answered: free functions* —
+   and Rust-shaped names (`parent`/`fileName`/`stem`), not `dirname`/`basename`; the survey and the five
+   deliberate divergences are in SPEC § *Paths*. *The original lean: free functions*
    (`join`/`dirname`/`basename`/`extension`) — a `Path` type means two string-ish types, against GOALS #4.
    Rust's `Path` earns its keep through `OsString` encoding concerns kama does not have (UTF-8 everywhere).
-5. **Does `std::io` gaining `stdout()` conflict with the floor's `print`/`println`?** They coexist
+5. **Does `std::io` gaining `stdout()` conflict with the floor's `print`/`println`?** ✅ *Answered in
+   FLOOR.md § Console I/O.* They coexist
    deliberately: the floor's print family is always-available and unbuffered, for diagnostics that must work
    under `--no-std`; `std::io`'s handles are `Reader`/`Writer` values that COMPOSE with `pump`, `BufWriter`
    and serde. Say so in FLOOR.md so it does not read as duplication.
@@ -138,9 +149,13 @@ decided and why, and SPEC for the surface itself. What follows is what M2b/M2c s
 
 ## Mechanics you will want to know
 
-- **A new stdlib module needs no registration anywhere.** `import { std::foo::X };` resolves by path to
-  `lib/std/foo/foo.kama` (or a directory of files sharing `namespace std::foo;`). Release packaging is
-  `cp -R lib/std` (`.github/workflows/release.yml`), so a new directory ships automatically.
+- **A new stdlib module needs exactly ONE registration: a line in `lib/kama.json`.** ⚠️ This entry used
+  to say none was needed, and that stopped being true in the module campaign (§2d): the resolver no longer
+  *looks* for `lib/std/foo/`, it resolves only a module the manifest declares
+  (`moduleFilesInProject`, `kama.driver.cpp`), so a directory without its `"foo": { "visibility": "public" }`
+  line is invisible and the import fails with "a folder is a module only once it is listed under
+  `modules`". `std::path` was the first module added after that change and found it. Release packaging is
+  `cp -R lib/std` plus a glob over `include/kama_*.h`, so the files themselves ship automatically.
 - **A module's cost is its seam header.** `extern "<math.h>"` is what makes the driver link `-lm`; the same
   pay-for-what-you-use rule is why `Atomic` sits behind `std::concurrent`. Anything needing a new C seam
   gets its own `kama_*.h` next to the module.

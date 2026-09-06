@@ -1449,9 +1449,37 @@ fn int32 main() {
 
 A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
-gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor) plus free
-`readFile`/`writeFile`/`stat`/`readDir`/`remove`; `std::net` gives RAII `TcpListener`/`TcpStream` (blocking
-TCP) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
+`Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`stat`/`readDir`/`remove`,
+`createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
+`isDir`, `modified` (a `std::time::SystemTime`, one-second resolution) and `readOnly` (the recorded
+permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
+`UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+`removeDirAll` does **not** follow a symlink — a link inside the tree is unlinked, never descended into
+(the CVE-2022-21658 shape) — and says in its doc comment what it still cannot promise (atomicity against
+a racing writer, which needs `openat`). `exists` returns a `bool`, and is a snapshot: to *use* a file, open
+it and handle the error.
+
+**Names (`std::net`).** `resolve(host:, port:) -> Result<DynamicArray<SocketAddr>, IoError>` asks the
+system resolver for **every** IPv4 address a name has, in the resolver's own (RFC 6724) order;
+`resolveOne` is the first of them; `TcpStream.connectTo(addr:)` connects to one. `connect(host:, port:)`
+keeps taking numeric text and performs **no** lookup — a call that reads like a syscall must not make a
+network round trip behind the caller's back, so a name is resolved by a function that says so. `parseIp`
+is the strict numeric parser under it: exactly four decimal octets, no leading zero on a multi-digit part
+(C's `inet_addr` reads `010.0.0.1` as octal and `127.1` as a packed number — the CVE-2021-29922 shape). <!-- test: net_resolve -->
+IPv4 only, because every socket seam is `AF_INET`; a name that resolves to IPv6 alone reports
+`HostUnreachable` rather than an empty list.
+
+**Lines and the standard streams (`std::io`).** `BufReader<R>.readLine() -> Result<Optional<string>,
+IoError>` is the text-framing primitive over the byte substrate: `Ok(None)` is end of input, the
+terminator is stripped, **CRLF is one terminator** and a lone `\r` is not, and a final unterminated line
+is still a line. `Lines<R: Reader>` is the `foreach` form — `Lines::<File>.make(src: give f)` — and since <!-- test: io_lines -->
+an `Optional`-yielding iterator cannot tell a read failure from a clean end, it records the failure for
+`error()` after the loop; `readLine`'s `Result` is the spelling that cannot be ignored. `stdin()`,
+`stdout()` and `stderr()` are three non-owning `Reader`/`Writer` values (no-op destructors — the
+descriptors belong to the process) that compose with `pump`, `BufWriter` and serde; they do not replace
+the floor's `print` family, which [FLOOR.md](FLOOR.md) explains.
 
 **Subprocesses (`std::process`).** A `Command` builder — argv **vector** (never a shell string, so
 injection-safe by construction; `Command.shell(line:)` is the explicit `sh -c` opt-in) with `cwd`/`env`/
@@ -1524,6 +1552,60 @@ above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` s
 (unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields a C
 `const char*`.
+
+### Time (`std::time`) ✅
+
+`import { std::time::Duration, std::time::Instant, std::time::SystemTime, std::time::monotonicNow,
+std::time::unixNow, std::time::sleep };` — **two clocks, and choosing between them is the only thing
+the module asks of a caller.**
+
+| | type | read with | for |
+|---|---|---|---|
+| **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. |
+| **wall** | `SystemTime` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1678..2262). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
+
+`Duration` is the signed span both produce (`fromMillis`/`asSecsF`/… and `+ - <`); all three implement
+`Equatable`/`Comparable`, so a stamp is a `SortedMap` key without a comparator. There is deliberately no
+calendar — no year/month/day, formatting or zones; Rust's `SystemTime` is the same bare epoch offset and
+`chrono` is a package, and a half-calendar is worse than none.
+
+`sleep(d: Duration)` blocks the calling thread for **at least** `d`: POSIX resumes `nanosleep` across a
+signal (without which any program that also uses `std::process` wakes early when a child exits), Windows
+rounds up to the millisecond, and a zero or negative span returns at once — so `sleep(d: deadline - now)`
+past its deadline is a no-op. ⚠️ On the web target it **busy-waits**: without ASYNCIFY (a whole-program <!-- test: time_wall_sleep -->
+cost kama will not pay for one function) a wasm function cannot yield to the host, so it spins on the
+monotonic clock, burns a core, and freezes a page on the browser's main thread. On an event loop,
+schedule instead of sleeping.
+
+### Paths (`std::path`) ✅
+
+`import { std::path::join, std::path::parent, std::path::fileName, std::path::stem,
+std::path::extension, std::path::isAbsolute, std::path::separator };` — six pure functions over `string`,
+no I/O, and **no `Path` type**: two string-ish types is what GOALS #4 warns against, and Rust's `Path`
+earns its keep through `OsString` encoding concerns kama does not have. The names are the ones every
+modern successor API converged on (Rust, `pathlib`, C#), not the shell tools' `dirname`/`basename`.
+
+```kama
+Optional<string> dir  = parent(path: "/a/b/c.txt");     // Some("/a/b")
+Optional<string> name = fileName(path: "/a/b/c.txt");   // Some("c.txt")
+Optional<string> ext  = extension(path: "/a/b.tar.gz"); // Some("gz") — the LAST dot, WITHOUT the dot
+string full = join(path: "/srv", with: "www");          // "/srv/www"
+```
+
+**Five deliberate answers**, each a place a mainstream implementation surprises someone: <!-- test: path_basic -->
+1. **`join` never discards the base.** Rust's and Python's `join` *replace* the whole path when the right
+   side is absolute — the classic traversal footgun. `join(path: "/srv/root", with: "/etc/passwd")` is
+   `/srv/root/etc/passwd` here. This is the one place kama disagrees with its comparator on purpose.
+2. A dotfile has no extension: `extension(path: ".bashrc")` is `None`.
+3. The extension excludes the dot (Rust/Go/Zig, not Node's `extname`).
+4. Missing is `None`, never `""`: `parent(path: "file.txt")` is `None` (Rust says `Some("")`), and so is
+   `fileName` of a root or of `.`/`..`.
+5. There is **no `normalize`**: resolving `..` lexically is wrong across a symlink; the honest version
+   needs the filesystem and belongs in `std::fs`.
+
+Separators are `/` everywhere and `\` as well on Windows (both accepted on input; `join` writes `\`),
+and `isAbsolute` knows the drive (`C:\`) and UNC forms. The variance is two `@compileFor` pairs, not a
+runtime branch.
 
 ### Command-line arguments + environment ✅
 

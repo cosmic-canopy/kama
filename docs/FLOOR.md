@@ -90,6 +90,13 @@ streams route to the overridable weak `kama_log_sink` (default no-op; a firmware
 A literal or interpolation temp passes by value directly; a **named** `string` is passed with `copy`/`give`
 like anywhere else in the value model.
 
+**Not a duplicate of `std::io::stdout()`.** The two coexist on purpose. The print family is always
+available, needs no import, survives `--no-std`, and writes immediately — it is for diagnostics that must
+work when nothing else does. `std::io`'s `stdin()`/`stdout()`/`stderr()` are ordinary `Reader`/`Writer`
+*values*, so they **compose**: `pump(from: file, to: out)`, `BufWriter.make(inner: out)`,
+`encodeTo(v, into: out)`, a function that takes a `Writer` and does not care whether it is a socket, a
+file or the terminal. Use print to *say* something; use the handles to *plumb* something.
+
 ## Command-line arguments + environment
 
 Bound to runtime globals stashed before `main` (so a `--no-std` program cannot reimplement them). Full prose
