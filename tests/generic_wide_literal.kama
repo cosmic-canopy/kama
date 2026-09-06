@@ -8,5 +8,8 @@ fn int32 main() {
     uint64 a = id(x: 5ui64);
     uint64 b = id(x: 18446744073709551615ui64);
     uint64 c = id(x: 9223372036854775808ui64);    // int64Max + 1, the first value that needs the fix
-    return (a == 5ui64 && b == 18446744073709551615ui64 && c == 9223372036854775808ui64) ? 7 : 0;
+    const uint64 big = 18446744073709551615ui64;  // a FOLDED constant walks the same branch as a literal
+    uint64 d = id(x: big);
+    return (a == 5ui64 && b == 18446744073709551615ui64 && c == 9223372036854775808ui64
+            && d == 18446744073709551615ui64) ? 7 : 0;
 }
