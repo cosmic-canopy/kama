@@ -1193,28 +1193,25 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
 
-- **A module's file-private names are one namespace (BUG, measured 2026-09-06).** Visibility is per file —
-  `export { … };` is what lets a name leave — but the declaration tables are per module: two files in one
-  module each declaring a non-exported `fn helper` is refused as "duplicate function 'helper' … a name may
-  be declared only once in its module", and a file-private `type T` in `a.kama` is FOUND by `b.kama`'s own
-  `T` lookup and then refused as "not exported by a.kama". The fix is that a non-exported declaration's
-  key (and its C name) carries its file, the way a type's C name already carries `_F<file>__`; the probe is
-  two files, `fn int32 helper()` in each, `export { other }` in one. Until then a module's private helpers
-  need per-file names. Found in `@kama/sodium`'s tests (`knownAnswer` in four files).
-
-- **No const raw pointer (design gap, measured 2026-09-06).** `addr(of: …)` on `const this` is refused —
-  "const is deep, and a raw address is not an exception" — and `InlineArray`/`FixedArray`/`DynamicArray`'s
-  `dataPtr()` are non-const, so there is no way to hand a read-only buffer to C from a `const ref`
-  parameter. Every FFI wrapper therefore takes `ref` (the sodium package: `seal(…, ref Key key)`), which
-  is honest about what C could do but not about what it does, and it forces a mutable borrow onto callers
-  that hold a key `const`. The clean answer is a const-qualified pointer (`UnsafePtr<const T>`, or a
-  `ConstPtr<T>` that derefs to a read) with `const fn dataPtr()` answering it; the cheap one is declaring
-  the hole part of the `unsafe` seam and letting `dataPtr()` be `const fn`. Decide once, then fix the
-  stdlib's own wrappers (`kama_string_from_raw` takes a `const uint8_t*` and already gets a mutable one).
-
-- **`--release` with `csources`: `-Wl,-dead_strip` on the per-TU compile lines.** clang warns
-  "'linker' input unused" once per C file — 121 lines for a package vendoring libsodium. The link-tail
-  flags are appended to compile-only (`-c`) invocations; they belong on the link line alone.
+- **A read-only `View` — `ConstView<T>` and the `view()`/`viewMut()` split (residual of the const-pointer
+  arc, 2026-09-06).** The raw seam is done: `UnsafeConstPtr<T>` is `T const*`, `dataPtr()` is `const fn`
+  and hands it out, `dataPtrMut()` is the writable half, `cstr()` is read-only (SPEC § `unsafe fn`). The
+  view is the same problem one level up and is not done: `view()`/`slice()` are non-const (SPEC lists them
+  as deliberately unmarked), so a `const ref DynamicArray<uint8>` cannot produce a window at all, and not
+  one FFI wrapper in `lib/std` takes `const View<uint8>` — every `write(View<uint8> bytes)` /`send` /digest
+  /base64 /hex parameter is a mutable view held only so `addr(of: bytes[0])` is legal. The answer is the
+  split the stdlib already spells everywhere else (`get`/`getRef`, `iterator`/`iterMut`, now
+  `dataPtr`/`dataPtrMut`): a `type view ConstView<T>` over an `UnsafeConstPtr<T>` with `length()`,
+  `isEmpty()`, `slice()`, `iterator()` (Copyable, by value), `const fn dataPtr()`, and a by-value read
+  (`get(i)`, since `operator[]` exists only as the place-returning `ref T` form — kama.y:2169 — and a
+  by-value form is a grammar change); `public unsafe const fn ConstView<T> view()` + `viewMut()` on every
+  container, `View<T>.asConst()`; then the sweep (the FFI parameters above become `ConstView<uint8>`,
+  `fs.writeAll`/`bytesToString`/`buildEnvp` become `const ref`). Measured cost, which is why it is its own
+  row: the emitter special-cases `"view"` by NAME in the `borrow` mint check, `parallel_for`,
+  `registerFixedViews` and the escape checker; `Viewable<V> { fn V view(); }` needs a `viewMut` sibling
+  (`borrow b.viewMut() as v { sortUnstable(items: v); }`); 134 test sites call `.view()`. Indexing a
+  NON-Copyable element from a read-only view needs a read-only PLACE (`ref readonly`) — a language item on
+  the audit's list, not a view detail; every buffer in the sweep is `uint8`, so v1 is complete without it.
 
 <a id="s3"></a>
 
