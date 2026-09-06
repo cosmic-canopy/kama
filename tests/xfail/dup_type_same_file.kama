@@ -1,0 +1,7 @@
+// Two declarations of one type name in one file. A private name is keyed by its FILE now, so two files may
+// each declare a private `T` (tests/mod_private_perfile.d) — but within one file, or for an exported name
+// within one module, the name is still declared once. This used to be a SILENT last-wins overwrite.
+type value T { public int32 a; public ctor make() { this.a = 1; } }
+type value T { public int32 b; public ctor make() { this.b = 2; } }   // -> REJECT
+
+fn int32 main() { T t = T.make(); return 0; }

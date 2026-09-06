@@ -1,0 +1,8 @@
+// Visibility is per FILE, and so are the tables behind it: two files of one module each declare a private
+// `helper`, a private `static n` and a private `type T`, and each file gets its own. Until 0.9.207 the
+// function collided ("duplicate function") and the static and the type silently last-won — a.kama's own
+// `n` resolved to b.kama's and was then refused as "not exported by b.kama". Found by the first package,
+// whose tests kept a private `knownAnswer` in four files.
+import { perfile::geo::runA, perfile::geo::runB };
+
+fn int32 main() { return runA() + runB(); }   // 14 + 26 = 40

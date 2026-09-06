@@ -190,6 +190,19 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
         // position (`_F4`), so there is no pattern to match on — the registry the emitter filled while
         // assigning contexts is the only thing that knows. Longest match wins, because a file whose name
         // itself contains `__` mints a scope that does too (`b__c.kama` -> `_Fb__c`).
+        // A module file's private scope renders as its MODULE: the file segment is the only part no user
+        // can spell (`nhflag___Fapp__grow` -> `nhflag::grow`). Before the loose-file strip below, which
+        // would otherwise take the whole prefix and leave a bare name.
+        {
+            bool fileScoped = false;
+            for (const auto& fs : _privateFileScopes)
+                if (tok.size() > fs.first.size() + 2 && tok.compare(0, fs.first.size(), fs.first) == 0
+                    && tok.compare(fs.first.size(), 2, "__") == 0) {
+                    out += demangleForDisplay(fs.second + "__" + tok.substr(fs.first.size() + 2), depth + 1);
+                    fileScoped = true; break;
+                }
+            if (fileScoped) continue;
+        }
         const std::string* priv = nullptr;
         for (const auto& s : _privateScopes)
             if (tok.size() > s.size() + 2 && tok.compare(0, s.size(), s) == 0
@@ -259,6 +272,7 @@ struct ScopedContractNs {
     {
         if (ii.isGenericInst) return;   // a generic instance gets its scope from ContractSubst instead
         ns.scope = ii.scope; ns.usings = ii.usings; ns.symbolAliases = ii.symbolAliases;
+        ns.privScope = ii.privScope; ns.exportedHere = ii.exportedHere;
         ns.unitPath = ii.declFile;
         if (!ii.declFile.empty()) diag = ii.declFile;
     }
@@ -412,6 +426,11 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
     if (!module.empty()) {
         ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
         ctx.isPublic = true;
+        // The file rung's key material (see NsCtx): the private scope this file's unexported names take,
+        // and the export list that decides which names do not. Read here, before any key is minted.
+        ctx.privScope = ctx.scope + "__" + privateScopeFor(ctx.unitPath);
+        if (unit->exportList)
+            for (auto& name : *unit->exportList) if (name) ctx.exportedHere.insert(*name);
     } else {
         ctx.scope = privateScopeFor(ctx.unitPath);
         ctx.isPublic = false;
@@ -478,7 +497,45 @@ std::string CEmitter::qualify(const std::string& name) const
 {
     if (name == "main") return "kama_main";
     if (_nsCtx.scope.empty()) return name;   // the prelude's global namespace -> bare names
+    // A name this file does not `export` is private to the FILE, and its key says so. Before 0.9.207 the
+    // key carried only the module, so two files each declaring a private `helper` collided ("duplicate
+    // function"), and a private `type T`/`static n` in one file silently replaced the other's — the
+    // tables were per module while the visibility rule was per file (ROADMAP row 1, found by the first
+    // package's tests). Decided HERE, once, because every declaration key and every same-file lookup
+    // comes through this function; the cross-file lookups add the module key as their second try.
+    if (!_nsCtx.privScope.empty() && !_nsCtx.exportedHere.count(name)) return _nsCtx.privScope + "__" + name;
     return _nsCtx.scope + "__" + name;
+}
+
+void CEmitter::restoreFileRung(NsCtx& ns, const std::string& declFile) const
+{
+    ns.privScope.clear(); ns.exportedHere.clear();
+    if (declFile.empty() || declFile[0] == '<') return;          // compiler-owned, or unknown
+    for (auto& kv : _unitCtx)
+        if (kv.second.unitPath == declFile) { ns.privScope = kv.second.privScope; ns.exportedHere = kv.second.exportedHere; return; }
+}
+
+std::string CEmitter::siblingPrivateKey(const std::string& name,
+                                        const std::function<bool(const std::string&)>& known,
+                                        const std::string& scope) const
+{
+    // A QUALIFIED spelling (`a::b::X`) names a module by path and reaches its private names the same way a
+    // sibling does: found, then refused by checkReach as "not exported by <file>" — the message every
+    // qualified-reference fixture asserts, and the one that names the file to edit.
+    const std::string& want = scope.empty() ? _nsCtx.scope : scope;
+    if (want.empty()) return "";
+    // Only from a REAL file context. A context rebuilt for a header pass (scope, no file rung) has no
+    // reference site for checkReach to judge, so a private key handed back there is not refused — it is
+    // EMITTED, and b's ctor prototype came out returning a's private `T`. Everything a header pass
+    // resolves was validated under a real context at collect time; a miss here is a miss.
+    if (_nsCtx.isPublic && _nsCtx.privScope.empty()) return "";
+    for (auto& kv : _unitCtx) {
+        const NsCtx& other = kv.second;
+        if (other.scope != want || other.privScope.empty() || other.privScope == _nsCtx.privScope) continue;
+        std::string cand = other.privScope + "__" + name;
+        if (known(cand)) return cand;
+    }
+    return "";
 }
 
 bool CEmitter::isNamespace(const std::string& name) const
@@ -547,14 +604,24 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
             nsMangled = mangleNs(path);
         }
         std::string cand = nsMangled + "__" + value;
-        return known(cand) ? cand : value;
+        if (known(cand)) return cand;
+        std::string priv = siblingPrivateKey(value, known, nsMangled);   // that module's file-private name -> checkReach refuses it
+        return priv.empty() ? value : priv;
     }
-    std::string own = _nsCtx.scope + "__" + value;     // file's own scope
+    // This file's own name first — the file-private key for one it does not export, the module key for
+    // one it does — then the module key regardless (a sibling's EXPORTED name, reachable without an
+    // import; checkReach's inbound arm is what judges that), then the imported namespaces.
+    std::string own = qualify(value);
+    if (known(own)) return own;
+    own = _nsCtx.scope + "__" + value;
     if (known(own)) return own;
     for (auto& u : _nsCtx.usings) {                    // imported public namespaces
         std::string cand = u + "__" + value;
         if (known(cand)) return cand;
     }
+    // A sibling file's PRIVATE name: resolve to it so checkReach can say "not exported by a.kama" — the
+    // one diagnostic that tells the reader which file to edit — rather than "unknown type".
+    { std::string sib = siblingPrivateKey(value, known); if (!sib.empty()) return sib; }
     // `Base` names the enclosing type's base, as `This` names the enclosing type — so a derived author
     // never spells the concrete base name and `this.base = Base.make(…)` survives a rename of it.
     // Resolved HERE rather than in `cType` because `This` is only ever a TYPE, while `Base.make(…)` is
@@ -582,6 +649,10 @@ std::string CEmitter::namespaceOfType(const std::string& value) const
         auto p = key.rfind("__");
         if (p == std::string::npos) return std::string();   // no namespace segment
         std::string ns = key.substr(0, p), out;
+        // A file-private key carries `___F<file>` after its module; the hint names the MODULE (the
+        // import to add), never the file segment, which nothing can spell.
+        auto f = ns.find("___F");
+        if (f != std::string::npos) ns = ns.substr(0, f);
         for (size_t i = 0; i < ns.size(); ++i) {
             if (i + 1 < ns.size() && ns[i] == '_' && ns[i + 1] == '_') { out += "::"; ++i; }
             else out += ns[i];
@@ -2826,14 +2897,22 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
             nsMangled = mangleNs(path);
         }
         std::string cand = nsMangled + "__" + name;
-        return _funcs.count(cand) ? cand : name;
+        if (_funcs.count(cand)) return cand;
+        std::string priv = siblingPrivateKey(name, [&](const std::string& k) { return _funcs.count(k) > 0; }, nsMangled);
+        return priv.empty() ? name : priv;
     }
-    std::string own = _nsCtx.scope + "__" + name;
+    // Own name (private or module-scoped), then the module key, then usings, then a sibling's private key
+    // for the diagnostic — the same ladder resolveUserNameImpl climbs, for the same reasons.
+    std::string own = qualify(name);
+    if (_funcs.count(own)) return own;
+    own = _nsCtx.scope + "__" + name;
     if (_funcs.count(own)) return own;
     for (auto& u : _nsCtx.usings) {
         std::string cand = u + "__" + name;
         if (_funcs.count(cand)) return cand;
     }
+    { std::string sib = siblingPrivateKey(name, [&](const std::string& k) { return _funcs.count(k) > 0; });
+      if (!sib.empty()) return sib; }
     return name;
 }
 
@@ -2878,9 +2957,12 @@ std::string CEmitter::resolveModuleVar(const std::string& name, SharedStringList
             nsMangled = mangleNs(path);
         }
         std::string cand = nsMangled + "__" + name;
-        return _moduleStatics.count(cand) ? cand : std::string();
+        if (_moduleStatics.count(cand)) return cand;
+        return siblingPrivateKey(name, [&](const std::string& k) { return _moduleStatics.count(k) > 0; }, nsMangled);
     }
-    std::string own = qualify(name);
+    std::string own = qualify(name);                 // this file's own (a `static` is always file-private)
+    if (_moduleStatics.count(own)) return own;
+    own = _nsCtx.scope + "__" + name;                // a sibling's exported `comptime`
     if (_moduleStatics.count(own)) return own;
     for (auto& u : _nsCtx.usings) {
         std::string cand = u + "__" + name;
@@ -7554,6 +7636,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (!cd || !cd->typeKind || *cd->typeKind != "contract" || !cd->name || !cd->name->value) continue;
         InterfaceInfo ii;
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
+        ii.privScope = _nsCtx.privScope; ii.exportedHere = _nsCtx.exportedHere;
         ii.symbolAliases = _nsCtx.symbolAliases;   // so contract sigs can name imported/library-generic types
         ii.node = cd;                              // decl site for the LSP def-site table (unused by emission)
         ii.declFile = unit && unit->name ? *unit->name : std::string();   // for a late whole-program check
@@ -14288,6 +14371,7 @@ void CEmitter::linkContracts()
             NsCtx savedNs = _nsCtx;
             _nsCtx = NsCtx{};
             _nsCtx.scope = pi.scope; _nsCtx.usings = pi.usings; _nsCtx.symbolAliases = pi.symbolAliases;
+            _nsCtx.privScope = pi.privScope; _nsCtx.exportedHere = pi.exportedHere;
             for (auto& pm : pit->second.methods) {
                 if (!seen.insert(pm.name).second) continue;              // inherited (dedup)
                 InterfaceMethod im = pm;
@@ -14356,7 +14440,7 @@ void CEmitter::linkBases()
         // a generic INSTANCE resolved its base/interfaces under its own subst in registerGenericTypeInst
         // (its `node` is the template's, whose refs still name the raw param `T`) — don't re-resolve here.
         if (ci.isGenericInst) continue;
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
 #if KAMA_INHERITANCE
         if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
@@ -14571,7 +14655,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
             const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
             for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
         } else {
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci->scope; _nsCtx.usings = ci->usings; _nsCtx.symbolAliases = ci->symbolAliases;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci->scope; _nsCtx.usings = ci->usings; _nsCtx.symbolAliases = ci->symbolAliases; restoreFileRung(_nsCtx, ci->declFile);
             _typeSubst = savedSubstOuter;   // (typically empty here)
         }
 
@@ -14792,7 +14876,7 @@ void CEmitter::bakeFieldCTypes()
             const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
             for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
         } else {
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         }
         bake(ci.fields);
         for (auto& v : ci.variants) bake(v.payload);
@@ -14854,7 +14938,7 @@ void CEmitter::computeDestructible()
                 const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
                 for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
             } else {
-                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;   // resolve field types in ci's scope
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);   // resolve field types in ci's scope
             }
             bool d = (ci.base && ci.base->destructible);
             if (!d)
@@ -14962,7 +15046,7 @@ void CEmitter::computeReachesPointer()
                 const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
                 for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
             } else {
-                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
             }
             bool r = (ci.base && ci.base->reachesPointer);
             if (!r)
@@ -15050,7 +15134,7 @@ void CEmitter::enterClassCtx(const ClassInfo& ci)
         const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
         for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     } else {
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
     }
 }
 
@@ -15264,7 +15348,7 @@ void CEmitter::computeDeeplyImmutable()
             const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
             for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
         } else {
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         }
         return inst;
     };
@@ -19205,7 +19289,7 @@ void CEmitter::resolveFriends()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.friendGrantsRaw.empty()) continue;
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         for (auto& rg : ci.friendGrantsRaw) {
             FriendGrant g; g.members = rg.members;
             SharedIdentifier acc = rg.accessor;
@@ -23550,7 +23634,7 @@ void CEmitter::computeGraphNodeTypes()
     while (!work.empty()) {
         std::string cur = work.back(); work.pop_back();
         ClassInfo& ci = _classes[cur];
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         // Both rejections below are about a FIELD of `ci` and carry that field's line, so they belong to the
         // file that declared `ci`. Whole-program pass — without this they named no file at all. See diagFile().
         ScopedStr _cu(_collectingUnitPath, ci.declFile);
@@ -23596,7 +23680,7 @@ void CEmitter::computeGraphNodeTypes()
             && it->second.returnType->genericArgs && !it->second.returnType->genericArgs->empty()) {   // Shared<T>
             SharedIdentifier inner = it->second.returnType->genericArgs->at(0);   // This (the fallible Result's Ok arm)
             SharedIdentifier sh = sharedTypeNode(inner);   // Shared<This>; a pure-Owned pointee has no Shared instance
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
             if (_classes.count(cType(sh))) {
                 it->second.returnType = resultOwnedErrorTypeNode(sh);   // Result<Shared<This>, Owned<Error>>
                 scanTypeForCollections(it->second.returnType);
@@ -26677,6 +26761,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                              "a subdirectory, which makes it a module").c_str(), 0);
             _privateScopes.insert(ctx.scope);
         }
+        // The same rule one level down: a module file's PRIVATE scope is also derived from its name, and a
+        // module may span subfolders (a folder with no manifest entry belongs to the module above it), so
+        // `geo/a.kama` and `geo/impl/a.kama` would mint one private scope between them. Rare, and already
+        // impossible in practice — their per-unit `.c` stems collide too — but refused by name here rather
+        // than discovered as a C redefinition.
+        if (!ctx.privScope.empty()) {
+            auto claimed = privateScopeOwner.emplace(ctx.privScope, ctx.unitPath);
+            if (!claimed.second && claimed.first->second != ctx.unitPath)
+                unsupported(("'" + claimed.first->second + "' and '" + ctx.unitPath + "' are two files of "
+                             "module `" + ctx.module + "` with the same name — their file-private symbols "
+                             "would share one scope and collide in the emitted C. Rename one").c_str(), 0);
+            _privateFileScopes[ctx.privScope] = ctx.scope;   // demangleForDisplay drops the file segment, keeps the module
+        }
     }
     // Record each module's PUBLIC SURFACE from its top-of-file `export { … };` manifest. Everything
     // unlisted is module-private and cannot be pulled in by another module's per-symbol `import`
@@ -26703,6 +26800,21 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // Pre-register every type's mangled NAME so references resolve regardless of
     // file/declaration order (a class method param may reference a type declared
     // later, or in another file). The full collect below overwrites these.
+    //
+    // ...and it is the ONE place a duplicate type is visible: `collectClasses` writes `_classes[n] = ci`
+    // over whatever is there, so two declarations of one key were a silent last-wins until 0.9.207 —
+    // a's own `T` resolved to b's and was refused as "not exported by b.kama". A private name is keyed
+    // by its file now, so what remains to collide is two declarations in one file, or two EXPORTED ones
+    // in one module, and both are named here the way `collectSignatures` names a duplicate function.
+    // `extern` structs are exempt for the reason externs always are: re-declared per file by design.
+    std::map<std::string, std::string> firstTypeAt;   // key -> "file:line" of its first declaration
+    auto claimType = [&](const std::string& n, const std::string& spelled, int line) {
+        std::string here = _nsCtx.unitPath + ":" + std::to_string(line);
+        auto it = firstTypeAt.emplace(n, here);
+        if (!it.second)
+            unsupported(("duplicate type '" + spelled + "' — a name may be declared only once in its module "
+                         "(first declared at " + it.first->second + ")").c_str(), line);
+    };
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
@@ -26716,6 +26828,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     // instance name rather than resolving the bare template stub.
                     if (cd->typeKind && *cd->typeKind == "contract") {
                         std::string n = qualify(*cd->name->value);
+                        claimType(n, *cd->name->value, cd->line);
                         if (cd->typeParams && !cd->typeParams->empty()) {
                             _genericContracts[n].name = n;
                             // Record params/defaults/ctx NOW (not just in collectInterfaces), so
@@ -26731,6 +26844,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         // a generic TYPE template pre-registers in _genericTypes, NOT _classes
                         // (an empty _classes entry would be emitted as a bogus struct). collectClasses fills it.
                         std::string n = qualify(*cd->name->value); _genericTypes[n].name = n;
+                        claimType(n, *cd->name->value, cd->line);
                         // Also record params/defaults/ctx here (ahead of collectClasses), so a DEFAULTED
                         // type-arg mangles to its filled instance name (`DynamicArray<int32>` ->
                         // `DynamicArray_int32_GlobalAllocator`) even in collectSignatures — which runs
@@ -26749,6 +26863,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         if (cd->modifiers) for (auto& mod : *cd->modifiers)
                             if (mod->value && *mod->value == "extern") ext = true;
                         std::string n = ext ? *cd->name->value : qualify(*cd->name->value);
+                        if (!ext) claimType(n, *cd->name->value, cd->line);
                         _classes[n].name = n;
                         if (ext) { _classes[n].isExternStruct = true; _externNames.insert(n); }
                     }
@@ -26756,6 +26871,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
                 if (ed->identifier && ed->identifier->value) {
                     std::string n = qualify(*ed->identifier->value);
+                    claimType(n, *ed->identifier->value, ed->line);
                     // pre-register a tagged/generic enum where its real home is (a class-like
                     // type / a generic template), NOT _enums — else emitEnum would emit a bogus enum.
                     if (ed->typeParams && !ed->typeParams->empty()) {
@@ -27048,9 +27164,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // the plain "does not export" check below would wave it through and leave the reader with a
                 // bare "call to unknown function" at the use site. Name the real reason instead.
                 const std::string q = mod + "__" + *sym->identifier->value;
-                bool live = _funcs.count(q) || _classes.count(q) || _enums.count(q) || _interfaces.count(q)
-                         || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q)
-                         || _constStatics.count(q);   // a module `comptime` is importable by name
+                auto anyTable = [&](const std::string& k) {
+                    return _funcs.count(k) || _classes.count(k) || _enums.count(k) || _interfaces.count(k)
+                        || _genericTypes.count(k) || _genericContracts.count(k) || _sigs.count(k)
+                        || _constStatics.count(k);   // a module `comptime` is importable by name
+                };
+                // `live` under the MODULE key, or under some sibling file's PRIVATE key: a name declared
+                // in this module and never exported now lives under its file's scope, and case 2 below
+                // must still find it to say so.
+                bool live = anyTable(q) || (sameModule && !siblingPrivateKey(*sym->identifier->value, anyTable).empty());
                 if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
@@ -27171,12 +27293,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 
     // Set the name-resolution scope from the type/file being emitted. `aliases` carries the
     // declaring file's per-symbol imports (a field/base typed with an imported generic needs them).
-    auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings,
+    auto scopeOf = [&](const std::string& declFile, const std::string& scope, const std::vector<std::string>& usings,
                        const std::map<std::string, std::string>& aliases = std::map<std::string, std::string>()) {
         _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings; _nsCtx.symbolAliases = aliases;
+        restoreFileRung(_nsCtx, declFile);   // the file rung too — or a private type's prototype resolves `This` to a sibling's
     };
 
-    for (auto& kv : _enums) { scopeOf(kv.second.scope, kv.second.usings); emitEnum(kv.second); }
+    for (auto& kv : _enums) { scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings); emitEnum(kv.second); }
 
     // Collection/smart-pointer STRUCT typedefs (the `_TYPE` half) — before class struct
     // bodies, so a class may hold a collection/smart-pointer BY VALUE as a field. They
@@ -27206,7 +27329,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->isGenericInst) {
             emitGenericTypeInst(_genericTypeInsts[ci->name], /*phase=*/0);   // body-only (forward split out)
         } else {
-            scopeOf(ci->scope, ci->usings, ci->symbolAliases);
+            scopeOf(ci->declFile, ci->scope, ci->usings, ci->symbolAliases);
 #if KAMA_INHERITANCE
             if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
 #endif
@@ -27214,7 +27337,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             emitStruct(*ci);   // dispatches to emitVariantStruct for a union
         }
     }
-    for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases); emitInterfaceTypes(kv.second); }
+    for (auto& kv : _interfaces) { scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings, kv.second.symbolAliases); emitInterfaceTypes(kv.second); }
 
     // Forward-declare each class-interface vtable (`C__as_I`) — the definitions have external linkage (see
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
@@ -27271,11 +27394,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // PROTOTYPES must come out here — a generic container monomorph emitted before that end pass may
             // call them (e.g. `DynamicArray<T, GlobalAllocator>` calling `GlobalAllocator__allocate`). Emit
             // them `static` so the later static-inline definitions don't follow a non-static implicit decl.
-            scopeOf(ci->scope, ci->usings, ci->symbolAliases);
+            scopeOf(ci->declFile, ci->scope, ci->usings, ci->symbolAliases);
             _emitStaticClass = true; emitClassPrototypes(*ci); _emitStaticClass = false;
             continue;
         }
-        scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
+        scopeOf(ci->declFile, ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
     }
     // Allocator-aware INTERFACE smart-ptr FUNCS (M11d): deferred to HERE so the `A__deallocate` the dtor calls
     // is already prototyped (above). Registration order (inner-first) so a Weak partner's Shared is complete.
@@ -27412,7 +27535,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // ...and this one is USER code emitted from the header pass, where `_sourcePath` is "" in a
             // multi-file build — so its rejection below named no file at all. See diagFile().
             ScopedStr _cu(_collectingUnitPath, oc != _classes.end() ? oc->second.declFile : std::string());
-            if (oc != _classes.end()) scopeOf(oc->second.scope, oc->second.usings, oc->second.symbolAliases);
+            if (oc != _classes.end()) scopeOf(oc->second.declFile, oc->second.scope, oc->second.usings, oc->second.symbolAliases);
             *_out << "static const " << cType(tc.type) << " " << tc.cName << " = ";
             if (tc.hasValue) *_out << tc.value;
             else if (tc.initializer && isConstInitExpr(tc.initializer.get())) *_out << emitExpression(tc.initializer);
@@ -27444,7 +27567,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         // static-inline bodies — but its definitions are class-shaped here (ctors, fields, a vtbl loop) and
         // an enum has none of that. The dedicated block just below emits its bodies instead.
         if (kv.second.isVariant) continue;
-        scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases);
+        scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings, kv.second.symbolAliases);
         ScopedStr _cu(_collectingUnitPath, kv.second.declFile);   // whose code this is — see diagFile()
         _emitStaticClass = true;
         emitClassPrototypes(kv.second);
@@ -27462,7 +27585,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             auto it = _classes.find(name);
             if (it == _classes.end() || !it->second.isVariant) continue;   // only a promoted enum reaches _classes
             ClassInfo& eci = it->second;
-            scopeOf(eci.scope, eci.usings, eci.symbolAliases);
+            scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, eci.declFile);   // whose code this is — see diagFile()
             if (eci.destructible) emitDtorDefinition(eci);
             emitClassInterfaceVtables(eci);

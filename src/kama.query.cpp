@@ -2228,7 +2228,9 @@ std::string CEmitter::bareNameOf(const std::string& key) const
         std::string rest = key.substr(pre.size());
         return (rest.empty() || rest.find("__") != std::string::npos) ? "" : rest;
     };
-    std::string n = under(_nsCtx.scope);
+    std::string n = under(_nsCtx.privScope);   // this file's own unexported names (their key carries the file)
+    if (!n.empty()) return n;
+    n = under(_nsCtx.scope);
     if (!n.empty()) return n;
     for (auto& u : _nsCtx.usings) { n = under(u); if (!n.empty()) return n; }
     return key.find("__") == std::string::npos ? key : "";   // the bare floor, in scope everywhere

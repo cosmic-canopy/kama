@@ -91,13 +91,16 @@ syms=$(grep -ohE '\b(deriv[A-Za-z_]*|_F[A-Za-z0-9_]+)__[A-Za-z_]+' "$tmp/c"/*.c 
 emitted() {
     printf '%s\n' "$syms" | grep -Fxq "$1" && ok "$2" || bad "$2 — no \`$1\` in the emitted C"
 }
-emitted deriv__rootHelper   "a file at the source root is scoped by the PROJECT name, with no declaration to say so"
-emitted deriv__net__n       "a listed folder's file is scoped by its module"
-emitted deriv__net__web__w  "a nested module composes both segments in the symbol"
-emitted deriv__network__k   "\`network\` does not collapse into \`net\`"
-emitted deriv__tidy__o      "a \`name\` override reaches the symbol, not the folder's spelling"
-emitted deriv__net__d       "an unlisted folder's file carries its nearest listed ancestor's scope"
-emitted deriv__vendored__v  "...at any depth"
+# Every helper below is UNEXPORTED, so since 0.9.207 its symbol also carries its FILE (`___F<file>`) after
+# the module — two files of one module may each keep a private `helper`. The module prefix is still what
+# each line pins; the file segment is the per-file rung, asserted in tests/mod_private_perfile.d.
+emitted deriv___Fapp__rootHelper        "a file at the source root is scoped by the PROJECT name, with no declaration to say so"
+emitted deriv__net___Fnet__n            "a listed folder's file is scoped by its module"
+emitted deriv__net__web___Fweb__w       "a nested module composes both segments in the symbol"
+emitted deriv__network___Fk__k          "\`network\` does not collapse into \`net\`"
+emitted deriv__tidy___Fo__o             "a \`name\` override reaches the symbol, not the folder's spelling"
+emitted deriv__net___Fd__d              "an unlisted folder's file carries its nearest listed ancestor's scope"
+emitted deriv__vendored___Fv__v         "...at any depth"
 
 # The one file set no path→module derivation can reach: the smart-pointer triad arrives as
 # `<prelude>/std/memory/*.kama`, synthetic units with NO PATH, so their module is STATED instead, in

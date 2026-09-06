@@ -1,0 +1,7 @@
+export { runA };
+
+static int32 n = 10;
+fn int32 helper() { return 3; }
+type value T { public int32 a; public ctor make() { this.a = 1; } }
+
+fn int32 runA() { T t = T.make(); return helper() + n + t.a; }   // 3 + 10 + 1 = 14

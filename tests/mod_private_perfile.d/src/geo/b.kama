@@ -1,0 +1,7 @@
+export { runB };
+
+static int32 n = 20;
+fn int32 helper() { return 4; }
+type value T { public int32 b; public ctor make() { this.b = 2; } }
+
+fn int32 runB() { T t = T.make(); return helper() + n + t.b; }   // 4 + 20 + 2 = 26

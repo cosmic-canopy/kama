@@ -202,6 +202,7 @@ dup_fn	dup_fn.kama:5
 dup_generic_fn	dup_generic_fn.kama:7
 dup_main	beta.kama:1
 dup_module_fn	b.kama:3
+dup_type_same_file	dup_type_same_file.kama:5
 elem_method_const	elem_method_const.kama:12
 empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
 enum_bare_spelling	enum_bare_spelling.kama:4

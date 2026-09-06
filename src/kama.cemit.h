@@ -288,6 +288,14 @@ struct NsCtx {
     // so the join is not injective. Empty for a file in no module.
     std::string module;
     bool        isPublic = false;
+    // Per-FILE privacy inside a module (SPEC § Modules: visibility is per file). `privScope` is the mangle
+    // prefix a declaration this file does NOT export gets — `<module>___F<file>` — so two files of one
+    // module may each declare a private `helper`, a private `static n`, a private `type T`, and neither
+    // shadows the other. `exportedHere` is this file's own `export { … }` list, read in ctxOf before any
+    // key is minted, which is what lets `qualify()` decide at the declaration. Both empty for a loose file
+    // (its whole scope is already the private `_F<file>`) and for the prelude.
+    std::string privScope;
+    std::set<std::string> exportedHere;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
     std::map<std::string, std::string> aliases;       // alias -> mangled namespace (module alias / `using X = Y`)
     std::map<std::string, std::string> symbolAliases; // per-symbol import: local name -> mangled global symbol
@@ -578,6 +586,8 @@ struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
     std::string                  scope;
+    std::string                  privScope;      // the declaring file's private scope + export set — the file
+    std::set<std::string>        exportedHere;   // rung's key material, restored with `scope` (ScopedContractNs)
     std::vector<std::string>     usings;
     // Per-symbol imports (`import a::b::{X,Y as Z}`) of the declaring unit — needed so a contract method
     // signature that names an imported/library-generic type (`List<uint8>`, `Result<usize, IoError>`)
@@ -1532,6 +1542,10 @@ private:
     // one by. This registry is what it consults instead. Filled from the same loop that builds `_unitCtx`.
     std::set<std::string> _privateScopes;
     std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
+    // A module file's private scope (`<module>___F<file>`) -> its module scope. Kept apart from
+    // `_privateScopes` because it renders differently: the FILE segment is what no user can spell, the
+    // module still is, so `nhflag___Fapp__grow` displays as `nhflag::grow`, not `grow`.
+    std::map<std::string, std::string> _privateFileScopes;
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
     // THE FILE RUNG, FFI SIDE. Every other symbol is judged by the ONE file that declares it
     // (`declFileOf`), but an extern keeps its literal C spelling and so collapses onto a single table
@@ -1548,7 +1562,17 @@ private:
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
     static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
-    std::string qualify(const std::string& name) const;          // scope-prefix a declared name
+    std::string qualify(const std::string& name) const;          // scope-prefix a declared name (the file-private scope for a name this file does not export)
+    // A sibling file's PRIVATE key for `name`, if some other file of this module declares it unexported —
+    // handed back so `checkReach` refuses it by name ("not exported by a.kama") instead of the resolver
+    // reporting an unknown symbol. `known` is the table test the caller was already using.
+    std::string siblingPrivateKey(const std::string& name, const std::function<bool(const std::string&)>& known,
+                                  const std::string& scope = std::string()) const;   // scope "" = this file's module; else that module's files
+    // The class-scoped emission passes rebuild `_nsCtx` from a type's stored scope/usings/aliases — and
+    // deliberately NOT its unitPath (a header pass names no reference site). The file rung's key material
+    // must come back too, or `qualify()` there mints the MODULE key for a file-private type and the
+    // prototype disagrees with the definition. Derived from the declaring file, which every info records.
+    void restoreFileRung(NsCtx& ns, const std::string& declFile) const;
     // `site`, when non-null, is the source identifier this name was spelled at: in analysis mode the
     // resolved key is recorded against it for the M3 reference index (recordRef). Defaulted, so the ~68
     // call sites that have no identifier in hand (or don't want the use recorded) are unaffected.

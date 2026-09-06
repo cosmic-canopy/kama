@@ -4077,8 +4077,11 @@ position: a call, a construction, a static call, a field, a parameter, a return 
 
 **A sibling in the same module is imported like anything else**, and needs no path to do it, because there
 is exactly one candidate: `import { DynamicArray };`, then the bare name at every use. A module's files
-share a name space but not a scope, so `export` offers a name and `import` accepts it — which is what lets a
-reader name the source of every symbol in a file without leaving it. This is the rung **Go** does not have
+share their **exported** names but not a scope, so `export` offers a name and `import` accepts it — which is <!-- test: mod_private_perfile -->
+what lets a reader name the source of every symbol in a file without leaving it. A name a file does not
+export is the file's alone: two files of one module may each declare a private `helper`, a private
+`static n`, a private `type T`, and neither shadows the other's — the compiler keys them by file, and only
+an exported name may be declared once per module. This is the rung **Go** does not have
 (any file of a package reaches any unexported identifier in it) and the reason **Java** needed sealed JARs
 and then JPMS. What `visibility` in `kama.json` governs is reach **beyond the module** (the *Modules* rules above) — it says nothing about files.
 
