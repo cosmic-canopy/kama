@@ -1,0 +1,30 @@
+// Generic inference DEFERS an unsuffixed literal: the typed siblings bind `T` first, then the literal is
+// retyped to it — the "literal is typed by its destination" rule, reaching a generic call. Before this,
+// `pick(a: 2, b: n)` with `isize n` failed with "cannot unify T (int32 vs isize)": the literal bound `T`
+// as int32 before the sibling was seen. A SUFFIXED literal (`2i32`) is the author's explicit width and
+// still binds eagerly. Bits sum to 127.
+fn T pick<T>(T a, T b) { return b; }
+fn T first<T>(T a, T b) { return a; }
+
+fn int32 main() {
+    int32 r = 0;
+    isize n = 40;
+    isize a = pick(a: 2, b: n);                       // literal after the typed sibling
+    if (a == 40)                     { r = r + 1; }
+    isize b = first(a: n, b: 2);                      // literal before it
+    if (b == 40)                     { r = r + 2; }
+    uint8 u = 200ui8;
+    uint8 c = pick(a: 5, b: u);                       // narrow sibling: the literal fits
+    if (c == 200ui8)                 { r = r + 4; }
+    int64 w = 7i64;
+    int64 d = pick(a: 4294967296, b: w);              // a WIDE unsuffixed literal beside an int64 sibling
+    if (d == 7i64)                   { r = r + 8; }
+    float32 f = 1.5f32;
+    float32 g = pick(a: 0.5, b: f);                   // an unsuffixed FLOAT literal defers the same way
+    if (g == 1.5f32)                 { r = r + 16; }
+    int64 h = pick::<int64>(a: 1, b: 2);              // a turbofish seeds T; the literals follow it
+    if (h == 2i64)                   { r = r + 32; }
+    int64 neg = first(a: -1, b: w);                   // a negated literal defers too
+    if (neg == -1i64)                { r = r + 64; }
+    return r;   // 127
+}

@@ -23,9 +23,9 @@ export { Rng, Ranged, range, shuffle, entropy };
 // Two integer draws, two jobs:
 //   `g.below(n:)`            an INDEX in [0, n) — takes a length directly: `v[g.below(n: v.length())]`.
 //   `range(rng: g, lo:, hi:)` a VALUE in [lo, hi), generic over every numeric width including floats.
-//     Both ends must agree in type: literals are `int32` (`lo: 1, hi: 7`), `0.0`/`1.0` are `float64`, and
-//     a size wants two `isize` locals — generic inference reads the arguments only and types an
-//     unsuffixed literal as `int32` before it sees a typed sibling, which is why `below` exists.
+//     `T` comes from the bounds: a typed one binds it and an unsuffixed literal follows
+//     (`range(rng: g, lo: 0, hi: xs.length())` is an `isize` draw); two bare literals are `int32`,
+//     `0.0`/`1.0` are `float64`. `below` stays because an index and a value are different jobs.
 // Integer draws are UNBIASED (rejection sampling), half-open like Rust's `gen_range` and Go's `Intn`,
 // and an empty range panics rather than answering `lo`.
 

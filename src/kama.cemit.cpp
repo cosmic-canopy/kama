@@ -870,6 +870,16 @@ bool isLiteralExpr(const ASTNode* n)
     return isNumericLiteral(n);
 }
 
+// An UNSUFFIXED numeric literal, possibly negated — the one argument generic inference defers, so the typed
+// siblings bind `T` first and the literal is then retyped to what they chose (ASTNode::unsuffixed). A
+// suffixed `5i32` is the author's explicit width and binds eagerly, exactly as before.
+static bool isDeferrableLiteral(const ASTNode* n)
+{
+    if (!n) return false;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isDeferrableLiteral(u->expression.get());
+    return n->unsuffixed && isNumericLiteral(n);
+}
+
 // A value-producing expression that carries NO type of its own and must be HANDED its destination —
 // a `match`, an array literal, or a ternary that yields one.
 //
@@ -11356,6 +11366,11 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     // (`log(x: exp(x: 1.0))`). Only for a non-generic callee: a generic one returns its own `T`, which is
     // exactly the thing not yet known here, so it is left to the "bind it to a local" rule.
     if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
+        // A METHOD call on a typed receiver: the method's declared return type, with the host's generic
+        // arguments substituted — `xs.length()` on a `DynamicArray<int32>` is an `isize`. mintReturnTypeNode
+        // already answers this for a `borrow` alias; a generic call's argument is the same question
+        // (`pick(a: 0, b: xs.length())` used to be "not a literal or a locally-typed value").
+        if (iv->expression) return mintReturnTypeNode(e, localTys);
         if (iv->identifier && iv->identifier->value && !iv->expression) {
             std::string k = resolveFunc(*iv->identifier->value, iv->identifier->qualifier);
             if (!_generics.count(k)) {
@@ -11558,6 +11573,32 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 // Each parameter whose declared type is a bare type-param binds it to the argument's concrete
 // type; a second, conflicting binding, an unresolvable argument, or a return-only (unbound)
 // type parameter each produce a clean diagnostic. Runs with _typeSubst empty (concrete mangles).
+// One argument's contribution to a generic call's binding: its (substituted) type must be concrete, and
+// must agree with what `T` is already bound to. Split out of inferGenericInst so the same rule serves both
+// passes — the typed arguments first, the deferred literals after.
+bool CEmitter::bindGenericArg(const std::string& pty, const std::string& pname, SharedExpression arg,
+                              std::map<std::string, SharedIdentifier>& localTys,
+                              std::map<std::string, SharedIdentifier>& bind, int line)
+{
+    // `_typeSubst` is bound when this runs from registerInstGenerics — i.e. the call sits inside a
+    // generic TYPE's member, being re-walked for one instantiation. Substituting first is what lets
+    // an argument declared with the ENCLOSING template's parameter (`V`) read as the concrete type.
+    SharedIdentifier at = deepSubstType(exprTypeNode(arg, localTys));
+    if (!isConcreteTypeArg(at)) {
+        unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
+                     "' is not a literal or a locally-typed value").c_str(), line);
+        return false;
+    }
+    auto b = bind.find(pty);
+    if (b != bind.end() && mangleElem(b->second) != mangleElem(at)) {
+        unsupported(("cannot unify type parameter '" + pty + "' (" + mangleElem(b->second) +
+                     " vs " + mangleElem(at) + ")").c_str(), line);
+        return false;
+    }
+    bind[pty] = at;
+    return true;
+}
+
 bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
                                 std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out,
                                 const std::map<std::string, SharedIdentifier>* seed)
@@ -11584,6 +11625,8 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     // the unification below. A seeded parameter is simply already in `bind`, so every later step (the
     // conflict check, the "cannot infer" sweep, bounds, mangling) treats it exactly like an inferred one.
     std::map<std::string, SharedIdentifier> bind;
+    struct DeferredLit { std::string pty, pname; SharedExpression expr; };
+    std::vector<DeferredLit> deferred;   // unsuffixed literals, bound after every typed argument
     if (seed) bind = *seed;
 
     // Structurally unify a parameter's declared type against the argument's concrete type, binding
@@ -11678,22 +11721,42 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
         auto ai = byName.find(pname);
         if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
-        // `_typeSubst` is bound when this runs from registerInstGenerics — i.e. the call sits inside a
-        // generic TYPE's member, being re-walked for one instantiation. Substituting first is what lets
-        // an argument declared with the ENCLOSING template's parameter (`V`) read as the concrete type.
-        SharedIdentifier at = deepSubstType(exprTypeNode(ai->second, localTys));
-        if (!isConcreteTypeArg(at)) {
-            unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
-                         "' is not a literal or a locally-typed value").c_str(), line);
-            return false;
+        // An unsuffixed literal is DEFERRED: `range(rng: g, lo: 0, hi: n)` with `isize n` used to fail
+        // with "cannot unify T (int32 vs isize)" because the literal, first in parameter order, bound `T`
+        // as int32 before the typed sibling was seen. The typed arguments bind first; the literal is
+        // then retyped to what they chose (the "literal is typed by its destination" rule the isize
+        // campaign taught ternary arms, mixed binaries and `match` arms), and range-checked against it.
+        if (isDeferrableLiteral(ai->second.get())) { deferred.push_back({ pty, pname, ai->second }); continue; }
+        if (!bindGenericArg(pty, pname, ai->second, localTys, bind, line)) return false;
+    }
+    for (const DeferredLit& d : deferred) {
+        auto b = bind.find(d.pty);
+        if (b != bind.end()) {
+            // `T` is bound by a typed sibling: retype the literal to it when that is a numeric widening
+            // the hand-off rule admits (an integer literal into any numeric type, a float literal into a
+            // float type — rejectNumericConversion's D2a exemption), with the fits check the same
+            // hand-off would run. Anything else — `string` bound and a literal `3` — is the ordinary
+            // conflict, reported exactly as before.
+            const std::string dst = cType(b->second);
+            const bool dstFloat = cNumFloat(dst);
+            int64_t lo, hi;
+            // primIntRangeC answers only the widths a fold can overflow; the 64-bit pair and the
+            // target-width pair are integers too, just ones every fold fits.
+            const bool dstInt = primIntRangeC(dst, lo, hi) || cNumTargetWidth(dst)
+                             || dst == "int64_t" || dst == "uint64_t";
+            const bool litFloat = cNumFloat(typeOfExpr(d.expr));
+            if (dstFloat || (dstInt && !litFloat)) {
+                if (dstInt) {
+                    int64_t v;
+                    if (constValue(d.expr, v) && constOutOfRange(dst, v, typeOfExpr(d.expr))) {
+                        rejectConstOutOfRange(dst, d.expr, ("argument `" + d.pname + "`").c_str(), false, line);
+                        return false;
+                    }
+                }
+                continue;
+            }
         }
-        auto b = bind.find(pty);
-        if (b != bind.end() && mangleElem(b->second) != mangleElem(at)) {
-            unsupported(("cannot unify type parameter '" + pty + "' (" + mangleElem(b->second) +
-                         " vs " + mangleElem(at) + ")").c_str(), line);
-            return false;
-        }
-        bind[pty] = at;
+        if (!bindGenericArg(d.pty, d.pname, d.expr, localTys, bind, line)) return false;
     }
 
     for (auto& tp : *tmpl->typeParams) {

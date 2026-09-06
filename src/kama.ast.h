@@ -40,6 +40,11 @@ public:
     // a literal's type would follow its MAGNITUDE — editing a constant could retype the expression around
     // it, which is the hazard the rule at makeUnsuffixedInt has always refused.
     bool wideUnsuffixed = false;
+    // An UNSUFFIXED numeric literal of any magnitude (`5`, `0.5`, `4294967296`) — as opposed to `5i32`,
+    // which is the author's explicit width. Generic inference DEFERS an unsuffixed literal: the typed
+    // siblings bind `T` first and the literal is then retyped to it (the "literal is typed by its
+    // destination" rule), whereas a suffixed one binds `T` eagerly. Set by the grammar at the literal.
+    bool unsuffixed = false;
     explicit ASTNode(CodeGenContext& context);
     ASTNode(const ASTNode&) = default;                  // Copy constructor
     ASTNode(ASTNode&&) = default;                       // Move constructor

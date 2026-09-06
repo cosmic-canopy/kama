@@ -643,7 +643,7 @@ literal
   /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
      std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
      saturate to ±inf on overflow (C-idiomatic) instead — no crash on a boundary literal. */
-  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->c_str(), nullptr)); }
+  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->c_str(), nullptr)); $$->unsuffixed = true; }
   | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, strtof ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
   | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
@@ -2378,12 +2378,17 @@ static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string
                                "(the widest is `uint64`, 0 to 18446744073709551615)").c_str());
         return std::make_shared<Int32Node>(ctx, 0);
     }
-    if(v <= 2147483647ULL) return std::make_shared<Int32Node>(ctx, (int32_t)v);
+    if(v <= 2147483647ULL) {
+        SharedExpression s = std::make_shared<Int32Node>(ctx, (int32_t)v);
+        s->unsuffixed = true;   /* deferrable in generic inference — see ASTNode::unsuffixed */
+        return s;
+    }
 
     SharedExpression n = (v <= 9223372036854775807ULL)
         ? std::static_pointer_cast<ExpressionNode>(std::make_shared<Int64Node>(ctx, (int64_t)v))
         : std::static_pointer_cast<ExpressionNode>(std::make_shared<UInt64Node>(ctx, v));
     n->wideUnsuffixed = true;
+    n->unsuffixed = true;
     return n;
 }
 
@@ -2402,17 +2407,24 @@ static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, Y
     else if(auto* u = dynamic_cast<UInt64Node*>(e.get())) m = (unsigned long long)u->value;
     else return nullptr;
 
-    if(m == 2147483648ULL) return std::make_shared<Int32Node>(ctx, (int32_t)-2147483648LL);
+    if(m == 2147483648ULL)
+    {
+        auto n = std::make_shared<Int32Node>(ctx, (int32_t)-2147483648LL);
+        n->unsuffixed = true;
+        return n;
+    }
     if(m <= 9223372036854775807ULL)
     {
         auto n = std::make_shared<Int64Node>(ctx, -(int64_t)m);
         n->wideUnsuffixed = true;      /* still needs int64, so a destination must still admit it */
+        n->unsuffixed = true;
         return n;
     }
     if(m == 9223372036854775808ULL)
     {
         auto n = std::make_shared<Int64Node>(ctx, (int64_t)m);   /* wraps to INT64_MIN, which is the answer */
         n->wideUnsuffixed = true;
+        n->unsuffixed = true;
         return n;
     }
     yyerror(loc, scanner, ("integer literal `-" + std::to_string(m) + "` does not fit `int64` "

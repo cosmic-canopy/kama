@@ -1,0 +1,26 @@
+// A method call on a typed local answers generic inference: `xs.length()` is an `isize` because
+// `DynamicArray<int32>::length` says so, and `pick(a: 0, b: xs.length())` binds `T` from it (with the
+// literal deferring). Before this the argument was "not a literal or a locally-typed value". Bits sum to 31.
+import { std::collections::DynamicArray, std::collections::View, std::random::Rng, std::random::range };
+fn T pick<T>(T a, T b) { return b; }
+fn T id<T>(T x) { return x; }
+
+fn int32 main() {
+    int32 r = 0;
+    DynamicArray<int32> xs = DynamicArray::<int32>.withCapacity(capacity: 4);
+    xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
+    isize n = pick(a: 0, b: xs.length());
+    if (n == 3)                              { r = r + 1; }
+    isize m = id(x: xs.length());
+    if (m == 3)                              { r = r + 2; }
+    string s = "hello";
+    isize k = pick(a: 1, b: s.length());     // an intrinsic's method too
+    if (k == 5)                              { r = r + 4; }
+    isize v = id(x: xs.view().length());     // a call on a call result: the receiver's type is a return type
+    if (v == 3)                              { r = r + 8; }
+    // The shape that started this: std::random's `range` with a literal and a length.
+    Rng g = Rng.seeded(seed: 7ui64);
+    isize d = range(rng: g, lo: 0, hi: xs.length());
+    if (d >= 0 && d < 3)                     { r = r + 16; }
+    return r;   // 31
+}

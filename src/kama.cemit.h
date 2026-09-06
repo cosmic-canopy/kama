@@ -1945,6 +1945,9 @@ private:
     // Unify a generic call's args against the template's params -> a deduped instantiation.
     // `seed` pre-binds the parameters a use site wrote explicitly, so the rest can still be inferred;
     // null means infer everything. See explicitGenericInst for who seeds and why.
+    bool bindGenericArg(const std::string& pty, const std::string& pname, SharedExpression arg,
+                        std::map<std::string, SharedIdentifier>& localTys,
+                        std::map<std::string, SharedIdentifier>& bind, int line);
     bool inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
                           std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out,
                           const std::map<std::string, SharedIdentifier>* seed = nullptr);

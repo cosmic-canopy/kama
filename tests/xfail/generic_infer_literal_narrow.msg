@@ -1,0 +1,1 @@
+expects `uint8` (0 to 255), so it cannot be given 300

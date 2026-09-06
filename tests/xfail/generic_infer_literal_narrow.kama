@@ -1,0 +1,8 @@
+// A deferred literal is range-checked against the width its siblings bound: 300 does not fit the
+// `uint8` that `b` made `T`.
+fn T pick<T>(T a, T b) { return b; }
+fn int32 main() {
+    uint8 u = 1ui8;
+    uint8 x = pick(a: 300, b: u);
+    return cast<int32>(x);
+}
