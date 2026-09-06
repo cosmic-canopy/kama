@@ -1,0 +1,79 @@
+import { std::collections::DynamicArray, std::collections::View };
+export { encode, decode, DecodeError };
+
+// Hexadecimal — bytes to text and back. `encode` writes LOWERCASE (what every tool prints, and what
+// Rust's `hex`, Go's `encoding/hex` and Python's `bytes.hex()` agree on); `decode` accepts either case,
+// because input is what other people wrote. Decoding is STRICT: an odd number of digits or a byte that is
+// not a hex digit is an error, and whitespace is not skipped — the position of the offending byte comes
+// back in the error so a caller can say where.
+//
+// This is hex ENCODING of a byte buffer, not hex FORMATTING of an integer — `std::fmt::parseRadix` and
+// the `${x}` formatters cover the number. The two meet only at a single byte, and even there this
+// module always writes two digits.
+//
+// A decode FAILS, it does not come up absent, so the result is `Result`, not `Optional` (the
+// `std::fmt::parse` line, GOALS #3d). Both functions allocate their result and are dropped from a
+// `--no-heap` build rather than reaching the allocator there.
+
+// The runtime string constructor — an `extern` is a reference to a C symbol, redeclared per module with
+// the one signature every declaration in the program must share (tools/check-extern-rung.sh).
+extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
+
+type enum DecodeError implements Error {
+    InvalidCharacter(isize at), InvalidLength;
+
+    public const fn string message() {
+        return match (this) {
+            case InvalidCharacter(at: a): "invalid hex digit at byte ${a}";
+            case InvalidLength:           "odd number of hex digits";
+        };
+    }
+}
+
+// One nibble to its lowercase digit.
+fn uint8 digit(uint8 v) {
+    if (v < 10ui8) { return 48ui8 + v; }        // '0'..'9'
+    return 87ui8 + v;                           // 'a' is 97 = 87 + 10
+}
+
+// One digit to its nibble, either case; 255 for anything that is not one.
+fn uint8 nibble(uint8 c) {
+    if (c >= 48ui8 && c <= 57ui8)  { return c - 48ui8; }          // 0-9
+    if (c >= 97ui8 && c <= 102ui8) { return c - 97ui8 + 10ui8; }  // a-f
+    if (c >= 65ui8 && c <= 70ui8)  { return c - 65ui8 + 10ui8; }  // A-F
+    return 255ui8;
+}
+
+// Two lowercase digits per byte.
+@compileFor(!NOHEAP)
+unsafe fn string encode(View<uint8> bytes) {
+    isize n = bytes.length();
+    if (n == 0) { return ""; }
+    DynamicArray<uint8> text = DynamicArray::<uint8>.withCapacity(capacity: n * 2);
+    isize i = 0;
+    while (i < n) {
+        uint8 b = bytes[i];
+        text.add(item: digit(v: b >> 4));
+        text.add(item: digit(v: b & 15ui8));
+        i = i + 1;
+    }
+    return kama_string_from_raw(src: addr(of: text[0]), start: 0, len: text.length());
+}
+
+// Digits in either case, an even number of them, nothing else.
+@compileFor(!NOHEAP)
+fn Result<DynamicArray<uint8>, DecodeError> decode(const ref string text) {
+    isize n = text.length();
+    if (n % 2 != 0) { return Result::Err(error: DecodeError::InvalidLength); }
+    DynamicArray<uint8> bytes = DynamicArray::<uint8>.withCapacity(capacity: n / 2);
+    isize i = 0;
+    while (i < n) {
+        uint8 hi = nibble(c: text[i]);
+        if (hi == 255ui8) { return Result::Err(error: DecodeError::InvalidCharacter(at: i)); }
+        uint8 lo = nibble(c: text[i + 1]);
+        if (lo == 255ui8) { return Result::Err(error: DecodeError::InvalidCharacter(at: i + 1)); }
+        bytes.add(item: (hi << 4) | lo);
+        i = i + 2;
+    }
+    return Result::Ok(value: bytes);
+}

@@ -1,0 +1,127 @@
+// std::encoding::base64 — the RFC 4648 test vectors verbatim, the URL-safe pair, a round trip over every
+// byte value, and one input per strict-rejection variant with its position. Eight flags sum to 255.
+import { std::encoding::base64::encode, std::encoding::base64::decode,
+         std::encoding::base64::encodeUrl, std::encoding::base64::decodeUrl,
+         std::encoding::base64::DecodeError, std::collections::DynamicArray };
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
+    foreach (uint8 c in s) { b.add(item: c); }
+    return b;
+}
+
+fn bool sameBytes(ref DynamicArray<uint8> a, const ref string s) {
+    if (a.length() != s.length()) { return false; }
+    isize i = 0;
+    while (i < a.length()) { if (a[i] != s[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn string enc(const ref string s) {
+    DynamicArray<uint8> b = bytesOf(s: s);
+    string t = "";
+    borrow b.view() as v { t = encode(bytes: v); }
+    return t;
+}
+
+fn string encUrl(const ref string s) {
+    DynamicArray<uint8> b = bytesOf(s: s);
+    string t = "";
+    borrow b.view() as v { t = encodeUrl(bytes: v); }
+    return t;
+}
+
+// `decode(text)` equals the bytes of `want`?
+fn bool decodesTo(const ref string text, const ref string want) {
+    Result<DynamicArray<uint8>, DecodeError> r = decode(text: text);
+    return match (r) {
+        case Ok(value: b):  { := sameBytes(a: b, s: want); }
+        case Err(error: e): { := false; }
+    };
+}
+
+// A code per error variant, with the byte position folded in for the one that carries it.
+fn int32 errCode(DecodeError e) {
+    return match (e) {
+        case InvalidCharacter(at: a): 100 + cast<int32>(a);
+        case InvalidLength:           1;
+        case InvalidPadding:          2;
+        case InvalidTrailingBits:     3;
+    };
+}
+
+fn int32 failsWith(const ref string text) {
+    Result<DynamicArray<uint8>, DecodeError> r = decode(text: text);
+    return match (r) { case Ok(value: b): 0; case Err(error: e): errCode(e: e); };
+}
+
+fn int32 failsWithUrl(const ref string text) {
+    Result<DynamicArray<uint8>, DecodeError> r = decodeUrl(text: text);
+    return match (r) { case Ok(value: b): 0; case Err(error: e): errCode(e: e); };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // RFC 4648 § 10, encode.
+    if (enc(s: "").equals(other: "") && enc(s: "f").equals(other: "Zg==") && enc(s: "fo").equals(other: "Zm8=")
+        && enc(s: "foo").equals(other: "Zm9v") && enc(s: "foob").equals(other: "Zm9vYg==")
+        && enc(s: "fooba").equals(other: "Zm9vYmE=") && enc(s: "foobar").equals(other: "Zm9vYmFy")) { r = r + 1; }
+
+    // RFC 4648 § 10, decode.
+    if (decodesTo(text: "", want: "") && decodesTo(text: "Zg==", want: "f") && decodesTo(text: "Zm8=", want: "fo")
+        && decodesTo(text: "Zm9v", want: "foo") && decodesTo(text: "Zm9vYg==", want: "foob")
+        && decodesTo(text: "Zm9vYmE=", want: "fooba") && decodesTo(text: "Zm9vYmFy", want: "foobar")) { r = r + 2; }
+
+    // The URL-safe alphabet: 0xFB 0xFF is "+/8=" standard and "-_8" unpadded URL-safe.
+    DynamicArray<uint8> hiBytes = DynamicArray::<uint8>.empty();
+    hiBytes.add(item: 251ui8); hiBytes.add(item: 255ui8);
+    string stdText = "";
+    string urlText = "";
+    borrow hiBytes.view() as hv { stdText = encode(bytes: hv); urlText = encodeUrl(bytes: hv); }
+    Result<DynamicArray<uint8>, DecodeError> ur = decodeUrl(text: "-_8");
+    bool urlBack = match (ur) {
+        case Ok(value: b):  { := b.length() == 2 && b[0] == 251ui8 && b[1] == 255ui8; }
+        case Err(error: e): { := false; }
+    };
+    if (stdText.equals(other: "+/8=") && urlText.equals(other: "-_8") && urlBack
+        && encUrl(s: "foob").equals(other: "Zm9vYg"))                     { r = r + 4; }
+
+    // Every byte value survives a round trip, through both alphabets.
+    DynamicArray<uint8> all = DynamicArray::<uint8>.empty();
+    isize i = 0;
+    while (i < 256) { all.add(item: cast<uint8>(i)); i = i + 1; }
+    string allStd = "";
+    string allUrl = "";
+    borrow all.view() as av { allStd = encode(bytes: av); allUrl = encodeUrl(bytes: av); }
+    Result<DynamicArray<uint8>, DecodeError> rs = decode(text: allStd);
+    Result<DynamicArray<uint8>, DecodeError> ru = decodeUrl(text: allUrl);
+    bool stdRound = match (rs) {
+        case Ok(value: b):  { bool ok = b.length() == 256; isize k = 0; while (k < 256) { if (b[k] != cast<uint8>(k)) { ok = false; } k = k + 1; } := ok; }
+        case Err(error: e): { := false; }
+    };
+    bool urlRound = match (ru) {
+        case Ok(value: b):  { bool ok = b.length() == 256; isize k = 0; while (k < 256) { if (b[k] != cast<uint8>(k)) { ok = false; } k = k + 1; } := ok; }
+        case Err(error: e): { := false; }
+    };
+    if (stdRound && urlRound && allStd.length() == 344 && allUrl.length() == 342) { r = r + 8; }
+
+    // InvalidLength: a length no padded encoding produces — and whitespace is a byte like any other.
+    if (failsWith(text: "Zg=") == 1 && failsWith(text: "Zm9v Zg==") == 1 && failsWith(text: "Z") == 1
+        && failsWithUrl(text: "Z") == 1)                                    { r = r + 16; }
+
+    // InvalidCharacter, with the position of the byte: a `!`, a newline inside a full group, and `=`
+    // in the URL form (where it is not a character at all).
+    if (failsWith(text: "Z!9v") == 101 && failsWith(text: "Zm9vYmF\n") == 107
+        && failsWithUrl(text: "Zg==") == 102 && failsWithUrl(text: "Zm+v") == 102) { r = r + 32; }
+
+    // InvalidPadding: `=` where it does not belong, or too much / too little of it.
+    if (failsWith(text: "Zg=x") == 2 && failsWith(text: "Z===") == 2 && failsWith(text: "Zm9v====") == 2
+        && failsWith(text: "Zm9vYg=A") == 2)                                { r = r + 64; }
+
+    // InvalidTrailingBits: "Zh==" is "Zg==" with one unused bit set — same byte, different text.
+    if (failsWith(text: "Zh==") == 3 && failsWith(text: "Zm9=") == 3 && failsWithUrl(text: "Zh") == 3
+        && decodesTo(text: "Zg==", want: "f"))                              { r = r + 128; }
+
+    return r;   // 255
+}

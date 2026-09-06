@@ -1,0 +1,82 @@
+// std::encoding::hex — lowercase out, either case in, strict about length and digits, and the error
+// carries the byte position. Both codecs export `encode`/`decode`, so a file that wants both renames
+// at the import (`… as hexEncode`) — the same `as` any two colliding symbols use. Eight flags sum to 255.
+import { std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as hexDecode,
+         std::encoding::hex::DecodeError,
+         std::encoding::base64::encode as b64Encode,
+         std::collections::DynamicArray };
+
+fn int32 errCode(DecodeError e) {
+    return match (e) {
+        case InvalidCharacter(at: a): 100 + cast<int32>(a);
+        case InvalidLength:           1;
+    };
+}
+
+fn int32 failsWith(const ref string text) {
+    Result<DynamicArray<uint8>, DecodeError> r = hexDecode(text: text);
+    return match (r) { case Ok(value: b): 0; case Err(error: e): errCode(e: e); };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Encode: DE AD BE EF, two lowercase digits per byte, and a zero byte keeps both digits.
+    DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
+    b.add(item: 222ui8); b.add(item: 173ui8); b.add(item: 190ui8); b.add(item: 239ui8); b.add(item: 0ui8);
+    string t = "";
+    borrow b.view() as v { t = hexEncode(bytes: v); }
+    if (t.equals(other: "deadbeef00"))                                    { r = r + 1; }
+
+    // Decode, mixed case, back to the same bytes.
+    Result<DynamicArray<uint8>, DecodeError> d = hexDecode(text: "DEADbeef00");
+    bool back = match (d) {
+        case Ok(value: x):  { := x.length() == 5 && x[0] == 222ui8 && x[1] == 173ui8 && x[2] == 190ui8 && x[3] == 239ui8 && x[4] == 0ui8; }
+        case Err(error: e): { := false; }
+    };
+    if (back)                                                             { r = r + 2; }
+
+    // Empty in, empty out, both ways.
+    DynamicArray<uint8> none = DynamicArray::<uint8>.empty();
+    string emptyText = "x";
+    borrow none.view() as nv { emptyText = hexEncode(bytes: nv); }
+    Result<DynamicArray<uint8>, DecodeError> de = hexDecode(text: "");
+    bool emptyBack = match (de) { case Ok(value: x): { := x.length() == 0; } case Err(error: e): { := false; } };
+    if (emptyText.length() == 0 && emptyBack)                             { r = r + 4; }
+
+    // Every byte value survives a round trip, and the text is exactly twice as long.
+    DynamicArray<uint8> all = DynamicArray::<uint8>.empty();
+    isize i = 0;
+    while (i < 256) { all.add(item: cast<uint8>(i)); i = i + 1; }
+    string allText = "";
+    borrow all.view() as av { allText = hexEncode(bytes: av); }
+    Result<DynamicArray<uint8>, DecodeError> ra = hexDecode(text: allText);
+    bool round = match (ra) {
+        case Ok(value: x):  { bool ok = x.length() == 256; isize k = 0; while (k < 256) { if (x[k] != cast<uint8>(k)) { ok = false; } k = k + 1; } := ok; }
+        case Err(error: e): { := false; }
+    };
+    if (round && allText.length() == 512)                                 { r = r + 8; }
+
+    // InvalidLength: an odd count of digits.
+    if (failsWith(text: "abc") == 1 && failsWith(text: "0") == 1)         { r = r + 16; }
+
+    // InvalidCharacter, at its byte: a non-digit first, a non-digit second, and a space.
+    if (failsWith(text: "zz") == 100 && failsWith(text: "0g") == 101 && failsWith(text: "de ad") == 1
+        && failsWith(text: "dead bee") == 104)                            { r = r + 32; }
+
+    // The message names the position.
+    Result<DynamicArray<uint8>, DecodeError> rm = hexDecode(text: "00zz");
+    string msg = match (rm) { case Ok(value: x): { := ""; } case Err(error: e): { := e.message(); } };
+    if (msg.equals(other: "invalid hex digit at byte 2"))                 { r = r + 64; }
+
+    // The two codecs in one file: hex of the bytes base64 decoded.
+    Result<DynamicArray<uint8>, DecodeError> hb = hexDecode(text: "666f6f626172");   // "foobar"
+    string via = "";
+    match (hb) {
+        case Ok(value: x):  { borrow x.view() as xv { via = b64Encode(bytes: xv); } }
+        case Err(error: e): { via = "?"; }
+    };
+    if (via.equals(other: "Zm9vYmFy"))                                    { r = r + 128; }
+
+    return r;   // 255
+}

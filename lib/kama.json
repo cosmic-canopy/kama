@@ -9,6 +9,11 @@
     "ascii":         { "visibility": "public" },
     "collections":   { "visibility": "public" },
     "concurrent":    { "visibility": "public" },
+    "encoding":      { "visibility": "public",
+                       "modules": {
+                         "base64": { "visibility": "public" },
+                         "hex":    { "visibility": "public" }
+                       } },
     "fmt":           { "visibility": "public" },
     "fs":            { "visibility": "public" },
     "io":            { "visibility": "public" },

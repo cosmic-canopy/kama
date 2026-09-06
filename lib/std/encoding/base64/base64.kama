@@ -1,0 +1,174 @@
+import { std::collections::DynamicArray, std::collections::View };
+export { encode, decode, encodeUrl, decodeUrl, DecodeError };
+
+// Base64 (RFC 4648) — bytes to text and back, in the two alphabets that matter and no configuration:
+//
+//   `encode` / `decode`       § 4, the STANDARD alphabet (`+` `/`), padded with `=` to a multiple of
+//                             four. MIME, Basic auth, `data:` URLs, JSON blobs, PEM bodies.
+//   `encodeUrl` / `decodeUrl` § 5, the URL-SAFE alphabet (`-` `_`), UNPADDED. JWT, OAuth state, anything
+//                             that lands in a URL or a filename. (Go's `RawURLEncoding`, and what JWT
+//                             specifies — a padded URL-safe form exists in the RFC and nobody sends it.)
+//
+// Two named pairs rather than one function with flags: a call site reads which wire format it speaks.
+//
+// Decoding is STRICT, in the way Rust's `base64` crate and Go's `encoding/base64` are and Python's is
+// not: a byte outside the alphabet is an error WITH ITS POSITION, `=` is accepted only where padding
+// belongs (never in the URL form), a length the encoding cannot produce is an error, and unused trailing
+// bits must be zero — so exactly one text decodes to any byte sequence, and a decoder cannot be used
+// to smuggle bits. Whitespace is NOT skipped. Line-wrapped MIME input is the caller's `replace`; a
+// decoder that silently dropped some bytes would have to decide which, and that decision is not its.
+//
+// Both directions allocate their result and are dropped from a `--no-heap` build (as `sort` is) rather
+// than reaching the allocator there.
+
+// The runtime string constructor — an `extern` is a reference to a C symbol, redeclared per module with
+// the one signature every declaration in the program must share (tools/check-extern-rung.sh).
+extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
+
+type enum DecodeError implements Error {
+    InvalidCharacter(isize at), InvalidLength, InvalidPadding, InvalidTrailingBits;
+
+    public const fn string message() {
+        return match (this) {
+            case InvalidCharacter(at: a): "byte ${a} is not in the base64 alphabet";
+            case InvalidLength:           "a length base64 cannot produce";
+            case InvalidPadding:          "`=` where padding does not belong";
+            case InvalidTrailingBits:     "the unused bits of the last character are not zero";
+        };
+    }
+}
+
+// A six-bit value to its character. The first 62 are shared; the last two are the alphabet.
+fn uint8 sextet(uint8 v, bool url) {
+    if (v < 26ui8) { return 65ui8 + v; }                 // 'A'..'Z'
+    if (v < 52ui8) { return 97ui8 + (v - 26ui8); }       // 'a'..'z'
+    if (v < 62ui8) { return 48ui8 + (v - 52ui8); }       // '0'..'9'
+    if (v == 62ui8) { return url ? 45ui8 : 43ui8; }      // '-' or '+'
+    return url ? 95ui8 : 47ui8;                          // '_' or '/'
+}
+
+// A character to its six-bit value; 255 for anything outside the alphabet asked for.
+fn uint8 value(uint8 c, bool url) {
+    if (c >= 65ui8 && c <= 90ui8)  { return c - 65ui8; }           // A-Z
+    if (c >= 97ui8 && c <= 122ui8) { return c - 97ui8 + 26ui8; }   // a-z
+    if (c >= 48ui8 && c <= 57ui8)  { return c - 48ui8 + 52ui8; }   // 0-9
+    if (url) {
+        if (c == 45ui8) { return 62ui8; }                          // '-'
+        if (c == 95ui8) { return 63ui8; }                          // '_'
+        return 255ui8;
+    }
+    if (c == 43ui8) { return 62ui8; }                              // '+'
+    if (c == 47ui8) { return 63ui8; }                              // '/'
+    return 255ui8;
+}
+
+unsafe fn string encodeWith(View<uint8> bytes, bool url, bool pad) {
+    isize n = bytes.length();
+    if (n == 0) { return ""; }
+    DynamicArray<uint8> text = DynamicArray::<uint8>.withCapacity(capacity: ((n + 2) / 3) * 4);
+    isize i = 0;
+    while (i + 3 <= n) {
+        uint8 b0 = bytes[i];
+        uint8 b1 = bytes[i + 1];
+        uint8 b2 = bytes[i + 2];
+        uint32 v = (cast<uint32>(b0) << 16) | (cast<uint32>(b1) << 8) | cast<uint32>(b2);
+        uint32 c0 = (v >> 18) & 63ui32;
+        uint32 c1 = (v >> 12) & 63ui32;
+        uint32 c2 = (v >> 6) & 63ui32;
+        uint32 c3 = v & 63ui32;
+        text.add(item: sextet(v: truncate<uint8>(c0), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c1), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c2), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c3), url: url));
+        i = i + 3;
+    }
+    isize rem = n - i;
+    if (rem == 1) {
+        uint8 b0 = bytes[i];
+        uint32 v = cast<uint32>(b0) << 16;
+        uint32 c0 = (v >> 18) & 63ui32;
+        uint32 c1 = (v >> 12) & 63ui32;
+        text.add(item: sextet(v: truncate<uint8>(c0), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c1), url: url));
+        if (pad) { text.add(item: 61ui8); text.add(item: 61ui8); }   // "=="
+    } else if (rem == 2) {
+        uint8 b0 = bytes[i];
+        uint8 b1 = bytes[i + 1];
+        uint32 v = (cast<uint32>(b0) << 16) | (cast<uint32>(b1) << 8);
+        uint32 c0 = (v >> 18) & 63ui32;
+        uint32 c1 = (v >> 12) & 63ui32;
+        uint32 c2 = (v >> 6) & 63ui32;
+        text.add(item: sextet(v: truncate<uint8>(c0), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c1), url: url));
+        text.add(item: sextet(v: truncate<uint8>(c2), url: url));
+        if (pad) { text.add(item: 61ui8); }                          // "="
+    }
+    return kama_string_from_raw(src: addr(of: text[0]), start: 0, len: text.length());
+}
+
+fn Result<DynamicArray<uint8>, DecodeError> decodeWith(const ref string text, bool url) {
+    isize n = text.length();
+    isize pad = 0;
+    if (!url) {
+        // Padded: the length is a multiple of four, and the padding is the last one or two bytes.
+        if (n % 4 != 0) { return Result::Err(error: DecodeError::InvalidLength); }
+        if (n >= 1 && text[n - 1] == 61ui8) {
+            pad = 1;
+            if (n >= 2 && text[n - 2] == 61ui8) { pad = 2; }
+        }
+    } else {
+        // Unpadded: a group of one leftover character encodes nothing and cannot occur.
+        if (n % 4 == 1) { return Result::Err(error: DecodeError::InvalidLength); }
+    }
+    isize data = n - pad;
+    isize rem = data % 4;
+    // The padding must be exactly what the leftover group needs: two `=` after two characters, one
+    // after three, none after a whole group. Anything else is padding where it does not belong.
+    isize needed = rem == 2 ? 2 : (rem == 3 ? 1 : 0);
+    if (!url && pad != needed) { return Result::Err(error: DecodeError::InvalidPadding); }
+
+    DynamicArray<uint8> bytes = DynamicArray::<uint8>.withCapacity(capacity: (data / 4) * 3 + 2);
+    uint32 acc = 0ui32;
+    int32 bits = 0;
+    isize i = 0;
+    while (i < data) {
+        uint8 c = text[i];
+        if (c == 61ui8) {
+            // A `=` before the padding position. In the URL form it is simply not a character.
+            if (url) { return Result::Err(error: DecodeError::InvalidCharacter(at: i)); }
+            return Result::Err(error: DecodeError::InvalidPadding);
+        }
+        uint8 v = value(c: c, url: url);
+        if (v == 255ui8) { return Result::Err(error: DecodeError::InvalidCharacter(at: i)); }
+        acc = (acc << 6) | cast<uint32>(v);
+        bits = bits + 6;
+        if (bits >= 8) {
+            bits = bits - 8;
+            uint32 whole = (acc >> bits) & 255ui32;
+            bytes.add(item: truncate<uint8>(whole));
+            uint32 keep = (1ui32 << bits) - 1ui32;
+            acc = acc & keep;
+        }
+        i = i + 1;
+    }
+    // Whatever is left in `acc` is the tail of the last character that encodes no byte. RFC 4648 § 3.5
+    // wants it zero, and a decoder that ignores it makes several texts decode to one byte string.
+    if (acc != 0ui32) { return Result::Err(error: DecodeError::InvalidTrailingBits); }
+    return Result::Ok(value: bytes);
+}
+
+// Standard alphabet, padded.
+@compileFor(!NOHEAP)
+unsafe fn string encode(View<uint8> bytes) { return encodeWith(bytes: bytes, url: false, pad: true); }
+
+// Standard alphabet, padded — strictly.
+@compileFor(!NOHEAP)
+fn Result<DynamicArray<uint8>, DecodeError> decode(const ref string text) { return decodeWith(text: text, url: false); }
+
+// URL-safe alphabet, unpadded.
+@compileFor(!NOHEAP)
+unsafe fn string encodeUrl(View<uint8> bytes) { return encodeWith(bytes: bytes, url: true, pad: false); }
+
+// URL-safe alphabet, unpadded — a `=` anywhere is not a character of this alphabet.
+@compileFor(!NOHEAP)
+fn Result<DynamicArray<uint8>, DecodeError> decodeUrl(const ref string text) { return decodeWith(text: text, url: true); }
