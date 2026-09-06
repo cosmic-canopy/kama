@@ -253,6 +253,19 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+- **Generic inference reads only the arguments — an unsuffixed literal binds `T` as `int32` before a
+  typed sibling is seen, and a receiver call cannot bind `T` at all.** Measured 2026-09-05 writing
+  `std::random`: `range(rng: g, lo: 0, hi: n)` with `isize n` fails ("cannot unify `T` (int32 vs isize)"),
+  `range(rng: g, lo: lo, hi: xs.length())` fails ("argument `hi` is not a literal or a locally-typed
+  value"), and a turbofish does not rescue either — `explicitGenericInst` seeds the binding and hands off to
+  the same unify with the conflict check intact (`inferGenericInst`, `src/kama.cemit.cpp` ~11555–11730;
+  `exprTypeNode` answers only a receiver-less non-generic call). The two fixes are small and separable:
+  **(a)** treat an unsuffixed integer literal as *deferrable* — bind `T` from every other argument first,
+  then retype the literal to it, the same "literal is typed by its destination" rule the isize campaign
+  taught ternary arms, mixed binaries and `match` arms; **(b)** let `exprTypeNode` answer a method call on a
+  typed local from the method's declared return type. Fixtures: the two failing shapes above, plus the
+  existing `generic_wide_literal`. Until then the spelling is two typed locals, which is why `std::random`
+  has `below(n:)` beside `range` — keep `below` regardless; an index and a value are different jobs.
 - **Layout control does not reach an `enum`.** `@align(N)`/`@packed` ship on a type with a struct
   (`type value`/`type resource`) and are REFUSED on both enum shapes, with a diagnostic that says so — this
   is a tracked deferral, not an oversight, and it is deliberately not a half-answer. A payload-less enum has
@@ -1890,6 +1903,23 @@ rather than here, so there is one number to keep current. Forward work:
   without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.
   User docs (including the registry protocol a host must serve): [packages.md](packages.md). What remains is
   hosted-services and ops work:
+  - **Official vs community packages — DECIDED 2026-09-05: the `@kama` scope is the mark, and it is also
+    the channel.** The mechanism already ships (`packages.md` § *Scopes*: `@scope/name`, a scope binds to a
+    registry, the package imports under its bare last segment — probed: `kama seed --name @kama/sodium`
+    seeds, checks and builds, and the artifact drops the scope). So an official package is `@kama/<name>`,
+    served from the official registry, imported as `<name>::…`; a community package is unscoped or under its
+    own scope; the repo is `kama-<name>` under the org. This is where npm (`@angular/`), JSR (`@std/`), NuGet
+    (reserved `Microsoft.*` prefixes with a badge) and Go (`golang.org/x/`) all landed, and the ecosystems
+    that put nothing in the name — crates.io, PyPI — have debated namespacing for years because names were
+    first-come. Two follow-throughs: **reserve `@kama` and `@std`** at the registry the day M3.3's host
+    exists (a policy the static index can enforce by refusing the scope from any other publisher), and one
+    sentence in `packages.md` § *Scopes* saying so. **`@kama/sodium` is the first** — a libsodium binding
+    (ISC, so MIT-licensable) living OUTSIDE this repo as a peer, seeded with `kama seed --kind library
+    --agents --claude --skill` so it is also the worked example of the recommended project bundle; the one
+    thing `seed` cannot write today is a LICENSE, so **`kama seed --license mit`** lands first (the bundle a
+    package publishes with must be complete). Scope for the first cut: `secretbox`/`box`/`sign`/
+    `randombytes` — the first consumer's encrypted UDP channel and nothing above it; a binding writes no
+    cryptography of its own, and an encrypted channel with sequence numbers is the engine's layer.
   - **Both gated on hosted services / the repo being public + the website staged:**
     - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host (Cloudflare
       Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI (`kDefaultRegistry`,
