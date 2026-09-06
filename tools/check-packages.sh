@@ -1138,4 +1138,34 @@ mv "$rl" "$tmp/rl-moved"
          sed 's/^/  /' "$tmp/rl.out" >&2; exit 1; }
 
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
+# ---- `kama`: the compiler-version range a package declares (docs/packages.md § What compiler a package needs)
+# A PATH dependency whose manifest asks for a compiler that does not exist: `pkg install` must refuse it
+# by name, naming both versions, and leave no view behind; the same package asking for a floor this
+# compiler clears installs and builds. The manifest-shape half (a range that does not parse, a non-string)
+# is check-manifest.sh's.
+kr="$tmp/kreq-src"; mkdir -p "$kr/src"
+printf 'export { one };\nfn int32 one() { return 1; }\n' > "$kr/src/kreq.kama"
+kc="$tmp/kreq-app"; mkdir -p "$kc/src"
+printf '{ "name": "kreqapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "kreq": { "path": "../kreq-src" } }, "modules": { ".": { "visibility": "internal" } } }\n' > "$kc/kama.json"
+printf 'import { kreq::one };\nfn int32 main() { return one(); }\n' > "$kc/src/main.kama"
+printf '{ "name": "kreq", "version": "0.1.0", "kind": "library", "kama": ">=99.0.0", "modules": { ".": { "visibility": "public" } } }\n' > "$kr/kama.json"
+if "$KAMA" pkg install "$kc/kama.json" >"$tmp/kreq.out" 2>&1; then
+    echo "check-packages: FAIL — a dependency needing kama >=99.0.0 was installed" >&2; exit 1; fi
+grep -q "needs kama >=99.0.0" "$tmp/kreq.out" \
+    || { echo "check-packages: FAIL — the refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreq.out" >&2; exit 1; }
+[ -e "$kc/.kama/deps/kreq" ] && { echo "check-packages: FAIL — the refused dependency was linked into the view anyway" >&2; exit 1; }
+printf '{ "name": "kreq", "version": "0.1.0", "kind": "library", "kama": ">=0.0.1", "modules": { ".": { "visibility": "public" } } }\n' > "$kr/kama.json"
+if ! "$KAMA" pkg install "$kc/kama.json" >"$tmp/kreq.out" 2>&1; then
+    echo "check-packages: FAIL — a dependency needing kama >=0.0.1 did not install:" >&2; sed 's/^/  /' "$tmp/kreq.out" >&2; exit 1; fi
+if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp" >"$tmp/kreqb.out" 2>&1; then run "$tmp/kreqapp"
+    [ "$RC" = "1" ] || { echo "check-packages: FAIL — the kama-range consumer returned $RC, expected 1" >&2; exit 1; }
+else echo "check-packages: FAIL — the kama-range consumer did not build:" >&2; sed 's/^/  /' "$tmp/kreqb.out" >&2; exit 1; fi
+# ...and the BUILD-time half: the view is installed, then the dependency's manifest is edited in place
+# (a `path` dep is its own store) to need more than this compiler — the build must refuse, install did not run.
+printf '{ "name": "kreq", "version": "0.1.0", "kind": "library", "kama": ">=99.0.0", "modules": { ".": { "visibility": "public" } } }\n' > "$kr/kama.json"
+if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; then
+    echo "check-packages: FAIL — a build against a dependency needing kama >=99.0.0 succeeded" >&2; exit 1; fi
+grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
+    || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

@@ -113,6 +113,26 @@ proj licbad <<'JSON'
 JSON
 reject licbad 'expected a string' "a non-string \`license\` is refused, not skipped"
 
+# `kama` is the compiler-version RANGE a package's source needs (docs/packages.md § What compiler a package
+# needs). Held to a version range in the reader — the value set is closed — and checked against THIS
+# compiler at build: a range it satisfies builds, one it cannot is refused by name, with both versions.
+proj kreq <<'JSON'
+{ "name": "kreq", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": ">=0.0.1", "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept kreq "a \`kama\` range this compiler satisfies builds"
+proj kreqhigh <<'JSON'
+{ "name": "kreqhigh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": ">=99.0.0", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqhigh 'needs kama >=99.0.0' "a \`kama\` range this compiler cannot satisfy is refused, naming both versions"
+proj kreqbad <<'JSON'
+{ "name": "kreqbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": "latest", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqbad 'must be a compiler version range' "a \`kama\` value that is not a range is refused by the reader"
+proj kreqnum <<'JSON'
+{ "name": "kreqnum", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": 1, "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqnum 'expected a string' "a non-string \`kama\` is refused, not skipped"
+
 # Recognition is split from storage, so a key the READER was not asked to capture must still be
 # recognized. `kama build` never captures `entry`/`version`, and before the split those fell down the
 # same path as a typo — this is the case that would regress if the two were re-fused.

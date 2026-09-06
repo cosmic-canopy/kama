@@ -563,6 +563,15 @@ candidate tarballs.
 A published `<name>@<version>` is **write-once**: its integrity is pinned forever and `kama publish`
 refuses to overwrite it. That is the lockfile-drift and dependency-confusion guarantee at the source.
 
+**A package is the unit of integrity — there are no partial downloads.** The lock pins one tree hash per
+package and the store is keyed by it, so what a consumer fetches is exactly what was published, whole.
+The "one large package, fetched in parts" shape other ecosystems offer is answered two ways here, neither
+of which weakens that guarantee: **scoped siblings** (`@acme/geo`, `@acme/geo-extras`, `@acme/geo-cli` —
+one scope, several packages, each fetched only by the projects that name it), or **several modules in one
+package** — a consumer imports only the modules it names, and link-time pruning (`--gc-sections`,
+emit-on-instantiation) drops the rest, so the download is the only cost the unused modules have. A package
+big enough for that cost to matter is a package that wants splitting by scope.
+
 ### Publishing
 
 `kama publish` packages the current project and records it in a registry:
@@ -581,8 +590,11 @@ A package name may be **scoped** as `@scope/name`. A scoped dependency **imports
 segment** — `@acme/geo` is `import { geo::X };` in your code — the scope only selects which registry serves
 it. **`@kama` is the official scope**: a package named `@kama/<name>` is maintained alongside the compiler
 and served from the official registry, and a community package is unscoped or under its own scope; `@kama`
-and `@std` are reserved the day a hosted registry exists, which refuses them from any other publisher. Bind
-scopes (and the default) with a top-level `registries` object:
+and `@std` are reserved the day a hosted registry exists, which refuses them from any other publisher.
+`@std` is reserved for a different reason than `@kama`: **the standard library is not a package.** It
+ships inside the compiler binary and is versioned with it — `kama --version` is a complete bug report, and
+there is no `std` to install, pin or resolve; the scope exists only so nothing else can ever claim the
+name. Bind scopes (and the default) with a top-level `registries` object:
 
 ```json
 {
@@ -773,6 +785,32 @@ kama update --version 1.3.0      # install a specific version and make it the de
 
 A pin or selection to a version you don't have installed fails with a clear message telling you to
 run `kama toolchain install <v>` — it never silently falls back to another version.
+
+### What compiler a package needs — `kama`
+
+`toolchain` pins which compiler **runs** for a project. `kama` is the other half: the **range of compiler
+versions a package's source needs**, declared by the package and checked wherever that package is built —
+in its own directory, and in every project that depends on it:
+
+```json
+{ "name": "geo", "version": "1.4.0", "kind": "library", "kama": ">=0.9.200" }
+```
+
+The value is a version range in the same syntax a dependency uses (`>=0.9.200`, `^1.2.0`, `~1.2.0`, an
+exact version, `*`), and it is checked twice. `kama pkg install` refuses to materialize a dependency whose
+requirement this compiler does not satisfy, naming the package and both versions; `kama build` checks the
+root project and every dependency in the view the same way, so an installed tree that a newer manifest has
+outgrown cannot build silently. The comparison is against the compiler's `MAJOR.MINOR.PATCH` — the
+`+g<sha>` a development build carries is not part of it.
+
+Why a range and not a pin: the package's author knows the **oldest** compiler that has what the source
+uses; which newer one a consumer runs is the consumer's choice, made with `toolchain`. `kama seed --kind
+library` writes `"kama": ">=<this compiler>"`, so a new package starts with the floor it was written
+against — raise it when the source starts to need more, and only then. Two limits, stated plainly: the
+registry index does not carry the requirement yet, so resolution picks the highest satisfying *package*
+version and the compiler check happens at install rather than steering the choice; and the key cannot
+reach backwards — a compiler older than the key itself reports `unknown key \`kama\``, a refusal without
+the reason, but still a refusal and never a wrong build.
 
 ## Command reference
 

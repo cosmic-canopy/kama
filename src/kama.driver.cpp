@@ -2561,6 +2561,32 @@ static bool satisfies(const VersionReq& r, const SemVer& v)
     return true;
 }
 
+// The compiler's own MAJOR.MINOR.PATCH. `KAMA_VERSION` is `0.9.204+g<sha>` in a development build (the
+// Makefile appends the sha) and `parseSemVer` rejects `+`/`-` by design, so cut there first. False for a
+// build that reports no version at all (`0.0.0-dev`, the no-Makefile fallback).
+static bool compilerSemVer(SemVer& out)
+{
+    std::string v = KAMA_VERSION;
+    size_t cut = v.find_first_of("+-");
+    if (cut != std::string::npos) v = v.substr(0, cut);
+    return parseSemVer(v, out);
+}
+
+// The manifest's `kama` key: the RANGE of compilers a package's source needs, checked wherever the package
+// is built — `kama pkg install` for the root and every fetched dependency, `kama build` for the root and
+// every dependency in the view (docs/packages.md § What compiler a package needs). `who` names the
+// package. Empty means the key is absent; an unparsable range never reaches here (the reader refuses it).
+static bool kamaReqSatisfied(const std::string& req, const std::string& who, std::string& err)
+{
+    if (req.empty()) return true;
+    VersionReq vr; SemVer me;
+    if (!parseVersionReq(req, vr) || !compilerSemVer(me)) return true;
+    if (satisfies(vr, me)) return true;
+    err = who + " needs kama " + req + " (`\"kama\"` in its manifest); this is kama " KAMA_VERSION
+        + std::string(" — `kama update`, or pin a newer compiler with `kama toolchain`");
+    return false;
+}
+
 // The intersection of two normalized ranges: the tighter of each bound. The authoritative
 // "is it empty" check is "does any real tag satisfy the result" (done at the call site over the
 // enumerated tags), so this never needs to reason about emptiness itself.
@@ -2639,6 +2665,7 @@ struct BuildSettings {
     // other two, and the first consumer's raw `-ffp-contract=off` cflag (which propagates) would have
     // silently lost its guarantee on migrating to the key.
     bool reproFloat = false;
+    std::string kamaReq;      // the `kama` compiler-version range this manifest declares ("" = none)
 };
 
 // One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
@@ -2712,6 +2739,7 @@ struct ManifestReader {
     std::vector<std::pair<std::string, bool>>* wsProjectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
+    std::string* kamaReqOut = nullptr;                    // set to capture the `kama` compiler-version RANGE (validated either way)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
@@ -3509,6 +3537,19 @@ struct ManifestReader {
                 return fail("`main` is now `entry` — npm's `main` names a library's entry point for "
                             "importers, kama's names the `kama run` target. Rename the key");
             else if (key == "toolchain") { if (toolchainOut) { if (!str(*toolchainOut)) return false; } else if (!skipValue()) return false; }   // pin (read by the selector)
+            // `toolchain` pins which compiler RUNS for a project; `kama` is the range a PACKAGE's source
+            // needs, checked for the root and every dependency at install and at build (kamaReqSatisfied).
+            // Validated HERE like `kind`: the value set is closed (a version range), and a caller that
+            // does not capture it would otherwise let `"kama": "latest"` through unexamined.
+            else if (key == "kama") {
+                std::string rq;
+                if (!str(rq)) return false;
+                VersionReq vr;
+                if (!parseVersionReq(rq, vr))
+                    return fail("`kama` must be a compiler version range — `>=0.9.200`, `^1.2.0`, `~1.2.0`, an "
+                                "exact version, or `*` — not \"" + rq + "\"");
+                if (kamaReqOut) *kamaReqOut = rq;
+            }
             // A project's `name` is its ROOT NAMESPACE (§2a.2), so it must be spellable in an `import`.
             // Validated HERE rather than only where it is consumed, for the reason `kind` and the two
             // booleans are: the value set is closed, and a caller that does not read `name` would
@@ -4043,7 +4084,8 @@ static bool loadManifestFlags(const std::string& path,
 // Load a `kama.json` manifest's `dependencies` (name -> DepSpec). Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load. Returns false + sets `err` on malformed JSON.
 static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err,
-                             std::map<std::string, DepSpec>* devDeps = nullptr, RegConfig* reg = nullptr)
+                             std::map<std::string, DepSpec>* devDeps = nullptr, RegConfig* reg = nullptr,
+                             std::string* kamaReq = nullptr)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -4053,6 +4095,7 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     r.deps = &deps;
     r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
     r.registriesOut = reg; // optional: also capture `registries` config (M3.1b)
+    r.kamaReqOut = kamaReq; // optional: also capture the `kama` compiler range (install checks it)
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -4152,6 +4195,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
     r.reproFloatOut = &out.reproFloat;
+    r.kamaReqOut = &out.kamaReq;
     if (!r.parse()) {
         err = r.err.empty() ? "malformed JSON" : r.err;
         out = BuildSettings();
@@ -4580,6 +4624,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         if (!loadManifestProjectFlags(manifest, g_rootSettings, err)) {
             err = manifest + ": " + err; return false;
         }
+        if (!kamaReqSatisfied(g_rootSettings.kamaReq, "this project", err)) { err = manifest + ": " + err; return false; }
         // Same shape and the same place as `link`: project properties a target may then override.
         if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap,
                                       g_manifestReproFloat, err)) {
@@ -4737,6 +4782,13 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 }
                 if (!depFlagPathIsPortable(bs.cflags, n, depManifest, derr) ||
                     !depFlagPathIsPortable(bs.ldflags, n, depManifest, derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+                // The dependency's `kama` range, at BUILD time: install already refused a package this
+                // compiler cannot build, so this catches the view a newer manifest has outgrown (a `path`
+                // dependency edited in place, a downgraded compiler). Same leniency split as above.
+                if (!kamaReqSatisfied(bs.kamaReq, "`" + n + "`", derr)) {
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
                 }
@@ -6006,9 +6058,13 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     std::string manifest = base + "/kama.json";
     std::map<std::string, DepSpec> deps, devDeps; std::string err;
     RegConfig regCfg;
-    if (!loadManifestDeps(manifest, deps, err, &devDeps, &regCfg)) {
+    std::string rootReq;
+    if (!loadManifestDeps(manifest, deps, err, &devDeps, &regCfg, &rootReq)) {
         fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
     }
+    // The root's own `kama` range, before anything is fetched: a project this compiler cannot build
+    // should not get a materialized view it then cannot use.
+    if (!kamaReqSatisfied(rootReq, "this project", err)) { fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
 
     // `kama.local.json` (M5.3): a gitignored, dev-local sibling that layers INSTALL-path overrides over
     // `kama.json` — a local `registries` config (merged now, so resolution routes through it) and dep
@@ -6316,22 +6372,30 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
                     madeDevDir = true;
                 }
-                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
-                    fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
-                }
                 // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
+                // BEFORE the view link below: the manifest also carries the package's `kama` range, and a
+                // package this compiler refuses must leave no link behind for a later build to trip over.
                 std::string childManifest = storePath + "/kama.json";
                 std::vector<std::string> directNames;
                 if (fileExists(childManifest)) {
-                    std::map<std::string, DepSpec> childDeps; std::string cerr;
-                    if (!loadManifestDeps(childManifest, childDeps, cerr)) {
+                    std::map<std::string, DepSpec> childDeps; std::string cerr, childReq;
+                    if (!loadManifestDeps(childManifest, childDeps, cerr, nullptr, nullptr, &childReq)) {
                         fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
+                    }
+                    // The fetched package's `kama` range against THIS compiler. Refused here, once per
+                    // package, so a tree that installs is a tree this compiler can build — the build-time
+                    // check (resolveBuildConfig) is for a view a newer manifest has since outgrown.
+                    if (!kamaReqSatisfied(childReq, "`" + r.name + "`", cerr)) {
+                        fprintf(stderr, "kama install: %s\n", cerr.c_str()); return 2;
                     }
                     for (auto& ck : childDeps) { directNames.push_back(ck.first);
                         // storePath is where THIS package's manifest lives — the dir its own path specs
                         // are relative to. For a path dep that is the local package dir itself.
                         q.push_back({ck.first, ck.second, r.name, storePath, r.dev}); }
                     std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
+                }
+                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
+                    fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
                 }
                 e.dependencies = directNames;
                 lock[r.name] = e;
@@ -7192,8 +7256,16 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     if (!license.empty()) m += ",\n  \"license\": \"" + jsonEscape(license) + "\"";
     if (kind == SeedKind::Executable)
         m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
-    else
+    else {
         m += ",\n  \"kind\": \"library\"";
+        // The compiler range a library's source needs, seeded as the floor it is written against — the
+        // compiler running `seed`. Raised by hand when the source starts to need more, never lowered by
+        // guesswork. Omitted when this build reports no version to seed (`0.0.0-dev`).
+        SemVer me;
+        if (compilerSemVer(me))
+            m += ",\n  \"kama\": \">=" + std::to_string(me.major) + "." + std::to_string(me.minor) + "."
+               + std::to_string(me.patch) + "\"";
+    }
     // The module map, with the one node every project has: `"."`, the files directly under `source`.
     // Seeded rather than left out, even though a one-file project could omit it, because it is the
     // example — the shape someone copies when they add their first folder, and the place the answer to
