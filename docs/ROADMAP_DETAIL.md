@@ -177,10 +177,10 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
-   [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a and M2b shipped** — M2b `0.9.190`–`0.9.195`,
-   2026-09-05: sleep + wall clock, DNS, fs completion, `std::path`, stdio handles + `readLine`/`Lines`;
-   only M2c remains, and that file is deleted when it ships).
+2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN is COMPLETE** (M2a 2026-08-04; M2b
+   `0.9.190`–`0.9.195` and M2c `0.9.196`–`0.9.197`, both 2026-09-05: sleep + wall clock, DNS, fs completion,
+   `std::path`, stdio handles + `readLine`/`Lines`, then `std::random` and `std::encoding`). Its brief is
+   deleted; the record is SPEC's per-module sections, and what stays here is the residue below.
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
    regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager.
    ⚠️ **So TLS, regex, HTTP and crypto are DECLARED NON-GOALS for `std`, not unscheduled work**, and this
@@ -188,9 +188,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
    the status "ROADMAP" and is waiting for it: `wss://` is not coming to `std`, and the answer for a
    secure socket is a package or terminating TLS at a reverse proxy. A non-goal that reads like a
    backlog item gets re-triaged forever. No new language
-   surface; pure library/codegen. Split M2a (parse · sort · math completion · `char` classification) /
-   M2b (fs + path · io handles + `lines()` · sleep + wall clock · DNS) / M2c (`std::random` ·
-   `std::encoding`). The items below are that campaign's contents:
+   surface; pure library/codegen. The items below are what the campaign left open:
    - **`std::net`** — DNS **shipped `0.9.192`** as explicit `resolve`/`resolveOne` + `TcpStream.connectTo`
      (IPv4 only, because every socket seam is `AF_INET`; a name resolving to IPv6 alone reports
      `HostUnreachable` rather than an empty list). *(UDP and ephemeral-port `getsockname` ship —
@@ -1133,16 +1131,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
-  - **KB-13's RESIDUAL — a field PASSED ALONG still demands the import.** Re-audited 2026-09-05 against
-    `0.9.188`, from their file and then by running it: `f489d19` closed the declaration (`Holder h =
-    makeHolder();` builds with `Kind` unimported), and the one shape left is handing the field to a
-    function that declares the type itself — `takesKind(k: h.k)` in a file that imports `Holder`,
-    `makeHolder` and `takesKind` and never spells `Kind`. Drop the call and it builds; the diagnostic lands
-    on the declaration line, not the call. Same family, same rule: the ARGUMENT path classifies `h.k`
-    through a resolver that re-resolves the field's type NODE under the reader's scope, where it must
-    answer from the C type baked at collect time. ⚠️ The measured wrong fix still applies — do not install
-    the owner's scope at the read site. Their practical cost is unchanged but narrower: adding a field to
-    a widely-held `type value` breaks every file that passes that field along.
+  - **KB-13's RESIDUAL — a field PASSED ALONG still demanded the import — FIXED `0.9.189`.** Re-audited
+    2026-09-05 against `0.9.188`: `f489d19` closed the declaration (`Holder h = makeHolder();` built with
+    `Kind` unimported), and the one shape left was handing the field to a function that declares the type
+    itself — `takesKind(k: h.k)` in a file that imports `Holder`, `makeHolder` and `takesKind` and never
+    spells `Kind`. Same family, same rule: `typeOfExpr` took the first non-empty of four resolvers and
+    three of them re-resolved the field's type NODE under the reader's scope; every field-type read now
+    goes through `fieldCType()`, the bake. Across a MODULE boundary that resolution used to MISS rather
+    than fire, and what went quiet with it was the enum-identity rule — a `Kind` handed to an `Other`
+    parameter was accepted; it is refused again. ⚠️ The measured wrong fix still applies — do not install
+    the owner's scope at the read site (the five-site `NsCtx` partial-swap hazard).
 
   - **A diagnostic can name the USER's file at a line that does not exist in it — the original filing.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
@@ -1268,7 +1266,8 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   compactness). Delta/snapshot replication stays ENGINE-level (above serde); generic byte compression is an
   io-adapter layer (§1 transform adapters), not a serde concern.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
-  impl + `encode`/`decode`. `std::encoding::base64` is a separate small module.
+  impl + `encode`/`decode`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
+  `::hex` beside it — SPEC § *Encoding*.)
 - **A back end's ENTRY POINTS are a convention, not a contract** — the defect the line above quietly
   describes. `Serializer`/`Deserializer`/`Serializable`/`Deserializable` are real contracts
   ([prelude/global.kama:207](../prelude/global.kama)), but `encode`/`decode`/`decodeFrom` are **bare free

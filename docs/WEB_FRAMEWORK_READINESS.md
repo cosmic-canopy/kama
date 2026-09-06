@@ -66,7 +66,7 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 |---|---|---|---|
 | **Body codecs**: `x-www-form-urlencoded`, `multipart/form-data` | ❌ missing (JSON ✅) | HTML form posts + file uploads. Pure kama parsers over the byte buffer. | **M** |
 | **Regex** | ❌ missing | Route patterns, validation. A byte-oriented engine in kama, or a `<regex.h>`/PCRE FFI. | **M–L** |
-| **Crypto / hashing / base64** | ❌ missing (internal FNV-1a is not exposed) | Cookie signing, JWT, `Sec-WebSocket-Accept` (SHA-1), Basic-auth (base64). Library + an OpenSSL FFI for real crypto. | **M** |
+| **Crypto / hashing / base64** | base64 + hex ✅ (`std::encoding`, strict, URL-safe pair for JWT); OS entropy ✅ (`std::random::entropy`); crypto ❌ (internal FNV-1a is not exposed) | Cookie signing, JWT signatures, `Sec-WebSocket-Accept` (SHA-1). A libsodium package — crypto is a declared non-goal for `std`. | **M** |
 | **Middleware / routing DSL** | ✅ ready to build — contracts + virtual dispatch | `type contract HttpHandler` + a chain/dispatcher is ordinary kama; the language support is done. | done (lang) |
 | **Connection pooling / keep-alive / streaming bodies** | ❌ missing | Throughput + backpressure. Rides on the event loop + timers above. | **M** |
 

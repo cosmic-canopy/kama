@@ -43,7 +43,8 @@ So string interpolation works under `--no-std` while `std::fmt` stays optional, 
 serialization. The reason the split is drawn at cost: a module's link and runtime cost is triggered only when
 its seam header is actually externed — `kama_isolate.h`/`kama_channel.h` pull in `-lpthread` natively and
 `-pthread -sPROXY_TO_PTHREAD` on wasm, `<math.h>` pulls `-lm`, `kama_gpu.h` pulls the GPU stack, Windows
-sockets pull `-lws2_32`. Folding any of those into the always-on floor would tax every program, including
+sockets pull `-lws2_32` and Windows entropy (`kama_random.h`) pulls `-lbcrypt`. Folding any of those into
+the always-on floor would tax every program, including
 `--no-std` and bare-metal builds.
 
 Two tiers of "built-in" follow from that:

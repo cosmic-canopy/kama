@@ -1607,6 +1607,90 @@ Separators are `/` everywhere and `\` as well on Windows (both accepted on input
 and `isAbsolute` knows the drive (`C:\`) and UNC forms. The variance is two `@compileFor` pairs, not a
 runtime branch.
 
+### Random (`std::random`) ✅
+
+`import { std::random::Rng, std::random::range, std::random::shuffle, std::random::entropy };` — a
+**seeded** generator first, OS entropy as the convenience, and neither one is a secret.
+
+```kama
+Rng g = Rng.seeded(seed: 42ui64);                       // the same stream on every platform, forever
+uint64 raw = g.next();                                  // xoshiro256**
+int32 die  = range(rng: g, lo: 1, hi: 7);               // a value in [1, 7), unbiased — T from the bounds
+isize pick = g.below(n: xs.length());                   // an index in [0, n)
+borrow xs.view() as v { shuffle(items: v, rng: g); }    // Fisher–Yates over any View, move-only safe
+Rng h = Rng.fromEntropy();                              // seeded by the OS — a different stream each run
+```
+
+**Seeded is primary**, because a deterministic stream is what most callers want: a game replays a match
+from its seed, a spectator catches up by re-running it, a test pins its inputs. The generator is
+xoshiro256** (Blackman & Vigna) seeded through splitmix64 — the mix `DefaultHasher` already finalizes
+with — and the first outputs of two seeds are pinned against the reference C implementation, so a
+change to the algorithm is a test failure rather than a silent replay break. <!-- test: random_seeded -->
+
+**Not cryptographic.** An observer who sees a few outputs can recover the state and predict the rest.
+`entropy(into: View<uint8>)` fills a buffer from the operating system's own generator (`getentropy`,
+`BCryptGenRandom`, `crypto.getRandomValues` under wasm) and is the one draw here fit for a key, a nonce
+or a token; everything above that is a libsodium package's job, not `std`'s. An entropy source that
+refuses is an environment fault, so it panics rather than returning a `Result` (Go 1.24 drew the same
+line). <!-- test: random_shuffle_entropy -->
+
+**`Rng` is a `resource`** — move-only, handed around as `ref Rng`. A copy would silently fork the stream
+into two identical ones, the bug Rust's `&mut Rng`, Go's `*rand.Rand` and C#'s class all rule out the
+same way. It is `Sendable`, so an isolate can own one.
+
+**Two integer draws, two jobs.** `range(rng:, lo:, hi:)` is one generic spelling over every numeric
+width — `int8`…`int64`, `uint8`…`uint64`, `isize`/`usize`, `float32`/`float64` — through the same
+marker-contract mechanism as `parse::<T>` (`Ranged`). It is half-open, **unbiased** (rejection sampling;
+there is no `uint128`, so Lemire's trick is out), and the signed span is computed in wrapping unsigned
+arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. Both bounds must
+agree in type: two literals are `int32`, `0.0`/`1.0` are `float64`, and a *size* wants two `isize`
+locals, because generic inference reads only the arguments — it types an unsuffixed literal as `int32`
+before a typed sibling can bind `T`, and cannot type a receiver call such as `xs.length()`. That gap is
+why `g.below(n:)` exists: its parameter is a plain `isize`, so a length or a literal goes straight in. <!-- test: random_range -->
+An empty range (`hi <= lo`) panics rather than answering `lo`. <!-- test: random_range_empty -->
+`nextFloat()` is a `float64` in [0, 1) from the top 53 bits, `chance(p:)` is `true` with probability `p`,
+and a float `range` interpolates convexly so two finite bounds cannot overflow.
+
+`shuffle` permutes through `View.swap`, so it works for a move-only element type, allocates nothing, and
+covers a `DynamicArray`, a `FixedArray` or a sub-range alike — the `sort` shape. The platform seam is
+`kama_random.h`; on a Windows target the driver links `-lbcrypt` beside `-lws2_32`.
+
+### Encoding (`std::encoding`) ✅
+
+`import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,
+std::encoding::base64::decodeUrl, std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as
+hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(View<uint8>) -> string` and
+`decode(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
+`encoding/hex`), Rust (`base64` + `hex`), Zig and Python all converged on; only C# prefixes
+(`Convert.ToBase64String`). Both export the same two names, so a file that wants both renames at the
+import — the same `as` any colliding pair uses.
+
+```kama
+string t = encode(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
+Result<DynamicArray<uint8>, DecodeError> b = decode(text: t);
+string u = encodeUrl(bytes: v);                                 // § 5 alphabet, UNPADDED — what a JWT carries
+string h = hexEncode(bytes: v);                                 // "666f6f626172", lowercase
+```
+
+**Five deliberate answers:** <!-- test: encoding_base64, encoding_hex -->
+1. **Two named pairs, not flags.** `encode`/`decode` is the standard alphabet with `=` padding;
+   `encodeUrl`/`decodeUrl` is the URL-safe alphabet without it. A call site reads which wire format it
+   speaks. (The RFC's padded URL-safe form exists and nobody sends it.)
+2. **Decoding is strict**, as in Rust and Go and unlike Python: a byte outside the alphabet is
+   `InvalidCharacter(at:)` with its position; `=` is accepted only where padding belongs and is not a
+   character of the URL alphabet at all (`InvalidPadding` / `InvalidCharacter`); a length the encoding
+   cannot produce is `InvalidLength`; and the unused bits of the last character must be zero
+   (`InvalidTrailingBits`), so exactly one text decodes to a given byte string.
+3. **Whitespace is not skipped.** Line-wrapped MIME input is the caller's `replace`; a decoder that drops
+   some bytes silently would have to decide which, and that decision is not its.
+4. **Hex writes lowercase and reads either case.** An odd digit count is `InvalidLength`. This is byte
+   *encoding*, not integer *formatting* — `${x}` and `parseRadix` cover the number.
+5. **A decode fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
+
+Both directions allocate their result, so they are `@compileFor(!NOHEAP)` and absent from a `--no-heap`
+build, as `sort` is. The byte substrate is `View<uint8>` in and `DynamicArray<uint8>` out; a `string`'s
+bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
+
 ### Command-line arguments + environment ✅
 
 A program reads its own command-line arguments and environment through a small, always-in-scope **prelude
