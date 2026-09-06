@@ -1,0 +1,93 @@
+
+import { IoError, lastError, Reader, Writer, std::collections::View };
+
+export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
+
+// The three standard streams, as `Reader`/`Writer` VALUES.
+//
+// ⚠️ These do not replace the floor's `print`/`println`/`eprint`, and the difference is worth stating
+// because they look like duplicates. The floor's print family is always available, needs no import,
+// survives `--no-std`, and writes immediately — it is for diagnostics that must work when nothing else
+// does. These handles are ordinary `Reader`/`Writer` values, so they COMPOSE: `pump(from: file, to:
+// stdout())`, `BufWriter.make(inner: stdout())`, `encodeTo(v, into: stdout())`, a function that takes a
+// `Writer` and does not care whether it is a socket, a file or the terminal. Use print to say something;
+// use these to plumb something.
+//
+// ⚠️ They do NOT own their descriptor and their destructors do nothing. Standard input, output and error
+// belong to the process — closing one out from under the rest of the program (or under `print`) would be
+// the opposite of what a handle-shaped API should do — so `stdout()` may be called any number of times
+// and each handle is just a name for fd 1. `std::fs::File.make(fd: 1)` would be the wrong tool: a `File`
+// closes its fd on drop, which is exactly right for a file and exactly wrong here.
+//
+// Three types rather than one, following Rust's split: reading from standard OUTPUT is not a thing, and a
+// single Reader+Writer handle would let you write it.
+extern "kama_os.h";
+extern fn isize kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
+extern fn isize kama_write(int32 fd, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_last_error();
+extern fn int32 kama_EINTR();
+
+// Standard input (fd 0) as a `Reader`. Wrap it in a `BufReader` for `readLine`.
+type resource StdIn implements Reader {
+    int32 fd = 0;
+
+    public ctor make() { this.fd = 0; }
+
+    public const fn int32 rawFd() { return this.fd; }
+
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+}
+
+// Standard output (fd 1) as a `Writer`. Unbuffered — every `write` is one syscall, so wrap it in a
+// `BufWriter` when writing many small pieces (and remember to `flush`, which `BufWriter` does on drop).
+type resource StdOut implements Writer {
+    int32 fd = 1;
+
+    public ctor make() { this.fd = 1; }
+
+    public const fn int32 rawFd() { return this.fd; }
+
+    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    // Nothing is held back, so there is nothing to drain — the OS buffers, not this handle.
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+}
+
+// Standard error (fd 2) as a `Writer`. Separate from `StdOut` so a program can send a report to a pipe
+// and its diagnostics to the terminal without the two interleaving.
+type resource StdErr implements Writer {
+    int32 fd = 2;
+
+    public ctor make() { this.fd = 2; }
+
+    public const fn int32 rawFd() { return this.fd; }
+
+    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+}
+
+fn StdIn  stdin()  { return StdIn.make(); }
+fn StdOut stdout() { return StdOut.make(); }
+fn StdErr stderr() { return StdErr.make(); }

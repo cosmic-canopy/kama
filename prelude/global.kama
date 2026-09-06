@@ -212,11 +212,14 @@ type intrinsic <string> implements Comparable<This> {
 }
 // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
 // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
+// The kinds are all three that can hold state: a BORROWING iterator is a `view` over its container, a
+// GENERATING one is a `value`, and one that OWNS its source — `std::io::Lines`, which owns the `Reader`
+// it reads, because kama forbids stored borrows — is a `resource`, RAII-dropped when the loop ends.
 // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place
 // (`ref T`) so `foreach (ref T x in c)` can write through it (Optional can't carry a place, so the
 // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
 // `iterator()` / `iterMut()` factory method.
-type contract Iterator<T> for value, view { fn Optional<T> next(); }
+type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }
 type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(); }
 // Container-side opt-in: a type that `implements Iterable<T>` hands out a by-value iterator via a
 // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`

@@ -13784,6 +13784,14 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         std::string nm = id->value ? *id->value : "";
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
+        // While PROBING an uninstantiated template, a local whose type depends on the unbound parameter
+        // has no resolved C type, so it was never registered as owning and `_moveState` does not know it.
+        // It is still a LOCAL — the diagnostic below is about a field or an element, and would be a
+        // false one here. Measured: `Lines<R>` in std::io does `Result<…> rl = this.inner.readLine();
+        // match (give rl) …` on a `BufReader<R>` field, and every program that merely imported std::io
+        // was refused for it. Every instantiation re-walks this body with the type bound and judges the
+        // move for real, so deferring here loses nothing.
+        if (_probingTemplate && (!id->qualifier || id->qualifier->empty()) && _localTypeNodes.count(nm)) return "";
     }
     // `give this` inside a ctor: `this` is not a field of some other owner, it IS the value the ctor
     // is handing back, and its storage dies at the return. Nothing is left holding a moved-from value.

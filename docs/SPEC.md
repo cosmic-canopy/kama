@@ -2043,7 +2043,7 @@ right method shape but no `implements` is rejected (explicit over implicit). <!-
   `iter()`/`iter_mut()` split; `Optional` can't carry a place, so mutable is a parallel iterator).
 - A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
-The prelude contracts (`type contract Iterator<T> for value, view { fn Optional<T> next(); }` and
+The prelude contracts (`type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }` and
 `IteratorMut<T>`) are ordinary monomorphized generic contracts, so they double as a static bound —
 `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct `Concrete__next`) or a dynamic fat-pointer value
 `Iterator<int32> it` (vtable). `foreach` uses the same `implements`, checked nominally.
@@ -2386,8 +2386,9 @@ any combination of the **five implementable kinds**, comma-separated, meaning *a
 
 ```kama
 type contract Rankable for value;                                  // one kind
-type contract Iterator<T> for value, view;                         // a borrowing iterator is a view,
-                                                                   //   a generating one is a value
+type contract Iterator<T> for value, view, resource;               // a borrowing iterator is a view, a
+                                                                   //   generating one is a value, and one
+                                                                   //   that OWNS its source is a resource
 type contract Hashable for value, resource, enum, intrinsic;       // anything that can be a Map key
 ```
 

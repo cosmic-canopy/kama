@@ -8,7 +8,7 @@
 
 import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View };
 
-export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump, readAll };
+export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines, writeAll, pump, readAll };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
@@ -229,4 +229,102 @@ type resource BufReader<R: Reader> implements Reader {
         this.pos = this.pos + k;
         return Result::Ok(value: k);
     }
+
+    // One LINE, with its terminator removed. `Ok(None)` is end of input; a final line with no terminator
+    // is still returned. This is the text-framing primitive over the byte substrate, and the reason it is
+    // a primitive rather than a convenience is that almost every text source is line-delimited: a log, a
+    // config, stdin, a CSV, an HTTP header block. Every comparator has it (Rust `BufRead::read_line`, Go
+    // `bufio.Scanner`, Python `for line in f`, Java `readLine`, C# `ReadLine`, C `getline`).
+    //
+    // ⚠️ CRLF is handled here, not left to the caller. A `\r` immediately before the `\n` goes with it, so
+    // a Windows-authored file read on POSIX does not hand back lines with an invisible byte on the end —
+    // the single most common "why does my comparison fail" in every language that made the caller do it.
+    // A LONE `\r` is NOT a terminator: old-Mac line endings are gone, and treating a bare carriage return
+    // as one would split binary-ish text in surprising places.
+    //
+    // The line is built through a `DynamicArray` rather than borrowed out of the buffer, because a line
+    // may span any number of refills. A pathologically long line therefore costs its own length in
+    // memory, which is the same contract `getline` and `read_line` carry.
+    //
+    // ⚠️ The errors stay in the `Result` where a caller has to look at them. `Lines` below is the
+    // `foreach` spelling on top of this one, and it necessarily reports a failure as "no more lines" —
+    // which is why it carries `error()` and this stays the primitive.
+    public unsafe fn Result<Optional<string>, IoError> readLine() {
+        DynamicArray<uint8> line = DynamicArray.empty();
+        bool any = false;
+        while (true) {
+            if (this.pos >= this.fill) {
+                Result<isize, IoError> rr = this.inner.read(into: this.buf.view());
+                match (rr) {
+                    case Err(error: e): { return Result::Err(error: e); }
+                    case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
+                };
+                if (this.fill == 0) {
+                    // End of input: a final unterminated line is still a line; nothing at all is None.
+                    if (!any) { return Result::Ok(value: Optional::None); }
+                    return Result::Ok(value: Optional::Some(value: bytesToString(bytes: ref line)));
+                }
+            }
+            while (this.pos < this.fill) {
+                uint8 c = this.buf[this.pos];
+                this.pos = this.pos + 1;
+                any = true;
+                if (c == 10ui8) {                                  // '\n' ends the line
+                    isize len = line.length();
+                    if (len > 0 && line[len - 1] == 13ui8) {                         // ...and takes a CR with it
+                        Optional<uint8> cr = line.pop();
+                    }
+                    return Result::Ok(value: Optional::Some(value: bytesToString(bytes: ref line)));
+                }
+                line.add(item: c);
+            }
+        }
+        return Result::Err(error: IoError::Other(code: 0));   // unreachable: the loop only exits by return
+    }
+}
+
+// The accumulated bytes as an owned string. Shared by `readLine` and anything else that builds text a
+// byte at a time; empty in, empty out (`kama_string_from_raw` would be handed a pointer into an empty
+// buffer otherwise, which `DynamicArray`'s own indexing correctly refuses).
+unsafe fn string bytesToString(ref DynamicArray<uint8> bytes) {
+    if (bytes.length() == 0) { return ""; }
+    return kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length());
+}
+
+// Every LINE of a `Reader`, as a `foreach`-able iterator: the spelling every comparator has (Rust's
+// `BufRead::lines`, Python's `for line in f`, Java's `lines()`, Go's `bufio.Scanner`). It OWNS the source
+// — kama forbids stored borrows — and buffers it, so it composes with anything that reads: a `File`, a
+// `TcpStream`, `stdin()`, a `SliceReader` over a string.
+//
+//     Lines<File> ls = Lines::<File>.make(src: give f);
+//     foreach (string line in ls) { … }
+//     match (ls.error()) { case Some(value: e): { … } case None: { } };
+//
+// ⚠️ The `error()` check is not ceremony. An iterator yields `Optional<T>`, so a read FAILURE and a clean
+// end of input arrive as the same `None` — a truncated file, a reset socket and a finished stream are
+// indistinguishable from inside the loop. That is true of Rust's `lines()` (whose item is a `Result`,
+// which callers `unwrap`), of Go's `Scanner` (hence `Err()`), and of Python's file iterator (which
+// raises). kama's answer is to keep the failure reachable AFTER the loop and to say so here; a caller who
+// must not miss one uses `BufReader.readLine()`, whose `Result` cannot be ignored.
+type resource Lines<R: Reader> implements Iterator<string> {
+    BufReader<R> inner;
+    Optional<IoError> failure;
+
+    public ctor make(R src) {
+        BufReader<R> b = BufReader::<R>.make(inner: give src);
+        this.inner = give b;
+        this.failure = Optional::None;
+    }
+
+    // The next line, or `None` at end of input — OR on an I/O error, which is recorded for `error()`.
+    public unsafe fn Optional<string> next() {
+        Result<Optional<string>, IoError> rl = this.inner.readLine();
+        return match (give rl) {
+            case Ok(value: line): give line;
+            case Err(error: e): { this.failure = Optional::Some(value: e); := Optional::None; }
+        };
+    }
+
+    // The error that ended the iteration, if one did. `None` after a clean end of input.
+    public const fn Optional<IoError> error() { return copy this.failure; }
 }

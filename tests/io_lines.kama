@@ -1,0 +1,81 @@
+// std::io — `BufReader.readLine()` and the standard-stream handles. The line cases are the ones every
+// hand-rolled splitter gets wrong: CRLF, an empty line, a final line with no terminator, and a lone `\r`
+// that is NOT a terminator, plus the `foreach` form and the standard-stream handles. Eight flags, 255.
+import { std::io::BufReader, std::io::SliceReader, std::io::Lines, std::io::IoError, std::io::writeAll,
+         std::io::stdout, std::io::stderr, std::io::StdOut, std::io::StdErr,
+         std::collections::DynamicArray, std::collections::View };
+
+// Read every line from `text` and report them joined by '|', or "ERR".
+fn string linesOf(string text) {
+    BufReader<SliceReader> br = BufReader.make(inner: SliceReader.make(src: give text));
+    string acc = "";
+    bool first = true;
+    bool done = false;
+    while (!done) {
+        Result<Optional<string>, IoError> rl = br.readLine();
+        match (rl) {
+            case Err(error: e): { return "ERR"; }
+            case Ok(value: got): {
+                match (got) {
+                    case None: { done = true; }
+                    case Some(value: line): {
+                        if (!first) { acc = acc + "|"; }
+                        acc = acc + line;
+                        first = false;
+                    }
+                };
+            }
+        };
+    }
+    return give acc;
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    isize i = 0;
+    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
+    return give d;
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    if (linesOf(text: "a\nb\nc\n") == "a|b|c")        { r = r + 1; }    // the ordinary case
+    if (linesOf(text: "a\nb\nc") == "a|b|c")          { r = r + 2; }    // a final line with no terminator
+    if (linesOf(text: "a\r\nb\r\n") == "a|b")         { r = r + 4; }    // ⚠️ CRLF: the CR goes with the LF
+    if (linesOf(text: "a\n\nb\n") == "a||b")          { r = r + 8; }    // an empty line IS a line
+    if (linesOf(text: "") == "")                      { r = r + 16; }   // nothing at all is None at once
+    if (linesOf(text: "\n") == "")                    { r = r + 32; }   // one empty line, then None
+    // ⚠️ A LONE carriage return is not a terminator — old-Mac endings are gone, and treating one as a
+    // break would split text nobody meant to split.
+    if (linesOf(text: "a\rb\n") == "a\rb")            { r = r + 64; }
+
+    // ...and the `foreach` spelling over the same primitive. The total length of "a|bb|ccc" is 6, and a
+    // clean end of input leaves `error()` empty — the check that separates "the stream ended" from "the
+    // read failed", which an Optional-yielding iterator cannot express on its own.
+    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.make(src: "a\nbb\nccc\n"));
+    int32 total = 0;
+    foreach (string ln in ls) { total = total + cast<int32>(ln.length()); }
+    bool clean = match (ls.error()) { case Some(value: e): false; case None: true; };
+    if (total == 6 && clean) { r = r + 128; }
+
+    // The handles: `stdout()` is a `Writer` that composes with the free helpers, and `stderr()` is a
+    // separate one. Both write for real, which the harness ignores (it compares the exit code).
+    StdOut sink = stdout();
+    DynamicArray<uint8> msg = bytesOf(s: "io_lines ok\n");
+    bool wroteOut = match (writeAll(w: sink, bytes: msg.view())) {
+        case Ok(value: u): true;
+        case Err(error: e): false;
+    };
+    // (Bound to a local, not passed inline: a call result has no address for a by-value contract
+    // parameter to borrow — SPEC's *Known limitations*.)
+    StdErr diag = stderr();
+    DynamicArray<uint8> note = bytesOf(s: "");
+    bool wroteErr = match (writeAll(w: diag, bytes: note.view())) {
+        case Ok(value: u): true;
+        case Err(error: e): false;
+    };
+    if (!(wroteOut && wroteErr)) { r = r - 1; }
+
+    return r;   // 255
+}
