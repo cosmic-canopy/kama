@@ -1,0 +1,130 @@
+import { std::collections::View };
+export { Sha1, sha1, DIGESTBYTES, BLOCKBYTES };
+
+// SHA-1 (RFC 3174 / FIPS 180-4): a 20-byte digest, streaming or one-shot.
+//
+// ⚠️ LEGACY. SHA-1 is not collision-resistant (SHAttered, 2017) and must not be used where a forged
+// collision matters — a signature, a certificate, a content id an attacker can influence. It is here
+// because protocols still require it: the RFC 6455 WebSocket handshake (`Sec-WebSocket-Accept` is
+// base64(SHA1(key + GUID))), git object ids, HMAC-SHA1 tokens that already exist. For anything new, use
+// `std::digest::sha256`.
+//
+//   Sha1 h = Sha1.make();           // streaming: feed any number of views, then `finish` once
+//   h.update(bytes: part1);
+//   h.update(bytes: part2);
+//   InlineArray<uint8>#(20) d = h.finish();
+//   InlineArray<uint8>#(20) e = sha1(bytes: whole);   // one-shot; identical for the same bytes
+//
+// Pure kama, no allocation, the same bytes on every target (loads and stores are spelled big-endian by
+// hand). `finish` pads and closes the stream; the hasher is spent afterwards — make a new one.
+
+comptime isize DIGESTBYTES = 20;
+comptime isize BLOCKBYTES  = 64;
+
+fn uint32 rotl(uint32 x, uint32 n) { return (x << n) | (x >> (32ui32 - n)); }
+
+type value Sha1 {
+    InlineArray<uint32>#(5)  h;
+    InlineArray<uint8>#(64)  block;
+    isize  filled;    // bytes waiting in `block`
+    uint64 total;     // bytes fed so far
+
+    public ctor make() {
+        this.h = [0x67452301ui32, 0xEFCDAB89ui32, 0x98BADCFEui32, 0x10325476ui32, 0xC3D2E1F0ui32];
+        this.block = [0; 64];
+        this.filled = 0;
+        this.total = 0ui64;
+    }
+
+    // Feed bytes. Any number of calls, any lengths; the block boundary is internal.
+    public fn void update(View<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            this.block[cast<usize>(this.filled)] = bytes[i];
+            this.filled = this.filled + 1;
+            i = i + 1;
+            if (this.filled == BLOCKBYTES) { this.compress(); this.filled = 0; }
+        }
+        this.total = this.total + cast<uint64>(n);
+    }
+
+    // Pad (0x80, zeros, the bit length big-endian) and answer the digest. Spends the hasher.
+    public fn InlineArray<uint8>#(20) finish() {
+        uint64 bits = this.total * 8ui64;
+        this.block[cast<usize>(this.filled)] = 128ui8;
+        this.filled = this.filled + 1;
+        if (this.filled > 56) {
+            while (this.filled < BLOCKBYTES) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+            this.compress();
+            this.filled = 0;
+        }
+        while (this.filled < 56) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+        isize i = 0;
+        while (i < 8) {
+            this.block[cast<usize>(56 + i)] = truncate<uint8>((bits >> cast<uint64>(56 - i * 8)) & 255ui64);
+            i = i + 1;
+        }
+        this.compress();
+        InlineArray<uint8>#(20) digest = [0; 20];
+        i = 0;
+        while (i < 5) {
+            uint32 w = this.h[cast<usize>(i)];
+            digest[cast<usize>(i * 4)]     = truncate<uint8>((w >> 24ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 1)] = truncate<uint8>((w >> 16ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 2)] = truncate<uint8>((w >> 8ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 3)] = truncate<uint8>(w & 255ui32);
+            i = i + 1;
+        }
+        return digest;
+    }
+
+    // One 64-byte block into the state.
+    fn void compress() {
+        InlineArray<uint32>#(80) w = [0; 80];
+        isize t = 0;
+        while (t < 16) {
+            usize j = cast<usize>(t * 4);
+            w[cast<usize>(t)] = (cast<uint32>(this.block[j]) << 24ui32) | (cast<uint32>(this.block[j + 1]) << 16ui32)
+                              | (cast<uint32>(this.block[j + 2]) << 8ui32) | cast<uint32>(this.block[j + 3]);
+            t = t + 1;
+        }
+        while (t < 80) {
+            w[cast<usize>(t)] = rotl(x: w[cast<usize>(t - 3)] ^ w[cast<usize>(t - 8)] ^ w[cast<usize>(t - 14)] ^ w[cast<usize>(t - 16)], n: 1ui32);
+            t = t + 1;
+        }
+        uint32 a = this.h[0];
+        uint32 b = this.h[1];
+        uint32 c = this.h[2];
+        uint32 d = this.h[3];
+        uint32 e = this.h[4];
+        t = 0;
+        while (t < 80) {
+            uint32 f = 0ui32;
+            uint32 k = 0ui32;
+            if (t < 20)      { f = (b & c) | ((~b) & d);        k = 0x5A827999ui32; }
+            else if (t < 40) { f = b ^ c ^ d;                   k = 0x6ED9EBA1ui32; }
+            else if (t < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCui32; }
+            else             { f = b ^ c ^ d;                   k = 0xCA62C1D6ui32; }
+            uint32 temp = rotl(x: a, n: 5ui32) + f + e + k + w[cast<usize>(t)];
+            e = d;
+            d = c;
+            c = rotl(x: b, n: 30ui32);
+            b = a;
+            a = temp;
+            t = t + 1;
+        }
+        this.h[0] = this.h[0] + a;
+        this.h[1] = this.h[1] + b;
+        this.h[2] = this.h[2] + c;
+        this.h[3] = this.h[3] + d;
+        this.h[4] = this.h[4] + e;
+    }
+}
+
+// The digest of `bytes` in one call.
+fn InlineArray<uint8>#(20) sha1(View<uint8> bytes) {
+    Sha1 h = Sha1.make();
+    h.update(bytes: bytes);
+    return h.finish();
+}

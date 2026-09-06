@@ -1,0 +1,42 @@
+// std::digest::sha256 against FIPS 180-4 vectors, cross-checked with `shasum -a 256` when written. Bits sum to 63.
+import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha256::DIGESTBYTES,
+         std::encoding::hex::encode as hexEncode, std::collections::DynamicArray, std::collections::View };
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> b = DynamicArray::<uint8>.withCapacity(capacity: s.length());
+    foreach (uint8 c in s) { b.add(item: c); }
+    return b;
+}
+
+fn bool hashIs(const ref string text, const ref string want) {
+    DynamicArray<uint8> b = bytesOf(s: text);
+    InlineArray<uint8>#(32) d = sha256(bytes: b.view());
+    string got = hexEncode(bytes: d.view());
+    return got.equals(other: want);
+}
+
+fn int32 main() {
+    int32 r = 0;
+    if (DIGESTBYTES == 32)                                                                                       { r = r + 1; }
+    if (hashIs(text: "", want: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))              { r = r + 2; }
+    if (hashIs(text: "abc", want: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))           { r = r + 4; }
+    if (hashIs(text: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+               want: "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"))                       { r = r + 8; }
+    DynamicArray<uint8> chunk = DynamicArray::<uint8>.withCapacity(capacity: 1000);
+    isize i = 0;
+    while (i < 1000) { chunk.add(item: 97ui8); i = i + 1; }
+    Sha256 h = Sha256.make();
+    i = 0;
+    while (i < 1000) { h.update(bytes: chunk.view()); i = i + 1; }
+    InlineArray<uint8>#(32) big = h.finish();
+    string bigHex = hexEncode(bytes: big.view());
+    if (bigHex.equals(other: "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"))                { r = r + 16; }
+    DynamicArray<uint8> whole = bytesOf(s: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+    Sha256 s = Sha256.make();
+    s.update(bytes: whole.slice(from: 0, count: 3));
+    s.update(bytes: whole.slice(from: 3, count: 53));
+    InlineArray<uint8>#(32) two = s.finish();
+    string twoHex = hexEncode(bytes: two.view());
+    if (twoHex.equals(other: "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"))                { r = r + 32; }
+    return r;   // 63
+}

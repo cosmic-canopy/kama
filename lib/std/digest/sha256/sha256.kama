@@ -1,0 +1,205 @@
+import { std::collections::View };
+export { Sha256, sha256, DIGESTBYTES, BLOCKBYTES };
+
+// SHA-256 (FIPS 180-4): a 32-byte digest, streaming or one-shot. The default digest — content ids,
+// integrity checks, HMAC, anything new. Same shape as `std::digest::sha1`:
+//
+//   Sha256 h = Sha256.make();
+//   h.update(bytes: part);         // any number of times
+//   InlineArray<uint8>#(32) d = h.finish();
+//   InlineArray<uint8>#(32) e = sha256(bytes: whole);
+//
+// Pure kama, no allocation, big-endian by hand, the same bytes on every target. `finish` spends the
+// hasher. This is the same function the package registry's `sha256-…` integrity strings are made of.
+
+comptime isize DIGESTBYTES = 32;
+comptime isize BLOCKBYTES  = 64;
+
+fn uint32 rotr(uint32 x, uint32 n) { return (x >> n) | (x << (32ui32 - n)); }
+
+// The 64 round constants, baked at compile time: a comptime array LITERAL is not an accepted initializer
+// (only a comptime fn's result is), so the table is filled by assignment, as tests/comptime_fn_crc does.
+comptime fn InlineArray<uint32>#(64) roundConstants() {
+    InlineArray<uint32>#(64) t = [0; 64];
+    t[0] = 0x428a2f98ui32;
+    t[1] = 0x71374491ui32;
+    t[2] = 0xb5c0fbcfui32;
+    t[3] = 0xe9b5dba5ui32;
+    t[4] = 0x3956c25bui32;
+    t[5] = 0x59f111f1ui32;
+    t[6] = 0x923f82a4ui32;
+    t[7] = 0xab1c5ed5ui32;
+    t[8] = 0xd807aa98ui32;
+    t[9] = 0x12835b01ui32;
+    t[10] = 0x243185beui32;
+    t[11] = 0x550c7dc3ui32;
+    t[12] = 0x72be5d74ui32;
+    t[13] = 0x80deb1feui32;
+    t[14] = 0x9bdc06a7ui32;
+    t[15] = 0xc19bf174ui32;
+    t[16] = 0xe49b69c1ui32;
+    t[17] = 0xefbe4786ui32;
+    t[18] = 0x0fc19dc6ui32;
+    t[19] = 0x240ca1ccui32;
+    t[20] = 0x2de92c6fui32;
+    t[21] = 0x4a7484aaui32;
+    t[22] = 0x5cb0a9dcui32;
+    t[23] = 0x76f988daui32;
+    t[24] = 0x983e5152ui32;
+    t[25] = 0xa831c66dui32;
+    t[26] = 0xb00327c8ui32;
+    t[27] = 0xbf597fc7ui32;
+    t[28] = 0xc6e00bf3ui32;
+    t[29] = 0xd5a79147ui32;
+    t[30] = 0x06ca6351ui32;
+    t[31] = 0x14292967ui32;
+    t[32] = 0x27b70a85ui32;
+    t[33] = 0x2e1b2138ui32;
+    t[34] = 0x4d2c6dfcui32;
+    t[35] = 0x53380d13ui32;
+    t[36] = 0x650a7354ui32;
+    t[37] = 0x766a0abbui32;
+    t[38] = 0x81c2c92eui32;
+    t[39] = 0x92722c85ui32;
+    t[40] = 0xa2bfe8a1ui32;
+    t[41] = 0xa81a664bui32;
+    t[42] = 0xc24b8b70ui32;
+    t[43] = 0xc76c51a3ui32;
+    t[44] = 0xd192e819ui32;
+    t[45] = 0xd6990624ui32;
+    t[46] = 0xf40e3585ui32;
+    t[47] = 0x106aa070ui32;
+    t[48] = 0x19a4c116ui32;
+    t[49] = 0x1e376c08ui32;
+    t[50] = 0x2748774cui32;
+    t[51] = 0x34b0bcb5ui32;
+    t[52] = 0x391c0cb3ui32;
+    t[53] = 0x4ed8aa4aui32;
+    t[54] = 0x5b9cca4fui32;
+    t[55] = 0x682e6ff3ui32;
+    t[56] = 0x748f82eeui32;
+    t[57] = 0x78a5636fui32;
+    t[58] = 0x84c87814ui32;
+    t[59] = 0x8cc70208ui32;
+    t[60] = 0x90befffaui32;
+    t[61] = 0xa4506cebui32;
+    t[62] = 0xbef9a3f7ui32;
+    t[63] = 0xc67178f2ui32;
+    return t;
+}
+comptime InlineArray<uint32>#(64) K = roundConstants();
+
+type value Sha256 {
+    InlineArray<uint32>#(8)  h;
+    InlineArray<uint8>#(64)  block;
+    isize  filled;
+    uint64 total;
+
+    public ctor make() {
+        this.h = [0x6a09e667ui32, 0xbb67ae85ui32, 0x3c6ef372ui32, 0xa54ff53aui32,
+                  0x510e527fui32, 0x9b05688cui32, 0x1f83d9abui32, 0x5be0cd19ui32];
+        this.block = [0; 64];
+        this.filled = 0;
+        this.total = 0ui64;
+    }
+
+    public fn void update(View<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            this.block[cast<usize>(this.filled)] = bytes[i];
+            this.filled = this.filled + 1;
+            i = i + 1;
+            if (this.filled == BLOCKBYTES) { this.compress(); this.filled = 0; }
+        }
+        this.total = this.total + cast<uint64>(n);
+    }
+
+    public fn InlineArray<uint8>#(32) finish() {
+        uint64 bits = this.total * 8ui64;
+        this.block[cast<usize>(this.filled)] = 128ui8;
+        this.filled = this.filled + 1;
+        if (this.filled > 56) {
+            while (this.filled < BLOCKBYTES) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+            this.compress();
+            this.filled = 0;
+        }
+        while (this.filled < 56) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+        isize i = 0;
+        while (i < 8) {
+            this.block[cast<usize>(56 + i)] = truncate<uint8>((bits >> cast<uint64>(56 - i * 8)) & 255ui64);
+            i = i + 1;
+        }
+        this.compress();
+        InlineArray<uint8>#(32) digest = [0; 32];
+        i = 0;
+        while (i < 8) {
+            uint32 w = this.h[cast<usize>(i)];
+            digest[cast<usize>(i * 4)]     = truncate<uint8>((w >> 24ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 1)] = truncate<uint8>((w >> 16ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 2)] = truncate<uint8>((w >> 8ui32) & 255ui32);
+            digest[cast<usize>(i * 4 + 3)] = truncate<uint8>(w & 255ui32);
+            i = i + 1;
+        }
+        return digest;
+    }
+
+    fn void compress() {
+        InlineArray<uint32>#(64) w = [0; 64];
+        isize t = 0;
+        while (t < 16) {
+            usize j = cast<usize>(t * 4);
+            w[cast<usize>(t)] = (cast<uint32>(this.block[j]) << 24ui32) | (cast<uint32>(this.block[j + 1]) << 16ui32)
+                              | (cast<uint32>(this.block[j + 2]) << 8ui32) | cast<uint32>(this.block[j + 3]);
+            t = t + 1;
+        }
+        while (t < 64) {
+            uint32 w15 = w[cast<usize>(t - 15)];
+            uint32 w2 = w[cast<usize>(t - 2)];
+            uint32 s0 = rotr(x: w15, n: 7ui32) ^ rotr(x: w15, n: 18ui32) ^ (w15 >> 3ui32);
+            uint32 s1 = rotr(x: w2, n: 17ui32) ^ rotr(x: w2, n: 19ui32) ^ (w2 >> 10ui32);
+            w[cast<usize>(t)] = w[cast<usize>(t - 16)] + s0 + w[cast<usize>(t - 7)] + s1;
+            t = t + 1;
+        }
+        uint32 a = this.h[0];
+        uint32 b = this.h[1];
+        uint32 c = this.h[2];
+        uint32 d = this.h[3];
+        uint32 e = this.h[4];
+        uint32 f = this.h[5];
+        uint32 g = this.h[6];
+        uint32 hh = this.h[7];
+        t = 0;
+        while (t < 64) {
+            uint32 S1 = rotr(x: e, n: 6ui32) ^ rotr(x: e, n: 11ui32) ^ rotr(x: e, n: 25ui32);
+            uint32 ch = (e & f) ^ ((~e) & g);
+            uint32 temp1 = hh + S1 + ch + K[cast<usize>(t)] + w[cast<usize>(t)];
+            uint32 S0 = rotr(x: a, n: 2ui32) ^ rotr(x: a, n: 13ui32) ^ rotr(x: a, n: 22ui32);
+            uint32 maj = (a & b) ^ (a & c) ^ (b & c);
+            uint32 temp2 = S0 + maj;
+            hh = g;
+            g = f;
+            f = e;
+            e = d + temp1;
+            d = c;
+            c = b;
+            b = a;
+            a = temp1 + temp2;
+            t = t + 1;
+        }
+        this.h[0] = this.h[0] + a;
+        this.h[1] = this.h[1] + b;
+        this.h[2] = this.h[2] + c;
+        this.h[3] = this.h[3] + d;
+        this.h[4] = this.h[4] + e;
+        this.h[5] = this.h[5] + f;
+        this.h[6] = this.h[6] + g;
+        this.h[7] = this.h[7] + hh;
+    }
+}
+
+fn InlineArray<uint8>#(32) sha256(View<uint8> bytes) {
+    Sha256 h = Sha256.make();
+    h.update(bytes: bytes);
+    return h.finish();
+}

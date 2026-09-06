@@ -183,8 +183,11 @@ Everything else here is library or toolchain work that does **not** gate the tag
    deleted; the record is SPEC's per-module sections, and what stays here is the residue below.
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
    regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager.
-   ⚠️ **So TLS, regex, HTTP and crypto are DECLARED NON-GOALS for `std`, not unscheduled work**, and this
-   is the sentence that says so. Recorded emphatically because the first consumer's queue lists TLS with
+   ⚠️ **So TLS, regex, HTTP and CIPHERS are DECLARED NON-GOALS for `std`, not unscheduled work**, and this
+   is the sentence that says so. Refined 2026-09-06: **digests are in** (`std::digest::sha1`/`sha256`,
+   SPEC § Digest) — a non-cryptographic protocol needs one (RFC 6455, git ids, content addressing, the
+   registry's own integrity strings), and every batteries stdlib ships them; what stays out is the
+   constant-time half — ciphers, key exchange, signatures — which is `@kama/sodium`'s job. Recorded emphatically because the first consumer's queue lists TLS with
    the status "ROADMAP" and is waiting for it: `wss://` is not coming to `std`, and the answer for a
    secure socket is a package or terminating TLS at a reverse proxy. A non-goal that reads like a
    backlog item gets re-triaged forever. No new language
@@ -1251,6 +1254,29 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
 
+- **A module's file-private names are one namespace (BUG, measured 2026-09-06).** Visibility is per file —
+  `export { … };` is what lets a name leave — but the declaration tables are per module: two files in one
+  module each declaring a non-exported `fn helper` is refused as "duplicate function 'helper' … a name may
+  be declared only once in its module", and a file-private `type T` in `a.kama` is FOUND by `b.kama`'s own
+  `T` lookup and then refused as "not exported by a.kama". The fix is that a non-exported declaration's
+  key (and its C name) carries its file, the way a type's C name already carries `_F<file>__`; the probe is
+  two files, `fn int32 helper()` in each, `export { other }` in one. Until then a module's private helpers
+  need per-file names. Found in `@kama/sodium`'s tests (`knownAnswer` in four files).
+
+- **No const raw pointer (design gap, measured 2026-09-06).** `addr(of: …)` on `const this` is refused —
+  "const is deep, and a raw address is not an exception" — and `InlineArray`/`FixedArray`/`DynamicArray`'s
+  `dataPtr()` are non-const, so there is no way to hand a read-only buffer to C from a `const ref`
+  parameter. Every FFI wrapper therefore takes `ref` (the sodium package: `seal(…, ref Key key)`), which
+  is honest about what C could do but not about what it does, and it forces a mutable borrow onto callers
+  that hold a key `const`. The clean answer is a const-qualified pointer (`UnsafePtr<const T>`, or a
+  `ConstPtr<T>` that derefs to a read) with `const fn dataPtr()` answering it; the cheap one is declaring
+  the hole part of the `unsafe` seam and letting `dataPtr()` be `const fn`. Decide once, then fix the
+  stdlib's own wrappers (`kama_string_from_raw` takes a `const uint8_t*` and already gets a mutable one).
+
+- **`--release` with `csources`: `-Wl,-dead_strip` on the per-TU compile lines.** clang warns
+  "'linker' input unused" once per C file — 121 lines for a package vendoring libsodium. The link-tail
+  flags are appended to compile-only (`-c`) invocations; they belong on the link line alone.
+
 <a id="s3"></a>
 
 ## 3. Open design questions (settle before the work they gate)
@@ -1264,6 +1290,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 *(The `Slot<T>`/`MaybeUninit` spike that sat here is answered and shipped: the shape is a `slot`
 DECLARATION, not a wrapper type — no new type, no `.assume_init()`, and an unassigned slot simply has no
 drop emitted. See SPEC § *Uninitialized storage*.)*
+
+- **Member visibility: per type, or per file?** A non-`public` ctor/method is private to its TYPE today,
+  while a free function or type is private to its FILE. A file that declares `type resource Key { ctor
+  zeroed() … }` and a free function that fills a zeroed key cannot call the ctor unless it is `public` —
+  which is how `@kama/sodium` shipped, with a comment on every one. Rust's answer is module-private by
+  default (`pub` to leave), Swift's is `fileprivate`. kama's boundary is the file everywhere else, so the
+  consistent refinement is "a non-public member is visible within its declaring file"; the argument
+  against is that a type's invariants would then be enforced by file layout rather than by the type.
+  Raised 2026-09-06; decide before another package repeats the workaround.
 
 <a id="s4"></a>
 
@@ -1946,3 +1981,11 @@ rather than here, so there is one number to keep current. Forward work:
   (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on the no-GC/AOT
   (or VM-scripted) runtime — the flagship *application* of the language + package manager + scripting tiers
   together. See [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md). Aspirational, post-ecosystem.
+
+- **Seeding the package half of the agent guidance.** `agents/AGENTS.md` carries the language rules every
+  project needs; a `--kind library` project that will be PUBLISHED needs a second page — publishing to a
+  registry, `csources`/`cincludes`, vendoring a C library with a pinned script, `tests/` as one program the
+  runner builds debug and release, `--license`. `kama seed --kind library --agents` knows the kind and
+  could append it; `kama agents install` does not, and rewrites AGENTS.md, so the addendum wants its own
+  file (`AGENTS.package.md`, pointed at from AGENTS.md) or a marker `agents install` preserves. The content
+  exists: `../kama-sodium/AGENTS.md` § "This package" and its README are the first draft.

@@ -199,8 +199,11 @@ A project (or a package) can hand the build its own C:
 }
 ```
 
-Each entry is one translation unit, compiled with the same flags kama's own generated C gets and linked
-into the same artifact — no out-of-band Makefile. Paths are **relative to the manifest that declares
+Each entry is one translation unit, compiled with the same flags kama's own generated C gets — except
+that it is compiled as **`-std=gnu11`** where kama's own C is ISO `c11`: a vendored library is somebody
+else's C, and the C the world writes is GNU C (emscripten's `EM_ASM`, which libsodium's entropy source
+uses, refuses to compile in a `-std=c*` mode) — and linked into the same artifact — no out-of-band
+Makefile. Paths are **relative to the manifest that declares
 them**, and each entry's directory goes on the include path, so a header sitting beside the `.c` is
 found both from that `.c` and from the kama file that `extern "adder.h";`s it.
 

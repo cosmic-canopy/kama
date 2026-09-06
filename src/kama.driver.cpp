@@ -10335,7 +10335,14 @@ int main(int argc, char** argv)
                         claimed.first->second.c_str(), cs.path.c_str(), obj.c_str());
                     return 2;
                 }
-                ccInputs.push_back({ "\"" + cs.path + "\" ", obj });
+                // `-std=gnu11`, overriding the `-std=c11` the base prefix set: kama's OWN C is written to
+                // ISO C11, but a `csources` entry is somebody else's C, and the C the world writes is GNU
+                // C — every compiler defaults to it, and a vendored library reaches for its extensions.
+                // Measured: libsodium's `randombytes.c` uses emscripten's `EM_ASM`, which refuses to
+                // compile under `-std=c*` ("use -std=gnu* modes instead"), so the first package's wasm
+                // leg failed on the one file that reads the browser's entropy. Placed on the input, not
+                // in the prefix, so it reaches exactly the foreign translation units.
+                ccInputs.push_back({ "-std=gnu11 \"" + cs.path + "\" ", obj });
             }
         }
 

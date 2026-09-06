@@ -1655,6 +1655,35 @@ and a float `range` interpolates convexly so two finite bounds cannot overflow.
 covers a `DynamicArray`, a `FixedArray` or a sub-range alike — the `sort` shape. The platform seam is
 `kama_random.h`; on a Windows target the driver links `-lbcrypt` beside `-lws2_32`.
 
+### Digest (`std::digest`) ✅
+
+`import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha1::sha1 };` — two
+submodules, `sha1` and `sha256`, each exporting a streaming hasher (`make()`, `update(View<uint8>)`,
+`finish()`), a one-shot function of the same name as the module, and `DIGESTBYTES`/`BLOCKBYTES`. The
+digest is an `InlineArray<uint8>#(N)` — 20 or 32 bytes on the stack, no allocation anywhere, so both are
+present in a `--no-heap` build.
+
+```kama
+InlineArray<uint8>#(32) d = sha256(bytes: v);          // one shot
+Sha1 h = Sha1.make();                                    // streaming: any number of updates, one finish
+h.update(bytes: key.view());
+h.update(bytes: guid.view());
+string accept = b64Encode(bytes: h.finish().view());     // RFC 6455's Sec-WebSocket-Accept
+```
+
+**Why a digest is in `std` when ciphers are not.** TLS, ciphers, key exchange and signatures are a
+package (`@kama/sodium`), because they are libsodium's job and carry the constant-time burden. A digest
+is what NON-cryptographic protocols need — the WebSocket handshake, git object ids, content addressing,
+ETags, the registry's own `sha256-…` integrity strings — and every peer with a batteries stdlib (Go,
+Zig, Python, .NET, Java, Node) ships one; only Rust leaves it to a crate, and the `sha1`/`sha2` crates
+being among its most-downloaded is the argument against copying that. <!-- test: digest_sha1, digest_sha256, digest_websocket_accept -->
+
+SHA-1 is **legacy** — not collision-resistant — and its header says so; it exists for the protocols that
+still require it. Anything new is `sha256`. Both are pure kama, spell their loads and stores big-endian
+by hand, and give the same bytes on every target; the fixtures pin the FIPS 180-4 vectors (including the
+million-`a` message, streamed in odd-sized pieces) and the RFC 6455 example. HMAC and SHA-512 are the
+recorded next cut.
+
 ### Encoding (`std::encoding`) ✅
 
 `import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,

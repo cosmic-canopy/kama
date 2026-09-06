@@ -136,6 +136,22 @@ feature.
   A name you neither declare nor import is not in scope, even if the file next door is in the same folder.
 - **`export { A, B };` is its own declaration**, near the top of the file — not a modifier you put in
   front of `type`. Without it the type is invisible outside this file even though it compiles.
+- **Every C keyword is reserved** — `out`, `short`, `long`, `signed`, `register`, … cannot name a
+  binding, because kama lowers to C. The message names the word; pick another.
+- **A `ref`-returning method call cannot feed a `ref` parameter** — a call result is a temporary and
+  its mutation would be lost. Pass the owner by `ref` instead (`seal(from: pair)`, not
+  `seal(from: pair.secretKey())`), or copy a value out to a local first.
+- **A buffer reaches C through `ref`, never `const ref`.** There is no const raw pointer, and
+  `addr(of:)` on a const receiver is refused ("const is deep"). An FFI wrapper that only reads still
+  takes `ref`.
+- **Member visibility is per TYPE.** A non-`public` ctor or method is invisible even to a free function
+  in the same file; a helper ctor a free function fills has to be `public`. (Free functions and types
+  are per FILE — a different rule.)
+- **Unwrapping a `Result`/`Optional` into a local:** a *value* payload copies out of a borrowing
+  `match (r) { case Ok(value: x): x; … }`; a *resource* payload leaves a consuming
+  `match (give r) { case Ok(value: x): give x; … }`. The subject must be a local — bind a call's result
+  first — and a block arm that does not produce a value must `return`.
+- **`print(s: …)` / `println(s: …)`** — named like every other call.
 - **One way to do a thing.** Before adding a helper, `--search` for an existing one.
 
 ## Conventions

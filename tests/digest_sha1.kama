@@ -1,0 +1,46 @@
+// std::digest::sha1 against RFC 3174 / FIPS 180-4 vectors, cross-checked with `shasum -a 1` when written,
+// and the RFC 6455 handshake example — the reason SHA-1 is in the stdlib at all. Bits sum to 63.
+import { std::digest::sha1::Sha1, std::digest::sha1::sha1, std::digest::sha1::DIGESTBYTES,
+         std::encoding::hex::encode as hexEncode, std::encoding::base64::encode as b64Encode,
+         std::collections::DynamicArray, std::collections::View };
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> b = DynamicArray::<uint8>.withCapacity(capacity: s.length());
+    foreach (uint8 c in s) { b.add(item: c); }
+    return b;
+}
+
+fn bool hashIs(const ref string text, const ref string want) {
+    DynamicArray<uint8> b = bytesOf(s: text);
+    InlineArray<uint8>#(20) d = sha1(bytes: b.view());
+    string got = hexEncode(bytes: d.view());
+    return got.equals(other: want);
+}
+
+fn int32 main() {
+    int32 r = 0;
+    if (DIGESTBYTES == 20)                                                                           { r = r + 1; }
+    if (hashIs(text: "", want: "da39a3ee5e6b4b0d3255bfef95601890afd80709"))                          { r = r + 2; }
+    if (hashIs(text: "abc", want: "a9993e364706816aba3e25717850c26c9cd0d89d"))                       { r = r + 4; }
+    if (hashIs(text: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+               want: "84983e441c3bd26ebaae4aa1f95129e5e54670f1"))                                   { r = r + 8; }
+    // A million 'a', streamed in odd-sized pieces so the block boundary is crossed mid-update.
+    DynamicArray<uint8> chunk = DynamicArray::<uint8>.withCapacity(capacity: 1000);
+    isize i = 0;
+    while (i < 1000) { chunk.add(item: 97ui8); i = i + 1; }
+    Sha1 h = Sha1.make();
+    i = 0;
+    while (i < 1000) { h.update(bytes: chunk.view()); i = i + 1; }
+    InlineArray<uint8>#(20) big = h.finish();
+    string bigHex = hexEncode(bytes: big.view());
+    if (bigHex.equals(other: "34aa973cd4c4daa4f61eeb2bdbad27316534016f"))                            { r = r + 16; }
+    // Streaming in two parts equals one-shot, split at 3 bytes into a 56-byte message.
+    DynamicArray<uint8> whole = bytesOf(s: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+    Sha1 s = Sha1.make();
+    s.update(bytes: whole.slice(from: 0, count: 3));
+    s.update(bytes: whole.slice(from: 3, count: 53));
+    InlineArray<uint8>#(20) two = s.finish();
+    string twoHex = hexEncode(bytes: two.view());
+    if (twoHex.equals(other: "84983e441c3bd26ebaae4aa1f95129e5e54670f1"))                            { r = r + 32; }
+    return r;   // 63
+}
