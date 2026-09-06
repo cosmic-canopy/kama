@@ -15,7 +15,7 @@ extern "<stdio.h>";
 
 extern fn UnsafePtr  wgpuCreateInstance(UnsafePtr descriptor);   // WGPUInstance (opaque) <- descriptor* (null OK)
 extern fn void wgpuInstanceRelease(UnsafePtr instance);
-extern fn int32 puts(UnsafePtr<int8> s);
+extern fn int32 puts(UnsafeConstPtr<int8> s);
 
 unsafe fn int32 run() {
     UnsafePtr instance = wgpuCreateInstance(descriptor: null);

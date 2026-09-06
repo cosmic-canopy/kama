@@ -11,9 +11,9 @@ import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
-extern fn int32 kama_ws_connect(UnsafePtr<int8> url);
+extern fn int32 kama_ws_connect(UnsafeConstPtr<int8> url);
 extern fn int32 kama_ws_state(int32 h);
-extern fn int32 kama_ws_send(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_ws_send(int32 h, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32 kama_ws_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_ws_close(int32 h);
 

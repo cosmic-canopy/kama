@@ -114,6 +114,7 @@ const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14
 const_place_return	const_place_return.kama:8
 const_ptr_call_nonconst	const_ptr_call_nonconst.kama:14
+const_ptr_launder_cstr	const_ptr_launder_cstr.kama:6
 const_ptr_ref_arg	const_ptr_ref_arg.kama:8
 const_ptr_store	const_ptr_store.kama:6
 const_ptr_store_field	const_ptr_store_field.kama:11

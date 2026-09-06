@@ -23,10 +23,10 @@ import {
 };
 
 extern "<stdio.h>";
-extern fn int32 puts(UnsafePtr<int8> s);
+extern fn int32 puts(UnsafeConstPtr<int8> s);
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it is
 // never `export`ed or `import`ed, so a file that names one declares it.
-extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
 // ---- small utilities --------------------------------------------------------
 // `envOr(name:, dflt:)` (config lookup with a fallback) is now in the prelude floor — no local getenv shim.

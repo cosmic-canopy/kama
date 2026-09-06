@@ -18,23 +18,23 @@ export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove,
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
 extern "kama_os.h";
-extern fn int32  kama_open_read(UnsafePtr<int8> path);
-extern fn int32  kama_open_create(UnsafePtr<int8> path);
-extern fn int32  kama_open_append(UnsafePtr<int8> path);
+extern fn int32  kama_open_read(UnsafeConstPtr<int8> path);
+extern fn int32  kama_open_create(UnsafeConstPtr<int8> path);
+extern fn int32  kama_open_append(UnsafeConstPtr<int8> path);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize  kama_write(int32 fd, UnsafePtr<uint8> buf, usize n);
+extern fn isize  kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
 extern fn int32  kama_fstat_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
                                  UnsafePtr<int64> outMtimeNs, UnsafePtr<int32> outReadOnly);
-extern fn int32  kama_path_meta(UnsafePtr<int8> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
+extern fn int32  kama_path_meta(UnsafeConstPtr<int8> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
                                 UnsafePtr<int64> outMtimeNs, UnsafePtr<int32> outReadOnly);
-extern fn int32  kama_unlink(UnsafePtr<int8> path);
-extern fn int32  kama_mkdir(UnsafePtr<int8> path);
-extern fn int32  kama_rmdir(UnsafePtr<int8> path);
-extern fn int32  kama_is_symlink(UnsafePtr<int8> path);
-extern fn int32  kama_rename(UnsafePtr<int8> from, UnsafePtr<int8> to);
-extern fn int32  kama_exists(UnsafePtr<int8> path);
-extern fn UnsafePtr    kama_diropen(UnsafePtr<int8> path);
+extern fn int32  kama_unlink(UnsafeConstPtr<int8> path);
+extern fn int32  kama_mkdir(UnsafeConstPtr<int8> path);
+extern fn int32  kama_rmdir(UnsafeConstPtr<int8> path);
+extern fn int32  kama_is_symlink(UnsafeConstPtr<int8> path);
+extern fn int32  kama_rename(UnsafeConstPtr<int8> from, UnsafeConstPtr<int8> to);
+extern fn int32  kama_exists(UnsafeConstPtr<int8> path);
+extern fn UnsafePtr    kama_diropen(UnsafeConstPtr<int8> path);
 extern fn string kama_dirnext(UnsafePtr dirp);
 extern fn int32  kama_dirclose(UnsafePtr dirp);
 extern fn int32  kama_last_error();

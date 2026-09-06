@@ -64,8 +64,12 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         return this.data[i];
     }
 
-    // The safe FixedArray->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
-    public unsafe fn UnsafePtr<T> dataPtr() { return this.data; }
+    // The FixedArray->pointer bridge, in the two halves every accessor pair here has (`get`/`getRef`,
+    // `iterator`/`iterMut`): the reading half is `const fn` and hands out the read-only pointer, so a
+    // buffer held `const` reaches a `const T*` C API with no cast and no mutable borrow; the writing half
+    // needs a mutable receiver. Obtaining either is safe; dereferencing is `unsafe`.
+    public unsafe const fn UnsafeConstPtr<T> dataPtr() { return this.data; }
+    public unsafe fn UnsafePtr<T> dataPtrMut() { return this.data; }
 
     // Borrow the whole array (or a sub-range) as a non-owning `View<T>` slice — zero copy. See
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the

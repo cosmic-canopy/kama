@@ -978,7 +978,8 @@ static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (p
    pointer is safe, DEREFERENCING it needs an `unsafe fn` — a rule that falls out of the `*`-suffixed \
    return type, not from anything special-cased here. This is the one container that is stack-        \
    allocated, fixed-size and allocation-free, so it is what a `@noheap` region has to hand to C.     */\
-static inline T*     NAME##__dataPtr(NAME* self) { return self->v; }                            \
+static inline T const* NAME##__dataPtr(NAME* self) { return self->v; }                          \
+static inline T*     NAME##__dataPtrMut(NAME* self) { return self->v; }                         \
 static inline NAME   NAME##__fill(T x) {                                        \
     NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
 }
@@ -1218,7 +1219,7 @@ static inline void kama_string__dtor(kama_string* self) {
 // for the same reason — a byte offset between two points in one object must be representable).
 static inline ptrdiff_t kama_string__length(kama_string* self) { return (ptrdiff_t)self->len; }
 // FFI: the underlying NUL-terminated bytes, for passing to a C `const char*`.
-static inline char* kama_string__cstr(kama_string* self) { return self->data; }
+static inline const char* kama_string__cstr(kama_string* self) { return self->data; }
 static inline bool kama_string__equals(kama_string* self, kama_string other) {
     return self->len == other.len &&
            (self->len == 0 || kama_cmp(self->data, other.data, self->len) == 0);

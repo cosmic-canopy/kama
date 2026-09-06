@@ -1,0 +1,21 @@
+// A buffer held `const` reaches C. `dataPtr()` is `const fn` on every contiguous container and hands out
+// the read-only `UnsafeConstPtr<T>`, so a `const ref` parameter — the honest signature for a function
+// that only reads its buffer — can pass it to a `const T*` C API with no cast and no mutable borrow.
+// Before 0.9.205 every such wrapper had to take `ref`, and its callers had to drop their `const`.
+import { std::collections::DynamicArray, std::collections::FixedArray };
+extern fn usize strlen(UnsafeConstPtr<char> s);
+
+unsafe fn int32 first(const ref DynamicArray<uint8> d) { return cast<int32>(d.dataPtr()[0]); }
+unsafe fn int32 last(const ref FixedArray<int32> f)    { return f.dataPtr()[2]; }
+unsafe fn int32 inl(const ref InlineArray<int32>#(3) a) { return a.dataPtr()[1]; }
+unsafe fn int32 len(const ref string s)                 { return cast<int32>(strlen(s: s.cstr())); }
+
+fn int32 main() {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    d.add(item: 5ui8);
+    FixedArray<int32> f = FixedArray.make(size: 3);
+    f[0] = 1; f[1] = 2; f[2] = 20;
+    InlineArray<int32>#(3) a = [7, 10, 9];
+    const string s = "abcdefg";
+    return first(d: d) + last(f: f) + inl(a: a) + len(s: s);   // 5 + 20 + 10 + 7 = 42
+}

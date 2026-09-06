@@ -103,9 +103,11 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     public const fn isize length() { return this.len; }
 
-    // The safe DynamicArray->pointer bridge (see FixedArray.dataPtr): obtaining the buffer pointer is
-    // safe; dereferencing it is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
-    public unsafe fn UnsafePtr<T> dataPtr() { return this.data; }
+    // The DynamicArray->pointer bridge (see FixedArray.dataPtr for the split): `dataPtr()` is the
+    // read-only half a const receiver may call, `dataPtrMut()` the writable one. Obtaining either is
+    // safe; dereferencing is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
+    public unsafe const fn UnsafeConstPtr<T> dataPtr() { return this.data; }
+    public unsafe fn UnsafePtr<T> dataPtrMut() { return this.data; }
 
     // Borrow the whole array as a `View<T>` (a non-owning slice / span) — zero copy, no ownership
     // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but

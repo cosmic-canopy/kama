@@ -12,7 +12,7 @@
 import { std::collections::DynamicArray, std::collections::View };
 
 unsafe fn View<int32> forge(ref DynamicArray<int32> a) {
-    return View::<int32>.over(at: a.dataPtr(), count: 999999);
+    return View::<int32>.over(at: a.dataPtrMut(), count: 999999);
 }
 
 fn int32 main() { return 0; }

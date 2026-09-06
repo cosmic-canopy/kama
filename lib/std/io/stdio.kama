@@ -23,7 +23,7 @@ export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
 // single Reader+Writer handle would let you write it.
 extern "kama_os.h";
 extern fn isize kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize kama_write(int32 fd, UnsafePtr<uint8> buf, usize n);
+extern fn isize kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 

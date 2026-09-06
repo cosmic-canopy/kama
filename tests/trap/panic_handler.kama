@@ -3,7 +3,7 @@
 // (no infinite recursion), so the process still terminates with a signal exit. Proves: handler runs +
 // re-entrancy-safe + always-terminates.
 extern "<unistd.h>";
-extern fn int64 write(int32 fd, UnsafePtr buf, usize n);
+extern fn int64 write(int32 fd, UnsafeConstPtr buf, usize n);
 
 unsafe fn void onPanic() {
     string m = "HANDLER RAN\n";

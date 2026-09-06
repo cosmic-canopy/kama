@@ -1555,8 +1555,8 @@ kama uses its fields (all public, the C layout) but never re-emits it (so no red
 the literal C name. It has no ctor; construct it either by binding a struct-returning C fn (`div(...)`
 above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
 (unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
-real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields a C
-`const char*`.
+real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
+`UnsafeConstPtr<char>` — C's `const char*`, read-only.
 
 ### Time (`std::time`) ✅
 
@@ -1893,7 +1893,7 @@ fn int32 caller(UnsafePtr<int32> p) {
 }
 
 FixedArray<float32> verts = ...;
-UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule)
+UnsafeConstPtr<float32> data = verts.dataPtr();   // SAFE to obtain — Rust's as_ptr; `dataPtrMut()` is as_mut_ptr
 usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()`
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
@@ -1940,8 +1940,9 @@ a **non-`const fn` call** on `q[i]` is rejected as a call on a const receiver; a
 **does not convert to `UnsafePtr<T>`** — at a local's initializer, an assignment, an argument, a `return` — <!-- xfail: const_ptr_to_mut_local, const_ptr_to_mut_arg, const_addr -->
 while `UnsafePtr<T>` → `UnsafeConstPtr<T>` is implicit, as in C, and `cast<UnsafePtr<T>>(q)` inside an
 `unsafe fn` is the explicit launder. It is what a `const fn` may honestly hand out: `addr(of: …)` on a
-const root yields one, so a buffer held `const` reaches a `const T*` C API with no cast and no mutable
-borrow — Rust's `*const T`, Swift's `UnsafePointer<T>`, the stdlib's own `get`/`getRef` split applied at
+const root yields one, and so do `dataPtr()` on every contiguous container and `string.cstr()` (the <!-- test: const_dataptr -->
+writable halves are `dataPtrMut()` and `addr(of:)` on a mutable root), so a buffer held `const` reaches
+a `const T*` C API with no cast and no mutable borrow — Rust's `*const T`, Swift's `UnsafePointer<T>`, the stdlib's own `get`/`getRef` split applied at
 the FFI seam. A `const UnsafePtr<T>` *parameter* is unchanged: a const binding of a mutable pointer, <!-- test: unsafe_const_ptr -->
 still lowered `const T*`, which is why it accepts either pointer.
 | **call** an `unsafe fn` | | unrestricted |
@@ -2274,8 +2275,9 @@ container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-si
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
-**Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view -->
-returns an `UnsafePtr<T>` for C (safe to obtain, `unsafe` to dereference), and `view()` returns a
+**Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view, const_dataptr -->
+(a `const fn`) returns an `UnsafeConstPtr<T>` for C and `dataPtrMut()` the writable `UnsafePtr<T>` —
+both safe to obtain, `unsafe` to dereference; `string.cstr()` is the same read-only bridge — and `view()` returns a
 `View<T>` for kama — which is what reaches `borrow`, `parallel_for` and every `View<T>`-taking algorithm
 in the stdlib (`sort`, `sortWith`, `binarySearch`). This matters most for `InlineArray<T>#(N)`, the one
 container that is stack-allocated, fixed-size and allocation-free — so the one a `@noheap` region is
@@ -2448,7 +2450,7 @@ fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);
 extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);
 ...
 Comparator c = cmp;
-qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast to the header's fn-ptr type
+qsort(buf: a.dataPtrMut(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // qsort WRITES: the mutable half; cast to the header's fn-ptr type
 ```
 
 ## Exposing to a host — `expose` ✅
@@ -2921,8 +2923,10 @@ members. `Equatable` and `Comparable` borrow their operand `const ref`.
 
 What it deliberately does **not** mark is as informative:
 
-- **`view()`, `slice()`, `iterMut()`, `dataPtr()`, `getRef()`** hand out a mutable window into the
-  receiver. Const on any of them would launder exactly what the rule above closes.
+- **`view()`, `slice()`, `iterMut()`, `dataPtrMut()`, `getRef()`** hand out a mutable window into the
+  receiver. Const on any of them would launder exactly what the rule above closes. (`dataPtr()` and
+  `cstr()` ARE const — they hand out the read-only `UnsafeConstPtr<T>`, which is the split applied at
+  the raw seam: `dataPtr`/`dataPtrMut` as `get`/`getRef`.)
 - **`Map`'s and `SlotMap`'s `hasNext()`** scan forward past empty slots, so asking the question moves the
   cursor. They are not queries — which is why `IteratorMut.hasNext` is not a const member either, even
   though the other implementations would satisfy it.

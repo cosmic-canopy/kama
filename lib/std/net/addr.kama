@@ -5,7 +5,7 @@ import { std::fmt::u8Str, std::io::IoError, std::io::lastError,
 export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne };
 
 extern "kama_os.h";
-extern fn int32 kama_resolve_host(UnsafePtr<int8> host, UnsafePtr<uint32> outIps, int32 max);
+extern fn int32 kama_resolve_host(UnsafeConstPtr<int8> host, UnsafePtr<uint32> outIps, int32 max);
 
 // An IP address. IPv4 today; the `enum` tag leaves room for a `V6(...)` arm later without reshaping any
 // existing match site (they already bind by variant). Octets are stored in logical order (a.b.c.d).

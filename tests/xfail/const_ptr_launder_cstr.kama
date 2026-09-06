@@ -1,0 +1,11 @@
+// The hole that motivated the read-only pointer, measured before it existed: `cstr()` was a `const fn`
+// returning a WRITABLE `char*`, so this built, ran, and died with SIGBUS writing into a string literal
+// — const laundered with no diagnostic anywhere. `cstr()` returns `UnsafeConstPtr<char>` now, and the
+// binding below is the const→mutable conversion the widen rule refuses.
+unsafe fn int32 g(const ref string s) {
+    UnsafePtr<char> p = s.cstr();                         // -> REJECT
+    p[0] = 'x';
+    return 0;
+}
+
+fn int32 main() { string s = "abc"; return g(s: s); }

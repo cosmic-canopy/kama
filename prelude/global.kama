@@ -417,7 +417,7 @@ type view Chars implements Iterator<char> {
 // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
 // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
 // separators yield "" pieces; an empty separator yields the whole string once.
-extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 type view Split implements Iterator<string> {
     UnsafePtr<uint8> data; isize len; UnsafePtr<uint8> sep; isize seplen; isize pos; bool done;
     // As with `Chars.over` — the compiler calls this for `s.split(separator:)`, in place of a six-field
@@ -465,7 +465,7 @@ extern fn string kama_args_at(int32 i);
 extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
 extern fn bool   kama_program_name(UnsafePtr<string> dst);
 extern fn bool   kama_program_path(UnsafePtr<string> dst);
-extern fn bool   kama_env_lookup(UnsafePtr<int8> name, UnsafePtr<string> dst);
+extern fn bool   kama_env_lookup(UnsafeConstPtr<int8> name, UnsafePtr<string> dst);
 type value Args implements Iterator<string> {
     int32 pos;
     public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
@@ -566,7 +566,7 @@ unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h:
 // Each reads its own `s` by borrow (`cstr()`/`length()`) — it never re-passes the string by value, so there
 // is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
 // string is passed with `copy`/`give` like anywhere else in the value model.
-extern fn void kama_print_write(int32 fd, UnsafePtr<int8> bytes, usize len);
+extern fn void kama_print_write(int32 fd, UnsafeConstPtr<int8> bytes, usize len);
 extern fn void kama_print_nl(int32 fd);
 unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
 unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }

@@ -18,8 +18,8 @@ export { LogLevel, LogSink, setLogSink, logEnabled,
 // Strings cross the FFI seam as borrowed byte spans (UnsafePtr<int8> + usize), never by value — the floor `print`
 // discipline — so a log call never transfers ownership of the caller's message.
 extern "kama_log.h";
-extern fn bool kama_log_enabled(int32 level, UnsafePtr<int8> tag, usize tagLen);
-extern fn void kama_log_dispatch(int32 level, UnsafePtr<int8> tag, usize tagLen, UnsafePtr<int8> msg, usize msgLen);
+extern fn bool kama_log_enabled(int32 level, UnsafeConstPtr<int8> tag, usize tagLen);
+extern fn void kama_log_dispatch(int32 level, UnsafeConstPtr<int8> tag, usize tagLen, UnsafeConstPtr<int8> msg, usize msgLen);
 extern fn void kama_set_log_sink(LogSink s);
 
 // Ordered by severity: Error is the most severe, Trace the most verbose. The ordinals ARE the filter scale

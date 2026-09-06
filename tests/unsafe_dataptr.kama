@@ -4,7 +4,7 @@ unsafe fn int32 run()
 {
     FixedArray<int32> a = FixedArray.make(size: 3);
     a[0] = 40; a[1] = 1; a[2] = 1;
-    UnsafePtr<int32> p = a.dataPtr();        // safe to obtain
+    UnsafeConstPtr<int32> p = a.dataPtr();   // safe to obtain — the reading half; `dataPtrMut()` is the writable one
     int32 s = 0;
     s = p[0] + p[1] + p[2]; // raw read needs unsafe
     return s;   // 42

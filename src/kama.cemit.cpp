@@ -9894,7 +9894,19 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("length", {}, synthId("isize", IDENTIFIER_ISIZE_VAL));
         addMethod("equals", { ST("other") }, SharedIdentifier());
         addMethod("concat", { ST("other") }, collType);   // returns a string
-        addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
+        // `cstr()` returns the READ-ONLY pointer — C's `const char*`, which is what the comment always
+        // said and what `kama_string__cstr` now returns. It was registered with a NULL return type, so
+        // the acquisition gate never saw it and the pointer that came back was a writable `char*`:
+        // `p = s.cstr(); p[0] = 'x'` on a `const ref string` built, ran, and died with SIGBUS writing
+        // into a literal (measured 2026-09-06). Naming the type closes both.
+        {
+            auto cstrRet = synthId("UnsafeConstPtr");
+            auto ch = synthId("char", IDENTIFIER_CHAR_VAL);
+            cstrRet->genericArg  = ch;
+            cstrRet->genericArgs = std::make_shared<IdentifierList>();
+            cstrRet->genericArgs->push_back(ch);
+            addMethod("cstr", {}, cstrRet);
+        }
         addMethod("get",    { SZ("index") }, elem);        // `s[i]` -> the i-th byte (uint8)
         addMethod("chars",  {}, synthId("Chars"));   // codepoint iterator
         // Phase 3 ergonomics. Bool-returning methods pass a NULL returnType (the `equals` pattern — the
@@ -10021,11 +10033,20 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // DynamicArray carry. It needs no rule of its own: the raw-pointer containment check reads the
     // `*`-suffixed return C TYPE at the acquisition-by-call site, so a caller outside an `unsafe fn` is
     // rejected exactly as it is for `FixedArray.dataPtr()`.
-    auto ptrRet = synthId("UnsafePtr");
+    //
+    // Two halves, as on FixedArray/DynamicArray: `dataPtr()` is `const fn` and returns the read-only
+    // `UnsafeConstPtr<T>` (what a const receiver may hand to a `const T*` C API); `dataPtrMut()` needs a
+    // mutable receiver and returns the writable pointer.
+    auto ptrRet = synthId("UnsafeConstPtr");
     ptrRet->genericArg  = elem;
     ptrRet->genericArgs = std::make_shared<IdentifierList>();
     ptrRet->genericArgs->push_back(elem);
-    addMethod("dataPtr", {}, ptrRet, false);
+    addMethod("dataPtr", {}, ptrRet, true);
+    auto ptrMutRet = synthId("UnsafePtr");
+    ptrMutRet->genericArg  = elem;
+    ptrMutRet->genericArgs = std::make_shared<IdentifierList>();
+    ptrMutRet->genericArgs->push_back(elem);
+    addMethod("dataPtrMut", {}, ptrMutRet, false);
 
     // `view()` -> `View<T>`, mirroring `string.find` -> `Optional<usize>` above: force-register the
     // generic instance so its C struct exists, give the method that return type, and emit the tiny

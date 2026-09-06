@@ -70,7 +70,7 @@ type value string {
     public fn isize length();                                   // length in BYTES, not codepoints
     public fn bool equals(string other);                        // also what `==` resolves to
     public fn string concat(string other);                      // a new owned string
-    public fn UnsafePtr<char> cstr();                           // FFI: the NUL-terminated C pointer
+    public fn UnsafeConstPtr<char> cstr();                      // FFI: the NUL-terminated C pointer, read-only
     public fn uint8 get(isize index);                           // `s[i]` — the i-th BYTE
     public fn Chars chars();                                    // codepoint iterator (see the prelude)
 
