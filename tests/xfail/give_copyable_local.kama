@@ -1,0 +1,11 @@
+// `give` moves a move-only value. A plain value is copied on assignment, so a `give` of one has nothing
+// to move — and the refusal says THAT, not "out of a field/element", which is the story for a
+// `give` of `owner.field`. A `Result` over a `value` payload is itself a plain value.
+type enum E implements Error { Bad; public const fn string message() { return "bad"; } }
+type value Nonce { public int32 v; public ctor zeroed() { this.v = 0; } }
+fn Result<Nonce, E> mk() { return Result::Ok(value: Nonce.zeroed()); }
+fn int32 main() {
+    Result<Nonce, E> r = mk();
+    Nonce n = match (give r) { case Ok(value: x): x; case Err(error: e): { return 1; } };
+    return n.v;
+}

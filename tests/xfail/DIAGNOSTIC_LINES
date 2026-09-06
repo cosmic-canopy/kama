@@ -289,6 +289,7 @@ generic_uninst_view_escape	generic_uninst_view_escape.kama:11
 generic_value_owns_resource	generic_value_owns_resource.kama:4
 generic_when_unsatisfied	generic_when_unsatisfied.kama:23
 generic_wrong_bound_call	generic_wrong_bound_call.kama:5
+give_copyable_local	give_copyable_local.kama:9
 give_inline_ctor_arg	give_inline_ctor_arg.kama:7
 give_ptr_local_reuse	give_ptr_local_reuse.kama:13 give_ptr_local_reuse.kama:16
 global_absolute_path	global_absolute_path.kama:10

@@ -1,0 +1,27 @@
+// A `resource` that owns nothing — no dtor, no owning field: a token, an identity — still moves by its
+// declared kind, and so does an intrinsic that holds one. `Result<Token, E>` and `Optional<Token>` are
+// move-only, a local of that type is move-tracked, and `match (give r)` hands the payload out.
+//
+// Before the fix an intrinsic was move-only iff it was DESTRUCTIBLE, so `Result<Token, E>` read as a
+// copyable value, `r` was never tracked, and `give r` was refused as "out of a field/element" — while
+// the same shape over `Result<File, IoError>` worked, because `File` has a dtor. Found writing the
+// first external package: a `Result` over a value-typed nonce and one over a dtor-less key.
+type enum E implements Error { Bad; public const fn string message() { return "bad"; } }
+
+type resource Token {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+}
+
+fn Result<Token, E> issue(int32 id) { return Result::Ok(value: Token.make(id: id)); }
+fn Optional<Token> maybe(int32 id) { return Optional::Some(value: Token.make(id: id)); }
+fn int32 consume(Token t) { return t.get(); }
+
+fn int32 main() {
+    Result<Token, E> r = issue(id: 30);
+    Token a = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    Optional<Token> o = maybe(id: 12);
+    Token b = match (give o) { case Some(value: x): give x; case None: { return 2; } };
+    return consume(t: give a) + consume(t: give b);   // 42
+}

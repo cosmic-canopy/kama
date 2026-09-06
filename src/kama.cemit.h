@@ -378,6 +378,7 @@ struct ClassInfo {
     bool                              hasDtor = false;   // declares its own ~dtor
     ClassDestructorDeclarationNode*   dtorNode = nullptr;
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
+    bool                              moveOnly = false;     // holds a move-only payload that owns nothing (a dtor-less resource) — see computeDestructible
     // Serialization mode gate (the tighter sibling of `destructible`): transitively reaches a
     // Shared/Weak/Owned pointer field. false => by-value/tree serialization; true => object-graph.
     // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse

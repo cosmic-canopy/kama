@@ -13614,7 +13614,9 @@ bool CEmitter::isMoveOnlyValue(const std::string& cls) const
     // collections/smart-ptrs already returned above) moves iff it owns a resource (is destructible).
     if (ci.kind == TypeKind::Resource) return true;
     if (ci.kind == TypeKind::Value)    return false;
-    return ci.destructible;
+    // ...or holds a move-only payload that owns nothing (`moveOnly`, from computeDestructible's
+    // fixpoint) — a `Result<Token, E>` over a dtor-less resource moves because the token does.
+    return ci.destructible || ci.moveOnly;
 }
 
 // A by-value class value the SLOT/CALLEE OWNS: a move-only `resource`, or a heap-owning collection/string
@@ -13803,6 +13805,22 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
     // is handing back, and its storage dies at the return. Nothing is left holding a moved-from value.
     // (There is no move state to key on — the storage is the function's own — so report no source.)
     if (_inNamedCtorBody && dynamic_cast<ThisAccessNode*>(e.get())) return "";
+    // A LOCAL that is not move-tracked is a plain value — copied on assignment, nothing to move — and
+    // the story below (a field, an element) would be the wrong one for it. Measured: `match (give r)`
+    // over a `Result<Nonce, E>` with a `value` payload was reported as giving "out of a field/element".
+    // Only when the local's TYPE is one that copies: a `ref` foreach binding over a resource is a local
+    // too, but an alias of an element the collection still owns, and for it the field/element story
+    // below is the right one (tests/xfail/foreach_ref_give).
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get()))
+        if (id->value && (!id->qualifier || id->qualifier->empty())
+            && (_localTypeNodes.count(*id->value) || _localTypes.count(*id->value))
+            && !(_localTypes.count(*id->value)
+                 && (ownsByValue(_localTypes[*id->value]) || isSmartPtrClass(_localTypes[*id->value]))))
+        {
+            unsupported(("cannot `give` `" + *id->value + "` — it is a plain value, copied on assignment, "
+                         "and `give` moves a move-only value; drop the `give`").c_str(), line);
+            return "";
+        }
     unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
                 "moved-from value; move a local instead, or use Optional<T>", line);
     return "";
@@ -14760,8 +14778,29 @@ void CEmitter::computeDestructible()
                     }
                     if (d) break;
                 }
+            // MOVE-ONLY is the sibling question, and it is not the same one: a `resource` that owns
+            // nothing (no dtor, no owning field — a token, an identity) is not destructible, but it
+            // still moves by declared kind. An intrinsic that holds one — `Result<Token, E>`,
+            // `Optional<Token>` — must move too, or a local of that type is never move-tracked and
+            // `match (give r)` on it is refused as if `r` were a field. Measured on the first external
+            // package: every `Result<K, E>` whose `K` had a dtor worked, and the one whose payload was
+            // a bare resource did not. Same fixpoint, same scope setup, read through isMoveOnlyValue
+            // so a nested intrinsic (`Optional<Result<Token, E>>`) propagates.
+            bool m = ci.moveOnly || (ci.base && ci.base->moveOnly);
+            if (!m && !ci.isIntrinsicColl && ci.kind != TypeKind::Value)
+                for (auto& f : ci.fields) {
+                    if (isMoveOnlyValue(cType(f.type))) { m = true; break; }
+                }
+            if (!m && !ci.isIntrinsicColl && ci.kind != TypeKind::Value)
+                for (auto& v : ci.variants) {
+                    for (auto& f : v.payload) {
+                        if (isMoveOnlyValue(cType(f.type))) { m = true; break; }
+                    }
+                    if (m) break;
+                }
             if (inst) _typeSubst.clear();
             if (d) { ci.destructible = true; changed = true; }
+            if (m && !ci.moveOnly) { ci.moveOnly = true; changed = true; }
         }
     }
     // Re-derive each collection's elemDestructible from the FINAL class destructibility — a
