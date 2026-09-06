@@ -1,0 +1,80 @@
+// std::random — the seeded stream is DETERMINISTIC, and its first outputs are pinned. The literals come
+// from the reference xoshiro256** + splitmix64 C implementation (Blackman & Vigna), NOT from kama, so a
+// change to the algorithm — or to the splitmix seeding — is a failure here rather than a silent replay
+// break for every game that saved a seed. Eight flags sum to 255 — an exit code is one byte.
+import { std::random::Rng };
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Seed 0: the first five raw outputs, hex in the comments.
+    Rng a = Rng.seeded(seed: 0ui64);
+    uint64 a0 = a.next();
+    uint64 a1 = a.next();
+    uint64 a2 = a.next();
+    uint64 a3 = a.next();
+    uint64 a4 = a.next();
+    if (a0 == 11091344671253066420ui64)                        { r = r + 1; }   // 0x99EC5F36CB75F2B4
+    if (a1 == 13793997310169335082ui64 &&                                       // 0xBF6E1F784956452A
+        a2 == 1900383378846508768ui64  &&                                       // 0x1A5F849D4933E6E0
+        a3 == 7684712102626143532ui64  &&                                       // 0x6AA594F1262D2D2C
+        a4 == 13521403990117723737ui64)                        { r = r + 2; }   // 0xBBA5AD4A1F842E59
+
+    // The sixth draw as a float: the top 53 bits of 0xFFEB7E1D... scaled by 2^-53. Bounded to the
+    // printed digits rather than compared exactly, so the check does not depend on literal rounding.
+    float64 f = a.nextFloat();
+    if (f >= 0.9997484362 && f < 0.9997484363)                 { r = r + 4; }
+
+    // Seed 42, the same shape.
+    Rng b = Rng.seeded(seed: 42ui64);
+    uint64 b0 = b.next();
+    uint64 b1 = b.next();
+    uint64 b2 = b.next();
+    uint64 b3 = b.next();
+    uint64 b4 = b.next();
+    if (b0 == 1546998764402558742ui64)                         { r = r + 8; }   // 0x15780B2E0C2EC716
+    if (b1 == 6990951692964543102ui64  &&                                       // 0x6104D9866D113A7E
+        b2 == 12544586762248559009ui64 &&                                       // 0xAE17533239E499A1
+        b3 == 17057574109182124193ui64 &&                                       // 0xECB8AD4703B360A1
+        b4 == 18295552978065317476ui64)                        { r = r + 16; }  // 0xFDE6DC7FE2EC5E64
+
+    // Two generators with the same seed walk the same stream, and two different seeds do not.
+    Rng c = Rng.seeded(seed: 7ui64);
+    Rng d = Rng.seeded(seed: 7ui64);
+    Rng e = Rng.seeded(seed: 8ui64);
+    bool same = true;
+    bool differ = false;
+    isize i = 0;
+    while (i < 50) {
+        uint64 x = c.next();
+        uint64 y = d.next();
+        uint64 z = e.next();
+        if (x != y) { same = false; }
+        if (x != z) { differ = true; }
+        i = i + 1;
+    }
+    if (same && differ)                                        { r = r + 32; }
+
+    // `nextFloat` stays in [0, 1) — never 1.0, never negative — over a thousand draws.
+    bool inUnit = true;
+    i = 0;
+    while (i < 1000) {
+        float64 u = c.nextFloat();
+        if (u < 0.0 || u >= 1.0) { inUnit = false; }
+        i = i + 1;
+    }
+    if (inUnit)                                                { r = r + 64; }
+
+    // `chance`: p = 0 never fires, p = 1 always does.
+    bool never = true;
+    bool always = true;
+    i = 0;
+    while (i < 200) {
+        if (c.chance(p: 0.0))  { never = false; }
+        if (!c.chance(p: 1.0)) { always = false; }
+        i = i + 1;
+    }
+    if (never && always)                                       { r = r + 128; }
+
+    return r;   // 255
+}

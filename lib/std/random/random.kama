@@ -1,0 +1,260 @@
+import { std::collections::View, std::collections::DefaultHasher };
+export { Rng, Ranged, range, shuffle, entropy };
+
+// Random numbers — a SEEDED generator first, OS entropy as the convenience, and neither is a secret.
+//
+// `Rng.seeded(seed:)` is the primary constructor because a deterministic stream is what most callers
+// actually want: a game replays a match from its seed, a spectator catches up by re-running it, a test
+// pins its inputs. `Rng.fromEntropy()` draws the seed from the OS for the cases that want a different
+// stream every run. The generator is xoshiro256** (Blackman & Vigna, public domain: 4×uint64 of state,
+// one rotate, two multiplies per output), seeded through splitmix64 — the same mix `DefaultHasher`
+// finalizes with, reused rather than re-spelled. The stream is identical on every platform and every
+// build, and `tests/random_seeded.kama` pins its first outputs so that a change to the algorithm is a
+// test failure rather than a silent replay break.
+//
+// ⚠️ NOT CRYPTOGRAPHIC. An observer who sees a few outputs can recover the state and predict the rest.
+// A key, a nonce, a session token or a password-reset code comes from `entropy(into:)` — the OS's own
+// generator, the one thing here that IS — or from a libsodium binding, never from `Rng`.
+//
+// `Rng` is a `resource`: move-only, handed around as `ref Rng`. A copy would silently fork the stream
+// into two identical ones — the bug every peer avoids by the same rule (Rust's `&mut Rng`, Go's
+// `*rand.Rand`, C#'s class) — so kama's type system rules it out rather than documenting it.
+//
+// Two integer draws, two jobs:
+//   `g.below(n:)`            an INDEX in [0, n) — takes a length directly: `v[g.below(n: v.length())]`.
+//   `range(rng: g, lo:, hi:)` a VALUE in [lo, hi), generic over every numeric width including floats.
+//     Both ends must agree in type: literals are `int32` (`lo: 1, hi: 7`), `0.0`/`1.0` are `float64`, and
+//     a size wants two `isize` locals — generic inference reads the arguments only and types an
+//     unsuffixed literal as `int32` before it sees a typed sibling, which is why `below` exists.
+// Integer draws are UNBIASED (rejection sampling), half-open like Rust's `gen_range` and Go's `Intn`,
+// and an empty range panics rather than answering `lo`.
+
+extern "kama_random.h";
+extern fn int32 kama_entropy(UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_entropy_u64(out uint64 v);
+
+// One 64-bit word from the OS. A refusal is an environment fault, not a state to handle (Go 1.24's
+// `crypto/rand.Read` draws the same line), so it panics.
+unsafe fn uint64 entropyWord() {
+    slot uint64 v;
+    if (kama_entropy_u64(v: out v) != 0) { panic(msg: "std::random: the OS entropy source failed"); }
+    return v;
+}
+
+// splitmix64's golden-ratio increment. `DefaultHasher::finish(raw:)` is `mix(raw + increment)` — the
+// generator's whole step — so `finish(raw: seed + k*increment)` for k = 0..3 is exactly the reference
+// stream's first four outputs.
+fn uint64 splitmixIncrement() { return 11400714819323198485ui64; }   // 0x9E3779B97F4A7C15
+
+type resource Rng implements Sendable {
+    uint64 s0;
+    uint64 s1;
+    uint64 s2;
+    uint64 s3;
+
+    // A deterministic stream: the same seed is the same sequence on every platform, forever.
+    public ctor seeded(uint64 seed) {
+        uint64 g = splitmixIncrement();
+        uint64 z0 = seed;
+        uint64 z1 = z0 + g;
+        uint64 z2 = z1 + g;
+        uint64 z3 = z2 + g;
+        this.s0 = DefaultHasher::finish(raw: z0);
+        this.s1 = DefaultHasher::finish(raw: z1);
+        this.s2 = DefaultHasher::finish(raw: z2);
+        this.s3 = DefaultHasher::finish(raw: z3);
+    }
+
+    // A stream seeded from the OS — different every run. Still not a secret once it is running.
+    public unsafe ctor fromEntropy() {
+        this.s0 = entropyWord();
+        this.s1 = entropyWord();
+        this.s2 = entropyWord();
+        this.s3 = entropyWord();
+        // xoshiro's one forbidden state is all-zero (it would emit zero forever). The OS will not hand
+        // it out, but the cost of refusing to trust that is one branch at construction.
+        uint64 any = this.s0 | this.s1 | this.s2 | this.s3;
+        if (any == 0ui64) { this.s0 = 1ui64; }
+    }
+
+    // The raw 64-bit output — xoshiro256**. Every other draw is derived from this one.
+    public fn uint64 next() {
+        uint64 m = this.s1 * 5ui64;
+        uint64 r = ((m << 7ui64) | (m >> 57ui64)) * 9ui64;   // rotl(s1 * 5, 7) * 9
+        uint64 t = this.s1 << 17ui64;
+        this.s2 = this.s2 ^ this.s0;
+        this.s3 = this.s3 ^ this.s1;
+        this.s1 = this.s1 ^ this.s2;
+        this.s0 = this.s0 ^ this.s3;
+        this.s2 = this.s2 ^ t;
+        this.s3 = (this.s3 << 45ui64) | (this.s3 >> 19ui64);   // rotl(s3, 45)
+        return r;
+    }
+
+    // A float64 in [0, 1): the top 53 bits, scaled — every value is exactly representable, and 1.0 is
+    // unreachable, so `lo + (hi - lo) * nextFloat()` never lands on `hi` by construction alone.
+    public fn float64 nextFloat() {
+        uint64 bits = this.next() >> 11ui64;
+        return cast<float64>(bits) * (1.0 / 9007199254740992.0);   // 2^-53
+    }
+
+    // `true` with probability `p`: never for `p <= 0`, always for `p >= 1`.
+    public fn bool chance(float64 p) {
+        return this.nextFloat() < p;
+    }
+
+    // An index in [0, n), unbiased. The parameter is a plain `isize`, so a length or a literal goes in
+    // directly — this is the draw `shuffle` and "pick one" are built on.
+    public fn isize below(isize n) {
+        if (n <= 0) { panic(msg: "below: n must be positive"); }
+        uint64 r = belowU64(rng: this, span: cast<uint64>(n));
+        return cast<isize>(r);
+    }
+}
+
+// A uniform draw in [0, span), UNBIASED: `next() % span` alone favours the low residues whenever 2^64
+// is not a multiple of `span`. Rejection fixes it — discard the outputs below `2^64 mod span` (computed
+// as `(0 - span) % span` in wrapping arithmetic) and the survivors are a whole number of copies of every
+// residue. Lemire's multiply-shift needs a 128-bit product; kama has no `uint128`, and this rejects at
+// most once in 2^32 draws for any span that fits in 32 bits.
+fn uint64 belowU64(ref Rng rng, uint64 span) {
+    uint64 neg = 0ui64 - span;
+    uint64 threshold = neg % span;
+    while (true) {
+        uint64 x = rng.next();
+        if (x >= threshold) { return x % span; }
+    }
+}
+
+// Signed and unsigned funnels for the per-width conformances below (the `parseSigned`/`parseUnsigned`
+// shape). The signed span is computed in WRAPPING unsigned arithmetic because `hi - lo` overflows —
+// and so traps — for `int64Min..int64Max`; the sum back is the same trick in reverse.
+fn int64 betweenI64(ref Rng rng, int64 lo, int64 hi) {
+    if (hi <= lo) { panic(msg: "range: hi must exceed lo"); }
+    uint64 span = bitcast<uint64>(hi) - bitcast<uint64>(lo);
+    uint64 r = belowU64(rng: rng, span: span);
+    uint64 sum = bitcast<uint64>(lo) + r;
+    return bitcast<int64>(sum);
+}
+
+fn uint64 betweenU64(ref Rng rng, uint64 lo, uint64 hi) {
+    if (hi <= lo) { panic(msg: "range: hi must exceed lo"); }
+    uint64 span = hi - lo;
+    return lo + belowU64(rng: rng, span: span);
+}
+
+// Floats interpolate `lo * (1 - u) + hi * u` rather than `lo + (hi - lo) * u`: the difference of two
+// finite bounds can overflow to infinity, the convex form cannot. Rounding can still land the result on
+// `hi` when `u` is within an ulp of 1, and the half-open contract holds by redrawing that case.
+fn float64 betweenF64(ref Rng rng, float64 lo, float64 hi) {
+    if (!(hi > lo)) { panic(msg: "range: hi must exceed lo"); }   // also refuses a NaN bound
+    while (true) {
+        float64 u = rng.nextFloat();
+        float64 v = lo * (1.0 - u) + hi * u;
+        if (v < hi) { return v; }
+    }
+}
+
+fn float32 betweenF32(ref Rng rng, float32 lo, float32 hi) {
+    if (!(hi > lo)) { panic(msg: "range: hi must exceed lo"); }
+    while (true) {
+        uint64 bits = rng.next() >> 40ui64;                        // 24 bits: a float32 mantissa
+        float32 u = cast<float32>(bits) * (1.0f32 / 16777216.0f32);   // 2^-24
+        float32 v = lo * (1.0f32 - u) + hi * u;
+        if (v < hi) { return v; }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// `range` — one generic spelling over every numeric width, the `parse::<T>` mechanism: a marker
+// contract with a pinned self type, and one `type intrinsic` conformance per width supplying the
+// constructor `range` calls. Each block casts through the 64-bit funnel above; the cast back can never
+// trap because the draw lies inside `[lo, hi)`, which fits the width by construction.
+// ---------------------------------------------------------------------------------------------------
+
+type contract Ranged<T is This> for intrinsic { ctor T between(ref Rng rng, T lo, T hi); }
+
+type intrinsic <int8> implements Ranged<This> {
+    public ctor int8 between(ref Rng rng, int8 lo, int8 hi) {
+        return cast<int8>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
+    }
+}
+type intrinsic <int16> implements Ranged<This> {
+    public ctor int16 between(ref Rng rng, int16 lo, int16 hi) {
+        return cast<int16>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
+    }
+}
+type intrinsic <int32> implements Ranged<This> {
+    public ctor int32 between(ref Rng rng, int32 lo, int32 hi) {
+        return cast<int32>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
+    }
+}
+type intrinsic <int64> implements Ranged<This> {
+    public ctor int64 between(ref Rng rng, int64 lo, int64 hi) {
+        return betweenI64(rng: rng, lo: lo, hi: hi);
+    }
+}
+// `isize`/`usize` vary in width per target, so their bodies compute at 64 bits and narrow last.
+type intrinsic <isize> implements Ranged<This> {
+    public ctor isize between(ref Rng rng, isize lo, isize hi) {
+        return cast<isize>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
+    }
+}
+type intrinsic <uint8> implements Ranged<This> {
+    public ctor uint8 between(ref Rng rng, uint8 lo, uint8 hi) {
+        return cast<uint8>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
+    }
+}
+type intrinsic <uint16> implements Ranged<This> {
+    public ctor uint16 between(ref Rng rng, uint16 lo, uint16 hi) {
+        return cast<uint16>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
+    }
+}
+type intrinsic <uint32> implements Ranged<This> {
+    public ctor uint32 between(ref Rng rng, uint32 lo, uint32 hi) {
+        return cast<uint32>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
+    }
+}
+type intrinsic <uint64> implements Ranged<This> {
+    public ctor uint64 between(ref Rng rng, uint64 lo, uint64 hi) {
+        return betweenU64(rng: rng, lo: lo, hi: hi);
+    }
+}
+type intrinsic <usize> implements Ranged<This> {
+    public ctor usize between(ref Rng rng, usize lo, usize hi) {
+        return cast<usize>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
+    }
+}
+type intrinsic <float64> implements Ranged<This> {
+    public ctor float64 between(ref Rng rng, float64 lo, float64 hi) {
+        return betweenF64(rng: rng, lo: lo, hi: hi);
+    }
+}
+type intrinsic <float32> implements Ranged<This> {
+    public ctor float32 between(ref Rng rng, float32 lo, float32 hi) {
+        return betweenF32(rng: rng, lo: lo, hi: hi);
+    }
+}
+
+// A value in [lo, hi). `T` is inferred from the two bounds, which must agree; an empty range panics.
+fn T range<T: Ranged<T>>(ref Rng rng, T lo, T hi) { return T.between(rng: rng, lo: lo, hi: hi); }
+
+// Fisher–Yates over a `View`, in place, through `View.swap` — so it permutes a move-only element
+// type, allocates nothing, and covers a `DynamicArray`, a `FixedArray` or a sub-range alike, exactly
+// as `sort` does. Every permutation is equally likely because each draw is unbiased.
+fn void shuffle<T>(View<T> items, ref Rng rng) {
+    isize i = items.length() - 1;
+    while (i > 0) {
+        isize j = rng.below(n: i + 1);
+        items.swap(i: i, j: j);
+        i = i - 1;
+    }
+}
+
+// Fill a buffer from the OS's cryptographically secure generator — the one draw in this module that IS
+// fit for a key or a token. Panics if the OS refuses (see `kama_random.h` for why that is not a `Result`).
+unsafe fn void entropy(View<uint8> into) {
+    if (into.length() == 0) { return; }
+    int32 st = kama_entropy(buf: addr(of: into[0]), n: cast<usize>(into.length()));
+    if (st != 0) { panic(msg: "std::random: the OS entropy source failed"); }
+}

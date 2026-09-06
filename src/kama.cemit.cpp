@@ -1560,8 +1560,14 @@ bool CEmitter::constOutOfRange(const std::string& dstCType, int64_t v, const std
     const bool srcU64    = srcCType == "uint64_t" || srcCType == "size_t";
     if (v < 0 && !srcSigned) {
         if (!srcU64) return false;                  // unknown source — a value and a reinterpretation look alike
-        // Above INT64_MAX, so it fits a 64-bit unsigned destination and nothing else.
-        return !(dstCType == "uint64_t" || dstCType == "size_t");
+        // Above INT64_MAX, so it fits a 64-bit unsigned destination and no other INTEGER — but only a
+        // destination this compiler can name is a judgement. An unsubstituted type parameter reaches
+        // here spelled `T` (a generic call is range-checked before instantiation), and the first cut
+        // read "not uint64_t" as "too narrow": `id(x: 18446744073709551615ui64)` into `fn T id<T>(T x)`
+        // was refused as holding "no negative value". Same constraint as the unknown-source arm above.
+        if (dstCType == "uint64_t" || dstCType == "size_t") return false;
+        int64_t lo, hi;
+        return primIntRangeC(dstCType, lo, hi) || dstCType == "int64_t" || dstCType == "ptrdiff_t";
     }
     int64_t lo, hi;
     if (primIntRangeC(dstCType, lo, hi)) return v < lo || v > hi;

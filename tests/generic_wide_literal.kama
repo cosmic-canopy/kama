@@ -1,0 +1,12 @@
+// A suffixed uint64 literal above int64Max, handed to a generic `T` parameter. The literal carries its
+// own type, so `T` binds to uint64 and the value fits; the range check used to fire on the unsubstituted
+// `T` — "holds no negative value" for a number that is not negative — because "not uint64_t" was read
+// as "too narrow" instead of "cannot tell". Found writing std::random's fixture for the full unsigned width.
+fn T id<T>(T x) { return x; }
+
+fn int32 main() {
+    uint64 a = id(x: 5ui64);
+    uint64 b = id(x: 18446744073709551615ui64);
+    uint64 c = id(x: 9223372036854775808ui64);    // int64Max + 1, the first value that needs the fix
+    return (a == 5ui64 && b == 18446744073709551615ui64 && c == 9223372036854775808ui64) ? 7 : 0;
+}

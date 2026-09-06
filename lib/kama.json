@@ -23,6 +23,7 @@
     "path":          { "visibility": "public" },
     "process":       { "visibility": "public" },
     "ptr":           { "visibility": "public" },
+    "random":        { "visibility": "public" },
     "serialization": { "visibility": "public",
                        "modules": {
                          "binary": { "visibility": "public" },

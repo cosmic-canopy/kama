@@ -1,0 +1,102 @@
+// std::random — `shuffle` over a View (a permutation, deterministic per seed, sub-range aware) and the
+// OS entropy seam (`Rng.fromEntropy()` and `entropy(into:)`), which must run on EVERY leg: the wasm leg
+// is the proof that emscripten's libc serves `getentropy`. Eight flags sum to 255.
+import { std::random::Rng, std::random::shuffle, std::random::entropy,
+         std::collections::DynamicArray, std::collections::FixedArray, std::collections::View };
+
+// Is `xs` a permutation of 0..n-1?
+fn bool isPermutation(ref DynamicArray<int32> xs) {
+    isize n = xs.length();
+    FixedArray<int32> seen = FixedArray::<int32>.make(size: n);
+    isize i = 0;
+    while (i < n) { seen[i] = 0; i = i + 1; }
+    i = 0;
+    while (i < n) {
+        int32 v = xs[i];
+        if (v < 0 || cast<isize>(v) >= n) { return false; }
+        seen[cast<isize>(v)] = seen[cast<isize>(v)] + 1;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < n) { if (seen[i] != 1) { return false; } i = i + 1; }
+    return true;
+}
+
+fn DynamicArray<int32> identity(isize n) {
+    DynamicArray<int32> xs = DynamicArray::<int32>.empty();
+    isize i = 0;
+    while (i < n) { xs.add(item: cast<int32>(i)); i = i + 1; }
+    return xs;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    isize i = 0;
+
+    // A shuffled 0..7 is still a permutation, and is not the identity.
+    Rng g = Rng.seeded(seed: 1ui64);
+    DynamicArray<int32> xs = identity(n: 8);
+    borrow xs.view() as v { shuffle(items: v, rng: g); }
+    bool moved = false;
+    i = 0;
+    while (i < 8) { if (xs[i] != cast<int32>(i)) { moved = true; } i = i + 1; }
+    if (isPermutation(xs: xs))                                 { r = r + 1; }
+    if (moved)                                                 { r = r + 2; }
+
+    // The same seed gives the same permutation.
+    Rng h = Rng.seeded(seed: 1ui64);
+    DynamicArray<int32> ys = identity(n: 8);
+    borrow ys.view() as w { shuffle(items: w, rng: h); }
+    bool same = true;
+    i = 0;
+    while (i < 8) { if (xs[i] != ys[i]) { same = false; } i = i + 1; }
+    if (same)                                                  { r = r + 4; }
+
+    // A sub-range shuffle leaves the elements outside it exactly where they were.
+    DynamicArray<int32> zs = identity(n: 10);
+    borrow zs.view() as whole {
+        View<int32> mid = whole.slice(from: 2, count: 6);
+        shuffle(items: mid, rng: g);
+    }
+    bool edges = zs[0] == 0 && zs[1] == 1 && zs[8] == 8 && zs[9] == 9;
+    int32 midSum = 0;
+    i = 2;
+    while (i < 8) { midSum = midSum + zs[i]; i = i + 1; }
+    if (edges && midSum == 27)                                 { r = r + 8; }   // 2+3+4+5+6+7
+
+    // Zero and one element: nothing to do, and nothing to trip over.
+    DynamicArray<int32> one = identity(n: 1);
+    DynamicArray<int32> none = identity(n: 0);
+    borrow one.view() as v1 { shuffle(items: v1, rng: g); }
+    borrow none.view() as v0 { shuffle(items: v0, rng: g); }
+    if (one[0] == 0 && none.length() == 0)                     { r = r + 16; }
+
+    // Two entropy-seeded generators start in different places.
+    Rng e1 = Rng.fromEntropy();
+    Rng e2 = Rng.fromEntropy();
+    if (e1.next() != e2.next())                                { r = r + 32; }
+
+    // `entropy(into:)` fills the whole buffer: 32 bytes are not all zero, and two fills differ.
+    DynamicArray<uint8> a = DynamicArray::<uint8>.empty();
+    DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
+    i = 0;
+    while (i < 32) { a.add(item: 0ui8); b.add(item: 0ui8); i = i + 1; }
+    borrow a.view() as va { entropy(into: va); }
+    borrow b.view() as vb { entropy(into: vb); }
+    bool anyNonZero = false;
+    bool differ = false;
+    i = 0;
+    while (i < 32) {
+        if (a[i] != 0ui8) { anyNonZero = true; }
+        if (a[i] != b[i]) { differ = true; }
+        i = i + 1;
+    }
+    if (anyNonZero)                                            { r = r + 64; }
+
+    // An empty buffer is a no-op rather than a panic.
+    DynamicArray<uint8> empty = DynamicArray::<uint8>.empty();
+    borrow empty.view() as ve { entropy(into: ve); }
+    if (differ && empty.length() == 0)                         { r = r + 128; }
+
+    return r;   // 255
+}

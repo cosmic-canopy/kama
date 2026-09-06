@@ -10303,6 +10303,9 @@ int main(int argc, char** argv)
         // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
         // build produced on Linux silently omitted the socket library.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lws2_32 ";
+        // std::random's entropy seam (kama_random.h) is BCryptGenRandom on Windows, which lives in
+        // bcrypt.dll — same rule, same pruning: keyed on the TARGET, dropped by --gc-sections when unused.
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lbcrypt ";
         // The PE SUBSYSTEM. Console is the default and stays byte-for-byte what it always was, so every
         // console tool, the CI legs and `kama` itself are untouched; a GUI program opts IN and stops
         // getting the stray console window Windows opens for a console-subsystem PE.

@@ -1,0 +1,9 @@
+// An EMPTY range is a panic, not a silent `lo`: `range(lo: 5, hi: 5)` has nothing to draw from, and
+// answering 5 would hide the caller's off-by-one (Rust's `gen_range` panics on the same input).
+import { std::random::Rng, std::random::range };
+
+fn int32 main() {
+    Rng g = Rng.seeded(seed: 3ui64);
+    int32 x = range(rng: g, lo: 5, hi: 5);
+    return x;
+}
