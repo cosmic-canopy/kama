@@ -837,6 +837,10 @@ suppressed), so its heap is freed exactly once — a silent copy is never emitte
 plus a **public `copy` constructor** (a lone `copy` ctor without the `implements` does *not* make a type
 copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
 is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes <!-- xfail: self_returning_static_fn -->
+it — and borrowed **mutably**, not `const ref`, because a *retaining* copy bumps a refcount reached through
+the source and const is deep (the write is refused through a `const ref`, raw pointer or not). That costs <!-- xfail: copy_const_ref_retain_write -->
+nothing at the call: a `Copyable` resource element still copies out of a `const ref` container, since the one <!-- test: copy_resource_const_ref -->
+`__copy` funnel casts the const place. Copying never consumes
 it. Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off moves)
 or `Copyable(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
 overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are markers only
@@ -1939,7 +1943,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.224` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.225` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must

@@ -1,0 +1,14 @@
+// Why `Copyable.copy` borrows its source MUTABLY: a retaining copy bumps a count reached through the
+// source, and const is deep — through a raw pointer too — so the same ctor written over a `const ref`
+// source is refused at the write. Measured by the consumer-driven audit (0.9.225), which set out to make
+// the contract `const ref` and found seven `Rc`-shaped fixtures doing exactly this line.
+extern "<stdlib.h>";
+extern fn UnsafePtr malloc(usize n);
+type value Ctrl { public int32 strong; }
+type resource Rc implements Copyable<This>(bare: copy) {
+    UnsafePtr<Ctrl> c;
+    public unsafe ctor make(UnsafePtr<Ctrl> c) { this.c = c; }
+    public unsafe ctor adopt() { UnsafePtr<Ctrl> k = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; return Rc.make(c: k); }
+    public unsafe ctor copy(const ref Rc source) { source.c[0].strong = source.c[0].strong + 1; return Rc.make(c: source.c); }   // ERROR: const is deep
+}
+fn int32 main() { Rc a = Rc.adopt(); Rc b = copy a; return 0; }

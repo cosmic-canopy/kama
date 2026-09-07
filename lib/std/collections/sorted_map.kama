@@ -50,8 +50,8 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // Three-way compare through a `ref K` receiver so a primitive key's scalar intrinsic conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
     const fn Ordering cmpKeys(const ref K a, const ref K b) { return a.compareTo(other: b); }
-    fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
-    fn K cloneKey(const ref K k) when [K: Copyable<K>] { return copy k; }
+    const fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
+    const fn K cloneKey(const ref K k) when [K: Copyable<K>] { return copy k; }
 
     // --- element hand-off helpers (move-only-safe; delegate to the tested DynamicArray ops) ---
     fn void pushKeyVal(K key, V value) { this.keys.add(item: give key); this.vals.add(item: give value); }
@@ -261,7 +261,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // In-order (ascending) collection of key/value copies into a caller-owned array — the eager backing for
     // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes don't expose.)
-    public fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable<K>] {
+    public const fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) { this.kids[i].collectKeys(dest: dest); }
@@ -270,7 +270,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         }
         if (!this.leaf) { this.kids[n].collectKeys(dest: dest); }
     }
-    public fn void collectVals(ref DynamicArray<V> dest) when [V: Copyable<V>] {
+    public const fn void collectVals(ref DynamicArray<V> dest) when [V: Copyable<V>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) { this.kids[i].collectVals(dest: dest); }
@@ -541,10 +541,10 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // Ascending iteration: a fresh `DynamicArray` of key (resp. value) COPIES in sorted-key order — iterate
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
     // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
-    public fn DynamicArray<K> keys() when [K: Copyable<K>] {
+    public const fn DynamicArray<K> keys() when [K: Copyable<K>] {
         DynamicArray<K> acc = DynamicArray.empty(); this.root.collectKeys(dest: acc); return give acc;
     }
-    public fn DynamicArray<V> values() when [V: Copyable<V>] {
+    public const fn DynamicArray<V> values() when [V: Copyable<V>] {
         DynamicArray<V> acc = DynamicArray.empty(); this.root.collectVals(dest: acc); return give acc;
     }
 

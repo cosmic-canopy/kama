@@ -174,6 +174,7 @@ contract_static_mismatch	contract_static_mismatch.kama:12
 contract_with_body	contract_with_body.kama:2
 contract_with_field	contract_with_field.kama:2
 copy_conditional_off	copy_conditional_off.kama:13
+copy_const_ref_retain_write	copy_const_ref_retain_write.kama:12
 copy_owned	copy_owned.kama:4
 copy_resource_coll	copy_resource_coll.kama:8
 copy_value	copy_value.kama:3 copy_value.kama:4

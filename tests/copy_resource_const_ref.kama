@@ -1,0 +1,14 @@
+// A `Copyable` RESOURCE element copies out of a `const ref` container. The roadmap called this unmeasured
+// ("whether a Copyable resource does is unmeasured"); the consumer-driven audit measured it: the one
+// `__copy` funnel casts the const place, so `copy xs[0]` reaches the type's own `copy` ctor through a
+// read-only container. The ctor keeps the contract's MUTABLE borrow (`ref R source`) — a retaining copy
+// must bump a count reached through the source, and const is deep — and the const container is still fine.
+import { std::collections::DynamicArray };
+type resource R implements Copyable<This>(bare: copy) {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public ctor copy(ref R source) { this.v = source.v + 1; }
+    public const fn int32 get() { return this.v; }
+}
+fn int32 first(const ref DynamicArray<R> xs) { R r = copy xs[0]; return r.get(); }
+fn int32 main() { DynamicArray<R> xs = DynamicArray.empty(); xs.add(item: R.make(v: 40)); R a = copy xs[0]; return first(xs: xs) + a.get() - 40; }   // 41 + 41 - 40 = 42

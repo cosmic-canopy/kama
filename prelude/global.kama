@@ -63,9 +63,13 @@ type contract Sendable for value, resource, enum, intrinsic { }
 // every other factory (M8e had already ruled that shape out for a self-returning `static fn`; this was
 // the last member that escaped it by taking `self`). The source is BORROWED (`ref This`) — copying
 // never consumes it. Emitted C is unchanged (`X__copy(X* source)`), so `copy x` lowers as before.
-// The borrow is deliberately MUTABLE, unlike `Equatable`/`Comparable`'s `const ref`: a RETAINING copy
-// (`Shared`, `Weak`, a library `Rc`) bumps a refcount reached through the source, so `const ref` here
-// would be a promise the shipped implementations break on their first line.
+// The borrow is deliberately MUTABLE, unlike `Equatable`/`Comparable`'s `const ref`, and this was
+// MEASURED (0.9.225, the consumer-driven audit): a RETAINING copy bumps a refcount reached through the
+// source, and const is deep — `source.c[0].strong = source.c[0].strong + 1` through a `const ref` is
+// refused at the write, raw pointer or not (seven in-tree `Rc` fixtures do exactly that). The stdlib's
+// `Shared`/`Weak` would slip through only because they hand the pointer to C; a user-written handle
+// would not. A `Copyable` resource element still copies out of a `const ref` container — the one
+// `__copy` funnel casts the const place (tests/copy_resource_const_ref) — so nothing is lost by `ref`.
 type contract Copyable<T is This> for resource { ctor copy(ref T source); }
 // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
 // Equatable>` is NOMINAL — the type must DECLARE `implements` (a coincidental method set isn't enough).
@@ -672,7 +676,7 @@ type resource Formatter {
     // and `prefix` are 0/1 flags; the integer is masked to `width` bits so a signed negative round-trips.
     public unsafe fn void writeF64Prec(float64 v, int32 prec, int32 width, int32 flags) { string t = kama_fmt_f64_prec(v: v, prec: prec, width: width, flags: flags); this.writeStr(s: ref t); }
     // `width` is the BIT width the value is masked to; `pad` the minimum field width and `flags` the
-    // `0`/`-` bits — `${n:08x}` composes a base with padding since 0.9.223.
+    // `0`/`-` bits — `${n:08x}` composes a base with padding since 0.9.224.
     public unsafe fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix, pad: pad, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
