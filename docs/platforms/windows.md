@@ -85,6 +85,20 @@ binary — is x86_64 running under Windows' x64 translation layer. `file "$(whic
 you have. See
 [Two msys2 environments](#two-msys2-environments-and-why-the-build-system-cannot-tell-them-apart).
 
+⚠️ **Measured 2026-09-06, and it is worse than one translation layer: this box is also a VM.**
+
+```
+PROCESSOR_IDENTIFIER = ARMv8 (64-bit) Family 8 Model 0 Revision 0, QEMU
+Win32_Processor Name = virt-10.0                    (12 cores)
+/ucrt64/bin/clang    = PE32+ … x86-64               Target: x86_64-w64-windows-gnu
+```
+
+So the `~1819 s` was taken through **two** layers — QEMU-virtualized ARM64, then x86_64 emulation on
+top — across ~1525 `kama build` invocations per leg. **Do not read that number as a property of
+Windows.** If you are optimizing here, this box is its own control and that is fine; but a lever whose
+justification is only these numbers belongs on this page as local configuration, not baked into
+`run_tests.sh` as a repo default.
+
 ## Two msys2 environments, and why the build system cannot tell them apart
 
 On an ARM64 Windows host both of these can be installed at once, and they select **different
@@ -106,33 +120,38 @@ Identical on both keys — `uname -m` says `x86_64` in *both*, because `bash.exe
 emulated x86_64 binary reporting on itself, not on the compiler it is about to invoke. msys2 ships no
 native ARM64 runtime, so `bash` and `make` stay emulated whichever environment you pick.
 
-So `out/$(uname -s)-$(uname -m)/` is the **same directory** for both, and there is no safe way today
-to keep both builds:
+So `out/$(uname -s)-$(uname -m)/` used to be the **same directory** for both, and there was no safe
+way to keep both builds:
 
-- **No `PLATFORM=`** → the second build silently overwrites the first *in place*. The harness then
-  tests whichever compiler built last while reporting the platform of the other. This is the
-  stale-binary trap that `./dev` exists to make unrepresentable, and here it is representable.
-- **`PLATFORM=<name>`** → the build lands in `out/<name>/`, and the harness **never sees it**.
-  `tools/kama-bin.sh` resolves `$KAMA` from `uname`, not from `PLATFORM`:
+- **No `PLATFORM=`** → the second build silently overwrote the first *in place*. The harness then
+  tested whichever compiler built last while reporting the platform of the other. This is the
+  stale-binary trap that `./dev` exists to make unrepresentable, and here it was representable.
+- **`PLATFORM=<name>`** → the build landed in `out/<name>/`, and the harness **never saw it**, because
+  `tools/kama-bin.sh` resolved `$KAMA` from `uname` rather than from `PLATFORM`. The other
+  environment's binary was still sitting at that path, so the `-x` test passed and the fallback was
+  never reached. You built ARM64, and `./run_tests.sh` tested the stale x86_64 one without a word.
 
-  ```sh
-  KAMA="$ROOT/out/$(uname -s)-$(uname -m)/kama"
-  [ -x "$KAMA" ] || KAMA="$ROOT/kama"
-  ```
+**FIXED.** Both the `Makefile`'s `PLATFORM ?=` and `tools/kama-bin.sh` now derive the name from
+[`tools/platform.sh`](../../tools/platform.sh), which keys off **`$MSYSTEM`** on msys2 — the variable
+that actually selects the toolchain, and one msys2 does pass to child processes. The two environments
+now land in `out/UCRT64-x86_64/` and `out/CLANGARM64-x86_64/` and cannot collide.
 
-  The other environment's binary is still sitting at that path, so the `-x` test passes and the
-  fallback is never reached. You build ARM64, and `./run_tests.sh` tests the stale x86_64 one without
-  a word. (The root `./kama` is no help either: `ln -s` degrades to a **copy** on msys2, so it is a
-  snapshot of whichever build ran last, not a pointer.)
+⚠️ The derivation lives in **one** script on purpose. It was spelled twice — identically — which was
+safe only for as long as both stayed the same one-liner; the moment one gained the `$MSYSTEM` arm and
+the other did not, `make` would build into a directory the harness never looks in, which is the same
+trap wearing different clothes.
 
-  **Until the fix below lands, `export KAMA=<abs path>` is the only way to be sure which compiler the
-  harness runs** — `kama-bin.sh` honors an externally set one, and `tools/run-checks.sh` passes it
-  down to the guards.
+Two residuals worth knowing:
 
-**Until that is fixed, pick one environment per checkout and stay in it.** `UCRT64` is the one that
-matches CI, which is why everything on this page uses it. Keying the platform off `$MSYSTEM` — in
-both `Makefile`'s `PLATFORM ?=` and `tools/kama-bin.sh` — is the fix, since `$MSYSTEM` is what
-actually selects the toolchain and msys2 does pass it to child processes.
+- **The root `./kama` is still "whichever built last"** — `ln -s` degrades to a **copy** on msys2, so
+  it is a snapshot, not a pointer. `kama-bin.sh` falls back to it when this platform has no build yet
+  (that fallback is load-bearing for an installed tree, which has no `out/` at all), so switching to a
+  not-yet-built environment gets you the other one's binary. Build first, or `export KAMA=<abs path>`,
+  which `kama-bin.sh` honors and `tools/run-checks.sh` passes down to the guards.
+- **`Makefile`'s `-static` rule still keys off `uname -s` matching `MINGW*`,** and should. That asks a
+  different question — "are we on msys2 at all" — which is answered the same way in every environment.
+
+`UCRT64` remains the one that matches CI, which is why everything on this page uses it.
 
 *(Whether the native ARM64 toolchain is meaningfully faster for the suite is untested — do not assume
 it from the emulation fact alone. `bash`, `make`, and the per-fixture process churn stay emulated
@@ -285,8 +304,43 @@ entries here. One has shipped:
     skipped, and output is discarded — which is the correct behaviour, but confirm it does not hang or
     crash.
 
-- **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Surfaces only on a deep
-  working directory. Still open, and parked in [ROADMAP.md](../ROADMAP.md); not a regression.
+- **The filesystem seam is ANSI** — still open, parked in [ROADMAP.md](../ROADMAP.md), not a
+  regression. ⚠️ This entry used to say "the temp-path builder assumes `MAX_PATH`-class lengths".
+  **There is no such builder**, and the framing was wrong twice over:
+
+  * The one fixed path buffer in all of `include/` is `char pattern[MAX_PATH]` in `kama_diropen`
+    (`include/kama_os.h:162`), which returns `ENOMEM` past it — so a deep directory reports an
+    out-of-memory-flavoured error for a path problem.
+  * **Length is the smaller half.** `GetFileAttributesA` / `MoveFileExA` / `FindFirstFileA` and the
+    narrow CRT decode a path in the process **ANSI code page**, while a kama string is UTF-8 by
+    definition (`lib/std/path/path.kama:6-7`). A path containing `é` or `日` is mojibake before it
+    reaches the filesystem, at any length, and **no fixture covers it**.
+
+  Probed here 2026-09-06 (msys2 UCRT64, clang 22.1.8, `LongPathsEnabled = 0`), with a negative control
+  on every case — every unprefixed `_w*` call past 260 failed, as it must for the rest to mean
+  anything:
+
+  * `CreateFileW` / `CreateDirectoryW` / `DeleteFileW` / `GetFileAttributesW` / `FindFirstFileW` all
+    work past `MAX_PATH` with a `\\?\` prefix **while the registry flag is 0** — so the prefix is
+    load-bearing and the registry setting is not something a user has to be told to change.
+  * `GetFullPathNameW` does `/`→`\`, collapses `.`/`..` and doubled separators, tolerates a trailing
+    `*`, passes an existing `\\?\` through untouched, leaves `\\host\share\x` unprefixed, and fails on
+    `""`.
+  * ⚠️ **Win32 already collapses `..` lexically**, even across a junction: with `j -> outer\real`,
+    `CreateFileW("j\..\sib")` finds the sibling next to `j`, not next to `real`. So normalizing with
+    `GetFullPathNameW` before prefixing makes existing behaviour visible rather than changing it —
+    which is the claim the whole design rests on.
+  * ⚠️ **The `_w*` CRT family *does* honour `\\?\` here** (`_wopen`, `_wstat64`, `_wmkdir` all
+    succeeded). Going Win32 is therefore a *preference*, not a forced move — chosen because the seam
+    is already half Win32 (`Find*` has no CRT equivalent), because it collapses `errno` and
+    `GetLastError` into one channel, and because `CreateFileW` + `_open_osfhandle` is already the
+    idiom at `include/kama_runtime.h:1775`.
+  * ⚠️ **`\\?\NUL` resolves.** The common claim that verbatim prefixing kills reserved device names is
+    **false** here — it reaches the NT object-manager entry. Do not use it as an argument.
+  * ⚠️ **`CreateProcessW`'s `lpCurrentDirectory` fails past 260 either way** (`GLE=267`,
+    `ERROR_DIRECTORY_INVALID`), prefixed *and* unprefixed. Going wide buys `std::process` full UTF-8
+    correctness for the program, its arguments, its environment and its cwd; it does **not** buy
+    long-path support for the cwd or the executable. That is a Win32 limit, not a seam limit.
 
 The **wall clock** is the other thing to know: the suite is ~1819 s here against ~75 s in the Linux
 container (read the vintage note under [Running things](#running-things) before comparing those two).

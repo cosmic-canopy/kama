@@ -41,7 +41,11 @@ CXXFLAGS += $(EXTRA_CXXFLAGS)
 # own tree is the one it teaches. The leaf is `uname -s`-`uname -m` rather than a kama triple
 # because THIS build is clang++ and make, not kama — and a Makefile-side uname->triple table would
 # be a second copy of what the driver already knows, free to drift from it.
-PLATFORM ?= $(shell uname -s)-$(shell uname -m)
+#
+# Derived by tools/platform.sh rather than inline, because tools/kama-bin.sh has to reach the SAME
+# answer and the two used to spell it independently. That script also carries the msys2 $MSYSTEM
+# arm and the measurements behind it — UCRT64 and CLANGARM64 are indistinguishable to uname.
+PLATFORM ?= $(shell sh $(dir $(lastword $(MAKEFILE_LIST)))tools/platform.sh)
 BUILD     = out/$(PLATFORM)
 
 # Inheritance is a BUILD-TIME feature switch on the compiler, not a runtime flag (docs/SPEC.md,

@@ -579,10 +579,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
   used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
   *different* ceilings that want separate fixes:
-  - **Runtime, in shipped code** — `kama_diropen` (`include/kama_os.h:117`) builds its `<path>\*` search
+  - **Runtime, in shipped code** — `kama_diropen` (`include/kama_os.h:162`) builds its `<path>\*` search
     pattern in a `char[MAX_PATH]` and returns `ENOMEM` past it, so a **user's** program fails to iterate
     a deep directory. The fix is the `\\?\` prefix + `FindFirstFileW` (the `A` variants cannot exceed
     `MAX_PATH` at all), which means going wide through that whole seam.
+    ⚠️ **Length is only half of it, and the smaller half.** The `A` family decodes a path in the process
+    ANSI code page, while a kama string is UTF-8 by definition (`lib/std/path/path.kama:6-7`) — so a
+    path with any non-ASCII character is mojibake before it reaches the filesystem, at **any** length,
+    and no fixture covers it. Both defects have one fix, and every peer language ships it: Rust
+    (`maybe_verbatim`), Go (`fixLongPath`), Zig, .NET and libuv all convert UTF-8⇄UTF-16 at a single
+    boundary and prefix a long absolute path there. None ships a mixed A/W seam.
   - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
     `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
     so). Lower stakes: it degrades to the unresolved spelling rather than failing.

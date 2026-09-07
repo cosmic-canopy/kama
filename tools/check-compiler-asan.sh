@@ -51,7 +51,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
-PLATFORM=$(uname -s)-$(uname -m)
+PLATFORM=$(sh "$ROOT/tools/platform.sh")   # the shared derivation, not a copy — see that file
 ASAN="out/$PLATFORM-asan/kama"        # the Makefile picks this directory itself when KAMA_ASAN=1
 
 tmp=$(mktemp -d)

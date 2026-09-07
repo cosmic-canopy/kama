@@ -37,7 +37,11 @@ if [ ! -x "$KAMA" ]; then echo "check-no-inheritance: $KAMA not built (run make 
 
 JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-PLATFORM=$(uname -s)-$(uname -m)
+# The SAME derivation the Makefile uses, not a fourth copy of it — see tools/platform.sh. This line
+# used to spell `$(uname -s)-$(uname -m)` itself, and broke the moment the shared rule grew its msys2
+# $MSYSTEM arm: `make` built into out/UCRT64-x86_64-noinherit while this guard looked for the old
+# uname-derived name, found nothing, and reported the compiler as failing to reject `extends`.
+PLATFORM=$(sh "$ROOT/tools/platform.sh")
 OUT="out/$PLATFORM-noinherit"        # the Makefile picks this itself when KAMA_INHERITANCE=0
 NOINH="$OUT/kama"
 

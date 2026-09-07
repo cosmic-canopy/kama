@@ -10627,7 +10627,6 @@ int main(int argc, char** argv)
         // Clamped to 1 — i.e. today's single invocation, byte for byte — when splitting cannot pay:
         //
         //  * nothing to split (one input: an import-free program, or a --release native unity build).
-        //  * Windows: no posix_spawn/waitpid pool.
         //  * wasm: emcc's Python startup makes per-TU spawning far costlier than clang's.
         //    ⚠️ This used to give a second reason — that emcc's link settings (`--js-library`,
         //    `-sEXPORTED_RUNTIME_METHODS`, `-sEXIT_RUNTIME`) sat in the COMPILE flags, so a per-TU
@@ -10641,6 +10640,12 @@ int main(int argc, char** argv)
         //    use that cache (it is bounded by zig's ~0.18s process startup: 0.59s cold AND warm), so
         //    parallelizing would be 7x better cold and 5x WORSE in the edit-rebuild loop, which is the
         //    loop that matters. A bundled install is exactly where `zig cc` comes from.
+        //
+        // ⚠️ Windows is deliberately NOT on this list, and this line is where that gets checked. A
+        // bullet here used to say "Windows: no posix_spawn/waitpid pool", which had already stopped
+        // being true when runCmdsParallel grew its `_spawnlp(_P_NOWAIT)`/`_cwait` arm — see that
+        // function, whose own comment calls the pool "the single largest lever on Windows build time".
+        // The comment outlived the code by describing a clamp the condition below never applied.
         if (ccInputs.size() < 2 || wasm || isZig(compiler)) nJobs = 1;
 
         // Compile every input on its own and join the results, rather than handing them all to one
