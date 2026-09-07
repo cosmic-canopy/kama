@@ -253,6 +253,19 @@ Worth knowing before debugging, because each of these produced a confident wrong
   filename predicate a test writes. `find … -name app` matches a filename, not a stem, so a guard
   asserting that a build produced `app` reports "the output went somewhere else" when it went exactly
   where it should. `case "$(uname -s)" in MINGW*) EXE=".exe"` is the idiom (`tools/check-toolchain.sh`).
+- ⚠️ **`opendir` on a `\\?\` path past `MAX_PATH` lists the WRONG DIRECTORY — silently.** mingw-w64's
+  dirent returns a valid `DIR*` and then enumerates the **current working directory**; measured twice on
+  a 357-character tree, which listed this repo's scratch files instead of the one file actually there.
+  Unprefixed at that length it fails honestly, so adding the prefix turns a reportable error into a wrong
+  answer. `FindFirstFileA`/`FindNextFileA` on the same tree is correct (3 entries). Nothing shipped hits
+  this yet — `std::fs` uses the `W` pair — but `src/kama.driver.cpp` lists directories with `opendir` for
+  module discovery, which is why it is written down here and not only in the roadmap.
+- **A UTF-8 `activeCodePage` manifest makes the NARROW API UTF-8, process-wide.** Windows 10 1903+.
+  Measured: the same program given a `日本語` argument sees `63 63 63` (`???`) without it and the exact
+  nine UTF-8 bytes with it — and `argv`, `fopen`, `_mkdir`, `stat`, `system()` and the `A` family all
+  follow, with no call-site changes. It does **not** lift `MAX_PATH`: that is the `\\?\` prefix's job,
+  and the prefix works with the narrow CRT too (`_mkdir` to 356, `fopen` to 365, with
+  `LongPathsEnabled = 0`). Relevant to the compiler, not to `std::fs`, which is already wide.
 
 ## Where the remaining work is
 

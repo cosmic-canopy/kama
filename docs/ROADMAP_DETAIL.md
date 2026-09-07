@@ -576,16 +576,69 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   here rather than folded into the walk-parity work. ⚠️ **`tools/check-scan-parity.sh` cannot see this
   one** — it holds the two walks at parity on AST *node kinds*, and this is an asymmetry in which
   *declarations* get walked at all, which is the same for both.
-- **The compiler's own Windows path handling is still narrow.** The runtime seam (`include/kama_os.h`)
-  went UTF-16-at-the-edge in `0.9.217` — the record is [platforms/windows.md](platforms/windows.md)
-  § *Where the remaining work is*, and `tools/check-long-path.sh` / `tools/check-path-unicode.sh` hold
-  it. What is left is `src/kama.driver.cpp`: sources are read through `fopen`, `PATH_MAX` is `_MAX_PATH`
-  (`:59`), and `absolutePath`'s `GetFinalPathNameByHandleA` treats an over-long result as a miss and
-  falls back (`:176`, which says so). Lower stakes than the runtime was — it degrades to the unresolved
-  spelling rather than failing — but a project under a non-ASCII directory is the same defect on the
-  compiler's side of the boundary. The fix is the same shape (`_wfopen`, `GetFinalPathNameByHandleW`,
-  one conversion helper), and `std::filesystem::path` is NOT the answer: it is `wchar_t`-native on
-  Windows and would push the conversion into every call site instead of one.
+- **The compiler's own Windows path handling is still narrow.** The RUNTIME seam (`include/kama_os.h`)
+  went UTF-16-at-the-edge in `0.9.217`/`0.9.218` — that record is
+  [platforms/windows.md](platforms/windows.md) § *Where the remaining work is*, held by
+  `tools/check-long-path.sh` and `tools/check-path-unicode.sh`. This entry is the other side of the
+  boundary: `kama.exe` itself. **Both axes fail today, and both fail at the same first ceiling** —
+  `kama: cannot create output directory` — measured 2026-09-07 on this box:
+
+  ```
+  kama build <dir>\hello.kama          where <dir> ends in 日本語   ->  ...\cw_???     (argv is ??? before any path call)
+  kama build <355-char path>\hello.kama                            ->  cannot create output directory
+  ```
+
+  ⚠️ **The obvious fix is the wrong one, and this entry used to prescribe it.** It said "the same shape
+  as the runtime — `_wfopen`, `GetFinalPathNameByHandleW`, one conversion helper". Going wide here is
+  **not** required and is the expensive road, for a reason specific to this file: `<windows.h>` **cannot
+  enter `kama.driver.cpp`'s translation unit** — it also holds `kama.parser.hpp`, whose token enum
+  (`BOOL`, `CHAR`, `CONST`, `INT8`, `VOID`, …) collides with the Win32 typedefs, which is why the two
+  Win32 calls already there are hand-declared (`:44-57`). A wide conversion would mean hand-declaring
+  the whole surface and replacing every `std::ifstream`. Measured, none of that is necessary:
+
+  1. **Encoding — an `activeCodePage` manifest, and nothing else.** Windows 10 1903+ lets a process
+     declare its ANSI code page as UTF-8, which makes the narrow CRT *and* the `A` family UTF-8 by
+     definition. Probed with the same program built twice, given a `日本語` argument:
+
+     | | `argv[1]` | `_mkdir` | `fopen` |
+     |---|---|---|---|
+     | today (no manifest) | `63 63 63` (`???`) | fails | fails |
+     | `activeCodePage` = UTF-8 | the exact 9 UTF-8 bytes | ok | ok |
+
+     It fixes argv, `fopen`, `ifstream`/`ofstream`, `stat`, `_mkdir`, `system()` and every `A` call **at
+     once, with zero call-site changes** — a `.manifest` + a one-line `.rc`, `windres` into a `.res.o`,
+     added to the link at `Makefile:224` under the existing `MINGW` branch (`:220`).
+     ⚠️ Needs 1903+; older Windows silently keeps the legacy code page, which is today's behaviour, not
+     a regression.
+  2. **Length — the `\\?\` prefix, still narrow.** The prefix is **not** wide-only: measured with
+     `LongPathsEnabled = 0` (confirmed `0x0` in the registry, so the prefix is doing the work, not the
+     machine), narrow `_mkdir` reached 356 characters and narrow `fopen` 365, where unprefixed `_mkdir`
+     died at 274. `std::ifstream`/`std::ofstream`, `stat` and `system()`-invoked `clang` all work
+     prefixed at ~355 too — the C-compiler shell-out through cmd.exe is **not** a blocker (`rc=0`, object
+     produced, with and without the prefix). So this is one prefixer applied at the entry points, over
+     `std::string`, with no type changes anywhere.
+  3. ⚠️ **`opendir`/`readdir` is the one call that cannot be saved, and it fails SILENTLY WRONG.**
+     mingw-w64's dirent on a `\\?\` path past `MAX_PATH` returns a valid `DIR*` and then lists **the
+     current working directory** — reproduced twice, listing this repo's scratch files instead of the
+     target's single `only.txt`. Unprefixed at that length it fails honestly (`opendir FAILED`), so the
+     prefix converts a reportable error into a wrong answer. The driver uses `opendir` for module and
+     package discovery (`:311`, `:329`, `:358`, `:651`, `:3965`), so this would silently compile the
+     wrong set of modules. `FindFirstFileA`/`FindNextFileA` is the replacement and was verified on the
+     same 357-character tree: correct 3 entries, and a CJK filename round-tripped as its exact UTF-8
+     bytes through the **narrow** call under the manifest.
+     Because that needs `<windows.h>`, it wants **a new small `src/kama.winpath.cpp`** exporting a few
+     narrow-`std::string` functions — a TU without `kama.parser.hpp` in it, which sidesteps the collision
+     that shapes this whole entry.
+
+  `std::filesystem::path` remains NOT the answer: it is `wchar_t`-native on Windows and would push a
+  conversion into every call site instead of one, and it needs the C++17 the build does not use
+  (`-std=c++14`, `Makefile`).
+
+  **Lower stakes than the runtime was** — this breaks a *build*, loudly, rather than a shipped program's
+  data — which is why it sits below the stdlib rows. The guard for it is a `tools/check-*.sh` that builds
+  a fixture from a deep directory; the non-ASCII half cannot be driven from msys2 bash (it re-encodes a
+  native child's argv through the ANSI code page), so that half is a PowerShell step or a
+  `kama`-spawns-`kama` fixture.
 - **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in
   [SPEC.md](SPEC.md) (*Explicit SIMD*); this entry keeps only the MEASUREMENTS behind it, because each one
   cost real time to obtain and every one of them contradicted an assumption someone held first.
