@@ -53,9 +53,9 @@ type resource SqlQuery {
     public ctor of(string text, DynamicArray<string> params) {
         this.text = give text; this.params = give params;
     }
-    public fn ref string queryText() { return this.text; }
+    public const fn const ref string queryText() { return this.text; }
     public const fn isize paramCount() { return this.params.length(); }
-    public fn ref string param(isize at) { return this.params[at]; }
+    public const fn const ref string param(isize at) { return this.params[at]; }
 }
 
 fn SqlQuery sql(ref Template t) {

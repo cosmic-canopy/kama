@@ -138,8 +138,12 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // Borrow the value for `h` IN PLACE (any V, no Copyable bound) — the read/mutate accessor for a SlotMap of
     // move-only values. PANICS on a stale/invalid handle (guard with `contains` first); the returned `ref V`
     // may not escape and dangles across an `insert`/`remove` that relocates the buffer.
-    public unsafe fn ref V getRef(Handle handle) {
+    public unsafe const fn const ref V getRef(Handle handle) {
         if (!this.valid(h: handle)) { panic(msg: "SlotMap.getRef: stale or invalid handle"); }
+        return this.values[handle.index];
+    }
+    public unsafe fn ref V getRefMut(Handle handle) {   // the writable twin
+        if (!this.valid(h: handle)) { panic(msg: "SlotMap.getRefMut: stale or invalid handle"); }
         return this.values[handle.index];
     }
 

@@ -7,7 +7,7 @@ type resource Counter {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     public fn void bump() { this.n = this.n + 1; }
-    public fn int32 get() { return this.n; }
+    public const fn int32 get() { return this.n; }
 }
 
 fn int32 main() {

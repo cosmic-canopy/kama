@@ -124,8 +124,12 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     // Borrow the root IN PLACE (any element, no Copyable bound). PANICS when empty (guard with `isEmpty` /
     // `length`), like `DynamicArray`'s `operator[]` out of bounds — the in-place read accessor for a heap of
     // move-only elements. The returned `ref T` may not escape and dangles across a `push`/`pop` that relocates.
-    public fn ref T peekRef() {
+    public const fn const ref T peekRef() {
         if (this.data.length() == 0) { panic(msg: "PriorityQueue.peekRef: empty"); }
+        return this.data[0];
+    }
+    public fn ref T peekRefMut() {   // the writable twin — mutate the root in place (its priority must not change)
+        if (this.data.length() == 0) { panic(msg: "PriorityQueue.peekRefMut: empty"); }
         return this.data[0];
     }
 

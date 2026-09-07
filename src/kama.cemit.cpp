@@ -3519,7 +3519,14 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
                   || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
     std::string em = emitExpression(e);
-    if (lvalue || cls.empty()) return "&(" + em + ")";
+    if (lvalue || cls.empty()) {
+        // A READ-ONLY place (a `const ref T` call, `cv[i]` through a const `operator[]`) is a `T const*` in
+        // C, and every runtime helper takes `T*`: `const fn` is ABI-neutral, so the front end has already
+        // refused every write and the cast only restates that. Same cast method dispatch applies to its
+        // receiver; this is the operator/intrinsic-operand half of it.
+        if (!cls.empty() && chainThroughConstPlace(e)) return "(" + cls + "*)&(" + em + ")";
+        return "&(" + em + ")";
+    }
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
@@ -4344,9 +4351,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 // An arithmetic compound goes through the place operator with the `__at` POINTER — the
                 // index is evaluated once, the sub-`int` result is range-checked, `/=` checks its divisor.
                 if (*placeOpMacro(v->token))
-                    return std::string(placeOpMacro(v->token)) + "(" + coll + "__at(&(" + recvExpr + "), " + idx
+                    return std::string(placeOpMacro(v->token)) + "(" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx
                          + "), (" + rhs + "))";
-                return "((*" + coll + "__at(&(" + recvExpr + "), " + idx + ")) "
+                return "((*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ")) "
                             + assignmentOperator(v->token) + " (" + rhs + "))";
             }
             // A user place-returning `operator[]`: assign/compound-assign THROUGH the place.
@@ -4417,7 +4424,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 recordDestructibleLocal(t, "kama_string");
                 return coll + "__get(&" + t + ", " + idx + ")";
             }
-            return coll + "__get(&(" + recvExpr + "), " + idx + ")";
+            return coll + "__get((" + coll + "*)&(" + recvExpr + "), " + idx + ")";
         }
         // A user place-returning `operator[]`: read the value out of the place.
         if (indexesUserOp(ea)) return emitPlace(expr);
@@ -13191,7 +13198,7 @@ std::string CEmitter::emitPlace(SharedExpression e)
     if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))   // recvExpr is itself a place (recursive)
-            return "(*" + coll + "__at(&(" + recvExpr + "), " + idx + "))";
+            return "(*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + "))";
         // A user place-returning `operator[]`: `a[i]` -> `(*Class__op_index(&(place of a), i))`.
         // The receiver is emitted as a place too, so a nested `m[i][j]` chains cleanly.
         SharedExpression recv = ea->expression ? ea->expression
@@ -13200,8 +13207,14 @@ std::string CEmitter::emitPlace(SharedExpression e)
             std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
                                    ? emitExpression((*ea->expressionlist)[0]) : "0";
             // `this` is already `self` (a pointer) — pass it directly; any other lvalue's address is `&place`.
+            // A receiver that is itself a READ-ONLY place (`o.stdout()[i]`) is a `T const*` in C; the
+            // operator takes `T*` (the ABI-neutral rule — every write was already refused), so cast, as
+            // method dispatch does for its receiver.
+            const std::string ownerCls = exprClass(recv);
             std::string recvAddr = dynamic_cast<ThisAccessNode*>(recv.get())
-                                       ? emitExpression(recv) : ("&(" + emitPlace(recv) + ")");
+                                       ? emitExpression(recv)
+                                       : ((chainThroughConstPlace(recv) ? "(" + ownerCls + "*)" : std::string())
+                                          + "&(" + emitPlace(recv) + ")");
             return "(*" + op->cName + "(" + recvAddr + ", " + idxE + "))";
         }
     }
@@ -26533,7 +26546,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // (a T* into the buffer). No copy, no temp; a plain nested call, strictly ISO C.
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
-            recvPtr = coll + "__at(&(" + recvExpr + "), " + idx + ")";
+            recvPtr = coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ")";
         else
             recvPtr = "&(" + emitExpression(receiver) + ")";
     } else if (cls == "kama_string") {

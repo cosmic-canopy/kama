@@ -30,7 +30,7 @@ fn int32 main() {
     w.fieldName(name: "b"); w.writeRef(id: cast<uint64>(2));
     w.endTableEntry();
     w.endGraph();
-    DynamicArray<uint8> bytes = w.innerRef().takeBytes();
+    DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();
 
     Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: give bytes);
     match (res) {

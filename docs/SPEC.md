@@ -437,13 +437,13 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 by copy (`e.key()` / `e.value()`), present only when **both** key and value are `Copyable` — the pair analogue
 of `iterator()` (keys) and `values()`. `Entry<K,V>` is a named pair (the language has no tuple); a key is never
 mutated in place (that would corrupt the table), so there is no `entriesMut()` — mutate values via
-`valuesMut()` / `getRef`.
+`valuesMut()` / `getRefMut`.
 
 `Map` is **move-only**: it owns its keys and values (dropping the key + handing the value back on `remove`,
 dropping both on overwrite/`clear`/end of life — ASan/UBSan-clean for owning keys *and* values, e.g.
 `Map<string, DynamicArray<string>>`). Lookups **borrow** the key (`ref K`), so they don't consume a key you're
 holding. Three value accessors form a consistent trio: `get(key:) -> Optional<V>` hands back a **deep copy**
-(present only when `V` is `Copyable`); `getRef(key:) -> ref V` **borrows the stored value in place** (any `V` —
+(present only when `V` is `Copyable`); `getRef(key:) -> const ref V` **borrows the stored value in place**, read-only, and `getRefMut(key:) -> ref V` is its writable twin (any `V` —
 the accessor that makes a `Map` of move-only values like `Owned`/`Shared`/a collection first-class rather than
 write-only; panics on an absent key, so guard with `contains` first, as a map lookup is *partial*);
 `remove(key:) -> Optional<V>` **moves the value out** (`None` when absent — reclaim it or discard to drop).
@@ -454,14 +454,14 @@ automatically, so `m.get(key: 5)` / `m.get(key: Point.make(x: 1, y: 2))` work wi
 **`PriorityQueue<T: Comparable>`** (a binary heap). The queue is a **min-heap by default** (bare ctor or
 `PriorityQueue.minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue.maxHeap()`
 inverts it. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
-element) / `peekRef() -> ref T` (borrow, panics when empty) read the root O(1). It orders via the element's
+element) / `peekRef() -> const ref T` (read-only borrow, panics when empty; `peekRefMut()` to mutate in place) read the root O(1). It orders via the element's
 `Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since heap order isn't
 meaningful — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`, which gained an O(1)
 `swap(i:, j:)` in-place element exchange.)
 
 **`SlotMap<V>`** is a generational slot map (Rust's `slotmap`; the ECS entity / asset registry): `insert(value:)
 -> Handle` hands back a stable, Copyable `Handle`, and `get(handle:) -> Optional<V>` (copy, `Copyable`) /
-`getRef(handle:) -> ref V` (borrow, panics on a stale handle) / `remove(handle:) -> Optional<V>` (moves out)
+`getRef(handle:) -> const ref V` (read-only borrow, panics on a stale handle; `getRefMut(handle:)` writes) / `remove(handle:) -> Optional<V>` (moves out)
 all **reject a stale handle** — one whose slot was removed, or removed and reused for a different value —
 returning `None` (or panicking on `getRef`) instead of aliasing the new occupant. That's a per-slot generation
 counter (odd while occupied, bumped on every insert/remove), so a handle can safely outlive the value it names
@@ -2968,10 +2968,14 @@ members. `Equatable` and `Comparable` borrow their operand `const ref`.
 
 What it deliberately does **not** mark is as informative:
 
-- **`view()`, `slice()`, `iterMut()`, `dataPtrMut()`, `getRef()`** hand out a mutable window into the
-  receiver. Const on any of them would launder exactly what the rule above closes. (`dataPtr()` and
-  `cstr()` ARE const — they hand out the read-only `UnsafeConstPtr<T>`, which is the split applied at
-  the raw seam: `dataPtr`/`dataPtrMut` as `get`/`getRef`.)
+- **`view()`, `slice()`, `iterMut()`, `dataPtrMut()`, `getRefMut()`, `peekRefMut()`, `derefMut()`,
+  `innerRefMut()`** hand out a mutable window into the receiver. Const on any of them would launder exactly
+  what the rule above closes. Each has a read-only twin that IS const — `dataPtr()`/`cstr()` hand out the
+  `UnsafeConstPtr<T>`, and `getRef()`/`peekRef()`/`deref()`/`innerRef()`/`Entry.key()`/`value()`/
+  `Output.stdout()` hand out a `const ref T` place — which is **the naming convention**: for a read/write
+  pair the unmarked name is the read-only form and `Mut` marks the writable one (`iterator`/`iterMut`,
+  `dataPtr`/`dataPtrMut`, `getRef`/`getRefMut`, `deref`/`derefMut`). A lone place-returner with no
+  read-only use keeps its bare name (`IteratorMut.next()`, `Child.stdout()` — every `File` op is non-const).
 - **`Map`'s and `SlotMap`'s `hasNext()`** scan forward past empty slots, so asking the question moves the
   cursor. They are not queries — which is why `IteratorMut.hasNext` is not a const member either, even
   though the other implementations would satisfy it.

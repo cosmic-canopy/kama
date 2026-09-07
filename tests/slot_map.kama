@@ -7,7 +7,7 @@ type resource Counter {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     public fn void bump() { this.n = this.n + 1; }
-    public fn int32 get() { return this.n; }
+    public const fn int32 get() { return this.n; }
 }
 
 fn int32 main() {
@@ -47,7 +47,7 @@ fn int32 main() {
     SlotMap<Counter> cm = SlotMap.empty();
     Handle h1 = cm.insert(value: Counter.make(n: 100));
     Handle h2 = cm.insert(value: Counter.make(n: 200));
-    cm.getRef(handle: h1).bump();                      // 100 -> 101, through the borrow
+    cm.getRefMut(handle: h1).bump();                      // 100 -> 101, through the borrow
     int32 g1 = cm.getRef(handle: h1).get();
     if (g1 == 101) { r = r + 5; }
     int32 taken = match (cm.remove(handle: h2)) { case Some(value: ctr): ctr.get(); case None: 0 - 1; };

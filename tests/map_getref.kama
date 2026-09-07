@@ -7,7 +7,7 @@ type resource Counter {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     public fn void bump() { this.n = this.n + 1; }
-    public fn int32 get() { return this.n; }
+    public const fn int32 get() { return this.n; }
 }
 
 fn int32 main() {
@@ -15,9 +15,9 @@ fn int32 main() {
     m.put(key: 1, value: Counter.make(n: 10));
     m.put(key: 2, value: Counter.make(n: 20));
 
-    m.getRef(key: 1).bump();          // borrow + mutate in place -> 11
-    m.getRef(key: 1).bump();          // -> 12
-    m.getRef(key: 2).bump();          // -> 21
+    m.getRefMut(key: 1).bump();          // borrow + mutate in place -> 11
+    m.getRefMut(key: 1).bump();          // -> 12
+    m.getRefMut(key: 2).bump();          // -> 21
 
     int32 r = 0;
     r = r + m.getRef(key: 1).get();   // 12 (mutation stuck across re-borrows)

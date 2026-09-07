@@ -59,7 +59,8 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     }
 
     // Borrow the underlying sink (e.g. so `encode` can `takeBytes()` its concrete StringWriter). W-agnostic.
-    public fn ref W innerRef() { return this.sink; }
+    public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
+    public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
     // `encode` sugar (a generic free fn can't instantiate `BinaryWriter<W>`, so this is an instance method the
@@ -267,7 +268,7 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serializable v)
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-    return Result::Ok(value: w.innerRef().takeBytes());
+    return Result::Ok(value: w.innerRefMut().takeBytes());
 }
 
 // Deserializable a KBIN byte buffer into a `Deserializable` type. Name the target with turbofish:

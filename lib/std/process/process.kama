@@ -75,8 +75,8 @@ type resource Output {
         this.st = status; this.outBytes = give stdout; this.errBytes = give stderr;
     }
     public const fn ExitStatus status() { return this.st; }
-    public fn ref DynamicArray<uint8> stdout() { return this.outBytes; }
-    public fn ref DynamicArray<uint8> stderr() { return this.errBytes; }
+    public const fn const ref DynamicArray<uint8> stdout() { return this.outBytes; }
+    public const fn const ref DynamicArray<uint8> stderr() { return this.errBytes; }
 }
 
 // Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status).
@@ -101,7 +101,7 @@ unsafe fn UnsafePtr buildArgv(const ref string program, ref DynamicArray<string>
 
 // Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
 // merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
-unsafe fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
+unsafe fn UnsafePtr buildEnvp(bool clear, const ref DynamicArray<string> keys, const ref DynamicArray<string> vals) {
     isize n = keys.length();
     UnsafePtr ov = kama_argv_new(n: cast<int32>(n));
     isize i = 0;

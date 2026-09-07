@@ -286,7 +286,7 @@ type resource BufReader<R: Reader> implements Reader {
 // The accumulated bytes as an owned string. Shared by `readLine` and anything else that builds text a
 // byte at a time; empty in, empty out (`kama_string_from_raw` would be handed a pointer into an empty
 // buffer otherwise, which `DynamicArray`'s own indexing correctly refuses).
-unsafe fn string bytesToString(ref DynamicArray<uint8> bytes) {
+unsafe fn string bytesToString(const ref DynamicArray<uint8> bytes) {
     if (bytes.length() == 0) { return ""; }
     return kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length());
 }

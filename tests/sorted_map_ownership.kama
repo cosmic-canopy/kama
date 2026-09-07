@@ -9,7 +9,7 @@ type resource Counter {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     public fn void bump() { this.n = this.n + 1; }
-    public fn int32 get() { return this.n; }
+    public const fn int32 get() { return this.n; }
 }
 
 // `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through
@@ -51,7 +51,7 @@ fn int32 main() {
     int32 i = 0;
     while (i < 40) { int32 kk = (i * 17) % 40; cm.put(key: kk, value: Counter.make(n: kk)); i = i + 1; }
     if (cm.length() == 40) { r = r + 5; }
-    cm.getRef(key: 20).bump(); cm.getRef(key: 20).bump();       // borrow + mutate in place (chained ref)
+    cm.getRefMut(key: 20).bump(); cm.getRefMut(key: 20).bump();       // borrow + mutate in place (chained ref)
     int32 b = cm.getRef(key: 20).get();
     if (b == 22) { r = r + 5; }
     Optional<Counter> got = cm.remove(key: 33);                  // reclaim the moved-out value

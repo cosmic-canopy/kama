@@ -89,8 +89,8 @@ type view MapValueIterMut<V> implements IteratorMut<V> {
 type resource Entry<K, V> implements Sendable when [K: Sendable, V: Sendable] {
     K k; V v;   // private (a `resource` exposes behavior through methods); read via key()/value()
     public ctor make(K key, V value) { this.k = give key; this.v = give value; }
-    public fn ref K key() { return this.k; }       // borrow the key  (never moved out — the pair owns it)
-    public fn ref V value() { return this.v; }      // borrow the value
+    public const fn const ref K key() { return this.k; }       // borrow the key  (never moved out — the pair owns it)
+    public const fn const ref V value() { return this.v; }      // borrow the value (read-only: the pair is a snapshot)
 }
 
 // A by-value iterator over a map's ENTRIES (`foreach (Entry<K,V> e in map.entries())`), present only when
@@ -244,9 +244,16 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // out of bounds — hence the explicit `getRef` name, not `operator[]` (which would hide the can-fail nature).
     // The returned `ref V` may not escape and dangles if held across a `put` that rehashes — the same borrow
     // boundary as an array `ref` held across `add`→realloc (the deliberate no-borrow-checker tradeoff).
-    public unsafe fn ref V getRef(const ref K key) {
+    public unsafe const fn const ref V getRef(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRef: absent key"); }
+        return this.vals[i];
+    }
+    // The writable twin (kama's unmarked/`Mut` split, as `iterator`/`iterMut`): the same lookup, handing back
+    // a place the caller may mutate through — `m.getRefMut(key: k).bump()`.
+    public unsafe fn ref V getRefMut(const ref K key) {
+        isize i = this.slotOf(key: key);
+        if (i < 0) { panic(msg: "Map.getRefMut: absent key"); }
         return this.vals[i];
     }
 

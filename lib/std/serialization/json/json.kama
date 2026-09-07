@@ -53,7 +53,8 @@ type resource JsonWriter<W: Writer> implements Serializer {
     }
 
     // Borrow the underlying sink (e.g. so `encode` can `finish()` its concrete StringWriter). W-agnostic body.
-    public fn ref W innerRef() { return this.sink; }
+    public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
+    public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's JSON into this writer's owned sink, then flush — the streaming twin of the
     // `encode` sugar, without materializing the whole string. The ergonomic write-to-a-sink entry (a generic
@@ -221,7 +222,7 @@ fn Result<string, std::memory::Owned<Error>> encode(Serializable v) {
     Serializer s = w;              // borrow the writer behind the Serializer interface
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-    return Result::Ok(value: w.innerRef().finish());   // materialize the concrete StringWriter's bytes
+    return Result::Ok(value: w.innerRefMut().finish());   // materialize the concrete StringWriter's bytes
 }
 
 // Borrows the token string (`ref` → `kama_string*`): C reads `.data` via strtod and never owns/frees it,
@@ -274,7 +275,7 @@ type resource JsonReader implements Deserializer {
         if (c >= 65ui8 && c <= 70ui8) { return c - 65ui8 + 10ui8; }  // A-F
         this.err = true; return 0ui8;
     }
-    unsafe fn string bytesToString(ref DynamicArray<uint8> b) {
+    unsafe fn string bytesToString(const ref DynamicArray<uint8> b) {
         if (b.length() == 0) { return ""; }
         return kama_string_from_raw(src: addr(of: b[0]), start: 0, len: b.length());
     }
