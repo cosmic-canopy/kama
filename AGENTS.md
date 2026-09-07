@@ -19,6 +19,15 @@ This repo vendors two guidance skills under `.claude/skills/` — apply them:
 - **karpathy-guidelines**: think before coding, simplicity first, surgical changes, goal-driven.
 - **ponytail**: write the least code that works (YAGNI ladder; deletion over addition).
 
+**YAGNI stops at the language surface.** Both skills govern how code is written, not what kama offers.
+kama is a general-purpose systems language, and a feature is decided on its merits against GOALS.md, never
+deferred because no consumer in the corpus asks for it yet: the corpus cannot ask for what the language has
+not made available. "No consumer yet" is not a verdict. A surface item is *scheduled*, *genuinely optional*
+(say why a consumer never needs it), or a *non-goal* (say what answers the need instead), and each verdict
+is written down in ROADMAP_DETAIL. Ponytail's ladder still applies to the implementation of whatever is
+decided: least code, deletion over addition. Learned the expensive way: the read-only place was refused
+three times as "the corpus asks for it nowhere" and then blocked the first external package.
+
 ## Verify the claim before you build on it
 
 The house rule, learned the hard way and worth more than any other line here: **a doc is not

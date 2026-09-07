@@ -181,6 +181,10 @@ Development of kama follows two vendored guidance skills that reinforce goals #4
 - **karpathy-guidelines** — think before coding, simplicity first, surgical changes, goal-driven.
 - **ponytail** — lazy-senior-dev YAGNI ladder: write the least code that works.
 
+Both govern *how code is written*, not *what kama offers*: YAGNI stops at the language surface, where a
+feature is decided on its merits against these goals rather than deferred until a consumer asks
+(`AGENTS.md` § *Working style* carries the rule and the reason).
+
 ## Current status
 
 **The language feature set is complete.** What remains before the 1.0 tag is documentation and
