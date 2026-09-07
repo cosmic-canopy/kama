@@ -1193,30 +1193,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
 
-- **A read-only `View` — `ConstView<T>` and the `view()`/`viewMut()` split (residual of the const-pointer
-  arc, 2026-09-06).** The raw seam is done: `UnsafeConstPtr<T>` is `T const*`, `dataPtr()` is `const fn`
-  and hands it out, `dataPtrMut()` is the writable half, `cstr()` is read-only (SPEC § `unsafe fn`). The
-  view is the same problem one level up and is not done: `view()`/`slice()` are non-const (SPEC lists them
-  as deliberately unmarked), so a `const ref DynamicArray<uint8>` cannot produce a window at all, and not
-  one FFI wrapper in `lib/std` takes `const View<uint8>` — every `write(View<uint8> bytes)` /`send` /digest
-  /base64 /hex parameter is a mutable view held only so `addr(of: bytes[0])` is legal. The answer is the
-  split the stdlib already spells everywhere else (`get`/`getRef`, `iterator`/`iterMut`, now
-  `dataPtr`/`dataPtrMut`): a `type view ConstView<T>` over an `UnsafeConstPtr<T>` with `length()`,
-  `isEmpty()`, `slice()`, `iterator()` (Copyable, by value), `const fn dataPtr()`, and **`const ref T
-  operator[]`** — the read-only place (SPEC § `const fn`, shipped 0.9.210) indexes ANY element, copyable or
-  not, so there is no `get(index:)` (it would be a second way to read); `public unsafe const fn
-  ConstView<T> view()` + `viewMut()` (and `slice`/`sliceMut`) on every container; `View<T>` implements
-  `Viewable<ConstView<T>>` so its `view()` is the narrowing, and the emitter converts `View<T>` →
-  `ConstView<T>` IMPLICITLY at every sink (argument, assignment, initializer, return — the direction kama
-  already takes for `const ref` parameters and `UnsafePtr` → `UnsafeConstPtr`), the reverse refused with
-  `viewMut()` named; then the sweep (the FFI parameters above become `ConstView<uint8>`,
-  `fs.writeAll`/`bytesToString`/`buildEnvp` become `const ref`). Measured cost, which is why it is its own
-  row: the emitter special-cases `"view"` by NAME in the `borrow` mint check, `parallel_for`,
-  `registerFixedViews` and the escape checker; `Viewable<V> { fn V view(); }` needs a `viewMut` sibling
-  (`borrow b.viewMut() as v { sortUnstable(items: v); }`); 134 test sites call `.view()`; and
-  `borrow d.viewMut() as v { v[0] = x; }` is refused today as a "reseat" (the alias check tests the root
-  binding, not the bare alias — kama.cemit.cpp `emitExpression`'s AssignmentNode arm), which the split fixes.
-
 <a id="s3"></a>
 
 ## 3. Open design questions (settle before the work they gate)
