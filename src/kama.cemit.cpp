@@ -24460,6 +24460,18 @@ std::string CEmitter::hoistStringTemp(SharedExpression e)
     // temp would free a buffer it doesn't own (double-free with the real owner). Leave it to addrOfOperand,
     // which derefs the returned place as an lvalue and never drops it — mirrors the general-receiver guard.
     if (auto* iv = dynamic_cast<InvocationNode*>(n)) if (invocationReturnsPlace(iv)) return "";
+    // `a[i]` is the SAME borrow reached through a different node kind, and it was not on this list.
+    // Every form it lowers to hands back an element the container still owns: an intrinsic collection's
+    // `__get` is a shallow struct copy sharing the buffer, a `ref T operator[]` is `(*Class__op_index(…))`,
+    // a raw `p[i]` reads a pointee owned elsewhere. (A by-value user `operator[]` is not an emission
+    // path — emitExpression routes only a place-returning one, and everything else falls to the raw
+    // pointer read.) Hoisting one here emitted `kama_string __strtmp = (*…op_index(&a, i)); …;
+    // kama_string__dtor(&__strtmp);`, freeing the array's buffer, which the array's own dtor then freed
+    // again — a double free that aborts at SCOPE EXIT, not at the comparison, and only when the element
+    // is heap-backed: a literal element has nothing to free twice, and the corpus only ever compared
+    // against literals or iterated with `foreach (ref string …)`, which is why nothing caught it.
+    // Pinned by tests/dynarr_string_index_compare.kama.
+    if (dynamic_cast<ElementAccessNode*>(n)) return "";
     if (!exprIsString(e)) return "";
     std::string t = "__strtmp" + std::to_string(_tempCounter++);
     _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");

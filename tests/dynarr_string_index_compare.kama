@@ -1,0 +1,56 @@
+// A string element read through `a[i]` is a BORROW, and using it as a string operand must not drop it.
+//
+// The emitter hoisted any string-typed rvalue operand into a scope-dropped `__strtmp` so a computed
+// string (`a + b`, `s.trim()`) would be freed rather than leaked. `a[i]` matched that rule — it is not a
+// literal, not an identifier, and its type is `string` — so `if (a[0] == "x")` emitted a shallow copy of
+// the element followed by `kama_string__dtor` on the copy: the array's buffer freed once there, and again
+// when the array dropped. A double free, aborting at SCOPE EXIT rather than at the comparison.
+//
+// ⚠️ The elements here are HEAP-BACKED on purpose (built by concatenation). A literal element has no
+// buffer to free twice, so the same code with `a.add(item: "plain.txt")` passes on the broken emitter —
+// which, with the corpus otherwise comparing against literals or iterating `foreach (ref string …)`,
+// is exactly why nothing caught it. Found by a std::fs guard whose readDir() strings are heap-owned.
+//
+// Every operand position that routes through the string-temp hoist is exercised: `==`/`!=`, a loop,
+// the receiver of a string method, the ARGUMENT of a string intrinsic, and both sides of `+`. Returns 42
+// on success — and `a` drops on the way out, which is where the abort was.
+import { std::collections::DynamicArray };
+
+fn DynamicArray<string> heapNames() {
+    DynamicArray<string> a = DynamicArray.empty();
+    string b0 = "plain" + ".txt";  a.add(item: give b0);    // heap-backed, not a literal
+    string b1 = "other" + ".txt";  a.add(item: give b1);
+    return give a;
+}
+
+fn int32 main() {
+    DynamicArray<string> a = heapNames();
+
+    // 1. direct comparison, both spellings
+    bool eq = (a[0] == "plain.txt");
+    if (!eq) { return 1; }
+    bool ne = (a[0] != "plain.txt");
+    if (ne) { return 2; }
+
+    // 2. indexed inside a loop — the shape a directory listing is scanned with
+    int32 hits = 0;
+    isize i = 0;
+    while (i < a.length()) {
+        if (a[i] == "other.txt") { hits = hits + 1; }
+        i = i + 1;
+    }
+    if (hits != 1) { return 3; }
+
+    // 3. as the RECEIVER of a string method
+    if (!a[1].contains(substring: "other")) { return 4; }
+
+    // 4. as the ARGUMENT of a string intrinsic (a second, separate hoist site)
+    string hay = "xx" + "other.txt" + "yy";
+    if (!hay.contains(substring: a[1])) { return 5; }
+
+    // 5. both operands of `+`
+    string joined = a[0] + a[1];
+    if (joined.length() != cast<isize>(18)) { return 6; }
+
+    return 42;   // `a` drops here: two heap elements, each freed exactly once
+}
