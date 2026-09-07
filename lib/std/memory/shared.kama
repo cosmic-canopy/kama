@@ -34,7 +34,7 @@ type value Ctrl { public usize strong; public usize weak; }
 // local — a bare `return <local>` re-invokes `copy()` and recurses); the ctor is also how a `Weak` builds a
 // `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
 // alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
-type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy),
+type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<This>(bare: copy),
                                     Deserializable<This> when [T: Deserializable<T>],
                                     // A shared handle may cross an isolate boundary exactly when its payload cannot
                                     // change: then the control block takes the atomic refcount flavor and every
@@ -74,7 +74,8 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
         ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }   // the read-only half (prelude `Deref`)
+    public unsafe fn ref T derefMut() { return this.p[0]; }            // the writable half (`DerefMut`)
     public unsafe ctor copy(ref Shared<T, A> source) {                                   // Copyable -> retain, carry the allocator
         kama_ctrl_retain_strong(c: cast<UnsafePtr>(source.c), atomic: __kama_ctrl_atomic());
         return Shared.make(p: source.p, c: source.c, alloc: source.alloc);
@@ -91,7 +92,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
             // reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
             // fetch_subs with a release store + acquire fence. A non-last release already decremented.
             if (kama_ctrl_release_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                drop(value: this.deref());                        // run the pointee's dtor once
+                drop(value: this.derefMut());                     // run the pointee's dtor once
                 this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T));
                 if (kama_ctrl_finish_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
                     this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));

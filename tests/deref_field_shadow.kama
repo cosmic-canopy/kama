@@ -11,11 +11,12 @@ type value Payload {
     public ctor make(int32 tag, int32 n) { this.tag = tag; this.n = n; }
 }
 
-type value Wrap implements Deref<Payload> {
+type value Wrap implements Deref<Payload>, DerefMut<Payload> {
     Payload inner;
     public int32 tag;                                   // shadows `Payload.tag`
     public ctor make(Payload p, int32 tag) { this.inner = p; this.tag = tag; }
-    public fn ref Payload deref() { return this.inner; }
+    public const fn const ref Payload deref() { return this.inner; }
+    public fn ref Payload derefMut() { return this.inner; }
     public fn void retag(int32 t) { this.tag = t; }     // the wrapper's field, not the pointee's
     public fn int32 ownTag() { return this.tag; }
 }

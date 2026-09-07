@@ -1,0 +1,19 @@
+// A type implementing only `Deref<T>` forwards member access through `deref()`, a `const fn` returning a
+// READ-ONLY place — so a non-const method of the pointee is unreachable through it. `DerefMut<T>` is the
+// writable half; without it the wrapper is a read-only window onto its pointee.
+type value Point {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public const fn int32 get() { return this.x; }
+    public fn void bump() { this.x = this.x + 1; }
+}
+type value BoxP implements Deref<Point> {
+    Point inner;
+    public ctor make(Point p) { this.inner = p; }
+    public const fn const ref Point deref() { return this.inner; }
+}
+fn int32 main() {
+    BoxP b = BoxP.make(p: Point.make(x: 1));
+    b.bump();   // -> REJECT: through the read-only `deref()`
+    return b.get();
+}

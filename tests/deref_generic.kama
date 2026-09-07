@@ -1,6 +1,6 @@
-// A GENERIC heap smart pointer written in kama: `Own<T> implements Deref<T>` — a generic class
+// A GENERIC heap smart pointer written in kama: `Own<T> implements Deref<T>, DerefMut<T>` — a generic class
 // implementing a generic contract parameterized by its OWN type param. When `Own<Point>` monomorphizes,
-// `implements Deref<T>` resolves to `Deref_Point` and auto-deref forwards `o.sum()`/`o.x` to the heap
+// `implements Deref<T>, DerefMut<T>` resolves to `Deref_Point` and auto-deref forwards `o.sum()`/`o.x` to the heap
 // pointee. This is the exact shape a library `Owned<T>` needs — the prerequisite for porting the
 // intrinsic smart pointers out of the compiler.
 extern "<stdlib.h>";
@@ -13,10 +13,11 @@ type value Point {
     public fn int32 sum() { return this.x + this.y; }
 }
 
-type resource Own<T> implements Deref<T> {
+type resource Own<T> implements Deref<T>, DerefMut<T> {
     UnsafePtr<T> p;
     public unsafe ctor make(T v) { this.p = cast<UnsafePtr<T>>(malloc(n: sizeof(T))); this.p[0] = v; }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     unsafe ~Own() { free(p: cast<UnsafePtr>(this.p)); }
 }
 

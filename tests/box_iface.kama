@@ -8,10 +8,11 @@ type contract Shape for value { fn int32 area(); }
 type value Circle implements Shape { int32 r; public ctor make(int32 r) { this.r = r; } public fn int32 area() { return this.r * this.r; } }
 type value Square implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
 
-type resource Box<T> implements Deref<T>, HeapOwner<T> {
+type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     UnsafePtr<T> p;
     public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
 

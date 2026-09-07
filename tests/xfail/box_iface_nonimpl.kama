@@ -3,10 +3,11 @@ extern fn void free(UnsafePtr p);
 type contract Shape for value { fn int32 area(); }
 type value Circle implements Shape { int32 r; public ctor make(int32 r){this.r=r;} public fn int32 area(){return this.r;} }
 type value Square { int32 s; public ctor make(int32 s){this.s=s;} }   // does NOT implement Shape
-type resource Box<T> implements Deref<T>, HeapOwner<T> {
+type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     UnsafePtr<T> p;
     public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
 fn int32 main() { Box<Shape> b = new Square.make(s: 4); return 0; }   // ERROR: Square does not implement Shape

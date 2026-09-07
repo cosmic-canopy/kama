@@ -5,10 +5,11 @@ type value Point {
     public ctor make(int32 x) { this.x = x; }
     public fn int32 get() { return this.x; }
 }
-type value BoxP implements Deref<Point> {
+type value BoxP implements Deref<Point>, DerefMut<Point> {
     Point inner;
     public ctor make(Point p) { this.inner = p; }
-    public fn ref Point deref() { return this.inner; }
+    public const fn const ref Point deref() { return this.inner; }
+    public fn ref Point derefMut() { return this.inner; }
 }
 fn int32 main() {
     BoxP b = BoxP.make(p: Point.make(x: 1));

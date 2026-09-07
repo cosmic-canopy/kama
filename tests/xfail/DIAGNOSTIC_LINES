@@ -64,8 +64,8 @@ borrow_nested_same_place	borrow_nested_same_place.kama:13
 borrow_not_viewable	borrow_not_viewable.kama:18 borrow_not_viewable.kama:19
 borrow_two_bindings_overlap	borrow_two_bindings_overlap.kama:13
 bound_nominal	bound_nominal.kama:15
-box_iface_nonimpl	box_iface_nonimpl.kama:12
-box_use_after_move	box_use_after_move.kama:11 box_use_after_move.kama:13 box_use_after_move.kama:3
+box_iface_nonimpl	box_iface_nonimpl.kama:13
+box_use_after_move	box_use_after_move.kama:12 box_use_after_move.kama:14 box_use_after_move.kama:3
 brace_do_bare	brace_do_bare.kama:5
 brace_else_bare	brace_else_bare.kama:7
 brace_for_bare	brace_for_bare.kama:5
@@ -124,6 +124,7 @@ const_ref_addr_widen	const_ref_addr_widen.kama:6
 const_ref_as_mut_return	const_ref_as_mut_return.kama:13
 const_ref_compound	const_ref_compound.kama:10
 const_ref_contract_mismatch	const_ref_contract_mismatch.kama:13
+const_ref_drop	const_ref_drop.kama:11
 const_ref_give	const_ref_give.kama:16
 const_ref_index_write	const_ref_index_write.kama:18
 const_ref_nonconst_call	const_ref_nonconst_call.kama:17
@@ -190,7 +191,9 @@ default_named_unknown	default_named_unknown.kama:3
 default_nonzero_arg	default_nonzero_arg.kama:5
 default_positional_after_named	default_positional_after_named.kama:3
 default_too_many_args	default_too_many_args.kama:3
-deref_missing	deref_missing.kama:15
+deref_missing	deref_missing.kama:16
+deref_readonly_call	deref_readonly_call.kama:17
+deref_readonly_write	deref_readonly_write.kama:14
 derived_implements_contract	derived_implements_contract.kama:17 derived_implements_contract.kama:21
 derived_shadows_base_method	derived_shadows_base_method.kama:34 derived_shadows_base_method.kama:35
 derived_widens_public	derived_widens_public.kama:20
@@ -749,7 +752,7 @@ viewable_takes_no_args	viewable_takes_no_args.kama:4
 virtual_class_empty	virtual_class_empty.kama:2
 virtual_in_plain	virtual_in_plain.kama:2
 virtual_on_value	virtual_on_value.kama:2
-weak_no_deref	weak_no_deref.kama:22
+weak_no_deref	weak_no_deref.kama:23
 when_multi_off	when_multi_off.kama:14
 widen_local	widen_local.kama:1
 withcapacity_custom_alloc	withcapacity_custom_alloc.kama:12 withcapacity_custom_alloc.kama:7

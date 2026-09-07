@@ -14,14 +14,15 @@ type value Counter {
     public fn int32 bump() { this.n = this.n + 1; return this.n; }
 }
 
-type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
+type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     public unsafe ctor adopt(UnsafePtr<T> raw) {
         this.p = raw;
         this.c = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); this.c[0].strong = 1; this.c[0].weak = 0;
     }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     public unsafe ctor copy(ref Rc<T> source) {                         // Copyable -> retain
         source.c[0].strong = source.c[0].strong + 1;
         this.p = source.p; this.c = source.c;
@@ -29,7 +30,7 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy
     unsafe ~Rc() {
         this.c[0].strong = this.c[0].strong - 1;
         if (this.c[0].strong == 0) {
-            drop(value: this.deref());           // run the pointee's dtor (no-op for a value)
+            drop(value: this.derefMut());           // run the pointee's dtor (no-op for a value)
             free(p: cast<UnsafePtr>(this.p));
             if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
         }

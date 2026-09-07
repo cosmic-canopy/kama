@@ -1,0 +1,16 @@
+// A field reached by auto-deref through `deref()` alone is a read-only place: writing it is refused at the
+// assignment, exactly as a write through any `const ref` place is. Implement `DerefMut<T>` to write.
+type value Point {
+    public int32 x;
+    public ctor make(int32 x) { this.x = x; }
+}
+type value BoxP implements Deref<Point> {
+    Point inner;
+    public ctor make(Point p) { this.inner = p; }
+    public const fn const ref Point deref() { return this.inner; }
+}
+fn int32 main() {
+    BoxP b = BoxP.make(p: Point.make(x: 1));
+    b.x = 2;   // -> REJECT: the field is reached through the read-only `deref()`
+    return b.x;
+}

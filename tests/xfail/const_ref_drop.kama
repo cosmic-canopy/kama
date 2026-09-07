@@ -1,0 +1,17 @@
+// `drop(value: place)` runs a destructor, which MUTATES the place (it leaves a dropped value behind) — so a
+// read-only place is refused: here `deref()` on a handle, which is the `const ref T` half of auto-deref.
+// A destructor drops through `derefMut()`, the writable half (see `Owned`'s own `~Owned`).
+import { std::memory::Owned };
+type resource Noisy {
+    int32 n;
+    public ctor make() { this.n = 1; }
+    ~Noisy() { }
+}
+unsafe fn void dropEarly(Owned<Noisy> o) {
+    drop(value: o.deref());   // -> REJECT
+}
+fn int32 main() {
+    Owned<Noisy> o = new Noisy.make();
+    dropEarly(o: give o);
+    return 0;
+}

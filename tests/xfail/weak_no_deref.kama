@@ -8,11 +8,12 @@ type resource RcWeak<T> {
     public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }
     unsafe ~RcWeak() { this.c[0].weak = this.c[0].weak - 1; }
 }
-type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     UnsafePtr<T> p; UnsafePtr<Ctrl> c;
     public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }
     public unsafe ctor adopt(UnsafePtr<T> raw) { UnsafePtr<Ctrl> k = null; k = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; return Rc.make(p: raw, c: k); }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     public unsafe fn RcWeak<T> downgrade() { this.c[0].weak = this.c[0].weak + 1; return RcWeak.make(p: this.p, c: this.c); }
     unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; }
 }

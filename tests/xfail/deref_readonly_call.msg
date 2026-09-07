@@ -1,0 +1,1 @@
+cannot call non-const method `bump` through `deref()`

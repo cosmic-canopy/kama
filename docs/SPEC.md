@@ -830,26 +830,37 @@ Res c = give b;   // move — b consumed
 Res d = a;        // bare — follows the declared default (here: deep-copy)
 ```
 
-**Auto-deref — the `Deref<T>` contract.** The standard smart pointers forward member access to their
-pointee (`ptr.method()`/`ptr.field` reach the held `T`). Any type can opt into the same **auto-deref** by
-implementing the prelude contract `type contract Deref<T> { fn ref T deref(); }` — the `implements` is the
-explicit gate. When a member isn't found on the wrapper itself, it resolves on the pointee `T` and is
-called through `deref()` (which returns a *place* — a `T*` — into the pointee); resolution is recursive, so
-deref chains. `deref()` returns a place rooted at `this`, so it's bound by the same second-class-borrow
-rules as `ref T operator[]` (no lifetimes needed). This is how a smart pointer is written as an ordinary
-`resource` (RAII + move-only come free) rather than a compiler intrinsic.
+**Auto-deref — the `Deref<T>` / `DerefMut<T>` contracts.** The standard smart pointers forward member
+access to their pointee (`ptr.method()`/`ptr.field` reach the held `T`). Any type can opt into the same
+**auto-deref** by implementing the prelude contracts — the `implements` is the explicit gate:
 
 ```kama
-type value Point { public int32 x; public int32 y; public fn int32 sum() { return this.x + this.y; }
+type contract Deref<T>    for value, resource { const fn const ref T deref(); }   // the read-only place
+type contract DerefMut<T> for value, resource { fn ref T derefMut(); }           // the writable place
+```
+
+When a member isn't found on the wrapper itself, it resolves on the pointee `T` and is called through a
+place into the pointee: **`derefMut()`** when the type implements `DerefMut<T>` and the receiver is
+mutable, else **`deref()`**, which is a `const fn` returning a `const ref T` — so a `const ref Owned<T>`
+reaches its pointee's `const fn`s, and a type implementing only `Deref<T>` forwards reads and refuses a
+write or a non-const call through it. Resolution is recursive, so deref chains. Both places root at <!-- xfail: deref_readonly_call, deref_readonly_write -->
+`this`, so they are bound by the same second-class-borrow rules as `ref T operator[]` (no lifetimes
+needed). This is how a smart pointer is written as an ordinary `resource` (RAII + move-only come free)
+rather than a compiler intrinsic; `Owned`/`Shared` implement both halves.
+
+```kama
+type value Point { public int32 x; public int32 y; public const fn int32 sum() { return this.x + this.y; }
                    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; } }
-type value BoxP implements Deref<Point> {
+type value BoxP implements Deref<Point>, DerefMut<Point> {
     Point inner;
     public ctor make(Point p) { BoxP r; r.inner = p; return give r; }
-    public fn ref Point deref() { return this.inner; }
+    public const fn const ref Point deref() { return this.inner; }
+    public fn ref Point derefMut() { return this.inner; }
 }
 BoxP b = BoxP.make(p: Point.make(x: 30, y: 12));
-int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__deref(&b))  (42)
-int32 x = b.x;       // auto-deref -> BoxP__deref(&b)->x           (30)
+int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__derefMut(&b))  (42)
+int32 x = b.x;       // auto-deref -> BoxP__derefMut(&b)->x           (30)
+b.x = 1;             // a write goes through `derefMut()`; with only `Deref<Point>` it is refused
 ```
 
 **The give/copy behavior matrix.** **Every owning kind is movable**; a bare hand-off follows the kind's
@@ -2235,7 +2246,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   it — see *Recoverable regions*.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
-  library owner over `UnsafePtr<T>` drop its heap pointee before `free` — through `deref()`'s `ref T`,
+  library owner over `UnsafePtr<T>` drop its heap pointee before `free` — through `derefMut()`'s `ref T`
+  (a destructor mutates, so a read-only place — `deref()`'s `const ref T`, a const root — is refused), <!-- xfail: const_ref_drop -->
   never through a bare raw element (`drop(value: p[0])` is refused: the element is untyped to ownership, <!-- xfail: unsafe_ptr_elem_drop -->
   so it would drop nothing).
 - **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`, or as an

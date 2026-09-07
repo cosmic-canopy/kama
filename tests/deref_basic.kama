@@ -1,4 +1,4 @@
-// Auto-deref via the prelude `Deref<T>` contract: a wrapper that `implements Deref<Point>` forwards
+// Auto-deref via the prelude `Deref<T>` contract: a wrapper that `implements Deref<Point>, DerefMut<Point>` forwards
 // member access to its pointee — `b.sum()` resolves to `Point__sum(BoxP__deref(&b))` and `b.x` reads
 // through `BoxP__deref(&b)->x`. Nominal/opt-in: the `implements` is the gate. No heap, no lifetimes.
 @generate(of)
@@ -7,10 +7,11 @@ type value Point {
     public fn int32 sum() { return this.x + this.y; }
 }
 
-type value BoxP implements Deref<Point> {
+type value BoxP implements Deref<Point>, DerefMut<Point> {
     Point inner;
     public ctor make(Point p) { this.inner = p; }
-    public fn ref Point deref() { return this.inner; }   // a place rooted at `this`
+    public const fn const ref Point deref() { return this.inner; }   // a place rooted at `this`
+    public fn ref Point derefMut() { return this.inner; }
 }
 
 fn int32 main() {

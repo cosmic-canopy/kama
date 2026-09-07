@@ -9,7 +9,7 @@ export { Owned };
 // stores the handle in `alloc` (via `adoptIn`), so the dtor releases it through the SAME allocator —
 // letting a boxed object live in a caller-owned arena and be bulk-reclaimed on `reset()`. The allocator
 // is a copyable VALUE handle carried by value (zero-size for `GlobalAllocator`).
-type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable] {
+type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> p;
     A alloc;
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). Leaves `alloc`
@@ -19,7 +19,10 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Heap
     // Placement adopt: a raw block that came FROM `allocator`, stored so the dtor releases it through the
     // same handle (the `new(allocator: a) T(...)` path).
     public unsafe ctor adoptIn(UnsafePtr<T> raw, A allocator) { this.p = raw; this.alloc = allocator; return this; }
-    public unsafe fn ref T deref() { return this.p[0]; }
+    // The two halves of auto-deref (prelude `Deref`/`DerefMut`): a read-only place a const handle may hand
+    // out, and the writable one a mutable handle uses.
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    public unsafe fn ref T derefMut() { return this.p[0]; }
     // The other half of `adopt` (Rust's `Box::into_raw` to its `from_raw`): give the block up to a FOREIGN
     // owner — a host API's userdata slot — and empty this handle, so the dtor below frees nothing. That is
     // how a value outlives the frame that made it: hand it over in one `unsafe fn`, borrow through the
@@ -28,5 +31,5 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Heap
     public unsafe fn UnsafePtr<T> release() { UnsafePtr<T> raw = this.p; this.p = null; return raw; }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
     // zero-initialized/moved-from handle).
-    unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
+    unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(value: this.derefMut()); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
 }

@@ -1529,6 +1529,7 @@ private:
     // program actually widens, since the alternative is ~100 vtables in every binary for a rare feature.
     std::set<std::pair<std::string, std::string>>   _primWidenings;
     std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
+    std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
     std::string                                     _movableContract;       // resolved name of the prelude `Movable` marker (implicit on every resource; `!Movable` subtracts it)
     std::string                                     _copyableContract;      // resolved name of the prelude `Copyable` marker
@@ -2562,6 +2563,8 @@ private:
     // dropped (dropping a copy of a borrow would double-free). isPlaceReturn is the discriminator.
     bool invocationReturnsPlace(InvocationNode* iv);
     MethodInfo* placeMethodOf(const std::string& cls, const std::string& method);   // resolve through `Deref<T>`
+    MethodInfo* derefAccessor(const std::string& cls, SharedExpression recv, bool* isConstPlace = nullptr);   // `derefMut` or `deref` for this receiver
+    std::string derefFnName(const std::string& cls, bool wantMut);   // the C name of the half a string-built site should call
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer
     // expression `recvPtr` (e.g. "self" or "&(c)"): virtual -> via __vptr; else direct.
     // `site`, when non-null, is the source identifier the method was spelled at: the resolved method is
@@ -2569,7 +2572,7 @@ private:
     // so the compiler-internal callers with no user spelling in hand are unaffected.
     std::string emitDispatch(const std::string& clsName, const std::string& recvPtr,
                              const std::string& method, SharedArgumentList args, int srcLine,
-                             const IdentifierNode* site = nullptr);
+                             const IdentifierNode* site = nullptr, SharedExpression recvExpr = nullptr);
     // Nothing is constructible by default: reject a nameless `Type(...)`/`new Type(...)`, with advice that
     // offers `of`/`zero` only for a transparent value. True if it rejected. Exempts intrinsic/extern.
     bool rejectNamelessConstruction(const ClassInfo& ci, const std::string& disp, bool viaNew, int srcLine);

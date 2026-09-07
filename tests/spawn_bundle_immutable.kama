@@ -12,7 +12,7 @@ import { std::concurrent::Isolate, std::memory::Shared };
 type immutable value Palette implements Sendable {
     int32 tint;
     public ctor make(int32 tint) { this.tint = tint; }
-    public fn int32 shade(int32 i) { return this.tint + i; }
+    public const fn int32 shade(int32 i) { return this.tint + i; }   // reached through `deref()`, the read-only place
 }
 
 type resource Job implements Sendable {

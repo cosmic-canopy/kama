@@ -7773,6 +7773,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         // the prelude `Deref<T>` gates auto-deref — remember its resolved name (by source name, so a
         // user's own `Deref` in a namespace still matches). Empty if no `Deref` is in scope → inert.
         if (cd->name && cd->name->value && *cd->name->value == "Deref") _derefContract = ii.name;
+        if (cd->name && cd->name->value && *cd->name->value == "DerefMut") _derefMutContract = ii.name;
         // the prelude `HeapOwner<T>` — a type implementing it is a `new` placement target (via `adopt`).
         if (cd->name && cd->name->value && *cd->name->value == "HeapOwner") _heapOwnerContract = ii.name;
         // the prelude ownership markers — `Movable` (implicit on resources; `!Movable` subtracts it) and
@@ -13683,7 +13684,7 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     std::string srcE = emitExpression(src);
     // pointee: a library owner exposes it via `deref()` (T*); the concrete's per-contract vtable
     // fattens it. The refcount block is the library `.c` (kama_ctrl-compatible), shared with the source.
-    indent(depth); *_out << nm << ".obj = (void*)" << srcCls << "__deref(&(" << srcE << "));\n";
+    indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(srcCls, true) << "(&(" << srcE << "));\n";
     indent(depth); *_out << nm << ".vtbl = &" << libT << "__as_" << dstElem << ";\n";
     if (dk != CollKind::Owned) {                                // intrinsic Owned<I> is {obj, vtbl} — no ctrl
         indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << srcE << ").c;\n";
@@ -13737,7 +13738,7 @@ void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& 
     // base-subobject pointer: the derived pointee (via deref()) walked down the `__base` chain.
     std::string bp = basePathTo(&_classes[derivedT], &_classes[baseT]);
     if (!bp.empty()) bp.pop_back();                            // drop trailing '.'
-    std::string basePtr = "&((" + srcCls + "__deref(&(" + srcE + ")))->" + bp + ")";
+    std::string basePtr = "&((" + derefFnName(srcCls, true) + "(&(" + srcE + ")))->" + bp + ")";
     if (copyable) {
         // Shared/Weak: build the base handle sharing the source's ctrl; retain bumps the count,
         // a move transfers the ref (no bump — the source's dtor is suppressed below). Carry the
@@ -16650,20 +16651,56 @@ bool CEmitter::implementsContractTemplate(ClassInfo* ci, const std::string& tmpl
 // no `Deref` is in scope, so the whole feature is zero-cost when unused.
 std::string CEmitter::derefTarget(const std::string& cls)
 {
-    if (_derefContract.empty()) return "";
+    if (_derefContract.empty() && _derefMutContract.empty()) return "";
     auto it = _classes.find(cls);
     if (it == _classes.end()) return "";
     for (auto& ifn : it->second.interfaces) {
         auto ii = _interfaces.find(ifn);
-        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != _derefContract)
-            continue;
+        if (ii == _interfaces.end() || !ii->second.isGenericInst) continue;
+        // Either half names the pointee: `Deref<T>` through `deref()`, `DerefMut<T>` through `derefMut()`.
+        const char* member = ii->second.templateKey == _derefContract      ? "deref"
+                           : ii->second.templateKey == _derefMutContract   ? "derefMut" : nullptr;
+        if (!member) continue;
         ClassInfo* oc = nullptr;
-        MethodInfo* mi = findMethod(&it->second, "deref", &oc);
+        MethodInfo* mi = findMethod(&it->second, member, &oc);
         if (!mi || !mi->returnType) return "";
         std::string t = cTypeInInstance(cls, mi->returnType);   // resolves `ref T` under a generic wrapper's subst
         return isClass(t) ? t : "";
     }
     return "";
+}
+
+// The accessor an auto-deref through `cls` goes through for THIS receiver: `derefMut()` when the type
+// implements `DerefMut<T>` and the receiver is not const (a writable place), else `deref()` (the read-only
+// place a `const ref Owned<T>` may still hand out). A type implementing only `Deref<T>` forwards reads and
+// nothing else — a write or a non-const call through it is refused where the place is used. Null when the
+// type has neither.
+MethodInfo* CEmitter::derefAccessor(const std::string& cls, SharedExpression recv, bool* isConstPlace)
+{
+    if (isConstPlace) *isConstPlace = false;
+    if (!_classes.count(cls)) return nullptr;
+    ClassInfo* dc = nullptr;
+    MethodInfo* mut = findMethod(&_classes[cls], "derefMut", &dc);
+    if (mut && !(recv && isConstReceiver(recv))) return mut;
+    MethodInfo* ro = findMethod(&_classes[cls], "deref", &dc);
+    if (ro && isConstPlace) *isConstPlace = true;
+    return ro ? ro : mut;
+}
+
+// The C function a string-built deref site calls — the handle→pointee bridges that hand a smart pointer's
+// pointee to a `ref` parameter, a contract fat pointer or an upcast, which have no receiver EXPRESSION to
+// ask about constness, only a need: `wantMut` says the consumer writes (a `ref T` parameter, a contract
+// box, a base handle), and a read-only consumer (`const ref T`) takes `deref()`. A type with only one half
+// gets that half; the C backstop then judges a `T const*` handed to a writer.
+std::string CEmitter::derefFnName(const std::string& cls, bool wantMut)
+{
+    if (_classes.count(cls)) {
+        ClassInfo* dc = nullptr;
+        if (wantMut) if (MethodInfo* m = findMethod(&_classes[cls], "derefMut", &dc)) return m->cName;
+        if (MethodInfo* m = findMethod(&_classes[cls], "deref", &dc)) return m->cName;
+        if (MethodInfo* m = findMethod(&_classes[cls], "derefMut", &dc)) return m->cName;
+    }
+    return cls + "__deref";
 }
 
 // Placement `new(allocator: a) T(...)`: extract the `allocator:` arg's C expression + its allocator class.
@@ -17551,7 +17588,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 if (dtImpl) {
                     // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
                     // — deref to the pointee (`T*`) and wrap THAT as the fat pointer, not the handle struct.
-                    s += "(" + p.className + "){ (void*)" + c + "__deref(&(" + val + ")), &"
+                    s += "(" + p.className + "){ (void*)" + derefFnName(c, true) + "(&(" + val + ")), &"
                        + dt + "__as_" + p.className + " }";
                 } else if (!c.empty() && isClass(c)) {
                     // `this` already IS the object pointer (`self`), so wrap it without taking its
@@ -17603,9 +17640,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                  + ">` (it may be dead) — `tryUpgrade` to a `Shared` first").c_str(), srcLine);
                 s += "(" + val + ").ptr";
             } else if (!dt.empty() && dt == p.className) {
-                // a library heap-owner (Owned/Shared) borrows its pointee via the Deref contract's
-                // `deref()` (-> T*), uniformly with `ref stackValue` — no `.ptr` field is assumed.
-                s += argCls + "__deref(&(" + val + "))";
+                // a library heap-owner (Owned/Shared) borrows its pointee via the Deref contracts —
+                // `derefMut()` (-> T*) for a `ref` parameter, `deref()` (-> T const*) for a `const ref` one —
+                // uniformly with `ref stackValue`; no `.ptr` field is assumed.
+                s += derefFnName(argCls, !p.isConst) + "(&(" + val + "))";
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
                 // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
                 // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
@@ -18197,7 +18235,19 @@ bool CEmitter::chainThroughConstPlace(SharedExpression e)
         if (MethodInfo* op = userIndexOp(exprClass(base))) if (op->isConstPlace) return true;
         return chainThroughConstPlace(base);
     }
-    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return chainThroughConstPlace(ma->expression);
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        // A FIELD reached by auto-deref (`w.x` where `x` lives on the pointee) goes through `deref()` — a
+        // read-only place — whenever the type has no `derefMut()` or the receiver is const.
+        if (ma->identifier && ma->identifier->value) {
+            std::string cls = exprClass(ma->expression);
+            if (!cls.empty() && _classes.count(cls) && !findFieldOwner(&_classes[cls], *ma->identifier->value)
+                && !derefTarget(cls).empty()) {
+                bool ro = false;
+                if (derefAccessor(cls, ma->expression, &ro) && ro) return true;
+            }
+        }
+        return chainThroughConstPlace(ma->expression);
+    }
     return false;
 }
 
@@ -19661,7 +19711,7 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
     // The receiver pointer: a library owner exposes it via `deref()` (T*); an intrinsic owner's
     // struct carries it in `.ptr`. The refcount block: library `.c`, intrinsic `.ctrl` (both a
     // `kama_ctrl`-compatible layout — the library `Ctrl` uses `usize` counts for this).
-    if (isLibOwner) { indent(depth); *_out << nm << ".obj = (void*)" << objCls << "__deref(&(" << objE << "));\n"; }
+    if (isLibOwner) { indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(objCls, true) << "(&(" << objE << "));\n"; }
     else            { indent(depth); *_out << nm << ".obj = (void*)(" << objE << ").ptr;\n"; }
     if (retain) {
         indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << objE << ")." << (isLibOwner ? "c" : "ctrl") << ";\n";
@@ -21151,6 +21201,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
         SharedExpression a = (*call->args)[0]->expression;
         std::string cls = exprClass(a);
+        // Running a destructor MUTATES the place (it leaves a dropped value behind), so a read-only one —
+        // a const root, or a `const ref` place such as `deref()` on a handle that implements only `Deref` —
+        // is refused here, before the C compiler sees a `T const*` handed to a dtor.
+        if (rootIsConst(rootBinding(a)) || chainThroughConstPlace(a))
+            unsupported("cannot `drop` a read-only place — a destructor mutates what it runs on. Drop "
+                        "through the writable form (`derefMut()`, a `ref` parameter) or let the owner go "
+                        "out of scope", call->line);
         // `drop(value: p[0])` through a LOCAL raw `UnsafePtr<T>` element whose `T` is a destructible class:
         // the element is untyped to ownership (see the method-call site for why that is deliberate), so
         // exprClass answers "" and this used to emit a literal `(void)0;` — a drop that dropped nothing,
@@ -24897,8 +24954,10 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             // compiler's "no member named 'zz' in 'struct …'" against a struct name nobody wrote.
             if (!fo) { rejectMissingField(&_classes[cls], cls, ma, field); return "0"; }
             if (fo) {
-                ClassInfo* dc = nullptr;
-                MethodInfo* dref = findMethod(&_classes[cls], "deref", &dc);
+                // `derefMut()` for a mutable receiver, `deref()` (a read-only place) for a const one or a
+                // type that implements only `Deref<T>`; a write through the read-only form is refused by
+                // checkConstWrite (chainThroughConstPlace knows this arm).
+                MethodInfo* dref = derefAccessor(cls, ma->expression);
                 std::string bp = basePathTo(&_classes[dtgt], fo);
                 checkFieldAccess(fo, field, ma->line);
                 recordFieldRef(fo, field, ma->identifier.get());
@@ -24957,7 +25016,7 @@ void CEmitter::rejectMissingField(ClassInfo* ci, const std::string& cls, MemberA
 // Dispatch a method call on a receiver of static class `clsName`.
 std::string CEmitter::emitDispatch(const std::string& clsName, const std::string& recvPtr,
                                    const std::string& method, SharedArgumentList args, int srcLine,
-                                   const IdentifierNode* site)
+                                   const IdentifierNode* site, SharedExpression recvExpr)
 {
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
     ClassInfo* owner = nullptr;
@@ -24983,11 +25042,21 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         // method IS on the pointee `T`. Resolve on `T` and call through `clsName__deref(recvPtr)` — a
         // `T*` — as the receiver. Recursive, so `A: Deref<B>, B: Deref<T>` chains transitively.
         std::string tgt = derefTarget(clsName);
-        ClassInfo* dc = nullptr;
-        MethodInfo* dref = tgt.empty() ? nullptr : findMethod(&_classes[clsName], "deref", &dc);
-        if (dref && _classes.count(tgt) && findMethod(&_classes[tgt], method, nullptr)) {
-            std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
-            return emitDispatch(tgt, derefed, method, args, srcLine, site);
+        bool roDeref = false;
+        MethodInfo* dref = tgt.empty() ? nullptr : derefAccessor(clsName, recvExpr, &roDeref);
+        if (dref && _classes.count(tgt)) {
+            ClassInfo* towner = nullptr;
+            if (MethodInfo* tmi = findMethod(&_classes[tgt], method, &towner)) {
+                // Through the READ-ONLY half (`deref()`: the receiver is const, or the type implements only
+                // `Deref<T>`), the pointee is a const receiver — only its `const fn`s are reachable. Said here
+                // in kama's words; the C backstop (`T const*` into a `T*` self) would otherwise say it.
+                if (roDeref && !tmi->isConst && !tmi->isStatic)
+                    unsupported(("cannot call non-const method `" + method + "` through `deref()` — a "
+                                 "read-only place. Implement `DerefMut<T>` on `" + clsName + "` (the writable "
+                                 "half, `derefMut()`), or hold the handle mutably").c_str(), srcLine);
+                std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
+                return emitDispatch(tgt, derefed, method, args, srcLine, site, nullptr);
+            }
         }
         if (rejectUnprovenBound(clsName, method, srcLine)) return "0";   // the BOUND, not the type
         // `view()` on an intrinsic collection is the one method whose absence has a fixable CAUSE rather
@@ -26520,7 +26589,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                             call->line);
         }
     }
-    std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get());
+    std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get(), receiver);
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
     // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
     // existing lvalue paths). `&(*…)` folds, so a chained `a.at(i).at(j)` stays clean ISO C.

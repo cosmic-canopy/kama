@@ -1,5 +1,5 @@
 // The real smart-pointer shape: a heap-owning RAII `resource` over `UnsafePtr<T>` + `unsafe` that
-// `implements Deref<Point>`. `o.sum()`/`o.x` auto-deref to the heap pointee; the dtor frees it.
+// `implements Deref<Point>, DerefMut<Point>`. `o.sum()`/`o.x` auto-deref to the heap pointee; the dtor frees it.
 // This is exactly how a library `Owned` would be written (RAII + move-only come free from `resource`).
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
@@ -11,12 +11,13 @@ type value Point {
     public fn int32 sum() { return this.x + this.y; }
 }
 
-type resource OwnPoint implements Deref<Point> {
+type resource OwnPoint implements Deref<Point>, DerefMut<Point> {
     UnsafePtr<Point> p;
     public unsafe ctor make(Point v) { 
         this.p = cast<UnsafePtr<Point>>(malloc(n: sizeof(Point))); this.p[0] = v;
  }
-    public unsafe fn ref Point deref() { return this.p[0]; }   // place into the heap object
+    public unsafe const fn const ref Point deref() { return this.p[0]; }   // place into the heap object
+    public unsafe fn ref Point derefMut() { return this.p[0]; }
     unsafe ~OwnPoint() { free(p: cast<UnsafePtr>(this.p)); }
 }
 
