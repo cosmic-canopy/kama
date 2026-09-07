@@ -1,0 +1,1 @@
+is read-only; it does not widen

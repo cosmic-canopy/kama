@@ -1,4 +1,4 @@
-import { std::collections::View };
+import { std::collections::View, std::collections::ConstView };
 export { Sha1, sha1, DIGESTBYTES, BLOCKBYTES };
 
 // SHA-1 (RFC 3174 / FIPS 180-4): a 20-byte digest, streaming or one-shot.
@@ -37,7 +37,7 @@ type value Sha1 {
     }
 
     // Feed bytes. Any number of calls, any lengths; the block boundary is internal.
-    public fn void update(View<uint8> bytes) {
+    public fn void update(ConstView<uint8> bytes) {
         isize n = bytes.length();
         isize i = 0;
         while (i < n) {
@@ -123,7 +123,7 @@ type value Sha1 {
 }
 
 // The digest of `bytes` in one call.
-fn InlineArray<uint8>#(20) sha1(View<uint8> bytes) {
+fn InlineArray<uint8>#(20) sha1(ConstView<uint8> bytes) {
     Sha1 h = Sha1.make();
     h.update(bytes: bytes);
     return h.finish();

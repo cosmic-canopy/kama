@@ -1,0 +1,16 @@
+// A `const ref` container can open only the read-only window: `viewMut()` is not a `const fn`, and a
+// `borrow` is a mint CALL on its receiver, so it answers to deep const like any other call. `view()` —
+// `const fn`, `ConstView<T>` — is the window a const receiver hands out.
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
+
+fn isize count(const ref DynamicArray<int32> d) {
+    borrow d.viewMut() as v {   // -> REJECT
+        return v.length();
+    }
+}
+
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 1);
+    return cast<int32>(count(d: d));
+}

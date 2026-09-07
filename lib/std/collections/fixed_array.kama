@@ -1,4 +1,4 @@
-import { View };
+import { View, ConstView };
 export { FixedArray, FixedArrayIter, FixedArrayIterMut };
 
 extern "<string.h>";
@@ -26,7 +26,7 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
+type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize size = 0; A alloc;
 
@@ -75,11 +75,16 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
     public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.size); }
+    public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.data, count: this.size); }
     public unsafe fn View<T> slice(isize from, isize count) {
         // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
         return this.view().slice(from: from, count: count);
+    }
+    public unsafe fn View<T> sliceMut(isize from, isize count) {
+        if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.sliceMut out of bounds"); }
+        return this.viewMut().slice(from: from, count: count);
     }
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.

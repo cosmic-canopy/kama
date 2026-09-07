@@ -1,0 +1,12 @@
+// `ConstView<T>.operator[]` hands out a `const ref T` PLACE, so a store through it is refused whatever the
+// binding that roots it — the element is read-only by construction of the type. The writable window is
+// `viewMut()`.
+import { std::collections::View, std::collections::ConstView };
+
+fn int32 main() {
+    InlineArray<int32>#(3) a = [1, 2, 3];
+    borrow a.view() as cv {
+        cv[0] = 9;   // -> REJECT
+    }
+    return 0;
+}

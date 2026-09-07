@@ -112,7 +112,7 @@ cat > "$sortsrc" <<'EOF'
 import { std::collections::View, std::collections::sortUnstable };
 fn int32 main() {
     InlineArray<int32>#(3) a = [3, 1, 2];
-    borrow a.view() as v {
+    borrow a.viewMut() as v {
         sortUnstable(items: v);
         return v[0] * 100 + v[1] * 10 + v[2];
     }

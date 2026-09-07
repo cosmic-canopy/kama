@@ -14,7 +14,7 @@ type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } public f
 @noheap fn int32 tick(ref Node n) {
     string tag = "voice";
     InlineArray<int32>#(3) a = [3, 1, 2];
-    borrow a.view() as v {
+    borrow a.viewMut() as v {
         sortUnstable(items: v);
         return v[0] * 100 + v[1] * 10 + v[2] + cast<int32>(tag.length()) + peek(n: n);
     }

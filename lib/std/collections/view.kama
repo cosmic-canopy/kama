@@ -1,13 +1,14 @@
 import { std::ptr::relocate, DynamicArray };
-export { View, ViewIter, ViewIterMut };
+export { View, ConstView, ViewIter, ViewIterMut };
 
 // A by-value iterator (the `foreach (T x in view)` protocol): yields each element by value. A view is a
 // FIXED borrow, so — unlike the growable containers — there is no `mods` counter to snapshot (nothing
 // structural can change under it; the borrowed buffer's owner is responsible for not resizing while a
-// view is live). Mirrors `FixedArrayIter`.
+// view is live). Mirrors `FixedArrayIter`. It only READS, so it holds the read-only pointer and serves
+// both halves: `ConstView<T>` hands it its own `UnsafeConstPtr<T>`, `View<T>` widens its `UnsafePtr<T>`.
 type view ViewIter<T: Copyable<T>> implements Iterator<T> {
-    UnsafePtr<T> data; isize pos; isize len;
-    unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafeConstPtr<T> data; isize pos; isize len;
+    unsafe ctor make(UnsafeConstPtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         isize p = this.pos; this.pos = this.pos + 1;
@@ -23,19 +24,67 @@ type view ViewIterMut<T> implements IteratorMut<T> {
     public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
-// A non-owning, stack-only borrow of a contiguous run of `T` — a slice / span (= C++ `std::span`, Rust
-// `&[T]`, C# `Span<T>`). It holds a raw `UnsafePtr<T>` it BORROWS plus a length; it owns nothing and has no
-// destructor. The `type view` kind makes it a *second-class borrow*: the escape checker forbids a
+// The READ-ONLY window over a contiguous run of `T` — Rust `&[T]`, C# `ReadOnlySpan<T>`, C++
+// `std::span<const T>`. The same second-class borrow as `View<T>` below (a `type view`: never a field, an
+// element or an escaping return), over the read-only raw pointer, so nothing reached through it can be
+// written: `operator[]` hands out a `const ref T` PLACE, which indexes ANY element — copyable or not —
+// without copying it, and is the reason there is no `get(index:)` (it would be a second way to read).
+// It is what a container's `view()`/`slice()` mint (both `const fn`, so a `const ref DynamicArray<T>`
+// can open one) and what a callee that only reads a buffer should take: `write(ConstView<uint8> bytes)`,
+// `sha256(ConstView<uint8> bytes)`, `binarySearch(ConstView<T> items)`. A `View<T>` narrows to it
+// implicitly at every sink (an argument, an initializer, an assignment, a `return`) — the direction kama
+// already takes for `const ref` parameters and `UnsafePtr<T>` → `UnsafeConstPtr<T>`; the reverse is
+// refused, naming `viewMut()`.
+type view ConstView<T> implements Iterable<T> when [T: Copyable<T>] {
+    UnsafeConstPtr<T> data; isize len;
+
+    // Private, like every `view` constructor (the mint rule): born in a container's `view()` — the member
+    // `Viewable<ConstView<T>>` grants — or here, in `slice`, the view narrowing itself. `at`/`count`
+    // because the escape check matches a borrow by argument NAME.
+    unsafe ctor over(UnsafeConstPtr<T> at, isize count) { this.data = at; this.len = count; }
+
+    public const fn isize length() { return this.len; }
+    public const fn bool  isEmpty() { return this.len == 0; }
+
+    // The read-only place. An operator is never `const fn`; the PLACE is const (`T const*` in C), so the
+    // caller may read, `copy`, and call `const fn`s through it, and may not assign, `give`, pass it
+    // `ref`/`out` or call a non-const method on it — the same deep const a `const ref` parameter has.
+    public unsafe const ref T operator[](isize i) {
+        if (i < 0 || i >= this.len) { panic(msg: "ConstView index out of bounds"); }
+        return this.data[i];
+    }
+
+    // The by-value `foreach (T x in view)` yields COPIES, so it exists only for a Copyable element. There
+    // is no `iterMut()`: a read-only window has no place-returning iteration to offer.
+    public unsafe const fn ViewIter<T> iterator() when [T: Copyable<T>] { return ViewIter::<T>.make(data: this.data, len: this.len); }
+
+    // The read-only pointer to the first element — the FFI bridge (`kama_write(fd, bytes.dataPtr(), n)`),
+    // valid for `length()` elements. Obtaining it is safe; dereferencing it is `unsafe`.
+    public unsafe const fn UnsafeConstPtr<T> dataPtr() { return this.data; }
+
+    // A sub-view `[from, from+count)` — bounds-checked, zero copy. It borrows `this`, which borrows the
+    // buffer, so it is escape-safe.
+    public unsafe const fn ConstView<T> slice(isize from, isize count) {
+        if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "ConstView.slice out of bounds"); }
+        if (count == 0) { return ConstView::<T>.over(at: this.data, count: 0); }
+        return ConstView::<T>.over(at: addr(of: this.data[from]), count: count);
+    }
+}
+
+// The MUTATE-THROUGH window over a contiguous run of `T` — a slice / span (= C++ `std::span`, Rust
+// `&mut [T]`, C# `Span<T>`). It holds a raw `UnsafePtr<T>` it BORROWS plus a length; it owns nothing and has
+// no destructor. The `type view` kind makes it a *second-class borrow*: the escape checker forbids a
 // `View<T>` from being a field, a collection element, or a return that outlives its buffer — so it can
-// never dangle without a borrow checker. Get one from a container's `.view()` / `.slice(...)`; read-only
-// intent is expressed at call sites with a `const View<T>` parameter. Mutating through `operator[]` /
-// `iterMut()` writes back to the borrowed buffer (the view IS the buffer, windowed).
-type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
+// never dangle without a borrow checker. Get one from a container's `.viewMut()` / `.sliceMut(...)`;
+// a callee that only reads takes a `ConstView<T>` instead, and a `View<T>` narrows to one implicitly.
+// Mutating through `operator[]` / `iterMut()` writes back to the borrowed buffer (the view IS the buffer,
+// windowed).
+type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>> {
     UnsafePtr<T> data; isize len;
 
     // Private, like every `view` constructor: a `View<T>` is what a CONTAINER hands out, so it is born
-    // in `Viewable<View<T>>.view()` on the type that owns the buffer — or here, in `slice`, which is the
-    // view narrowing itself. `at`/`count` rather than `data`/`len` because the escape check matches a
+    // in `ViewableMut<View<T>>.viewMut()` on the type that owns the buffer — or here, in `slice`, which is
+    // the view narrowing itself. `at`/`count` rather than `data`/`len` because the escape check matches a
     // borrow by argument NAME, so the names are part of the contract, not decoration.
     unsafe ctor over(UnsafePtr<T> at, isize count) { this.data = at; this.len = count; }
 
@@ -46,6 +95,16 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
         if (i < 0 || i >= this.len) { panic(msg: "View index out of bounds"); }
         return this.data[i];
     }
+
+    // The narrowing: the read-only window over the same run. `Viewable<ConstView<T>>` is what lets this
+    // body mint a `ConstView` (its ctor is private, and a `View` is not the type it views — the grant
+    // says so). The compiler inserts this call itself wherever a `View<T>` meets a `ConstView<T>` sink.
+    public unsafe const fn ConstView<T> view() { return ConstView::<T>.over(at: this.data, count: this.len); }
+
+    // The by-value form of the narrowing, for the COMPILER: an implicit `View<T>` → `ConstView<T>` at a
+    // sink whose source is an rvalue (`f(bytes: v.slice(…))`) has no lvalue to call `view()` on, and a
+    // by-value parameter is evaluated exactly once. Private — user code writes `v.view()`, or nothing.
+    static fn ConstView<T> narrow(View<T> v) { return v.view(); }
 
     // The by-value `foreach (T x in view)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in view)`.)
@@ -80,8 +139,10 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
         while (i < j) { this.swap(i: i, j: j); i = i + 1; j = j - 1; }
     }
 
-    // A sub-view `[from, from+count)` of this view — bounds-checked, zero copy. Returning it borrows
-    // `this` (the view), which itself borrows the underlying buffer, so it's escape-safe.
+    // A sub-view `[from, from+count)` of this view — bounds-checked, zero copy, and MUTABLE: a `View<T>`
+    // is the writable half, and its derive stays one (`sort` recurses on `items.slice(…)`). Returning it
+    // borrows `this` (the view), which itself borrows the underlying buffer, so it's escape-safe. The
+    // read-only sub-range is `v.view().slice(…)`.
     public unsafe fn View<T> slice(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "View.slice out of bounds"); }
         if (count == 0) { return View::<T>.over(at: this.data, count: 0); }

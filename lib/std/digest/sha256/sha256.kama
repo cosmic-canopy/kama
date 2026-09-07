@@ -1,4 +1,4 @@
-import { std::collections::View };
+import { std::collections::View, std::collections::ConstView };
 export { Sha256, sha256, DIGESTBYTES, BLOCKBYTES };
 
 // SHA-256 (FIPS 180-4): a 32-byte digest, streaming or one-shot. The default digest — content ids,
@@ -103,7 +103,7 @@ type value Sha256 {
         this.total = 0ui64;
     }
 
-    public fn void update(View<uint8> bytes) {
+    public fn void update(ConstView<uint8> bytes) {
         isize n = bytes.length();
         isize i = 0;
         while (i < n) {
@@ -198,7 +198,7 @@ type value Sha256 {
     }
 }
 
-fn InlineArray<uint8>#(32) sha256(View<uint8> bytes) {
+fn InlineArray<uint8>#(32) sha256(ConstView<uint8> bytes) {
     Sha256 h = Sha256.make();
     h.update(bytes: bytes);
     return h.finish();

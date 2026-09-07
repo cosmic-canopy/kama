@@ -1,0 +1,12 @@
+// A `ConstView<T>` is the read-only window; it never widens to a `View<T>`. The narrowing goes the other
+// way only — `View<T>` → `ConstView<T>` is implicit — and the remedy is the writable half, taken where
+// the view was made (`viewMut()` / `sliceMut()`), not a conversion.
+import { std::collections::View, std::collections::ConstView, std::collections::sortUnstable };
+
+fn int32 main() {
+    InlineArray<int32>#(3) a = [3, 1, 2];
+    borrow a.view() as cv {          // `view()` is the read-only mint
+        sortUnstable(items: cv);     // -> REJECT: `sortUnstable` takes `View<T>`, the writable window
+    }
+    return 0;
+}

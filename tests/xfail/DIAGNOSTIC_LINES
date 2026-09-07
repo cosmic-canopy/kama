@@ -134,6 +134,8 @@ const_ref_param_as_mut_return	const_ref_param_as_mut_return.kama:6
 const_ref_refarg	const_ref_refarg.kama:11
 const_ref_write	const_ref_write.kama:11
 const_this_write	const_this_write.kama:12 const_this_write.kama:7
+const_view_to_mut	const_view_to_mut.kama:9
+const_view_write	const_view_write.kama:9
 constgen_arity	constgen_arity.kama:4 constgen_arity.kama:5
 constgen_count	constgen_count.kama:3
 constgen_oob	constgen_oob.kama:4
@@ -273,6 +275,7 @@ for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12
 foreach_ref_comptime	foreach_ref_comptime.kama:12
+foreach_ref_const_view	foreach_ref_const_view.kama:9
 foreach_ref_give	foreach_ref_give.kama:4 foreach_ref_give.kama:7 foreach_ref_give.kama:8
 foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
@@ -580,6 +583,7 @@ packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
 parallel_spawn_workers	parallel_spawn_workers.kama:15
+parfor_const_view	parfor_const_view.kama:9
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11
 parfor_no_workers	parfor_no_workers.kama:14
 parfor_noncontiguous	parfor_noncontiguous.kama:9
@@ -680,7 +684,7 @@ turbofish_nongeneric	turbofish_nongeneric.kama:3
 two_defaults	two_defaults.kama:5
 type_as_value	type_as_value.kama:6
 type_param_as_value	type_param_as_value.kama:4
-type_param_shadows_type	type_param_shadows_type.kama:10 type_param_shadows_type.kama:12
+type_param_shadows_type	type_param_shadows_type.kama:10
 uint_retired	uint_retired.kama:5
 unimplemented_pure	unimplemented_pure.kama:4
 unimported_type_param	unimported_type_param.kama:6
@@ -735,6 +739,7 @@ view_ctor_public	view_ctor_public.kama:10
 view_dtor	view_dtor.kama:2
 view_escape_inline_array	view_escape_inline_array.kama:9
 view_field	view_field.kama:3
+view_from_const_receiver	view_from_const_receiver.kama:7 view_from_const_receiver.kama:8
 view_local_from_method	view_local_from_method.kama:16
 view_local_inline_array	view_local_inline_array.kama:7
 view_local_ternary_root	view_local_ternary_root.kama:10

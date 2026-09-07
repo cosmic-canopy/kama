@@ -1,4 +1,4 @@
-import { std::ptr::relocate, View };
+import { std::ptr::relocate, View, ConstView };
 export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
@@ -35,7 +35,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
+type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
                                   Sendable when [T: Sendable, A: Sendable] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
@@ -114,6 +114,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
     // resized. Mutating through the view writes back to this array's buffer.
     public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
+    public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.data, count: this.len); }
 
     // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
     public unsafe fn View<T> slice(isize from, isize count) {
@@ -121,6 +122,10 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }
         return this.view().slice(from: from, count: count);
+    }
+    public unsafe fn View<T> sliceMut(isize from, isize count) {
+        if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.sliceMut out of bounds"); }
+        return this.viewMut().slice(from: from, count: count);
     }
 
     // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`

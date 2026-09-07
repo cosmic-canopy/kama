@@ -1,0 +1,12 @@
+// A `ref` binding is a writable place, and a `ConstView<T>` has none to offer: it implements `Iterable<T>`
+// (by value) and never `IterableMut<T>`. Refused by name — "must implements IterableMut" would be true and
+// point away from the remedy, which is `viewMut()` where the view was made.
+import { std::collections::View, std::collections::ConstView };
+
+fn int32 main() {
+    InlineArray<int32>#(3) a = [1, 2, 3];
+    borrow a.view() as cv {
+        foreach (ref int32 x in cv) { x = x + 1; }   // -> REJECT
+    }
+    return 0;
+}

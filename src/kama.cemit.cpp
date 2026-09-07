@@ -2021,11 +2021,25 @@ bool CEmitter::plainUserClass(const std::string& ct) const
 void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedExpression value,
                                            const char* what, int line)
 {
-    if (!value || !plainUserClass(dstCType)) return;
+    if (!value) return;
     // Runs inside a generic instantiation too. It was gated on `_typeSubst.empty()` from `0.9.148` to
     // `0.9.184` because it fired on `Owned<T, A>.adoptIn`; that was `lvalueCType` auto-dereferencing
     // `this.alloc` onto the pointee (fixed in its member arm), not a substitution defect.
     const std::string src = exprClass(value);
+    // The two stdlib windows. `View<X>` NARROWS to `ConstView<X>` at every sink (the sink spells it —
+    // narrowViewValue), the direction kama already takes for `const ref` parameters and `UnsafePtr<T>` →
+    // `UnsafeConstPtr<T>`; the reverse would make a read-only window writable, and "unrelated types"
+    // would name the wrong problem — the remedy is the writable half, taken where the view was made.
+    if (!src.empty() && !dstCType.empty()) {
+        if (constViewOf(dstCType, src)) return;
+        if (constViewOf(src, dstCType)) {
+            unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "` — the writable "
+                         "window — and a `" + demangleForDisplay(src) + "` is read-only; it does not widen. "
+                         "Take the mutable form where the view was made (`viewMut()` / `sliceMut()`)").c_str(), line);
+            return;
+        }
+    }
+    if (!plainUserClass(dstCType)) return;
     if (src.empty() || src == dstCType || !plainUserClass(src)) return;
     if (isBaseOf(dstCType, src)) return;                       // an inheritance UPCAST is the point of one
     if (!_classes[dstCType].collElemClass.empty()
@@ -4320,13 +4334,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         }
         // The window defeated from the INSIDE. An alias names one window over one place for the extent of
         // one block; reseating it to some other container's view keeps the name and drops the bound, so
-        // the rest of the block reads a view nothing froze.
-        if (v->unaryExpression)
-            if (const std::vector<std::string>* r = frozenAliasRoot(rootBinding(v->unaryExpression)))
-                unsupported(("`" + rootBinding(v->unaryExpression) + "` is a `borrow` alias — it names the "
-                             "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
-                             "the block would hold a view of storage this window never froze. Open another "
-                             "`borrow`, or derive with `.slice(…)`").c_str(), v->line);
+        // the rest of the block reads a view nothing froze. A reseat is the BARE alias on the left — a write
+        // THROUGH it (`v[0] = x`, `v.f = x`) is what a mutate-through window is for. This used to test the
+        // root binding, which collapses `v[0]` to `v`, and so refused every element write inside a
+        // `borrow d.viewMut() as v { … }` as a reseat.
+        if (auto* lid = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
+            if (lid->value && (!lid->qualifier || lid->qualifier->empty()))
+                if (const std::vector<std::string>* r = frozenAliasRoot(*lid->value))
+                    unsupported(("`" + *lid->value + "` is a `borrow` alias — it names the "
+                                 "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
+                                 "the block would hold a view of storage this window never froze. Open another "
+                                 "`borrow`, or derive with `.slice(…)`").c_str(), v->line);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -4402,8 +4420,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (*placeOpMacro(v->token))
             return std::string(placeOpMacro(v->token)) + "(&(" + emitExpression(v->unaryExpression) + "), ("
                  + emitExpression(v->expression) + "))";
-        return "(" + emitExpression(v->unaryExpression) + " "
-                   + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
+        std::string lhs = emitExpression(v->unaryExpression);
+        std::string rhs = emitExpression(v->expression);
+        if (v->token == EQ) rhs = narrowViewValue(lvalueCType(v->unaryExpression), v->expression, rhs, v->line);
+        return "(" + lhs + " " + assignmentOperator(v->token) + " " + rhs + ")";
     }
 
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
@@ -4977,13 +4997,22 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             if (!vmi || !vmi->params.empty()) {
                 // Same fixable cause as at the method-dispatch site: an intrinsic collection's `view()`
                 // exists only when the program has a `std::collections::View` to mint.
-                if (mint == "view" && viewTemplateKey().empty() && _classes[hostCls].isIntrinsicColl)
+                if ((mint == "view" || mint == "viewMut") && viewTemplateKey().empty() && _classes[hostCls].isIntrinsicColl)
                     unsupported(("`" + hostCls + "` can open a window, but this program has no `View<T>` "
                                  "to mint — add `import { std::collections::View };`").c_str(), bn->line);
                 else
                     unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
                                  "window — a `borrow` host must be a container that can hand out a view")
                                     .c_str(), bn->line);
+                continue;
+            }
+            // A mint is a CALL on its receiver, so it answers to deep const like any other: the writable
+            // window (`viewMut()`, not `const fn`) cannot be opened over a `const` place. Said here because
+            // this gate emits the call directly and never passes through the dispatch site's receiver check.
+            if (!vmi->isConst && isConstReceiver(recvExpr)) {
+                unsupported(("cannot call non-const method `" + mint + "` on a const receiver — a window over "
+                             "a `const` place is the read-only one; open it with `view()` (a `const fn`, "
+                             "yielding a `ConstView<T>`)").c_str(), bn->line);
                 continue;
             }
             if (!grantedMint(_classes[hostCls], mint)) {
@@ -5155,17 +5184,26 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     // ── (a) Resolve the iterable to a View<T> (direct, or auto-`.view()` a contiguous container). ─────
     std::string itCls = exprClass(pf->expression);
     if (itCls.empty() || !_classes.count(itCls))
-        unsupported((KW + " needs a `View<T>` or a contiguous container with `.view()` "
+        unsupported((KW + " needs a `View<T>` or a contiguous container with `.viewMut()` "
                     "(DynamicArray/FixedArray) — the operand is not a collection").c_str(), pf->line);
     std::string viewCType, viewExpr;
     if (isViewCType(itCls)) {
+        // `ref` is mandatory here — every worker WRITES its slice — so the read-only window cannot serve.
+        // Said here, or the foreach lowering below would report a missing `iterMut()` and leave the reader
+        // to work out that a `ConstView` never has one.
+        if (isConstViewCType(itCls)) {
+            unsupported((KW + " binds each element `ref` — every worker writes its slice — and a "
+                         "`ConstView<T>` is read-only. Pass the writable window: `viewMut()` where the "
+                         "view was made").c_str(), pf->line);
+            return;
+        }
         viewCType = itCls;
         viewExpr  = emitExpression(pf->expression);
     } else {
-        MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
+        MethodInfo* viewMi = findMethod(&_classes[itCls], "viewMut", nullptr);
         if (!viewMi || !viewMi->params.empty()
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
-            unsupported((KW + " needs a `View<T>` or a contiguous container with a nullary `.view()` "
+            unsupported((KW + " needs a `View<T>` or a contiguous container with a nullary `.viewMut()` "
                          "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
                          "collection cannot be split into disjoint slices").c_str(), pf->line);
             return;   // `viewMi` may be the null this guard rejected — never fall through and deref it
@@ -5173,7 +5211,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (!declaresViewable(_classes[itCls])) {
             unsupported((KW + " splits a container into disjoint slices, so the container must "
                          "declare that its storage is what those slices view; `" + itCls + "` has a "
-                         "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
+                         "`.viewMut()` but implements no `@viewable` contract (the prelude's `ViewableMut<V>`)")
                             .c_str(), pf->line);
             return;
         }
@@ -6334,7 +6372,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     bool ph = _hoistOK; _hoistOK = true;               // inline-ctor hoisting
                     std::string pvt = _variantTargetType; _variantTargetType = ty;   // `Optional<int32> o = Optional::Some(…)`
                     std::string pmt = _matchTargetCType; _matchTargetCType = ty;      // `string s = match(…)` / `List l = match(…)`
-                    std::string iv = emitExpression(init);
+                    std::string iv = narrowViewValue(ty, init, emitExpression(init), n->line);   // `ConstView<T> cv = v;`
                     _matchTargetCType = pmt;
                     _variantTargetType = pvt;
                     _hoistOK = ph;
@@ -7368,6 +7406,30 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
         }
     }
     return out;
+}
+
+// A generic call used to reorder its arguments off the TEMPLATE's signature, whose `className`s are the
+// symbolic spellings (`std__collections__ConstView_T`). Every per-argument rule in emitReorderedCall keys on
+// that C type — the kind rule, the identity rule, and the `View<X>` → `ConstView<X>` narrowing, which is
+// what found this: `isSorted(items: v)` narrowed nowhere because `ConstView_T` names no instance. Bind the
+// instantiation's arguments exactly as emitGenericInst does, and the call site sees what the callee's
+// prototype says. Saved and restored around the binding: the caller may itself be an instantiation mid-walk.
+const std::vector<ParamSig>& CEmitter::instParamSigs(const GenericInst& gi)
+{
+    auto cached = _instParamSigs.find(gi.mangledName);
+    if (cached != _instParamSigs.end()) return cached->second;
+    auto tit = _generics.find(gi.templateKey);
+    if (tit == _generics.end()) return _instParamSigs[gi.mangledName] = _funcs[gi.templateKey].params;
+    FunctionDeclarationNode* tmpl = tit->second;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    auto savedComptime = _comptimeSubst;
+    NsCtx savedCtx = _nsCtx;
+    auto cit = _genericCtx.find(gi.templateKey);
+    if (cit != _genericCtx.end()) _nsCtx = cit->second;
+    bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
+    std::vector<ParamSig> sigs = paramSigsOf(tmpl->parameters);
+    _typeSubst = savedSubst; _comptimeSubst = savedComptime; _nsCtx = savedCtx;
+    return _instParamSigs[gi.mangledName] = sigs;
 }
 
 // Build the function signature table so call sites can reorder named arguments
@@ -9743,9 +9805,9 @@ SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
 // never imports it does not have one. `dataPtr()` is unaffected and always present.
 void CEmitter::registerFixedViews()
 {
-    const std::string viewTmpl = viewTemplateKey();
-    if (viewTmpl.empty()) return;
-    auto vwTmpl = _genericContractParams.find("Viewable");
+    const std::string viewTmpl  = viewTemplateKey();
+    const std::string constTmpl = constViewTemplateKey();
+    if (viewTmpl.empty() || constTmpl.empty()) return;   // one module declares both; neither, or both
     // Collect first: registerGenericTypeInst can register further collections, and mutating
     // `_collections` while iterating it would invalidate the iterator.
     std::vector<std::string> fixed;
@@ -9756,37 +9818,45 @@ void CEmitter::registerFixedViews()
 
     for (auto& name : fixed) {
         SharedIdentifier elem = _collections[name].elem;
-        auto viewArgs = std::make_shared<IdentifierList>();
-        viewArgs->push_back(elem);
-        registerGenericTypeInst(viewTmpl, viewArgs);
-        // The return node is spelled as a QUALIFIED reference — `std::collections::View<T>` — not as the
-        // pre-mangled key. Both resolve to the same C type, but only this one carries the bare name `View`
-        // in `value`, and generic-argument INFERENCE matches a `View<T>` parameter by that name: with the
-        // mangled spelling, `sortUnstable(items: v)` could not infer `T` from a view an InlineArray minted,
-        // while the identical call over a FixedArray's view inferred it fine. Qualifying also makes the
-        // reference independent of the calling file's imports, which a bare `View` would not be.
-        auto viewRet = viewQualifiedNode(viewTmpl);
-        viewRet->genericArg  = elem;
-        viewRet->genericArgs = std::make_shared<IdentifierList>();
-        viewRet->genericArgs->push_back(elem);
+        // One mint per half, exactly as the stdlib containers spell them: `view()` is the READ-ONLY window
+        // (`ConstView<T>`, a `const fn`, so a `const` InlineArray can open one) and `viewMut()` the
+        // mutate-through one (`View<T>`). Each carries its own grant.
+        auto mint = [&](const char* member, const char* contract, const std::string& tmpl, bool isConst) {
+            auto viewArgs = std::make_shared<IdentifierList>();
+            viewArgs->push_back(elem);
+            registerGenericTypeInst(tmpl, viewArgs);
+            // The return node is spelled as a QUALIFIED reference — `std::collections::View<T>` — not as the
+            // pre-mangled key. Both resolve to the same C type, but only this one carries the bare name
+            // `View` in `value`, and generic-argument INFERENCE matches a `View<T>` parameter by that name:
+            // with the mangled spelling, `sortUnstable(items: v)` could not infer `T` from a view an
+            // InlineArray minted, while the identical call over a FixedArray's view inferred it fine.
+            // Qualifying also makes the reference independent of the calling file's imports, which a bare
+            // `View` would not be.
+            auto viewRet = viewQualifiedNode(tmpl);
+            viewRet->genericArg  = elem;
+            viewRet->genericArgs = std::make_shared<IdentifierList>();
+            viewRet->genericArgs->push_back(elem);
 
-        ClassInfo& ci = _classes[name];
-        MethodInfo mi; mi.cName = name + "__view";
-        mi.returnType = viewRet; mi.isIntrinsic = true; mi.isConst = false;
-        ci.methods["view"] = mi;
+            ClassInfo& ci = _classes[name];   // after the instantiation above, which may grow `_classes`
+            MethodInfo mi; mi.cName = name + "__" + member;
+            mi.returnType = viewRet; mi.isIntrinsic = true; mi.isConst = isConst;
+            ci.methods[member] = mi;
 
-        // The grant. `Viewable<V>` is a generic contract, so its instance must be registered before it can
-        // be named — the same two-step `synthConformanceName` does for `Deserializable<T>` — and the instance
-        // name is the one registerGenericContractInst computes: template + mangled args. `borrow` and
-        // `parallel_for` read this to prove the host IS the thing being viewed rather than a type
-        // forwarding somebody else's view, and here it states a fact: an `InlineArray` is
-        // `struct { T v[N]; }`, so a view minted from it views that struct's own bytes.
-        if (vwTmpl != _genericContractParams.end()) {
-            auto vwArgs = std::make_shared<IdentifierList>();
-            vwArgs->push_back(viewRet);
-            registerGenericContractInst("Viewable", vwArgs);
-            ci.interfaces.push_back("Viewable_" + mangleElem(viewRet));
-        }
+            // The grant. `Viewable<V>` is a generic contract, so its instance must be registered before it
+            // can be named — the same two-step `synthConformanceName` does for `Deserializable<T>` — and the
+            // instance name is the one registerGenericContractInst computes: template + mangled args.
+            // `borrow` and `parallel_for` read this to prove the host IS the thing being viewed rather than a
+            // type forwarding somebody else's view, and here it states a fact: an `InlineArray` is
+            // `struct { T v[N]; }`, so a view minted from it views that struct's own bytes.
+            if (_genericContractParams.count(contract)) {
+                auto vwArgs = std::make_shared<IdentifierList>();
+                vwArgs->push_back(viewRet);
+                registerGenericContractInst(contract, vwArgs);
+                ci.interfaces.push_back(std::string(contract) + "_" + mangleElem(viewRet));
+            }
+        };
+        mint("view",    "Viewable",    constTmpl, /*isConst=*/true);
+        mint("viewMut", "ViewableMut", viewTmpl,  /*isConst=*/false);
     }
 }
 
@@ -9797,20 +9867,27 @@ void CEmitter::registerFixedViews()
 // (the common case — `InlineArray` is a prelude builtin) would resolve it to nothing. Nor is the path
 // hardcoded: the stdlib may move it. It is IDENTIFIED instead, by the two facts that define it — a
 // single-parameter generic whose bare tail is `View` and whose template shape is a `type view`
-// (`isBorrow`). Cached because it is asked once per `InlineArray<T,N>` instantiation.
-const std::string& CEmitter::viewTemplateKey()
+// (`isBorrow`). Cached because it is asked once per `InlineArray<T,N>` instantiation. The same
+// identification, by bare tail, serves the read-only twin `ConstView<T>` — the tail test is exact
+// (`__ConstView` is not `__View`), so each answers for its own type.
+const std::string& CEmitter::viewTemplateKeyFor(const std::string& tail)
 {
-    if (!_viewTmplKey.empty() || _viewTmplLookedUp) return _viewTmplKey;
-    _viewTmplLookedUp = true;
+    auto cached = _viewTmplKeys.find(tail);
+    if (cached != _viewTmplKeys.end()) return cached->second;
+    std::string& key = _viewTmplKeys[tail];   // "" until found — and "" for good if the stdlib has no such view
+    const std::string suffix = "__" + tail;
     for (auto& kv : _genericTypeParams) {
         const std::string& k = kv.first;
-        bool tailIsView = (k == "View") || (k.size() > 6 && k.compare(k.size() - 6, 6, "__View") == 0);
-        if (!tailIsView || kv.second.size() != 1) continue;
+        bool tailMatches = (k == tail)
+            || (k.size() > suffix.size() && k.compare(k.size() - suffix.size(), suffix.size(), suffix) == 0);
+        if (!tailMatches || kv.second.size() != 1) continue;
         auto gt = _genericTypes.find(k);
-        if (gt != _genericTypes.end() && gt->second.isBorrow) { _viewTmplKey = k; break; }
+        if (gt != _genericTypes.end() && gt->second.isBorrow) { key = k; break; }
     }
-    return _viewTmplKey;
+    return key;
 }
+const std::string& CEmitter::viewTemplateKey()      { return viewTemplateKeyFor("View"); }
+const std::string& CEmitter::constViewTemplateKey() { return viewTemplateKeyFor("ConstView"); }
 
 bool CEmitter::allTypeParamsDefaulted(const std::string& tmpl) const
 {
@@ -11787,7 +11864,15 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             bind[*pt->value] = at;
             return true;
         }
-        if (*pt->value != *at->value || !pt->genericArgs || !at->genericArgs
+        // `ConstView<T>` parameter, `View<T>` argument: the argument sink narrows implicitly, so the shapes DO
+        // line up — bind `T` through the pair, or every read-only algorithm (`binarySearch`, `isSorted`)
+        // would demand a turbofish from exactly the caller it was written for. The REVERSE pair binds too:
+        // a `ConstView<T>` handed to `sortUnstable(View<T>)` is wrong, and it is the identity rule at the
+        // sink that says why ("read-only; it does not widen") — "cannot infer T" would point away from it.
+        const bool viewPair = ((*pt->value == "ConstView" && *at->value == "View")
+                            || (*pt->value == "View" && *at->value == "ConstView"))
+                          && !constViewTemplateKey().empty() && !viewTemplateKey().empty();
+        if ((*pt->value != *at->value && !viewPair) || !pt->genericArgs || !at->genericArgs
             || pt->genericArgs->size() != at->genericArgs->size()) return true;   // shapes differ — bind nothing
         for (size_t i = 0; i < pt->genericArgs->size(); ++i)
             if (!unify((*pt->genericArgs)[i], (*at->genericArgs)[i])) return false;
@@ -13001,13 +13086,17 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
 // — so the two-field literal here IS the grant, discharged in C.
 void CEmitter::emitFixedView(const CollectionInfo& info)
 {
-    auto mi = _classes[info.cName].methods.find("view");
-    if (mi == _classes[info.cName].methods.end()) return;      // no stdlib View -> `view()` unregistered
-    const std::string vt = cType(mi->second.returnType);
-    if (!isViewCType(vt)) return;                              // registration failed; nothing to emit
-    *_out << "static inline " << vt << " " << info.cName << "__view(" << info.cName << "* self) {\n"
-          << "    return (" << vt << "){ .data = self->v, .len = (ptrdiff_t)(" << info.constValue << ") };\n"
-          << "}\n";
+    // Both halves (registerFixedViews): `__view` builds the `ConstView<T>` literal — `self->v` decays to
+    // `T*` and C narrows it to the struct's `T const*` field — and `__viewMut` the `View<T>` one.
+    for (const char* member : { "view", "viewMut" }) {
+        auto mi = _classes[info.cName].methods.find(member);
+        if (mi == _classes[info.cName].methods.end()) continue;   // no stdlib View -> unregistered
+        const std::string vt = cType(mi->second.returnType);
+        if (!isViewCType(vt)) continue;                            // registration failed; nothing to emit
+        *_out << "static inline " << vt << " " << info.cName << "__" << member << "(" << info.cName << "* self) {\n"
+              << "    return (" << vt << "){ .data = self->v, .len = (ptrdiff_t)(" << info.constValue << ") };\n"
+              << "}\n";
+    }
 }
 
 // Emit the KAMA_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
@@ -13338,6 +13427,13 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // Mirror the by-value branch: a container hands out a mutable iterator via `iterMut()`, OR the operand
         // IS its own mutable iterator (implements `IteratorMut` directly) and is iterated by value — the latter
         // lets an rvalue operand (`m.valuesMut()`) work, exactly as `s.chars()` does for the by-value form.
+        // The read-only window has no writable iteration to offer, and "must `implements IterableMut<T>`"
+        // would be true and useless — the remedy is the other half of the pair, not a conformance.
+        if (isConstViewCType(container)) {
+            unsupported("a `ConstView<T>` is read-only, so it has no `foreach (ref …)` — a `ref` binding is a "
+                        "writable place. Iterate it by value, or take the writable window (`viewMut()`) "
+                        "where the view was made", fe->line); *_out << "\n"; return;
+        }
         MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
         ClassInfo* ic = nullptr;
@@ -15487,8 +15583,9 @@ bool CEmitter::grantedMint(const ClassInfo& ci, const std::string& member) const
     return false;
 }
 
-// `parallel_for` needs CONTIGUOUS storage, so unlike `borrow` it wants one specific grant: `view()`.
-bool CEmitter::declaresViewable(const ClassInfo& ci) const { return grantedMint(ci, "view"); }
+// `parallel_for` needs CONTIGUOUS storage it can WRITE (its binding is `ref`), so unlike `borrow` it wants
+// one specific grant: `viewMut()`, the writable half.
+bool CEmitter::declaresViewable(const ClassInfo& ci) const { return grantedMint(ci, "viewMut"); }
 
 bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
 {
@@ -17672,8 +17769,15 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     && !isBaseOf(p.className, argCls))
                     unsupported(("cannot borrow a `" + argCls + "` as `ref " + p.className
                                  + "` — it is not that object (a `Weak` must `tryUpgrade` to a `Shared` first)").c_str(), srcLine);
-                s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
-                                          : ("&(" + val + ")");
+                // A `const ref` parameter lowers to a plain `T*` (`const fn` is ABI-neutral — see paramListC),
+                // while a READ-ONLY place — a `const` binding, an `UnsafeConstPtr<T>` element, a `const ref T`
+                // result such as `cv[i]` — addresses as `T const*`. The front end has already ruled the pass
+                // legal (a `const ref` borrow may take a read-only place), so the cast states the ABI, the
+                // same way every receiver and `__at` site does. A class param was always cast (the upcast).
+                const bool constPlaceToConstRef = p.isConst && !p.className.empty() && isConstReceiver(argExpr);
+                s += (isClass(p.className) || constPlaceToConstRef)
+                         ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base / the read-only place
+                         : ("&(" + val + ")");
             }
         } else {
             // By value. A *named* smart pointer TRANSFERS into the param, which the
@@ -17759,7 +17863,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // whole-`this` value arg, e.g. `this.dot(r: this)` in `length()`.)
                 s += "*(" + val + ")";
             } else {
-                s += val;   // plain value copy (primitive / value / collection borrow); `give` on a value is just that copy
+                // plain value copy (primitive / value / collection borrow); `give` on a value is just that
+                // copy — and a `View<X>` meeting a `ConstView<X>` parameter narrows here.
+                s += narrowViewValue(p.className, argExpr, val, srcLine);
             }
         }
     }
@@ -18370,6 +18476,51 @@ void CEmitter::rejectConstPtrWiden(const std::string& dstCType, SharedExpression
                  + " would make a read-only pointer writable. Take the mutable form where the pointer was "
                    "made (`dataPtrMut()`, `viewMut()`), or `cast<UnsafePtr<T>>(…)` in an `unsafe fn` to "
                    "say the launder out loud").c_str(), line);
+}
+
+// ---- `ConstView<T>` — the read-only window ----------------------------------------------------------
+// The same seam one level up: `View<T>` is to `ConstView<T>` what `UnsafePtr<T>` is to `UnsafeConstPtr<T>`.
+// Both stdlib windows are `type view`s (`isBorrow`), so isViewCType cannot tell them apart; the TEMPLATE
+// can, identified structurally (viewTemplateKeyFor), never by a hardcoded path.
+bool CEmitter::isConstViewCType(const std::string& ct)
+{
+    auto gi = _genericTypeInsts.find(ct);
+    return gi != _genericTypeInsts.end() && !constViewTemplateKey().empty()
+        && gi->second.templateKey == constViewTemplateKey();
+}
+bool CEmitter::isMutViewCType(const std::string& ct)
+{
+    auto gi = _genericTypeInsts.find(ct);
+    return gi != _genericTypeInsts.end() && !viewTemplateKey().empty()
+        && gi->second.templateKey == viewTemplateKey();
+}
+// `dst` is `ConstView<X>` and `src` is `View<X>` — the one implicit conversion between the two.
+bool CEmitter::constViewOf(const std::string& dstCType, const std::string& srcCType)
+{
+    if (dstCType == srcCType || !isConstViewCType(dstCType) || !isMutViewCType(srcCType)) return false;
+    const auto& d = _genericTypeInsts[dstCType].typeArgs;
+    const auto& s = _genericTypeInsts[srcCType].typeArgs;
+    return d.size() == 1 && s.size() == 1 && d[0] && s[0] && mangleElem(d[0]) == mangleElem(s[0]);
+}
+// Spell the narrowing at a sink: `View_X__narrow(<emitted>)` — the stdlib's own by-value thunk (view.kama),
+// which is why an rvalue source (`f(bytes: v.slice(…))`) is evaluated exactly once and no lvalue is needed.
+// Anything else — a source already a `ConstView`, an unrelated value — passes through untouched. Asked at
+// every sink a value lands in: an argument, a local's initializer, an assignment, a `return`/`match` arm —
+// the list rejectConstPtrWiden rides. The reverse direction is rejectClassIdentityMismatch's.
+std::string CEmitter::narrowViewValue(const std::string& dstCType, SharedExpression src,
+                                      const std::string& emitted, int line)
+{
+    if (dstCType.empty() || !src) return emitted;
+    const std::string sc = exprClass(src);
+    if (sc.empty() || !constViewOf(dstCType, sc)) return emitted;
+    MethodInfo* mi = findMethod(&_classes[sc], "narrow", nullptr);
+    if (!mi) {   // a `View` without its thunk is not the shipped view.kama — say so rather than emit a bad C cast
+        unsupported(("`" + demangleForDisplay(sc) + "` has no `narrow` — the stdlib `View<T>` supplies the "
+                     "by-value narrowing this conversion is spelled with").c_str(), line);
+        return emitted;
+    }
+    recordCallEdge(mi->cName, line);
+    return mi->cName + "(" + emitted + ")";
 }
 
 // --- Never-null definite assignment for `Owned`/`Shared` fields (Stage 1) ------------------------------
@@ -19831,7 +19982,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
     std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
     if (rv.empty()) rv = tryHoistInlineValue(v, dstCType, line); // `:= new T(…)`
-    if (rv.empty()) rv = emitExpression(v);
+    if (rv.empty()) rv = narrowViewValue(dstCType, v, emitExpression(v), line);   // `return v;` into a `ConstView<T>`
     if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
     flushHoisted(depth);
@@ -21036,7 +21187,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             // mangled name has no def-site, and two instantiations must not split one declaration's
             // references. This path returns before the resolveFunc that records every other call.
             recordRef(gi.templateKey, call->identifier.get());
-            return placeWrap(emitReorderedCall(gi.mangledName, "", tmpl.params, call->args, call->line),
+            return placeWrap(emitReorderedCall(gi.mangledName, "", instParamSigs(gi), call->args, call->line),
                              tmpl.isPlaceReturn);
         }
     }
@@ -21060,7 +21211,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     const FuncSig& tsig = _funcs[k];
                     recordRef(k, call->identifier.get());   // the reference is to the TEMPLATE, as above
                     ++_probeResolved;
-                    return placeWrap(emitReorderedCall(gi.mangledName, "", tsig.params, call->args,
+                    return placeWrap(emitReorderedCall(gi.mangledName, "", instParamSigs(gi), call->args,
                                                        call->line), tsig.isPlaceReturn);
                 }
             }
@@ -21776,7 +21927,11 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
     } else {
         recordCallEdge(cls + "__copy", _curLine);
     }
-    return cls + "__copy(&(" + lvalue + "))";
+    // `__copy` READS its source, and every copy ctor takes a plain `T*` (`const ref` is ABI-neutral — see
+    // paramListC), while a read-only place addresses as `T const*`: `copy this.data[p]` in `ViewIter.next()`
+    // walks an `UnsafeConstPtr<T>`, and `copy cv[i]` reads through a `const ref T` place. The cast states
+    // the ABI at the one site every deep copy funnels through, as the receiver and `__at` sites do.
+    return cls + "__copy((" + cls + "*)&(" + lvalue + "))";
 }
 
 // One call edge out of the body being emitted. Only a plain C identifier is an edge: see the hook in
@@ -25076,7 +25231,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         // than being a typo: it is registered only when the program contains `std::collections::View`,
         // and unlike `FixedArray` — which drags View in through its own module — a prelude builtin drags
         // in nothing. Without this the user is told the method does not exist, which is true and useless.
-        if (method == "view" && viewTemplateKey().empty()
+        if ((method == "view" || method == "viewMut") && viewTemplateKey().empty()
             && _classes.count(clsName) && _classes[clsName].isIntrinsicColl) {
             unsupported(("`" + clsName + "` can hand out a view, but this program has no `View<T>` to hand "
                          "out — add `import { std::collections::View };`").c_str(), srcLine);

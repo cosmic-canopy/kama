@@ -1,0 +1,73 @@
+// The read-only window: `ConstView<T>` — Rust `&[T]`, C# `ReadOnlySpan<T>`. It is to `View<T>` what
+// `UnsafeConstPtr<T>` is to `UnsafePtr<T>` and what a `const ref T` place is to `ref T`: the same window,
+// minus every write. Its `operator[]` hands out a `const ref T` place, so it indexes ANY element (a
+// move-only one too) without copying; there is no `get(index:)`. A `View<T>` NARROWS to it implicitly at
+// every sink — an argument, a local's initializer, an assignment, a `return` — lvalue or rvalue, and a
+// generic `ConstView<T>` parameter infers `T` from a `View<T>` argument through the same pair. The
+// negative half is tests/xfail/const_view_*.kama.
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView,
+         std::collections::sortUnstable, std::collections::isSorted, std::collections::binarySearch,
+         std::concurrent::Isolate, std::concurrent::cpuCount };
+
+// A move-only element: `ConstView<Token>` reads it in place through the `const ref` place.
+type resource Token {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+}
+
+fn int32 sum(ConstView<int32> xs) { int32 s = 0; foreach (int32 x in xs) { s = s + x; } return s; }   // by-value foreach
+fn ConstView<int32> firstTwo(View<int32> xs) { return xs.slice(from: 0, count: 2); }   // an RVALUE narrowed at a return
+fn ConstView<int32> whole(View<int32> xs) { return xs; }                               // an lvalue narrowed at a return
+fn int32 viaLocal(View<int32> xs) { ConstView<int32> cv = xs; return sum(xs: cv); }   // narrowed at an initializer
+fn int32 viaAssign(View<int32> xs) {
+    ConstView<int32> cv = xs.view();   // the explicit spelling
+    cv = xs;                           // narrowed at an assignment
+    return cast<int32>(cv.length());
+}
+unsafe fn int32 firstRaw(ConstView<int32> xs) { UnsafeConstPtr<int32> p = xs.dataPtr(); return p[0]; }
+
+fn int32 main() {
+    int32 r = 0;
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 9); d.add(item: 1); d.add(item: 5); d.add(item: 3);
+    borrow d.viewMut() as v {
+        sortUnstable(items: v);                                              // the writable half sorts
+        if (isSorted(items: v)) { r = r + 1; }                               // 1: `ConstView<T>` param infers T from a `View<T>`
+        int32 nine = 9;
+        Optional<isize> at = binarySearch(items: v, target: nine);
+        int32 found = match (at) { case Some(value: i): cast<int32>(i); case None: -1; };
+        if (found == 3) { r = r + 1; }                                       // 2: through the generic pair
+        if (sum(xs: v) == 18) { r = r + 1; }                                 // 3: implicit narrowing at an argument
+        ConstView<int32> cv = v.view();                                      // the explicit narrowing
+        if (cv.length() == 4 && cv[0] == 1 && !cv.isEmpty()) { r = r + 1; }  // 4: the read-only place
+        if (sum(xs: cv.slice(from: 1, count: 2)) == 8) { r = r + 1; }        // 5: a read-only derive
+        if (firstTwo(xs: v).length() == 2 && sum(xs: firstTwo(xs: v)) == 4) { r = r + 1; }   // 6: rvalue narrowing
+        if (whole(xs: v).length() == 4) { r = r + 1; }                       // 7: lvalue narrowing at a return
+        if (viaLocal(xs: v) == 18) { r = r + 1; }                            // 8
+        if (viaAssign(xs: v) == 4) { r = r + 1; }                            // 9
+        if (firstRaw(xs: cv) == 1) { r = r + 1; }                            // 10: the FFI bridge
+    }
+    borrow d.viewMut() as w { w[0] = 100; }                                  // a write THROUGH the alias is not a reseat
+    if (d[0] == 100) { r = r + 1; }                                          // 11
+
+    // `InlineArray` mints both halves: `viewMut()` (sort through it) and `view()` (read it back).
+    InlineArray<int32>#(3) a = [3, 1, 2];
+    borrow a.viewMut() as av { sortUnstable(items: av); }
+    borrow a.view() as ac { if (ac.length() == 3 && ac[0] == 1 && ac[2] == 3) { r = r + 1; } }   // 12
+
+    // `parallel_for` binds `ref`, so it auto-mints the WRITABLE half.
+    DynamicArray<int32> p = DynamicArray.empty();
+    p.add(item: 1); p.add(item: 2); p.add(item: 3);
+    parallel_for (ref int32 e in p, workers: cpuCount()) { e = e * 2; }
+    if (p[0] == 2 && p[2] == 6) { r = r + 1; }                               // 13
+
+    // A move-only element, read in place through the `const ref` place.
+    DynamicArray<Token> ts = DynamicArray.empty();
+    ts.add(item: Token.make(n: 7));
+    borrow ts.viewMut() as tv {
+        ConstView<Token> tc = tv;
+        if (tc[0].value() == 7) { r = r + 1; }                              // 14
+    }
+    return r;   // 14
+}

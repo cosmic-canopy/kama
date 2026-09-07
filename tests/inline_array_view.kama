@@ -7,9 +7,9 @@
 // DynamicArray carry, and it falls out of the raw-pointer return type rather than a rule of its own).
 // `view()` is the stdlib bridge: the length travels WITH the buffer, so one `View<float32>` signature
 // serves every N — which a `ref InlineArray<T>#(N)` parameter cannot, since N joins the type.
-import { std::collections::View, std::collections::sortUnstable };
+import { std::collections::View, std::collections::ConstView, std::collections::sortUnstable };
 
-fn int32 sum(const View<int32> v) { int32 s = 0; foreach (int32 x in v) { s = s + x; } return s; }
+fn int32 sum(ConstView<int32> v) { int32 s = 0; foreach (int32 x in v) { s = s + x; } return s; }
 
 unsafe fn int32 viaPointer() {
     InlineArray<int32>#(3) a = [10, 20, 12];
@@ -20,7 +20,7 @@ unsafe fn int32 viaPointer() {
 fn int32 main() {
     InlineArray<int32>#(4) b = [4, 2, 3, 1];
     // A `borrow` window: the InlineArray carries the `Viewable<View<T>>` grant, so it may host one.
-    borrow b.view() as v { sortUnstable(items: v); }     // stdlib algorithm over a stack array
+    borrow b.viewMut() as v { sortUnstable(items: v); }     // stdlib algorithm over a stack array
     InlineArray<int32>#(3) c = [1, 2, 3];
     return viaPointer() + sum(v: c.view()) + b.get(index: 0);   // 42 + 6 + 1 = 49
 }

@@ -1,4 +1,4 @@
-import { View, DynamicArray };
+import { View, ConstView, DynamicArray };
 export { Order, sort, sortUnstable, sortWith, sortUnstableWith,
          binarySearch, binarySearchWith, lowerBound, lowerBoundWith, isSorted, isSortedWith };
 
@@ -28,7 +28,7 @@ type value Natural<T: Comparable<T>> implements Order<T> {
 // through a buffer element (see DynamicArray.indexOf for the same rule).
 // ---------------------------------------------------------------------------------------------------
 
-fn bool lessAt<T, C: Order<T>>(View<T> items, ref C by, isize i, isize j) {
+fn bool lessAt<T, C: Order<T>>(ConstView<T> items, ref C by, isize i, isize j) {
     Ordering o = by.compare(a: items[i], b: items[j]);
     bool r = match (o) { case Less: true; case Equal: false; case Greater: false; };
     return r;
@@ -239,7 +239,7 @@ fn void sort<T: Comparable<T>>(View<T> items) {
 
 // The first position at which `target` could be inserted with the range staying sorted — i.e. the count
 // of elements ordered strictly before it. Total: it always answers, found or not.
-fn isize lowerBoundWith<T, C: Order<T>>(View<T> items, const ref T target, ref C by) {
+fn isize lowerBoundWith<T, C: Order<T>>(ConstView<T> items, const ref T target, ref C by) {
     isize lo = 0;
     isize hi = items.length();
     while (lo < hi) {
@@ -251,14 +251,14 @@ fn isize lowerBoundWith<T, C: Order<T>>(View<T> items, const ref T target, ref C
     return lo;
 }
 
-fn isize lowerBound<T: Comparable<T>>(View<T> items, const ref T target) {
+fn isize lowerBound<T: Comparable<T>>(ConstView<T> items, const ref T target) {
     Natural<T> nat = Natural::<T>.make();
     return lowerBoundWith::<T, Natural<T>>(items: items, target: target, by: nat);
 }
 
 // The index of an element equal to `target`, or `None`. With duplicates it reports the FIRST, which is
 // the only answer that composes with `lowerBound`.
-fn Optional<isize> binarySearchWith<T, C: Order<T>>(View<T> items, const ref T target, ref C by) {
+fn Optional<isize> binarySearchWith<T, C: Order<T>>(ConstView<T> items, const ref T target, ref C by) {
     isize i = lowerBoundWith::<T, C>(items: items, target: target, by: by);
     if (i >= items.length()) { return Optional::None; }
     Ordering o = by.compare(a: items[i], b: target);
@@ -267,14 +267,14 @@ fn Optional<isize> binarySearchWith<T, C: Order<T>>(View<T> items, const ref T t
     return Optional::None;
 }
 
-fn Optional<isize> binarySearch<T: Comparable<T>>(View<T> items, const ref T target) {
+fn Optional<isize> binarySearch<T: Comparable<T>>(ConstView<T> items, const ref T target) {
     Natural<T> nat = Natural::<T>.make();
     return binarySearchWith::<T, Natural<T>>(items: items, target: target, by: nat);
 }
 
 // ---------------------------------------------------------------------------------------------------
 
-fn bool isSortedWith<T, C: Order<T>>(View<T> items, ref C by) {
+fn bool isSortedWith<T, C: Order<T>>(ConstView<T> items, ref C by) {
     isize i = 1;
     while (i < items.length()) {
         if (lessAt::<T, C>(items: items, by: by, i: i, j: i - 1)) { return false; }
@@ -283,7 +283,7 @@ fn bool isSortedWith<T, C: Order<T>>(View<T> items, ref C by) {
     return true;
 }
 
-fn bool isSorted<T: Comparable<T>>(View<T> items) {
+fn bool isSorted<T: Comparable<T>>(ConstView<T> items) {
     Natural<T> nat = Natural::<T>.make();
     return isSortedWith::<T, Natural<T>>(items: items, by: nat);
 }

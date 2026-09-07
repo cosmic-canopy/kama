@@ -1,4 +1,4 @@
-import { std::collections::DynamicArray, std::collections::View };
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
 export { encode, decode, encodeUrl, decodeUrl, DecodeError };
 
 // Base64 (RFC 4648) — bytes to text and back, in the two alphabets that matter and no configuration:
@@ -62,7 +62,7 @@ fn uint8 value(uint8 c, bool url) {
     return 255ui8;
 }
 
-unsafe fn string encodeWith(View<uint8> bytes, bool url, bool pad) {
+unsafe fn string encodeWith(ConstView<uint8> bytes, bool url, bool pad) {
     isize n = bytes.length();
     if (n == 0) { return ""; }
     DynamicArray<uint8> text = DynamicArray::<uint8>.withCapacity(capacity: ((n + 2) / 3) * 4);
@@ -159,7 +159,7 @@ fn Result<DynamicArray<uint8>, DecodeError> decodeWith(const ref string text, bo
 
 // Standard alphabet, padded.
 @compileFor(!NOHEAP)
-unsafe fn string encode(View<uint8> bytes) { return encodeWith(bytes: bytes, url: false, pad: true); }
+unsafe fn string encode(ConstView<uint8> bytes) { return encodeWith(bytes: bytes, url: false, pad: true); }
 
 // Standard alphabet, padded — strictly.
 @compileFor(!NOHEAP)
@@ -167,7 +167,7 @@ fn Result<DynamicArray<uint8>, DecodeError> decode(const ref string text) { retu
 
 // URL-safe alphabet, unpadded.
 @compileFor(!NOHEAP)
-unsafe fn string encodeUrl(View<uint8> bytes) { return encodeWith(bytes: bytes, url: true, pad: false); }
+unsafe fn string encodeUrl(ConstView<uint8> bytes) { return encodeWith(bytes: bytes, url: true, pad: false); }
 
 // URL-safe alphabet, unpadded — a `=` anywhere is not a character of this alphabet.
 @compileFor(!NOHEAP)

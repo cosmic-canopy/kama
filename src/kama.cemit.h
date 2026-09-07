@@ -1881,8 +1881,9 @@ private:
     SharedIdentifier viewQualifiedNode(const std::string& tmplKey);   // "a__b__View" -> `a::b::View` node
     SharedIdentifier findMethodReturn(ClassInfo& ci, const std::string& member);   // one method's return type
     const std::string& viewTemplateKey();       // the stdlib `type view View<T>` template key (cached)
-    std::string _viewTmplKey;                   // "" until looked up, and "" if the stdlib has no View
-    bool        _viewTmplLookedUp = false;
+    const std::string& constViewTemplateKey();  // ...and its read-only twin, `ConstView<T>`
+    const std::string& viewTemplateKeyFor(const std::string& tail);   // identified by bare tail + `type view` shape
+    std::map<std::string, std::string> _viewTmplKeys;   // tail -> key; present-and-"" once looked up and absent
     // True iff a (post-substitution) type arg still carries an UNBOUND type-parameter — a bare name resolving
     // to no known type (nor a primitive / This / UnsafePtr / usize / isize), recursing into nested generic args.
     // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.
@@ -2154,7 +2155,16 @@ private:
     // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
     // No-op inside one. Returns true if it rejected.
     bool grantedMint(const ClassInfo& ci, const std::string& member) const;  // `member` is a nullary member of a `@viewable` contract `ci` implements
-    bool declaresViewable(const ClassInfo& ci) const;   // the host of a `parallel_for` declared it hands out a view — `grantedMint(ci, "view")`
+    bool declaresViewable(const ClassInfo& ci) const;   // the host of a `parallel_for` declared it hands out a WRITABLE view — `grantedMint(ci, "viewMut")`
+    // The two stdlib windows, told apart by TEMPLATE (both are `isBorrow`, so isViewCType cannot): `ConstView<T>`
+    // is the read-only half, `View<T>` the writable one. `constViewOf` is the one implicit conversion between
+    // them — `View<X>` narrows to `ConstView<X>` at every sink — and `narrowViewValue` spells it (a by-value
+    // call to the stdlib's own `View<X>.narrow`, so an rvalue source is evaluated once). The reverse is
+    // refused in rejectClassIdentityMismatch, naming `viewMut()`.
+    bool isConstViewCType(const std::string& ct);
+    bool isMutViewCType(const std::string& ct);
+    bool constViewOf(const std::string& dstCType, const std::string& srcCType);
+    std::string narrowViewValue(const std::string& dstCType, SharedExpression src, const std::string& emitted, int line);
     bool rejectRawOutsideUnsafe(const char* what, int line);
     // The signature half: a declaration NAMING a raw pointer (return type or any parameter) must be
     // `unsafe`. Applied only where a body exists — an `abstract` member and a `contract` member are
@@ -2252,6 +2262,11 @@ private:
     // disjoint-borrow rule (several isolates may `ref`-borrow the SAME atomic cell — the sanctioned case).
     std::string _atomicTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
+    // The same list for a generic function INSTANTIATION — the template's parameters with its type
+    // arguments bound, so a call site sees `ConstView_int32`, not the symbolic `ConstView_T` the template's
+    // own FuncSig carries. Cached per mangled name.
+    const std::vector<ParamSig>& instParamSigs(const GenericInst& gi);
+    std::map<std::string, std::vector<ParamSig>> _instParamSigs;
     static bool isExtern(FunctionDeclarationNode* fn);
     static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary
 

@@ -1,4 +1,4 @@
-import { std::collections::DynamicArray, std::collections::View };
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
 export { encode, decode, DecodeError };
 
 // Hexadecimal — bytes to text and back. `encode` writes LOWERCASE (what every tool prints, and what
@@ -46,7 +46,7 @@ fn uint8 nibble(uint8 c) {
 
 // Two lowercase digits per byte.
 @compileFor(!NOHEAP)
-unsafe fn string encode(View<uint8> bytes) {
+unsafe fn string encode(ConstView<uint8> bytes) {
     isize n = bytes.length();
     if (n == 0) { return ""; }
     DynamicArray<uint8> text = DynamicArray::<uint8>.withCapacity(capacity: n * 2);

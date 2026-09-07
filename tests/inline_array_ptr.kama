@@ -16,7 +16,7 @@ import { std::collections::View };
 unsafe fn int32 raw() {
     UnsafePtr p = null;
     InlineArray<UnsafePtr>#(3) a = [p, p, p];
-    borrow a.view() as v { v.swap(i: 0, j: 2); return cast<int32>(v.length()); }
+    borrow a.viewMut() as v { v.swap(i: 0, j: 2); return cast<int32>(v.length()); }
 }
 unsafe fn int32 typed() {
     UnsafePtr<uint8> q = null;

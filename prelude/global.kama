@@ -244,6 +244,13 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // DmaSpan` has the identical relationship to its owner, and a contract naming `View` would serve exactly
 // one type and leave every other view type unmintable.
 @viewable type contract Viewable<V> for resource, value, view { fn V view(); }
+// The writable twin. `view()` hands out the READ-ONLY window (`ConstView<T>` in the stdlib — a `const fn`,
+// so a `const ref` container can open one); `viewMut()` hands out the mutate-through one (`View<T>`).
+// Two contracts rather than two members of one, because a grant is read BY MEMBER NAME (`grantedMint`):
+// `borrow d.viewMut() as v` and `parallel_for` (whose `ref` binding needs the writable half) each look
+// for exactly their own mint, and a type that can only ever be read (a `ConstView<T>` itself) grants
+// `view()` alone.
+@viewable type contract ViewableMut<V> for resource, value, view { fn V viewMut(); }
 // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
 // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
 // (std::json, …) implements; `Serializable` is what a `@generate(Serializable)` type gets (compiler-synthesized)
