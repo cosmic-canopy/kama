@@ -13,8 +13,11 @@
 // typed `__atomic_*_n` compiler builtin — so every op inlines to a lock-free machine instruction for the
 // concrete scalar width (no libatomic dependency). The generic sized `__atomic_load`/`__atomic_store`
 // forms would take a runtime size through this boundary and fall back to libatomic; the width switch keeps
-// it inline. `T` is restricted (by the emitter) to an integer primitive or `UnsafePtr`, so a cell is always a
-// naturally-aligned lock-free scalar of width 1/2/4/8.
+// it inline. `T` is restricted (by the emitter) to an integer primitive, `bool`, a float or `UnsafePtr`, so a
+// cell is always a naturally-aligned lock-free scalar of width 1/2/4/8. A float cell is pure bit movement
+// through the width switch — load/store/exchange/compare-exchange on its 4 or 8 bytes, with
+// compare-exchange comparing BITS (C++20 `atomic<float>` semantics) — and the emitter refuses
+// `fetchAdd`/`fetchSub` on one at the call, since the add below is an integer add of the bit pattern.
 //
 // Freestanding-friendly: only <stdint.h>. The `__atomic_*` builtins are GCC/Clang intrinsics (no header),
 // and emscripten (clang) lowers them onto shared-memory Web-Worker atomics unchanged — one source, both

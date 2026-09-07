@@ -26,6 +26,7 @@ asm_outside_unsafe	asm_outside_unsafe.kama:4
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7
 assign_str_bare	assign_str_bare.kama:2
 atomic_bool_fetch_add	atomic_bool_fetch_add.kama:6
+atomic_float_fetch_add	atomic_float_fetch_add.kama:4
 atomic_nonscalar	atomic_nonscalar.kama:12
 attr_on_extern	attr_on_extern.kama:5
 attr_on_fnptr	attr_on_fnptr.kama:6

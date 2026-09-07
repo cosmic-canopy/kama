@@ -1,0 +1,23 @@
+// `Atomic<float32>` / `Atomic<float64>` — a float is a 4- or 8-byte machine word, so load/store/swap/
+// compareExchange are the same lock-free bit movement `Atomic<bool>` already relies on; `compareExchange`
+// compares BITS (C++20 `atomic<float>` semantics: `-0.0` and `+0.0` differ). What a float cell cannot do
+// is `fetchAdd`/`fetchSub` (tests/xfail/atomic_float_fetch_add): no hardware has a lock-free float add,
+// and the shim would add the raw bit patterns. The idiom is a `compareExchange` loop, shown here.
+import { std::concurrent::Atomic };
+fn void addTo(ref Atomic<float64> cell, float64 delta) {
+    float64 seen = cell.load();
+    while (!cell.compareExchange(expected: ref seen, desired: seen + delta)) { }
+}
+fn int32 main() {
+    Atomic<float32> a = Atomic.make(value: 1.5f32);
+    Atomic<float64> b = Atomic.make(value: 10.0);
+    a.store(value: 2.5f32);
+    float32 prior = a.swap(value: 4.0f32);           // prior 2.5, cell 4.0
+    addTo(cell: ref b, delta: 30.0);
+    addTo(cell: ref b, delta: -2.0);                  // 38.0
+    int32 r = 0;
+    if (prior == 2.5f32) { r = r + 1; }
+    if (a.load() == 4.0f32) { r = r + 2; }
+    if (b.load() == 38.0) { r = r + 4; }
+    return r + 35;   // 7 + 35 = 42
+}

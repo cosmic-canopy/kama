@@ -10790,10 +10790,15 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // `bool` is a lock-free byte too — the done-flag the docs advertise. What it cannot do is
         // `fetchAdd`/`fetchSub`: the shim adds the raw bytes, and `true + 1` is the byte 2, which is not a
         // `_Bool`. Those two are refused at the CALL on a `bool` cell (emitDispatch), where `swap`/
-        // `compareExchange` are the flip. `float` stays out for the same raw-bytes reason, with no use.
-        bool isBool = el->builtInVal == IDENTIFIER_BOOL_VAL;
-        if (!isInt && !isSize && !isPtr && !isBool) {
-            unsupported(("`Atomic<T>` requires an integer primitive, `bool` or `UnsafePtr` element (a lock-free "
+        // `compareExchange` are the flip. A float is the same story at width 4/8: load/store/swap/
+        // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
+        // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
+        // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.222).
+        bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
+        bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
+        if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
+            unsupported(("`Atomic<T>` requires an integer primitive, `bool`, a float or `UnsafePtr` element (a lock-free "
                          "machine word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
             return;
         }
@@ -25227,11 +25232,20 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (mi && isAtomicClass(clsName) && !(_currentClass && isAtomicClass(_currentClass->name))
         && (method == "fetchAdd" || method == "fetchSub" || method == "fetchAddExplicit" || method == "fetchSubExplicit")) {
         auto gi = _genericTypeInsts.find(clsName);
-        if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty() && gi->second.typeArgs[0]
-            && gi->second.typeArgs[0]->builtInVal == IDENTIFIER_BOOL_VAL) {
+        const int elv = (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty() && gi->second.typeArgs[0])
+                        ? gi->second.typeArgs[0]->builtInVal : -1;
+        if (elv == IDENTIFIER_BOOL_VAL) {
             unsupported(("`" + method + "` needs an integer element — `Atomic<bool>` is a flag: set it with "
                          "`store(value:)`, flip it with `swap(value:)` (which hands back the prior value), or "
                          "`compareExchange`").c_str(), srcLine);
+            return "0";
+        }
+        // A float cell: the same shim would add the two BIT PATTERNS, and no hardware has a lock-free float
+        // add anyway — the portable accumulate is a compareExchange loop, which is what the message hands back.
+        if (elv == IDENTIFIER_FLOAT32_VAL || elv == IDENTIFIER_FLOAT64_VAL) {
+            unsupported(("`" + method + "` needs an integer element — there is no atomic float arithmetic (no "
+                         "hardware has a lock-free float add): accumulate with a `compareExchange` loop — "
+                         "`seen = c.load(); while (!c.compareExchange(expected: ref seen, desired: seen + d)) {}`").c_str(), srcLine);
             return "0";
         }
     }

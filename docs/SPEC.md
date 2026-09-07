@@ -3803,9 +3803,11 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   value crossing a type-erased boundary is passed by ADDRESS and moved as `sizeof(T)` bytes, which
   converts nothing and needs no such promise. That is the idiom to reach for; `Atomic<T>` is written that
   way throughout, and its element restriction — a lock-free machine word: an integer, `bool` (the
-  done-flag) or `UnsafePtr` — is enforced by the compiler at the use site, being likewise unspellable as <!-- xfail: atomic_nonscalar -->
+  done-flag), a float or `UnsafePtr` — is enforced by the compiler at the use site, being likewise unspellable as <!-- xfail: atomic_nonscalar -->
   a bound; so is the one operation a `bool` cell lacks, `fetchAdd`/`fetchSub` (the shim adds raw bytes, and
-  `true + 1` is not a `bool`), whose flip is `swap` or `compareExchange`. <!-- xfail: atomic_bool_fetch_add --> <!-- test: atomic_bool -->
+  `true + 1` is not a `bool`), whose flip is `swap` or `compareExchange`. A float cell lacks the same two <!-- xfail: atomic_bool_fetch_add --> <!-- test: atomic_bool -->
+  (no hardware has a lock-free float add); its `compareExchange` compares bits, and the accumulate idiom <!-- xfail: atomic_float_fetch_add --> <!-- test: atomic_float -->
+  is a `compareExchange` loop.
 - **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime(int32 N)`, in its
   own trailing list, supplied at a use site with `#(4)`. `<…>` holds types; `#(…)` holds values. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:

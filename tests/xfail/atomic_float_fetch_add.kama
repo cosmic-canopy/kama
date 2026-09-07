@@ -1,0 +1,4 @@
+// `fetchAdd` on a float cell: no hardware has a lock-free float add, and the width shim would add the raw
+// bit patterns. Refused at the call; the idiom is a `compareExchange` loop (tests/atomic_float).
+import { std::concurrent::Atomic };
+fn int32 main() { Atomic<float32> a = Atomic.make(value: 1.0f32); float32 p = a.fetchAdd(delta: 1.0f32); return cast<int32>(p); }
