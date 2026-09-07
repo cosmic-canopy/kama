@@ -1,0 +1,123 @@
+// Long-path probe, driven by tools/check-long-path.sh (NOT the standard harness — that runs fixtures
+// with no args, and this one needs to be told where to build). Contract with the script: run with one
+// user arg, a SHORT existing directory to work under. Prints `len=<n>` for the deepest path it builds,
+// so the script can refuse to pass vacuously. Returns 0 iff every step succeeds; a distinct nonzero
+// code pinpoints the first failure.
+//
+// ⚠️ The DEPTH IS BUILT HERE, not by the shell, for two reasons. It exercises createDirAll — which is
+// itself under test — and it keeps a >260-character argument out of msys2's argv path-conversion layer,
+// which rewrites POSIX-looking absolute arguments when it spawns a native child. Only the short base
+// crosses that boundary.
+//
+// Measured on Windows before the wide-path seam landed: this returns **2** — `createDirAll` cannot even
+// build the tree, because narrow `_mkdir` stops at MAX_PATH like every other ANSI/CRT path call. ⚠️ An
+// earlier draft of this comment predicted `readDir` (12) would fail first, on the grounds that
+// `kama_diropen` is the one site with an explicit `char[MAX_PATH]` and an ENOMEM bail. That is the most
+// VISIBLE ceiling, not the first one reached — the probe never gets that far. Both are fixed by the same
+// wide seam; the ordering claim was simply wrong, and is recorded here so it is not re-derived.
+import { std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
+         std::fs::rename, std::fs::remove, std::fs::readDir,
+         std::fs::writeFile, std::fs::readFile,
+         std::io::IoError, std::collections::DynamicArray,
+         std::path::join };
+
+// Exactly 40 characters: "d" + one index digit + a 38-character tail. Under the 255-byte
+// per-component limit every platform enforces, and eight of them (8 x 41 = 328 with separators) plus
+// a mktemp base clears 260 on Windows while staying inside macOS's 1024 PATH_MAX.
+fn string comp(int32 i) {
+    return "d${i}" + "_23456789_123456789_123456789_12345678";
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    isize i = 0;
+    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
+    return give d;
+}
+
+fn int32 main() {
+    // `base` is a reserved word in kama, so the short working directory is `work`.
+    string work = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
+    if (work.isEmpty()) { return 1; }
+
+    // ---- build the deep tree ------------------------------------------------------------------
+    string root = join(path: work, with: "lp");
+    string deep = copy root;
+    int32 i = 0;
+    while (i < 8) { deep = join(path: deep, with: comp(i: i)); i = i + 1; }
+
+    // An interpolation hole takes an identifier with member/index accessors only — NOT a call — so the
+    // length lands in a binding first.
+    isize dlen = deep.length();
+    print(s: "len=${dlen}\n");
+
+    match (createDirAll(path: deep)) {
+        case Err(error: e): { return 2; }
+        case Ok(value: u): { }
+    };
+    if (!exists(path: deep)) { return 3; }
+
+    // ---- stat the deep directory -------------------------------------------------------------
+    int32 stDir = match (stat(path: deep)) {
+        case Ok(value: m): (m.isDir ? 0 : 4);
+        case Err(error: e): 5;
+    };
+    if (stDir != 0) { return stDir; }
+
+    // ---- write / read a file at the bottom ---------------------------------------------------
+    string f = join(path: deep, with: "leaf.txt");
+    DynamicArray<uint8> payload = bytesOf(s: "kama-long-path");
+    isize wrote = match (writeFile(path: f, bytes: payload)) {
+        case Ok(value: w): w;
+        case Err(error: e): cast<isize>(-1);
+    };
+    if (wrote != cast<isize>(14)) { return 6; }
+
+    int32 rd = match (readFile(path: f)) {
+        case Ok(value: got): (got.length() == cast<isize>(14) ? 0 : 7);
+        case Err(error: e): 8;
+    };
+    if (rd != 0) { return rd; }
+
+    // ---- stat the deep FILE (size, not a directory) ------------------------------------------
+    int32 stFile = match (stat(path: f)) {
+        case Ok(value: m): (m.isDir ? 9 : ((m.size == cast<usize>(14)) ? 0 : 10));
+        case Err(error: e): 11;
+    };
+    if (stFile != 0) { return stFile; }
+
+    // ---- readDir: the site that fails first on an unfixed Windows ----------------------------
+    int32 seen = match (readDir(path: deep)) {
+        case Err(error: e): 12;
+        // ⚠️ `foreach (ref string …)`, not `names[i] == "leaf.txt"` — indexing a DynamicArray<string>
+        // and comparing the element directly is a double free (see unicodepath_probe.kama's note).
+        case Ok(value: names): {
+            int32 hit = 13;
+            foreach (ref string nm in names) { if (nm == "leaf.txt") { hit = 0; } }
+            := hit;
+        }
+    };
+    if (seen != 0) { return seen; }
+
+    // ---- rename within the deep directory ----------------------------------------------------
+    string f2 = join(path: deep, with: "moved.txt");
+    match (rename(from: f, to: f2)) {
+        case Err(error: e): { return 14; }
+        case Ok(value: u): { }
+    };
+    if (exists(path: f))   { return 15; }
+    if (!exists(path: f2)) { return 16; }
+
+    // ---- remove the file, then the whole tree ------------------------------------------------
+    match (remove(path: f2)) {
+        case Err(error: e): { return 17; }
+        case Ok(value: u): { }
+    };
+    match (removeDirAll(path: root)) {
+        case Err(error: e): { return 18; }
+        case Ok(value: u): { }
+    };
+    if (exists(path: root)) { return 19; }
+
+    return 0;
+}

@@ -1,0 +1,118 @@
+// Non-ASCII path probe, driven by tools/check-path-unicode.sh (NOT the standard harness — that runs
+// fixtures with no args, and this one needs to be told where to work). Contract with the script: run
+// with one user arg, a SHORT ASCII directory; before starting, the script has created ONE file inside
+// it named with the same bytes as `shellMade()` below. Returns 0 iff every step succeeds; a distinct
+// nonzero code pinpoints the first failure.
+//
+// ⚠️ Every non-ASCII name is written as `\u{...}` ESCAPES, never as literal bytes, and never passed
+// through argv. Two independent reasons: msys2 converts a native child's arguments through the ANSI
+// code page, which would corrupt a UTF-8 argument before kama ever saw it; and an ASCII-only source
+// file is immune to whatever a CI checkout does with encodings.
+//
+// ⚠️ NO precomposed Latin accents (no `café`). HFS+ normalizes them to NFD, so a byte-identity
+// assertion on such a name fails on macOS for a reason that has nothing to do with the seam under
+// test. The three below are chosen for UTF-8 WIDTH instead, which is what actually exercises the
+// conversion: Cyrillic is 2 bytes per character, CJK is 3, and the emoji is 4 — the last being a
+// surrogate PAIR in UTF-16, which is the case a naive converter gets wrong in both directions.
+//
+// Measured on Windows before the wide-path seam landed: the shipped runtime called the ANSI path
+// functions (`_mkdir`, `_open`, `GetFileAttributesA`, `FindFirstFileA`), which decode a path in the
+// process ANSI code page. A kama string is UTF-8 by definition (lib/std/path/path.kama), so these
+// names were mojibake before they reached the filesystem — at ANY length, with no MAX_PATH involved.
+import { std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
+         std::fs::rename, std::fs::readDir, std::fs::writeFile, std::fs::readFile,
+         std::io::IoError, std::collections::DynamicArray,
+         std::path::join };
+
+// Привет — Cyrillic, 2 bytes per character in UTF-8 (12 bytes, 6 characters).
+fn string cyrillic() { return "\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}"; }
+// 日本語 — CJK, 3 bytes per character (9 bytes, 3 characters).
+fn string cjk()      { return "\u{65E5}\u{672C}\u{8A9E}"; }
+// U+1F600 — 4 bytes in UTF-8, and a SURROGATE PAIR in UTF-16. The one that catches a half-done
+// converter: a per-unit loop produces two replacement characters here instead of one emoji.
+fn string emoji()    { return "\u{1F600}"; }
+// The name the GUARD creates with the shell, before this probe runs — same bytes, different writer.
+fn string shellMade(){ return "\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}-shell.txt"; }
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    isize i = 0;
+    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
+    return give d;
+}
+
+// Is `want` among the directory's entries, byte for byte? 0 = yes.
+//
+// ⚠️ `foreach (ref string …)`, NOT `names[i] == want`. Indexing a `DynamicArray<string>` and comparing
+// the element directly emits a shallow copy of the BORROWED element followed by a dtor on that copy,
+// which frees a buffer the array still owns — the array's own dtor then frees it again. A double free,
+// and it aborts (127 on Windows) at scope exit rather than at the comparison, which is what makes it
+// look like a path bug when it is not one. `tests/fs_readdir.kama` uses this same `ref` form, which is
+// why the corpus never hit it. Found while writing this guard; see the ROADMAP entry.
+fn int32 listedIn(const ref string dir, const ref string want, int32 missCode, int32 errCode) {
+    return match (readDir(path: dir)) {
+        case Err(error: e): errCode;
+        case Ok(value: names): {
+            int32 hit = missCode;
+            foreach (ref string nm in names) { if (nm == want) { hit = 0; } }
+            := hit;
+        }
+    };
+}
+
+fn int32 main() {
+    string work = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
+    if (work.isEmpty()) { return 1; }
+
+    // ---- 1. a directory whose name is 3-byte-per-character CJK -------------------------------
+    string dir = join(path: work, with: cjk());
+    match (createDirAll(path: dir)) { case Err(error: e): { return 2; } case Ok(value: u): { } };
+    if (!exists(path: dir)) { return 3; }
+
+    int32 stDir = match (stat(path: dir)) {
+        case Ok(value: m): (m.isDir ? 0 : 4);
+        case Err(error: e): 5;
+    };
+    if (stDir != 0) { return stDir; }
+
+    // ---- 2. a file whose name mixes 2-byte and 4-byte characters ------------------------------
+    string fname = cyrillic() + emoji() + ".txt";
+    string f = join(path: dir, with: fname);
+    DynamicArray<uint8> payload = bytesOf(s: "unicode");
+    isize wrote = match (writeFile(path: f, bytes: payload)) {
+        case Ok(value: w): w;
+        case Err(error: e): 0;
+    };
+    if (wrote != cast<isize>(7)) { return 6; }
+    if (!exists(path: f)) { return 7; }
+
+    int32 rd = match (readFile(path: f)) {
+        case Ok(value: got): (got.length() == cast<isize>(7) ? 0 : 8);
+        case Err(error: e): 9;
+    };
+    if (rd != 0) { return rd; }
+
+    // ---- 3. THE LOAD-BEARING ASSERTION: byte-identical round-trip through readDir -------------
+    // This is the one that catches both conversion directions at once. A name kama wrote must come
+    // back from the OS as the same bytes kama used to write it.
+    int32 mine = listedIn(dir: dir, want: fname, missCode: 10, errCode: 11);
+    if (mine != 0) { return mine; }
+
+    // ---- 4. the other direction: a name kama did NOT write ------------------------------------
+    // The guard created this one with the shell. Proves the seam can READ names from the filesystem,
+    // not merely round-trip its own.
+    int32 theirs = listedIn(dir: work, want: shellMade(), missCode: 12, errCode: 13);
+    if (theirs != 0) { return theirs; }
+
+    // ---- 5. rename between two non-ASCII names ------------------------------------------------
+    string f2 = join(path: dir, with: cjk() + emoji() + ".txt");
+    match (rename(from: f, to: f2)) { case Err(error: e): { return 14; } case Ok(value: u): { } };
+    if (exists(path: f))   { return 15; }
+    if (!exists(path: f2)) { return 16; }
+
+    // ---- 6. tear the non-ASCII tree down ------------------------------------------------------
+    match (removeDirAll(path: dir)) { case Err(error: e): { return 17; } case Ok(value: u): { } };
+    if (exists(path: dir)) { return 18; }
+
+    return 0;
+}
