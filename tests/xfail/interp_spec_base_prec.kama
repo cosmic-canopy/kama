@@ -1,0 +1,2 @@
+// A precision with a base marker: an integer has no fraction to round, so `.N` on `x` is refused.
+fn int32 main() { int32 n = 255; string s = "${n:.2x}"; return cast<int32>(s.length()); }

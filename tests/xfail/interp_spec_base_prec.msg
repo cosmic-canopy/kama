@@ -1,0 +1,1 @@
+a precision (`.N`) does not apply to a base specifier

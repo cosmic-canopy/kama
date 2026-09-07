@@ -10794,7 +10794,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.222).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.223).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -26471,17 +26471,19 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     bool hasFlag = plus || left || zero;
     int flags = (zero ? 1 : 0) | (left ? 2 : 0) | (plus ? 4 : 0);
 
-    // ---- Base spec: integer only, no width/flags/precision yet. ----
+    // ---- Base spec: integer only. Width and the `0`/`-` flags compose with it (`${n:08x}` is the zero
+    //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
+    //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
+    //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.223). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
-        if (hasWidth || hasFlag || hasPrec) {
-            unsupported(("width/sign/align specifiers can't be combined with a base yet — use `:0x` or `:6`, "
-                         "not `:" + spec + "`").c_str(), hole->line);
-            return;
-        }
+        if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
+        if (plus)    { unsupported(("`+` does not apply to a base specifier — `:" + spec + "` shows an unsigned bit pattern, which has no sign").c_str(), hole->line); return; }
         _hoisted.push_back("Formatter__writeU64Radix(&" + fv + ", (uint64_t)(" + val + "), "
                            + std::to_string(base) + ", " + std::to_string(bits) + ", "
-                           + std::to_string(upper) + ", " + std::to_string(prefix) + ");");
+                           + std::to_string(upper) + ", " + std::to_string(prefix) + ", "
+                           + std::to_string(width) + ", " + std::to_string(flags) + ");");
         return;
     }
 

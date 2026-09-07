@@ -185,8 +185,13 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   stays ahead of the zeros), and on a float it composes with a precision (`${pi:8.2}`, `${pi:08.2}`) — ideal
   for zero-padded columns (`${h:02}:${m:02}`). A leading **`+`** forces a sign on non-negatives (`${n:+}` →
   `+42`) and **`-`** left-aligns within the width (`${n:-6}`); both compose with the width/precision. The full
-  spec grammar is `[+|-]* [0? width] [.precision] | base`. Combining a base marker with width/flags, a custom
-  fill character, and center-align are not yet supported (see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
+  spec grammar is `[+|-]* [0? width] [.precision] | [-]* [0? width] base`. A width and the `0`/`-` flags
+  compose with a base: `${n:8x}` space-pads to 8, `${n:08x}` zero-pads to 8 (`000000ff` — the zero flag,
+  NOT the prefix: the prefix is only ever the lone `0` directly before the letter, so `:0x` and `:08x` mean <!-- test: fmt_base_width -->
+  different things, as printf's `%#x` and `%08x` do), and `${n:-8x}` left-aligns. A precision (`.N`) or a
+  `+` with a base is a compile error — an integer has no fraction and a bit pattern no sign. A custom fill <!-- xfail: interp_spec_base_prec, interp_spec_base_plus -->
+  character and center-align are not offered: both are presentation the caller composes over the rendered
+  string, and a second fill vocabulary would be a second way to say `0`.
 - **`@generate(Formattable)`** synthesizes a default field-dump `Formattable` impl so a type renders without a
   hand-written `format` — `Type { field1: v1, field2: v2 }`, each field dispatching to its own `Formattable` into
   the same sink (so nesting composes, one allocation):

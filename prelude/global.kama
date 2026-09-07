@@ -645,7 +645,7 @@ extern fn string kama_fmt_char(char cp);
 // Formattable-specifier variants (`${x:.2}` / `${n:0x}`): fixed-precision float + base-N integer. Emitted as
 // Formatter fast-paths by the interpolation codegen (like writeChar), so the `Formattable` contract is unchanged.
 extern fn string kama_fmt_f64_prec(float64 v, int32 prec, int32 width, int32 flags);
-extern fn string kama_fmt_u64_radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix);
+extern fn string kama_fmt_u64_radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags);
 extern fn string kama_fmt_i64_width(int64 v, int32 width, int32 flags);
 extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
@@ -671,7 +671,9 @@ type resource Formatter {
     // Formattable-specifier writers (interpolation fast-paths): fixed float precision + base-N integer. `upper`
     // and `prefix` are 0/1 flags; the integer is masked to `width` bits so a signed negative round-trips.
     public unsafe fn void writeF64Prec(float64 v, int32 prec, int32 width, int32 flags) { string t = kama_fmt_f64_prec(v: v, prec: prec, width: width, flags: flags); this.writeStr(s: ref t); }
-    public unsafe fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix); this.writeStr(s: ref t); }
+    // `width` is the BIT width the value is masked to; `pad` the minimum field width and `flags` the
+    // `0`/`-` bits — `${n:08x}` composes a base with padding since 0.9.223.
+    public unsafe fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix, pad: pad, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).

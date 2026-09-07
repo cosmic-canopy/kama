@@ -1557,18 +1557,32 @@ static inline kama_string kama_fmt_u64_width(uint64_t v, int32_t width, int32_t 
 // unsigned bit pattern of its declared width — a signed negative round-trips (`${x:0x}` on `-1i8` -> `0xff`).
 // `base` is 16/8/2; `upper` uppercases the hex digits; `prefix` emits the matching `0x`/`0o`/`0b` marker so
 // the output is itself a valid Kama literal. A base-16 uint64 is at most 16 digits + a 2-char prefix.
-static inline kama_string kama_fmt_u64_radix(uint64_t v, int32_t base, int32_t width_bits, int32_t upper, int32_t prefix) {
+// `pad` is a minimum field width (0 = none) and `flags` the same `KAMA_FMT_*` bits the decimal path takes:
+// ZERO pads the digit run with `0`s AFTER the prefix (`${n:08x}` -> `000000ff`, and with the echoed prefix
+// `0x000000ff`), LEFT pads with spaces on the right, otherwise spaces on the left — printf's rules for `%#08x`.
+// PLUS is never passed: a base shows an unsigned bit pattern, which has no sign. The buffer covers the
+// emitter's width clamp (256) plus 16 digits and a prefix.
+static inline kama_string kama_fmt_u64_radix(uint64_t v, int32_t base, int32_t width_bits, int32_t upper, int32_t prefix,
+                                             int32_t pad, int32_t flags) {
     if (width_bits > 0 && width_bits < 64) v &= ((uint64_t)1 << width_bits) - 1u;
     const char* digs = upper ? "0123456789ABCDEF" : "0123456789abcdef";
     char tmp[64]; int t = 0;
     if (v == 0) tmp[t++] = '0';
     while (v) { tmp[t++] = digs[(int)(v % (uint64_t)base)]; v /= (uint64_t)base; }
-    char buf[72]; int i = 0;
+    if (pad < 0) pad = 0;
+    if (pad > 256) pad = 256;
+    char buf[280]; int i = 0;
+    const int plen = prefix ? 2 : 0;
+    const int body = plen + t;
+    const int fill = pad > body ? pad - body : 0;
+    if (!(flags & KAMA_FMT_LEFT) && !(flags & KAMA_FMT_ZERO)) for (int k = 0; k < fill; ++k) buf[i++] = ' ';
     if (prefix) {
         buf[i++] = '0';
         buf[i++] = (base == 16) ? (upper ? 'X' : 'x') : (base == 8 ? 'o' : 'b');
     }
+    if (!(flags & KAMA_FMT_LEFT) && (flags & KAMA_FMT_ZERO)) for (int k = 0; k < fill; ++k) buf[i++] = '0';
     while (t) buf[i++] = tmp[--t];
+    if (flags & KAMA_FMT_LEFT) for (int k = 0; k < fill; ++k) buf[i++] = ' ';
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)i);
 }
 

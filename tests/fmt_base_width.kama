@@ -1,0 +1,17 @@
+// A base marker combined with width/flags — `${n:08x}`. `:0x` alone still means "echo the prefix";
+// `:08x` is the zero flag + width 8 with NO prefix; `:8x` pads with spaces; `:-8x` left-aligns.
+fn int32 main() {
+    int32 n = 255;
+    string a = "${n:0x}";     // "0xff"
+    string b = "${n:08x}";    // "000000ff"
+    string c = "${n:8X}";     // "      FF"
+    string d = "${n:-8x}";    // "ff      "
+    string e = "${n:08b}";    // "11111111"
+    int32 ok = 0;
+    if (a.equals(other: "0xff")) { ok = ok + 1; }
+    if (b.equals(other: "000000ff")) { ok = ok + 2; }
+    if (c.equals(other: "      FF")) { ok = ok + 4; }
+    if (d.equals(other: "ff      ")) { ok = ok + 8; }
+    if (e.equals(other: "11111111")) { ok = ok + 16; }
+    return ok + 11;   // 31 + 11 = 42
+}

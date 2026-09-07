@@ -1,0 +1,2 @@
+// `+` with a base marker: a base shows the unsigned bit pattern of the declared width, which has no sign.
+fn int32 main() { int32 n = 255; string s = "${n:+x}"; return cast<int32>(s.length()); }
