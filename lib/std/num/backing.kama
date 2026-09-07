@@ -23,9 +23,11 @@ type contract FixedBacking<B is This> for value, intrinsic {
 
 // Which integers are backings, and which are deliberately not:
 //
-// * `int64` is NOT a backing, and cannot be. The accumulator `wide()` widens INTO is `int64`, and kama has
-//   no `int128` — so an int64-backed multiply has nowhere to compute its intermediate product. This is a
-//   real limit of the design, not an omission.
+// * `int64` is NOT a backing. The accumulator `wide()` widens INTO is `int64`, so an int64-backed multiply
+//   has nowhere to compute its intermediate product through THIS contract. A native `int128` is a declared
+//   non-goal (no portable C lowering), but the product itself is not out of reach: `std::num::mulWideI64`
+//   (0.9.228) hands back the 128-bit result as a hi/lo pair, so an `int64` backing is an additive change
+//   to `FixedBacking` — a `wide()` that returns the pair — should a consumer want it. Optional, not blocked.
 // * The unsigned widths are NOT backings, and that is a scope line rather than a technical one. `uint8`,
 //   `uint16` and `uint32` all widen into `int64` losslessly, so they would work; but Q-format is signed by
 //   convention, and `Fixed`'s unary minus and its saturating ops are written for a signed range. Adding

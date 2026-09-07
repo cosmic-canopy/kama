@@ -115,8 +115,9 @@ type resource Rng implements Sendable {
 // A uniform draw in [0, span), UNBIASED: `next() % span` alone favours the low residues whenever 2^64
 // is not a multiple of `span`. Rejection fixes it — discard the outputs below `2^64 mod span` (computed
 // as `(0 - span) % span` in wrapping arithmetic) and the survivors are a whole number of copies of every
-// residue. Lemire's multiply-shift needs a 128-bit product; kama has no `uint128`, and this rejects at
-// most once in 2^32 draws for any span that fits in 32 bits.
+// residue. Lemire's multiply-shift needs the high 64 bits of a 128-bit product, which `std::num::mulHighU64`
+// (0.9.228) now provides; rejection sampling is kept because it is already unbiased and rejects at most
+// once in 2^32 draws for any span that fits in 32 bits — switching is an optional follow-on.
 fn uint64 belowU64(ref Rng rng, uint64 span) {
     uint64 neg = 0ui64 - span;
     uint64 threshold = neg % span;

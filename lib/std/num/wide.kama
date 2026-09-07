@@ -1,0 +1,49 @@
+// The 128-bit product of two 64-bit integers, as a hi/lo pair — the answer to "kama has no `int128`".
+//
+// A native 128-bit width is a declared non-goal: `__int128` exists in clang and gcc on 64-bit targets
+// only (not MSVC, not gcc on thumbv6m), so a kama `int128` would be a numeric type that exists on some
+// targets, which the fixed-width position forbids. What the two in-tree wants actually need — a
+// `Fixed<int64>` backing's intermediate product, Lemire's unbiased range in `std::random` — is the WIDE
+// PRODUCT, and that is four 32-bit limb products in plain unsigned arithmetic: portable to every target,
+// no runtime header, no `unsafe`, and clang folds it to one `mul`/`umulh` pair where the hardware has it.
+export { Wide64, WideI64, mulWideU64, mulHighU64, mulWideI64 };
+
+// The unsigned product `a * b` as `hi * 2^64 + lo`.
+@generate(of)
+type value Wide64 {
+    public uint64 hi;
+    public uint64 lo;
+}
+
+// The signed product `a * b` in two's complement: `hi` carries the sign, `lo` the low 64 bits unchanged.
+@generate(of)
+type value WideI64 {
+    public int64  hi;
+    public uint64 lo;
+}
+
+fn Wide64 mulWideU64(uint64 a, uint64 b) {
+    uint64 mask = 4294967295ui64;                  // 2^32 - 1
+    uint64 a0 = a & mask; uint64 a1 = a >> 32ui64;
+    uint64 b0 = b & mask; uint64 b1 = b >> 32ui64;
+    uint64 p00 = a0 * b0; uint64 p01 = a0 * b1; uint64 p10 = a1 * b0; uint64 p11 = a1 * b1;
+    // The middle column: three 32-bit-ish terms, so it fits in 64 bits with room (< 2^34).
+    uint64 mid = (p00 >> 32ui64) + (p01 & mask) + (p10 & mask);
+    uint64 lo  = (mid << 32ui64) | (p00 & mask);
+    uint64 hi  = p11 + (p01 >> 32ui64) + (p10 >> 32ui64) + (mid >> 32ui64);   // p11 < 2^64 - 2^33: no wrap
+    return Wide64.of(hi: hi, lo: lo);
+}
+
+// The high 64 bits of the unsigned product — `(a * b) >> 64`, Lemire's multiply-shift in one call.
+fn uint64 mulHighU64(uint64 a, uint64 b) { Wide64 p = mulWideU64(a: a, b: b); return p.hi; }
+
+// Two's complement: the signed 128-bit product is the unsigned product of the bit patterns minus
+// `b * 2^64` when `a` is negative and minus `a * 2^64` when `b` is — both land in `hi` alone.
+fn WideI64 mulWideI64(int64 a, int64 b) {
+    uint64 ua = bitcast<uint64>(a); uint64 ub = bitcast<uint64>(b);
+    Wide64 p = mulWideU64(a: ua, b: ub);
+    uint64 hi = p.hi;
+    if (a < 0i64) { hi = hi - ub; }
+    if (b < 0i64) { hi = hi - ua; }
+    return WideI64.of(hi: bitcast<int64>(hi), lo: p.lo);
+}

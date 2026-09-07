@@ -1139,6 +1139,13 @@ std::num::wrappingAddI32, … };`. The `minI32`/`minI64`/`minf` ladder that spel
 <!-- test: generic_min_max_clamp --> a literal beside a typed sibling now binds `T` (generic inference defers an
 unsuffixed literal), so `min(a: n, b: 9)` with `isize n` is the whole spelling.
 
+The **wide product** — `mulWideU64(a:, b:) -> Wide64 { hi, lo }`, `mulHighU64` (the top 64 bits, Lemire's
+multiply-shift in one call) and the signed `mulWideI64 -> WideI64` — is the answer to "kama has no `int128`": <!-- test: wide_mul -->
+a native 128-bit width is a non-goal (`__int128` exists in clang and gcc on 64-bit targets only, so it would be
+a numeric type that exists on some targets, which the fixed-width position forbids), while the two things that
+reach for one — a `Fixed<int64>` backing's intermediate product, an unbiased random range — need exactly this
+product, which is four 32-bit limb multiplies in plain unsigned arithmetic on every target.
+
 ### Sorting & searching (`std::collections`) ✅
 
 `import { std::collections::sort, std::collections::sortUnstable, std::collections::binarySearch,
@@ -1220,8 +1227,9 @@ divide widen through `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFlo
 `sat*` forms clamp. Pure library, no compiler support.
 
 Both halves of the format are parameters. `B` is the **backing integer**, bounded by the `FixedBacking<B>`
-contract (`int8`/`int16`/`int32`; `int64` cannot be one, because `wide()` widens *into* an `int64` and there
-is no `int128`), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32>#(16)` is
+contract (`int8`/`int16`/`int32`; `int64` is not one today, because `wide()` widens *into* an `int64` — a
+native `int128` is a non-goal, and `std::num::mulWideI64` is the 128-bit product an `int64` backing would
+widen through, an additive change if a consumer wants it), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32>#(16)` is
 the classic Q16.16 and `Fixed<int16>#(8)` is Q8.8. The backing is *passed*, not computed from a bit count:
 kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
 explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8>#(16)`)
@@ -1685,8 +1693,8 @@ same way. It is `Sendable`, so an isolate can own one.
 
 **Two integer draws, two jobs.** `range(rng:, lo:, hi:)` is one generic spelling over every numeric
 width — `int8`…`int64`, `uint8`…`uint64`, `isize`/`usize`, `float32`/`float64` — through the same
-marker-contract mechanism as `parse::<T>` (`Ranged`). It is half-open, **unbiased** (rejection sampling;
-there is no `uint128`, so Lemire's trick is out), and the signed span is computed in wrapping unsigned
+marker-contract mechanism as `parse::<T>` (`Ranged`). It is half-open, **unbiased** (rejection sampling, kept
+because it is already unbiased; `std::num::mulHighU64` is Lemire's multiply-shift if the branch ever matters), and the signed span is computed in wrapping unsigned
 arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. `T` comes from
 the bounds: a typed one binds it and an unsuffixed literal follows (`range(rng: g, lo: 0, hi: xs.length())`
 is an `isize` draw — generic inference defers an unsuffixed literal until its typed siblings have bound
@@ -1943,7 +1951,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.227` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.228` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must

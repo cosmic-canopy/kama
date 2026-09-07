@@ -1,0 +1,14 @@
+// The 128-bit product of two 64-bit integers, as a hi/lo pair — the answer to "kama has no int128".
+import { std::num::mulWideU64, std::num::mulHighU64, std::num::mulWideI64, std::num::Wide64, std::num::WideI64 };
+fn int32 main() {
+    uint64 big = 18446744073709551615ui64;              // 2^64 - 1
+    Wide64 p = mulWideU64(a: big, b: big);   // (2^64-1)^2 = 2^128 - 2^65 + 1
+    int32 r = 0;
+    if (p.hi == 18446744073709551614ui64) { r = r + 1; }    // 2^64 - 2
+    if (p.lo == 1ui64) { r = r + 2; }
+    if (mulHighU64(a: big, b: 2ui64) == 1ui64) { r = r + 4; }
+    WideI64 q = mulWideI64(a: 0i64 - 3i64, b: 5i64);   // -15
+    if (q.hi == 0i64 - 1i64) { r = r + 8; }
+    if (q.lo == 18446744073709551601ui64) { r = r + 16; }   // 2^64 - 15
+    return r + 11;   // 31 + 11 = 42
+}
