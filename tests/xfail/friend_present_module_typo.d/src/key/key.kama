@@ -1,0 +1,9 @@
+// A grant into a module that IS in the program, naming a symbol that is not there: still a hard error —
+// inertness (tests/friend_cross_module) is only for a module absent from the build.
+export { Key };
+type resource Key {
+    int32 v;
+    friend fpt::user::nothing[zeroed];
+    ctor zeroed() { this.v = 1; }
+    public const fn int32 get() { return this.v; }
+}

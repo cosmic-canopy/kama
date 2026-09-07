@@ -2805,6 +2805,7 @@ private:
     bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line);
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
+    bool        friendModulePresent(SharedStringList qual);   // does a `friend` path name a module this program loaded?
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     void        checkConstPlaceReturn(bool isConst, bool isRef, bool isConstRef, const std::string& m, int line);
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the

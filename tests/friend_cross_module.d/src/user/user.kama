@@ -1,0 +1,5 @@
+import { fcm::key::Key };
+export { fillOther, Holder, Peek };
+type value Holder { int32 w; public ctor build() { Key k = Key.zeroed(); this.w = k.get() + 10; } public const fn int32 get() { return this.w; } }
+type value Peek { int32 z; public ctor make() { this.z = 0; } public fn int32 read(ref Key k) { return k.v + 20; } }
+fn Key fillOther() { Key k = Key.zeroed(); return give k; }

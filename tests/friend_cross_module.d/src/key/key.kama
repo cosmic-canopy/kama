@@ -1,0 +1,19 @@
+// `friend` reaches across FILES and MODULES, by qualified path, for every accessor kind — a free function,
+// a type, and a `Type::method` (a named `ctor` included). Until 0.9.223 only the free-function form resolved
+// from a qualified path; a type had to be imported and named bare, so an owner had to `import` a module
+// purely to name it (the first external package's KAMA_GAPS #1). And a grant naming a module that is not
+// part of THIS program is INERT rather than an error (#2): the code it names is not being compiled, so
+// it can grant nothing — while a typo inside a module that IS present stays a hard error
+// (tests/xfail/friend_present_module_typo.d).
+export { Key, fillSame };
+type resource Key {
+    int32 v;
+    friend fillSame[zeroed];                    // same file, free fn
+    friend fcm::user::fillOther[zeroed];        // other module, free fn, qualified
+    friend fcm::user::Holder[zeroed];           // other module, a TYPE, qualified
+    friend fcm::user::Peek::read[v];            // other module, `Type::method`, qualified
+    friend fcm::ghost::nothing[zeroed];         // a module absent from this program: inert
+    ctor zeroed() { this.v = 1; }
+    public const fn int32 get() { return this.v; }
+}
+fn Key fillSame() { Key k = Key.zeroed(); return give k; }

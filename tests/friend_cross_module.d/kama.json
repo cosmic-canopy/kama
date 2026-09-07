@@ -1,0 +1,2 @@
+{ "name": "fcm", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "modules": { "key": { "visibility": "internal" }, "user": { "visibility": "internal" } } }

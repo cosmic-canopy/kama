@@ -1,0 +1,3 @@
+import { fpt::key::Key };
+export { probe };
+fn int32 probe() { return 1; }

@@ -10794,7 +10794,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.224).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.225).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -16938,7 +16938,7 @@ std::string CEmitter::ptrElemType(SharedExpression e)
 
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
-// local pointer, and (0.9.224) to type the RECEIVER of a method call on such an element, which borrows it
+// local pointer, and (0.9.225) to type the RECEIVER of a method call on such an element, which borrows it
 // in place. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of exprClass —
 // an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on) must keep its
 // plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
@@ -19620,12 +19620,37 @@ void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int 
 // resolve each class's raw `friend` grants to match keys, once every unit's
 // functions/classes are registered. An accessor is a class (matched vs _currentClass),
 // a free function, or a `Class::method` (both matched vs _currentFunc's C-name).
+// Does the qualifier of a `friend` accessor name a module this program loaded? The qualifier is judged
+// WHOLE, never by a prefix: the project root is a namespace too, so a prefix test would call
+// `sodium::box::sealInto` present whenever `sodium` is. Three shapes are present: a 1-segment file alias;
+// a path that is itself a registered module scope (`mod::func`, `mod::Type`); or a path whose last segment
+// names a class inside the registered module the rest spells (`mod::Type::method`). Anything else names a
+// module absent from the build — see the inert-grant rule in resolveFriends.
+bool CEmitter::friendModulePresent(SharedStringList qual)
+{
+    if (!qual || qual->empty()) return true;
+    if (qual->size() == 1 && _nsCtx.aliases.count(*(*qual)[0])) return true;
+    auto dotted = [&](size_t n) { std::string path; for (size_t i = 0; i < n; ++i) path += (path.empty() ? "" : ".") + *(*qual)[i]; return path; };
+    if (_namespaces.count(mangleNs(dotted(qual->size())))) return true;
+    if (qual->size() >= 2 && _namespaces.count(mangleNs(dotted(qual->size() - 1)))) {
+        auto head = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < qual->size(); ++i) head->push_back((*qual)[i]);
+        return _classes.count(resolveUserName(*qual->back(), head)) > 0;
+    }
+    return false;
+}
+
 void CEmitter::resolveFriends()
 {
+    // A whole-program pass, so no unit is "current": without the owner's file installed as the
+    // diagnostic context, every grant error printed `:6:0:` with no file name at all — which is exactly
+    // how the first external package's report quoted them. The same rung ScopedContractNs installs.
+    const std::string savedDiag = _emitDeclFile;
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.friendGrantsRaw.empty()) continue;
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
+        if (!ci.declFile.empty()) _emitDeclFile = ci.declFile;
         for (auto& rg : ci.friendGrantsRaw) {
             FriendGrant g; g.members = rg.members;
             SharedIdentifier acc = rg.accessor;
@@ -19634,16 +19659,38 @@ void CEmitter::resolveFriends()
             bool resolved = false;
 
             if (qual && !qual->empty()) {
-                // `Class::method` — the qualifier names a class, `val` is its method.
-                std::string clsName = resolveUserName(*qual->back(), nullptr);
-                auto cit = _classes.find(clsName);
-                if (cit != _classes.end() && cit->second.methods.count(val)) {
-                    g.accessor = cit->second.methods[val].cName; g.accessorIsClass = false; resolved = true;
+                // A qualified accessor, three shapes — tried in this order because each is one segment
+                // longer than the last: `mod::Type` (the whole path names a class), `mod::Type::method`
+                // (the path minus its last segment names the class, `val` its method — a named `ctor`
+                // included, since a ctor is registered in `methods` with its visibility), and `mod::func`
+                // (a free function). The first two used to be spelled only bare: `resolveUserName` was
+                // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
+                // `user` as a class and failed, and an owner had to `import` a module purely to name its
+                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.227.
+                std::string clsName = resolveUserName(val, qual);          // `mod::Type`
+                if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
+                if (!resolved) {                                           // `mod::Type::method`
+                    auto head = std::make_shared<StringList>();
+                    for (size_t i = 0; i + 1 < qual->size(); ++i) head->push_back((*qual)[i]);
+                    std::string owner = head->empty() ? resolveUserName(*qual->back(), nullptr)
+                                                      : resolveUserName(*qual->back(), head);
+                    auto cit = _classes.find(owner);
+                    if (cit != _classes.end() && cit->second.methods.count(val)) {
+                        g.accessor = cit->second.methods[val].cName; g.accessorIsClass = false; resolved = true;
+                    }
                 }
-                if (!resolved) {                                   // `Ns::func` — namespaced free function
+                if (!resolved) {                                           // `mod::func`
                     std::string fk = resolveFunc(val, qual);
                     if (_funcs.count(fk)) { g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true; }
                 }
+                // A grant into a module that is not part of THIS program is INERT, not an error: the code
+                // it names is not being compiled, so it can grant nothing — and an owner must be able to
+                // say who its friends are without dragging every one of their modules into every
+                // consumer's build (KAMA_GAPS #2: `Nonce.raw()` was `public` "under protest" for exactly
+                // this). A typo inside a module that IS present stays a hard error below. "Present" is
+                // judged on the longest namespace prefix of the path that names a loaded module, which is
+                // what an absent `sodium::box` fails and a present `sodium::aead` passes.
+                if (!resolved && !friendModulePresent(qual)) continue;
             } else {
                 std::string clsName = resolveUserName(val, nullptr);   // a class
                 if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
@@ -19668,6 +19715,7 @@ void CEmitter::resolveFriends()
             ci.friendGrants.push_back(g);
         }
     }
+    _emitDeclFile = savedDiag;
 }
 
 // Resolve WHAT a `fnptr`-typed destination is being bound to — a free function name, an unbound
@@ -26476,7 +26524,7 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
     //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
-    //      wholesale as "not yet" until the consumer-driven audit (0.9.224). ----
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.225). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
         if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
@@ -26528,7 +26576,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // exprClass feeds the store path; widening it was measured to break 45 fixtures). A CALL is not a
     // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
-    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.224 this was
+    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.225 this was
     // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
     if (cls.empty()) {
         const std::string et = ptrLocalElemType(receiver);
@@ -26676,7 +26724,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
         // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
-        // Since 0.9.224 the receiver is typed at the top of this function — a call borrows the element in
+        // Since 0.9.225 the receiver is typed at the top of this function — a call borrows the element in
         // place, as the field form always did — so a class-typed local element never reaches this line;
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);

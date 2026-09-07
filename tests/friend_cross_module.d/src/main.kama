@@ -1,0 +1,5 @@
+import { fcm::key::Key, fcm::key::fillSame, fcm::user::fillOther, fcm::user::Holder, fcm::user::Peek };
+fn int32 main() {
+    Key a = fillSame(); Key b = fillOther(); Holder h = Holder.build(); Peek p = Peek.make();
+    return a.get() + b.get() + h.get() + p.read(k: ref a) + 8;   // 1 + 1 + 11 + 21 + 8 = 42
+}

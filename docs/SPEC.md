@@ -1943,7 +1943,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.226` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.227` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
@@ -3941,7 +3941,16 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an extensible `resource`.
 - **`~dtor` ⟺ `resource`** — a destructor is allowed only on a `resource` (a `value` owns nothing).
 - **`friend`** grants are granular and owner-declared: `friend <accessor>[members];` (or `[...]` for all
-  privates), where the accessor is a type, a free function, or a `Type::method` — greppable and explicit.
+  privates), where the accessor is a type, a free function, or a `Type::method` (a named `ctor` included) —
+  greppable and explicit. **Member visibility is per TYPE, by design**: a non-`public` ctor or method is
+  reachable only inside its type, not by a free function in the same file — a type's invariants are
+  enforced by the type, never by file layout — and a grant is how the type names the exceptions, which is
+  more granular than C++'s `friend` since it names members. A grant reaches across files and modules by
+  **qualified path** for every accessor kind (`friend other::mod::Holder::build[key];`), with no `import` <!-- test: friend_cross_module -->
+  needed to name the friend; and a grant whose path names a module that is **not part of this program** is
+  **inert** — the code it names is not being compiled, so it grants nothing — which is what lets a root
+  module grant to siblings a given consumer never imports. A grant naming an unknown symbol inside a module
+  that IS in the program stays a compile error. <!-- xfail: friend_present_module_typo -->
 
 See `docs/KEYWORDS.md` for the full kind × visibility table.
 

@@ -1,0 +1,2 @@
+import { fpt::user::probe };
+fn int32 main() { return probe(); }
