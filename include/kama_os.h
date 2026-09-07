@@ -22,9 +22,11 @@
 // Every function is `static inline` (single-TU, unused ones are pruned) and returns the raw syscall
 // result (`< 0` / a set errno = error); the kama layer maps `kama_last_error()` -> `IoError`.
 //
-// Windows branch: implemented — Winsock (`WSAStartup`/`SOCKET`/`WSAGetLastError`), CRT (`_open`/`_stat`/
-// `FindFirstFile`/`_pipe`), and std::process (`CreateProcess`/`WaitForSingleObject`/`TerminateProcess`). The
-// POSIX branch below also serves iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
+// Windows branch: implemented — Winsock (`WSAStartup`/`SOCKET`/`WSAGetLastError`), the WIDE CRT + Win32
+// (`_wopen`/`_wstat64`/`FindFirstFileW`/`_pipe`), and std::process (`CreateProcessW`/`WaitForSingleObject`/
+// `TerminateProcess`). Every path and every string handed to the OS is converted UTF-8 -> UTF-16 at the call
+// (kama__wide / kama__wpath below) and never through an `A` function. The POSIX branch below also serves
+// iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
 
 // Restated here as well as in kama_runtime.h, for a TU that reaches this header FIRST: the macro only
 // takes effect before glibc's <features.h> is read, and either header may be the one that gets there
@@ -53,14 +55,15 @@
 #endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
-#include <windows.h>      // FindFirstFileA / HANDLE / MAX_PATH
-#include <io.h>           // _open, _read, _write, _close, _unlink
-#include <direct.h>       // _mkdir  (kama_mkdir)
+#include <windows.h>      // FindFirstFileW / HANDLE / MultiByteToWideChar / GetFullPathNameW
+#include <io.h>           // _wopen, _read, _write, _close, _wunlink
+#include <direct.h>       // _wmkdir, _wrmdir
 #include <fcntl.h>        // _O_*
-#include <sys/stat.h>     // _stat64, _S_IFDIR
+#include <sys/stat.h>     // _wstat64, _S_IFDIR
 #include <errno.h>        // ENOENT, ECONNREFUSED, ... (UCRT defines the POSIX supplemental codes)
-#include <string.h>       // memcpy, strlen
-#include <stdlib.h>       // malloc, free (dir cursor)
+#include <string.h>       // memcpy, strlen, wcslen (⚠️ NOT <wchar.h>: it defines a `stdout` macro that breaks a
+                          //   kama parameter of that name in the emitted C)
+#include <stdlib.h>       // malloc, free (dir cursor, wide-path buffers)
 
 // ---- errno / last-error ----------------------------------------------------
 // Windows splits errors: CRT file ops set `errno`; Winsock ops set WSAGetLastError(). The socket wrappers
@@ -100,15 +103,81 @@ static inline void kama__capture_wsa(void) {
     }
 }
 
-// ---- files (CRT low-level I/O) ---------------------------------------------
-// _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data.
-static inline int32_t   kama_open_read(const char* path)   { return (int32_t)_open(path, _O_RDONLY | _O_BINARY); }
-static inline int32_t   kama_open_create(const char* path) { return (int32_t)_open(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE); }
-static inline int32_t   kama_open_append(const char* path) { return (int32_t)_open(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE); }
+// ---- UTF-8 <-> UTF-16, at the edge --------------------------------------------
+// A kama string is UTF-8 by definition (lib/std/path/path.kama), and Windows' native string is UTF-16. This
+// is utf8everywhere.org's prescription, and what Rust (`maybe_verbatim`), Go (`fixLongPath`), Zig, .NET and
+// libuv all do: convert ONCE, immediately before the W call, and never touch an `A` function or the narrow
+// CRT — those decode a path in the process ANSI code page (so `日本語` was mojibake before it reached the
+// filesystem) and stop at MAX_PATH by construction. tools/check-path-unicode.sh and tools/check-long-path.sh
+// hold both halves down.
+//
+// Invalid UTF-8 is refused (EINVAL) rather than silently substituted: a path that is not a kama string is a
+// caller bug, and a name that quietly became `?` would be the ANSI defect wearing a new coat.
+static inline wchar_t* kama__wide(const char* s, int len) {   // len -1: NUL-terminated (count INCLUDES the NUL)
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, NULL, 0);
+    if (n <= 0) { errno = EINVAL; return NULL; }
+    wchar_t* w = (wchar_t*)malloc((size_t)n * sizeof(wchar_t));
+    if (!w) { errno = ENOMEM; return NULL; }
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, w, n);
+    return w;
+}
+// The read direction, as a fresh malloc'd UTF-8 string (the caller owns it; kama_alloc IS malloc, so it may
+// become a kama_string's buffer directly). ⚠️ NTFS permits a lone surrogate in a name; it comes back as
+// U+FFFD and cannot be re-opened — the same limit Rust's `to_str()` has, and not worth an OsString.
+static inline char* kama__utf8(const wchar_t* w, size_t* outLen) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);   // includes the NUL
+    if (n <= 0) { errno = EINVAL; return NULL; }
+    char* s = (char*)malloc((size_t)n);
+    if (!s) { errno = ENOMEM; return NULL; }
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
+    if (outLen) *outLen = (size_t)n - 1;
+    return s;
+}
+// A PATH, long-path aware. Past 248 characters (MAX_PATH minus the 12 CreateDirectoryW reserves for an 8.3
+// name — the threshold Rust and Go use) the path is made absolute and normalized by GetFullPathNameW
+// (`/` -> `\`, `..` collapsed — which Win32 already does lexically, so nothing changes meaning) and given
+// the `\\?\` prefix (`\\?\UNC\` for a share). Every W call here honours that prefix with LongPathsEnabled=0
+// (probed: docs/platforms/windows.md), so no registry setting is asked of the user. A shorter path passes
+// through untouched, so the common case is exactly what it was.
+static inline wchar_t* kama__wpath(const char* utf8) {
+    wchar_t* w = kama__wide(utf8, -1);
+    if (!w) return NULL;
+    if (wcslen(w) < 248 || (w[0] == L'\\' && w[1] == L'\\' && w[2] == L'?' && w[3] == L'\\')) return w;
+    DWORD full = GetFullPathNameW(w, 0, NULL, NULL);                        // required size, incl. NUL
+    wchar_t* v = full ? (wchar_t*)malloc(((size_t)full + 8) * sizeof(wchar_t)) : NULL;   // + `\\?\UNC\`
+    if (!v) { free(w); errno = full ? ENOMEM : ENOENT; return NULL; }
+    DWORD got = GetFullPathNameW(w, full, v + 4, NULL);                     // excludes the NUL on success
+    free(w);
+    if (got == 0 || got >= full) { free(v); errno = ENOENT; return NULL; }
+    if (v[4] == L'\\' && v[5] == L'\\') {                                    // \\srv\share\x -> \\?\UNC\srv\share\x
+        memmove(v + 8, v + 6, ((size_t)got - 2 + 1) * sizeof(wchar_t));
+        memcpy(v, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));
+    } else {
+        memcpy(v, L"\\\\?\\", 4 * sizeof(wchar_t));
+    }
+    return v;
+}
+// free() may clobber errno; the wrappers below free their wide copy AFTER the call whose errno they return.
+static inline void kama__wfree(void* p) { int e = errno; free(p); errno = e; }
+
+// ---- files (wide CRT low-level I/O) -----------------------------------------
+// _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data. The `_w*` CRT
+// family is preferred over raw Win32 for the file calls because it sets `errno` itself, so kama_last_error()
+// stays the single error channel with no GetLastError mapping.
+static inline int32_t kama__wopen(const char* path, int flags) {
+    wchar_t* w = kama__wpath(path); if (!w) return -1;
+    int fd = _wopen(w, flags, _S_IREAD | _S_IWRITE); kama__wfree(w); return (int32_t)fd;
+}
+static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
+static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
+static inline int32_t   kama_open_append(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, (unsigned int)n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, (unsigned int)n); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)fd); }
-static inline int32_t   kama_unlink(const char* path) { return (int32_t)_unlink(path); }
+static inline int32_t   kama_unlink(const char* path) {
+    wchar_t* w = kama__wpath(path); if (!w) return -1;
+    int r = _wunlink(w); kama__wfree(w); return (int32_t)r;
+}
 
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
 // mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::SystemTime` with no conversion at the
@@ -125,49 +194,64 @@ static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* ou
 }
 static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
-    struct _stat64 st; if (_stat64(path, &st) != 0) return -1;
+    wchar_t* w = kama__wpath(path); if (!w) return -1;
+    struct _stat64 st; int r = _wstat64(w, &st); kama__wfree(w);
+    if (r != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
     *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
     return 0;
 }
-// Directory creation, rename and existence. `_mkdir` takes no mode on Windows; `MoveFileExA` with
-// REPLACE_EXISTING is what makes rename overwrite as POSIX's does (plain MoveFileA fails on an existing
+// Directory creation, rename and existence. `_wmkdir` takes no mode on Windows; `MoveFileExW` with
+// REPLACE_EXISTING is what makes rename overwrite as POSIX's does (plain MoveFileW fails on an existing
 // destination, which would have made the same kama call behave differently per platform).
-static inline int32_t kama_mkdir(const char* path) { return (int32_t)_mkdir(path); }
-static inline int32_t kama_rmdir(const char* path) { return (int32_t)_rmdir(path); }
+static inline int32_t kama_mkdir(const char* path) {
+    wchar_t* w = kama__wpath(path); if (!w) return -1;
+    int r = _wmkdir(w); kama__wfree(w); return (int32_t)r;
+}
+static inline int32_t kama_rmdir(const char* path) {
+    wchar_t* w = kama__wpath(path); if (!w) return -1;
+    int r = _wrmdir(w); kama__wfree(w); return (int32_t)r;
+}
+static inline DWORD kama__attrs(const char* path) {
+    wchar_t* w = kama__wpath(path); if (!w) return INVALID_FILE_ATTRIBUTES;
+    DWORD a = GetFileAttributesW(w); free(w); return a;
+}
 // Is this path a symlink (a reparse point here), WITHOUT following it? The distinction only matters to a
 // recursive delete, which must not walk through a link and empty a directory somewhere else.
 static inline int32_t kama_is_symlink(const char* path) {
-    DWORD a = GetFileAttributesA(path);
+    DWORD a = kama__attrs(path);
     if (a == INVALID_FILE_ATTRIBUTES) return 0;
     return (a & FILE_ATTRIBUTE_REPARSE_POINT) ? 1 : 0;
 }
 static inline int32_t kama_rename(const char* from, const char* to) {
-    if (!MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
-        errno = (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND)
-              ? ENOENT : EACCES;
-        return -1;
-    }
+    wchar_t* wf = kama__wpath(from); if (!wf) return -1;
+    wchar_t* wt = kama__wpath(to);   if (!wt) { kama__wfree(wf); return -1; }
+    BOOL ok = MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
+    DWORD e = ok ? 0 : GetLastError();
+    free(wf); free(wt);
+    if (!ok) { errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES; return -1; }
     return 0;
 }
 static inline int32_t kama_exists(const char* path) {
-    return GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;
+    return kama__attrs(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;
 }
 
-// ---- directory iteration (Win32 FindFirstFile) -----------------------------
+// ---- directory iteration (Win32 FindFirstFileW) ----------------------------
 // DIR* analogue: a heap cursor holding the search handle + the pending entry (FindFirstFile already
 // returns the first match). Empty string = end-of-directory; kama filters "." / ".." itself.
-typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAA data; int pending; } kama__dir;
+typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW data; int pending; } kama__dir;
 static inline void* kama_diropen(const char* path) {
-    char pattern[MAX_PATH];
     size_t n = strlen(path);
-    if (n + 3 >= sizeof pattern) { errno = ENOMEM; return NULL; }   // long-path support: deferred
-    memcpy(pattern, path, n);
-    pattern[n] = '\\'; pattern[n + 1] = '*'; pattern[n + 2] = '\0';  // "<path>\*"
+    char* pattern = (char*)malloc(n + 3);                                    // "<path>\*"
+    if (!pattern) { errno = ENOMEM; return NULL; }
+    memcpy(pattern, path, n); pattern[n] = '\\'; pattern[n + 1] = '*'; pattern[n + 2] = '\0';
+    wchar_t* w = kama__wpath(pattern);                                       // GetFullPathNameW keeps a trailing `*`
+    kama__wfree(pattern);
+    if (!w) return NULL;
     kama__dir* d = (kama__dir*)malloc(sizeof *d);
-    if (!d) { errno = ENOMEM; return NULL; }
-    d->h = FindFirstFileA(pattern, &d->data);
+    if (!d) { free(w); errno = ENOMEM; return NULL; }
+    d->h = FindFirstFileW(w, &d->data); free(w);
     if (d->h == INVALID_HANDLE_VALUE) { free(d); errno = ENOENT; return NULL; }
     d->pending = 1;
     return d;
@@ -178,11 +262,14 @@ static inline int32_t kama_dirclose(void* dirp) {
 }
 static inline kama_string kama_dirnext(void* dirp) {
     kama__dir* d = (kama__dir*)dirp;
-    if (!d->pending && !FindNextFileA(d->h, &d->data)) {
-        kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r;   // end of directory
-    }
+    kama_string r; r.data = NULL; r.len = 0; r.cap = 0;                     // "" = end of directory
+    if (!d->pending && !FindNextFileW(d->h, &d->data)) return r;
     d->pending = 0;
-    return kama_string_from_raw((const uint8_t*)d->data.cFileName, 0, (int32_t)strlen(d->data.cFileName));
+    size_t len = 0;
+    char* s = kama__utf8(d->data.cFileName, &len);                          // malloc'd, NUL-terminated
+    if (!s) return r;
+    r.data = s; r.len = len; r.cap = len + 1;                                // same shape kama_string_from_raw builds
+    return r;
 }
 
 // ---- TCP sockets (Winsock2) ------------------------------------------------
@@ -384,11 +471,11 @@ static inline void kama_poller_free(void* ph) {
     if (p) { free(p->fds); free(p); }
 }
 
-// ---- process (std::process; Win32 CreateProcess) ---------------------------
+// ---- process (std::process; Win32 CreateProcessW) --------------------------
 // Same seam + EXACT signatures as the POSIX branch — process.kama is byte-identical across platforms. The
 // argv-vector helpers (kama_argv_*) are platform-agnostic; kama_envp_build returns the SAME char*[] shape as
 // POSIX (so process.kama frees it with kama_argv_free), and kama_proc_spawn converts argv[]/envp[] into the
-// Windows command-line string + double-NUL env block on the fly.
+// Windows command-line string + double-NUL env block on the fly — in UTF-8, then to UTF-16 at the call.
 static inline void* kama_argv_new(int32_t n) { return calloc((size_t)n + 1, sizeof(char*)); }
 static inline void  kama_argv_set(void* v, int32_t i, const char* s) { ((char**)v)[i] = _strdup(s ? s : ""); }
 static inline void  kama_argv_free(void* v) {
@@ -396,17 +483,22 @@ static inline void  kama_argv_free(void* v) {
     for (char** p = (char**)v; *p; ++p) free(*p);
     free(v);
 }
-// Merge the inherited env (`_environ`, unless `clear`) with each "KEY=VALUE" override (replace-by-KEY, else
-// append) into a fresh strdup'd char*[] — identical semantics to the POSIX kama_envp_build.
+// Merge the inherited env (unless `clear`) with each "KEY=VALUE" override (replace-by-KEY, else append) into
+// a fresh malloc'd char*[] — identical semantics to the POSIX kama_envp_build. The inherited half is read
+// from GetEnvironmentStringsW, the process's own UTF-16 block, converted to UTF-8 — NOT `_environ`, which is
+// that block re-encoded through the ANSI code page. The hidden `=C:=...` drive entries are dropped, as the
+// CRT drops them.
 static inline void* kama_envp_build(void* overridesV, int32_t clear) {
     char** ov = (char**)overridesV;
     int nov = 0; if (ov) while (ov[nov]) nov++;
-    char** base = _environ;
-    int nbase = 0; if (!clear && base) while (base[nbase]) nbase++;
+    wchar_t* blk = clear ? NULL : GetEnvironmentStringsW();
+    int nbase = 0; if (blk) for (wchar_t* p = blk; *p; p += wcslen(p) + 1) nbase++;
     char** out = (char**)calloc((size_t)nbase + (size_t)nov + 1, sizeof(char*));
     int k = 0;
-    for (int i = 0; i < nbase; i++) {
-        const char* e = base[i];
+    if (blk) for (wchar_t* p = blk; *p; p += wcslen(p) + 1) {
+        if (*p == L'=') continue;
+        char* e = kama__utf8(p, NULL);
+        if (!e) continue;
         const char* eq = strchr(e, '=');
         size_t klen = eq ? (size_t)(eq - e) : strlen(e);
         int overridden = 0;
@@ -415,8 +507,9 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
             size_t olen = oeq ? (size_t)(oeq - o) : strlen(o);
             if (olen == klen && _strnicmp(o, e, klen) == 0) { overridden = 1; break; }   // Windows env is case-insensitive
         }
-        if (!overridden) out[k++] = _strdup(e);
+        if (overridden) free(e); else out[k++] = e;
     }
+    if (blk) FreeEnvironmentStringsW(blk);
     for (int j = 0; j < nov; j++) out[k++] = _strdup(ov[j]);
     out[k] = NULL;
     return out;
@@ -450,8 +543,9 @@ static inline char* kama__win_cmdline(char** argv) {
     return buf;
 }
 // char*[] "KEY=VALUE" -> a Win32 environment block (each string NUL-terminated, the whole block ending in an
-// extra NUL). NULL envp means inherit (kama_proc_spawn passes NULL straight through to CreateProcess).
-static inline char* kama__win_envblock(char** envp) {
+// extra NUL), with its byte length in *outLen so the embedded NULs survive the UTF-16 conversion. NULL envp
+// means inherit (kama_proc_spawn passes NULL straight through to CreateProcessW).
+static inline char* kama__win_envblock(char** envp, size_t* outLen) {
     size_t total = 2;                                  // final "\0\0" (also the empty-block case)
     for (char** e = envp; *e; e++) total += strlen(*e) + 1;
     char* buf = (char*)malloc(total);
@@ -459,6 +553,7 @@ static inline char* kama__win_envblock(char** envp) {
     char* w = buf;
     for (char** e = envp; *e; e++) { size_t l = strlen(*e); memcpy(w, *e, l); w += l; *w++ = '\0'; }
     *w++ = '\0'; *w = '\0';
+    *outLen = total;
     return buf;
 }
 // Pipe over CRT fds (so File{int32 fd} works unchanged). Both ends non-inheritable (_O_NOINHERIT) — the POSIX
@@ -472,11 +567,23 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
                                       int32_t inFd, int32_t outFd, int32_t errFd,
                                       ptrdiff_t* outHandle, int32_t* outPid) {
+    // Quote in UTF-8 first (the metacharacters are all ASCII, so the bytes >= 0x80 pass through untouched),
+    // then convert the finished command line, the env block (by explicit length: it holds NULs) and the cwd.
+    // The cwd gets the PLAIN conversion, not kama__wpath: CreateProcessW rejects a >MAX_PATH directory with
+    // or without the `\\?\` prefix (probed: docs/platforms/windows.md), so prefixing would only change the
+    // error. CreateProcessW writes into the command line, hence the heap copy.
     char* cmdline = kama__win_cmdline((char**)argv);
     if (!cmdline) { errno = ENOMEM; return -1; }
-    char* envblock = envp ? kama__win_envblock((char**)envp) : NULL;
+    size_t envlen = 0;
+    char* envblock = envp ? kama__win_envblock((char**)envp, &envlen) : NULL;
+    wchar_t* wcmd = kama__wide(cmdline, -1);
+    wchar_t* wenv = envblock ? kama__wide(envblock, (int)envlen) : NULL;
+    wchar_t* wcwd = (cwd && cwd[0]) ? kama__wide(cwd, -1) : NULL;
+    int convOk = wcmd && (!envblock || wenv) && (!(cwd && cwd[0]) || wcwd);
+    free(cmdline); free(envblock);
+    if (!convOk) { free(wcmd); free(wenv); free(wcwd); return -1; }     // errno: EINVAL (bad UTF-8) or ENOMEM
 
-    STARTUPINFOA si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    STARTUPINFOW si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
     int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0);
     HANDLE hIn = INVALID_HANDLE_VALUE, hOut = INVALID_HANDLE_VALUE, hErr = INVALID_HANDLE_VALUE;
     if (useStd) {
@@ -491,14 +598,14 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         si.hStdInput = hIn; si.hStdOutput = hOut; si.hStdError = hErr;
     }
     PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
-    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, useStd ? TRUE : FALSE, 0,
-                             envblock, (cwd && cwd[0]) ? cwd : NULL, &si, &pi);
+    BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, useStd ? TRUE : FALSE, CREATE_UNICODE_ENVIRONMENT,
+                             wenv, wcwd, &si, &pi);
     if (useStd) {   // undo inheritability on the parent's copies of the redirected ends (belt-and-suspenders)
         if (inFd  >= 0 && hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, 0);
         if (outFd >= 0 && hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, 0);
         if (errFd >= 0 && hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, 0);
     }
-    free(cmdline); free(envblock);
+    free(wcmd); free(wenv); free(wcwd);
     if (!ok) {
         DWORD e = GetLastError();
         errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
@@ -544,8 +651,8 @@ static inline int32_t kama_WNOHANG(void) { return 1; }     // a private sentinel
 static inline int32_t kama_SIGKILL(void) { return 9; }     // ignored by kama_kill on Windows (any => Terminate)
 static inline int32_t kama_SIGTERM(void) { return 15; }
 static inline void    kama_sleep_ms(int32_t ms) { Sleep((DWORD)ms); }
-static inline int32_t kama_open_null_read(void)  { return (int32_t)_open("NUL", _O_RDONLY | _O_BINARY); }
-static inline int32_t kama_open_null_write(void) { return (int32_t)_open("NUL", _O_WRONLY | _O_BINARY); }
+static inline int32_t kama_open_null_read(void)  { return (int32_t)_wopen(L"NUL", _O_RDONLY | _O_BINARY); }
+static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL", _O_WRONLY | _O_BINARY); }
 
 // Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
 // reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own

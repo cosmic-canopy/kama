@@ -304,21 +304,31 @@ entries here. One has shipped:
     skipped, and output is discarded — which is the correct behaviour, but confirm it does not hang or
     crash.
 
-- **The filesystem seam is ANSI** — still open, parked in [ROADMAP.md](../ROADMAP.md), not a
-  regression. ⚠️ This entry used to say "the temp-path builder assumes `MAX_PATH`-class lengths".
-  **There is no such builder**, and the framing was wrong twice over:
+- **The filesystem and process seam is UTF-16 at the edge — SHIPPED `0.9.217`.** Every path, command
+  line, environment block and cwd that `include/kama_os.h` hands to Windows is converted UTF-8 → UTF-16
+  immediately before a `W` call (`kama__wide` / `kama__wpath`), and a name coming back (`readDir`, the
+  inherited environment) is converted the other way. No `A` function and no narrow CRT path call remains
+  in that header. That is the [utf8everywhere.org](https://utf8everywhere.org/) prescription, which is
+  kama's stance (`lib/std/path/path.kama:6-7`), and what Rust, Go, Zig, .NET and libuv all ship. Past 248
+  characters a path is normalized by `GetFullPathNameW` and given the `\\?\` prefix, so the `MAX_PATH`
+  ceiling is gone without asking the user for a registry setting. `tools/check-long-path.sh` and
+  `tools/check-path-unicode.sh` hold both halves down; they were landed RED first (exit 2 and exit 12),
+  which is the observation that they guard anything.
 
-  * The one fixed path buffer in all of `include/` is `char pattern[MAX_PATH]` in `kama_diropen`
-    (`include/kama_os.h:162`), which returns `ENOMEM` past it — so a deep directory reports an
-    out-of-memory-flavoured error for a path problem.
-  * **Length is the smaller half.** `GetFileAttributesA` / `MoveFileExA` / `FindFirstFileA` and the
-    narrow CRT decode a path in the process **ANSI code page**, while a kama string is UTF-8 by
-    definition (`lib/std/path/path.kama:6-7`). A path containing `é` or `日` is mojibake before it
-    reaches the filesystem, at any length, and **no fixture covers it**.
+  ⚠️ Two things this did NOT close, both recorded in [ROADMAP.md](../ROADMAP.md):
 
-  Probed here 2026-09-06 (msys2 UCRT64, clang 22.1.8, `LongPathsEnabled = 0`), with a negative control
-  on every case — every unprefixed `_w*` call past 260 failed, as it must for the rest to mean
-  anything:
+  * **`CreateProcessW`'s cwd and executable stay ≤ 260** — a Win32 limit, not a seam limit (below).
+  * **The compiler itself is still narrow** — `src/kama.driver.cpp` reads sources through `fopen`, and
+    `absolutePath` uses `_fullpath` / `GetFinalPathNameByHandleA` with a `_MAX_PATH` buffer. A project
+    under a non-ASCII or very deep directory is a compiler-side problem, separate from a program's.
+
+  ⚠️ **`<wchar.h>` is not includable from `kama_os.h`.** It pulls in `<stdio.h>`'s `stdout` macro, which
+  breaks every emitted function with a parameter of that name (`std::process::Output.make` has one). `wcslen`
+  is reachable through `<string.h>` on UCRT, and that is all the seam needs.
+
+  The measurements the design rests on, probed here 2026-09-06 (msys2 UCRT64, clang 22.1.8,
+  `LongPathsEnabled = 0`), with a negative control on every case — every unprefixed `_w*` call past 260
+  failed, as it must for the rest to mean anything:
 
   * `CreateFileW` / `CreateDirectoryW` / `DeleteFileW` / `GetFileAttributesW` / `FindFirstFileW` all
     work past `MAX_PATH` with a `\\?\` prefix **while the registry flag is 0** — so the prefix is
@@ -330,11 +340,11 @@ entries here. One has shipped:
     `CreateFileW("j\..\sib")` finds the sibling next to `j`, not next to `real`. So normalizing with
     `GetFullPathNameW` before prefixing makes existing behaviour visible rather than changing it —
     which is the claim the whole design rests on.
-  * ⚠️ **The `_w*` CRT family *does* honour `\\?\` here** (`_wopen`, `_wstat64`, `_wmkdir` all
-    succeeded). Going Win32 is therefore a *preference*, not a forced move — chosen because the seam
-    is already half Win32 (`Find*` has no CRT equivalent), because it collapses `errno` and
-    `GetLastError` into one channel, and because `CreateFileW` + `_open_osfhandle` is already the
-    idiom at `include/kama_runtime.h:1775`.
+  * ⚠️ **The `_w*` CRT family *does* honour `\\?\` here** (`_wopen`, `_wstat64`, `_wmkdir` probed;
+    `_wunlink`, `_wrmdir` and `MoveFileExW` proven by the long-path guard's rename and teardown steps).
+    The shipped seam keeps the CRT for the file calls for exactly that reason: the CRT sets `errno`
+    itself, so `kama_last_error()` stays the one error channel with no `GetLastError` mapping. Only what
+    has no CRT spelling (`Find*W`, `GetFileAttributesW`, `MoveFileExW`, `CreateProcessW`) is raw Win32.
   * ⚠️ **`\\?\NUL` resolves.** The common claim that verbatim prefixing kills reserved device names is
     **false** here — it reaches the NT object-manager entry. Do not use it as an argument.
   * ⚠️ **`CreateProcessW`'s `lpCurrentDirectory` fails past 260 either way** (`GLE=267`,
