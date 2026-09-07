@@ -1215,6 +1215,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **capturing closures** (the *No capturing closures* row) — the textbook case: deferred because the
     first consumer "says it bites at their UI milestone, not before";
   - **member visibility per type vs per file** (the next item in this section);
+  - **no user spelling for a pointer to C `char`** (found 2026-09-07 through `examples/httpd`'s `puts`
+    extern, which builds with a `-Wpointer-sign` warning): a written `UnsafeConstPtr<char>` lowers to
+    `kama_char const*` — `char` is the 32-bit codepoint — while `string.cstr()`'s return is a
+    compiler-internal `char` that lowers to C `char const*` (SPEC calls it "C's `const char*`"). `int8` and
+    `uint8` both trip clang's `-Wpointer-sign` against a libc prototype, so every `const char*` extern in
+    `lib/std` is spelled `UnsafeConstPtr<int8>` and stays warning-free only because `kama_os.h` is never
+    `extern "<…>"`-included. The verdict wants one of: a C-`char` element spelling for externs, or `char`
+    inside a raw pointer meaning C `char`;
   - default parameters (a declared non-goal in SPEC § *Construction*); the `Optional`-of-everything ctor
     pattern (§4 below); "removing fences nobody has asked to remove" (§2, the generic-body fences); the
     `const`-param shadowing ban "deliberately not answered here" (`checkConstParamBinder`); the C++ half
