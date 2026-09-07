@@ -17,77 +17,26 @@ comptime isize BLOCKBYTES  = 64;
 
 fn uint32 rotr(uint32 x, uint32 n) { return (x >> n) | (x << (32ui32 - n)); }
 
-// The 64 round constants, baked at compile time: a comptime array LITERAL is not an accepted initializer
-// (only a comptime fn's result is), so the table is filled by assignment, as tests/comptime_fn_crc does.
-comptime fn InlineArray<uint32>#(64) roundConstants() {
-    InlineArray<uint32>#(64) t = [0; 64];
-    t[0] = 0x428a2f98ui32;
-    t[1] = 0x71374491ui32;
-    t[2] = 0xb5c0fbcfui32;
-    t[3] = 0xe9b5dba5ui32;
-    t[4] = 0x3956c25bui32;
-    t[5] = 0x59f111f1ui32;
-    t[6] = 0x923f82a4ui32;
-    t[7] = 0xab1c5ed5ui32;
-    t[8] = 0xd807aa98ui32;
-    t[9] = 0x12835b01ui32;
-    t[10] = 0x243185beui32;
-    t[11] = 0x550c7dc3ui32;
-    t[12] = 0x72be5d74ui32;
-    t[13] = 0x80deb1feui32;
-    t[14] = 0x9bdc06a7ui32;
-    t[15] = 0xc19bf174ui32;
-    t[16] = 0xe49b69c1ui32;
-    t[17] = 0xefbe4786ui32;
-    t[18] = 0x0fc19dc6ui32;
-    t[19] = 0x240ca1ccui32;
-    t[20] = 0x2de92c6fui32;
-    t[21] = 0x4a7484aaui32;
-    t[22] = 0x5cb0a9dcui32;
-    t[23] = 0x76f988daui32;
-    t[24] = 0x983e5152ui32;
-    t[25] = 0xa831c66dui32;
-    t[26] = 0xb00327c8ui32;
-    t[27] = 0xbf597fc7ui32;
-    t[28] = 0xc6e00bf3ui32;
-    t[29] = 0xd5a79147ui32;
-    t[30] = 0x06ca6351ui32;
-    t[31] = 0x14292967ui32;
-    t[32] = 0x27b70a85ui32;
-    t[33] = 0x2e1b2138ui32;
-    t[34] = 0x4d2c6dfcui32;
-    t[35] = 0x53380d13ui32;
-    t[36] = 0x650a7354ui32;
-    t[37] = 0x766a0abbui32;
-    t[38] = 0x81c2c92eui32;
-    t[39] = 0x92722c85ui32;
-    t[40] = 0xa2bfe8a1ui32;
-    t[41] = 0xa81a664bui32;
-    t[42] = 0xc24b8b70ui32;
-    t[43] = 0xc76c51a3ui32;
-    t[44] = 0xd192e819ui32;
-    t[45] = 0xd6990624ui32;
-    t[46] = 0xf40e3585ui32;
-    t[47] = 0x106aa070ui32;
-    t[48] = 0x19a4c116ui32;
-    t[49] = 0x1e376c08ui32;
-    t[50] = 0x2748774cui32;
-    t[51] = 0x34b0bcb5ui32;
-    t[52] = 0x391c0cb3ui32;
-    t[53] = 0x4ed8aa4aui32;
-    t[54] = 0x5b9cca4fui32;
-    t[55] = 0x682e6ff3ui32;
-    t[56] = 0x748f82eeui32;
-    t[57] = 0x78a5636fui32;
-    t[58] = 0x84c87814ui32;
-    t[59] = 0x8cc70208ui32;
-    t[60] = 0x90befffaui32;
-    t[61] = 0xa4506cebui32;
-    t[62] = 0xbef9a3f7ui32;
-    t[63] = 0xc67178f2ui32;
-    return t;
-}
-comptime InlineArray<uint32>#(64) K = roundConstants();
+// The 64 round constants (FIPS 180-4 §4.2.2), baked at compile time as an array literal — the shape
+// this table was refused until 0.9.221, when it had to be filled by assignment inside a `comptime fn`.
+comptime InlineArray<uint32>#(64) K = [
+    0x428a2f98ui32, 0x71374491ui32, 0xb5c0fbcfui32, 0xe9b5dba5ui32,
+    0x3956c25bui32, 0x59f111f1ui32, 0x923f82a4ui32, 0xab1c5ed5ui32,
+    0xd807aa98ui32, 0x12835b01ui32, 0x243185beui32, 0x550c7dc3ui32,
+    0x72be5d74ui32, 0x80deb1feui32, 0x9bdc06a7ui32, 0xc19bf174ui32,
+    0xe49b69c1ui32, 0xefbe4786ui32, 0x0fc19dc6ui32, 0x240ca1ccui32,
+    0x2de92c6fui32, 0x4a7484aaui32, 0x5cb0a9dcui32, 0x76f988daui32,
+    0x983e5152ui32, 0xa831c66dui32, 0xb00327c8ui32, 0xbf597fc7ui32,
+    0xc6e00bf3ui32, 0xd5a79147ui32, 0x06ca6351ui32, 0x14292967ui32,
+    0x27b70a85ui32, 0x2e1b2138ui32, 0x4d2c6dfcui32, 0x53380d13ui32,
+    0x650a7354ui32, 0x766a0abbui32, 0x81c2c92eui32, 0x92722c85ui32,
+    0xa2bfe8a1ui32, 0xa81a664bui32, 0xc24b8b70ui32, 0xc76c51a3ui32,
+    0xd192e819ui32, 0xd6990624ui32, 0xf40e3585ui32, 0x106aa070ui32,
+    0x19a4c116ui32, 0x1e376c08ui32, 0x2748774cui32, 0x34b0bcb5ui32,
+    0x391c0cb3ui32, 0x4ed8aa4aui32, 0x5b9cca4fui32, 0x682e6ff3ui32,
+    0x748f82eeui32, 0x78a5636fui32, 0x84c87814ui32, 0x8cc70208ui32,
+    0x90befffaui32, 0xa4506cebui32, 0xbef9a3f7ui32, 0xc67178f2ui32
+];
 
 type value Sha256 {
     InlineArray<uint32>#(8)  h;

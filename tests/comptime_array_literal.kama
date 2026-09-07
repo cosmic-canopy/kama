@@ -1,0 +1,7 @@
+// A `comptime` module constant may be initialized by an array LITERAL, not only by a `comptime fn`'s
+// result. The first external package built a 64-entry table by assignment inside a `comptime fn` because
+// the literal was refused ("unsupported expression in comptime fn") — the consumer-driven audit (0.9.216)
+// admitted the literal: same evaluator, same bake, the `[v; N]` fill form included.
+comptime InlineArray<int32>#(4) T = [1, 2, 3, 36];
+comptime InlineArray<uint8>#(3) Z = [7ui8; 3];
+fn int32 main() { return T[3] + cast<int32>(Z[2]) - 1; }   // 36 + 7 - 1 = 42

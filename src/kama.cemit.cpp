@@ -28151,8 +28151,8 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                 else if (_ctErroredConsts.count(cname))
                     *_out << " = {0}";   // 6b-3: interpreter eval already reported a precise error — no duplicate
                 else {
-                    unsupported(("a `comptime` initializer must be a compile-time constant (a literal, "
-                                 "`sizeof`, `alignof`, or const arithmetic) — `" + *d->name->value + "`").c_str(), mv->line);
+                    unsupported(("a `comptime` initializer must be a compile-time constant (a literal, an array "
+                                 "literal, `sizeof`, const arithmetic, or a `comptime fn` call) — `" + *d->name->value + "`").c_str(), mv->line);
                     *_out << " = {0}";
                 }
             }

@@ -3504,8 +3504,9 @@ fn void demo() {
   type's own code, the same rule and diagnostic as a private field. A **local** `comptime` is scoped to its
   function or block.
 - **Initializer must fold** — a literal, `sizeof` of a fixed-width scalar (**not** `alignof`, and not
-  `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, or another
-  `comptime`. A
+  `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, another
+  `comptime`, a `comptime fn` call, or — for an `InlineArray`-typed constant — an **array literal** of
+  foldable elements (`[1, 2, 3]` or the `[v; N]` fill form), which bakes as a `static const` table. A
   `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message <!-- xfail: sizeof_usize_not_foldable, alignof_not_foldable -->
   points you back to `const` for a runtime-initialized immutable). A plain `const` *local* whose initializer
   happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs

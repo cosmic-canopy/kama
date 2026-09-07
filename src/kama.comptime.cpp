@@ -540,7 +540,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             return CTFlow::Normal;
         }
         auto* tgt = dynamic_cast<IdentifierNode*>(a->unaryExpression.get());
-        if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local (Stage 3 adds array-element writes)", s->line); return CTFlow::Fail; }
+        if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local or an element of a local array (`a[i] = …`)", s->line); return CTFlow::Fail; }
         auto it = env.vars.find(*tgt->value);
         if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s->line); return CTFlow::Fail; }
         CTValue val;
@@ -688,16 +688,30 @@ void CEmitter::evalComptimeConsts()
         _nsCtx = dc.ctx;
         _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
         CTEnv env; CTValue v;
-        if (!ctEvalExpr(dc.init, env, v)) {
+        // An ARRAY-typed constant may be initialized by an array literal (`[1, 2, 3]`, `[v; N]`) as well as
+        // by a `comptime fn` call: the literal goes through `ctBuildArrayInit`, the same arm a comptime
+        // LOCAL's initializer takes, and bakes through the same `ctRender`. It used to be refused as
+        // "unsupported expression in comptime fn" — the general evaluator has no array-literal case, on
+        // purpose (an array is not a scalar value) — so the first external package built a 64-entry table
+        // by assignment inside a `comptime fn`. The consumer-driven audit (0.9.221) admitted the literal.
+        CTValue elemProto; int64_t an; std::string aelem;
+        const bool isArrayConst = ctArrayInfo(dc.type, elemProto, an, aelem);
+        bool ok;
+        if (isArrayConst && dynamic_cast<ArrayLiteralNode*>(dc.init.get())) {
+            v.isArray = true;
+            ok = ctBuildArrayInit(dc.init, env, elemProto, (size_t)an, v.elems);
+        } else {
+            ok = ctEvalExpr(dc.init, env, v);
+        }
+        if (!ok) {
             if (!_ctFailed)
-                ctFail(("a `comptime` initializer must be a compile-time constant (a literal, `sizeof`, "
-                        "const arithmetic, or a `comptime fn` call) — `" + dc.cName + "`").c_str(), dc.line);
+                ctFail(("a `comptime` initializer must be a compile-time constant (a literal, an array literal, "
+                        "`sizeof`, const arithmetic, or a `comptime fn` call) — `" + dc.cName + "`").c_str(), dc.line);
             _ctErroredConsts.insert(dc.cName);   // a precise error was emitted; suppress the emit-time duplicate
             continue;
         }
         // Coerce/validate against the constant's declared type, then bake.
-        CTValue elemProto; int64_t an; std::string aelem;
-        if (ctArrayInfo(dc.type, elemProto, an, aelem)) {
+        if (isArrayConst) {
             if (!v.isArray || (int64_t)v.elems.size() != an) {
                 ctFail(("a `comptime` array constant's initializer must return an `InlineArray` of the "
                         "declared size — `" + dc.cName + "`").c_str(), dc.line);
