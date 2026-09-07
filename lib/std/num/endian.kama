@@ -8,8 +8,10 @@
 //
 // Host-order helpers (`htole`/`htobe`) are deliberately NOT here: whether the host is little- or big-endian
 // is a memory-layout fact that pure kama arithmetic cannot observe, so they need a compile-time endianness
-// flag (a small future `@compileFor`-style facility). Every target kama ships on today is little-endian, so
-// `byteswap*` composed with a known target order covers serialization now.
+// flag. Genuinely optional rather than deferred (the consumer-driven audit, 2026-09-07): every target kama ships
+// on is little-endian, so `byteswap*` composed with a known target order IS the serialization primitive; a
+// big-endian target, if one is ever added, brings the `@compileFor` flag with it — a target dependency, not
+// a consumer one.
 export { byteswapU16, byteswapU32, byteswapU64, byteswapF32, byteswapF64 };
 
 fn uint16 byteswapU16(uint16 x) {

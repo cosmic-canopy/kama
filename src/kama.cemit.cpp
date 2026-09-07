@@ -8933,17 +8933,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             }
         } else if (ci.genOf || ci.genZero) {
             // A generic `value<T>` template or a variant: `of`/`zero` apply only to a plain (non-generic,
-            // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6.
+            // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6 — the *Derive follow-ons* ROADMAP row.
             unsupported("`@generate(of, zero)` applies only to a plain transparent `value` (all public fields) "
                         "— not a generic or variant type; write a `ctor`", cd->line);
         } else if (ci.genFormat) {
             // A generic `value<T>` template or a variant: `@generate(Formattable)` is out of scope for a first cut;
-            // write a hand `implements Formattable` (per-instance synthesis for generics is a later milestone).
+            // write a hand `implements Formattable` (per-instance synthesis for generics is the *Derive follow-ons* ROADMAP row).
             unsupported("`@generate(Formattable)` applies only to a plain (non-generic, non-variant) type "
                         "— write `implements Formattable` by hand for a generic or variant", cd->line);
         } else if (ci.genEquatable || ci.genHashable) {
             // Same v1 scope as `@generate(Formattable)`: a generic template specializes per instance and a variant
-            // needs per-tag walks — both are follow-ons (ROADMAP), not a silent half-derive.
+            // needs per-tag walks — both are the *Derive follow-ons* ROADMAP row, not a silent half-derive.
             unsupported("`@generate(Equatable, Hashable)` applies only to a plain (non-generic, non-variant) "
                         "type — write `implements Equatable`/`Hashable` by hand for a generic or variant", cd->line);
         } else if (ci.genSerialize || ci.genDeserialize) {
@@ -10794,7 +10794,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.226).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.227).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -16938,7 +16938,7 @@ std::string CEmitter::ptrElemType(SharedExpression e)
 
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
-// local pointer, and (0.9.226) to type the RECEIVER of a method call on such an element, which borrows it
+// local pointer, and (0.9.227) to type the RECEIVER of a method call on such an element, which borrows it
 // in place. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of exprClass —
 // an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on) must keep its
 // plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
@@ -18301,7 +18301,10 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
 // Note this is narrower than kama's general shadowing ban: `foreach` and `match` binders are exempt from
 // that ban today, and for an ordinary name the exemption is harmless (the inner binding wins, which is
 // what the author wrote). It is only a const param that gets discarded instead of shadowed. Widening the
-// general ban to these two binders is a separate question and deliberately not answered here.
+// general ban to these two binders was a separate question, and the consumer-driven audit answered it
+// (0.9.230): the exemption STAYS. A runtime binder that shadows is the inner binding winning, which is what
+// the author wrote; only a comptime parameter is DISCARDED instead of shadowed, and that is what this rule
+// catches.
 void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, int srcLine)
 {
     if (nm.empty() || !_comptimeSubst.count(nm)) return;
@@ -19678,7 +19681,7 @@ void CEmitter::resolveFriends()
                 // (a free function). The first two used to be spelled only bare: `resolveUserName` was
                 // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
-                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.228.
+                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.229.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
                 if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
                 if (!resolved) {                                           // `mod::Type::method`
@@ -21411,7 +21414,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                         call->line);
         // An element or field IS a place, but not when its ROOT is a temporary: `addr(of: f.view()[0])`
         // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
-        // dangle — and until 0.9.229 it escaped the front end and died in clang ("cannot take the address
+        // dangle — and until 0.9.230 it escaped the front end and died in clang ("cannot take the address
         // of an rvalue"), which a package author who does not read C could not act on (the first external
         // package's KAMA_GAPS #3). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
         // still owns and stays fine, as it does for `isNamedValue`.
@@ -26547,7 +26550,7 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
     //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
-    //      wholesale as "not yet" until the consumer-driven audit (0.9.226). ----
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.227). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
         if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
@@ -26599,7 +26602,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // exprClass feeds the store path; widening it was measured to break 45 fixtures). A CALL is not a
     // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
-    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.226 this was
+    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.227 this was
     // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
     if (cls.empty()) {
         const std::string et = ptrLocalElemType(receiver);
@@ -26747,7 +26750,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
         // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
-        // Since 0.9.226 the receiver is typed at the top of this function — a call borrows the element in
+        // Since 0.9.227 the receiver is typed at the top of this function — a call borrows the element in
         // place, as the field form always did — so a class-typed local element never reaches this line;
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);

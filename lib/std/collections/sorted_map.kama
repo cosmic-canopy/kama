@@ -260,7 +260,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     }
 
     // In-order (ascending) collection of key/value copies into a caller-owned array — the eager backing for
-    // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes don't expose.)
+    // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes hide by design; the eager copy is O(n) once per walk, and that is the accepted trade — genuinely optional, not deferred.)
     public const fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {

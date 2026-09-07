@@ -459,7 +459,7 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 (independent clone) — present only when **both** key and value are `Copyable`, gated by a **multi-condition
 `when [K: Copyable, V: Copyable]`**. `foreach (Entry<K,V> e in m.entries())` iterates the **key-value pairs**
 by copy (`e.key()` / `e.value()`), present only when **both** key and value are `Copyable` — the pair analogue
-of `iterator()` (keys) and `values()`. `Entry<K,V>` is a named pair (the language has no tuple); a key is never
+of `iterator()` (keys) and `values()`. `Entry<K,V>` is a named pair (the language has no tuple, by decision: a named pair is greppable and self-describing — explicit over implicit, GOALS 5 — and a one-line `type value` is the spelling); a key is never
 mutated in place (that would corrupt the table), so there is no `entriesMut()` — mutate values via
 `valuesMut()` / `getRefMut`.
 
@@ -1231,7 +1231,7 @@ contract (`int8`/`int16`/`int32`; `int64` is not one today, because `wide()` wid
 native `int128` is a non-goal, and `std::num::mulWideI64` is the 128-bit product an `int64` backing would
 widen through, an additive change if a consumer wants it), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32>#(16)` is
 the classic Q16.16 and `Fixed<int16>#(8)` is Q8.8. The backing is *passed*, not computed from a bit count:
-kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
+kama has no type-level computation — a type is passed, never computed, which is the simplicity line GOALS 4 draws — and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
 explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8>#(16)`)
 is a compile error, from one [`comptime assert`](#compile-time-assertions--comptime-assert-) in the type's <!-- xfail: fixed_bad_pairing -->
 own body reading `sizeof(B)` — not a rule the compiler knows about this type. See
@@ -1553,7 +1553,7 @@ Windows) so both platforms take the same code path. wasm has no process model.
 are always views (a non-owning span — zero-copy sub-slicing, no charset assumptions: binary-native, text
 backends layer UTF-8 on top): the read-only `ConstView<uint8>` where the callee only reads (`write`,
 `send`), the writable `View<uint8>` where it fills (`read`, `recv`). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
-primitive (contracts carry no default methods); `StringWriter`/`SliceReader` are the in-memory impls and
+primitive (contracts carry no default methods: a contract is purely an interface, so conformance is total and every body lives in the implementing type — helpers compose over the primitive); `StringWriter`/`SliceReader` are the in-memory impls and
 `BufWriter<W>`/`BufReader<R>` the buffering layer (each **owns** its inner sink/source by value — kama forbids
 stored borrows). `std::fs::File` implements both, and a reliable network stream is
 `type contract ReliableStream implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
@@ -1758,7 +1758,7 @@ string h = hexEncode(bytes: v);                                 // "666f6f626172
 **Five deliberate answers:** <!-- test: encoding_base64, encoding_hex -->
 1. **Two named pairs, not flags.** `encode`/`decode` is the standard alphabet with `=` padding;
    `encodeUrl`/`decodeUrl` is the URL-safe alphabet without it. A call site reads which wire format it
-   speaks. (The RFC's padded URL-safe form exists and nobody sends it.)
+   speaks. (The RFC's padded URL-safe form is `urlSafe` plus a stripped `=` tail; a third named pair would be a second spelling of two that exist.)
 2. **Decoding is strict**, as in Rust and Go and unlike Python: a byte outside the alphabet is
    `InvalidCharacter(at:)` with its position; `=` is accepted only where padding belongs and is not a
    character of the URL alphabet at all (`InvalidPadding` / `InvalidCharacter`); a length the encoding
@@ -1817,7 +1817,7 @@ string term = envOr(name: "TERM", dflt: "dumb");           // value, or the fall
   query: **wasm** (a JS/browser host), **bare-metal firmware**, or an unsupported platform (a console port
   adds its own branch). The `Optional` return is what makes the MCU/wasm "not available" honest.
 - **`env(name) -> Optional<string>`** is the primitive (a keyed lookup — the environment is exposed as a
-  by-name query, not an enumerable list); **`envOr(name, dflt) -> string`** is the common fallback wrapper.
+  by-name query, not an enumerable list — the keyed lookup is the portable primitive; enumeration is `environ`-shaped and absent on bare metal); **`envOr(name, dflt) -> string`** is the common fallback wrapper.
 - **Embedded (`--target embedded`).** There is no argv/environ on bare metal, so `kama_args_init` and the
   accessors are no-op **stubs** behind `#if KAMA_TARGET_EMBEDDED` (`args()` empty, `env()`/`programName()`
   `None`) — the surface still compiles, with **zero libc linkage** (`getenv` is a block-scope extern, elided).
@@ -1942,7 +1942,7 @@ fn int32 caller(UnsafePtr<int32> p) {
 
 FixedArray<float32> verts = ...;
 UnsafeConstPtr<float32> data = verts.dataPtr();   // SAFE to obtain — Rust's as_ptr; `dataPtrMut()` is as_mut_ptr
-usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()`
+usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()` — one way, `length() * sizeof(T)`
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
@@ -1951,7 +1951,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.229` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.230` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
@@ -2554,7 +2554,7 @@ scripting-host interface — is future work; the keyword is live today for the C
 `if/else`, `while`, `do/while`, `for`, `foreach`, `break`, `continue`, `return`; the full operator set
 (`+ - * / %`, bitwise, shifts, comparisons, `&& || !`, ternary `?:`), assignment ops (`= += …`), `++`/`--`,
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
-is done with `if` / `else if`. There is no `switch` statement.
+is done with `if` / `else if`. There is no `switch` statement: `match` on an enum, `if`/`else if` on an integer — one construct per concept (GOALS 4).
 
 **Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
 `{ … }` block — never a bare statement, and never an empty `;`:
@@ -3122,7 +3122,7 @@ type final resource Circle extends Shape {             // `type final resource` 
 }
 ```
 
-Single inheritance (`extends`), base embedded by value (upcast is offset-0), `base.m()` for non-virtual
+Single inheritance (`extends`) — one base embedded by value at offset 0 is what keeps an upcast a no-op and the depth budget meaningful; there is no multiple inheritance — `base.m()` for non-virtual
 upcalls — **subject to the same visibility rules as `this.`**, so a derived type cannot reach a `private`
 base member by choosing the other spelling. `virtual`/`override` methods dispatch through a vtable. **Inheritance is
 opt-in and one-way:** only a `type virtual resource`/`type abstract resource` may be `extends`-ed (a `value`,
@@ -3377,7 +3377,7 @@ fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }   // `string` now satisf
 The set form works because the bodies are **genuinely identical** across it — they use raw `<` / `==`,
 which stay raw C operators for all-primitive operands. It is not a substitute for per-type dispatch: a
 type list cannot serve `sqrt`, which needs a different C function per width (`sqrtf` vs `sqrt`), and kama
-has no in-body type branching by design.
+has no in-body type branching by design: `@compileFor` is a declaration-level gate (SPEC § *Conditional compilation*), and a body that branched on a type would be a second, hidden one.
 
 A primitive gets **no `_classes` entry** — every "is this a user type?" test keys on that — so the
 conformance hangs on a separate registry, and a **scalar** target's `this` is the value itself: the method
@@ -3734,7 +3734,7 @@ Both contracts **borrow** their operand (`ref This`) — a comparison never cons
 `!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
 **explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated <!-- xfail: operator_missing -->
 structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
-(see *Derives*). The `true`/`false` conversion operators are out of scope.
+(see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`.
 
 **Primitives are untouched.** An all-primitive comparison keeps the built-in C operator, so `float` `<`
 keeps exact IEEE semantics at zero cost and never routes through `Comparable`. (A float is deliberately
@@ -3746,7 +3746,7 @@ whose body returns a place (`return this.cells[i]`). It lowers to `T* C__op_inde
 and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i].field = v`, and
 `ref g[i]` all work — the same place semantics as a built-in collection, now expressible in the
 language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
-`self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
+`self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it — GOALS 3e, no stored borrows: a place is used where it is produced),
 and a `const` receiver makes it read-only. A type whose elements are read-only by construction — a
 read-only view over an `UnsafeConstPtr<T>` — declares that in the operator itself: **`const ref T
 operator[](isize i)`** returns a read-only place (§ `const fn`), so `cv[i].method()` reaches only `const fn`
@@ -3878,7 +3878,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 
   `is` is an **identity** constraint and gets its own grammar position rather than joining the `:` bound
   list, which holds contracts. At most one parameter may be pinned, it must come first, and the operand is `This` —
-  `<T is Widget>` (a subtype bound) is not a thing kama has. Chosen over `Self` to pair with the `this`
+  `<T is Widget>` (a subtype bound) is not a thing kama has: inheritance is not a bound axis — substitutability is a contract's job (SPEC § *Inheritance*). Chosen over `Self` to pair with the `this`
   value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
   arithmetic over any conforming type at zero cost:
@@ -3946,7 +3946,7 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
 - **Field visibility is per field on a `value`.** A `type value` marks each field `public` (externally
   accessible) or leaves it private (default, reached through accessors) — a `value` with all-public fields is
   a plain-old-data struct. A `type resource` keeps **all fields private** (ownership stays encapsulated); a
-  `type contract` has no fields at all.
+  `type contract` has no fields at all (an interface owns nothing; state lives in the implementing type).
 - **Overridable methods are written `protected`** (public polymorphism is a `contract`'s job); a type opts
   into extension as a `type virtual resource`/`type abstract resource` and seals as a plain `resource`/`type
   final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an extensible `resource`.
@@ -4163,7 +4163,7 @@ outright — `namespace` is not a keyword and writing one is a syntax error.
 `a::b`, always — there is no whole-module import, so the entry is never ambiguous. `as` renames
 (`a::b::X as Y`), and an entry with **no scope** (`X`) names a symbol of this file's own module, because
 there the scope is the only candidate. Importing any symbol of a module loads that module, so a qualified
-`a::b::Y` stays available afterwards. There is no glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
+`a::b::Y` stays available afterwards. There is no glob — unqualified-everything is not offered: explicit over implicit, and per-symbol imports are what the LSP's auto-import and closure pruning ride on. Fully-qualified `a::b::X` is always available once
 imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
 a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
 this file can reach, which would leave the original unspellable

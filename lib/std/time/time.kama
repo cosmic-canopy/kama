@@ -84,7 +84,7 @@ type value Instant implements Equatable<This>, Comparable<This> {
 // There is deliberately no calendar here: no year/month/day, no formatting, no time zones. That is a
 // separate module's worth of work (civil-from-days, a zone database, a parser), the comparator draws the
 // same line — Rust's `SystemTime` is a bare epoch offset and `chrono` is a package — and a half-calendar
-// is worse than none.
+// is worse than none — which means whole, not never: a calendar module is a ROADMAP row (the audit, 2026-09-07).
 @generate(of)
 type value SystemTime implements Equatable<This>, Comparable<This> {
     public int64 nanos;

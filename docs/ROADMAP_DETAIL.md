@@ -215,6 +215,11 @@ near-native and toolchain-free, but **not** as fast as native kama today (LLVM's
 keep `C→emcc -O3` ahead on heavy numeric loops), so the **release tier remains the max-performance path for both
 native and web**. Don't conflate "can emit WASM directly" with "the fast web path."
 
+- **`std::time` calendar — scheduled, unsized.** `time.kama` says "deliberately no calendar … a half-calendar is
+  worse than none", which means WHOLE, not never: a general-purpose stdlib needs civil dates. Scope: civil-from-days
+  (Hinnant's algorithms), ISO-8601 format/parse of a `SystemTime`, leap-year and weekday arithmetic; no zone
+  database (a package, as `chrono-tz` is), no locale.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -244,11 +249,11 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
   (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
   callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
-  ([kama.y](../src/kama.y), the `FNPTR` rule has no type-param slot). **Deliberately deferred, not overlooked**
-  — for the case it would serve, a generic **contract** is the better tool anyway: it monomorphizes to a
+  ([kama.y](../src/kama.y), the `FNPTR` rule has no type-param slot). **Non-goal** (the consumer-driven audit, 2026-09-07; it used to read "deliberately deferred")
+  — for the case it would serve, a generic **contract** is the better tool: it monomorphizes to a
   direct inlinable call where an `fnptr` is an indirect one, and a comparator object can carry state,
   which matters because kama has no capturing closures. `std::collections`' `Order<T>` is the worked
-  example. Additive and non-breaking, so it costs nothing to wait. *(This used to defer itself "alongside
+  example. A generic contract IS the generic callback, so nothing is missing. *(This used to defer itself "alongside
   the full specialization campaign", on the argument that a concrete-args specialization would cover the
   per-type-body case an `fnptr` gets reached for. That campaign is now a non-goal — see the entry below —
   and it changes nothing here: the generic-contract answer never depended on it.)*
@@ -394,8 +399,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   **So: `UnsafePtr` containment, above, is the cheaper and more direct route to the same goal.** Every
   genuine `null` in the tree (75/75) targets an `UnsafePtr`; if `UnsafePtr` can only be handled inside
   `unsafe`, `null` is confined by construction — no `Optional`, no niche opt, no unwrap ergonomic, no
-  token deletion, no `tree-sitter` change. What remains worth doing on its own schedule is the honest FFI
-  surface: only **8** extern declarations return a genuinely nullable pointer (`malloc` ×3,
+  token deletion, no `tree-sitter` change. What remains is the honest FFI surface, now a ROADMAP row (S): only **8** extern declarations return a genuinely nullable pointer (`malloc` ×3,
   `kama_poller_create`, `kama_diropen`, `kama_channel_new`, `kama_argv_new`, `kama_envp_build`) —
   `fopen`/`dlopen`/`getenv`/`realloc`/`mmap` are not declared at all, since kama routes them through
   `kama_*` seams that already return `bool` + an out-param or a `Result`.
@@ -462,13 +466,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
-  `@generate(Formattable)`, and tagged strings all ship (SPEC). Still open, additive, no current need: combining a
+  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.223: combining a
   base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Formattable)`
   on a **generic**/**variant**/**enum** type; a `${x:?}`-routed `@generate(Debug)` (spec hook already exists);
   per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
   parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears); and tagged-string
   *type-preserved params* (Model B — each hole keeping its static type into the params list, `html` returning
-  a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error by design.
+  a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error — a **non-goal**: `"${x}"` is the one way to render a value (SPEC § *Interpolation*), and the emitter's message says so.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (SPEC + §8
   hot-reload); the **full `expose`** — richer wasm module exports + the scripting host interface — stays 2.0 (§7).
 
@@ -485,8 +489,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   runtime alive after `main`, so shipping this work means making that flag conditional again — on the
   artifact **kind** (program vs module), never on which library the program happens to use, which is the
   keying that was wrong before.
-- **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
-  open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
+- **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Scheduled — the
+  *Derive follow-ons* ROADMAP row (M): the same derives on a **generic** or **variant** type (the same v1 boundary
   `@generate(Formattable)` draws — all of them now error rather than half-deriving; `Serializable`/`Deserializable`
   were the two kinds with no arm, so they were *accepted in silence* and died in the C compiler on a
   missing `_F<file>__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
@@ -585,7 +589,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   one fixture, `kama build`. If it fails, the fix is the two quotes plus a guard shaped like
   `check-clean-tree.sh` (a private temp root, five build shapes); if it passes, write down why here and
   delete the row. Sized `?` until the probe has run.
-- **Windows path residuals after `0.9.219`.** The compiler-side seam shipped
+- **Windows path residuals after `0.9.220`.** The compiler-side seam shipped
   ([platforms/windows.md](platforms/windows.md) § *Where the remaining work is* has the record and the
   measurements). What it left, with a verdict each, so nothing here is "out of scope" by silence:
   * **`CreateProcessW`'s cwd and executable stay ≤ 260 characters** — `ERROR_DIRECTORY_INVALID` prefixed
@@ -607,7 +611,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.
   * **A volume with 8dot3 names disabled.** The linker fix rests on an 8.3 alias because GNU `ld`/`ar` are
     narrow (windows.md has the measurements); a non-ASCII or 248+ path on a volume that keeps no aliases
-    fails at the link exactly as it did before `0.9.219` — honestly, with ld's own message. The system
+    fails at the link exactly as it did before `0.9.220` — honestly, with ld's own message. The system
     volume has them on by default, and that is where a user profile is. Verdict **genuinely optional**
     until someone reports it: the two answers are `-fuse-ld=lld` when `ld.lld` is on PATH (lld is LLVM
     and reads UTF-16 argv; the CI clang package does not install it) or staging the link in an ASCII
@@ -618,6 +622,46 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     such**: it is the toolchain's, `-fuse-ld=lld` or an ASCII `TEMP` fixes it outside kama, and kama's
     per-TU path (`-j` ≥ 2) never asks clang for a temporary. What IS scheduled: say so in
     [platforms/windows.md](platforms/windows.md) (done) and in `targets.md`'s Windows notes (not yet).
+- **Capturing closures — sized, not scheduled (audit verdict, 2026-09-07).** The shape a UI event table wants
+  today is a generic functor: `type contract Handler<E> { fn void call(E e); }`, one `type resource` per handler
+  carrying its captures as fields, stored as `Owned<Handler<E>>` in the table — the comparator twin
+  [SPEC.md](SPEC.md) shows under *Ordering comes from a contract*. A closure is SUGAR over exactly that: a lambda
+  expression with an explicit capture list (`give`/`copy` per capture — no lifetime tracking, so by-move or
+  by-`Shared` only) lowering to a synthesized resource plus the conformance, with the sink staying a contract
+  (inlinable, monomorphized) rather than a function pointer. Size **L**: grammar, the capture-ownership rules,
+  a synthesized type per lambda, and the diagnostics for a capture that escapes. The functor answers the need;
+  the sugar is wanted when a real event table is written by hand and its boilerplate is measured — not before.
+  (The row that sat in NOW as "No capturing closures" is gone: this is its verdict.)
+- **C ABI element spellings for externs (`cchar`, `clong`/`culong`) — scheduled, M.** Not a const question:
+  `UnsafeConstPtr<T>` is done. It is an ELEMENT question — kama's `char` is a 32-bit codepoint, C's `char` is a
+  byte that is a third type beside `signed char` (`int8`) and `unsigned char` (`uint8`), and clang's
+  `-Wpointer-sign` fires on either. Every FFI-capable language names it (Rust `c_char`, Zig `c_char`, Swift
+  `CChar`, Go `C.char`, Nim `cchar`). Measured 2026-09-07: `UnsafeConstPtr<char> p = s.cstr();` dies under
+  `-Werror=incompatible-pointer-types`; `examples/httpd`'s `puts` casts to `int8` and warns. Design: `cchar` is
+  opaque — legal only inside a raw pointer, `p[i]` and `cchar x` refused ("cast to `UnsafePtr<uint8>` to read
+  bytes") — so `primKeyOfCType`, `scalarByteSize` and the Formattable switches never see it; `clong`/`culong`
+  are VALUE types of target-varying width, excluded from folding and range checks by explicit case like
+  `isize` (kama.y's fixed-width rule). Touches: `kama.l` reserved table, `kama.y` primitive_type (×2),
+  `IDENTIFIER_*_VAL` (appended AFTER `USIZE`, outside the `INT8..CHAR`/`..UINT64` spans), `cType`/`primKey`/
+  `mangleElem`, `prelude/builtin.kama` (`check-builtin-doc.sh` derives from the list), tree-sitter + VS Code
+  grammars, SPEC. The two alternatives are non-goals: `char` inside a raw pointer meaning C `char` breaks
+  `DynamicArray<char>.dataPtr()` (a 1-byte stride declared over a 4-byte buffer), and `-Wno-pointer-sign` +
+  "spell everything `uint8`" would silence a real `int8`/`uint8` mismatch everywhere to save one keyword.
+- **`int128` — non-goal; the wide product shipped (0.9.228).** `__int128` exists in clang and gcc on 64-bit
+  targets only (not MSVC, not gcc on thumbv6m), so a kama `int128` would be a numeric type that exists on some
+  targets, which the fixed-width position forbids. What reached for it — a `Fixed<int64>` backing's
+  intermediate product, Lemire's unbiased range — needs the PRODUCT: `std::num::mulWideU64`/`mulHighU64`/
+  `mulWideI64`, four 32-bit limb multiplies in plain unsigned arithmetic on every target. Both consumers are
+  now *optional* follow-ons, recorded beside their code.
+- **Honest FFI surface — scheduled, S.** The 8 externs returning a genuinely nullable pointer (`malloc` ×3,
+  `kama_poller_create`, `kama_diropen`, `kama_channel_new`, `kama_argv_new`, `kama_envp_build`) wrapped as
+  `Optional` in `lib/std/ptr/`; the sentence above that scoped it "on its own schedule" is that schedule.
+- **`Simd` `sqrt`/`floor`/`ceil` — scheduled, S.** A `kama_math.h`-backed intrinsic arm on a lane batch; the
+  wasm leg must prove the `-msimd128` lowering, which is why it is a row and not a footnote.
+- **`Copyable` conformance checks parameter constness — scheduled, S.** `checkConformanceSignature` compares
+  `ref`/`out` per parameter but not `const ref`, so an implementer that drops or adds `const` still conforms.
+  Tightening it is a source break for every external `Copyable`, which is why the audit's `Copyable` measurement
+  (the borrow stays mutable — prelude/global.kama says why) did not fold it in.
 - **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in
   [SPEC.md](SPEC.md) (*Explicit SIMD*); this entry keeps only the MEASUREMENTS behind it, because each one
   cost real time to obtain and every one of them contradicted an assumption someone held first.
@@ -657,7 +701,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   Not built, and each is a decision rather than an omission: **widths above 128 bits** wait for the
   CPU-tuning knob (§9) — no AOT language ships wider lanes without a build flag, so this is parity, not a
   gap; **per-ISA intrinsics** are a declared non-goal, being the half every surveyed language keeps
-  `unsafe` or experimental; and **`sqrt`/`floor`/`ceil` on a lane batch** want the `kama_math.h` seam that
+  `unsafe` or experimental; and **`sqrt`/`floor`/`ceil` on a lane batch** want the `kama_math.h` seam — now a ROADMAP row (S), pending the wasm leg's proof of the lowering — and that
   `lib/std/math/scalar.kama` uses and an intrinsic cannot reach.
 
   ⚠️ **On the 1.0 tag:** the row is done, so the question it raised is closed — nothing here was
@@ -731,8 +775,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     - **One nuance left open, unprobed.** Only an *exported* constant moves to the header, so a private
       `comptime fn` table still lives in one unit — but an exported one is `static const` in every TU
       that includes the header. An ordinary constant is dead-stripped where unused; a `@section`-placed
-      one on an MCU may not be. No fixture exercises that combination and no user has hit it. If one
-      does, the answer is a single definition with `extern` declarations, not a retreat from the header.
+      one on an MCU may not be. Genuinely optional, remedy decided (the audit, 2026-09-07): a `static const` per TU is what a `@section`
+      placement needs anyway, and a single link-time copy — if ever wanted — is one definition plus `extern`
+      declarations, not a retreat from the header.
     - ⚠️ **The lesson, which is the reason this entry stays.** The report named the narrowest visible
       symptom. Had it been taken at face value — add the name to one membership set — the export would
       have been accepted and the program would still have failed in the C compiler, and the fixture
@@ -1017,12 +1062,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     while the rAF callback lives), which is what made it look like the fix. It is not, and the reasoning
     is kept here so it is not re-derived. (The seam it was mistaken for — a local `UnsafePtr<T>` element
     is deliberately untyped to ownership so `nd[i] = od[i]` stays a bitwise relocate; widening `exprClass`
-    fixes their KB-14 and breaks 45 fixtures — is now DIAGNOSTICS, shipped `0.9.174`: `drop` through a
-    raw element is refused, the method call names the two spellings, the SPEC has *The raw seam*.)
+    fixes their KB-14 and breaks 45 fixtures — became DIAGNOSTICS in `0.9.174`, and then the audit found the
+    narrower fix: a CALL is not a store, so `0.9.224` types the RECEIVER alone through `ptrLocalElemType`
+    and `p[0].m()` resolves on a local as it always did on a field, `exprClass` untouched; `drop` through a
+    raw element stays refused, the SPEC has *The raw seam*.)
     - **kama's `static` is a fenced MCU tool, not a general global.** Per-isolate (`KAMA_ISOLATE_LOCAL`),
       compile-time initializer only (no init order, no hidden constructor before `main`), unreadable in a
       `@foreignEntry` region unless assigned there, and typed to the MCU shapes — value, `UnsafePtr`,
-      `InlineArray`, `Simd`. "Support it in full" means removing fences nobody has asked to remove.
+      `InlineArray`, `Simd`. "Support it in full" means removing fences that exist for the MCU shape (no teardown on bare metal, per-isolate on a host); a host driver object is `Owned<T>.release()` — so this is genuinely optional, not "nobody asked".
     - **The need it was mistaken for is answered at the foreign boundary instead — SHIPPED `0.9.175`.**
       `HeapOwner<T>` had `adopt` (Rust's `Box::from_raw`) and no twin, so ownership could enter kama from
       a foreign API but not leave it. `Owned<T>.release()` lets the foreign API's own `userdata` slot hold
@@ -1206,7 +1253,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   which is the same profile as the `fnptr` entry above and the same reason it waits. Note also that the
   turbofish's absence on a method is *not* an extra restriction: `3c9b441` removed the one receiver
   turbofish (`r.deserialize::<T>()`, sugar for a `__kamaDeserialize<T>` free trampoline), and with no
-  generic methods a method turbofish has nothing to name. Reopen if a real API cannot be spelled either way.
+  generic methods a method turbofish has nothing to name. Verdict (audit, 2026-09-07): a **non-goal** — a method's own type parameter would need a second turbofish grammar on a receiver call, and the free-function spelling above is the idiom.
 
 - **A `comptime` parameter's type is an integer, `bool` or `char`** ([kama.y](../src/kama.y),
   `comptime_param_type`) — no compile-time float, array or struct parameter. This is where a
@@ -1229,37 +1276,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ## 3. Open design questions (settle before the work they gate)
 
-- **Audit every "waiting on a consumer" deferral (raised 2026-09-06).** The const-pointer row was a
-  *declared* deferral: the emitter's own comment on `const fn ref T` says a read-only place "needs a
-  const-place type kama does not have, and the corpus asks for it nowhere" — true until the first package
-  held a key `const` and wanted C to read it. kama is a general-purpose systems language, and **YAGNI is
-  not a rule it can apply to its own surface**: a feature a consumer will need is decided on its merits,
-  not deferred until the corpus happens to ask. The audit is a **read, not a grep** — this file's §2 and §3,
-  every "non-goal" / "not in the language" / "deliberately not" sentence in [SPEC.md](SPEC.md), the
-  emitter's "asks for it nowhere" / "deliberately not answered here" comments, and the language-holes
-  list — producing one verdict per item: *schedule* (it becomes its own row, sized), *genuinely optional*
-  (say why a consumer never needs it), or *non-goal* (say what answers the need instead). Seed list, found
-  while shipping the const pointer (the first, a read-only PLACE, was decided and shipped as `const ref T`
-  in 0.9.210 — SPEC § `const fn` — after it was found refused three times as "the corpus asks for it
-  nowhere"; the verdict pattern the rest of this list wants):
-  - **`Copyable.copy(ref T source)` takes a mutable borrow** — a `string` copies out of a `const ref
-    DynamicArray<string>` fine (measured), whether a `Copyable` *resource* does is unmeasured;
-  - **capturing closures** (the *No capturing closures* row) — the textbook case: deferred because the
-    first consumer "says it bites at their UI milestone, not before";
-  - **member visibility per type vs per file** (the next item in this section);
-  - **no user spelling for a pointer to C `char`** (found 2026-09-07 through `examples/httpd`'s `puts`
-    extern, which builds with a `-Wpointer-sign` warning): a written `UnsafeConstPtr<char>` lowers to
-    `kama_char const*` — `char` is the 32-bit codepoint — while `string.cstr()`'s return is a
-    compiler-internal `char` that lowers to C `char const*` (SPEC calls it "C's `const char*`"). `int8` and
-    `uint8` both trip clang's `-Wpointer-sign` against a libc prototype, so every `const char*` extern in
-    `lib/std` is spelled `UnsafeConstPtr<int8>` and stays warning-free only because `kama_os.h` is never
-    `extern "<…>"`-included. The verdict wants one of: a C-`char` element spelling for externs, or `char`
-    inside a raw pointer meaning C `char`;
-  - default parameters (a declared non-goal in SPEC § *Construction*); the `Optional`-of-everything ctor
-    pattern (§4 below); "removing fences nobody has asked to remove" (§2, the generic-body fences); the
-    `const`-param shadowing ban "deliberately not answered here" (`checkConstParamBinder`); the C++ half
-    of `csources` (its own row).
-
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
   types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
@@ -1269,15 +1285,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 *(The `Slot<T>`/`MaybeUninit` spike that sat here is answered and shipped: the shape is a `slot`
 DECLARATION, not a wrapper type — no new type, no `.assume_init()`, and an unassigned slot simply has no
 drop emitted. See SPEC § *Uninitialized storage*.)*
-
-- **Member visibility: per type, or per file?** A non-`public` ctor/method is private to its TYPE today,
-  while a free function or type is private to its FILE. A file that declares `type resource Key { ctor
-  zeroed() … }` and a free function that fills a zeroed key cannot call the ctor unless it is `public` —
-  which is how `@kama/sodium` shipped, with a comment on every one. Rust's answer is module-private by
-  default (`pub` to leave), Swift's is `fileprivate`. kama's boundary is the file everywhere else, so the
-  consistent refinement is "a non-public member is visible within its declaring file"; the argument
-  against is that a type's invariants would then be enforced by file layout rather than by the type.
-  Raised 2026-09-06; decide before another package repeats the workaround.
 
 <a id="s4"></a>
 
@@ -1306,7 +1313,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
-  optionals" ctor pattern. A deliberate non-goal for now: named static factories + named params cover it.
+  optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
 <a id="s5"></a>
