@@ -1937,12 +1937,14 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 **The raw seam is a seam, not a second ownership system.** An element `p[i]` of a raw `UnsafePtr<T>` is
 **untyped to ownership**: `p[i] = v` is a plain store (the old bytes are overwritten, no destructor runs),
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
-the emitter does not resolve a class for a raw element. So two things that *look* like they should work
-through one are refused with the two spellings instead: a **method call** on a raw element (`p[0].m()`) <!-- xfail: unsafe_ptr_elem_method -->
-and **`drop(value: p[0])`** (which would otherwise drop nothing, silently). To use the value: **borrow it** <!-- xfail: unsafe_ptr_elem_drop -->
-through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or **own it** — keep it in an
-`Owned<T>`, and `release()` it to a foreign API's userdata slot when it must outlive a frame (see *Smart
-pointers*). A raw pointer is the foreign boundary, never general-purpose escape (GOALS §3a/§3e).
+the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
+(`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
+through a field one (until `0.9.224` the local form was refused, the field form never was). What stays
+refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
+release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
+**own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
+outlive a frame (see *Smart pointers*). A raw pointer is the foreign boundary, never general-purpose escape
+(GOALS §3a/§3e).
 
 #### What requires an `unsafe fn` — the decision table
 

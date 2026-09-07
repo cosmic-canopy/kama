@@ -1,0 +1,27 @@
+// A method call on an element of a LOCAL raw `UnsafePtr<T>` — `p[0].get()`. Through a FIELD pointer
+// (`this.buf[i].get()`) this always resolved; on a local it was refused as "untyped to ownership" (the
+// first consumer's KB-14), because typing the element for `exprClass` breaks the collections' bitwise
+// relocate stores. The consumer-driven audit (0.9.220) types the RECEIVER only — a call borrows the
+// element in place, exactly as the field form does — and stores stay untyped.
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+
+type resource Big {
+    int32 n;
+    public ctor sized(int32 n) { this.n = n; return this; }
+    public const fn int32 get() { return this.n; }
+    public fn void bump() { this.n = this.n + 1; }
+    ~Big() { }
+}
+
+unsafe fn int32 run() {
+    UnsafePtr<Big> p = cast<UnsafePtr<Big>>(malloc(n: cast<usize>(sizeof(Big))));
+    p[0] = Big.sized(n: 40);
+    p[0].bump();
+    p[0].bump();
+    int32 r = p[0].get();
+    free(p: cast<UnsafePtr>(p));
+    return r;
+}
+
+fn int32 main() { return run(); }

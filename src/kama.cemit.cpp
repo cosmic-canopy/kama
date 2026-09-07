@@ -10794,7 +10794,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.223).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.224).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -16937,10 +16937,11 @@ std::string CEmitter::ptrElemType(SharedExpression e)
 }
 
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
-// the element C-type, used ONLY in the assignment store path for an explicit `give`/`copy` raw-slot move
-// into a local pointer. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of
-// exprClass — an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on)
-// must keep its plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
+// the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
+// local pointer, and (0.9.224) to type the RECEIVER of a method call on such an element, which borrows it
+// in place. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of exprClass —
+// an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on) must keep its
+// plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
 // -> `void*` is not indexable (excluded). Only locals/params live in `_localCTypes`, and a `ref T` param
 // lowers to `T` (no `*`), so no false positives.
 std::string CEmitter::ptrLocalElemType(SharedExpression e)
@@ -26475,7 +26476,7 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
     //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
-    //      wholesale as "not yet" until the consumer-driven audit (0.9.223). ----
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.224). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
         if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
@@ -26522,6 +26523,17 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         return "0";
     }
     std::string cls = exprClass(receiver);
+    // `p[0].m()` on a LOCAL raw `UnsafePtr<T>`: `exprClass` deliberately does not type a local raw element
+    // (a store through one — `nd[i] = od[i]` in the collections — must stay a bitwise relocate, and
+    // exprClass feeds the store path; widening it was measured to break 45 fixtures). A CALL is not a
+    // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
+    // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
+    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.224 this was
+    // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
+    if (cls.empty()) {
+        const std::string et = ptrLocalElemType(receiver);
+        if (!et.empty() && _classes.count(et)) cls = et;
+    }
     // A `string` receiver that `exprClass` can't name — a bare literal (`"x".trim()`) or a `+` chain
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
     // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.
@@ -26662,27 +26674,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // `isize`/`usize` are absent from every `type intrinsic <…> implements …` list in the prelude.
         // Telling someone that `n` is "not in reach" when `n` is the local on the line above sends them
         // hunting for a scope bug that is not there.
-        // ...and a THIRD: an element of a raw `UnsafePtr<T>` — `p[0].m()`. A raw element is deliberately
-        // untyped to ownership (ptrLocalElemType is kept out of exprClass so `nd[i] = od[i]` stays a bitwise
-        // relocate in the collections), so its class is unknown HERE by design, not by accident. Widening
-        // exprClass to it was measured: it resolves this call and breaks 45 fixtures inside
-        // dynamic_array.kama. So the answer is the two spellings GOALS §3a/§3e give — borrow through the
-        // pointer, or own the value — not "its type is not known", which reads as a scope bug. The first
-        // consumer's KB-14. Only a LOCAL element whose element type is a class reaches this: a field
-        // element of class type resolves through ptrElemType (so `cls` is not empty), and a primitive
-        // element takes the conformance branches below.
-        {
-            std::string et = ptrLocalElemType(receiver);
-            if (!et.empty() && _classes.count(et)) {
-                const std::string place = unparseExpr(receiver);
-                unsupported(("`" + place + "` is an element of a raw `UnsafePtr<" + et + ">`, which is untyped to "
-                             "ownership, so `" + method + "` cannot be called on it — borrow it through a `ref " + et
-                             + "` parameter (`fn f(ref " + et + " x)`, called as `f(x: ref " + place + ")`), or own the "
-                             "value in an `Owned<" + et + ">` and reach it through that (`release()` hands it to a foreign "
-                             "API's userdata slot to outlive a frame)").c_str(), call->line);
-                return "0";
-            }
-        }
+        // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
+        // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
+        // Since 0.9.224 the receiver is typed at the top of this function — a call borrows the element in
+        // place, as the field form always did — so a class-typed local element never reaches this line;
+        // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);
         const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
         if (!rk.empty())
