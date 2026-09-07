@@ -10509,6 +10509,10 @@ int main(int argc, char** argv)
         // std::random's entropy seam (kama_random.h) is BCryptGenRandom on Windows, which lives in
         // bcrypt.dll — same rule, same pruning: keyed on the TARGET, dropped by --gc-sections when unused.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lbcrypt ";
+        // args() on Windows re-reads the command line wide through shell32's CommandLineToArgvW
+        // (kama_args_init, kama_runtime.h). mingw-w64 links shell32 by default; zig's cross line is its
+        // own, so say it — same rule, same pruning.
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lshell32 ";
         // The PE SUBSYSTEM. Console is the default and stays byte-for-byte what it always was, so every
         // console tool, the CI legs and `kama` itself are untouched; a GUI program opts IN and stops
         // getting the stray console window Windows opens for a console-subsystem PE.

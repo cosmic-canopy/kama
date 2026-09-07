@@ -1739,6 +1739,35 @@ extern int    kama_argc;
 extern char** kama_argv;
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
+#if defined(_WIN32)
+    // argv as UTF-8. The CRT hands `main` the UTF-16 command line re-encoded through the process ANSI
+    // code page, so a non-ASCII argument — a path the user typed — arrives as mojibake, which is the same
+    // defect the filesystem seam had (kama_os.h; utf8everywhere.org). Re-read the command line wide and
+    // convert it here, once. On any failure the narrow argv stays, which is still right for ASCII.
+    // Block-scope declarations, like _setmode below, so <windows.h> never leaks: CP_UTF8 is 65001;
+    // CommandLineToArgvW lives in shell32, which `kama build` links for a Windows target.
+    {
+        extern wchar_t*  __stdcall GetCommandLineW(void);
+        extern wchar_t** __stdcall CommandLineToArgvW(const wchar_t*, int*);
+        extern void*     __stdcall LocalFree(void*);
+        extern int       __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t*, int,
+                                                       char*, int, const char*, int*);
+        int wargc = 0;
+        wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+        if (wargv) {
+            char** u = (char**)kama_calloc((size_t)wargc + 1, sizeof(char*));
+            int ok = u != NULL && wargc > 0;
+            for (int i = 0; ok && i < wargc; ++i) {
+                int n = WideCharToMultiByte(65001u, 0, wargv[i], -1, (char*)0, 0, (const char*)0, (int*)0);
+                u[i] = n > 0 ? (char*)kama_alloc((size_t)n) : (char*)0;
+                if (!u[i] || WideCharToMultiByte(65001u, 0, wargv[i], -1, u[i], n, (const char*)0, (int*)0) <= 0) ok = 0;
+            }
+            if (ok) { kama_argc = wargc; kama_argv = u; }
+            else if (u) { for (int i = 0; i < wargc; ++i) kama_free(u[i]); kama_free(u); }
+            LocalFree(wargv);
+        }
+    }
+#endif
 #if defined(_WIN32) && defined(KAMA_SUBSYSTEM_WINDOWS)
     // A GUI-subsystem PE (`--subsystem windows`) is given NO console, so `print`/`eprintln` write to
     // handles that go nowhere. That is the cost that stops windows-subsystem being the default. Undo the
@@ -1850,15 +1879,28 @@ static inline int kama_program_name(kama_string* out) {
 // bare metal (the embedded stub below), and any platform without a branch here (e.g. a console port adds its
 // own). Models the driver's selfExePath (kama.driver.cpp): _get_pgmptr / readlink /proc/self/exe /
 // _NSGetExecutablePath, each declared at block scope so no platform header leaks.
+#if defined(_WIN32)
+struct HINSTANCE__;   // HMODULE's pointee — the tag <windows.h> defines, so a later include agrees with the declaration below
+#endif
 static inline int kama_program_path(kama_string* out) {
 #if defined(__EMSCRIPTEN__)
     (void)out; *out = kama_string_lit("", 0); return 0;   // wasm host: no executable path
 #elif defined(_WIN32)
-    extern int _get_pgmptr(char**);
-    extern size_t strlen(const char*);
-    char* p = 0;
-    if (_get_pgmptr(&p) == 0 && p) { *out = kama_string_from_raw((const uint8_t*)p, 0, (int32_t)strlen(p)); return 1; }
-    *out = kama_string_lit("", 0); return 0;
+    // GetModuleFileNameW, converted to UTF-8 — the narrow _get_pgmptr is the ANSI re-encoding of this
+    // path (and its wide twin _wget_pgmptr is not in mingw-w64's UCRT import library at all). 32767 is
+    // the NT path ceiling, so one heap buffer of that size never truncates.
+    extern unsigned long __stdcall GetModuleFileNameW(struct HINSTANCE__*, wchar_t*, unsigned long);
+    extern int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t*, int, char*, int, const char*, int*);
+    wchar_t* w = (wchar_t*)kama_alloc(32768u * sizeof(wchar_t));
+    unsigned long got = GetModuleFileNameW((struct HINSTANCE__*)0, w, 32768u);
+    int n = (got > 0 && got < 32768u) ? WideCharToMultiByte(65001u, 0, w, -1, (char*)0, 0, (const char*)0, (int*)0) : 0;
+    if (n > 1) {
+        char* s = (char*)kama_alloc((size_t)n);
+        WideCharToMultiByte(65001u, 0, w, -1, s, n, (const char*)0, (int*)0);
+        out->data = s; out->len = (size_t)n - 1; out->cap = (size_t)n;                     // the from_raw shape
+        kama_free(w); return 1;
+    }
+    kama_free(w); *out = kama_string_lit("", 0); return 0;
 #elif defined(__linux__)
     extern long readlink(const char*, char*, size_t);   // ssize_t; does not NUL-terminate
     char buf[4096];
@@ -1878,12 +1920,37 @@ static inline int kama_program_path(kama_string* out) {
 // Look up env var `name` (a NUL-terminated C string). Writes an OWNED copy to *out and returns 1 if set,
 // else leaves *out = "" and returns 0.
 static inline int kama_env_lookup(const char* name, kama_string* out) {
+#if defined(_WIN32)
+    // Wide, then UTF-8 — getenv's value is the ANSI re-encoding of the same block (see kama_args_init).
+    extern int __stdcall MultiByteToWideChar(unsigned, unsigned long, const char*, int, wchar_t*, int);
+    extern int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t*, int, char*, int, const char*, int*);
+    extern unsigned long __stdcall GetEnvironmentVariableW(const wchar_t*, wchar_t*, unsigned long);
+    *out = kama_string_lit("", 0);
+    int wn = MultiByteToWideChar(65001u, 0, name, -1, (wchar_t*)0, 0);
+    if (wn <= 0) return 0;
+    wchar_t* wname = (wchar_t*)kama_alloc((size_t)wn * sizeof(wchar_t));
+    MultiByteToWideChar(65001u, 0, name, -1, wname, wn);
+    unsigned long need = GetEnvironmentVariableW(wname, (wchar_t*)0, 0);            // incl. NUL; 0 = unset
+    if (need == 0) { kama_free(wname); return 0; }
+    wchar_t* wval = (wchar_t*)kama_alloc((size_t)need * sizeof(wchar_t));
+    unsigned long got = GetEnvironmentVariableW(wname, wval, need);
+    kama_free(wname);
+    int n = (got > 0 && got < need) ? WideCharToMultiByte(65001u, 0, wval, -1, (char*)0, 0, (const char*)0, (int*)0) : 0;
+    if (n > 0) {
+        char* s = (char*)kama_alloc((size_t)n);
+        WideCharToMultiByte(65001u, 0, wval, -1, s, n, (const char*)0, (int*)0);
+        out->data = s; out->len = (size_t)n - 1; out->cap = (size_t)n;                 // the from_raw shape
+    }
+    kama_free(wval);
+    return n > 0;
+#else
     extern char* getenv(const char*);
     extern size_t strlen(const char*);
     const char* v = getenv(name);
     if (!v) { *out = kama_string_lit("", 0); return 0; }
     *out = kama_string_from_raw((const uint8_t*)v, 0, (int32_t)strlen(v));
     return 1;
+#endif
 }
 #else
 // Freestanding: no argv, no environ, no executable path. Stubs so the prelude surface still COMPILES on

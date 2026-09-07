@@ -322,6 +322,18 @@ entries here. One has shipped:
     `absolutePath` uses `_fullpath` / `GetFinalPathNameByHandleA` with a `_MAX_PATH` buffer. A project
     under a non-ASCII or very deep directory is a compiler-side problem, separate from a program's.
 
+  **`args()`, `env()` and `programPath()` followed in `0.9.218`** (`include/kama_runtime.h`): the CRT's
+  `main` argv, `getenv` and `_get_pgmptr` are the ANSI re-encodings of the process's UTF-16 command line,
+  environment and image path, so `kama_args_init` re-reads the command line through `GetCommandLineW` +
+  `CommandLineToArgvW`, and the other two go through `GetEnvironmentVariableW` / `GetModuleFileNameW`
+  (⚠️ not `_wget_pgmptr`: it is declared in `<stdlib.h>` and absent from mingw-w64's UCRT import
+  library, so it fails at LINK — after the whole program compiled). ⚠️ No
+  bash guard can witness this half: msys2 converts a native child's arguments through the ANSI code page
+  before kama sees them (the two path guards keep their names out of argv for that reason). It was
+  verified by hand from PowerShell — a native launch passes UTF-16 argv — with a program that prints the
+  bytes of `args().get(at: 0)`, `env(name: …)` and `programPath()` given `日本語`, `Привет😀` and a
+  directory named `日本語`.
+
   ⚠️ **`<wchar.h>` is not includable from `kama_os.h`.** It pulls in `<stdio.h>`'s `stdout` macro, which
   breaks every emitted function with a parameter of that name (`std::process::Output.make` has one). `wcslen`
   is reachable through `<string.h>` on UCRT, and that is all the seam needs.
