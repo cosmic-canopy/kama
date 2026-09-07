@@ -22,6 +22,9 @@ tests/xfail/brace_if_bare.kama
 tests/xfail/brace_if_empty_semi.kama
 tests/xfail/brace_while_bare.kama
 tests/xfail/comptime_value_in_angles.kama
+tests/xfail/digit_sep_after_prefix.kama
+tests/xfail/digit_sep_double.kama
+tests/xfail/digit_sep_trailing.kama
 tests/xfail/enum_bare_spelling.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/file_gate_after_import.kama

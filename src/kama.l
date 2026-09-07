@@ -110,10 +110,17 @@ hex_digit                   [0-9A-Fa-f]
 oct_digit                   [0-7]
 based_digit                 [0-9A-Za-z]
 int_suffix                  u?i(8|16|32|64)
-dec_literal_no_suffix       {dec_digit}+
-hex_literal_no_suffix       0[xX]{hex_digit}+
-oct_literal_no_suffix       0[oO]{oct_digit}+
-based_literal_no_suffix     0[bB]{based_digit}+_([1-2][0-9]|[3][0-2]|[2-9])
+  /* Digit separators (0.9.226): an underscore BETWEEN two digits of a run is ignored — `1_000_000`,
+     `0xFFFF_0000`, `0b1010_0101_2`, `1_000.5`. The run shape `{d}+(_{d}+)*` is what makes the rule
+     "between two digits": `1__0`, `10_` and `0x_F` do not lex as one literal and fall to a parse error
+     (tests/xfail/digit_sep_*). A based literal's BASE TAIL is still `_<2..32>` after the last run, so the
+     parser splits at the LAST underscore, not the first. The parser strips the separators before
+     strtoull/strtod (stripDigitSeps in kama.y); the token keeps the source spelling for diagnostics. */
+dec_run                     {dec_digit}+(_{dec_digit}+)*
+dec_literal_no_suffix       {dec_run}
+hex_literal_no_suffix       0[xX]{hex_digit}+(_{hex_digit}+)*
+oct_literal_no_suffix       0[oO]{oct_digit}+(_{oct_digit}+)*
+based_literal_no_suffix     0[bB]{based_digit}+(_{based_digit}+)*_([1-2][0-9]|[3][0-2]|[2-9])
 dec_literal                 {dec_literal_no_suffix}{int_suffix}
 hex_literal                 {hex_literal_no_suffix}{int_suffix}
 oct_literal                 {oct_literal_no_suffix}{int_suffix}
@@ -129,7 +136,7 @@ exponent                    [eE][+\-]?{dec_digit}+
      ⚠️ These used to be two macros, and the exponent one accepted only a SINGLE leading digit — so
      `12.5` lexed but `12.5e10` did not, while non-normalized `0.0001e10` was fine. One macro can't
      drift that way. See docs/SPEC.md "Numeric literals". */
-float_literal_no_suffix     ({dec_digit}+\.{dec_digit}+{exponent}?|{dec_digit}+{exponent})
+float_literal_no_suffix     ({dec_run}\.{dec_run}{exponent}?|{dec_run}{exponent})
 float_literal32             {float_literal_no_suffix}f(32)
 float_literal64             {float_literal_no_suffix}f(64)
 

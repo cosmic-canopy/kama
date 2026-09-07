@@ -287,3 +287,50 @@ fn void main()
             (string_tag
               (identifier))
             (string_content)))))))
+
+================================================================================
+Digit separators in every integer form and a float
+================================================================================
+
+fn void main()
+{
+    int32 a = 1_000_000;
+    int32 b = 0xFF_FF;
+    int32 c = 0o7_7;
+    int32 d = 0b1010_1010_2;
+    float64 f = 1_000.5;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal))))))

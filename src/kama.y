@@ -37,6 +37,9 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner);
 static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner);
+/* Digit separators (0.9.226): the lexer admits `_` between two digits of a run; every numeric parse below
+   strips them first, so strtoull/strtod see the plain digits. The token keeps the source spelling. */
+static std::string stripDigitSeps(const std::string& s);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
                                           const std::string& spelling, YYLTYPE* loc, yyscan_t scanner);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
@@ -631,9 +634,11 @@ literal
   | DEC_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner); }
   | HEX_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 16, &@1, scanner); }
   | OCT_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2), 8, &@1, scanner); }
-  | BASED_LITERAL_NO_SUFFIX   { std::string::size_type underscoreIndex = $1->find('_');
+  | BASED_LITERAL_NO_SUFFIX   { std::string::size_type underscoreIndex = $1->rfind('_');   /* the base tail follows the LAST run: `0b1010_1010_2` */
     int base = (int)strtoll($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
-    $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2, underscoreIndex - 3), base, &@1, scanner);
+    /* The digit run is [2, underscoreIndex): `underscoreIndex - 2` characters. This said `- 3` and dropped the
+       LAST digit of every based literal (`0b101010_2` was 21) — found by the digit-separator fixture (0.9.226). */
+    $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2, underscoreIndex - 2), base, &@1, scanner);
   }
   | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1, *$1, &@1, scanner ); }
   | HEX_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  16, $1->substr(2), *$1, &@1, scanner ); }
@@ -643,9 +648,9 @@ literal
   /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
      std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
      saturate to ±inf on overflow (C-idiomatic) instead — no crash on a boundary literal. */
-  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->c_str(), nullptr)); $$->unsuffixed = true; }
-  | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, strtof ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
-  | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
+  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod (stripDigitSeps(*$1).c_str(), nullptr)); $$->unsuffixed = true; }
+  | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, strtof (stripDigitSeps($1->substr(0,$1->length() - 3)).c_str(), nullptr)); }
+  | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod (stripDigitSeps($1->substr(0,$1->length() - 3)).c_str(), nullptr)); }
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
   | interp_expr
@@ -2382,9 +2387,17 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
  * or editing a constant could silently retype the expression around it.
  *
  * Applies to every unsuffixed base (decimal, hex, octal, based): a mask is a value like any other. */
-static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
+static std::string stripDigitSeps(const std::string& s)
+{
+    std::string r; r.reserve(s.size());
+    for (char c : s) if (c != '_') r += c;
+    return r;
+}
+
+static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& rawDigits, int base,
                                           YYLTYPE* loc, yyscan_t scanner)
 {
+    const std::string digits = stripDigitSeps(rawDigits);
     errno = 0;
     unsigned long long v = strtoull(digits.c_str(), NULL, base);
     if(errno == ERANGE)
@@ -2499,15 +2512,15 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
   int realBase = base;
   if(base == 0)
   {
-    // based type
-    std::string::size_type underscoreIndex = str.find('_');
+    // based type — the base tail follows the LAST digit run (`0b1010_1010_2ui8`), so split at rfind
+    std::string::size_type underscoreIndex = str.rfind('_');
     std::string::size_type subStrLength = str.length() - underscoreIndex - suffixSize;
     realBase = strtol(str.substr(underscoreIndex + 1, subStrLength).c_str(), NULL, 10);
-    digits = str.substr(0, underscoreIndex - 1);
+    digits = stripDigitSeps(str.substr(0, underscoreIndex));   /* [0, underscoreIndex) — `- 1` here dropped the last digit too */
   }
   else
   {
-    digits = str.substr(0, str.length() - suffixSize);
+    digits = stripDigitSeps(str.substr(0, str.length() - suffixSize));
   }
 
   /* The token carries no sign — a leading `-` is a separate unary node — so the digits are always a

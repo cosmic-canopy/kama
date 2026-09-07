@@ -98,14 +98,6 @@
 #              ^ source.kama
 #               ^^^^^ source.kama invalid.illegal.numeric.kama
 #                    ^^ source.kama
->    int32 n3 = 1_000;
-#^^^^ source.kama
-#    ^^^^^ source.kama storage.type.primitive.kama
-#         ^^^^ source.kama
-#             ^ source.kama keyword.operator.assignment.kama
-#              ^ source.kama
-#               ^^^^^ source.kama invalid.illegal.numeric.kama
-#                    ^^ source.kama
 >    int32 n4 = 0b1010;
 #^^^^ source.kama
 #    ^^^^^ source.kama storage.type.primitive.kama

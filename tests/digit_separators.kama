@@ -1,0 +1,19 @@
+// Digit separators: an underscore BETWEEN two digits of an integer or float literal is ignored. The
+// based form's `_<base>` tail is unchanged (a separator sits between digits; the base tail follows the
+// last digit), so `0b1010_1010_2` is the byte 0xAA in base 2.
+fn int32 main() {
+    int32 a = 1_000_000;
+    int32 b = 0xFF_FF;            // 65535
+    int32 c = 0b1010_1010_2;      // 170
+    uint32 d = 4_000_000_000ui32;
+    float64 f = 1_000.5;
+    int64 g = 1_2_3i64;
+    int32 r = 0;
+    if (a == 1000000) { r = r + 1; }
+    if (b == 65535) { r = r + 2; }
+    if (c == 170) { r = r + 4; }
+    if (d == 4000000000ui32) { r = r + 8; }
+    if (f == 1000.5) { r = r + 16; }
+    if (g == 123i64) { r = r + 32; }
+    return r - 21;   // 63 - 21 = 42
+}

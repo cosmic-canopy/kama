@@ -1,0 +1,18 @@
+// A based literal `0b<digits>_<base>` keeps EVERY digit. Both parse paths (unsuffixed, suffixed) dropped
+// the last one — `0b101010_2` was 21, `0bVV_32` was 31 — for as long as the form existed, and nothing
+// noticed because no runtime fixture asserted a based value: the only `0b…_N` in the corpus sat in a
+// syntax-highlighting fixture that is never run. Found by the digit-separator fixture (0.9.226).
+fn int32 main() {
+    int32 a = 0b101010_2;          // 42
+    int32 b = 0b101010_2i32;       // 42, suffixed
+    int32 c = 0bVV_32;             // 31*32 + 31 = 1023
+    uint8 d = 0b377_8ui8;          // 255
+    int32 e = 0b1010_1010_2;       // 170, with a digit separator
+    int32 r = 0;
+    if (a == 42) { r = r + 1; }
+    if (b == 42) { r = r + 2; }
+    if (c == 1023) { r = r + 4; }
+    if (d == 255ui8) { r = r + 8; }
+    if (e == 170) { r = r + 16; }
+    return r + 11;   // 31 + 11 = 42
+}

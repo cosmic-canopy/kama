@@ -1,0 +1,2 @@
+// A trailing underscore has no digit after it.
+fn int32 main() { int32 a = 10_; return a; }

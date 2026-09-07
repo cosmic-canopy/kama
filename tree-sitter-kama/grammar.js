@@ -1208,9 +1208,11 @@ module.exports = grammar({
     boolean_literal: ($) => choice('true', 'false'),
     null_literal: ($) => 'null',
 
-    // Transcribed literally from kama.l:68-80. The unsigned suffix is `ui`, NOT `u` — there is no `42u32`.
-    // A based literal REQUIRES its `_<base>` tail, so bare `0b1010` is `0` followed by the identifier
-    // `b1010` and the enclosing statement fails to parse. There are NO digit separators.
+    // Transcribed literally from kama.l's literal macros. The unsigned suffix is `ui`, NOT `u` — there is no
+    // `42u32`. A based literal REQUIRES its `_<base>` tail, so bare `0b1010` is `0` followed by the
+    // identifier `b1010` and the enclosing statement fails to parse. A digit separator is an underscore
+    // BETWEEN two digits of a run (`1_000`, `0xFF_FF`, `0b1010_1010_2` — the base tail follows the LAST run);
+    // `1__0`, `10_` and `0x_F` are not literals and fail to parse (test/parse-errors.txt).
     //
     // Float is listed FIRST in `_literal` order-independently, but the token conflict matters: `1.5` must
     // not lex as `1` `.` `5`. tree-sitter resolves by longest match, and float_literal is longer.
@@ -1218,10 +1220,10 @@ module.exports = grammar({
       token(
         seq(
           choice(
-            /0[xX][0-9A-Fa-f]+/,
-            /0[oO][0-7]+/,
-            /0[bB][0-9A-Za-z]+_([1-2][0-9]|[3][0-2]|[2-9])/,
-            /[0-9]+/,
+            /0[xX][0-9A-Fa-f]+(_[0-9A-Fa-f]+)*/,
+            /0[oO][0-7]+(_[0-7]+)*/,
+            /0[bB][0-9A-Za-z]+(_[0-9A-Za-z]+)*_([1-2][0-9]|[3][0-2]|[2-9])/,
+            /[0-9]+(_[0-9]+)*/,
           ),
           optional(/u?i(8|16|32|64)/),
         ),
@@ -1232,7 +1234,7 @@ module.exports = grammar({
     float_literal: ($) =>
       token(
         seq(
-          choice(/[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?/, /[0-9]+[eE][+-]?[0-9]+/),
+          choice(/[0-9]+(_[0-9]+)*\.[0-9]+(_[0-9]+)*([eE][+-]?[0-9]+)?/, /[0-9]+(_[0-9]+)*[eE][+-]?[0-9]+/),
           optional(/f(32|64)/),
         ),
       ),

@@ -2,7 +2,8 @@
 //
 // See tests/syntax/declarations.kama for how the three oracles work. This family has the worst defect
 // history in the grammar — `139fb10` found it disagreeing with the compiler four ways at once — and the
-// rejected spellings (42u32, 42f32, 1_000, 0b1010) live in tests/syntax/bad.kama. What the snapshot pins
+// rejected spellings (42u32, 42f32, 0b1010) live in tests/syntax/bad.kama; `1_000` moved out of there when
+// digit separators landed (0.9.226). What the snapshot pins
 // here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
 
 fn int32 main() {
@@ -18,6 +19,10 @@ fn int32 main() {
     float32 f32v = 1.5f32;
     float64 f64v = 1.5f64;
     float64 exp = 1e1;
+    int32 sep = 1_000_000;
+    int32 hexsep = 0xFF_FF;
+    int32 basedsep = 0b1010_1010_2;
+    float64 fsep = 1_000.5;
     if (dec == suf && hex == 42 && oct == 42 && based == 42) { return 0; }
     if (usuf > 0ui32 && hexs == 42 && f > 0.0 && fe > 0.0) { return 0; }
     if (f32v > 0.0f32 && f64v > 0.0 && exp > 0.0) { return 0; }

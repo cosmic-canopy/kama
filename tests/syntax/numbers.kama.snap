@@ -6,8 +6,10 @@
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >// history in the grammar — `139fb10` found it disagreeing with the compiler four ways at once — and the
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
->// rejected spellings (42u32, 42f32, 1_000, 0b1010) live in tests/syntax/bad.kama. What the snapshot pins
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// rejected spellings (42u32, 42f32, 0b1010) live in tests/syntax/bad.kama; `1_000` moved out of there when
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// digit separators landed (0.9.226). What the snapshot pins
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >// here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >
@@ -119,6 +121,38 @@
 #                 ^ source.kama
 #                  ^^^ source.kama constant.numeric.float.kama
 #                     ^^ source.kama
+>    int32 sep = 1_000_000;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^^^^^^^^ source.kama constant.numeric.integer.kama
+#                         ^^ source.kama
+>    int32 hexsep = 0xFF_FF;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^^^^ source.kama
+#                 ^ source.kama keyword.operator.assignment.kama
+#                  ^ source.kama
+#                   ^^^^^^^ source.kama constant.numeric.hex.kama
+#                          ^^ source.kama
+>    int32 basedsep = 0b1010_1010_2;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^^^^^^ source.kama
+#                   ^ source.kama keyword.operator.assignment.kama
+#                    ^ source.kama
+#                     ^^^^^^^^^^^^^ source.kama constant.numeric.other.kama
+#                                  ^^ source.kama
+>    float64 fsep = 1_000.5;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^^^^ source.kama
+#                 ^ source.kama keyword.operator.assignment.kama
+#                  ^ source.kama
+#                   ^^^^^^^ source.kama constant.numeric.float.kama
+#                          ^^ source.kama
 >    if (dec == suf && hex == 42 && oct == 42 && based == 42) { return 0; }
 #^^^^ source.kama
 #    ^^ source.kama keyword.control.kama

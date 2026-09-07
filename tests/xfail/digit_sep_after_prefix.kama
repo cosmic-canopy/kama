@@ -1,0 +1,2 @@
+// `0x_F`: the underscore follows the base prefix, not a digit.
+fn int32 main() { int32 a = 0x_F; return a; }

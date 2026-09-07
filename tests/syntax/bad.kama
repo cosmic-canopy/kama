@@ -17,7 +17,6 @@ fn int32 main() {
     char c2 = '';
     int32 n1 = 42u32;
     int32 n2 = 42f32;
-    int32 n3 = 1_000;
     int32 n4 = 0b1010;
     return 0;
 }

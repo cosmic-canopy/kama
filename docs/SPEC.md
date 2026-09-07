@@ -33,7 +33,7 @@ boundary). Collections are generic library types.
 
 | form | example | notes |
 |---|---|---|
-| decimal / hex / octal integer | `42`, `0xFF`, `0o17` | no digit separators — `1_000` is not a literal |
+| decimal / hex / octal integer | `42`, `0xFF`, `0o17`, `1_000_000`, `0xFFFF_0000` | a digit separator is an underscore **between two digits** of a run (`1_000`, `0xFF_FF`, and `1_000.5` in a float); `1__0`, `10_` and `0x_F` are not literals <!-- test: digit_separators --> <!-- xfail: digit_sep_double, digit_sep_trailing, digit_sep_after_prefix --> |
 | based integer | `0b1010_2` | `0b<digits>_<base>`, base 2–32; the `_<base>` is required |
 | integer suffix | `42i32`, `42ui32` | `u?i(8\|16\|32\|64)` — unsigned is **`ui`**; there is no bare `42u32` |
 | float | `12.5`, `12.5e10`, `1e10`, `1.5e-3` | `digits.digits` with an optional exponent, **or** `digits` with a required one |
@@ -1943,7 +1943,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.225` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.226` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must

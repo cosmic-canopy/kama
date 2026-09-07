@@ -206,6 +206,9 @@ deserialize_turbofish_bad_method	deserialize_turbofish_bad_method.kama:17
 deserialize_usize_field	deserialize_usize_field.kama:5
 diag_line_after_multiline_string	diag_line_after_multiline_string.kama:37
 diag_no_mangled_name	diag_no_mangled_name.kama:13
+digit_sep_after_prefix	digit_sep_after_prefix.kama:2
+digit_sep_double	digit_sep_double.kama:2
+digit_sep_trailing	digit_sep_trailing.kama:2
 dot_on_type_const_read	dot_on_type_const_read.kama:9
 dot_on_type_field	dot_on_type_field.kama:7
 dot_on_type_field_read	dot_on_type_field_read.kama:7
