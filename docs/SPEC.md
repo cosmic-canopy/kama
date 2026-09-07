@@ -1951,12 +1951,15 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.228` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.229` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
 outlive a frame (see *Smart pointers*). A raw pointer is the foreign boundary, never general-purpose escape
-(GOALS §3a/§3e).
+(GOALS §3a/§3e). And `addr(of:)` takes the address of a **place**, never of a temporary: an element or
+field whose root is a by-value call result (`addr(of: f.view()[0])`, a view minted by the call and dropped
+at the end of the statement) is refused — bind the value to a local first — while a place-returning call at <!-- xfail: addr_of_temporary_element -->
+the root (`addr(of: b.at(i: 0))`) is storage the callee still owns and is fine.
 
 #### What requires an `unsafe fn` — the decision table
 

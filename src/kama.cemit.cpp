@@ -10794,7 +10794,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.225).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.226).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -16938,7 +16938,7 @@ std::string CEmitter::ptrElemType(SharedExpression e)
 
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
-// local pointer, and (0.9.225) to type the RECEIVER of a method call on such an element, which borrows it
+// local pointer, and (0.9.226) to type the RECEIVER of a method call on such an element, which borrows it
 // in place. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of exprClass —
 // an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on) must keep its
 // plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
@@ -17906,6 +17906,18 @@ bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
         if (sig.params[i].byRef    != fn.params[i].byRef)    return false;
     }
     return true;
+}
+
+// Is the ROOT of a member/element chain a by-value call result — a temporary that dies with the statement?
+// `f.view()[0]`, `make().field`, `a.slice()[i]` -> true; `b.at(i: 0)` (a place-returning call), `x[i]`,
+// `this.f` -> false. `rootBinding` answers "" for a call root, which is not the same question.
+bool CEmitter::rootIsTemporary(SharedExpression e) const
+{
+    ASTNode* n = e.get();
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return ma->expression ? rootIsTemporary(ma->expression) : false;
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) return ea->expression ? rootIsTemporary(ea->expression) : false;
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) return !const_cast<CEmitter*>(this)->invocationReturnsPlace(inv);
+    return false;
 }
 
 // the root identifier a write ultimately targets, for deep-const checks.
@@ -19666,7 +19678,7 @@ void CEmitter::resolveFriends()
                 // (a free function). The first two used to be spelled only bare: `resolveUserName` was
                 // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
-                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.227.
+                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.228.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
                 if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
                 if (!resolved) {                                           // `mod::Type::method`
@@ -21396,6 +21408,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // place-returning-method awareness was bypassed with it.)
         if (!isNamedValue(a.get()))
             unsupported("`addr(of: …)` needs a place — a field, local, or element (not a temporary)",
+                        call->line);
+        // An element or field IS a place, but not when its ROOT is a temporary: `addr(of: f.view()[0])`
+        // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
+        // dangle — and until 0.9.229 it escaped the front end and died in clang ("cannot take the address
+        // of an rvalue"), which a package author who does not read C could not act on (the first external
+        // package's KAMA_GAPS #3). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
+        // still owns and stays fine, as it does for `isNamedValue`.
+        else if (rootIsTemporary(a))
+            unsupported(("`addr(of: …)` on an element of a temporary — `" + unparseExpr(a) + "` is rooted in "
+                         "a call result that is dropped at the end of the statement, so the pointer would "
+                         "dangle; bind the value to a local first, then take the address through that").c_str(),
                         call->line);
         return "(&(" + emitPlace(a) + "))";
     }
@@ -26524,7 +26547,7 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
     //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
-    //      wholesale as "not yet" until the consumer-driven audit (0.9.225). ----
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.226). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
         if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
@@ -26576,7 +26599,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // exprClass feeds the store path; widening it was measured to break 45 fixtures). A CALL is not a
     // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
-    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.225 this was
+    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.226 this was
     // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
     if (cls.empty()) {
         const std::string et = ptrLocalElemType(receiver);
@@ -26724,7 +26747,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
         // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
-        // Since 0.9.225 the receiver is typed at the top of this function — a call borrows the element in
+        // Since 0.9.226 the receiver is typed at the top of this function — a call borrows the element in
         // place, as the field form always did — so a class-typed local element never reaches this line;
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);

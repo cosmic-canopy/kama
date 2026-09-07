@@ -1,0 +1,10 @@
+// `addr(of:)` on an element of a TEMPORARY — the view minted by a call and dropped at the end of the
+// statement — used to escape the front end and die in clang ("cannot take the address of an rvalue").
+// Bind the view to a local first; the message says so.
+import { std::collections::FixedArray };
+unsafe fn int32 run() {
+    FixedArray<uint8> f = FixedArray::<uint8>.make(size: 4);
+    UnsafeConstPtr<uint8> cp = addr(of: f.view()[0]);
+    return cast<int32>(cp[0]);
+}
+fn int32 main() { return run(); }

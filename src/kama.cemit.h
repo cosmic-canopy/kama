@@ -2769,7 +2769,8 @@ private:
     std::string ctRender(const CTValue& v) const;                                 // scalar -> C initializer text
     static double ctAsF(const CTValue& v);
     static int64_t ctAsI(const CTValue& v);
-    std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
+    std::string rootBinding(SharedExpression e) const;
+    bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field
     // name to `this.<name>` needs `findFieldOwner`.
