@@ -1,0 +1,7 @@
+// A read-only place is still a place: it must borrow `this` or a `ref`/`const ref` parameter, never a
+// local — the caller would read a dangling address. Same escape rule as `fn ref T`.
+fn const ref int32 dangle() {
+    int32 x = 1;
+    return x;   // -> REJECT
+}
+fn int32 main() { return dangle(); }

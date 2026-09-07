@@ -2244,7 +2244,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
-  local — it would dangle), and it's second-class (used in-place, never stored).
+  local — it would dangle), and it's second-class (used in-place, never stored). Its read-only form is
+  **`const ref T`** — the place a `const fn` may return (§ `const fn` below).
 
 **`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the
 built-in `InlineArray`) via a small **iterator protocol** — not indexing, so it works for any shape (list, tree,
@@ -2635,7 +2636,8 @@ declaration — not at the call sites, and not by the C compiler:
 
 - the member **exists**, and is **`public`** (a contract is a public guarantee; a private method
   satisfying it would be reachable through the contract but not by name);
-- its **return type** matches the member's, including a `ref T` place-return;
+- its **return type** matches the member's, including a `ref T` / `const ref T` place-return — exactly,
+  in both directions;
 - each **parameter type** matches, and so does the **arity**, each parameter's `ref`/`out`, and each
   parameter's **label** — kama call sites are label-based, so the label is part of the call surface the
   conformance promises, not decoration;
@@ -2866,8 +2868,8 @@ parameter are all rejected. So is **moving** out of it — `give` leaves its sou
 value, which is a mutation. `addr(of: …)` into it hands back an `UnsafeConstPtr<T>`, never a writable
 pointer, and returning that as an `UnsafePtr<T>` is rejected at the `return`. <!-- xfail: const_addr -->
 
-Symmetrically, a **const receiver** — a `const` local, a `const`/`const ref` parameter, or `this` inside a
-`const fn` — may call only `const fn` methods. That gate is the point of the marker: it is what lets a
+Symmetrically, a **const receiver** — a `const` local, a `const`/`const ref` parameter, `this` inside a
+`const fn`, or a `const ref T` place (below) — may call only `const fn` methods. That gate is the point of the marker: it is what lets a
 caller hold a value immutably and still use it.
 
 ```kama
@@ -2886,16 +2888,47 @@ c.bump();                 // error: cannot call non-const method `bump` on a con
 **`const fn` is ABI-neutral.** It is a front-end rule only — the emitted C signature is identical either
 way, so marking a method costs nothing and changes no generated code.
 
-**A `const fn` may not return `ref T`.** A place returned out of a const method is a writable alias into <!-- xfail: const_place_return -->
-the receiver, so `c.place() = 99` would mutate a `const` binding with no `unsafe` anywhere. The two halves
-take separate names instead — `get`/`getRef`, `iterator`/`iterMut`, `peek`/`peekRef` — which is the split
-the standard library already spelled and now the one the compiler enforces. (This is Rust's
-`get`/`get_mut`, not C++'s const-overloading, which would need every accessor written twice. A read-only
-place — C#'s `ref readonly` — would be more expressive; it is not in the language. The raw-pointer seam
-has its read-only form, `UnsafeConstPtr<T>`; a read-only *place* is a roadmap item.)
+**A `const fn` may not return `ref T`; it returns `const ref T`.** A `ref T` place returned out of a const <!-- xfail: const_place_return -->
+method is a writable alias into the receiver, so `c.place() = 99` would mutate a `const` binding with no
+`unsafe` anywhere. What a const method may hand out is a **read-only place** — `const ref T`, C#'s
+`ref readonly`, Rust's `&T` — the fourth const-rooted place beside a `const` local, a `const ref` parameter
+and an element reached through an `UnsafeConstPtr<T>`. It reads like any place (index, field, a `const fn`
+call, `copy`, `addr(of:)` — which yields an `UnsafeConstPtr<T>`) and refuses every write: assignment and <!-- xfail: const_ref_write, const_ref_compound, const_ref_addr_widen -->
+compound assignment, `give` out of it, passing it as a `ref`/`out` argument, and a non-`const fn` call on <!-- xfail: const_ref_give, const_ref_refarg, const_ref_nonconst_call -->
+it. The root binding may be perfectly mutable — it is the call that narrowed the place, which is what a
+root-const rule alone cannot see. The same form is available on a free function and on `operator[]`
+(below), and a `const ref T` result must borrow `this` or a `ref`/`const ref` parameter, exactly as a <!-- xfail: const_ref_over_local -->
+`ref T` must.
+
+```kama
+type resource Bag implements Indexed {
+    DynamicArray<Counter> items;
+    public const fn const ref Counter at(isize i) { return this.items[i]; }   // read-only place
+    public fn ref Counter atMut(isize i) { return this.items[i]; }           // the writable twin
+}
+int32 v = b.at(i: 0).value();   // fine: reading through the place
+b.atMut(i: 0).bump();           // fine: the writable twin
+b.at(i: 0).bump();              // error: cannot call non-const method `bump` on a const receiver
+```
+
+**The mirror rule: a `ref T` body may not return a read-only place.** `fn ref int32 firstMut(const ref <!-- xfail: const_ref_as_mut_return, const_ref_param_as_mut_return -->
+DynamicArray<int32> d) { return d[0]; }` would hand the caller a writable alias into storage it lent
+read-only, and `return this.at(i: 0)` from a `ref` method would do the same through a `const ref` place.
+Both want `const ref T` as their return type. Ref-constness is part of the signature in both directions: a
+contract member declaring `ref T` may not be implemented as `const ref T` (every caller writing through the <!-- xfail: const_ref_contract_mismatch -->
+slot would be handed a read-only place), nor the reverse, and an `override` may not change it. <!-- xfail: const_ref_override_drops -->
+
+Unlike `const fn`, **`const ref T` is not ABI-neutral**: it lowers to `T const*` where `ref T` lowers to
+`T*`, so the C compiler's own pointer-qualifier check agrees with the front end, and a body that returns
+`this.data[i]` out of an `UnsafeConstPtr<T>` field type-checks in C without a cast.
+
+The standard library's two-name split — `get`/`getRef`, `iterator`/`iterMut`, `peek`/`peekRef` — is the
+convention for the WRITABLE twin (Rust's `get`/`get_mut`, not C++'s const-overloading, which would need
+every accessor written twice); it is no longer the only way to reach an element through a const receiver.
 
 Operators cannot be `const fn`, and need not be: a write through `operator[]` on a const receiver is
-already rejected at the assignment, since its root is const.
+already rejected at the assignment, since its root is const. An operator's PLACE can be const, though —
+`const ref T operator[]` is how a read-only view indexes.
 
 ### Constness in a contract
 
@@ -3653,7 +3686,10 @@ and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i
 `ref g[i]` all work — the same place semantics as a built-in collection, now expressible in the
 language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
-and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
+and a `const` receiver makes it read-only. A type whose elements are read-only by construction — a
+read-only view over an `UnsafeConstPtr<T>` — declares that in the operator itself: **`const ref T
+operator[](isize i)`** returns a read-only place (§ `const fn`), so `cv[i].method()` reaches only `const fn`
+methods and `cv[i] = v` is refused whatever the receiver's own constness. Bounds safety is the operator's responsibility — a <!-- xfail: const_ref_index_write -->
 `InlineArray`/collection-backed body is auto-checked; a raw `UnsafePtr<T>` body is `unsafe`. The same place-return
 works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. It also
 works on a **free function** and a **`static` method** — `fn ref int32 at(ref Buf b, usize i) { return

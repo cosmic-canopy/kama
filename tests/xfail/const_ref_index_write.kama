@@ -1,0 +1,21 @@
+// A `const ref T operator[]` hands out a read-only place, so `cv[i] = v` is refused whatever the receiver's
+// own constness — `w` here is a plain mutable local. This is the read-only view's index operator: the
+// element is read-only by CONSTRUCTION of the type, not by the binding that roots it.
+import { std::collections::DynamicArray };
+type view ConstWindow {
+    UnsafeConstPtr<int32> data; isize len;
+    unsafe ctor over(UnsafeConstPtr<int32> at, isize count) { this.data = at; this.len = count; }
+    public unsafe const ref int32 operator[](isize i) { return this.data[i]; }
+}
+type resource Buf implements Viewable<ConstWindow> {
+    DynamicArray<int32> d;
+    public ctor make() { this.d = DynamicArray.empty(); this.d.add(item: 1); }
+    public unsafe const fn ConstWindow view() { return ConstWindow.over(at: this.d.dataPtr(), count: this.d.length()); }
+}
+fn int32 main() {
+    Buf b = Buf.make();
+    borrow b.view() as w {
+        w[0] = 7;   // -> REJECT
+    }
+    return 0;
+}

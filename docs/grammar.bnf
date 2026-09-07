@@ -462,6 +462,8 @@ plain_function_declaration
 
   | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block
 
+  | function_modifier_opt unsafe_opt FN CONST REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block
+
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   ;
@@ -1419,6 +1421,7 @@ method_declaration
   | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `fn ref T at(…)` — a place-returning method */
+  | modifiers_opt const_opt FN CONST REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `const fn const ref T at(…)` — a READ-ONLY place-returning method (the form a `const fn` may return) */
   ;
 /* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
    value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
@@ -1479,6 +1482,7 @@ operator_body
   ;
 overloadable_operator_declarator
   : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN      /* `ref T operator[](usize i)` — a place-returning index operator */
+  | CONST REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN      /* `const ref T operator[](isize i)` — a READ-ONLY place-returning index operator */
   | type OPERATOR overloadable_operator LPAREN RPAREN      /* 0-param unary: `Vec2 operator-()` = `-this` */
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN

@@ -1,0 +1,1 @@
+declares `ref Counter`

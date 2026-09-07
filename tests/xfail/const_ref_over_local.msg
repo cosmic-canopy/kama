@@ -1,0 +1,1 @@
+returning a place into a local would dangle

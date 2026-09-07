@@ -1,0 +1,78 @@
+// The read-only PLACE: `const ref T`. kama already had three const-rooted places — a `const` local, a
+// `const ref` parameter, and `p[i]` through an `UnsafeConstPtr<T>` — and every write path checks the root.
+// What it did not have was a method that RETURNS one: `const fn ref T` was refused outright, so a const
+// receiver could reach an element only by copying it (`get`), never in place. `const ref T` is the fourth
+// form: the caller may read through it (index, field, `const fn` call, `copy`) and may not assign, `give`,
+// pass it `ref`/`out` or call a non-const method on it — the same deep const a `const ref` parameter has.
+// It lowers to `T const*`, so the C compiler agrees with the front end.
+//
+// The negative half is tests/xfail/const_ref_*.kama. The type-level consumer this exists for is a
+// read-only view (`ConstView<T>`), whose shape `ConstWindow` below is: a `type view` over an
+// `UnsafeConstPtr<T>` whose `operator[]` hands out a read-only place for ANY element type, copyable or not.
+import { std::collections::DynamicArray };
+
+type value Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+    public fn void bump() { this.n = this.n + 1; }
+}
+
+// A contract member may promise the read-only place; the slot lowers to `Counter const*`.
+type contract Indexed for resource { const fn const ref Counter at(isize i); }
+
+type view ConstWindow {
+    UnsafeConstPtr<Counter> data; isize len;
+    unsafe ctor over(UnsafeConstPtr<Counter> at, isize count) { this.data = at; this.len = count; }
+    public const fn isize length() { return this.len; }
+    public unsafe const ref Counter operator[](isize i) {   // an operator is never `const fn`; the PLACE is const
+        if (i < 0 || i >= this.len) { panic(msg: "ConstWindow index out of bounds"); }
+        return this.data[i];
+    }
+}
+
+type resource Bag implements Indexed, Viewable<ConstWindow> {
+    DynamicArray<Counter> items;
+    public ctor make() {
+        this.items = DynamicArray.empty();
+        this.items.add(item: Counter.make(n: 5));
+        this.items.add(item: Counter.make(n: 7));
+    }
+    public const fn const ref Counter at(isize i) { return this.items[i]; }   // a const fn may return a read-only place
+    public fn ref Counter atMut(isize i) { return this.items[i]; }           // the writable twin, non-const
+    public const fn const ref Counter first() { return this.at(i: 0); }      // chained: const ref through const ref
+    public unsafe const fn ConstWindow view() { return ConstWindow.over(at: this.items.dataPtr(), count: this.items.length()); }
+}
+
+// A free function may return one too; it must borrow a `ref`/`const ref` parameter, like `fn ref T`.
+fn const ref T pick<T>(const ref DynamicArray<T> d, isize i) { return d[i]; }
+
+fn int32 readVia(const ref Bag b) { return b.at(i: 1).value(); }      // const receiver -> const fn -> const fn
+fn int32 viaContract(Indexed x) { return x.at(i: 0).value(); }        // through the contract slot
+
+// `addr(of:)` on a read-only place hands out an `UnsafeConstPtr<T>` — never a writable pointer.
+unsafe fn int32 pointerRead(const ref DynamicArray<int32> d) {
+    UnsafeConstPtr<int32> p = addr(of: pick(d: d, i: 0));
+    return p[0];
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Bag b = Bag.make();
+    if (b.at(i: 0).value() == 5) { r = r + 1; }                              // 1: read through the place
+    if (b.first().value() == 5) { r = r + 1; }                               // 2: chained const ref
+    b.atMut(i: 0).bump();                                                    // the writable twin mutates in place
+    if (b.at(i: 0).value() == 6) { r = r + 1; }                              // 3
+    if (readVia(b: b) == 7) { r = r + 1; }                                   // 4: a const receiver reaches it
+    if (viaContract(x: b) == 6) { r = r + 1; }                               // 5: contract dispatch
+    borrow b.view() as w {
+        if (w.length() == 2 && w[1].value() == 7) { r = r + 1; }             // 6: a read-only view indexes a non-copyable
+    }
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 9);
+    if (pick(d: d, i: 0) == 9) { r = r + 1; }                                // 7: a generic const ref free fn
+    if (pointerRead(d: d) == 9) { r = r + 1; }                               // 8: addr(of:) of the place is read-only
+    int32 c = copy b.at(i: 1).value();                                       // reading and copying out is free
+    if (c == 7) { r = r + 1; }                                               // 9
+    return r;   // 9
+}

@@ -402,7 +402,9 @@ module.exports = grammar({
       choice($._type, $.void_type, $.reference_return_type),
 
     void_type: ($) => 'void',
-    reference_return_type: ($) => seq('ref', $._type),
+    // kama.y — `ref T` (a writable place) or `const ref T` (a read-only place); the const comes first,
+    // matching the parameter spelling `const ref T x`.
+    reference_return_type: ($) => seq(optional('const'), 'ref', $._type),
 
     // `extern "<stdio.h>";` and `extern fn T name(...);`
     // Both arms take an `attribute_list`, mirroring kama.y's `attribute_list plain_function_declaration`
@@ -501,8 +503,10 @@ module.exports = grammar({
         optional($.attribute_list),
         repeat($.modifier),
         choice(
-          // `ref T operator[](usize i)` — the place-returning index operator.
+          // `ref T operator[](usize i)` / `const ref T operator[](isize i)` — the place-returning
+          // index operator, writable or read-only.
           seq(
+            optional('const'),
             'ref',
             field('return_type', $._type),
             'operator',

@@ -120,6 +120,18 @@ const_ptr_store	const_ptr_store.kama:6
 const_ptr_store_field	const_ptr_store_field.kama:11
 const_ptr_to_mut_arg	const_ptr_to_mut_arg.kama:9
 const_ptr_to_mut_local	const_ptr_to_mut_local.kama:6
+const_ref_addr_widen	const_ref_addr_widen.kama:6
+const_ref_as_mut_return	const_ref_as_mut_return.kama:13
+const_ref_compound	const_ref_compound.kama:10
+const_ref_contract_mismatch	const_ref_contract_mismatch.kama:13
+const_ref_give	const_ref_give.kama:16
+const_ref_index_write	const_ref_index_write.kama:18
+const_ref_nonconst_call	const_ref_nonconst_call.kama:17
+const_ref_over_local	const_ref_over_local.kama:5
+const_ref_override_drops	const_ref_override_drops.kama:15
+const_ref_param_as_mut_return	const_ref_param_as_mut_return.kama:6
+const_ref_refarg	const_ref_refarg.kama:11
+const_ref_write	const_ref_write.kama:11
 const_this_write	const_this_write.kama:12 const_this_write.kama:7
 constgen_arity	constgen_arity.kama:4 constgen_arity.kama:5
 constgen_count	constgen_count.kama:3

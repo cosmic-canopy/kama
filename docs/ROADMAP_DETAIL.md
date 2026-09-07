@@ -1202,16 +1202,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   /base64 /hex parameter is a mutable view held only so `addr(of: bytes[0])` is legal. The answer is the
   split the stdlib already spells everywhere else (`get`/`getRef`, `iterator`/`iterMut`, now
   `dataPtr`/`dataPtrMut`): a `type view ConstView<T>` over an `UnsafeConstPtr<T>` with `length()`,
-  `isEmpty()`, `slice()`, `iterator()` (Copyable, by value), `const fn dataPtr()`, and a by-value read
-  (`get(i)`, since `operator[]` exists only as the place-returning `ref T` form — kama.y:2169 — and a
-  by-value form is a grammar change); `public unsafe const fn ConstView<T> view()` + `viewMut()` on every
-  container, `View<T>.asConst()`; then the sweep (the FFI parameters above become `ConstView<uint8>`,
+  `isEmpty()`, `slice()`, `iterator()` (Copyable, by value), `const fn dataPtr()`, and **`const ref T
+  operator[]`** — the read-only place (SPEC § `const fn`, shipped 0.9.210) indexes ANY element, copyable or
+  not, so there is no `get(index:)` (it would be a second way to read); `public unsafe const fn
+  ConstView<T> view()` + `viewMut()` (and `slice`/`sliceMut`) on every container; `View<T>` implements
+  `Viewable<ConstView<T>>` so its `view()` is the narrowing, and the emitter converts `View<T>` →
+  `ConstView<T>` IMPLICITLY at every sink (argument, assignment, initializer, return — the direction kama
+  already takes for `const ref` parameters and `UnsafePtr` → `UnsafeConstPtr`), the reverse refused with
+  `viewMut()` named; then the sweep (the FFI parameters above become `ConstView<uint8>`,
   `fs.writeAll`/`bytesToString`/`buildEnvp` become `const ref`). Measured cost, which is why it is its own
   row: the emitter special-cases `"view"` by NAME in the `borrow` mint check, `parallel_for`,
   `registerFixedViews` and the escape checker; `Viewable<V> { fn V view(); }` needs a `viewMut` sibling
-  (`borrow b.viewMut() as v { sortUnstable(items: v); }`); 134 test sites call `.view()`. Indexing a
-  NON-Copyable element from a read-only view needs a read-only PLACE (`ref readonly`) — a language item on
-  the audit's list, not a view detail; every buffer in the sweep is `uint8`, so v1 is complete without it.
+  (`borrow b.viewMut() as v { sortUnstable(items: v); }`); 134 test sites call `.view()`; and
+  `borrow d.viewMut() as v { v[0] = x; }` is refused today as a "reseat" (the alias check tests the root
+  binding, not the bare alias — kama.cemit.cpp `emitExpression`'s AssignmentNode arm), which the split fixes.
 
 <a id="s3"></a>
 
@@ -1227,9 +1231,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   emitter's "asks for it nowhere" / "deliberately not answered here" comments, and the language-holes
   list — producing one verdict per item: *schedule* (it becomes its own row, sized), *genuinely optional*
   (say why a consumer never needs it), or *non-goal* (say what answers the need instead). Seed list, found
-  while shipping the const pointer:
-  - **a read-only PLACE** (C#'s `ref readonly`) — the `const fn ref T` refusal is the workaround, and a
-    read-only view over a non-`Copyable` element cannot be indexed without it;
+  while shipping the const pointer (the first, a read-only PLACE, was decided and shipped as `const ref T`
+  in 0.9.210 — SPEC § `const fn` — after it was found refused three times as "the corpus asks for it
+  nowhere"; the verdict pattern the rest of this list wants):
   - **`Copyable.copy(ref T source)` takes a mutable borrow** — a `string` copies out of a `const ref
     DynamicArray<string>` fine (measured), whether a `Copyable` *resource* does is unmeasured;
   - **capturing closures** (the *No capturing closures* row) — the textbook case: deferred because the

@@ -1,0 +1,15 @@
+// Ref-constness of a place-return is part of the signature in BOTH directions. A member promising `ref T`
+// is implemented as `const ref T` here: every caller writing through the slot would be handed a read-only
+// place, so the conformance is refused — the return must match exactly, like the type itself.
+import { std::collections::DynamicArray };
+type value Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+}
+type contract Indexed for resource { fn ref Counter at(isize i); }
+type resource Bag implements Indexed {
+    DynamicArray<Counter> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Counter.make(n: 1)); }
+    public const fn const ref Counter at(isize i) { return this.items[i]; }   // -> REJECT: `const ref` vs `ref`
+}
+fn int32 main() { Bag b = Bag.make(); return 0; }

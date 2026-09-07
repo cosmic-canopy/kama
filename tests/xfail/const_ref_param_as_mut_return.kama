@@ -1,0 +1,12 @@
+// A `ref T` free function may only return a place rooted in a `ref` parameter — and a `const ref`
+// parameter is not one for this purpose: the place would be a writable alias into storage the caller
+// lent read-only. Before `const ref T` existed this compiled and lowered to a plain pointer, so not
+// even the C compiler saw the launder. `const ref T` is the return type this function wants.
+import { std::collections::DynamicArray };
+fn ref int32 firstMut(const ref DynamicArray<int32> d) { return d[0]; }   // -> REJECT
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 1);
+    firstMut(d: d) = 2;
+    return d[0];
+}

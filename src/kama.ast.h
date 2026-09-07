@@ -417,6 +417,7 @@ public:
     SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
+    bool isConstRef = false;       // `fn const ref T …` — the place is READ-ONLY (a `T const*`); implies isRef
     bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
     bool isUnsafe = false;         // `unsafe fn …` — the BODY may touch raw memory (C#'s meaning). Calling one is free.
     SharedAttributeList attributes; // `@interrupt`/`@section(".x")` (null when none) — MCU codegen attributes
@@ -1082,6 +1083,7 @@ public:
     SharedBlock body;
     bool isConst = false;   // `const fn …` — a non-mutating method
     bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
+    bool isConstRef = false; // `fn const ref T …` — the place is READ-ONLY (a `T const*`); implies isRef
     bool isCtor = false;    // `ctor name(…)` — a named constructor (static factory returning the enclosing
                             // type / `Result<This,E>`); reuses the method pipeline. returnType null => infallible.
     bool isComptime = false; // `comptime fn …` — a type-associated compile-time-only function (6b-3); read `Type::name()`
@@ -1122,6 +1124,7 @@ public:
     SharedIdentifier param2Type;
     SharedIdentifier param2Name;
     bool refReturn = false;   // `ref T operator[](…)` — returns a PLACE (a T*), not a value
+    bool constRefReturn = false;   // `const ref T operator[](…)` — the place is READ-ONLY (a `T const*`); implies refReturn
     ClassOperatorDeclaratorNode(CodeGenContext& context, SharedIdentifier returnType,
             int opToken,
             SharedIdentifier param1Type,

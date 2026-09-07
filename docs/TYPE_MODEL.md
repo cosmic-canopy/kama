@@ -118,7 +118,7 @@ uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownershi
 - **Second-class borrow (the escape rule).** Exactly like a `contract` value, a `view` may be a
   **parameter or a local** but **not** a field, a collection element, or an `enum` payload — and it may be
   **returned only when it borrows `this` or a `ref`/view parameter** (so the buffer outlives the call, the
-  same structural rule as a `ref T` place-return). A `view` over a *local* can't be returned — it would
+  same structural rule as a `ref T` / `const ref T` place-return). A `view` over a *local* can't be returned — it would
   dangle. To hand back data, **own it** (copy into a `DynamicArray`). Read-only intent at a call site is a
   `const View<T>` parameter. No lifetime tracking is needed — the escape check is purely structural.
 

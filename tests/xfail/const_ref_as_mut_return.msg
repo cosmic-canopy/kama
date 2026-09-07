@@ -1,0 +1,1 @@
+a `ref T` result is a writable place, and this one is read-only

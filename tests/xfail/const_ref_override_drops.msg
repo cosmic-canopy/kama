@@ -1,0 +1,1 @@
+the base declares `const ref int32`

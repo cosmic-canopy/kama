@@ -648,3 +648,83 @@ fn int32 main()
             (field_expression
               (identifier)
               (identifier))))))))
+
+================================================================================
+A place-return is `ref T` or the read-only `const ref T`, on a method, an operator and a free function
+================================================================================
+
+type value Cell
+{
+    int32 n;
+    public fn ref int32 place() { return this.n; }
+    public const fn const ref int32 view() { return this.n; }
+    public const ref int32 operator[](isize i) { return this.n; }
+}
+fn const ref int32 pick(const ref Cell c) { return c.view(); }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)))
+      (method_declaration
+        (modifier)
+        (reference_return_type
+          (primitive_type))
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (field_expression
+              (this_expression)
+              (identifier)))))
+      (method_declaration
+        (modifier)
+        (reference_return_type
+          (primitive_type))
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (field_expression
+              (this_expression)
+              (identifier)))))
+      (operator_declaration
+        (modifier)
+        (primitive_type)
+        (index_operator)
+        (parameter_list
+          (parameter
+            (primitive_type)
+            (identifier)))
+        (block
+          (return_statement
+            (field_expression
+              (this_expression)
+              (identifier)))))))
+  (function_declaration
+    (reference_return_type
+      (primitive_type))
+    (identifier)
+    (parameter_list
+      (parameter
+        (type_name
+          (identifier))
+        (identifier)))
+    (block
+      (return_statement
+        (call_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (argument_list))))))

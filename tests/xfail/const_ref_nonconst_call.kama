@@ -1,0 +1,19 @@
+// A `const ref` place is a const receiver: only `const fn` methods may be called on it. `bump` mutates,
+// so it is refused — deep const, the same gate a `const` local and a `const ref` parameter already have.
+import { std::collections::DynamicArray };
+type value Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+    public fn void bump() { this.n = this.n + 1; }
+}
+type resource Bag {
+    DynamicArray<Counter> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Counter.make(n: 1)); }
+    public const fn const ref Counter at(isize i) { return this.items[i]; }
+}
+fn int32 main() {
+    Bag b = Bag.make();
+    b.at(i: 0).bump();   // -> REJECT
+    return b.at(i: 0).value();
+}

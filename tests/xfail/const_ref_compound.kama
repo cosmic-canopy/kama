@@ -1,0 +1,12 @@
+// A compound assignment reads first and then STORES, so it is a write through the read-only place too —
+// the same helper that refuses `c.place() = 99` (tests/xfail/const_ref_write) is on this path.
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 5; }
+    public const fn const ref int32 place() { return this.n; }
+}
+fn int32 main() {
+    Cell c = Cell.make();
+    c.place() += 1;   // -> REJECT
+    return c.place();
+}

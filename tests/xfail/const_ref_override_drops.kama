@@ -1,0 +1,17 @@
+// An `override` may not change the ref-constness of a place-return: the caller sees the base declaration,
+// so a `const ref` that is read-only there must stay read-only behind the slot — an override handing out
+// `ref T` would let a const receiver write through the base's promise. Same rule as `const fn` on override.
+type virtual(maxDepth: 1) resource Base
+{
+    int32 n;
+    public ctor make() { this.n = 1; }
+    public const fn int32 read() { return this.place(); }
+    protected virtual const fn const ref int32 place() { return this.n; }
+}
+type final resource Derived extends Base
+{
+    int32 m;
+    public ctor make() { this.base = Base.make(); this.m = 2; }
+    protected override fn ref int32 place() { return this.m; }   // -> REJECT: drops `const` from `const ref`
+}
+fn int32 main() { Derived d = Derived.make(); return d.read(); }

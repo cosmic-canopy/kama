@@ -1,0 +1,14 @@
+// `addr(of:)` on a `const ref` place hands out an `UnsafeConstPtr<T>` — the read-only raw pointer — and
+// binding that to an `UnsafePtr<T>` is the widening the raw seam refuses at every sink.
+import { std::collections::DynamicArray };
+fn const ref T pick<T>(const ref DynamicArray<T> d, isize i) { return d[i]; }
+unsafe fn int32 writeThrough(const ref DynamicArray<int32> d) {
+    UnsafePtr<int32> p = addr(of: pick(d: d, i: 0));   // -> REJECT
+    p[0] = 1;
+    return d[0];
+}
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 9);
+    return writeThrough(d: d);
+}

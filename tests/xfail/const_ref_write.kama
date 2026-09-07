@@ -1,0 +1,13 @@
+// A `const ref T` place is READ-ONLY: assigning through it is refused at the assignment, whatever the
+// root binding is — `c` here is an ordinary mutable local; it is the CALL that narrowed the place.
+// The writable twin is a non-const `fn ref T` (`placeMut`), the split the stdlib spells `getRef`/`getRefMut`.
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 5; }
+    public const fn const ref int32 place() { return this.n; }
+}
+fn int32 main() {
+    Cell c = Cell.make();
+    c.place() = 99;   // -> REJECT
+    return c.place();
+}

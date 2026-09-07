@@ -6432,17 +6432,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (root != "this" && !_refParams.count(root))
                 unsupported("a `ref T` result must borrow `this` or a `ref` parameter — returning a "
                             "place into a local would dangle", n->line);
-            // A place-returning CALL (`return recv.getRef(...)`) already yields the borrow as a pointer, so
-            // return it directly; a structural place (`this.f[i]`) is an lvalue we address with `&`.
-            bool retIsPlaceCall = retExpr && dynamic_cast<InvocationNode*>(retExpr.get()) != nullptr;
+            // The mirror of checkConstPlaceReturn, one step later: a WRITABLE place may not be minted from
+            // a read-only one. `fn ref T f(const ref X x) { return x.n; }` would hand the caller a
+            // writable alias into a const parameter, and `return this.m.getRef(k)` one into a `const ref`
+            // place — the C backstop (`T const*` → `T*`) would catch the second; the first lowers to a
+            // plain pointer and would not. `const ref T` is the return type both want.
+            if (!_returnIsConstPlace && retExpr && (rootIsConst(root) || chainThroughConstPlace(retExpr)))
+                unsupported("a `ref T` result is a writable place, and this one is read-only — it roots in a "
+                            "`const` binding or passes through a `const ref` place. Return `const ref T` "
+                            "instead, or take the mutable form (`…Mut`) where the place was made", n->line);
+            // Every place is an lvalue we address with `&` — a structural one (`this.f[i]`) directly, and a
+            // place-returning CALL (`return this.at(i: 0)`) through the `(*call)` placeWrap gives every
+            // place call, which `&` folds back to the callee's pointer. This used to special-case the call
+            // as "already a pointer, return it directly" and emit `return (*call)`: a chained place return
+            // through a DIRECT method call never compiled (the stdlib's one chain, `SortedMap.getRef`, goes
+            // through an `Owned` auto-deref and took another path), and the first `const ref` fixture found it.
             bool ph = _hoistOK; _hoistOK = true;
             std::string p = retExpr ? emitPlace(retExpr) : std::string("0");
             _hoistOK = ph;
             flushHoisted(depth);
             emitUnwindAll(depth);
             indent(depth);
-            if (retIsPlaceCall) *_out << "return " << p << ";\n";
-            else                *_out << "return &(" << p << ");\n";
+            *_out << "return &(" << p << ");\n";
             return;
         }
         // View-return escape check (B4): a `type view` return borrows its buffer, so allow it only when
@@ -7444,6 +7455,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
+        sig.isConstPlace  = fn->isConstRef;   // `fn const ref T …` — and may only read through it
         sig.isUnsafe = fn->isUnsafe;     // `unsafe fn …` — the body may touch raw memory
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
 
@@ -7723,6 +7735,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         if (bad) rejectThis(*md->name->value, md->line);
                         ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst,
                                               modHas(md->modifiers, "static"), md->name});
+                        ii.methods.back().isConstPlace = md->isConstRef;   // `const ref T` member — see InterfaceMethod
                         // `@noheap` on a contract member. It parsed and was silently DISCARDED before this
                         // — the attribute reached `ClassMemberDeclarationNode::attributes` and nothing ever
                         // read it here, so a contract could promise a real-time guarantee that no
@@ -8383,7 +8396,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
-                        checkConstPlaceReturn(md->isConst, md->isRef, *md->name->value, md->line);
+                        checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, *md->name->value, md->line);
                         if (md->whenParams)   // `fn … when [P: B, …]` — conditional method (AND of all)
                             for (size_t c = 0; c < md->whenParams->size(); ++c) {
                                 auto& p = (*md->whenParams)[c];
@@ -8392,6 +8405,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 mi.whenBounds.push_back(resolveWhenBound(b));
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
+                        mi.isConstPlace  = md->isConstRef;   // `fn const ref T …` — a read-only place (T const*)
                         mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // A `view`'s CONSTRUCTOR is always private — the mint rule. A view is a
@@ -8673,6 +8687,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.arity      = arity;
                     mi.isStatic   = (arity == 2);            // the free form takes no `this`
                     mi.isPlaceReturn = d->refReturn;         // `ref T operator[]` — the result is a place (T*)
+                    mi.isConstPlace  = d->constRefReturn;    // `const ref T operator[]` — a read-only place (T const*)
                     mi.isUnsafe   = modHas(od->modifiers, "unsafe");   // `unsafe ref T operator[]` — View indexes raw memory
                     mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
                     ci.methods[opName] = mi;
@@ -12513,6 +12528,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                 mi.isStatic     = m.isStatic;
                 mi.isCtor       = m.isCtor;
                 mi.isPlaceReturn = m.isPlaceReturn;
+                mi.isConstPlace  = m.isConstPlace;
                 mi.visibility   = Visibility::Public;         // a contract's methods are public
                 mi.fromContract = contract;
                 mi.isAbstract   = true;                       // a promise, not a body — never emit one
@@ -13558,6 +13574,11 @@ bool CEmitter::isNamedValue(ASTNode* e)
 {
     if (dynamic_cast<MemberAccessNode*>(e) || dynamic_cast<ElementAccessNode*>(e)
         || dynamic_cast<BaseAccessNode*>(e)) return true;
+    // A place-returning call (`m.getRef(k)`, `b.at(i: 0)`, `pick(d: d, i: 0)`) NAMES storage the callee
+    // still owns — it is an element reached through a method, not a fresh result — so `addr(of:)` may take
+    // its address and `give`/`copy` reach the same rules an element does (a `const ref` place refuses the
+    // move; a writable one is "out of a field/element").
+    if (auto* inv = dynamic_cast<InvocationNode*>(e)) return invocationReturnsPlace(inv);
     // `this` inside a ctor names the value under construction — real storage the ctor owns and hands
     // out, so `give this` is a move like any other. (In a METHOD `this` is a borrowed receiver, and
     // moving out of it is exactly what the caller must not be able to do.)
@@ -13965,6 +13986,10 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
         unsupported(("cannot `give` out of `const " + rootBinding(e) + "` — a move leaves its source "
                      "holding a moved-from value, which a const binding may not become; `copy` it, or "
                      "drop the `const`").c_str(), line);
+    else if (chainThroughConstPlace(e))
+        unsupported("cannot `give` out of a `const ref` place — a move leaves its source holding a "
+                    "moved-from value, and the place only reads; `copy` it, or take the mutable form "
+                    "(`…Mut`) where the place was made", line);
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         std::string nm = id->value ? *id->value : "";
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
@@ -15694,8 +15719,8 @@ CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMeth
     {
         ContractSubst _cs(*this, ii);
         if (m.returnType) {
-            s.cRet    = cType(m.returnType) + (m.isPlaceReturn ? "*" : "");
-            s.kamaRet = (m.isPlaceReturn ? "ref " : "") + kamaTypeText(m.returnType);
+            s.cRet    = cType(m.returnType) + placeRetSuffix(m.isPlaceReturn, m.isConstPlace);
+            s.kamaRet = placeKamaPrefix(m.isPlaceReturn, m.isConstPlace) + kamaTypeText(m.returnType);
         }
         if (m.params)
             for (auto& p : *m.params) {
@@ -15733,8 +15758,8 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
         ScopedStr  _ts(_thisType, tci.name);
         ScopedThis _tt(_typeSubst, synthId(tci.name));
         if (mi->returnType) {
-            s.cRet    = cTypeInInstance(tci.name, mi->returnType) + (mi->isPlaceReturn ? "*" : "");
-            s.kamaRet = (mi->isPlaceReturn ? "ref " : "") + kamaTypeText(mi->returnType);
+            s.cRet    = cTypeInInstance(tci.name, mi->returnType) + placeRetSuffix(mi->isPlaceReturn, mi->isConstPlace);
+            s.kamaRet = placeKamaPrefix(mi->isPlaceReturn, mi->isConstPlace) + kamaTypeText(mi->returnType);
         }
         // The declaration's own parameter nodes when there are any; an intrinsic/synthesized method has
         // no node, and its recorded `className` IS the C spelling — the only answer available there.
@@ -16138,9 +16163,10 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             mi.params       = paramSigsOf(md->params);
             mi.node         = md;
             mi.isConst      = md->isConst;
-            checkConstPlaceReturn(md->isConst, md->isRef, mname, md->line);
+            checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, mname, md->line);
             mi.isUnsafe     = modHas(md->modifiers, "unsafe");
             mi.isPlaceReturn = md->isRef;
+            mi.isConstPlace  = md->isConstRef;
             // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
             // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
             mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
@@ -16262,9 +16288,10 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
     for (auto& m : *ed->members) {
         auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
         if (!md || !md->name || !md->name->value || !md->body) continue;
-        std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+        std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
         line(md->line);
         _returnIsPlace = md->isRef;
+        _returnIsConstPlace = md->isConstRef;
         emitMethodOrCtorBody(eci.name + "__" + *md->name->value, ret.c_str(),
                              md->params, md->body, eci, md->isConst,
                              modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
@@ -18096,18 +18123,82 @@ void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, in
 // of a const method is a writable alias into `this`, so `c.place() = 99;` mutates a `const` binding — deep
 // const defeated by the one construct that hands out an address instead of a value.
 //
-// The fix is the one kama's own library already spells: name the two halves apart. `get`/`getRef`,
-// `iterator`/`iterMut`, `peek`/`peekRef` — the reading half is const, the borrowing half is not, and a
-// caller holding a const receiver reaches only the first. (This is Rust's `get`/`get_mut`, not C++'s
-// const-overloading, which would need every accessor written twice.) A read-only place — C#'s
-// `ref readonly` — would be the strictly more expressive answer, but it needs a const-place type kama
-// does not have, and the corpus asks for it nowhere.
-void CEmitter::checkConstPlaceReturn(bool isConst, bool isRef, const std::string& m, int line)
+// The form a const method MAY return is `const ref T` — a READ-ONLY place (C#'s `ref readonly`, Rust's
+// `&T`), the fourth const-rooted place beside a `const` local, a `const ref` parameter and an element of an
+// `UnsafeConstPtr<T>`. It lowers to `T const*`, and every write path — assignment, `give`, a `ref`/`out`
+// argument, a non-const call, `addr(of:)` — sees it through `chainThroughConstPlace`. The stdlib's
+// two-name split (`getRef`/`getRefMut`, `iterator`/`iterMut`) is the convention for the WRITABLE twin; it
+// is no longer the only way to read through a const receiver.
+void CEmitter::checkConstPlaceReturn(bool isConst, bool isRef, bool isConstRef, const std::string& m, int line)
 {
-    if (isConst && isRef)
+    if (isConst && isRef && !isConstRef)
         unsupported(("`const fn ref " + m + "` returns a writable place out of a const method, which "
-                     "launders const away — a caller can assign through it. Drop `const`, or return by "
-                     "value (the `get`/`getRef` split the stdlib uses)").c_str(), line);
+                     "launders const away — a caller can assign through it. Return `const ref` (a "
+                     "read-only place), drop `const`, or return by value").c_str(), line);
+}
+
+std::string CEmitter::placeRetSuffix(bool isPlace, bool isConstPlace)
+{
+    return !isPlace ? "" : isConstPlace ? " const*" : "*";
+}
+
+std::string CEmitter::placeKamaPrefix(bool isPlace, bool isConstPlace)
+{
+    return !isPlace ? "" : isConstPlace ? "const ref " : "ref ";
+}
+
+// Does this call resolve to a `const ref T` place-returner? Mirrors invocationReturnsPlace's lookup — a free
+// function through `_funcs`, a method through its (auto-deref'd) receiver class — plus a CONTRACT receiver,
+// whose member lives in `_interfaces`: a read-only slot dispatched through a fat pointer is still read-only.
+bool CEmitter::invocationIsConstPlace(InvocationNode* iv)
+{
+    if (!iv) return false;
+    if (iv->identifier && iv->identifier->value) {
+        auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
+        return fit != _funcs.end() && fit->second.isConstPlace;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
+        std::string rcls = exprClass(ma->expression);
+        if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;
+        std::string m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+        if (rcls.empty() || m.empty()) return false;
+        if (_classes.count(rcls)) {
+            MethodInfo* mi = placeMethodOf(rcls, m);
+            return mi && mi->isConstPlace;
+        }
+        if (isInterface(rcls))
+            for (auto& im : _interfaces[rcls].methods)
+                if (im.name == m) return im.isConstPlace;
+    }
+    return false;
+}
+
+// Does some step of this place pass through a READ-ONLY place — a `const ref T` call (`m.getRef(k)`,
+// `pick(d: d, i: 0)`, `c.place().field`) or a `const ref T operator[]` (`cv[i]`)? A write there, a `give`
+// out of it, a `ref`/`out` pass of it or a non-const call on it lands in storage the place only reads. The
+// ROOT binding may be perfectly mutable — it is the call that narrows — which is exactly the case
+// `rootIsConst` cannot see, and the reason this predicate exists beside it. Same shape as
+// chainThroughConstRawPtr, one level up: that one is the raw seam's read-only place, this is the safe one.
+bool CEmitter::chainThroughConstPlace(SharedExpression e)
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) return chainThroughConstPlace(h->value);
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        if (invocationIsConstPlace(inv)) return true;
+        // A non-const place call on a read-only receiver is refused by isConstReceiver at the call; here the
+        // chain only needs to keep walking so `cv[i].getRefMut(k)` still answers through `cv`.
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) return chainThroughConstPlace(ma->expression);
+        return false;
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        SharedExpression base = ea->expression ? ea->expression
+                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (MethodInfo* op = userIndexOp(exprClass(base))) if (op->isConstPlace) return true;
+        return chainThroughConstPlace(base);
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return chainThroughConstPlace(ma->expression);
+    return false;
 }
 
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
@@ -18137,6 +18228,12 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
         unsupported("cannot store through `UnsafeConstPtr<T>` — it is a read-only pointer. Take the "
                     "mutable form where the pointer was made (`dataPtrMut()`, `viewMut()`), or "
                     "`cast<UnsafePtr<T>>(…)` in an `unsafe fn` to say the launder out loud", srcLine);
+    // The read-only PLACE: a `const ref T` call or `operator[]` somewhere in the chain. Like the const raw
+    // pointer, the root binding may be mutable — the call is what narrowed it.
+    else if (chainThroughConstPlace(target))
+        unsupported("cannot write through a `const ref` place — it is read-only. Take the mutable form "
+                    "where the place was made (the `…Mut` twin, e.g. `getRefMut`), or return `ref T` from "
+                    "a non-const method", srcLine);
 }
 
 // a non-const method may not be invoked on a const receiver (it could mutate). A receiver reached
@@ -18144,7 +18241,8 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 // `self` out of memory the pointer only reads.
 bool CEmitter::isConstReceiver(SharedExpression receiver)
 {
-    return receiver && (rootIsConst(rootBinding(receiver)) || chainThroughConstRawPtr(receiver));
+    return receiver && (rootIsConst(rootBinding(receiver)) || chainThroughConstRawPtr(receiver)
+                        || chainThroughConstPlace(receiver));
 }
 
 // ---- `UnsafeConstPtr<T>` — the read-only raw pointer ----------------------------------------------
@@ -21929,7 +22027,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
                         : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
-          << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+          << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
@@ -22028,10 +22126,11 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
                         : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
-          << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+          << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     _returnIsPlace = fn->isRef;
+    _returnIsConstPlace = fn->isConstRef;
     bool prevNoHeap = _noHeapActive;
     if (fnHasNoHeap(fn)) {
         _noHeapActive = true;   // `@noheap`: gate every allocation in this body...
@@ -22337,8 +22436,9 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     for (auto& m : ii.methods) {
         if (m.isCtor) continue;   // a contract-required `ctor` (HeapOwner::adopt) is not dispatchable — no slot
         indent(1);
-        // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot.
-        *_out << cType(m.returnType) << (m.isPlaceReturn ? "*" : "") << " (*" << m.name << ")"
+        // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot
+        // (`T const*` for `const ref T`).
+        *_out << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << " (*" << m.name << ")"
               << ifaceSlotSig(m.params) << ";\n";
     }
     // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
@@ -22444,7 +22544,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                 }
             }
             indent(1);
-            *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
+            *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
                  << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
         }
         // the virtual-destructor slot — the concrete dtor (cast to the erased signature),
@@ -22562,8 +22662,12 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
             rejectNoHeapIndirect(("`" + iface + "." + method + "`, a contract member not declared "
                                   "`@noheap`").c_str(), srcLine);
         std::vector<ParamSig> params = paramSigsOf(m.params);
-        return emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
-                                 params, args, srcLine);
+        // A place-returning slot (`fn ref T m()` / `fn const ref T m()`) yields a `T*` / `T const*`; deref it
+        // so the call is an lvalue everywhere, exactly as the class and free-function paths do — a contract
+        // place call used to come back as a bare pointer, so `x.at(i: 0).value()` fed a `T const*` to a
+        // method expecting a `T`.
+        return placeWrap(emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
+                                           params, args, srcLine), m.isPlaceReturn);
     }
     unsupported("unknown contract method", srcLine);
     return "0";
@@ -22610,8 +22714,9 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
         SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
                                                   : mi.node->params;
-        // a place-returning `ref T operator[]` returns a `T*` (the place); everything else by value.
-        std::string retC = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+        // a place-returning `ref T operator[]` returns a `T*` (the place; `T const*` for `const ref T`);
+        // everything else by value.
+        std::string retC = cType(mi.returnType) + placeRetSuffix(mi.isPlaceReturn, mi.isConstPlace);
         *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
                            ci.isScalarRecv) << ");\n";   // static/free: no self
@@ -22975,18 +23080,21 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             line(mi.opDecl->line);
             // a place-returning `ref T operator[]` emits `T* Class__op_index(Class* self, …)`; its
             // `return e` addresses the place (see the ReturnNode path, gated on `_returnIsPlace`).
-            std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+            std::string ret = cType(mi.returnType) + placeRetSuffix(mi.isPlaceReturn, mi.isConstPlace);
             _returnIsPlace = mi.isPlaceReturn;
+            _returnIsConstPlace = mi.isConstPlace;
             emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false,
                                  mi.arity == 2, mi.isUnsafe, nullptr, mi.opDecl->attributes);
             _returnIsPlace = false;
+            _returnIsConstPlace = false;
             continue;
         }
         line(mi.node->line);
         // a place-returning `fn ref T m(…)` emits `T* Class__m(Class* self, …)`; its `return e`
         // addresses the place (the ReturnNode path, gated on `_returnIsPlace`) — same as `operator[]`.
-        std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+        std::string ret = cType(mi.returnType) + placeRetSuffix(mi.isPlaceReturn, mi.isConstPlace);
         _returnIsPlace = mi.isPlaceReturn;
+        _returnIsConstPlace = mi.isConstPlace;
         // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
         // null owning pointer. It is the only ctor shape there is, so this is the only such seal.
         if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
@@ -24318,7 +24426,16 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         && inv->args && inv->args->size() == 1 && (*inv->args)[0] && (*inv->args)[0]->expression) {
         SharedExpression a = (*inv->args)[0]->expression;
         std::string ct = lvalueCType(a);
-        bool isConst = rootIsConst(rootBinding(a));
+        bool isConst = rootIsConst(rootBinding(a)) || chainThroughConstPlace(a);
+        // A PLACE CALL (`addr(of: b.at(i: 0))`, `addr(of: pick(d: d, i: 0))`) and a user-indexed element
+        // (`addr(of: cv[i])`) are places `lvalueCType` does not type. Their element type is what the
+        // place-returner / `operator[]` declared; without it the pointer would be untyped, and a
+        // `const ref T` place's address would silently bind to an `UnsafePtr<T>`.
+        if (ct.empty())
+            if (auto* pin = dynamic_cast<InvocationNode*>(a.get()))
+                if (invocationReturnsPlace(pin)) ct = callReturnTypeRaw(pin);
+        if (ct.empty())
+            if (dynamic_cast<ElementAccessNode*>(a.get()) && chainThroughConstPlace(a)) ct = indexElemTypeRaw(a);
         // A module `static` / `comptime` is neither a local nor a field, so `lvalueCType` does not know
         // it. A `comptime` is real `static const` storage (SPEC § Compile-time constants), so its address
         // is read-only — `addr(of: CAP)` into an `UnsafePtr<int32>` was accepted until 0.9.204, and
@@ -25024,9 +25141,14 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
         std::string rcls = exprClass(ma->expression);
         if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;       // a method lives on the pointee
         std::string m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
-        if (rcls.empty() || !_classes.count(rcls) || m.empty()) return false;
-        ClassInfo* owner = nullptr;
-        MethodInfo* mi = findMethod(&_classes[rcls], m, &owner);
+        if (rcls.empty() || m.empty()) return false;
+        if (isInterface(rcls)) {                    // a contract value: the slot itself is the place-returner
+            for (auto& im : _interfaces[rcls].methods)
+                if (im.name == m) return im.isPlaceReturn;
+            return false;
+        }
+        if (!_classes.count(rcls)) return false;
+        MethodInfo* mi = placeMethodOf(rcls, m);   // follows `Deref<T>` — `this.root.getRef(k)` is a place too
         return mi && mi->isPlaceReturn;
     }
     return false;
@@ -26402,9 +26524,25 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
     // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
     // existing lvalue paths). `&(*…)` folds, so a chained `a.at(i).at(j)` stays clean ISO C.
-    ClassInfo* powner = nullptr;
-    MethodInfo* pmi = findMethod(&_classes[cls], method, &powner);
+    // Resolved the way emitDispatch resolved it — through `Deref<T>` when the method lives on the pointee
+    // (`this.root.getRef(k)` on an `Owned<Node>`): the deref arm used to be skipped here, so a place call
+    // reached through a smart pointer came back as a bare `T*` while the same call on a direct receiver
+    // was `(*…)`, and the `return &(place)` path could not serve both.
+    MethodInfo* pmi = placeMethodOf(cls, method);
     return (pmi && pmi->isPlaceReturn) ? ("(*" + callStr + ")") : callStr;
+}
+
+// The method `recv.m()` resolves to, following `Deref<T>` auto-deref transitively when `m` is not on the
+// receiver's own class — the same walk emitDispatch's deref arm makes. Null when nothing resolves.
+MethodInfo* CEmitter::placeMethodOf(const std::string& cls, const std::string& method)
+{
+    std::string c = cls;
+    for (int hops = 0; hops < 8 && !c.empty() && _classes.count(c); ++hops) {
+        ClassInfo* owner = nullptr;
+        if (MethodInfo* mi = findMethod(&_classes[c], method, &owner)) return mi;
+        c = derefTarget(c);
+    }
+    return nullptr;
 }
 
 // Nothing is constructible by default (SPEC § Construction). A nameless `Type(...)` / `new Type(...)` names
@@ -27424,7 +27562,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 for (auto& m : *e.members) {
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
-                    std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                    std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
                     // a `static` impl method (or a `ctor` — always static) has no implicit `self` receiver
                     const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr
                                                                                        : e.target->name.c_str();
@@ -27609,9 +27747,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             for (auto& m : *e.members) {
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                 if (!md || !md->name || !md->name->value) continue;
-                std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
                 line(md->line);
                 _returnIsPlace = md->isRef;
+                _returnIsConstPlace = md->isConstRef;
                 emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
@@ -27828,9 +27967,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         for (auto& m : *e.members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
-            std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+            std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
             line(md->line);
             _returnIsPlace = md->isRef;
+            _returnIsConstPlace = md->isConstRef;
             emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)

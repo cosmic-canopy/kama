@@ -102,6 +102,7 @@ struct FuncSig {
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
+    bool                   isConstPlace  = false;  // `fn const ref T …` — the place is read-only (`T const*`)
     bool                   isUnsafe = false;       // `unsafe fn …` — the body may touch raw memory
     // The declaration site. Read by the LSP def-site table, and by `resolveFnPtrTarget` for the one
     // question a bind needs and `FuncSig` does not otherwise carry: whether the function is `@noheap`.
@@ -251,6 +252,8 @@ struct MethodInfo {
     int                          arity = 0;           // 0 = unary-on-this, 1 = binary method (`this`+rhs), 2 = binary free
     ClassOperatorDeclarationNode* opDecl = nullptr;   // the operator decl (body/params) when isOperator
     bool                         isPlaceReturn = false;  // `ref T operator[]` — returns a PLACE (T*), deref'd at the caller
+    bool                         isConstPlace  = false;  // `const ref T …` — that place is READ-ONLY (`T const*`): no
+                                                         // assignment, `give`, `ref`/`out` pass or non-const call through it
 };
 
 // A built-in generic collection / smart-pointer kind. Backed by a C runtime template. Owned<T> is a
@@ -560,7 +563,10 @@ struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedPa
                          // allocates nothing, every implementation is checked against that promise, and a
                          // `@noheap` caller may then dispatch through it. Last in the struct so the two
                          // brace-initialised push_backs keep working; set explicitly beside them.
-                         bool noHeap = false; };
+                         bool noHeap = false;
+                         // `const ref T` on the member — the slot spells `T const*`. Same rule as noHeap:
+                         // last in the struct, set explicitly beside the push_back.
+                         bool isConstPlace = false; };
 // The kinds that may `implements` a contract — its `for` clause (`type contract C for value, view`).
 // A BITMASK, not a set<string>: the gate is a test in the inner loop of a `_classes × interfaces`
 // sweep, the domain is CLOSED at five, and the clause has to render back into a diagnostic in a
@@ -1638,6 +1644,7 @@ private:
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
     bool               _returnIsPlace = false;         // emitting a `ref T operator[]` body: `return e` -> `return &(place)`
+    bool               _returnIsConstPlace = false;    // …and that place is `const ref T`: a read-only root may be returned
     std::string        _matchTargetCType;              // result C type of a value-producing `match` (set by the liftable site)
     std::string        _variantTargetType;             // target union instance for a generic-variant construction (Optional<int32>)
     // A1 — a value-producing variant ctor as a `match` SUBJECT (`match (Optional::Some(x))`). The instance
@@ -2138,6 +2145,10 @@ private:
     bool        isMutRawCType(const std::string& ct);     // `T*` and not a struct/view — a writable one
     bool        exprIsConstRawPtr(SharedExpression e);    // the expression's type is a const raw pointer (a place goes through lvalueCType)
     bool        chainThroughConstRawPtr(SharedExpression e);   // some `[i]` step of the place derefs a const raw pointer
+    bool        chainThroughConstPlace(SharedExpression e);    // some step of the place is a `const ref T` call / `operator[]`
+    bool        invocationIsConstPlace(InvocationNode* iv);    // the call resolves to a `const ref T` method / free fn
+    static std::string placeRetSuffix(bool isPlace, bool isConstPlace);   // "" / "*" / " const*" — the C return of a place-returner
+    static std::string placeKamaPrefix(bool isPlace, bool isConstPlace);  // "" / "ref " / "const ref " — its kama spelling
     void        rejectConstPtrWiden(const std::string& dstCType, SharedExpression src, const char* what, int line);
     // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
     // No-op inside one. Returns true if it rejected.
@@ -2550,6 +2561,7 @@ private:
     // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
     // dropped (dropping a copy of a borrow would double-free). isPlaceReturn is the discriminator.
     bool invocationReturnsPlace(InvocationNode* iv);
+    MethodInfo* placeMethodOf(const std::string& cls, const std::string& method);   // resolve through `Deref<T>`
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer
     // expression `recvPtr` (e.g. "self" or "&(c)"): virtual -> via __vptr; else direct.
     // `site`, when non-null, is the source identifier the method was spelled at: the resolved method is
@@ -2776,7 +2788,7 @@ private:
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
-    void        checkConstPlaceReturn(bool isConst, bool isRef, const std::string& m, int line);
+    void        checkConstPlaceReturn(bool isConst, bool isRef, bool isConstRef, const std::string& m, int line);
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
     // name of a comptime param bound in this instantiation — see the definition for why.
     void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);

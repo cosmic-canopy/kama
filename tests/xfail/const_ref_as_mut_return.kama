@@ -1,0 +1,15 @@
+// The mirror of the `const fn ref T` refusal, one step later: a WRITABLE place may not be minted from a
+// read-only one. `leak` is a non-const method returning `ref`, and the place it returns came through
+// `at`, a `const ref` — handing the caller a writable alias into storage that place only reads.
+import { std::collections::DynamicArray };
+type value Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+}
+type resource Bag {
+    DynamicArray<Counter> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Counter.make(n: 1)); }
+    public const fn const ref Counter at(isize i) { return this.items[i]; }
+    public fn ref Counter leak() { return this.at(i: 0); }   // -> REJECT
+}
+fn int32 main() { Bag b = Bag.make(); return 0; }

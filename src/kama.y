@@ -1038,6 +1038,21 @@ plain_function_declaration
       splitFnParams(fn, $7, $11);
       $$ = fn;
   }
+  | function_modifier_opt unsafe_opt FN CONST REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block   {
+      /* `fn const ref T f(const ref …)` — a READ-ONLY place-returning free function: the caller may read
+         through the place but not assign, `give`, pass it `ref`/`out` or call a non-const method on it.
+         Same escape rule as `fn ref T`; the parameter order (`const ref T x`) is the return spelling. */
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $6, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7), $10, $13 );
+      STAMP_LOC(fn->name, @7);
+      if (!$1) STAMP_START(fn, $2 ? @2 : @3);
+      fn->isRef = true;
+      fn->isConstRef = true;
+      fn->isUnsafe = ($2 != nullptr);
+      rejectFnTypeParamDefault($8, &@8, scanner);
+      rejectFnTypeParamDefault($12, &@12, scanner);
+      splitFnParams(fn, $8, $12);
+      $$ = fn;
+  }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       /* `fnptr ret Name(params);` — an explicit function-pointer TYPE.
          A null body marks it as a signature type (collectSignatures -> _sigs). */
@@ -2107,6 +2122,7 @@ method_declaration
   | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  | modifiers_opt const_opt FN CONST REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $6, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7), $9, $12); STAMP_LOC(m->name, @7); m->isConst = ($2 != nullptr); m->isRef = true; m->isConstRef = true; if ($11) { m->whenParams = $11->whenParams; m->whenBounds = $11->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `const fn const ref T at(…)` — a READ-ONLY place-returning method (the form a `const fn` may return) */
   ;
 /* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
    value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
@@ -2167,6 +2183,7 @@ operator_body
   ;
 overloadable_operator_declarator
   : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN   { auto d = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $2, LEFT_BRACKET, $7, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $8), SharedIdentifier(), SharedIdentifier()); d->refReturn = true; STAMP_LOC(d->param1Name, @8); $$ = d; }   /* `ref T operator[](usize i)` — a place-returning index operator */
+  | CONST REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN   { auto d = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $3, LEFT_BRACKET, $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9), SharedIdentifier(), SharedIdentifier()); d->refReturn = true; d->constRefReturn = true; STAMP_LOC(d->param1Name, @9); $$ = d; }   /* `const ref T operator[](isize i)` — a READ-ONLY place-returning index operator */
   | type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* 0-param unary: `Vec2 operator-()` = `-this` */
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); STAMP_LOC($$->param1Name, @6); }
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); STAMP_LOC($$->param1Name, @6); STAMP_LOC($$->param2Name, @9); }

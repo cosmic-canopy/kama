@@ -1,0 +1,18 @@
+// A move MUTATES its source — it leaves a moved-from value behind — so `give` out of a `const ref` place
+// is refused at the hand-off, exactly as `give` out of a `const` binding is. `copy` reads; `give` writes.
+import { std::collections::DynamicArray };
+type resource Token {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 id() { return this.id; }
+}
+type resource Bag {
+    DynamicArray<Token> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Token.make(id: 1)); }
+    public const fn const ref Token at(isize i) { return this.items[i]; }
+}
+fn int32 main() {
+    Bag b = Bag.make();
+    Token t = give b.at(i: 0);   // -> REJECT
+    return t.id();
+}

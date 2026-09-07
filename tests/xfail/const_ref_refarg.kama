@@ -1,0 +1,13 @@
+// Passing a `const ref` place as a `ref` argument would hand the callee a writable alias into read-only
+// storage — the same write path an assignment takes, refused at the argument.
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 5; }
+    public const fn const ref int32 place() { return this.n; }
+}
+fn void poke(ref int32 x) { x = 99; }
+fn int32 main() {
+    Cell c = Cell.make();
+    poke(x: ref c.place());   // -> REJECT
+    return c.place();
+}
