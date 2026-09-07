@@ -9,9 +9,9 @@
 //   3. a derive off a `borrow` ALIAS — the same, one step from the window itself.
 //   4. a free function's result, when every view handed to it was bounded — the view-return rule already
 //      guarantees the result roots at one of those arguments.
-import { std::collections::DynamicArray, std::collections::View };
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
 
-fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn int32 sum(ConstView<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 
 // 1 + 2: a by-value view parameter is a bounded root, and a derive off one is bounded too.
 fn int32 halves(View<int32> items) {
@@ -29,7 +29,7 @@ fn int32 main() {
     a.add(item: 1); a.add(item: 2); a.add(item: 3); a.add(item: 4);
 
     int32 r = 0;
-    borrow a.view() as w {
+    borrow a.viewMut() as w {
         r = r + halves(items: w);                 // 3*100 + 7*10 + 2 = 372
 
         View<int32> mid = w.slice(from: 1, count: 2);   // 3: a derive off the alias

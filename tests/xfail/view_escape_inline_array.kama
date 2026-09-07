@@ -3,8 +3,8 @@
 // lives, so a stack container is bounded by the same three rules a heap `FixedArray` is. This fixture
 // proves that as an OUTCOME rather than by reading the rules — nothing had ever minted a view from a
 // compiler-synthesized intrinsic before.
-import { std::collections::View };
-fn View<int32> leak() {
+import { std::collections::View, std::collections::ConstView };
+fn ConstView<int32> leak() {
     InlineArray<int32>#(3) a = [1, 2, 3];
     return a.view();        // the storage dies at the closing brace; the view would outlive it
 }

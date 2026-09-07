@@ -724,7 +724,7 @@ use_after_give_shared	use_after_give_shared.kama:4 use_after_give_shared.kama:6 
 use_after_move	use_after_move.kama:2 use_after_move.kama:5 use_after_move.kama:7
 usize_from_int32	usize_from_int32.kama:1
 value_owns_resource	value_owns_resource.kama:3
-view_arg_aliases_receiver	view_arg_aliases_receiver.kama:15
+view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15
 view_chain_over_local	view_chain_over_local.kama:11 view_chain_over_local.kama:14
 view_collection_elem	view_collection_elem.kama:3

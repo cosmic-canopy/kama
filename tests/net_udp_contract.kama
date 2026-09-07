@@ -10,11 +10,11 @@ import {
     std::io::IoError,
     std::collections::DynamicArray,
     std::collections::FixedArray,
-    std::collections::View,
+    std::collections::View, std::collections::ConstView,
 };
 
 // These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
-fn int32 sendVia(DatagramSocket d, View<uint8> msg, ref SocketAddr to) {
+fn int32 sendVia(DatagramSocket d, ConstView<uint8> msg, ref SocketAddr to) {
     Result<usize, IoError> r = d.sendTo(bytes: msg, to: to);
     return match (r) { case Ok(value: w): cast<int32>(w); case Err(error: e): -1; };
 }
@@ -39,7 +39,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b) {
     if (sent != 2) { return 72; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    int32 got = recvVia(d: b, into: buf.view());       // dynamic dispatch through DatagramSocket
+    int32 got = recvVia(d: b, into: buf.viewMut());       // dynamic dispatch through DatagramSocket
     if (got != 2) { return 73; }
     if (cast<int32>(buf[0]) != 42) { return 74; }
     if (cast<int32>(buf[1]) != 99) { return 75; }

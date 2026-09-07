@@ -7,7 +7,7 @@ import { std::collections::View, std::collections::DynamicArray };
 type resource Box {
     DynamicArray<int32> buf;
     public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 2); this.buf.add(item: 1); }
-    public unsafe fn View<int32> peek() { return this.buf.view(); }
+    public unsafe fn View<int32> peek() { return this.buf.viewMut(); }
     public fn void push(int32 v) { this.buf.add(item: v); }
 }
 

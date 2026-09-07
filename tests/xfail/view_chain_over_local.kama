@@ -8,7 +8,7 @@ import { std::collections::View, std::collections::DynamicArray };
 unsafe fn View<int32> bad() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: 1);
-    return a.view().slice(from: 0, count: 1);   // roots at `a`, a local -> dangles
+    return a.viewMut().slice(from: 0, count: 1);   // roots at `a`, a local -> dangles
 }
 
 fn int32 main() { return bad().length(); }

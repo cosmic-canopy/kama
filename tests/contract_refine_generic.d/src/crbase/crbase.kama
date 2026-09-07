@@ -4,8 +4,8 @@
 // the emitted vtable unless the child's file happened to import `View` too, which it has no reason to.
 // See linkContracts: an inherited signature is rebound to its parent-resolved absolute spelling at
 // merge time, so the slot mangles identically no matter which file emits it.
-import { std::collections::View };
+import { std::collections::View, std::collections::ConstView };
 export { Parent };
 type contract Parent for resource {
-    fn int32 take(View<uint8> bytes);
+    fn int32 take(ConstView<uint8> bytes);
 }

@@ -13,7 +13,7 @@ fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 5); xs.add(item: 1); xs.add(item: 4); xs.add(item: 1); xs.add(item: 3);
     int32 a = 0;
-    borrow xs.view() as v {
+    borrow xs.viewMut() as v {
         sort(items: v);                              // 1 1 3 4 5
         a = (isSorted(items: v) ? 1 : 0) + v[0] + v[4];          // 1 + 1 + 5 = 7
     }
@@ -23,7 +23,7 @@ fn int32 main() {
     fa[0] = 9; fa[1] = 2; fa[2] = 8; fa[3] = 4;
     int32 b = 0;
     int32 c = 0;
-    borrow fa.view() as fv {
+    borrow fa.viewMut() as fv {
         sortUnstable(items: fv);                     // 2 4 8 9
         b = fv[0] * 10 + fv[3];                      // 29
 
@@ -36,7 +36,7 @@ fn int32 main() {
     DynamicArray<string> ws = DynamicArray::<string>.empty();
     ws.add(item: "pear"); ws.add(item: "apple"); ws.add(item: "fig");
     int32 d = 0;
-    borrow ws.view() as wv {
+    borrow ws.viewMut() as wv {
         sort(items: wv);
         d = wv[0].equals(other: "apple") ? 5 : 0;
     }

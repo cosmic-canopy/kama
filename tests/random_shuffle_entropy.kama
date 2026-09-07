@@ -36,7 +36,7 @@ fn int32 main() {
     // A shuffled 0..7 is still a permutation, and is not the identity.
     Rng g = Rng.seeded(seed: 1ui64);
     DynamicArray<int32> xs = identity(n: 8);
-    borrow xs.view() as v { shuffle(items: v, rng: g); }
+    borrow xs.viewMut() as v { shuffle(items: v, rng: g); }
     bool moved = false;
     i = 0;
     while (i < 8) { if (xs[i] != cast<int32>(i)) { moved = true; } i = i + 1; }
@@ -46,7 +46,7 @@ fn int32 main() {
     // The same seed gives the same permutation.
     Rng h = Rng.seeded(seed: 1ui64);
     DynamicArray<int32> ys = identity(n: 8);
-    borrow ys.view() as w { shuffle(items: w, rng: h); }
+    borrow ys.viewMut() as w { shuffle(items: w, rng: h); }
     bool same = true;
     i = 0;
     while (i < 8) { if (xs[i] != ys[i]) { same = false; } i = i + 1; }
@@ -54,7 +54,7 @@ fn int32 main() {
 
     // A sub-range shuffle leaves the elements outside it exactly where they were.
     DynamicArray<int32> zs = identity(n: 10);
-    borrow zs.view() as whole {
+    borrow zs.viewMut() as whole {
         View<int32> mid = whole.slice(from: 2, count: 6);
         shuffle(items: mid, rng: g);
     }
@@ -67,8 +67,8 @@ fn int32 main() {
     // Zero and one element: nothing to do, and nothing to trip over.
     DynamicArray<int32> one = identity(n: 1);
     DynamicArray<int32> none = identity(n: 0);
-    borrow one.view() as v1 { shuffle(items: v1, rng: g); }
-    borrow none.view() as v0 { shuffle(items: v0, rng: g); }
+    borrow one.viewMut() as v1 { shuffle(items: v1, rng: g); }
+    borrow none.viewMut() as v0 { shuffle(items: v0, rng: g); }
     if (one[0] == 0 && none.length() == 0)                     { r = r + 16; }
 
     // Two entropy-seeded generators start in different places.
@@ -81,8 +81,8 @@ fn int32 main() {
     DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
     i = 0;
     while (i < 32) { a.add(item: 0ui8); b.add(item: 0ui8); i = i + 1; }
-    borrow a.view() as va { entropy(into: va); }
-    borrow b.view() as vb { entropy(into: vb); }
+    borrow a.viewMut() as va { entropy(into: va); }
+    borrow b.viewMut() as vb { entropy(into: vb); }
     bool anyNonZero = false;
     bool differ = false;
     i = 0;
@@ -95,7 +95,7 @@ fn int32 main() {
 
     // An empty buffer is a no-op rather than a panic.
     DynamicArray<uint8> empty = DynamicArray::<uint8>.empty();
-    borrow empty.view() as ve { entropy(into: ve); }
+    borrow empty.viewMut() as ve { entropy(into: ve); }
     if (differ && empty.length() == 0)                         { r = r + 128; }
 
     return r;   // 255

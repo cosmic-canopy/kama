@@ -6,7 +6,7 @@ import { std::collections::View, std::collections::DynamicArray };
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
     d.add(item: 1); d.add(item: 2);
-    View<int32> v = d.view();
+    View<int32> v = d.viewMut();
     d.add(item: 3); d.add(item: 4); d.add(item: 5);   // reallocs out from under `v`
     return v[0];
 }

@@ -22,7 +22,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     if (sent != 3) { return 62; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.view());
+    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.viewMut());
     int32 got = match (rr) { case Ok(value: rf): cast<int32>(rf.count); case Err(error: e): -1; };
     if (got != 3) { return 63; }
     if (cast<int32>(buf[0]) != 7)  { return 64; }

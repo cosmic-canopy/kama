@@ -42,7 +42,7 @@ fn int32 main() {
     ByField byDept = ByField.make(field: 0);
 
     int32 ok = 1;
-    borrow rs.view() as v {
+    borrow rs.viewMut() as v {
         sortWith(items: v, by: byId);      // by id:   1 2 3 4 5
         sortWith(items: v, by: byDept);    // by dept: dept 1 (ids 2,4), dept 2 (ids 1,3,5) — ids ASCENDING iff stable
 
@@ -59,7 +59,7 @@ fn int32 main() {
     while (i < 40) { dup.add(item: 7 - (i % 3)); i = i + 1; }
     int32 lo = 0;
     int32 hi = 0;
-    borrow dup.view() as dv {
+    borrow dup.viewMut() as dv {
         sort(items: dv);
         lo = dv[0] == 5 ? 1 : 0;
         hi = dv[39] == 7 ? 1 : 0;

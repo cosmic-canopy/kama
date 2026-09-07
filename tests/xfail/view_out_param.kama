@@ -4,7 +4,7 @@
 // that it borrows `this` or a parameter.
 import { std::collections::View, std::collections::DynamicArray };
 
-fn void fill(out View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
+fn void fill(out View<int32> v, ref DynamicArray<int32> src) { v = src.viewMut(); }
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);

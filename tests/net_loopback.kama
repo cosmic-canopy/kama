@@ -40,7 +40,7 @@ fn int32 serverRecv(ref TcpStream s, int32 expectSum, int32 expectLen) {
     int32 sum = 0;
     bool done = false;
     while (!done) {
-        int32 got = match (s.read(into: buf.view())) { case Ok(value: c): cast<int32>(c); case Err(error: e): -1; };
+        int32 got = match (s.read(into: buf.viewMut())) { case Ok(value: c): cast<int32>(c); case Err(error: e): -1; };
         if (got < 0) { return 91; }
         if (got == 0) {
             done = true;

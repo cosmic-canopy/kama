@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError, std::collections::View, SocketAddr, RecvFrom };
+import { std::io::IoError, std::io::lastError, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom };
 
 export { UdpSocket, DatagramSocket };
 
@@ -28,13 +28,13 @@ extern fn int32 kama_EINTR();
 // later WebRTC DataChannel) satisfy the SAME contract on other targets — so game netcode written
 // `fn tick<S: DatagramSocket>(ref S s)` runs unchanged on every platform. `setNonBlocking(false)` is a
 // no-op on web (the browser is always non-blocking); `WouldBlock` is the uniform "nothing ready" signal.
-// Buffers are `View<uint8>` — the uniform byte-buffer type across std::net/fs/serde — so a datagram can be
+// Buffers are `ConstView<uint8>` out / `View<uint8>` in — the uniform byte-buffer type across std::net/fs/serde — so a datagram can be
 // sent from (or received into) a sub-slice of a larger buffer with no copy. Datagrams are message-oriented,
 // so a `DatagramSocket` is NOT a `Reader`/`Writer` (those model byte streams; a datagram is atomic).
 type contract DatagramSocket for resource {
-    fn Result<usize, IoError> sendTo(View<uint8> bytes, ref SocketAddr to);
+    fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to);
     fn Result<RecvFrom, IoError> recvFrom(View<uint8> into);
-    fn Result<usize, IoError> send(View<uint8> bytes);
+    fn Result<usize, IoError> send(ConstView<uint8> bytes);
     fn Result<usize, IoError> recv(View<uint8> into);
     fn Result<Unit, IoError> setNonBlocking(bool on);
 }
@@ -74,10 +74,10 @@ type resource UdpSocket implements DatagramSocket {
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
-    public unsafe fn Result<usize, IoError> sendTo(View<uint8> bytes, ref SocketAddr to) {
+    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) {
         string h = to.ipString();
         while (true) {
-            isize n = kama_sendto_inet(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()),
+            isize n = kama_sendto_inet(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()),
                                        host: h.cstr(), port: to.port);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
@@ -99,9 +99,9 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Send to the connected default peer (see connect). EINTR-retried.
-    public unsafe fn Result<usize, IoError> send(View<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
         while (true) {
-            isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }

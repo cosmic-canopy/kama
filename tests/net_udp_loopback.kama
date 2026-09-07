@@ -53,7 +53,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     FixedArray<uint8> buf = FixedArray.make(size: 2048);
     int32 got = -1;
     int32 fromPort = -1;
-    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.view());
+    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.viewMut());
     match (rr) {
         case Ok(value: rf): { got = cast<int32>(rf.count); fromPort = cast<int32>(rf.from.port); }
         case Err(error: e): { got = -2; }

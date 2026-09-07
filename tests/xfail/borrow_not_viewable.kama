@@ -3,14 +3,14 @@
 // never fires, and before `borrow` became nominal this was accepted purely because a method happened to be
 // spelled `view`. That is duck typing in the one construct whose entire job is to bound a borrow.
 //
-// The fix is one clause: `implements Viewable<View<int32>>`. Resolution stays structural either way — the
+// The fix is one clause: `implements Viewable<ConstView<int32>>`. Resolution stays structural either way — the
 // contract is a gate, never a dispatch — so nothing about the emitted call changes.
-import { std::collections::DynamicArray, std::collections::View };
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
 
 type resource Wrapper {
     DynamicArray<int32> inner;
     public ctor make() { this.inner = DynamicArray.empty(); this.inner.add(item: 7); }
-    public unsafe fn View<int32> view() { return this.inner.view(); }
+    public unsafe const fn ConstView<int32> view() { return this.inner.view(); }
 }
 
 fn int32 main() {

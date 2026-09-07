@@ -13,7 +13,7 @@ fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 20); xs.add(item: 30); xs.add(item: 40);
     int32 a = 0; int32 b = 0; int32 c = 0; int32 d = 0; int32 e = 0; int32 g = 0;
-    borrow xs.view() as v {
+    borrow xs.viewMut() as v {
         sort(items: v);
 
         int32 t20 = 20;

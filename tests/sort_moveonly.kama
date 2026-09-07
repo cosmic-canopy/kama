@@ -41,7 +41,7 @@ fn int32 main() {
     ts.add(item: Tag.make(n: 2));
     ByValue by = ByValue.make();
     int32 r = 0;
-    borrow ts.view() as v {
+    borrow ts.viewMut() as v {
         sortUnstableWith(items: v, by: by);
         int32 ok = isSortedWith(items: v, by: by) ? 1 : 0;
         r = v[0].value() * 1000 + v[1].value() * 100 + v[2].value() * 10 + v[3].value() + ok - 1195;

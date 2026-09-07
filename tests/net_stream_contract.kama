@@ -8,12 +8,12 @@ import {
     std::io::IoError,
     std::collections::DynamicArray,
     std::collections::FixedArray,
-    std::collections::View,
+    std::collections::View, std::collections::ConstView,
 };
 
 // Drive the ReliableStream's Writer primitive to completion through the erased contract (dynamic dispatch on
 // `write`). ReliableStream refines Reader+Writer, so `write`/`read` dispatch through the same fat pointer.
-fn int32 writeVia(ReliableStream s, View<uint8> bytes) {
+fn int32 writeVia(ReliableStream s, ConstView<uint8> bytes) {
     isize total = bytes.length();
     isize off = 0;
     while (off < total) {
@@ -50,7 +50,7 @@ fn int32 serverRecv(ref TcpStream srv) {
     int32 sum = 0;
     bool done = false;
     while (!done) {
-        int32 n = readVia(s: srv, into: buf.view());   // dynamic dispatch through ReliableStream
+        int32 n = readVia(s: srv, into: buf.viewMut());   // dynamic dispatch through ReliableStream
         if (n < 0) { return 43; }
         if (n == 0) { done = true; }
         else { int32 k = 0; while (k < n) { sum = sum + cast<int32>(buf[k]); total = total + 1; k = k + 1; } }

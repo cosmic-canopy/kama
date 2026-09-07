@@ -260,21 +260,22 @@ or **discard it to drop** (`xs.remove(index: i);` drops cleanly). This is the on
 across every container — a single method that hands ownership back (matching `Deque.popFront`/`popBack` and
 Rust's `Vec::remove`/`pop`), never a silent drop.
 
-### Slices / spans — `View<T>` ✅
+### Slices / spans — `View<T>` and `ConstView<T>` ✅
 
 A **`View<T>`** is a non-owning window over a contiguous run of `T` — a slice / span (zero copy, no
-ownership transfer). It is a **`type view`** (the stack-only-borrow kind; see *Type declarations*): the
-escape check keeps it from being stored, and **the window rule below keeps it from outliving its buffer**,
-so it cannot dangle — without a borrow checker, and without lifetimes.
+ownership transfer) — and **`ConstView<T>`** is its read-only half (Rust `&mut [T]` / `&[T]`, C# `Span<T>` /
+`ReadOnlySpan<T>`). Both are a **`type view`** (the stack-only-borrow kind; see *Type declarations*): the
+escape check keeps them from being stored, and **the window rule below keeps them from outliving their
+buffer**, so neither can dangle — without a borrow checker, and without lifetimes.
 
 ```kama
 DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
-borrow verts.view() as all {                            // a WINDOW — `verts` is frozen inside it
+borrow verts.viewMut() as all {                         // a WINDOW — `verts` is frozen inside it
     View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
     foreach (ref float32 x in mid) { x = x * 2.0; }     // mutate-through: writes back to `verts`
     isize n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
 }
-uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy, no window needed
+uploadToGpu(window: verts.slice(from: 0, count: 3));    // a read-only subrange down — no copy, no window needed
 verts.add(item: 1.0);                                   // mutable again: the window has closed
 ```
 
@@ -285,7 +286,7 @@ scope** — not a lifetime annotation, and not a programmer's promise. A **`borr
 and it is purely lexical: one C block plus one initializer per binding, no runtime cost.
 
 ```kama
-borrow d.view() as v { … }        // `Viewable<View<T>>` grants `view()`
+borrow d.view() as v { … }        // `Viewable<ConstView<T>>` grants `view()`; `ViewableMut<View<T>>` grants `viewMut()`
 borrow m.values() as vals { … }   // `ValuesIterable<I>` grants `values()` — `Map` has no `view()`
 borrow buf.span() as s { … }      // a user contract's own grant
 ```
@@ -302,8 +303,8 @@ Three rules, and together they are what lets the paragraph above say "cannot dan
    be reseated. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
    mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
    fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over
-   the frozen host, and an element write (`a[0] = 7` cannot realloc, and a view is a mutate-through window
-   in the first place).
+   the frozen host, and an element write (`a[0] = 7` cannot realloc, and a `View<T>` is a mutate-through
+   window in the first place).
 3. **A view LOCAL's root must already be lifetime-bounded** — a `borrow` alias, a by-value view parameter,
    a derive off either, or a free function's result when every view handed to it was bounded. A view
    minted from a container you can still name is *not* bounded, because the next line may grow it, and is
@@ -321,11 +322,22 @@ m.values())` freezes `m`. Reads stay free: a `const fn` call on the operand, an 
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
 mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
 
-- Obtain one from a container: `DynamicArray`/`FixedArray` expose **`view()`** (whole) and
-  **`slice(from:, count:)`** (bounds-checked sub-range); `View<T>` itself has `slice`, `length()`,
-  `isEmpty()`, `operator[]` (a mutate-through place), and `iterator()`/`iterMut()` for `foreach`.
-- A view **flows down the call stack** as a by-value parameter; **`const View<T>`** expresses read-only
-  intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field -->
+- Obtain one from a container: `DynamicArray`/`FixedArray`/`InlineArray` expose **`view()`** (whole) and
+  **`slice(from:, count:)`** (bounds-checked sub-range), both `const fn`, minting the read-only
+  **`ConstView<T>`** — so a `const ref` container can open a window — and **`viewMut()`**/**`sliceMut()`**,
+  minting the writable `View<T>`. `View<T>` has `slice` (writable), `length()`, `isEmpty()`, `operator[]`
+  (a mutate-through place), `swap`/`reverse`, and `iterator()`/`iterMut()`; `ConstView<T>` has `slice`
+  (read-only), `length()`, `isEmpty()`, a **`const ref T operator[]`** — the read-only place, which indexes
+  any element, copyable or not, without copying it, so there is no `get(index:)` — `iterator()`, and
+  `dataPtr()` (the `UnsafeConstPtr<T>` for C).
+- A view **flows down the call stack** as a by-value parameter. A callee that only reads takes a
+  **`ConstView<T>`**, and a `View<T>` argument **narrows to it implicitly** at every sink — an argument, an
+  initializer, an assignment, a `return` — the direction kama already takes for `const ref` parameters
+  and `UnsafePtr<T>` → `UnsafeConstPtr<T>`; a generic `ConstView<T>` parameter infers `T` from a `View<T>`
+  argument through the same pair. The reverse is refused, naming `viewMut()`, and a write through a <!-- xfail: const_view_to_mut -->
+  `ConstView<T>` — `cv[0] = x`, a `foreach (ref …)`, a `parallel_for` — is refused as a write through a <!-- xfail: const_view_write, foreach_ref_const_view, parfor_const_view -->
+  `const ref` place; `viewMut()` on a `const ref` container is refused like any non-`const fn` call. <!-- xfail: view_from_const_receiver -->
+  A view may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field -->
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`. <!-- xfail: view_return_over_local, view_ctor_over_local -->
 - **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra <!-- xfail: view_ref_param, view_out_param -->
@@ -349,21 +361,28 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   `int32` mints nothing.
 
   ```kama
-  @viewable type contract Viewable<V> for resource, value, view { fn V view(); }
+  @viewable type contract Viewable<V>    for resource, value, view { fn V view(); }      // the read-only window
+  @viewable type contract ViewableMut<V> for resource, value, view { fn V viewMut(); }   // the writable one
 
-  type resource DynamicArray<T, A> implements …, Viewable<View<T>> {
-      public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
+  type resource DynamicArray<T, A> implements …, Viewable<ConstView<T>>, ViewableMut<View<T>> {
+      public unsafe const fn ConstView<T> view() { return ConstView::<T>.over(at: this.data, count: this.len); }
+      public unsafe fn View<T> viewMut()         { return View::<T>.over(at: this.data, count: this.len); }
   }
   ```
 
-  The marked contracts in tree are `Viewable<V>`, `Iterable<T>`/`IterableMut<T>` (prelude) and
+  Two contracts rather than two members of one, because a grant is read **by member name**: `borrow
+  d.viewMut()` and `parallel_for` each look for exactly their own mint, and a type that can only ever be
+  read grants `view()` alone. `View<T>` itself implements `Viewable<ConstView<T>>` — its `view()` is the
+  narrowing, and the one route outside `ConstView` to that view's private constructor.
+
+  The marked contracts in tree are `Viewable<V>`/`ViewableMut<V>`, `Iterable<T>`/`IterableMut<T>` (prelude) and
   `ValuesIterable`/`ValuesIterableMut`/`EntriesIterable` (`std::collections`). A **`@viewable` contract is a
   mint protocol, not a value**: it declares *who* may hand out a view, so boxing one would erase the very
   identity the grant is about. It emits no C type at all — no vtable, no fat pointer — and naming one as a
   local, parameter, field or return type is an error. Use it in an `implements` clause or as a generic <!-- xfail: mint_protocol_not_a_value -->
   bound. `borrow` and `parallel_for` are **nominal** on it too: a host whose method was never granted is
   rejected, though resolution stays structural, so the emitted call is still direct. `parallel_for` wants
-  one specific grant — `view()` — because it needs contiguous storage; `borrow` accepts any.
+  one specific grant — `viewMut()` — because it needs contiguous storage it can write; `borrow` accepts any.
 
   **What the mint buys is auditability and generality; the window is what buys soundness.** A view is
   minted only by a type that claims to own the memory — but that type's own `view()` can still return a
@@ -1117,7 +1136,7 @@ unsuffixed literal), so `min(a: n, b: 9)` with `isize n` is the whole spelling.
 std::collections::lowerBound, std::collections::isSorted, std::collections::Order, … };`.
 
 **Free functions over a `View<T>`, not methods on each container.** One implementation therefore serves
-`DynamicArray`, `FixedArray` and any **sub-range** — `sort(items: xs.slice(from: 1, count: 4))` orders a
+`DynamicArray`, `FixedArray` and any **sub-range** — `sort(items: xs.sliceMut(from: 1, count: 4))` orders a
 window and leaves everything outside it untouched, which a per-container `xs.sort()` could not express.
 `View<T>` gained `swap`/`reverse` to support this: a view is second-class in *escape*, not in mutability
 (it already writes through its place-returning `operator[]`), and putting the raw move there keeps every
@@ -1512,10 +1531,11 @@ and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POS
 Windows) so both platforms take the same code path. wasm has no process model.
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
-`type contract Writer` (the partial-write primitive `write(View<uint8>) -> Result<usize, IoError>` + `flush`)
-and `type contract Reader` (`read(View<uint8>) -> Result<usize, IoError>`, `Ok(0)` = EOF). Buffers are always
-`View<uint8>` (a non-owning span — zero-copy sub-slicing, no charset assumptions: binary-native, text backends
-layer UTF-8 on top). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
+`type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<usize, IoError>` +
+`flush`) and `type contract Reader` (`read(View<uint8>) -> Result<usize, IoError>`, `Ok(0)` = EOF). Buffers
+are always views (a non-owning span — zero-copy sub-slicing, no charset assumptions: binary-native, text
+backends layer UTF-8 on top): the read-only `ConstView<uint8>` where the callee only reads (`write`,
+`send`), the writable `View<uint8>` where it fills (`read`, `recv`). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
 primitive (contracts carry no default methods); `StringWriter`/`SliceReader` are the in-memory impls and
 `BufWriter<W>`/`BufReader<R>` the buffering layer (each **owns** its inner sink/source by value — kama forbids
 stored borrows). `std::fs::File` implements both, and a reliable network stream is
@@ -1523,7 +1543,7 @@ stored borrows). `std::fs::File` implements both, and a reliable network stream 
 the web `WsConnection` are drop-in `Reader`/`Writer`s. The upshot: the serde backends and `fmt` stream over a
 file or a socket with no transport-specific code (`decodeFrom<T>(from: someReader)`), and unbounded data moves
 in bounded memory. (Datagram endpoints — `UdpSocket`, WebTransport — are message-oriented, not byte streams, so
-they take `View<uint8>` buffers but do **not** implement `Reader`/`Writer`.)
+they take the same view buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
 import { std::fs::readFile, std::fs::writeFile };
@@ -1633,7 +1653,7 @@ Rng g = Rng.seeded(seed: 42ui64);                       // the same stream on ev
 uint64 raw = g.next();                                  // xoshiro256**
 int32 die  = range(rng: g, lo: 1, hi: 7);               // a value in [1, 7), unbiased — T from the bounds
 isize pick = g.below(n: xs.length());                   // an index in [0, n)
-borrow xs.view() as v { shuffle(items: v, rng: g); }    // Fisher–Yates over any View, move-only safe
+borrow xs.viewMut() as v { shuffle(items: v, rng: g); } // Fisher–Yates over any View, move-only safe
 Rng h = Rng.fromEntropy();                              // seeded by the OS — a different stream each run
 ```
 
@@ -1675,7 +1695,7 @@ covers a `DynamicArray`, a `FixedArray` or a sub-range alike — the `sort` shap
 ### Digest (`std::digest`) ✅
 
 `import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha1::sha1 };` — two
-submodules, `sha1` and `sha256`, each exporting a streaming hasher (`make()`, `update(View<uint8>)`,
+submodules, `sha1` and `sha256`, each exporting a streaming hasher (`make()`, `update(ConstView<uint8>)`,
 `finish()`), a one-shot function of the same name as the module, and `DIGESTBYTES`/`BLOCKBYTES`. The
 digest is an `InlineArray<uint8>#(N)` — 20 or 32 bytes on the stack, no allocation anywhere, so both are
 present in a `--no-heap` build.
@@ -1705,7 +1725,7 @@ recorded next cut.
 
 `import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,
 std::encoding::base64::decodeUrl, std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as
-hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(View<uint8>) -> string` and
+hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(ConstView<uint8>) -> string` and
 `decode(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
 `encoding/hex`), Rust (`base64` + `hex`), Zig and Python all converged on; only C# prefixes
 (`Convert.ToBase64String`). Both export the same two names, so a file that wants both renames at the
@@ -1734,7 +1754,7 @@ string h = hexEncode(bytes: v);                                 // "666f6f626172
 5. **A decode fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
 
 Both directions allocate their result, so they are `@compileFor(!NOHEAP)` and absent from a `--no-heap`
-build, as `sort` is. The byte substrate is `View<uint8>` in and `DynamicArray<uint8>` out; a `string`'s
+build, as `sort` is. The byte substrate is `ConstView<uint8>` in and `DynamicArray<uint8>` out; a `string`'s
 bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
 
 ### Command-line arguments + environment ✅
@@ -2290,9 +2310,10 @@ address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
 **Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view, const_dataptr -->
 (a `const fn`) returns an `UnsafeConstPtr<T>` for C and `dataPtrMut()` the writable `UnsafePtr<T>` —
-both safe to obtain, `unsafe` to dereference; `string.cstr()` is the same read-only bridge — and `view()` returns a
-`View<T>` for kama — which is what reaches `borrow`, `parallel_for` and every `View<T>`-taking algorithm
-in the stdlib (`sort`, `sortWith`, `binarySearch`). This matters most for `InlineArray<T>#(N)`, the one
+both safe to obtain, `unsafe` to dereference; `string.cstr()` is the same read-only bridge — and `view()` returns
+the read-only `ConstView<T>` and `viewMut()` the writable `View<T>` for kama — which is what reaches `borrow`,
+`parallel_for` (`viewMut()`) and every view-taking algorithm in the stdlib (`sort`, `sortWith`,
+`binarySearch`). This matters most for `InlineArray<T>#(N)`, the one
 container that is stack-allocated, fixed-size and allocation-free — so the one a `@noheap` region is
 obliged to use, and until it carried these two it was the one locked out of all of the above.
 `view()` is also what lets a single signature serve every size: `N` is part of an
@@ -2968,13 +2989,14 @@ members. `Equatable` and `Comparable` borrow their operand `const ref`.
 
 What it deliberately does **not** mark is as informative:
 
-- **`view()`, `slice()`, `iterMut()`, `dataPtrMut()`, `getRefMut()`, `peekRefMut()`, `derefMut()`,
+- **`viewMut()`, `sliceMut()`, `iterMut()`, `dataPtrMut()`, `getRefMut()`, `peekRefMut()`, `derefMut()`,
   `innerRefMut()`** hand out a mutable window into the receiver. Const on any of them would launder exactly
-  what the rule above closes. Each has a read-only twin that IS const — `dataPtr()`/`cstr()` hand out the
-  `UnsafeConstPtr<T>`, and `getRef()`/`peekRef()`/`deref()`/`innerRef()`/`Entry.key()`/`value()`/
-  `Output.stdout()` hand out a `const ref T` place — which is **the naming convention**: for a read/write
-  pair the unmarked name is the read-only form and `Mut` marks the writable one (`iterator`/`iterMut`,
-  `dataPtr`/`dataPtrMut`, `getRef`/`getRefMut`, `deref`/`derefMut`). A lone place-returner with no
+  what the rule above closes. Each has a read-only twin that IS const — `view()`/`slice()` mint the
+  `ConstView<T>`, `dataPtr()`/`cstr()` hand out the `UnsafeConstPtr<T>`, and `getRef()`/`peekRef()`/
+  `deref()`/`innerRef()`/`Entry.key()`/`value()`/`Output.stdout()` hand out a `const ref T` place — which
+  is **the naming convention**: for a read/write pair the unmarked name is the read-only form and `Mut`
+  marks the writable one (`view`/`viewMut`, `iterator`/`iterMut`, `dataPtr`/`dataPtrMut`,
+  `getRef`/`getRefMut`, `deref`/`derefMut`). A lone place-returner with no
   read-only use keeps its bare name (`IteratorMut.next()`, `Child.stdout()` — every `File` op is non-const).
 - **`Map`'s and `SlotMap`'s `hasNext()`** scan forward past empty slots, so asking the question moves the
   cursor. They are not queries — which is why `IteratorMut.hasNext` is not a const member either, even
@@ -4449,8 +4471,9 @@ Stating it is the point: how many isolates a loop splits into used to be invisib
 chunking below surprising. Now `grep 'workers:'` finds every parallelism-width decision in a codebase.
 
 `ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
-contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
-non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
+contiguous container that exposes `.viewMut()` (`DynamicArray`, `FixedArray` are auto-viewed); a
+non-contiguous container such as a `Map` has no `.viewMut()` and is rejected, and so is a read-only <!-- xfail: parfor_noncontiguous -->
+`ConstView<T>` (nothing to bind `ref` to). <!-- xfail: parfor_const_view -->
 The element and every captured local reach the workers by `ref`, which is the borrow form of a `spawn`
 bundle, so each faces the same sendability gate: a user element type must declare `implements Sendable` <!-- xfail: parfor_elem_undeclared -->
 (a primitive needs nothing — see *Channels* below for the whole rule), and `parallel_spawn` shares the gate. <!-- test: ecs_pattern, parallel_spawn_pool -->

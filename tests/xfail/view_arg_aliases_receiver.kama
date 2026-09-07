@@ -1,13 +1,14 @@
 // The RECEIVER form of the same aliasing. A non-`const fn` borrows its receiver mutably, so
 // `b.eat(v: b.view())` hands `eat` a window over the very object it may grow — and the receiver never
-// reaches the argument-overlap test, which only ever compares arguments with each other.
-import { std::collections::View, std::collections::DynamicArray };
+// reaches the argument-overlap test, which only ever compares arguments with each other. A READ-ONLY
+// window is no safer: the buffer it borrows can still be reallocated under it.
+import { std::collections::View, std::collections::ConstView, std::collections::DynamicArray };
 
 type resource Box {
     DynamicArray<int32> buf;
     public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 2); this.buf.add(item: 1); }
-    public unsafe fn View<int32> view() { return this.buf.view(); }
-    public fn int32 eat(View<int32> v) { this.buf.reserve(n: 64); return v[0]; }
+    public unsafe const fn ConstView<int32> view() { return this.buf.view(); }
+    public fn int32 eat(ConstView<int32> v) { this.buf.reserve(n: 64); return v[0]; }
 }
 
 fn int32 main() {

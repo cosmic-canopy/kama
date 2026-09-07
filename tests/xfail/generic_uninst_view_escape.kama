@@ -8,7 +8,7 @@
 import { std::collections::DynamicArray, std::collections::View };
 
 fn isize neverCalled<T>(ref DynamicArray<T> d) {
-    View<T> v = d.view();                // ERROR: nothing bounds the storage `v` views
+    View<T> v = d.viewMut();                // ERROR: nothing bounds the storage `v` views
     return v.length();
 }
 fn int32 main() { return 0; }

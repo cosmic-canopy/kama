@@ -5,7 +5,7 @@
 //
 // Three grants, three windows, one file: the prelude's `Viewable<V>.view()`, `std::collections`'
 // `ValuesIterable<I>.values()`, and a USER contract's `span()`.
-import { std::collections::DynamicArray, std::collections::Map, std::collections::View };
+import { std::collections::DynamicArray, std::collections::Map, std::collections::View, std::collections::ConstView };
 
 @viewable type contract Spanned<S> for resource { fn S span(); }
 
@@ -26,16 +26,16 @@ type resource Buf implements Spanned<Span> {
     public unsafe fn Span span() { return Span.over(p: addr(of: this.a[0]), n: cast<int32>(this.a.length())); }
 }
 
-fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn int32 sum(ConstView<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 
 fn int32 main() {
     int32 total = 0;
 
-    // 1. `Viewable<View<T>>.view()` — the prelude's grant.
+    // 1. `Viewable<ConstView<T>>.view()` — the prelude's grant (the read-only window).
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 4);
     d.add(item: 10); d.add(item: 20);
     borrow d.view() as v {
-        View<int32> half = v.slice(from: 0, count: 1);   // a derive off the alias — free, no new window
+        ConstView<int32> half = v.slice(from: 0, count: 1);   // a derive off the alias — free, no new window
         total = total + sum(xs: v) + sum(xs: half);      // 30 + 10
     }
 

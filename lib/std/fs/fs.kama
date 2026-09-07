@@ -6,7 +6,7 @@ import {
     std::io::Writer,
     std::collections::DynamicArray,
     std::collections::FixedArray,
-    std::collections::View,
+    std::collections::View, std::collections::ConstView,
     std::time::SystemTime,
     std::path::parent,
     std::path::join,
@@ -107,10 +107,10 @@ type resource File implements Reader, Writer {
 
     // The `Writer` partial-write PRIMITIVE: one `kama_write` (EINTR-retried), returning the count actually
     // written (may be `< length`). The free `writeAll(Writer, View)` loops over this to send every byte.
-    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
-            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            isize n = kama_write(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
@@ -142,7 +142,7 @@ type resource File implements Reader, Writer {
     }
 
     // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
-    public unsafe fn Result<isize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
+    public unsafe fn Result<isize, IoError> writeAll(const ref DynamicArray<uint8> bytes) {
         isize total = bytes.length();
         isize off = 0;
         while (off < total) {
@@ -178,7 +178,7 @@ fn Result<DynamicArray<uint8>, IoError> readFile(const ref string path) {
 }
 
 // Create/truncate a file and write the whole buffer to it.
-fn Result<isize, IoError> writeFile(const ref string path, ref DynamicArray<uint8> bytes) {
+fn Result<isize, IoError> writeFile(const ref string path, const ref DynamicArray<uint8> bytes) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
     return match (r) {
         case Ok(value: f):  f.writeAll(bytes: bytes);

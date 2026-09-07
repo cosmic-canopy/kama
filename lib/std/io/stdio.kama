@@ -1,5 +1,5 @@
 
-import { IoError, lastError, Reader, Writer, std::collections::View };
+import { IoError, lastError, Reader, Writer, std::collections::View, std::collections::ConstView };
 
 export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
 
@@ -54,10 +54,10 @@ type resource StdOut implements Writer {
 
     public const fn int32 rawFd() { return this.fd; }
 
-    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
-            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            isize n = kama_write(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
@@ -76,10 +76,10 @@ type resource StdErr implements Writer {
 
     public const fn int32 rawFd() { return this.fd; }
 
-    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
-            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            isize n = kama_write(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }

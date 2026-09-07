@@ -3,7 +3,7 @@ import {
     std::io::IoError,
     std::io::Reader,
     std::io::Writer,
-    std::collections::View,
+    std::collections::View, std::collections::ConstView,
     std::net::ReliableStream,
 };
 
@@ -57,9 +57,9 @@ type resource WsConnection implements ReliableStream, Reader, Writer {
 
     // `Writer` primitive: send `bytes` as ONE binary message; returns the byte count. Callers wanting a stream
     // of bytes use the free `std::io::writeAll` (each call = one message here). `flush` is a no-op.
-    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
-        if (kama_ws_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
+        if (kama_ws_send(h: this.handle, buf: bytes.dataPtr(), n: cast<usize>(bytes.length())) != 0) {
             return Result::Err(error: IoError::Other(code: 0 - 1));
         }
         return Result::Ok(value: bytes.length());

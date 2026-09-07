@@ -1,4 +1,4 @@
 // Returning a view over a LOCAL array would dangle — the root check rejects it.
 import { std::collections::DynamicArray, std::collections::View };
-fn View<int32> bad() { DynamicArray<int32> a = DynamicArray.empty(); a.add(item: 1); return a.slice(from: 0, count: 1); }
+fn View<int32> bad() { DynamicArray<int32> a = DynamicArray.empty(); a.add(item: 1); return a.sliceMut(from: 0, count: 1); }
 fn int32 main() { return 0; }

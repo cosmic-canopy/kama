@@ -1,8 +1,8 @@
-import { std::collections::View, crgen::crbase::Parent, crgen::crchild::Child };
+import { std::collections::View, std::collections::ConstView, crgen::crbase::Parent, crgen::crchild::Child };
 type resource Impl implements Child, Parent {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
-    public fn int32 take(View<uint8> bytes) { return this.n + cast<int32>(bytes.length()); }
+    public fn int32 take(ConstView<uint8> bytes) { return this.n + cast<int32>(bytes.length()); }
     public fn int32 extra() { return this.n + 1; }
 }
 fn int32 main() {

@@ -32,7 +32,7 @@ fn int32 drainSum(Reader r) {
     FixedArray<uint8> buf = FixedArray.make(size: 8);
     int32 sum = 0;
     while (true) {
-        Result<isize, IoError> rr = r.read(into: buf.view());
+        Result<isize, IoError> rr = r.read(into: buf.viewMut());
         int32 n = match (rr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
         if (n < 0) { return -1; }
         if (n == 0) { return sum; }        // EOF

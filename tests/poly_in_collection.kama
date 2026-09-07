@@ -43,5 +43,5 @@ fn int32 main() {
     a.add(item: PlainTick.make(n: 10)); a.add(item: PlainTick.make(n: 20));
     DynamicArray<DerivedTick> b = DynamicArray.withCapacity(capacity: 2);
     b.add(item: DerivedTick.make(n: 10)); b.add(item: DerivedTick.make(n: 20));
-    return sumPlain(xs: a.view()) + sumDerived(xs: b.view());   // 32 + 32 = 64
+    return sumPlain(xs: a.viewMut()) + sumDerived(xs: b.viewMut());   // 32 + 32 = 64
 }

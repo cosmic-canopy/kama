@@ -63,7 +63,7 @@ fn int32 main() {
     DynamicArray<isize> sd = DynamicArray.empty();
     isize c1 = 3; isize c2 = 1; isize c3 = 2;
     sd.add(item: c1); sd.add(item: c2); sd.add(item: c3);
-    sortUnstable::<isize>(items: sd.view());
+    sortUnstable::<isize>(items: sd.viewMut());
     if (sd[0] == 1 && sd[1] == 2 && sd[2] == 3) { r = r + 16; }
 
     // 6. `@generate(Formattable)` over both — the emitter's own field writer, not the prelude conformance.

@@ -8,7 +8,7 @@ fn int32 main() {
     int32 i = 0;
     while (i < 8) { a.add(item: 1i32); i = i + 1; }   // eight 1s
 
-    borrow a.view() as v {
+    borrow a.viewMut() as v {
         parallel_for (ref int32 e in v, workers: cpuCount()) {             // direct View — no auto-view
             e = e + 4;                                // each 1 -> 5
         }

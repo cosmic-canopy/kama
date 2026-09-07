@@ -35,7 +35,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>, ViewableMut<View<T>>,
+type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
                                   Sendable when [T: Sendable, A: Sendable] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
@@ -109,15 +109,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     public unsafe const fn UnsafeConstPtr<T> dataPtr() { return this.data; }
     public unsafe fn UnsafePtr<T> dataPtrMut() { return this.data; }
 
-    // Borrow the whole array as a `View<T>` (a non-owning slice / span) — zero copy, no ownership
-    // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
-    // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
-    // resized. Mutating through the view writes back to this array's buffer.
-    public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
+    // Borrow the whole array as a window (a non-owning slice / span) — zero copy, no ownership transfer,
+    // in the two halves every accessor pair here has: `view()` is the READ-ONLY `ConstView<T>` (a `const fn`,
+    // so a `const ref` array can open one), `viewMut()` the mutate-through `View<T>`, which writes back to
+    // this array's buffer. Either may be passed DOWN the call stack but never stored (the `view` kind's
+    // escape check enforces that), and is valid only while the array isn't resized.
+    public unsafe const fn ConstView<T> view() { return ConstView::<T>.over(at: this.data, count: this.len); }
     public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.data, count: this.len); }
 
-    // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
-    public unsafe fn View<T> slice(isize from, isize count) {
+    // Borrow the sub-range `[from, from+count)`, bounds-checked (panics on overrun) — the same two halves.
+    public unsafe const fn ConstView<T> slice(isize from, isize count) {
         // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }

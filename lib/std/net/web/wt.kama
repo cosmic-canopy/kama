@@ -1,7 +1,7 @@
 
 import {
     std::io::IoError,
-    std::collections::View,
+    std::collections::View, std::collections::ConstView,
     std::net::DatagramSocket,
     std::net::SocketAddr,
     std::net::RecvFrom,
@@ -44,9 +44,9 @@ type resource WtConnection implements DatagramSocket {
     }
 
     // Send one datagram to the connected peer.
-    public unsafe fn Result<usize, IoError> send(View<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
-        if (kama_wt_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
+        if (kama_wt_send(h: this.handle, buf: bytes.dataPtr(), n: cast<usize>(bytes.length())) != 0) {
             return Result::Err(error: IoError::Other(code: 0 - 1));
         }
         return Result::Ok(value: cast<usize>(bytes.length()));
@@ -63,7 +63,7 @@ type resource WtConnection implements DatagramSocket {
 
     // DatagramSocket conformance: WebTransport has a single peer, so sendTo ignores `to` (delegates to send)
     // and recvFrom reports a nil sender (0.0.0.0:0) — datagrams carry no per-packet address here.
-    public fn Result<usize, IoError> sendTo(View<uint8> bytes, ref SocketAddr to) {
+    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) {
         return this.send(bytes: bytes);
     }
     public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {

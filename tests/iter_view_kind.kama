@@ -41,7 +41,7 @@ fn int32 main() {
     foreach (int32 v in d) { b = b + v; }     // the ordinary foreach surface, unchanged
 
     int32 c = 0;
-    borrow d.view() as v {
+    borrow d.viewMut() as v {
         foreach (int32 x in v) { c = c + x; } // a view's own iterator — the laundering pair
         sort(items: v);                       // `sort` takes a View directly and still does
     }

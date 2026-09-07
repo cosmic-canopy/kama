@@ -278,15 +278,15 @@ cat > "$tmp/impl/kama.json" <<'JSON'
 { "name": "impl", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$tmp/impl/src/sink.kama" <<'KAMA'
-import { std::io::Writer, std::io::IoError };
+import { std::io::Writer, std::io::IoError, std::collections::ConstView };
 type resource Sink implements Writer {
     int32 n;
-    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }
+    public fn Result<usize, IoError> write(ConstView<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 }
 KAMA
 CIURI=$(furi "$tmp/impl/src/sink.kama")
-CISRC='import { std::io::Writer, std::io::IoError };\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
+CISRC='import { std::io::Writer, std::io::IoError, std::collections::ConstView };\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(ConstView<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
 DURI=$(furi "$dep/app/src/app.kama")
 DSRC='import { geo::Point };\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'

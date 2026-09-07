@@ -4,12 +4,12 @@
 // Pass a view by value; it is two words and copying it borrows nothing new.
 import { std::collections::View, std::collections::DynamicArray };
 
-fn void reseat(ref View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
+fn void reseat(ref View<int32> v, ref DynamicArray<int32> src) { v = src.viewMut(); }
 
 fn int32 main() {
     DynamicArray<int32> outer = DynamicArray.withCapacity(capacity: 2);
     outer.add(item: 1);
-    View<int32> v = outer.view();
+    View<int32> v = outer.viewMut();
     {
         DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 2);
         inner.add(item: 9);

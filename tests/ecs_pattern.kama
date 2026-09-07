@@ -76,14 +76,14 @@ fn int32 main()
     xf.add(item: Transform.make(x: 0.0f32, y: 0.0f32, vx: 1.0f32, vy: 2.0f32));
     xf.add(item: Transform.make(x: 5.0f32, y: 5.0f32, vx: 1.0f32, vy: 1.0f32));
 
-    integrate(xs: xf.view(), dt: 2.0f32);          // (0,0)->(2,4)   (5,5)->(7,7)
-    integratePar(xs: xf.view(), dt: 0.0f32);       // parallel, dt=0 keeps it deterministic
+    integrate(xs: xf.viewMut(), dt: 2.0f32);          // (0,0)->(2,4)   (5,5)->(7,7)
+    integratePar(xs: xf.viewMut(), dt: 0.0f32);       // parallel, dt=0 keeps it deterministic
 
     // a contract-bounded generic system — direct calls, no vtable
     DynamicArray<Timer> ts = DynamicArray.withCapacity(capacity: 2);
     ts.add(item: Timer.make(n: 10));
     ts.add(item: Timer.make(n: 20));
-    int32 ticks = tickAll::<Timer>(items: ts.view());          // 11 + 21 = 32
+    int32 ticks = tickAll::<Timer>(items: ts.viewMut());          // 11 + 21 = 32
 
     // entities: a generational-index store, the ECS entity primitive
     SlotMap<Health> ents = SlotMap.empty();

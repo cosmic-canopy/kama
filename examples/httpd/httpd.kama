@@ -159,7 +159,7 @@ fn int32 retryAsDirectory(ref TcpStream client, ref string root, ref string rel)
 // Handle one connection: read the request, resolve a file under `root`, send it (or an error).
 unsafe fn int32 handle(ref TcpStream client, ref string root) {
     FixedArray<uint8> buf = FixedArray.make(size: 8192);
-    Result<isize, IoError> rr = client.read(into: buf.view());
+    Result<isize, IoError> rr = client.read(into: buf.viewMut());
     isize got = match (rr) { case Ok(value: c): c; case Err(error: e): cast<isize>(0 - 1); };
     if (got <= 0) { return 0; }                                   // empty / failed read: drop the connection
 

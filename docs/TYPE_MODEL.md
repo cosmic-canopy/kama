@@ -94,7 +94,8 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 ### `view` — borrows a range it doesn't own, stack-only
 
 A `view` is a **non-owning, second-class borrow** of a contiguous run of memory — a slice / span. The
-flagship is the stdlib `View<T>` (`{ UnsafePtr<T> data; int32 len }`), but the kind is general: an engine can
+flagship is the stdlib pair `View<T>` (`{ UnsafePtr<T> data; isize len }`) and its read-only half
+`ConstView<T>` (`{ UnsafeConstPtr<T> data; isize len }`), but the kind is general: an engine can
 declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { ref World w; … }`.
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
 (`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonReader`).
@@ -107,7 +108,7 @@ type view View<T> {                               // a slice/span over a buffer 
 }
 
 DynamicArray<float32> verts = …;
-uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownership transfer
+uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownership transfer — a read-only `ConstView`
 ```
 
 - **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
@@ -120,7 +121,8 @@ uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownershi
   **returned only when it borrows `this` or a `ref`/view parameter** (so the buffer outlives the call, the
   same structural rule as a `ref T` / `const ref T` place-return). A `view` over a *local* can't be returned — it would
   dangle. To hand back data, **own it** (copy into a `DynamicArray`). Read-only intent at a call site is a
-  `const View<T>` parameter. No lifetime tracking is needed — the escape check is purely structural.
+  `ConstView<T>` parameter, which a `View<T>` narrows to implicitly. No lifetime tracking is needed — the
+  escape check is purely structural.
 
 ### `contract` — a public-only guarantee
 

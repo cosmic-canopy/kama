@@ -11661,6 +11661,24 @@ SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
         _typeSubst[(*tps)[i]] = (*recvTy->genericArgs)[i];
     SharedIdentifier out = deepSubstType(mi->returnType);
     _typeSubst = saved;
+    // The return type is spelled as the HOST's file spells it — `ConstView<T>` in dynamic_array.kama — and
+    // the node goes back to a CALLER that may never have imported that name: `id(x: xs.view().length())`
+    // in a file importing only `View` resolved `ConstView` to nothing and could not infer `T`. Re-spell
+    // it absolutely under the host's own context (the same independence from the calling file's imports
+    // registerFixedViews buys with viewQualifiedNode), so the next lookup needs no import.
+    if (out && out->value) {
+        NsCtx savedCtx = _nsCtx;
+        auto cx = _genericTypeCtx.find(base);
+        if (cx != _genericTypeCtx.end()) _nsCtx = cx->second;
+        const std::string rk = resolveUserName(*out->value, out->qualifier, nullptr);
+        _nsCtx = savedCtx;
+        if (!rk.empty() && (_genericTypes.count(rk) || _classes.count(rk))) {
+            SharedIdentifier q = viewQualifiedNode(rk);
+            q->genericArgs = out->genericArgs;
+            q->genericArg  = out->genericArg;
+            out = q;
+        }
+    }
     return out;
 }
 

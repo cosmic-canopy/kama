@@ -6,7 +6,7 @@
 // agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
 // Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
 
-import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View };
+import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView };
 
 export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines, writeAll, pump, readAll };
 
@@ -21,7 +21,7 @@ extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, is
 // destination (an in-memory sink no-ops). Kept to these two so every impl is trivial; `writeAll`/`copy` are
 // free helpers (kama contracts carry no default methods).
 type contract Writer for resource {
-    fn Result<isize, IoError> write(View<uint8> bytes);
+    fn Result<isize, IoError> write(ConstView<uint8> bytes);
     fn Result<Unit, IoError> flush();
 }
 
@@ -33,7 +33,7 @@ type contract Reader for resource {
 
 // Write EVERY byte, looping over the partial-write primitive until done (or error). A write that makes no
 // progress (returns 0) on a would-block sink surfaces as `WouldBlock` rather than spinning forever.
-fn Result<Unit, IoError> writeAll(Writer w, View<uint8> bytes) {
+fn Result<Unit, IoError> writeAll(Writer w, ConstView<uint8> bytes) {
     isize total = bytes.length();
     isize off = 0;
     while (off < total) {
@@ -56,7 +56,7 @@ fn Result<isize, IoError> pump(Reader from, Writer to) {
     FixedArray<uint8> scratch = FixedArray.make(size: 4096);
     isize total = 0;
     while (true) {
-        Result<isize, IoError> rr = from.read(into: scratch.view());
+        Result<isize, IoError> rr = from.read(into: scratch.viewMut());
         match (rr) {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: n): {
@@ -90,7 +90,7 @@ type resource StringWriter implements Writer {
         this.buf = give b;
     }
 
-    public fn Result<isize, IoError> write(View<uint8> bytes) {
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         isize n = bytes.length();
         isize i = 0;
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
@@ -164,7 +164,7 @@ type resource BufWriter<W: Writer> implements Writer {
         this.cap = 4096;
     }
 
-    public fn Result<isize, IoError> write(View<uint8> bytes) {
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         isize n = bytes.length();
         isize i = 0;
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
@@ -214,7 +214,7 @@ type resource BufReader<R: Reader> implements Reader {
 
     public fn Result<isize, IoError> read(View<uint8> into) {
         if (this.pos >= this.fill) {
-            Result<isize, IoError> rr = this.inner.read(into: this.buf.view());
+            Result<isize, IoError> rr = this.inner.read(into: this.buf.viewMut());
             match (rr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
@@ -254,7 +254,7 @@ type resource BufReader<R: Reader> implements Reader {
         bool any = false;
         while (true) {
             if (this.pos >= this.fill) {
-                Result<isize, IoError> rr = this.inner.read(into: this.buf.view());
+                Result<isize, IoError> rr = this.inner.read(into: this.buf.viewMut());
                 match (rr) {
                     case Err(error: e): { return Result::Err(error: e); }
                     case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
