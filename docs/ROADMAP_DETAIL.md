@@ -466,7 +466,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
-  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.223: combining a
+  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.224: combining a
   base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Formattable)`
   on a **generic**/**variant**/**enum** type; a `${x:?}`-routed `@generate(Debug)` (spec hook already exists);
   per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
@@ -589,7 +589,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   one fixture, `kama build`. If it fails, the fix is the two quotes plus a guard shaped like
   `check-clean-tree.sh` (a private temp root, five build shapes); if it passes, write down why here and
   delete the row. Sized `?` until the probe has run.
-- **Windows path residuals after `0.9.220`.** The compiler-side seam shipped
+- **Windows path residuals after `0.9.221`.** The compiler-side seam shipped
   ([platforms/windows.md](platforms/windows.md) § *Where the remaining work is* has the record and the
   measurements). What it left, with a verdict each, so nothing here is "out of scope" by silence:
   * **`CreateProcessW`'s cwd and executable stay ≤ 260 characters** — `ERROR_DIRECTORY_INVALID` prefixed
@@ -611,7 +611,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.
   * **A volume with 8dot3 names disabled.** The linker fix rests on an 8.3 alias because GNU `ld`/`ar` are
     narrow (windows.md has the measurements); a non-ASCII or 248+ path on a volume that keeps no aliases
-    fails at the link exactly as it did before `0.9.220` — honestly, with ld's own message. The system
+    fails at the link exactly as it did before `0.9.221` — honestly, with ld's own message. The system
     volume has them on by default, and that is where a user profile is. Verdict **genuinely optional**
     until someone reports it: the two answers are `-fuse-ld=lld` when `ld.lld` is on PATH (lld is LLVM
     and reads UTF-16 argv; the CI clang package does not install it) or staging the link in an ASCII
@@ -631,6 +631,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (inlinable, monomorphized) rather than a function pointer. Size **L**: grammar, the capture-ownership rules,
   a synthesized type per lambda, and the diagnostics for a capture that escapes. The functor answers the need;
   the sugar is wanted when a real event table is written by hand and its boilerplate is measured — not before.
+  **Measured (2026-09-07, `tests/functor_event_table` and `tests/functor_by_ref`):** both forms compile and
+  dispatch today with nothing added — the stored table through `Owned<Handler<E>>`, and the lent visitor
+  through a `<V: Visitor<T>> ref V` bound with its state read back after the call, which is the case Rust
+  spends borrowed captures on. The boilerplate a closure would erase is four lines per handler (the type
+  header, one ctor, the conformance, a field per capture) around one line of behaviour; what it would NOT
+  add is a borrowed capture, since neither spelling has lifetime tracking. Two verdicts written with it:
+  the prelude ships no `Callable` family (an arity ladder without variadic generics; a callback signature
+  is the library's contract), and the sugar stays deferred by the maintainer's ruling — SPEC § *Ordering
+  comes from a contract* carries the idiom.
   (The row that sat in NOW as "No capturing closures" is gone: this is its verdict.)
 - **C ABI element spellings for externs (`cchar`, `clong`/`culong`) — scheduled, M.** Not a const question:
   `UnsafeConstPtr<T>` is done. It is an ELEMENT question — kama's `char` is a 32-bit codepoint, C's `char` is a
@@ -647,7 +656,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   grammars, SPEC. The two alternatives are non-goals: `char` inside a raw pointer meaning C `char` breaks
   `DynamicArray<char>.dataPtr()` (a 1-byte stride declared over a 4-byte buffer), and `-Wno-pointer-sign` +
   "spell everything `uint8`" would silence a real `int8`/`uint8` mismatch everywhere to save one keyword.
-- **`int128` — non-goal; the wide product shipped (0.9.228).** `__int128` exists in clang and gcc on 64-bit
+- **`int128` — non-goal; the wide product shipped (0.9.229).** `__int128` exists in clang and gcc on 64-bit
   targets only (not MSVC, not gcc on thumbv6m), so a kama `int128` would be a numeric type that exists on some
   targets, which the fixed-width position forbids. What reached for it — a `Fixed<int64>` backing's
   intermediate product, Lemire's unbiased range — needs the PRODUCT: `std::num::mulWideU64`/`mulHighU64`/
@@ -1063,7 +1072,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     is kept here so it is not re-derived. (The seam it was mistaken for — a local `UnsafePtr<T>` element
     is deliberately untyped to ownership so `nd[i] = od[i]` stays a bitwise relocate; widening `exprClass`
     fixes their KB-14 and breaks 45 fixtures — became DIAGNOSTICS in `0.9.174`, and then the audit found the
-    narrower fix: a CALL is not a store, so `0.9.224` types the RECEIVER alone through `ptrLocalElemType`
+    narrower fix: a CALL is not a store, so `0.9.225` types the RECEIVER alone through `ptrLocalElemType`
     and `p[0].m()` resolves on a local as it always did on a field, `exprClass` untouched; `drop` through a
     raw element stays refused, the SPEC has *The raw seam*.)
     - **kama's `static` is a fenced MCU tool, not a general global.** Per-isolate (`KAMA_ISOLATE_LOCAL`),

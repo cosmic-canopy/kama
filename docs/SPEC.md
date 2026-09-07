@@ -1175,6 +1175,20 @@ is what stands in for a capturing closure, since kama has none. It is also the f
 compiler cannot inline (the reason `qsort` trails `std::sort`). `fnptr` could not express it in any case —
 a function-pointer type takes no type parameters (ROADMAP_DETAIL §2).
 
+**The same object is kama's closure — the generic functor.** Anything a capturing closure would hold is a
+field: declare the callback signature as a contract (`type contract Handler<E> for resource { fn void
+call(ref E e); }`), write one `type resource` per handler with its captured state as fields, and either
+**store** it — an event table is a `DynamicArray<Owned<Handler<Click>>>`, dispatched through the contract — <!-- test: functor_event_table -->
+or **lend** it for one call, the non-escaping case where Rust would borrow locals: the functor is passed
+`ref`, never moved, and the caller reads its state back afterwards. The lent form is spelled as a generic <!-- test: functor_by_ref -->
+bound, `fn void each<T, V: Visitor<T>>(ref DynamicArray<T> xs, ref V v)`, because a concrete value cannot be
+passed to a `ref` parameter of contract type (mutable references are invariant — see *Contracts*), and the
+bound monomorphizes to a direct call. There is no prelude `Callable` family: without variadic generics it
+would be an arity ladder, and a callback signature is the library's own contract, as `Order<T>` is. What a
+closure would add is syntax only — the handler type, its ctor and the conformance line written for you; not
+borrowed captures, which no lifetime tracking means kama would not have in either spelling. It is sized and
+not scheduled (ROADMAP_DETAIL §2).
+
 Because a `ref` parameter may not name a smart pointer, `Order<Owned<T>>` is not instantiable: sort a <!-- xfail: ref_handle -->
 container of the resources themselves. Searching splits what Rust folds into `Result<usize, usize>` —
 kama's `Result<T, E>` constrains `E` to `Error`, so `binarySearch` returns `Optional<int32>` (the **first**
@@ -1951,7 +1965,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.230` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.231` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must

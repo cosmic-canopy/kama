@@ -1,0 +1,36 @@
+// The generic FUNCTOR — kama's answer to a capturing closure. A UI event table: one `Handler<E>` contract, a
+// `type resource` per handler carrying its captured state as fields, stored as `Owned<Handler<Click>>` and
+// dispatched through the contract. Everything a closure would capture is a field; the closure sugar
+// (ROADMAP_DETAIL §2, sized, not scheduled) would lower to exactly this. The exit code comes from the
+// handlers' effects, so it proves stateful dispatch, not just that the shape compiles.
+import { std::collections::DynamicArray, std::memory::Owned };
+@generate(of)
+type value Click { public int32 x; public int32 y; public int32 acc; }
+type contract Handler<E> for resource { fn void call(ref E e); }
+// A handler with captured state — what a closure would capture.
+type resource Counter implements Handler<Click> {
+    int32 hits; int32 weight;
+    public ctor make(int32 weight) { this.hits = 0; this.weight = weight; }
+    public fn void call(ref Click e) { this.hits = this.hits + this.weight * e.x; e.acc = e.acc + this.hits; }
+    public const fn int32 total() { return this.hits; }
+}
+type resource Logger implements Handler<Click> {
+    int32 last;
+    public ctor make() { this.last = 0; }
+    public fn void call(ref Click e) { this.last = e.y; e.acc = e.acc + 1; }
+    public const fn int32 seen() { return this.last; }
+}
+type resource Table {
+    DynamicArray<Owned<Handler<Click>>> handlers;
+    public ctor make() { DynamicArray<Owned<Handler<Click>>> h = DynamicArray.empty(); this.handlers = give h; }
+    public fn void on(Owned<Handler<Click>> h) { this.handlers.add(item: give h); }
+    public fn void fire(ref Click e) { foreach (ref Owned<Handler<Click>> h in this.handlers.iterMut()) { h.call(e: ref e); } }
+}
+fn int32 main() {
+    Table t = Table.make();
+    t.on(h: new Counter.make(weight: 2));
+    t.on(h: new Logger.make());
+    Click c = Click.of(x: 10, y: 22, acc: 0);
+    t.fire(e: ref c); t.fire(e: ref c);   // Counter: 20 then 40 (stateful) -> 60; Logger: +1 twice -> 62
+    return c.acc - 20;
+}

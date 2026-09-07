@@ -1,0 +1,24 @@
+// The functor's NON-escaping case, where Rust would borrow locals into a closure: a callback that reads
+// and mutates caller state while one call runs. kama's answer: the functor owns that state and is passed
+// by `ref`, so it is never moved and the caller reads it back afterwards. The spelling is a generic
+// bound, `<V: Visitor<T>> ref V v` — `ref Visitor<T> v` with a concrete argument is refused (a mutable
+// reference is invariant) — and it monomorphizes to a direct call.
+import { std::collections::DynamicArray };
+type contract Visitor<T> for resource { fn void visit(ref T item); }
+fn void each<T, V: Visitor<T>>(ref DynamicArray<T> xs, ref V v) {
+    foreach (ref T x in xs.iterMut()) { v.visit(item: ref x); }
+}
+type resource Tally implements Visitor<int32> {
+    int32 threshold; int32 matches; int32 sum;         // what a Rust closure would borrow: `&threshold`, `&mut matches`
+    public ctor make(int32 threshold) { this.threshold = threshold; this.matches = 0; this.sum = 0; }
+    public fn void visit(ref int32 item) { if (item > this.threshold) { this.matches = this.matches + 1; this.sum = this.sum + item; } }
+    public const fn int32 matched() { return this.matches; }
+    public const fn int32 total() { return this.sum; }
+}
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 5); xs.add(item: 20); xs.add(item: 30); xs.add(item: 1);
+    Tally t = Tally.make(threshold: 10);
+    each(xs: ref xs, v: ref t);                        // borrowed for the call, not moved
+    return t.total() - t.matched() * 4;                // 50 - 8 = 42: the state came back
+}
