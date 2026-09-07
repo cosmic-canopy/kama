@@ -765,18 +765,29 @@ static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(p
 // 0 = ok, -1 = error (errno set). mtime is NANOSECONDS from the UNIX epoch, so it IS a
 // `std::time::SystemTime` at the kama end with no conversion.
 //
-// ⚠️ `st_mtime` (whole seconds) rather than `st_mtim.tv_nsec`: the sub-second field is spelled three ways
-// across the platforms this branch serves — `st_mtim` (POSIX 2008/Linux), `st_mtimespec` (macOS/BSD), and
-// neither under a strict feature set — while `st_mtime` is the one spelling every one of them has. A
-// second of resolution is what a portable mtime can promise; a build-time detection of three spellings is
-// not worth the sub-second precision nothing in `std` compares on.
+// The sub-second field is spelled three ways across the platforms this branch serves, and each one is
+// picked by the spelling it actually has rather than by the OS name: macOS/BSD's `st_mtimespec` is visible
+// whenever no strict `_POSIX_C_SOURCE` hides it (nothing in `include/` sets one); POSIX.1-2008 defines
+// `st_mtime` as a MACRO over `st_mtim.tv_sec` — glibc under `_DEFAULT_SOURCE` (set above), musl, and
+// emscripten's musl all do — so `defined(st_mtime)` is the portable test for `st_mtim`; and a libc with
+// neither gets whole seconds, which is exactly what this seam reported everywhere until 0.9.220. It used
+// to stop at whole seconds on purpose, "not worth the precision nothing in `std` compares on" — the
+// consumer-driven audit reversed that: a build tool compares mtimes, and a rebuild inside one second is
+// the common case on a fast box. (The Windows branch stays at whole seconds: `_stat64` has no field.)
+#if defined(__APPLE__)
+#  define KAMA_ST_MTIME_NSEC(st) ((int64_t)(st).st_mtimespec.tv_nsec)
+#elif defined(st_mtime)
+#  define KAMA_ST_MTIME_NSEC(st) ((int64_t)(st).st_mtim.tv_nsec)
+#else
+#  define KAMA_ST_MTIME_NSEC(st) ((int64_t)0)
+#endif
 // `readOnly` is the owner's write PERMISSION BIT, not an access check for this process (root ignores it,
 // and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
 static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* outIsDir,
                                       int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct stat st; if (fstat((int)fd, &st) != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
-    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(st);
     *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
     return 0;
 }
@@ -784,7 +795,7 @@ static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_
                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
     struct stat st; if (stat(path, &st) != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
-    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(st);
     *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
     return 0;
 }

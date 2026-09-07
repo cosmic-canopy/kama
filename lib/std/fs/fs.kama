@@ -49,8 +49,8 @@ type enum OpenMode { Read, Write, Append }
 //
 // `modified` is a wall-clock stamp, so comparing two of them tells you which is newer and nothing about
 // how long ago; it also moves backward when the clock does (see `std::time::SystemTime`). Resolution is
-// one second — the sub-second `stat` field is spelled three different ways across the platforms this
-// supports, and kama_os.h says why it takes the one they share.
+// whatever the filesystem records — nanoseconds on macOS, Linux and the wasm VFS, whole seconds on
+// Windows (`_stat64` has no sub-second field); kama_os.h picks the spelling per libc.
 //
 // `readOnly` is the file's write PERMISSION BIT, not "this process cannot write it": root ignores it, and
 // an ACL can deny a file whose mode looks writable. It answers what is recorded, not what would happen.
