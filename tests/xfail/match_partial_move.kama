@@ -1,10 +1,11 @@
 // A `resource` value moved in SOME match arms but not others is MaybeMoved at the join and live at
 // scope exit -> compile error (the conditional-drop guard; `match` is exhaustive, no implicit arm).
-type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+import { std::collections::DynamicArray };
+type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 sink(Res r) { return r.head(); }
 type enum Two { A, B }
 fn int32 main() {
-    Res a = Res(v: 1);
+    Res a = Res.make(v: 1);
     Two t = Two::A;
     int32 z = 0;
     match (t) {

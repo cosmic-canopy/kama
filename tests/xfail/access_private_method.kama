@@ -1,3 +1,3 @@
 // A private method is not callable from outside (default visibility is private).
-type value Counter { int32 n; public Counter(){ this.n = 0; } fn void bump(){ this.n = this.n + 1; } }
-fn int32 main() { Counter c = Counter(); c.bump(); return 0; }   // bump is private
+type value Counter { int32 n; public ctor make(){ this.n = 0; } fn void bump(){ this.n = this.n + 1; } }
+fn int32 main() { Counter c = Counter.make(); c.bump(); return 0; }   // bump is private

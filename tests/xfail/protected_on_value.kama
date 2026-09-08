@@ -1,3 +1,3 @@
 // M26h — `protected` belongs to an extensible `resource`; a value's members are private/public.
-type value Bad { int32 n; public Bad(int32 n){ this.n = n; } protected fn int32 get() { return this.n; } }
-fn int32 main() { Bad b = Bad(n: 1); return 0; }
+type value Bad { int32 n; public ctor make(int32 n){ this.n = n; } protected fn int32 get() { return this.n; } }
+fn int32 main() { Bad b = Bad.make(n: 1); return 0; }

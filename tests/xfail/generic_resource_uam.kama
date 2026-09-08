@@ -2,10 +2,10 @@
 // (a `type resource Box<T>` specialization) after it was `give`n is a compile error, exactly as for
 // a non-generic resource. Proves the `resource` kind — hence move-only + the dataflow move check —
 // flows to each monomorphized instance.
-type resource Box<T> { T value; public Box(T v){ this.value = v; } ~Box(){} public fn T get(){ return this.value; } }
+type resource Box<T> { T value; public ctor make(T v){ this.value = v; } ~Box(){} public fn T get(){ return this.value; } }
 fn int32 take(Box<int32> b) { return b.get(); }
 fn int32 main() {
-    Box<int32> a = Box(v: 1);
+    Box<int32> a = Box.make(v: 1);
     take(b: give a);
     return a.get();   // ERROR: use of `a` after it was moved
 }

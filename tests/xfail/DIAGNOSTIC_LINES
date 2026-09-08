@@ -11,7 +11,7 @@
 access_base_private	access_base_private.kama:2 access_base_private.kama:4 access_base_private.kama:5
 access_private_ctor	access_private_ctor.kama:3
 access_private_field	access_private_field.kama:3
-access_private_method	access_private_method.kama:2 access_private_method.kama:3
+access_private_method	access_private_method.kama:3
 addr_comptime_to_mut	main.kama:7
 addr_of_temporary	addr_of_temporary.kama:7
 addr_of_temporary_element	addr_of_temporary_element.kama:7
@@ -74,7 +74,7 @@ borrow_not_viewable	borrow_not_viewable.kama:18 borrow_not_viewable.kama:19
 borrow_two_bindings_overlap	borrow_two_bindings_overlap.kama:13
 bound_nominal	bound_nominal.kama:15
 box_iface_nonimpl	box_iface_nonimpl.kama:13
-box_use_after_move	box_use_after_move.kama:12 box_use_after_move.kama:14 box_use_after_move.kama:3
+box_use_after_move	box_use_after_move.kama:14
 brace_do_bare	brace_do_bare.kama:5
 brace_else_bare	brace_else_bare.kama:7
 brace_for_bare	brace_for_bare.kama:5
@@ -119,11 +119,11 @@ comptime_fn_impure	comptime_fn_impure.kama:6
 comptime_fn_runtime_call	comptime_fn_runtime_call.kama:6
 comptime_fn_visibility	comptime_fn_visibility.kama:8
 comptime_value_in_angles	comptime_value_in_angles.kama:4
-cond_move_live	cond_move_live.kama:4 cond_move_live.kama:7 cond_move_live.kama:9
+cond_move_live	cond_move_live.kama:10
 const_addr	const_addr.kama:9
 const_contract_impl	const_contract_impl.kama:9
 const_contract_recv	const_contract_recv.kama:11
-const_escape_obj	const_escape_obj.kama:2 const_escape_obj.kama:3 const_escape_obj.kama:4
+const_escape_obj	const_escape_obj.kama:4
 const_escape_ref	const_escape_ref.kama:3
 const_give	const_give.kama:7 const_give.kama:8
 const_intrinsic_set	const_intrinsic_set.kama:4
@@ -195,7 +195,7 @@ copy_const_ref_retain_write	copy_const_ref_retain_write.kama:16
 copy_const_ref_signature	copy_const_ref_signature.kama:9
 copy_owned	copy_owned.kama:4
 copy_resource_coll	copy_resource_coll.kama:8
-copy_value	copy_value.kama:3 copy_value.kama:4
+copy_value	copy_value.kama:5
 copyable_no_bare_default	copyable_no_bare_default.kama:10
 copyable_no_method	copyable_no_method.kama:3
 ctor_declares_own_type	ctor_declares_own_type.kama:9
@@ -263,7 +263,7 @@ enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5
 enum_unknown_variant_scope	enum_unknown_variant_scope.kama:5
 enum_variant_arity	enum_variant_arity.kama:4
 enum_variant_dot	enum_variant_dot.kama:7
-error_downcast_owned	error_downcast_owned.kama:12 error_downcast_owned.kama:13 error_downcast_owned.kama:14 error_downcast_owned.kama:6
+error_downcast_owned	error_downcast_owned.kama:13
 export_const_unexported	main.kama:3
 export_leak_field	export_leak_field.kama:8
 export_leak_return	export_leak_return.kama:12
@@ -301,7 +301,7 @@ foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12
 foreach_ref_comptime	foreach_ref_comptime.kama:12
 foreach_ref_const_view	foreach_ref_const_view.kama:9
-foreach_ref_give	foreach_ref_give.kama:4 foreach_ref_give.kama:7 foreach_ref_give.kama:8
+foreach_ref_give	foreach_ref_give.kama:8
 foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
 foreign_crossing_bare_name	foreign_crossing_bare_name.kama:5
@@ -331,7 +331,7 @@ generic_call_unresolved_instance	generic_call_unresolved_instance.kama:18
 generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11 generic_ctor_incomplete_field.kama:16
 generic_infer_conflict	generic_infer_conflict.kama:6
 generic_infer_literal_narrow	generic_infer_literal_narrow.kama:6
-generic_resource_uam	generic_resource_uam.kama:10 generic_resource_uam.kama:5 generic_resource_uam.kama:8
+generic_resource_uam	generic_resource_uam.kama:10
 generic_return_only	generic_return_only.kama:3 generic_return_only.kama:6
 generic_turbofish_arg	generic_turbofish_arg.kama:11
 generic_unbounded_call	generic_unbounded_call.kama:9
@@ -364,11 +364,11 @@ identity_enum_to_int	identity_enum_to_int.kama:9
 identity_int_to_enum	identity_int_to_enum.kama:13
 identity_sig_arity	identity_sig_arity.kama:20
 identity_sig_cross_sig	identity_sig_cross_sig.kama:13
-iface_collection	iface_collection.kama:5
+iface_collection	-
 iface_field	iface_field.kama:5
 iface_method_private	iface_method_private.kama:7
 iface_ref_concrete	iface_ref_concrete.kama:12
-iface_return	iface_return.kama:4 iface_return.kama:5
+iface_return	iface_return.kama:5
 immutable_bound_mutable	immutable_bound_mutable.kama:11
 immutable_declared	immutable_declared.kama:5
 immutable_mutable_field	immutable_mutable_field.kama:5
@@ -490,7 +490,7 @@ match_label_duplicate	match_label_duplicate.kama:5
 match_label_missing	match_label_missing.kama:5
 match_label_unknown	match_label_unknown.kama:6
 match_nonexhaustive	match_nonexhaustive.kama:5
-match_partial_move	match_partial_move.kama:14 match_partial_move.kama:3 match_partial_move.kama:7
+match_partial_move	match_partial_move.kama:15
 match_subject_not_enum	match_subject_not_enum.kama:11
 match_ternary_arg_kind	match_ternary_arg_kind.kama:6 match_ternary_arg_kind.kama:7
 match_ternary_arg_narrow	match_ternary_arg_narrow.kama:10 match_ternary_arg_narrow.kama:9
@@ -515,8 +515,8 @@ module_static_resource	module_static_resource.kama:3
 module_static_runtime_init	module_static_runtime_init.kama:3
 module_static_volatile	module_static_volatile.kama:8
 move_field	move_field.kama:7
-move_in_loop	move_in_loop.kama:3 move_in_loop.kama:6 move_in_loop.kama:8
-move_reuse_same_scope	move_reuse_same_scope.kama:4 move_reuse_same_scope.kama:7 move_reuse_same_scope.kama:9
+move_in_loop	move_in_loop.kama:9
+move_reuse_same_scope	move_reuse_same_scope.kama:9
 named_const_narrow	named_const_narrow.kama:1
 nameless_call_banned	nameless_call_banned.kama:4
 nameless_new_banned	nameless_new_banned.kama:4
@@ -529,12 +529,12 @@ narrow_return	narrow_return.kama:1
 narrow_variant_payload	narrow_variant_payload.kama:1
 new_abstract	new_abstract.kama:2 new_abstract.kama:3
 new_abstract_owned	new_abstract_owned.kama:3 new_abstract_owned.kama:4
-new_alloc_iface	new_alloc_iface.kama:3 new_alloc_iface.kama:5 new_alloc_iface.kama:8
-new_alloc_shared	new_alloc_shared.kama:2 new_alloc_shared.kama:4 new_alloc_shared.kama:7
+new_alloc_iface	new_alloc_iface.kama:8
+new_alloc_shared	new_alloc_shared.kama:7
 new_arg_iface_nonimpl	new_arg_iface_nonimpl.kama:5
-new_arg_marker	new_arg_marker.kama:2 new_arg_marker.kama:4
-new_arg_ref	new_arg_ref.kama:2 new_arg_ref.kama:4
-new_bare_stateful	new_bare_stateful.kama:2 new_bare_stateful.kama:4 new_bare_stateful.kama:5
+new_arg_marker	new_arg_marker.kama:4
+new_arg_ref	new_arg_ref.kama:4
+new_bare_stateful	new_bare_stateful.kama:5
 new_dot_fallible_bad_type	new_dot_fallible_bad_type.kama:18
 new_plain_value	new_plain_value.kama:3
 new_ret_abstract	new_ret_abstract.kama:2 new_ret_abstract.kama:3
@@ -629,8 +629,8 @@ pin_twice	pin_twice.kama:3
 pkg_undeclared_import	-
 place_store_bare	place_store_bare.kama:6
 poly_edge_nongenerate	poly_edge_nongenerate.kama:25 poly_edge_nongenerate.kama:33
-protected_on_value	protected_on_value.kama:2 protected_on_value.kama:3
-public_field_on_resource	public_field_on_resource.kama:2
+protected_on_value	protected_on_value.kama:2
+public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
 rc_bare_handoff	rc_bare_handoff.kama:6
 recover_multi_error	recover_multi_error.kama:16 recover_multi_error.kama:22 recover_multi_error.kama:27
@@ -643,7 +643,7 @@ ref_literal_mutable	ref_literal_mutable.kama:16
 ref_on_slot	ref_on_slot.kama:12 ref_on_slot.kama:13 ref_on_slot.kama:14
 ref_string_literal_mutable	ref_string_literal_mutable.kama:10
 ref_temporary_nonconst	ref_temporary_nonconst.kama:14
-ref_through_weak	ref_through_weak.kama:3 ref_through_weak.kama:6 ref_through_weak.kama:8
+ref_through_weak	ref_through_weak.kama:8
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3
 refreturn_local	refreturn_local.kama:5
@@ -660,7 +660,7 @@ scope_op_on_value	scope_op_on_value.kama:14
 scoped_bound_wrong_contract	main.kama:11
 section_nonstring	section_nonstring.kama:2
 self_local	self_local.kama:8
-self_move_owned	self_move_owned.kama:5 self_move_owned.kama:7 self_move_owned.kama:8 self_move_owned.kama:9
+self_move_owned	self_move_owned.kama:8 self_move_owned.kama:9
 self_param	self_param.kama:8
 self_returning_static_fn	self_returning_static_fn.kama:8
 sendable_arena_container	sendable_arena_container.kama:6
@@ -751,9 +751,9 @@ unsafe_ptr_local_outside	unsafe_ptr_local_outside.kama:7
 unsafe_ptr_match_binding	unsafe_ptr_match_binding.kama:13
 unsafe_ptr_signature_param	unsafe_ptr_signature_param.kama:4
 unsafe_ptr_signature_return	unsafe_ptr_signature_return.kama:6
-upcast_bad	upcast_bad.kama:5 upcast_bad.kama:7 upcast_bad.kama:8
-use_after_give_shared	use_after_give_shared.kama:4 use_after_give_shared.kama:6 use_after_give_shared.kama:8
-use_after_move	use_after_move.kama:2 use_after_move.kama:5 use_after_move.kama:7
+upcast_bad	upcast_bad.kama:8
+use_after_give_shared	use_after_give_shared.kama:8
+use_after_move	use_after_move.kama:8
 usize_from_int32	usize_from_int32.kama:1
 value_owns_resource	value_owns_resource.kama:3
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16

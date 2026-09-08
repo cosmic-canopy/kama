@@ -2,9 +2,9 @@
 // bytes. Rejected at compile time (Rust rejects self-move too). The copy-only case is a no-op
 // (tests/smartptr_selfassign).
 import { std::memory::Owned };
-type value Probe { int32 id; public Probe(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
+type value Probe { int32 id; public ctor make(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
 fn int32 main() {
-    Owned<Probe> o = new Probe(id: 20);
+    Owned<Probe> o = new Probe.make(id: 20);
     o = o;
     return o.get();
 }

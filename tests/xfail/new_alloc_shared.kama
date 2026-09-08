@@ -1,9 +1,9 @@
 import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
-type value Node { int32 v; public Node(int32 v){ this.v=v; } public fn int32 get(){ return this.v; } }
+type value Node { int32 v; public ctor make(int32 v){ this.v=v; } public fn int32 get(){ return this.v; } }
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 1 << 10);
+    Arena arena = Arena.make(capacity: 1024);
     // ERROR: the box spells `Shared<Node>` (= GlobalAllocator) but the handle is a BumpAllocator — there
     // is no inference axis; the allocator type must be spelled: `Shared<Node, BumpAllocator>`.
-    Shared<Node> s = new(allocator: arena.handle()) Node(v: 1);
+    Shared<Node> s = new(allocator: arena.handle()) Node.make(v: 1);
     return s.get();
 }

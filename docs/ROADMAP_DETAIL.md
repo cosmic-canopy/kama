@@ -220,19 +220,23 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
   (Hinnant's algorithms), ISO-8601 format/parse of a `SystemTime`, leap-year and weekday arithmetic; no zone
   database (a package, as `chrono-tz` is), no locale.
 
-**Fixture hygiene — 23 `tests/xfail` fixtures still use the retired class-named constructor.** Measured
-2026-09-08 on `0.9.249`: `grep -l "public [A-Z][A-Za-z0-9]*(" tests/xfail/*.kama` lists 23 files (none
-under `tests/` proper), and every one of them produces between 2 and 13 kama errors where its `.msg` asserts
-one — `cond_move_live` reports five, `iface_collection` thirteen. They pass because the harness checks that
-the asserted message APPEARS, and it does, beside "class-named constructor `Res(...)` is no longer allowed",
-"unknown type `DynamicArray` in a field" (the import form changed too) and their cascades. That is not a
-false green — if the asserted diagnostic vanished the fixture would still fail — but a fixture that errors
-for four reasons no longer demonstrates that its program is refused for the ONE reason it names, and the
-extra errors can mask a position drift `DIAGNOSTIC_LINES` would otherwise see. The chore: rewrite each to
-`public ctor make(…)` / `Type.make(…)` and `import { std::collections::DynamicArray };`, and confirm it
-produces exactly one error before committing. Tests only, no VERSION bump; roughly a session-third. Worth
-considering alongside it: a guard that an `xfail` fixture's error count matches a declared expectation, so
-the syntax retiring a spelling cannot silently pad a fixture again.
+**Fixture hygiene — the retired-syntax `tests/xfail` sweep, DONE 2026-09-08 (tests only).** The row said 23;
+the class was **25**, measured on `0.9.253` by running all 758 xfails and reading their errors rather than
+grepping for `public Name(`: 23 carried the class-named constructor (two of them without `public`, which the
+grep missed) and two more failed only on the unimported `DynamicArray`. Each produced 2–13 errors where its
+`.msg` asserts one, passing because the harness checks that the asserted message APPEARS — not a false green,
+but a fixture erroring for four reasons no longer showed its program refused for the ONE it names, and the
+extra errors could mask a position drift. All 25 now spell `public ctor make(…)` / `Type.make(…)` /
+`new Type.make(…)` and import what they name; 22 produce exactly one error. The three that do not are the
+compiler's own behaviour, not stale syntax, and are left as they are: `self_move_owned` and
+`new_bare_stateful` report a second error from the SAME offending line (a cascade of the asserted one), and
+**`iface_collection` reports twelve, every one inside the instantiated stdlib and none in its own file** — its
+`DIAGNOSTIC_LINES` row is now `-`, which is the finding: a contract as a collection element is refused only
+by cascade, so it is a ROADMAP row (S). The other 120 multi-error xfails are cascades of their own asserted
+error (a refused `borrow` binder leaves its name unresolved, an abstract type with no `ctor` fails twice,
+…), read and left alone. **No error-count guard** was added: `DIAGNOSTIC_LINES` already pins every position
+a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
+guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
 <a id="s2"></a>
 

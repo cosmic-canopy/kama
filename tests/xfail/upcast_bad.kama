@@ -2,9 +2,9 @@ import { std::memory::Shared };
 // A cross-element hand-off that isn't a valid upcast: Sq does not implement Draw. Must be a
 // clean diagnostic, not a raw C type error or the misleading "collection hand-off" message.
 type contract Draw for resource { fn int32 v(); }
-type resource Sq { int32 s; public Sq(int32 s) { this.s = s; } public fn int32 area() { return this.s; } }
+type resource Sq { int32 s; public ctor make(int32 s) { this.s = s; } public fn int32 area() { return this.s; } }
 fn int32 main() {
-    Shared<Sq> a = new Sq(s: 3);
+    Shared<Sq> a = new Sq.make(s: 3);
     Shared<Draw> d = a;                // Sq isn't a Draw -> clean error
     return d.v();
 }

@@ -1,3 +1,4 @@
 // M26h — a `resource` field is always private (ownership encapsulated).
+import { std::collections::DynamicArray };
 type resource Bad { public DynamicArray<int32> items; public ctor make() { this.items.add(item: 1); } }
 fn int32 main() { Bad b = Bad.make(); return 0; }

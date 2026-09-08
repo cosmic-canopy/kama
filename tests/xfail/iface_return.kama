@@ -1,6 +1,6 @@
 // M26e — an interface borrows its object; returning one would dangle. A returnable
 // "reference" is always an owned handle (a smart pointer), never a borrow.
 type contract Shape for value { fn int32 area(); }
-type value Sq implements Shape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
-fn Shape make() { Sq s = Sq(s: 4); return s; }
+type value Sq implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
+fn Shape make() { Sq s = Sq.make(s: 4); return s; }
 fn int32 main() { return 0; }

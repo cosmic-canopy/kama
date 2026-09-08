@@ -1,9 +1,9 @@
 // Moving a Shared (`give`) consumes the source — use-after-move is a compile error. This is the
 // safety that makes bare=move safe across the model and lets `!Movable`/copy-only go away.
 import { std::memory::Shared };
-type value Counter { public int32 n; public Counter(int32 n){this.n=n;} public fn int32 get(){return this.n;} }
+type value Counter { public int32 n; public ctor make(int32 n){this.n=n;} public fn int32 get(){return this.n;} }
 fn int32 main() {
-    Shared<Counter> a = new Counter(n: 7);
+    Shared<Counter> a = new Counter.make(n: 7);
     Shared<Counter> b = give a;
     return a.get();   // ERROR: use of `a` after it was moved
 }

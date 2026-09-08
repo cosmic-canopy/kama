@@ -3,12 +3,12 @@
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
-type resource Probe { UnsafePtr p; public unsafe Probe(){ this.p = malloc(n: 8); } unsafe ~Probe(){ free(p: this.p); } public fn int32 v(){return 1;} }
+type resource Probe { UnsafePtr p; public unsafe ctor make(){ this.p = malloc(n: 8); } unsafe ~Probe(){ free(p: this.p); } public fn int32 v(){return 1;} }
 type enum LoadError implements Error {
     Missing, Wrapped(Shared<Probe> probe);
 
     public const fn string message(){ return "x"; }
 }
-fn Result<int32, Owned<Error>> mk() { Shared<Probe> sp = new Probe(); return Result::Err(error: LoadError::Wrapped(probe: give sp)); }
+fn Result<int32, Owned<Error>> mk() { Shared<Probe> sp = new Probe.make(); return Result::Err(error: LoadError::Wrapped(probe: give sp)); }
 fn int32 peek(Owned<Error> e) { return match (e.as<LoadError>()) { case Some(value: x): 1; case None: 0; }; }   // ERROR: LoadError owns resources
-fn int32 main() { return match (mk()) { case Ok(value: v): v; case Err(error: e): peek(e: e); }; }
+fn int32 main() { Result<int32, Owned<Error>> r = mk(); return match (give r) { case Ok(value: v): v; case Err(error: e): peek(e: give e); }; }

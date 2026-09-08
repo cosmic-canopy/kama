@@ -1,6 +1,6 @@
 extern "<stdlib.h>";
 extern fn void free(UnsafePtr p);
-type value Counter { public int32 n; public Counter(int32 s) { this.n = s; } public fn int32 get() { return this.n; } }
+type value Counter { public int32 n; public ctor make(int32 s) { this.n = s; } public fn int32 get() { return this.n; } }
 type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     UnsafePtr<T> p;
     public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
@@ -9,7 +9,7 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
 fn int32 main() {
-    Box<Counter> a = new Counter(s: 7);
+    Box<Counter> a = new Counter.make(s: 7);
     Box<Counter> b = give a;
     return a.get();   // ERROR: use after move
 }
