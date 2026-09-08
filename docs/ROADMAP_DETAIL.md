@@ -1314,20 +1314,29 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
 
-- **A `foreach` variable or `match` payload binding named like a FIELD of the enclosing type.** The
-  field-shadow ban ("local `x` shadows a field — rename it") is checked at a DECLARATION only; the two
-  binders are exempt from the shadowing ban by design (they name a value the loop or arm hands them), so
-  `foreach (int32 count in xs)` inside a method of a type with a field `count` is accepted. Inside the loop
-  the bare name resolves through `lvalueCType`/`receiverScalarCType`, which fall through to the CURRENT
-  CLASS's field wherever the local tables have no entry — and after `0.9.248` a binder deliberately HIDES
-  the enclosing local's entry for its extent, so that fall-through is reached in one more case than before
-  (previously the enclosing local's stale type answered instead, which was wrong differently). The binder's
-  own type node still wins where it is consulted, so this is a diagnostic-shaped gap, not a known
-  miscompile — but it is the same rule the declaration form already enforces, and a member and a loop
-  variable sharing a name inside one body is the shape the ban exists to refuse. Extend the field-shadow
-  diagnostic to both binders (the check at the declarator, `_currentClass->fieldNames.count(nm)`, gated
-  by the same static/ctor exemptions), with an `xfail` per binder. S; found by probing while fixing
-  consumer KB-20, unreported by any consumer.
+- **A `foreach` variable or `match` payload binding named like a FIELD of the enclosing type — a
+  CONSISTENCY question, and the measurement says it is not a defect.** The field-shadow ban (*"local `x`
+  shadows a field — rename it"*) is checked at a DECLARATION only. The two binders are exempt from the
+  shadowing ban by design — they name a value the loop or arm hands them, not a new declaration — so
+  `foreach (int32 count in xs)` inside a method of a type with a field `count` is accepted where
+  `int32 count = 5;` in the same body is refused.
+  ⚠️ **Probed on `0.9.252`, six shapes, and every one behaves correctly**: reading the name inside the
+  loop yields the ELEMENT (6, not the field's 300); writing it leaves the field untouched (the field
+  still reads 100); a `match` payload yields the PAYLOAD (7); and with a PARAMETER also sharing the
+  field's name — the only way a local table can hold that name at all, since a local sharing a field's
+  name is itself refused — the binder still wins inside and the parameter is restored after (56). So
+  there is **no miscompile here and no wrong answer**, which is what separates this from
+  `constparam_shadow_foreach`: that binder exemption WAS silently wrong (a const param is resolved ahead
+  of every runtime name and got discarded rather than shadowed), and it earned a rule for that reason.
+  This one earns a rule only if *readability* is the argument — the ban's own stated purpose is "one name
+  = one binding within any live scope", and a field and a loop variable sharing a name inside one body
+  reads exactly as badly as the refused declaration does.
+  **The verdict is therefore the maintainer's, not this file's**, and it is one of three: SCHEDULE it
+  (extend the check at the declarator, `_currentClass->fieldNames.count(nm)`, to both binders under the
+  same static/`ctor` exemptions, plus an `xfail` per binder — S, an hour); declare it OPTIONAL (the
+  exemption is deliberate, the behaviour is correct, and a binder is not a declaration — then say so here
+  and delete this row); or leave the asymmetry documented in SPEC so a reader is not surprised by it.
+  Found by probing while fixing consumer KB-20; unreported by any consumer, and no in-tree code does it.
 
 <a id="s3"></a>
 
