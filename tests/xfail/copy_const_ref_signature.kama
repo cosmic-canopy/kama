@@ -1,0 +1,12 @@
+// `Copyable` declares `ctor copy(ref T source)` — a MUTABLE borrow, on purpose (a retaining copy bumps a
+// count reached through the source). An implementer that writes `const ref` instead used to conform
+// silently, because nothing compared a parameter's constness: it never wrote through the source, so the
+// const-write rule had nothing to say either. Constness of a place parameter is part of the signature,
+// in both directions, exactly as a place RETURN's already is.
+type resource H implements Copyable<This>(bare: copy) {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public ctor copy(const ref H source) { return H.make(id: source.id); }   // -> REJECT: contract says `ref`
+    public const fn int32 get() { return this.id; }
+}
+fn int32 main() { H a = H.make(id: 7); H b = copy a; return b.get(); }

@@ -128,6 +128,8 @@ const_escape_ref	const_escape_ref.kama:3
 const_give	const_give.kama:7 const_give.kama:8
 const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14
+const_param_contract_drops	const_param_contract_drops.kama:9
+const_param_override_drops	const_param_override_drops.kama:17
 const_place_return	const_place_return.kama:8
 const_ptr_call_nonconst	const_ptr_call_nonconst.kama:14
 const_ptr_launder_cstr	const_ptr_launder_cstr.kama:6
@@ -189,7 +191,8 @@ contract_static_mismatch	contract_static_mismatch.kama:12
 contract_with_body	contract_with_body.kama:2
 contract_with_field	contract_with_field.kama:2
 copy_conditional_off	copy_conditional_off.kama:13
-copy_const_ref_retain_write	copy_const_ref_retain_write.kama:12
+copy_const_ref_retain_write	copy_const_ref_retain_write.kama:16
+copy_const_ref_signature	copy_const_ref_signature.kama:9
 copy_owned	copy_owned.kama:4
 copy_resource_coll	copy_resource_coll.kama:8
 copy_value	copy_value.kama:3 copy_value.kama:4

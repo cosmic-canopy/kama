@@ -842,7 +842,9 @@ plus a **public `copy` constructor** (a lone `copy` ctor without the `implements
 copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
 is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes <!-- xfail: self_returning_static_fn -->
 it — and borrowed **mutably**, not `const ref`, because a *retaining* copy bumps a refcount reached through
-the source and const is deep (the write is refused through a `const ref`, raw pointer or not). That costs <!-- xfail: copy_const_ref_retain_write -->
+the source and const is deep (the write is refused through a `const ref`, raw pointer or not). The `copy` <!-- xfail: copy_const_ref_retain_write -->
+ctor must spell that `ref` itself: a parameter's ref-constness is part of the signature (below, *const ref*), <!-- xfail: copy_const_ref_signature -->
+so `ctor copy(const ref This source)` does not conform even when it never writes through the source. That costs
 nothing at the call: a `Copyable` resource element still copies out of a `const ref` container, since the one <!-- test: copy_resource_const_ref -->
 `__copy` funnel casts the const place. Copying never consumes
 it. Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off moves)
@@ -3038,6 +3040,11 @@ read-only, and `return this.at(i: 0)` from a `ref` method would do the same thro
 Both want `const ref T` as their return type. Ref-constness is part of the signature in both directions: a
 contract member declaring `ref T` may not be implemented as `const ref T` (every caller writing through the <!-- xfail: const_ref_contract_mismatch -->
 slot would be handed a read-only place), nor the reverse, and an `override` may not change it. <!-- xfail: const_ref_override_drops -->
+The same holds for a **parameter** passed `ref`/`out`: a contract member declaring `const ref T other` may not
+be implemented as `ref T other` (a caller holding a `const` place hands it through the slot, and the body <!-- xfail: const_param_contract_drops -->
+would write through it), nor the reverse, and an `override` may not change it either. One spelling per <!-- xfail: const_param_override_drops -->
+member, so a reader knows where const is without opening the implementation. A by-value `const T x` is the
+callee's own copy, invisible to every caller, and is not compared.
 
 Unlike `const fn`, **`const ref T` is not ABI-neutral**: it lowers to `T const*` where `ref T` lowers to
 `T*`, so the C compiler's own pointer-qualifier check agrees with the front end, and a body that returns

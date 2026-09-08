@@ -16197,6 +16197,7 @@ struct CEmitter::ConfSig {
     std::string cRet, kamaRet;
     std::vector<std::string> cParam, kamaParam, label;
     std::vector<bool> byRef, isOut;
+    std::vector<bool> isConst;   // `const ref` / `const out` — signature on a PLACE parameter, see reportSigMismatch
 };
 
 // The signature of a contract member, rendered under the CONTRACT's own name-resolution scope — its
@@ -16221,6 +16222,7 @@ CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMeth
                 s.label.push_back(p && p->identifier && p->identifier->value ? *p->identifier->value : "");
                 s.byRef.push_back(p ? paramByRef(p.get()) : false);
                 s.isOut.push_back(p ? paramIsOut(p.get()) : false);
+                s.isConst.push_back(p ? p->isConst : false);
             }
     }
     return s;
@@ -16270,6 +16272,7 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
                 s.label.push_back(p && p->identifier && p->identifier->value ? *p->identifier->value : "");
                 s.byRef.push_back(p ? paramByRef(p.get()) : false);
                 s.isOut.push_back(p ? paramIsOut(p.get()) : false);
+                s.isConst.push_back(p ? p->isConst : false);
             }
         } else {
             for (auto& p : mi->params) {
@@ -16278,6 +16281,7 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
                 s.kamaParam.push_back("");      // no node to render: the message falls back to the C name
                 s.byRef.push_back(p.byRef);
                 s.isOut.push_back(p.isOut);
+                s.isConst.push_back(p.isConst);
             }
         }
     }
@@ -16400,6 +16404,22 @@ void CEmitter::reportSigMismatch(const ConfSig& want, const ConfSig& have, const
             unsupported((lead + "passes " + pos + " " + (have.isOut[i] ? "`out`" : have.byRef[i] ? "`ref`" : "by value")
                          + " — " + authority + " declares it "
                          + (want.isOut[i] ? "`out`" : want.byRef[i] ? "`ref`" : "by value") + tail).c_str(), at);
+        // Constness of a PLACE parameter is signature too, in both directions — the same rule the
+        // place-RETURN already obeys (`placeRetSuffix` folds it into `cRet`). The unsound direction is an
+        // implementation or override that DROPS `const`: dispatch goes through a slot whose declaration
+        // said `const ref`, so a caller holding a const place hands it over and the body writes through
+        // it — measured on an `override` before this clause existed. The other direction (adding `const`
+        // where the contract said `ref`) breaks no caller, but a conformance is a promise to match the
+        // declared signature, not to be compatible with it: one spelling per member, so a reader knows
+        // where const is without consulting the implementation. A by-VALUE `const T x` is the callee's own
+        // copy — invisible to every caller and absent from the C spelling — so it is not compared.
+        else if (want.byRef[i] && want.isConst[i] != have.isConst[i]) {
+            auto spell = [](bool isOut, bool isConst) {
+                return std::string(isConst ? "`const " : "`") + (isOut ? "out`" : "ref`");
+            };
+            unsupported((lead + "declares " + pos + " " + spell(have.isOut[i], have.isConst[i]) + " — " + authority
+                         + " declares it " + spell(want.isOut[i], want.isConst[i]) + tail).c_str(), at);
+        }
     }
 }
 
@@ -23312,18 +23332,11 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                                "no-heap caller dispatching through the contract still gets the guarantee")
                                 .c_str(),
                             mi->node ? mi->node->line : ci.declLine());
-            // Same argument, one level down: a `const ref T` MEMBER promises the caller its argument comes
-            // back untouched. The caller can only read the member, so an implementation that borrows the
-            // same parameter mutably silently revokes that promise for everyone bound by the contract.
-            if (m.params)
-                for (size_t pi = 0; pi < m.params->size() && pi < mi->params.size(); ++pi) {
-                    auto& mp = (*m.params)[pi];
-                    if (mp && mp->isConst && !mi->params[pi].isConst)
-                        unsupported(("parameter `" + mi->params[pi].name + "` of '" + m.name
-                                     + "' implements contract '" + ii.name + "', which declares it "
-                                       "`const` — declare it `const` here too").c_str(),
-                                    mi->node ? mi->node->line : ci.declLine());
-                }
+            // Parameter constness is NOT checked here: it is part of the signature, and the signature
+            // comparison (`reportSigMismatch`, via checkConformanceSignatures) owns it — in both directions,
+            // for every conformance including the static-only ones this vtable path skips, and for
+            // overrides. A one-direction copy used to live here and named the contract by its internal
+            // instance key; one check, one message.
             }
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)

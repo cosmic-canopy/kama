@@ -1,0 +1,13 @@
+// A contract member declaring `const ref T other` promises every caller its argument comes back untouched.
+// Dispatch goes through a slot, so an implementation that borrows the same parameter mutably would be the
+// one place that promise can be broken — a caller holding a `const` place hands it over, and the body
+// writes through it. The signature comparison refuses the conformance.
+type contract Same<T is This> for value { const fn bool same(const ref T other); }
+type value P implements Same<This> {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public const fn bool same(ref P other) { other.x = 99; return this.x == other.x; }   // -> REJECT: contract says `const ref`
+    public const fn int32 get() { return this.x; }
+}
+fn bool viaContract(const ref P a, const ref P b) { Same<P> s = a; return s.same(other: b); }
+fn int32 main() { P a = P.make(x: 1); const P b = P.make(x: 2); bool r = viaContract(a: a, b: b); return b.get(); }

@@ -1,0 +1,19 @@
+// An `override` may not change the ref-constness of a PARAMETER, for the same reason it may not change a
+// place-return's: the caller sees the base declaration. A `const ref P p` that is read-only there must
+// stay read-only behind the slot — before this was checked, the override below built clean and wrote 99
+// through a binding its caller had declared `const`.
+type value P { int32 x; public ctor make(int32 x) { this.x = x; } public fn void set(int32 v) { this.x = v; } public const fn int32 get() { return this.x; } }
+type virtual(maxDepth: 1) resource Base
+{
+    int32 n;
+    public ctor make() { this.n = 1; }
+    public const fn int32 read(const ref P p) { return this.peek(p: p); }
+    protected virtual const fn int32 peek(const ref P p) { return p.get(); }
+}
+type final resource Derived extends Base
+{
+    int32 m;
+    public ctor make() { this.base = Base.make(); this.m = 2; }
+    protected override const fn int32 peek(ref P p) { p.set(v: 99); return p.get(); }   // -> REJECT: drops `const` from `const ref`
+}
+fn int32 main() { Derived d = Derived.make(); const P q = P.make(x: 1); int32 r = d.read(p: q); return q.get(); }

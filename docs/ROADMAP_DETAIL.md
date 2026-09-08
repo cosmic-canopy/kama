@@ -680,10 +680,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `Optional` in `lib/std/ptr/`; the sentence above that scoped it "on its own schedule" is that schedule.
 - **`Simd` `sqrt`/`floor`/`ceil` — scheduled, S.** A `kama_math.h`-backed intrinsic arm on a lane batch; the
   wasm leg must prove the `-msimd128` lowering, which is why it is a row and not a footnote.
-- **`Copyable` conformance checks parameter constness — scheduled, S.** `checkConformanceSignature` compares
-  `ref`/`out` per parameter but not `const ref`, so an implementer that drops or adds `const` still conforms.
-  Tightening it is a source break for every external `Copyable`, which is why the audit's `Copyable` measurement
-  (the borrow stays mutable — prelude/global.kama says why) did not fold it in.
 - **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in
   [SPEC.md](SPEC.md) (*Explicit SIMD*); this entry keeps only the MEASUREMENTS behind it, because each one
   cost real time to obtain and every one of them contradicted an assumption someone held first.
