@@ -1,0 +1,45 @@
+// A KBIN buffer missing its closing `endObject` byte(s) is REFUSED (consumer KG-35).
+//
+// The derived enum deserializer used a bare `moreFields()` call to "close" each object. KBIN peeks 0 past
+// the end of the buffer, which is not the end tag, so that call answered true, consumed nothing and set no
+// error: once every declared field had been read, the trailing `17`s were never required, and the 49- and
+// 50-byte prefixes of a 51-byte `Create(name: "matt")` both decoded as the complete value. The value was
+// CORRECT and no shorter prefix was accepted, so this never produced a wrong message — only an accepted
+// one, which a caller without an outer length cannot tell from a complete one. Closing now DRAINS to the
+// end tag: at the end of a truncated buffer that asks `next()` past the end, which is an error.
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+};
+
+@generate(Serializable, Deserializable)
+type enum Cmd { Create(string name), Quit }
+
+fn bool decodes(DynamicArray<uint8> src) {
+    Result<Cmd, Owned<Error>> r = decode::<Cmd>(src: give src);
+    return match (r) { case Ok(value: c): true; case Err(error: e): false; };
+}
+fn DynamicArray<uint8> prefix(ref DynamicArray<uint8> b, isize n) {
+    DynamicArray<uint8> p = DynamicArray::<uint8>.empty();
+    for (isize i = 0; i < n; i = i + 1) { p.add(item: b[i]); }
+    return give p;
+}
+fn int32 main() {
+    int32 score = 0;
+    Cmd c = Cmd::Create(name: "matt");
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: c);
+    DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
+    isize n = bytes.length();
+    if (decodes(src: prefix(b: ref bytes, n: n)))      { score = score + 1; }   // complete -> Ok
+    if (!decodes(src: prefix(b: ref bytes, n: n - 1))) { score = score + 2; }   // missing the outer end -> Err
+    if (!decodes(src: prefix(b: ref bytes, n: n - 2))) { score = score + 4; }   // missing both ends -> Err
+
+    Cmd q = Cmd::Quit;
+    Result<DynamicArray<uint8>, Owned<Error>> q_r = encode(v: q);
+    DynamicArray<uint8> qb = match (give q_r) { case Ok(value: b): give b; case Err(error: __e): { return 251; } };
+    isize m = qb.length();
+    if (decodes(src: prefix(b: ref qb, n: m)))      { score = score + 8; }    // complete -> Ok
+    if (!decodes(src: prefix(b: ref qb, n: m - 1))) { score = score + 16; }   // a unit variant missing its end -> Err
+    return score;   // 31
+}

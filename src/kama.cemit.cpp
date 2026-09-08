@@ -24409,6 +24409,16 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         *_out << "}\n\n";
         return;
     }
+    // Closing an object means DRAINING it to the end tag, never a bare `moreFields()` (consumer KG-35).
+    // The bare call answered true at a truncated buffer's end (KBIN peeks 0 past the end, which is not
+    // the end tag) and consumed nothing, so an object missing its closing bytes decoded as the complete
+    // value — the 49- and 50-byte prefixes of a 51-byte `Create(name: "matt")` both came back as it.
+    // Draining makes the reader ask `next()` past the end, which IS an error, and skips any unknown
+    // trailing field on the way — the same forward-compat rule the struct path above has always had.
+    auto closeObj = [&](int d) {
+        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { kama_string __sk = r.vtbl->fieldName(r.obj); "
+                            "kama_string__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
+    };
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
     indent(1); *_out << "kama_string __k = r.vtbl->fieldName(r.obj); kama_string__dtor(&__k);\n";   // the "tag" key
@@ -24432,13 +24442,13 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
                 if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
                     cleanup += cType(f.type) + "__dtor(&__p_" + f.name + "); ";
             }
-            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the value object
-            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the outer object
+            closeObj(2);   // the value object
+            closeObj(2);   // the outer object
             indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << ", .u." << v.name << " = { ";
             for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << v.payload[i].name << " = __p_" << v.payload[i].name; }
             *_out << " } };\n";
         } else {
-            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the outer object
+            closeObj(2);   // the outer object
             indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << " };\n";
         }
         indent(1); *_out << "}\n";
