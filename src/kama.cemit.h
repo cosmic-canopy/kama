@@ -1206,6 +1206,11 @@ private:
     SavedLocalType saveLocalBinding(const std::string& name);
     void restoreLocalBindings(const std::vector<SavedLocalType>& saved);   // reverse order: first snapshot wins
     void noteScopedBinding(const std::string& name);   // save into the innermost scope (no scope: function-wide, as a param)
+    // A `foreach`/`match` binding SHADOWS an enclosing local of its name (those binders sit outside the
+    // shadowing ban) but deliberately writes neither `_localCTypes` nor the const/slot/ref/move tables —
+    // so the enclosing entry answered for it. Hide the entry for the binding's extent instead; the scope's
+    // snapshot (taken first) brings it back at the pop. `refBinder`: a `foreach (ref …)` re-inserts itself.
+    void hideShadowedLocal(const std::string& name, bool refBinder);
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (friend match)
     // Set while the emitter dispatches a call IT synthesized (string interpolation lowering `${x}` to

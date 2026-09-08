@@ -1,0 +1,19 @@
+// The move analysis of an OUTER resource survives an arm binding that shadows its name.
+//
+// A `match` arm's `armEnds` snapshot was taken before the arm scope popped, so a payload binding `m`
+// over an outer `Res m` handed ITS state to the merge under the outer name, and the pop then erased the
+// outer's state outright. The conditional move below was still caught — through the erased state, by
+// accident — so this fixture pins the rule rather than a former acceptance: the snapshot is now taken
+// after the pop, and the outer `m` reaches the `if` with its own, restored state.
+import { std::memory::Owned };
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type resource Res { Owned<Box> a; public ctor make(int32 v) { Owned<Box> b = new Box.make(v: v); this.a = give b; } public fn int32 head() { return this.a.get(); } }
+fn int32 sink(Res r) { return r.head(); }
+fn int32 main() {
+    Res m = Res.make(v: 1);
+    Optional<int32> o = Optional::Some(value: 3);
+    int32 r = 0;
+    match (o) { case Some(value: m): { r = m; } case None: { } };
+    if (r == 3) { r = sink(r: give m); }   // ERROR: the outer `m` is moved on some paths but not others
+    return r;
+}

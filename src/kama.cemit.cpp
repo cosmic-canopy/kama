@@ -1029,6 +1029,22 @@ void CEmitter::noteScopedBinding(const std::string& name)
     if (!_scopes.empty()) _scopes.back().bindings.push_back(saveLocalBinding(name));
 }
 
+// `_localCTypes` is NOT written for these binders on purpose (see bindArmPayloadTypes: a `foreach (string
+// s …)` binding is a borrow on the indexed path and an owned value on the iterator path, and an entry
+// perturbs `ownsByValue` LHS detection). Hiding is not writing: with no entry the resolvers fall through
+// to the binding's own type node, which is exactly what happens when no enclosing local shares the name.
+// Before this, `string m; foreach (E m in xs) { takeE(v: m); }` was refused for handing a `string`, a
+// `foreach (int32 m …)` inside `fn f(ref int32 m)` emitted `(*m)` on a plain int (a clang error leaked
+// through), and a payload binding `m` over an outer `Res m` read the outer's type and move state.
+void CEmitter::hideShadowedLocal(const std::string& name, bool refBinder)
+{
+    _localCTypes.erase(name);
+    _constLocals.erase(name); _constLocalVals.erase(name);
+    _slotLocals.erase(name);  _slotDeclared.erase(name);
+    _moveState.erase(name);
+    if (!refBinder) _refParams.erase(name);
+}
+
 std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj)
 {
     if (inlineSubj) *inlineSubj = false;
@@ -1080,6 +1096,7 @@ std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassI
         if (!pf) continue;                       // an unknown label is emitMatchSwitch's to report
         const std::string bn = *(*a->bindings)[i];
         saved.push_back(saveLocalBinding(bn));
+        hideShadowedLocal(bn, /*refBinder=*/false);
         // SUBSTITUTED — a generic instance stores its payload in the TEMPLATE's `T`, so the raw node
         // would classify as nothing. The binding is scoped to THIS RESOLUTION (`deepSubstInInstance`),
         // not held open by the caller: the arm body that follows belongs to the ENCLOSING generic scope,
@@ -6908,6 +6925,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // The loop scope owns the binding: the type entries below (and `_refParams` for the `ref` form)
         // must not outlive the loop, and popScope puts back whatever `nm` named outside it.
         noteScopedBinding(nm);
+        hideShadowedLocal(nm, fe->isRef);
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
         if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
 
@@ -13824,6 +13842,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
     noteScopedBinding(nm);   // the loop scope owns the binding — see the indexed path
+    hideShadowedLocal(nm, fe->isRef);
     _localTypes[nm] = elemClass;
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     if (fe->isRef) {
@@ -20653,6 +20672,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // hover, go-to-definition and rename all reach it, the same as any other named use.
                 if (a->labelIds && i < a->labelIds->size() && pf.nameId)
                     recordNodeRef((*a->labelIds)[i].get(), pf.nameId.get());
+                // The arm scope owns the binding, and whatever the name meant outside is hidden for the
+                // arm. FIRST — before the consumed-arm branch below seeds the binding's own move state,
+                // which the snapshot must not capture and the hide must not erase.
+                noteScopedBinding(bn);
+                hideShadowedLocal(bn, /*refBinder=*/false);
                 std::string bcty = fieldCType(subjCls, pf);
                 std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
                 indent(depth + 2);
@@ -20681,7 +20705,6 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     _borrowedMatchBindings.insert(bn);
                     borrowedHere.push_back(bn);
                 }
-                noteScopedBinding(bn);
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
                 // …and the TYPE NODE, which `_localTypes` deliberately drops (it keeps classes only, so a
                 // primitive payload records ""). Without it the classifier cannot answer for a payload

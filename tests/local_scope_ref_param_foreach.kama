@@ -1,0 +1,14 @@
+// A by-value `foreach` binding that shadows a `ref` PARAMETER is a plain value inside the loop.
+//
+// `_refParams` (the names whose reads deref a pointer) was never hidden by the binder, so the loop body
+// emitted `(*m)` on an `int32_t` and the failure surfaced as a clang error against generated C —
+// "indirection requires pointer operand" — with no kama diagnostic at all. The binder now hides the
+// parameter's entry for the loop's extent; after the loop `m` is the reference again.
+fn int32 bump(ref int32 m) {
+    InlineArray<int32>#(2) xs = [3, 4];
+    int32 r = 0;
+    foreach (int32 m in xs) { r = r + m; }   // 7 — the elements
+    m = m + r;                               // the parameter: 1 + 7
+    return m;
+}
+fn int32 main() { int32 v = 1; return bump(m: ref v); }   // 8
