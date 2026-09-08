@@ -310,7 +310,6 @@ gencontract_unsat	gencontract_unsat.kama:15
 generate_eq_unconformed_field	generate_eq_unconformed_field.kama:8
 generate_generic_unmet	generate_generic_unmet.kama:16
 generate_of_on_enum	generate_of_on_enum.kama:7
-generate_on_plain_enum	generate_on_plain_enum.kama:4
 generate_unknown_name	generate_unknown_name.kama:4
 generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2
 generic_arity	generic_arity.kama:4
@@ -658,7 +657,7 @@ sendable_lie_shared_field	sendable_lie_shared_field.kama:7
 sendable_undeclared_channel	sendable_undeclared_channel.kama:7
 sendable_undeclared_field	sendable_undeclared_field.kama:6
 sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10
-ser_field_no_conformance	ser_field_no_conformance.kama:14
+ser_field_no_conformance	ser_field_no_conformance.kama:15
 ser_field_no_generate	ser_field_no_generate.kama:2
 ser_unmarked_field	ser_unmarked_field.kama:5
 serialize_isize_field	serialize_isize_field.kama:13

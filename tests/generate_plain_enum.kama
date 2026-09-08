@@ -1,0 +1,51 @@
+// `@generate(...)` on a PAYLOAD-LESS enum. It used to be refused — "has nothing to synthesize on the
+// payload-less enum `Color` (it is a bare integer, not a struct)" — which was true of the enum as it
+// stood and false as a conclusion: an enum that writes `implements Hashable` by hand has exactly the
+// same problem and is not refused. `collectEnumConformances` PROMOTES it to a variant ClassInfo, which
+// is where a conformance and a method can live. `@generate` asks for the same thing in fewer words, so
+// it takes the same road. (The promotion is lossless — 0.9.234 is the commit that made sure of it, and
+// the four lines below re-prove it here: `==`, `cast<int32>`, an explicit member value, and `match`.)
+//
+// Closes the second half of consumer bug KB-19: `Deserializable` on an enum used to register only for
+// the MIXED shape — some variants with payloads, some without. All-payload was the `hasUnit` gate
+// (tests/generate_enum_derives); all-unit was this refusal.
+import { std::collections::Map, std::serialization::json::encode, std::serialization::json::decode };
+
+@generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
+type enum Color { Red, Green = 5, Blue }
+
+fn int32 main() {
+    Color g = Color::Green;
+    Color r = Color::Red;
+
+    // The integer nature, kept: `==` still lowers to a raw tag compare (the derived `equals` exists and
+    // is what a Map key uses, but `==` does not pay for a call), and the member VALUE survives promotion.
+    if (g != Color::Green) { return 91; }
+    if (g == r)            { return 92; }
+    if (cast<int32>(g) != 5) { return 93; }
+
+    // A payload-less variant formats as its bare name — there is no `{ … }` because there is no payload.
+    if (!"${g}".equals(other: "Green")) { return 94; }
+    if (!"a ${r} b".equals(other: "a Red b")) { return 95; }
+
+    Map<Color, int32> m = Map.empty();
+    m.put(key: Color::Red,  value: 4);
+    m.put(key: Color::Blue, value: 8);
+    int32 red  = match (m.get(key: Color::Red))  { case Some(value: v): v; case None: 0; };
+    int32 blue = match (m.get(key: Color::Blue)) { case Some(value: v): v; case None: 0; };
+
+    // On the wire it is a NAME, not a record: `"Green"`, never `{"tag":"Green"}`. There is no payload
+    // for an object to carry, and the shape is decided by the TYPE, so a schema still reads cleanly.
+    Result<string, Owned<Error>> j = encode(v: g);
+    string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
+    if (!js.equals(other: "\"Green\"")) { return 96; }
+
+    Result<Color, Owned<Error>> back = decode::<Color>(src: give js);
+    int32 bv = match (back) { case Ok(value: c): cast<int32>(c); case Err(error: e2): 0 - 1; };
+
+    // A name that matches no variant is an `Err` — not a silently-wrong variant.
+    Result<Color, Owned<Error>> bad = decode::<Color>(src: "\"Puce\"");
+    int32 rej = match (bad) { case Ok(value: c2): 0 - 50; case Err(error: e3): 20; };
+
+    return red + blue + bv + rej;   // 4 + 8 + 5 + 20 = 37
+}

@@ -3834,7 +3834,12 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // it is a `struct { Tag tag; }`) must not lose the operator merely for having done so. Comparing
         // the tags is what the integer form compiles to. Ordering is NOT included: `<` on an enum needs
         // `Comparable`, which the message below still says.
-        if (!cm && eq && isUnitEnum(lc)) {
+        // ...and the same shortcut when the `equals` in hand is the SYNTHESIZED one: a derived
+        // `Color__equals` on a unit-only enum is `self->tag == other->tag` wearing a function call, so
+        // taking the call would make `@generate(Equatable)` cost something that `implements Equatable`
+        // does not. A HAND-WRITTEN `equals` still wins — the author meant it — and the derived body is
+        // still emitted and still used wherever the conformance is (a `Map` key, a `<T: Equatable>` bound).
+        if ((!cm || cm->isSynthCmp) && eq && isUnitEnum(lc)) {
             const std::string l = unitEnumTag(lhs), r = unitEnumTag(rhs);
             return "(" + l + (token == EQEQ ? " == " : " != ") + r + ")";
         }
@@ -8124,18 +8129,13 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             continue;
         }
 
-        // A plain C-style enum is a bare integer with no ClassInfo, so there is nothing for `@generate` to
-        // synthesize into — and it used to be SILENTLY IGNORED, which is the worst answer: the attribute
-        // reads as if it worked and the missing conformance only surfaces somewhere far away. Say so, and
-        // point at the enum's own `implements` clause, which is where a conformance is declared.
-        if (ed->attributes)
-            for (auto& at : *ed->attributes)
-                if (at && at->name && *at->name == "generate")
-                    unsupported(("`@generate(...)` has nothing to synthesize on the payload-less enum `"
-                                 + *ed->identifier->value + "` (it is a bare integer, not a struct) — declare "
-                                 "the conformance on the enum itself and write the method: `type enum "
-                                 + *ed->identifier->value + " implements <Contract> { …variants…; …methods… }`")
-                                .c_str(), ed->line);
+        // A payload-less enum carrying `@generate` is NOT handled here. It is a bare C integer at this
+        // point, with no ClassInfo to synthesize into — which is what the refusal that used to stand here
+        // said. But an enum that declares `implements` has exactly the same problem and is not refused:
+        // collectEnumConformances PROMOTES it to a variant ClassInfo, which is where a conformance and a
+        // method can live. `@generate` asks for the same thing by a shorter spelling, so it takes the same
+        // road; the promotion is lossless (0.9.234 made sure `==`, `cast<int32>`, `try cast` and the
+        // member values all survive it). See collectEnumConformances, which reads the attribute itself.
         // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
         EnumInfo ei;
         ei.name  = name;
@@ -16565,22 +16565,35 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
+        // Whose code this is. Every diagnostic raised below is ABOUT a declaration in `u`, and in a
+        // multi-file build `_sourcePath` is still "" here — so without this they report no file at all,
+        // exactly as the four collectors in the main sweep say. It started mattering when registerDerives
+        // began firing from here (`@generate(of)` on an enum reports against the enum's own line).
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         for (auto& decl : *u->codeDeclarationList) {
             auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
             if (!ed || !ed->identifier || !ed->identifier->value) continue;
             bool hasMembers = ed->members && !ed->members->empty();
             SharedIdentifierList ifaceNodes = ed->baseTypes ? ed->baseTypes->interfaces : SharedIdentifierList();
             bool hasIfaces = ifaceNodes && !ifaceNodes->empty();
-            if (!hasMembers && !hasIfaces) continue;   // an ordinary enum — the lightweight path, untouched
+            // `@generate` is a third reason to promote, and the same reason as the other two: a
+            // conformance and a method need somewhere to live, and a bare C integer has nowhere. An enum
+            // that spells the conformance out (`implements Hashable` + a hand-written `hash`) has always
+            // come through here; one that asks for the derived version is asking for the same thing.
+            bool hasGen = hasGenerateAttr(ed->attributes);
+            if (!hasMembers && !hasIfaces && !hasGen) continue;   // an ordinary enum — the lightweight path, untouched
 
             const std::string& bare = *ed->identifier->value;
             if (ed->baseTypes && ed->baseTypes->base)
                 unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
                              "a contract is declared with `implements`").c_str(), ed->line);
             if (ed->typeParams && !ed->typeParams->empty()) {
-                unsupported(("`type enum " + bare + "<…>` cannot declare members or contracts yet — a "
-                             "generic enum is a monomorphization template, so each instance would need its "
-                             "own conformance").c_str(), ed->line);
+                // A generic enum's `@generate` is handled at its TEMPLATE (collectEnums) and applied per
+                // instance, so it never needs this path; only members/contracts are refused here.
+                if (hasMembers || hasIfaces)
+                    unsupported(("`type enum " + bare + "<…>` cannot declare members or contracts yet — a "
+                                 "generic enum is a monomorphization template, so each instance would need its "
+                                 "own conformance").c_str(), ed->line);
                 continue;
             }
             std::string name = qualify(bare);
@@ -16638,6 +16651,18 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 // Dynamic dispatch through a fat pointer + (P2) boxing into `Owned<C>`.
                 if (eci.isVariant) _polyDispatchContracts.insert(c);
                 checkImplCompleteness(eci, c, bare, ed->line);
+            }
+
+            // ...and LAST, the derives. After injectImplMethods and the `implements` loop, both because a
+            // hand-written `equals`/`hash`/`format` must win registerDerives' `!methods.count` guard, and
+            // because checkImplCompleteness above must not be asked about a method that has not been
+            // synthesized yet. A tagged enum has already been through this in collectEnums, so only a
+            // PROMOTED (payload-less) one reaches it here — `hasGen` is what brought it.
+            if (hasGen && !eci.genSerialize && !eci.genDeserialize && !eci.genFormat
+                && !eci.genEquatable && !eci.genHashable && !eci.genOf && !eci.genZero) {
+                for (auto& at : *ed->attributes)
+                    if (at && at->name && *at->name == "generate") parseGenerateAttr(at, eci, ed->line);
+                registerDerives(eci, ed->identifier, ed->line);
             }
         }
     }
@@ -24178,6 +24203,29 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     // emitClassPrototypes already wrote for it, or each TU gets its own external copy of the same symbol.
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    // A PAYLOAD-LESS enum is a NAME, not a record, and it goes on the wire as one: `"Green"`, not
+    // `{"tag":"Green"}`. There is no payload for the object to carry, so the object would be a wrapper
+    // around nothing — and a bare string is what every other format writes for a fieldless variant
+    // (serde_json included). The shape is decided by the TYPE, not per value, so a schema still reads
+    // cleanly: a payload-less enum is always a string, a tagged one is always an object.
+    if (isUnitEnum(ci.name)) {
+        indent(1); *_out << "switch (self->tag) {\n";
+        for (auto& v : ci.variants) {
+            indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+            indent(2); *_out << "kama_string __tv = " << kamaStrLit(v.name) << "; w->vtbl->writeString(w->obj, &__tv);\n";
+            indent(2); *_out << "break;\n";
+            indent(1); *_out << "}\n";
+        }
+        indent(1); *_out << "default: break;\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+        std::string ubox = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ubox << " } };\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+        *_out << "}\n\n";
+        return;
+    }
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
     indent(1); *_out << "switch (self->tag) {\n";
     for (auto& v : ci.variants) {
@@ -24217,6 +24265,27 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(Deserializer r)\n{\n";   // linkage: see emitEnumSerializeDefinition
     indent(1); *_out << ci.name << " __result = (" << ci.name << "){0};\n";
+    // The reader half of the bare-string form — read the name, match it against the variants, and Err on
+    // one that names none (there is no "unknown" variant to park on and no payload to skip).
+    if (isUnitEnum(ci.name)) {
+        indent(1); *_out << "kama_string __nm = r.vtbl->readString(r.obj);\n";
+        bool firstU = true;
+        for (auto& v : ci.variants) {
+            indent(1); *_out << (firstU ? "if" : "else if") << " (kama_string__equals(&__nm, " << kamaStrLit(v.name) << ")) {\n";
+            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << " };\n";
+            indent(1); *_out << "}\n";
+            firstU = false;
+        }
+        indent(1); *_out << "else { r.vtbl->fail(r.obj); }\n";
+        indent(1); *_out << "kama_string__dtor(&__nm);\n";
+        indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+        std::string nbox = emitStickyErrBox(2);
+        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << nbox << " } };\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __result } };\n";
+        *_out << "}\n\n";
+        return;
+    }
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
     indent(1); *_out << "kama_string __k = r.vtbl->fieldName(r.obj); kama_string__dtor(&__k);\n";   // the "tag" key

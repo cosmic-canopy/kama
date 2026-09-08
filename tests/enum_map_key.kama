@@ -1,6 +1,8 @@
-// The working path for a payload-less enum: a declared `implements` supplies the same two contracts
-// the `@generate` derive supplies for a struct, and the enum becomes an ordinary `Map` key. Kept as the
-// counterpart to xfail/generate_on_plain_enum, which points here.
+// A payload-less enum as a `Map` key, by declaring `implements` and writing the two methods by hand.
+// The counterpart is now tests/generate_plain_enum, which asks for the SAME two contracts with
+// `@generate(Equatable, Hashable)` and gets the derived bodies — both roads go through the same
+// promotion to a variant ClassInfo, which is the whole reason `@generate` on such an enum could stop
+// being refused. This one pins the hand-written road: a derive must never be the only way in.
 import { std::collections::Map };
 
 type enum Color implements Hashable, Equatable<This> {

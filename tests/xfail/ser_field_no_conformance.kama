@@ -3,8 +3,9 @@
 // defines, so the kama build was clean and clang failed on an implicit declaration. The sibling
 // `serdeRejectsPrimitive` had already closed the same hole for `isize`; this is its composite half.
 //
-// A payload-less enum is the shape that reaches it most easily — it cannot carry `@generate` today, so
-// nothing about it looks wrong at the field's declaration.
+// A payload-less enum is the shape that reaches it most easily. It CAN carry `@generate` now
+// (tests/generate_plain_enum) — the point here is the one that has not, so nothing about it looks
+// wrong at the field's declaration, and the diagnostic has to be the thing that says so.
 import { std::serialization::json::encode };
 
 type enum Color { Red, Green }
