@@ -718,11 +718,13 @@ FIXTURE="$ROOT/tests/query/complete.kama"
 # ⚠️ THE LINE NUMBERS ARE THE ASSERTION, not decoration. tools/embed_prelude.sh wrapped each source as
 # `R"KAMASRC(\n<file>` — that newline was line 1 of the embedded copy, so every declaration sat one line
 # below where it does on disk. Nothing could see it while nothing pointed at the file; the moment
-# go-to-definition did, `Optional` opened the blank line under itself. Pinning `8:10` here is what stops
-# that returning (and any real edit to global.kama's head will fail this and should).
+# go-to-definition did, `Optional` opened the blank line under itself. Pinning the exact line/column here
+# is what stops that returning — and any real edit to global.kama's head fails this and should. It has
+# done its job once already: `Optional` moved from line 8 to line 15 when it gained `@generate`, and this
+# is the assertion that said so. Update the number WITH the edit; never relax it to a line range.
 echo "check-query: go-to-definition reaches the prelude"
-expect --def 102:4  -- "prelude/global.kama:8:10"    # `Optional` -> its declaration, not `no definition`
-expect --def 102:27 -- "prelude/global.kama:8:10"    # ...and from the `Optional::` qualifier too
+expect --def 102:4  -- "prelude/global.kama:15:10"    # `Optional` -> its declaration, not `no definition`
+expect --def 102:27 -- "prelude/global.kama:15:10"    # ...and from the `Optional::` qualifier too
 expect --def 118:4  -- "std/memory/owned.kama:12:14" # `Owned` -> the embedded built-in MODULE's own file
 # The prelude stays READ-ONLY, and that is the point of `DefSite::file` being a second field rather than
 # a `unit`. Not owning a declaration is a reason to refuse to REWRITE it; it was never a reason to refuse

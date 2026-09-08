@@ -909,8 +909,8 @@ echo "check-lsp: go-to-definition reaches the prelude"
 # its path on the way in. Nothing is synthesized to answer this — the definition was always written.
 expect '"id":75,"result":{"uri":"'"$(furi "$ROOT/prelude/global.kama")"'"' \
     "definition: F12 on \`Optional\` opens prelude/global.kama"
-expect '"id":75,"result":{"uri":"'"$(furi "$ROOT/prelude/global.kama")"'","range":{"start":{"line":7,"character":10},"end":{"line":7,"character":18}}}' \
-    "definition: ...on the declaration ITSELF (kama 8:10 — the embed used to shift every line by one)"
+expect '"id":75,"result":{"uri":"'"$(furi "$ROOT/prelude/global.kama")"'","range":{"start":{"line":14,"character":10},"end":{"line":14,"character":18}}}' \
+    "definition: ...on the declaration ITSELF (kama 15:10 — the embed used to shift every line by one)"
 # ⚠️ AND IT IS STILL READ-ONLY. These two are why `DefSite` gained a `file` rather than a `unit`: not
 # owning a declaration is a reason to refuse to REWRITE it, and was never a reason to refuse to OPEN it.
 # A prelude that became renameable would be a regression the assertion above cannot see.
