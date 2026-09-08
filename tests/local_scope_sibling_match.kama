@@ -1,0 +1,25 @@
+// A local declared in one block is gone when the block closes — a later SIBLING block may bind the
+// same name and gets ITS type (consumer KB-20).
+//
+// The emitter's per-name local tables were flat maps that `popScope` never touched, so `string m` here
+// stayed typed to the end of `main`. A `match` payload binding does not write `_localCTypes` (by design:
+// that map drives ownership detection), so `lvalueCType` — which `typeOfExpr` consults FIRST — answered
+// the stale `kama_string` for the binding, and the call below was rejected with "argument `v` expects a
+// type value, so it cannot be given a `string`": valid code refused, diagnosed at the wrong line, naming
+// neither the binding nor the block the stale type came from. Neither block encloses the other, so there
+// is nothing here to shadow; the SPEC says sibling scopes may reuse a name freely.
+//
+// Fixed at the root: a `Scope` owns the table entries its binders displace and restores them on pop.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    Optional<E> inner = Optional::Some(value: E.of(n: 5));
+    int32 r = 0;
+    if (r == 1) {
+        string m = "boom";                    // sibling block — does NOT enclose the one below
+        r = cast<int32>(m.length());
+    } else {
+        match (inner) { case Some(value: m): { r = takeE(v: m); } case None: { } };
+    }
+    return r;   // 5
+}

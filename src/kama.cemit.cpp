@@ -989,12 +989,44 @@ static bool isTryCast(const ASTNode* n)
     return c && c->isTry;
 }
 
-void CEmitter::restoreLocalTypeBindings(const std::vector<SavedLocalType>& saved)
+CEmitter::SavedLocalType CEmitter::saveLocalBinding(const std::string& name)
 {
-    for (auto& sv : saved) {
-        if (sv.had)     _localTypes[sv.name]     = sv.prev;     else _localTypes.erase(sv.name);
-        if (sv.hadNode) _localTypeNodes[sv.name] = sv.prevNode; else _localTypeNodes.erase(sv.name);
+    SavedLocalType sv; sv.name = name;
+    auto t = _localTypes.find(name);     if (t != _localTypes.end())     { sv.had = true;         sv.prev = t->second; }
+    auto c = _localCTypes.find(name);    if (c != _localCTypes.end())    { sv.hadC = true;        sv.prevC = c->second; }
+    auto n = _localTypeNodes.find(name); if (n != _localTypeNodes.end()) { sv.hadNode = true;     sv.prevNode = n->second; }
+    auto v = _constLocalVals.find(name); if (v != _constLocalVals.end()) { sv.hadConstVal = true; sv.prevConstVal = v->second; }
+    auto m = _moveState.find(name);      if (m != _moveState.end())      { sv.hadMove = true;     sv.prevMove = m->second; }
+    sv.hadConst    = _constLocals.count(name);
+    sv.hadSlot     = _slotLocals.count(name);
+    sv.hadSlotDecl = _slotDeclared.count(name);
+    sv.hadRef      = _refParams.count(name);
+    return sv;
+}
+
+// Reverse order, so a name bound twice in one scope (the re-declaration diagnostic keeps emitting)
+// unwinds to what the FIRST binding displaced.
+void CEmitter::restoreLocalBindings(const std::vector<SavedLocalType>& saved)
+{
+    for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+        const SavedLocalType& sv = *it;
+        if (sv.had)         _localTypes[sv.name]     = sv.prev;         else _localTypes.erase(sv.name);
+        if (sv.hadC)        _localCTypes[sv.name]    = sv.prevC;        else _localCTypes.erase(sv.name);
+        if (sv.hadNode)     _localTypeNodes[sv.name] = sv.prevNode;     else _localTypeNodes.erase(sv.name);
+        if (sv.hadConstVal) _constLocalVals[sv.name] = sv.prevConstVal; else _constLocalVals.erase(sv.name);
+        if (sv.hadMove)     _moveState[sv.name]      = sv.prevMove;     else _moveState.erase(sv.name);
+        if (sv.hadConst)    _constLocals.insert(sv.name);    else _constLocals.erase(sv.name);
+        if (sv.hadSlot)     _slotLocals.insert(sv.name);     else _slotLocals.erase(sv.name);
+        if (sv.hadSlotDecl) _slotDeclared.insert(sv.name);   else _slotDeclared.erase(sv.name);
+        if (sv.hadRef)      _refParams.insert(sv.name);      else _refParams.erase(sv.name);
     }
+}
+
+// With no scope open the binding is function-wide (a parameter, the `parallel_for` worker's captures) and
+// the per-body reset at the next function entry is what retires it — exactly as before.
+void CEmitter::noteScopedBinding(const std::string& name)
+{
+    if (!_scopes.empty()) _scopes.back().bindings.push_back(saveLocalBinding(name));
 }
 
 std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj)
@@ -1047,10 +1079,7 @@ std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassI
         for (auto& f : vc->payload) if (f.name == lbl) { pf = &f; break; }
         if (!pf) continue;                       // an unknown label is emitMatchSwitch's to report
         const std::string bn = *(*a->bindings)[i];
-        saved.push_back({bn, (bool)_localTypes.count(bn),
-                         _localTypes.count(bn) ? _localTypes[bn] : std::string(),
-                         (bool)_localTypeNodes.count(bn),
-                         _localTypeNodes.count(bn) ? _localTypeNodes[bn] : SharedIdentifier()});
+        saved.push_back(saveLocalBinding(bn));
         // SUBSTITUTED — a generic instance stores its payload in the TEMPLATE's `T`, so the raw node
         // would classify as nothing. The binding is scoped to THIS RESOLUTION (`deepSubstInInstance`),
         // not held open by the caller: the arm body that follows belongs to the ENCLOSING generic scope,
@@ -1320,7 +1349,7 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                 std::vector<SavedLocalType> bound;
                 if (mci) bound = bindArmPayloadTypes(*mci, a);
                 std::string ac = typeOfExpr(v);
-                restoreLocalTypeBindings(bound);
+                restoreLocalBindings(bound);
                 if (!ac.empty()) { answer = ac; break; }
             }
             if (!answer.empty()) return answer;
@@ -4844,9 +4873,16 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
 // than inherit a stale Moved (the sibling-scope false use-after-move bug). Erasing an untracked name
 // is a harmless no-op, so the pass is uniform. Only true scope-pops call this; the early-exit dtor
 // walks for return/break/continue leave enclosing scopes live and must NOT clear their move-state.
+//
+// Then the scope's bindings unwind — every per-name table entry a binder here displaced comes back (see
+// `SavedLocalType`). AFTER the move-state erase, on purpose: a `match`/`foreach` binding may shadow an
+// enclosing move-tracked local of the same name, and the erase above would otherwise be the last word on
+// the OUTER local's state. The `_scopes.clear()` resets at body entry/exit skip this, and may: every one
+// sits beside (or right before) the per-body table reset that retires the whole function's entries.
 void CEmitter::popScope()
 {
     for (auto& l : _scopes.back().locals) _moveState.erase(l.cVar);
+    restoreLocalBindings(_scopes.back().bindings);
     _scopes.pop_back();
 }
 
@@ -5143,6 +5179,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             indent(depth + 1);
             *_out << viewCType << " " << alias << " = " << vmi->cName
                   << "(&(" << emitExpression(recvExpr) << "));\n";
+            noteScopedBinding(alias);   // the window's scope owns the alias — popScope retires all three entries
             _localTypes[alias] = viewCType;
             // An alias is an ordinary local in every way a later statement can ask about, and generic
             // INFERENCE asks through `_localCTypes` — without this, `sort(items: v)` on an alias could not
@@ -5168,14 +5205,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
     indent(depth); *_out << "}\n";
-    if (bn->bindings)
-        for (auto& b : *bn->bindings)
-            if (b && b->alias && b->alias->value) {
-                _localTypes.erase(*b->alias->value);
-                _localCTypes.erase(*b->alias->value);
-                _localTypeNodes.erase(*b->alias->value);
-            }
-    popScope();
+    popScope();   // retires the aliases
 }
 
 // Synthesize the `View<elem>` type node the loop iterates, so the scan passes register that instance
@@ -5494,6 +5524,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         auto savedLocalCTypes         = _localCTypes;
         auto savedLocalTypeNodes      = _localTypeNodes;
         auto savedConstLocals         = _constLocals;
+        auto savedSlotLocals          = _slotLocals;
+        auto savedSlotDeclared        = _slotDeclared;
         auto savedMoveState           = _moveState;
         auto savedScopes              = _scopes;
         auto savedHoisted             = _hoisted;
@@ -5537,6 +5569,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _refParams       = savedRefParams;   _paramNames      = savedParamNames;
         _localTypes      = savedLocalTypes;  _localCTypes     = savedLocalCTypes;
         _localTypeNodes  = savedLocalTypeNodes; _constLocals  = savedConstLocals;
+        _slotLocals      = savedSlotLocals;  _slotDeclared    = savedSlotDeclared;
         _moveState       = savedMoveState;   _scopes          = savedScopes;
         _hoisted         = savedHoisted;     _currentClass    = savedClass;
         _currentReturnCType = savedRetC;     _tempCounter     = savedTemp;
@@ -6050,6 +6083,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                      "rooted in a window, or in a by-value view parameter, needs no "
                                      "window of its own").c_str(), n->line);
                 }
+                noteScopedBinding(nm);                        // the block owns it: popScope retires every entry below
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
                 _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
                 _localTypeNodes[nm] = declType;               // kama type node (keeps char vs uint32 for interpolation)
@@ -6735,6 +6769,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* f = dynamic_cast<ForNode*>(n)) {
         line(n->line);
+        // The counter the init declares lives exactly as long as the loop — in C, and in kama's binding
+        // tables through this wrapper Scope, which owns the init's bindings and nothing else: it emits no
+        // block and is NOT a loop boundary (the body scope is; break/continue unwind to that one). Any
+        // init/condition temp recorded into it is handed back to the enclosing scope below, so dtor
+        // emission is exactly what it was when the enclosing scope held them directly. Without it the
+        // counter stayed typed to the end of the enclosing block — `for (int32 i …) {}` followed by
+        // `foreach (E i in xs)` handed the second `i` the first one's `int32_t`.
+        _scopes.push_back(Scope());
         std::string init = emitForClause(f->initializerStatements);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(f->booleanExpression);
@@ -6760,6 +6802,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << "\n";
             indent(depth); *_out << "}\n";
         }
+        {   // hand any temps the wrapper collected back to the enclosing scope, then retire the counter
+            Scope& wrap = _scopes.back();
+            if (_scopes.size() >= 2 && !wrap.locals.empty()) {
+                auto& outer = _scopes[_scopes.size() - 2].locals;
+                outer.insert(outer.end(), wrap.locals.begin(), wrap.locals.end());
+                wrap.locals.clear();
+            }
+        }
+        popScope();
         return;
     }
 
@@ -6854,21 +6905,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         Scope sc; sc.isLoopBoundary = true;
         _scopes.push_back(sc);
         registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
-        bool hadType = _localTypes.count(nm);
-        std::string prevType = hadType ? _localTypes[nm] : std::string();
+        // The loop scope owns the binding: the type entries below (and `_refParams` for the `ref` form)
+        // must not outlive the loop, and popScope puts back whatever `nm` named outside it.
+        noteScopedBinding(nm);
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
-        // Saved/restored like `_localTypes` beside it — the binding's type must not outlive the loop. It
-        // never was, which was latent only while `narrowCheck` alone read this map; now that `typeOfExpr`
-        // serves it to every numeric rule, a leaked entry types a same-named local in the enclosing scope.
-        bool hadNode = _localTypeNodes.count(nm);
-        SharedIdentifier prevNode = hadNode ? _localTypeNodes[nm] : SharedIdentifier();
         if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
 
         // `foreach (ref T e …)` binds each element by PLACE (a bounds-checked `T*` via `__at`), so
         // mutation persists; `e` joins `_refParams` so reads/writes in the body deref it (`(*e)`),
         // exactly like a `ref` parameter. Plain `foreach` binds a borrowed COPY (`__get`). Neither
         // is recorded destructible (the collection owns the element).
-        bool hadRef = _refParams.count(nm);
         indent(depth + 2);
         if (fe->isRef) {
             *_out << elemTy << "* " << nm << " = " << coll << "__at(" << fp << ", " << ix << ");\n";
@@ -6884,11 +6930,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitStatement(fe->body, depth + 2); last = fe->body;
         }
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
-
-        if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
-        if (hadNode) _localTypeNodes[nm] = prevNode; else _localTypeNodes.erase(nm);
-        if (fe->isRef && !hadRef) _refParams.erase(nm);
-        popScope();
+        popScope();   // retires the binding — see noteScopedBinding above
 
         indent(depth + 1); *_out << "}\n";   // close for
         indent(depth);     *_out << "}\n";   // close wrapper
@@ -7444,7 +7486,9 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
                 // does — it used to be invisible to all of them, so the counter of every `for` loop in the
                 // corpus reached the identifier arm as a name nothing bound. Not pushed onto the scope's
                 // `declaredNames`: two sequential loops over `i` in one function are ordinary, not shadowing.
+                // Owned by the `for`'s wrapper scope (emitStatement's ForNode arm), so it dies with the loop.
                 if (!nm.empty()) {
+                    noteScopedBinding(nm);
                     _localTypes[nm]     = (isClass(ty) || isInterface(ty)) ? ty : "";
                     _localCTypes[nm]    = ty;
                     _localTypeNodes[nm] = decl->type;
@@ -13779,13 +13823,9 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     }
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
-    bool hadType = _localTypes.count(nm);
-    std::string prevType = hadType ? _localTypes[nm] : std::string();
+    noteScopedBinding(nm);   // the loop scope owns the binding — see the indexed path
     _localTypes[nm] = elemClass;
-    bool hadNode = _localTypeNodes.count(nm);              // restored below, like `_localTypes` — see the indexed path
-    SharedIdentifier prevNode = hadNode ? _localTypeNodes[nm] : SharedIdentifier();
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
-    bool hadRef = _refParams.count(nm);
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
         indent(depth + 2); *_out << elemTy << "* " << nm << " = " << nextCall << ";\n";
@@ -13809,11 +13849,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         emitStatement(fe->body, depth + 2); last = fe->body;
     }
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
-
-    if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
-    if (hadNode) _localTypeNodes[nm] = prevNode; else _localTypeNodes.erase(nm);
-    if (fe->isRef && !hadRef) _refParams.erase(nm);
-    popScope();
+    popScope();   // retires the binding
 
     indent(depth + 1); *_out << "}\n";   // close while
     emitScopeCleanup(_scopes.back(), depth + 1);   // drop relocated iterable temps (e.g. `s.trim()`) after the loop
@@ -20556,8 +20592,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         if (!a->isWildcard()) for (auto& v : ci.variants) if (v.name == *a->variantName) { vc = &v; break; }
 
         // Fresh arm scope; bind the payload fields (borrowed copies — same as a foreach element).
-        Scope sc; _scopes.push_back(sc);
-        std::vector<SavedLocalType> savedTypes;   // shared shape with the classifier's arm binding
+        Scope sc; _scopes.push_back(sc);          // owns the arm's payload bindings — popScope retires them
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
         bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
         if (a->bindings && !a->bindings->empty()) {
@@ -20646,10 +20681,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     _borrowedMatchBindings.insert(bn);
                     borrowedHere.push_back(bn);
                 }
-                savedTypes.push_back({bn, (bool)_localTypes.count(bn),
-                                      _localTypes.count(bn) ? _localTypes[bn] : std::string(),
-                                      (bool)_localTypeNodes.count(bn),
-                                      _localTypeNodes.count(bn) ? _localTypeNodes[bn] : SharedIdentifier()});
+                noteScopedBinding(bn);
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
                 // …and the TYPE NODE, which `_localTypes` deliberately drops (it keeps classes only, so a
                 // primitive payload records ""). Without it the classifier cannot answer for a payload
@@ -20735,11 +20767,15 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         }
         indent(depth + 2); *_out << "break;\n";
 
-        restoreLocalTypeBindings(savedTypes);
         for (auto& bn : borrowedHere) _borrowedMatchBindings.erase(bn);
+        popScope();   // retires the payload bindings — the state of anything they shadowed comes back with them
+        // Captured AFTER the pop, on purpose. A payload binding may shadow an enclosing move-tracked local
+        // of the same name; captured before the pop, the merge read the BINDING's state under the outer
+        // name and the pop then erased the outer local's state outright. The merge reads only the names
+        // live before the match and falls back to their before-state for a key that is missing, so the
+        // post-pop map — arm locals gone, shadowed names restored, moves of enclosing locals kept — is exact.
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
-        popScope();
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);

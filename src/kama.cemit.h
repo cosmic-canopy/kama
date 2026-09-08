@@ -1188,6 +1188,24 @@ private:
     // owns, so `give`ing one out double-frees. Non-giveable: a give of a name in here is a hard error
     // (the consuming `match (give x)` is the way to move a payload out). Scoped per-arm.
     std::set<std::string> _borrowedMatchBindings;
+    // ONE name's entry in EVERY per-name local table above (and `_constLocals`/`_constLocalVals` below),
+    // so a scoped binding can be undone at scope exit. Those tables are flat maps with no scope of their
+    // own; until a `Scope` owned the bindings it introduced, a block-declared local lived to the end of its
+    // function, and a later SIBLING block's `match`/`foreach` binding of the same name — which by design
+    // does not write `_localCTypes` — was typed by the stale entry (consumer KB-20; the same leak sat in
+    // `_constLocals`, `_slotLocals` and `_refParams`). `saveLocalBinding` takes one BEFORE the binder
+    // writes; `popScope` restores a scope's, in reverse, when it closes. Shared by the match emitter and
+    // the classifier's arm binding, which may not diagnose and so pushes no scope of its own.
+    struct SavedLocalType {
+        std::string name;
+        bool had = false, hadC = false, hadNode = false, hadConst = false, hadConstVal = false,
+             hadSlot = false, hadSlotDecl = false, hadRef = false, hadMove = false;
+        std::string prev, prevC; SharedIdentifier prevNode; int64_t prevConstVal = 0;
+        MoveState prevMove = MoveState::NotMoved;
+    };
+    SavedLocalType saveLocalBinding(const std::string& name);
+    void restoreLocalBindings(const std::vector<SavedLocalType>& saved);   // reverse order: first snapshot wins
+    void noteScopedBinding(const std::string& name);   // save into the innermost scope (no scope: function-wide, as a param)
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (friend match)
     // Set while the emitter dispatches a call IT synthesized (string interpolation lowering `${x}` to
@@ -1648,9 +1666,13 @@ private:
                    // `match` bindings, which the index does want. Popping the scope is what makes two
                    // same-named locals in sibling scopes resolve to their own declaration.
                    struct IndexDecl { std::string name, key; };
-                   std::vector<IndexDecl> indexDecls; };
-    // Erase move-state for the closing scope's locals, then pop it. A name going out of scope is
-    // lexically dead, so a sibling scope reusing it must start NotMoved (not inherit a stale Moved).
+                   std::vector<IndexDecl> indexDecls;
+                   // The per-name table entries this scope's binders displaced (declared locals, `for`
+                   // counters, `foreach`/`match`/`borrow` bindings), restored in reverse when it pops.
+                   std::vector<SavedLocalType> bindings; };
+    // Erase move-state for the closing scope's locals, restore the table entries its bindings displaced,
+    // then pop it. A name going out of scope is lexically dead: a sibling scope reusing it must start
+    // NotMoved (not inherit a stale Moved) and must not see the dead binding's type either.
     void popScope();
     std::vector<Scope> _scopes;
     // By-value smart-ptr params the callee owns — dropped at fn-end. emitFunction
@@ -2491,11 +2513,6 @@ private:
     // rule above reads it through `kindOfCType`, and width/conversion checking will read it directly.
     std::string typeOfExpr(SharedExpression e);
     std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
-    // A saved `_localTypes` / `_localTypeNodes` entry, so a scoped binding can be undone. Both the match
-    // emitter and the classifier bind arm payloads; only the emitter may diagnose, so they share the
-    // save/restore shape rather than the install.
-    struct SavedLocalType { std::string name; bool had; std::string prev; bool hadNode; SharedIdentifier prevNode; };
-    void restoreLocalTypeBindings(const std::vector<SavedLocalType>& saved);
     // The `match` subject's variant class, QUIETLY — the same four-step recovery `emitMatchSwitch` does
     // (`exprClass`, through a `give` hand-off, the discovery-stashed inline instance, the qualified
     // variant name), with no diagnostic on failure. "" when it is not a resolvable variant class, which

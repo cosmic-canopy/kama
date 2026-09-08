@@ -1,0 +1,17 @@
+// The `foreach` half of local_scope_sibling_match (KB-20 was filed against `match` alone, but the
+// defect was the table, not the binder): a loop binding after a sibling block's same-named local took
+// the sibling's `string` and `takeE(v: m)` was refused. Both `foreach` paths — the indexed one over an
+// InlineArray here, the iterator one over an `Iterator<T>` — bind the same way.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
+    int32 r = 0;
+    if (r == 1) {
+        string m = "boom";
+        r = cast<int32>(m.length());
+    } else {
+        foreach (E m in xs) { r = r + takeE(v: m); }
+    }
+    return r;   // 5
+}

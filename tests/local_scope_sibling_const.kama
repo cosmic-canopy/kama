@@ -1,0 +1,28 @@
+// `const` is a property of a binding, and the binding ends with its block. `_constLocals` was a flat
+// per-function set, so a `const int32 m` in one block made the plain `int32 m` of a later sibling block
+// — and a `foreach (int32 m …)` binding there — unassignable: "cannot write to `const m`" on a value
+// that was never const. Same table family as local_scope_sibling_match.
+fn int32 plain() {
+    int32 r = 0;
+    if (r == 1) {
+        const int32 m = 7;
+        r = m;
+    } else {
+        int32 m = 2;
+        m = 5;                                // a plain local: writable
+        r = m;
+    }
+    return r;   // 5
+}
+fn int32 loop() {
+    int32 r = 0;
+    InlineArray<int32>#(2) xs = [3, 4];
+    if (r == 1) {
+        const int32 m = 7;
+        r = m;
+    } else {
+        foreach (int32 m in xs) { m = m + 1; r = r + m; }   // the binding is a copy: writable
+    }
+    return r;   // 9
+}
+fn int32 main() { return plain() + loop(); }   // 14

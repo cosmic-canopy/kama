@@ -1,0 +1,13 @@
+// A `for` counter lives exactly as long as its loop. The init clause declared `i` straight into the
+// enclosing block's tables (a `for` had no scope of its own until the loop got a binding-holder scope),
+// so the `foreach (E i …)` after it inherited `int32_t` and `takeE(v: i)` was refused with "cannot be
+// given a number". Same family as local_scope_sibling_match, different binder.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
+    int32 r = 0;
+    for (int32 i = 0; i < 2; i = i + 1) { r = r + i; }   // 0 + 1
+    foreach (E i in xs) { r = r + takeE(v: i); }         // + 2 + 3
+    return r;   // 6
+}

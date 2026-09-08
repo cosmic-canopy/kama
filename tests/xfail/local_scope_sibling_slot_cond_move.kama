@@ -1,0 +1,24 @@
+// A `slot` declared in one block is gone when the block closes — a later SIBLING block's ordinary local
+// of the same name is an ordinary value, with an ordinary value's rules.
+//
+// `_slotDeclared` was a flat per-function set that `popScope` never touched, so `a` below inherited
+// "declared as a slot" from its sibling, and the one place that grants a slot leniency — a value moved on
+// SOME paths is dropped rather than rejected, because a slot's storage is always valid — granted it to a
+// plain `Res a` that was never a hole. The conditional move compiled clean and the drop was undecidable.
+import { std::memory::Owned };
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type resource Res { Owned<Box> a; public ctor make(int32 v) { Owned<Box> b = new Box.make(v: v); this.a = give b; } public fn int32 head() { return this.a.get(); } }
+fn int32 sink(Res r) { return r.head(); }
+fn void fill(out Res d) { d = Res.make(v: 2); }
+fn int32 main() {
+    int32 r = 0;
+    if (r == 1) {
+        slot Res a;                 // a real slot, filled on the same path — fine
+        fill(d: out a);
+        r = a.head();
+    } else {
+        Res a = Res.make(v: 1);     // a plain local: NOT a slot
+        if (a.head() == 1) { r = sink(r: give a); }   // ERROR: moved on some paths but not others
+    }
+    return r;
+}
