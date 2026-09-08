@@ -913,6 +913,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       `kama_gpu.h`, and a project that does not is not entitled to track it.
     - What is left is the C++ half of `csources`, which is its own row.
 
+- **`csources` compiles C, not C++ — the row, and the BUG that was hiding behind it (KB-16).** The
+  consumer carried this as one open bug for eight releases while kama reported its queue empty, and the
+  reconciliation is that it was **two defects** and kama held only one. Settled by reproducing it,
+  2026-09-07:
+  - **The gap (this row, still open).** A `.m`/`.cpp`/`.cc`/`.mm` entry is refused BY NAME, with the two
+    obstacles the diagnostic already states: every input shares one flag prefix (`-std=c11` plus the
+    C-only warning promotions), so a C++ TU needs its own, and a C++ link needs the target's C++ runtime
+    (`-lc++` vs `-lstdc++`), a per-target table kama does not have. Objective-C is a third case — one
+    platform's language, and `csources` is project-level with no per-target tier to exclude it. A
+    per-entry or per-target language tier closes all three; a fix for Objective-C alone closes none,
+    because the C++ half is what keeps the consumer's hand-written Makefile alive (48 lines when this was
+    filed, 556 after their M4).
+  - **The bug (FIXED, `0.9.238`).** The only way to say "compile this as Objective-C" was `-x objective-c`
+    in `cflags`, and a project's `cflags` were reaching the LINK command, where `-x` is a sticky mode flag
+    that applies to the `.o` inputs. Every consumer's link died lexing Mach-O bytes as source. That is
+    wrong independently of this row — a link consumes objects and compiles nothing — and it is why the
+    workaround was fatal rather than ugly. Pinned by `tools/check-buildsettings.sh`.
+  - **The lesson for triage, since it cost eight releases:** a report that is half gap and half bug gets
+    counted by whichever half the reader is holding. Split it on arrival.
+
   - **Declared NOT ours, and they agree** — the audio backend, WebGPU binding breadth, their RFC6455
     framing, module statics being per-isolate (correct behaviour), and a PATH entry that is a directory
     breaking `make` in the emscripten image. Their `ENGINE_TODO.md` holds those.
