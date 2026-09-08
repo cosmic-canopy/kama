@@ -8823,6 +8823,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.visibility  = fvis;
                             fi.serSkip     = fSkip;
                             fi.serName     = fName;
+                            // A member name is declared once (consumer KB-21). A duplicate FIELD used to
+                            // reach clang as `duplicate member` in a generated file; the METHOD twin below
+                            // was accepted outright and the last body won.
+                            if (ci.fieldNames.count(fi.name))
+                                unsupported(("duplicate field '" + fi.name + "' in '" + ci.name
+                                             + "' — a member name may be declared only once in its type").c_str(),
+                                            d->name ? d->name->line : mn->line);
                             ci.fields.push_back(fi);
                             ci.fieldNames.insert(fi.name);
                         }
@@ -9020,6 +9027,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
                         else if (mi.isFinal && !mi.isVirtual)
                             unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
+                        // KB-21's silent half: two bodies under one name compiled, and the LAST one
+                        // answered every call. Same rule as `duplicate function` at file scope — kama has
+                        // no overloading — so a member name is declared once. (`redeclares … inherits` is
+                        // the base-class case and lives with the inheritance checks.)
+                        if (ci.methods.count(*md->name->value))
+                            unsupported(("duplicate method '" + *md->name->value + "' in '" + ci.name
+                                         + "' — kama has no overloading, so a member name may be declared "
+                                           "only once in its type; the second body would silently replace the first").c_str(),
+                                        md->line);
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -9086,6 +9102,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.type        = kd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = kvis;
+                            if (ci.fieldNames.count(fi.name))   // KB-21, the `const` field spelling
+                                unsupported(("duplicate field '" + fi.name + "' in '" + ci.name
+                                             + "' — a member name may be declared only once in its type").c_str(),
+                                            d->name ? d->name->line : mn->line);
                             ci.fields.push_back(fi);
                             ci.fieldNames.insert(fi.name);
                             ci.constFields.insert(fi.name);

@@ -229,9 +229,11 @@ dot_on_type_static_read	dot_on_type_static_read.kama:7
 dot_on_type_unknown_ctor	dot_on_type_unknown_ctor.kama:7
 double_retired	double_retired.kama:11
 dtor_on_value	dtor_on_value.kama:2
+dup_field	dup_field.kama:7
 dup_fn	dup_fn.kama:5
 dup_generic_fn	dup_generic_fn.kama:7
 dup_main	beta.kama:1
+dup_method	dup_method.kama:9
 dup_module_fn	b.kama:3
 dup_type_same_file	dup_type_same_file.kama:5
 elem_method_const	elem_method_const.kama:12

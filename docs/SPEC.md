@@ -3996,6 +3996,11 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   is an error naming both declaration sites, for a plain function and a generic template alike. `extern` <!-- xfail: dup_fn, dup_generic_fn -->
   is exempt on both sides: re-declaring a C entry point in each module that calls it is what an `extern`
   is for (`tests/xfail/dup_fn`, `tests/xfail/dup_generic_fn`).
+- **A member name is declared once per type** — a second field or a second method of the same name is <!-- xfail: dup_field, dup_method -->
+  an error at the second declaration, for the same reason. A duplicate field used to reach the C compiler
+  as `duplicate member`; a duplicate method used to compile with the LAST body silently winning
+  (`tests/xfail/dup_field`, `tests/xfail/dup_method`). Redeclaring an *inherited* method is the separate
+  rule under Inheritance.
 - **Specialization is a non-goal.** There is no way to give one generic function a second body for a
   particular concrete type argument, and there will not be — the mechanism for a per-type body is a
   `contract` (plus `type intrinsic` for a primitive), which is what `std::math`'s `Real` is. Reasoning in

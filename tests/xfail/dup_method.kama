@@ -1,0 +1,11 @@
+// The silent half of consumer KB-21: two METHOD bodies under one name compiled with no message at all,
+// and the last one answered every call — this program built and returned 222. A careless merge or a
+// rebase that lands one function twice replaced a method's behaviour and nothing said so. kama has no
+// overloading, so a member name is declared once, like a file-scope function.
+type value Box {
+    isize count;
+    public ctor make() { this.count = 1; }
+    public const fn isize get() { return 111; }
+    public const fn isize get() { return 222; }   // ERROR: duplicate method
+}
+fn int32 main() { Box b = Box.make(); return cast<int32>(b.get()); }

@@ -1,0 +1,10 @@
+// A member name is declared once (consumer KB-21). A duplicate FIELD used to compile to a C struct with
+// two members of one name, and the error arrived from clang — `duplicate member 'count'` — against a
+// generated file the author never wrote. The rule kama already had for a file-scope function
+// ("duplicate function") and a local ("shadows") now covers a type's members too.
+type resource Box {
+    isize count;
+    isize count;                                  // ERROR: duplicate field
+    public ctor make() { this.count = 1; }
+}
+fn int32 main() { Box b = Box.make(); return 0; }
