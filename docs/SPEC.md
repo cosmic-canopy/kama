@@ -918,7 +918,12 @@ scope exit are all rejected — there is no runtime drop flag.
 **Local variable shadowing is a compile error.** A local declaration may not shadow a parameter, an <!-- xfail: shadow_param, shadow_field, shadow_enclosing -->
 enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; one name = one binding within
 any live scope — keeps both name resolution and move tracking unambiguous). Sibling scopes may reuse a name
-freely (they never coexist). A *parameter* sharing a field's name — the `this.x = x` constructor idiom — is
+freely (they never coexist), whatever binds it — a declaration, a `for` counter, a `foreach` variable or a
+`match` payload. <!-- test: local_scope_sibling_match, local_scope_sibling_foreach, local_scope_for_init, local_scope_sibling_const -->
+A `foreach` variable or a `match` payload binding *may* shadow an enclosing local (those two binders name a
+value the loop or arm hands them, not a new declaration), and inside the loop or arm the name is that value,
+whole. <!-- test: local_scope_shadow_foreach, local_scope_shadow_match -->
+A *parameter* sharing a field's name — the `this.x = x` constructor idiom — is
 allowed; a static method has no `this`, so a local there can never shadow a field.
 
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy retains
