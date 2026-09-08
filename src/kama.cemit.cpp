@@ -23931,6 +23931,11 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
     // Composite field: it must itself implement Formattable. (Optional/collections/enum-typed fields don't today
     // and land here as a clean error — v1 scope, tracked on the ROADMAP.)
     std::string ct = cType(ty);
+    // An OPAQUE parameter under the uninstantiated-template probe: nothing is known about `T` here, and
+    // the answer would be a defect reported against a type nobody instantiates. Same silence, and the
+    // same escape, that serdeRejectsField already takes — see the comment there. (The probe's C goes to
+    // a discarded sink, so what this emits for the field never reaches a compiler.)
+    if (opaqueScalarUnknown(ct)) return;
     if (!satisfiesBound(ct, "Formattable"))
         unsupported(("`@generate(Formattable)` needs every field to be a primitive/string or a type that "
                      "`implements Formattable`; field type `" + (ty && ty->value ? *ty->value : ct)
@@ -23955,6 +23960,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
     std::string ct = cType(ty);
     if (!_classes.count(ct))                       // primitive / UnsafePtr / enum-not-in-_classes
         return "(" + a + " == " + b + ")";
+    if (opaqueScalarUnknown(ct)) return "(" + a + " == " + b + ")";   // probing an opaque `T` — see emitFmtFieldWrite
     if (!satisfiesBound(ct, "Equatable"))
         unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
                      "`implements Equatable`; field type `" + (ty && ty->value ? *ty->value : ct)
@@ -24003,6 +24009,7 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
         if (fty && fty->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
         else if (!_classes.count(ct))                       // primitive / UnsafePtr — its own value IS the content hash
             fh = "(uint64_t)(" + acc + ")";
+        else if (opaqueScalarUnknown(ct)) fh = "(uint64_t)(" + acc + ")";   // probing an opaque `T` — see emitFmtFieldWrite
         else {
             if (!satisfiesBound(ct, "Hashable"))
                 unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "

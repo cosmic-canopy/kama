@@ -1,0 +1,32 @@
+// A derived generic that NOBODY instantiates. `@generate` on a generic type became legal in 0.9.239
+// (it derives per instantiation), and that opened a shape the refusal used to make unreachable: a
+// template nothing ever names. `checkUninstantiatedTemplates` walks exactly those, with OPAQUE type
+// arguments, and emits their bodies into a discarded sink to type-check them — so the derived
+// `equals`/`hash`/`format` were asked whether `T` conforms, which is a question with no answer here,
+// and all three answered "no" with a hard error. Three diagnostics, on a type the program never uses.
+//
+// Serde never had the bug: `serdeRejectsField` already carried the opaque escape. The other three do now.
+// `Kept` is the control — the same derives on a template that IS instantiated, so this fixture fails if
+// the escape is widened into a blanket "never check a generic's fields".
+@generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
+type value Unused<T> {
+    @field public T v;
+}
+
+@generate(Equatable, Hashable, Formattable, of)
+type value Kept<T> {
+    public T v;
+}
+
+fn int32 main() {
+    Kept<int32> a = Kept::<int32>.of(v: 20);
+    Kept<int32> b = Kept::<int32>.of(v: 20);
+    Kept<int32> c = Kept::<int32>.of(v: 3);
+
+    int32 n = 0;
+    if (a == b) { n = n + 20; }              // the derive still holds where it can be decided
+    if (a != c) { n = n + 20; }
+    string s = "${c}";
+    if (!s.equals(other: "Kept { v: 3 }")) { return 1; }
+    return n + c.v;                          // 43
+}
