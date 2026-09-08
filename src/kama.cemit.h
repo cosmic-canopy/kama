@@ -2248,6 +2248,7 @@ private:
     void emitEqualsDefinition(ClassInfo& ci);
     void emitHashDefinition(ClassInfo& ci);
     std::string eqFieldTest(SharedIdentifier ty, const std::string& a, const std::string& b, int line);
+    std::string hashFieldExpr(SharedIdentifier ty, const std::string& access, int line);   // eqFieldTest's sibling
     void emitFmtLiteral(const std::string& s);   // write a literal chunk via a kama_string temp + Formatter__writeStr
     // `@generate(of|zero)` bag ctors (M6): the C signature (`V V__of(f1…)` / `V V__zero(void)`) shared by the
     // prototype and the definition, and the synthesized memberwise/zero-init body. `which` is "of" or "zero".
@@ -2257,6 +2258,17 @@ private:
     bool        isTransparentValue(const ClassInfo& ci) const;
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
     void emitEnumDeserializeDefinition(ClassInfo& ci);
+    // The per-tag siblings of the three class-side derived bodies: a variant's data lives in
+    // `variants[i].payload`, not in `fields`, so each switches on `self->tag` and reaches
+    // `self->u.<Variant>.<field>`. The per-FIELD rules are shared with the class side, not copied.
+    void emitEnumFormatDefinition(ClassInfo& ci);        // `Circle { r: 2 }` / a bare `Nil`
+    void emitEnumEqualsDefinition(ClassInfo& ci);        // tag, then the payload field by field
+    void emitEnumHashDefinition(ClassInfo& ci);          // FNV over the tag, then the live payload
+    // The one place a synth body picks its emitter (variant vs class), and the loop that runs it over
+    // every synth method a variant carries. See emitVariantSynthBodies for why a CONCRETE enum reaches
+    // this from two hand sites rather than from emitClassDefinitions.
+    void emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo& mi);
+    void emitVariantSynthBodies(ClassInfo& ci);
     // True (and diagnosed) for a PRIMITIVE serde field with no wire form — `isize`/`usize`, whose width
     // is platform-varying. Both directions funnel through it; see the definition for why.
     bool serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line);

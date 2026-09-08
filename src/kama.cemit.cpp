@@ -23655,12 +23655,11 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
-        if (mi.isSynthSer) { ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci); continue; }
-        if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
-        if (mi.isSynthBag) { emitBagCtorBody(ci, kv.first); continue; }   // M6: `@generate(of|zero)` bag ctor
-        if (mi.isSynthFormat) { emitFormatDefinition(ci); continue; }     // `@generate(Formattable)` field dump
-        if (mi.isSynthCmp) {                                              // `@generate(Equatable|Hashable)`
-            if (kv.first == "equals") emitEqualsDefinition(ci); else emitHashDefinition(ci);
+        // Every `@generate` body, through the one fork that knows a variant from a class — which is how a
+        // GENERIC ENUM instance gets its per-tag bodies, since its instance comes through here like any
+        // other (emitGenericTypeInst phase 2).
+        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp) {
+            emitSynthBody(ci, kv.first, mi);
             continue;
         }
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
@@ -23987,6 +23986,27 @@ void CEmitter::emitEqualsDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// One field's contribution to the derived `hash` — the sibling of eqFieldTest, extracted for the same
+// reason: a variant's per-tag hash walks payload fields under the identical rule, and one rule is what
+// keeps a field hashing the same wherever it is reached from. A field contributes its OWN `hash()` (the
+// same cheap content hash the prelude gives every primitive); the caller does the FNV combining.
+std::string CEmitter::hashFieldExpr(SharedIdentifier ty, const std::string& access, int line)
+{
+    // Substituted, for the reason emitSerFieldWrite gives: a generic instance's field node is the
+    // template's `T`, and the string arm below reads `builtInVal`.
+    ty = deepSubstType(ty);
+    std::string ct = cType(ty);
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) return "kama_string__hash(&" + access + ")";
+    if (!_classes.count(ct))                       // primitive / UnsafePtr — its own value IS the content hash
+        return "(uint64_t)(" + access + ")";
+    if (opaqueScalarUnknown(ct)) return "(uint64_t)(" + access + ")";   // probing an opaque `T` — see emitFmtFieldWrite
+    if (!satisfiesBound(ct, "Hashable"))
+        unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
+                     "`implements Hashable`; field type `" + (ty && ty->value ? *ty->value : ct)
+                     + "` does not").c_str(), line);
+    return ct + "__hash(&" + access + ")";
+}
+
 // `@generate(Hashable)` — the field-walked hash. Each field contributes its OWN `hash()` (the same cheap
 // content hash the prelude gives every primitive), FNV-1a-combined in declaration order so field order
 // matters and `{1,2}` doesn't collide with `{2,1}`. The avalanche stays where it always was: the Map's
@@ -24000,24 +24020,8 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
     indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
     for (auto& fld : ci.fields) {
         if (fld.serSkip) continue;
-        // Substituted, for the reason emitSerFieldWrite gives: a generic instance's field node is the
-        // template's `T`, and the string arm below reads `builtInVal`.
-        SharedIdentifier fty = deepSubstType(fld.type);
-        std::string ct = cType(fty);
-        std::string acc = "self->" + fld.name;
-        std::string fh;
-        if (fty && fty->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
-        else if (!_classes.count(ct))                       // primitive / UnsafePtr — its own value IS the content hash
-            fh = "(uint64_t)(" + acc + ")";
-        else if (opaqueScalarUnknown(ct)) fh = "(uint64_t)(" + acc + ")";   // probing an opaque `T` — see emitFmtFieldWrite
-        else {
-            if (!satisfiesBound(ct, "Hashable"))
-                unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
-                             "`implements Hashable`; field type `" + (fty && fty->value ? *fty->value : ct)
-                             + "` does not").c_str(), line);
-            fh = ct + "__hash(&" + acc + ")";
-        }
-        indent(1); *_out << "h = (h ^ " << fh << ") * 16777619ULL;\n";
+        indent(1); *_out << "h = (h ^ " << hashFieldExpr(fld.type, "self->" + fld.name, line)
+                         << ") * 16777619ULL;\n";
     }
     indent(1); *_out << "return h;\n";
     *_out << "}\n\n";
@@ -24252,6 +24256,150 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __result } };\n";
     *_out << "}\n\n";
+}
+
+// ---- The derived bodies for a VARIANT (a tagged enum, and a promoted payload-less one) ---------------
+//
+// A `value`/`resource` derives by walking `ci.fields`; a variant has none — its data lives per tag, in
+// `ci.variants[i].payload`, reached as `self->u.<Variant>.<field>`. So each of the three class-side
+// emitters below has a per-tag sibling here, switching on `self->tag`. The PER-FIELD rules are not
+// duplicated: these call the very helpers the class side calls (emitFmtFieldWrite / eqFieldTest /
+// hashFieldExpr), which is what keeps a field rendering, comparing and hashing identically wherever it
+// is reached from — and which is where the `deepSubstType` hop lives that a generic instance depends on.
+//
+// ⚠️ A payload FieldInfo carries NO `@skip`: buildVariantClassInfo never reads per-field attributes.
+// So there is deliberately no `serSkip` check below — a dead one would read as a supported feature.
+
+// `@generate(Formattable)` on an enum: `Circle { r: 2 }` for a payload variant, the bare name (`Nil`)
+// for a unit one. The subject is the VARIANT, not the type — which is also why this needs no display
+// name: a variant name is written as the author spelled it, never mangled.
+void CEmitter::emitEnumFormatDefinition(ClassInfo& ci)
+{
+    int line = ci.declLine();
+    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
+          << "__format(" << ci.name << "* self, Formatter* f)\n{\n";
+    indent(1); *_out << "switch (self->tag) {\n";
+    for (auto& v : ci.variants) {
+        indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+        if (v.payload.empty()) emitFmtLiteral(v.name);
+        else {
+            bool any = false;
+            for (auto& f : v.payload) {
+                emitFmtLiteral((any ? ", " : v.name + " { ") + f.name + ": ");
+                emitFmtFieldWrite(f.type, "self->u." + v.name + "." + f.name, line);
+                any = true;
+            }
+            emitFmtLiteral(" }");
+        }
+        indent(2); *_out << "break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "default: break;\n";
+    indent(1); *_out << "}\n";
+    *_out << "}\n\n";
+}
+
+// `@generate(Equatable)` on an enum: different tags are never equal; the same tag compares its payload
+// field by field, each through its own `equals`. A unit variant is exhausted by the tag test alone.
+void CEmitter::emitEnumEqualsDefinition(ClassInfo& ci)
+{
+    int line = ci.declLine();
+    *_out << (_emitStaticClass ? "static inline " : "") << "bool " << ci.name
+          << "__equals(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
+    indent(1); *_out << "if (self->tag != other->tag) { return false; }\n";
+    bool anyPayload = false;
+    for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
+    if (anyPayload) {
+        indent(1); *_out << "switch (self->tag) {\n";
+        for (auto& v : ci.variants) {
+            if (v.payload.empty()) continue;   // the tag test above already settled it
+            indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+            std::string cond;
+            for (auto& f : v.payload) {
+                if (!cond.empty()) cond += " && ";
+                cond += eqFieldTest(f.type, "self->u." + v.name + "." + f.name,
+                                            "other->u." + v.name + "." + f.name, line);
+            }
+            indent(2); *_out << "return " << cond << ";\n";
+            indent(1); *_out << "}\n";
+        }
+        indent(1); *_out << "default: break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "return true;\n";
+    *_out << "}\n\n";
+}
+
+// `@generate(Hashable)` on an enum: the tag is the first thing mixed in — it is what distinguishes two
+// variants carrying identical payloads — then the live variant's fields, in declaration order. Same
+// FNV-1a combine as the class-side walk, so the hash/equals contract holds by the same construction.
+void CEmitter::emitEnumHashDefinition(ClassInfo& ci)
+{
+    int line = ci.declLine();
+    *_out << (_emitStaticClass ? "static inline " : "") << "uint64_t " << ci.name
+          << "__hash(" << ci.name << "* self)\n{\n";
+    indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
+    indent(1); *_out << "h = (h ^ (uint64_t)(self->tag)) * 16777619ULL;\n";
+    bool anyPayload = false;
+    for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
+    if (anyPayload) {
+        indent(1); *_out << "switch (self->tag) {\n";
+        for (auto& v : ci.variants) {
+            if (v.payload.empty()) continue;
+            indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+            for (auto& f : v.payload) {
+                indent(2); *_out << "h = (h ^ "
+                                 << hashFieldExpr(f.type, "self->u." + v.name + "." + f.name, line)
+                                 << ") * 16777619ULL;\n";
+            }
+            indent(2); *_out << "break;\n";
+            indent(1); *_out << "}\n";
+        }
+        indent(1); *_out << "default: break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "return h;\n";
+    *_out << "}\n\n";
+}
+
+// The ONE place a synthesized body picks its emitter, so the variant/class fork is written once. Called
+// from emitClassDefinitions (which is how a GENERIC enum instance gets its bodies — its instance goes
+// through emitGenericTypeInst phase 2 like any other) and, via emitVariantSynthBodies, from the two
+// sites that emit a concrete enum's bodies by hand.
+void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo& mi)
+{
+    if (mi.isSynthSer) { ci.isVariant ? emitEnumSerializeDefinition(ci)
+                       : (ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci)); return; }
+    if (mi.isSynthDe)  { ci.isVariant ? emitEnumDeserializeDefinition(ci)
+                       : (ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
+    if (mi.isSynthFormat) { ci.isVariant ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
+    if (mi.isSynthCmp) {                                              // keyed by the method name
+        if (name == "equals") ci.isVariant ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
+        else                  ci.isVariant ? emitEnumHashDefinition(ci)   : emitHashDefinition(ci);
+        return;
+    }
+    emitBagCtorBody(ci, name);   // M6 `@generate(of|zero)` — never a variant (registerDerives refuses it)
+}
+
+// Every synthesized body a variant carries. A CONCRETE enum's bodies are emitted from the two hand sites
+// rather than from emitClassDefinitions, and that is not an accident to be tidied away: `classOf` casts
+// `ClassDeclarationNode` (an enum has none), the preludeStatic loop skips `isVariant`, and the prelude
+// enum loop looks names up in `_classes`, where a generic TEMPLATE never lives. Those three guards are
+// what keep the two populations disjoint — remove any one and a concrete enum gets its bodies twice.
+// Emitted in a FIXED order rather than `ci.methods`' alphabetical one — which would put `deserialize`
+// ahead of `serialize` and shuffle every existing enum's generated C for no reason. Nothing depends on
+// the order (the prototypes are all in the header), but a refactor that reorders output cannot be
+// diffed against the corpus to prove it changed nothing, and that proof is worth more than the shuffle.
+void CEmitter::emitVariantSynthBodies(ClassInfo& ci)
+{
+    static const char* kOrder[] = { "serialize", "deserialize", "format", "equals", "hash" };
+    for (const char* name : kOrder) {
+        auto it = ci.methods.find(name);
+        if (it == ci.methods.end() || it->second.isAbstract) continue;
+        MethodInfo& mi = it->second;
+        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthFormat || mi.isSynthCmp)
+            emitSynthBody(ci, it->first, mi);
+    }
 }
 
 // ---- Graph (object-graph / pointer) serialization intrinsic (Phase D) ------
@@ -28477,8 +28625,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (eci.destructible) emitDtorDefinition(eci);
             // (its vtables went out ahead of the generic instantiations above — see there for why)
             emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
-            if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
-            if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);
+            emitVariantSynthBodies(eci);               // whatever `@generate` synthesized for it
         }
         _emitStaticClass = false;
     }
@@ -28750,11 +28897,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                     // implements C { A, B; … }`). Same reason as the serde bodies below: classOf skips
                     // enums, so the per-class definition loop never reaches them.
                     emitEnumMemberBodies(eci, ed);
-                    // `@generate` enum serde — bodies land in the home module (protos are in the header via
+                    // The `@generate` bodies — bodies land in the home module (protos are in the header via
                     // emitClassPrototypes; classOf skips enums, so emit here alongside the dtor). The unit's
                     // scope is already active (_nsCtx = _unitCtx above), so payload types resolve.
-                    if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
-                    if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);
+                    emitVariantSynthBodies(eci);
                 }
             }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
