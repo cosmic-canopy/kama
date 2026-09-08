@@ -1,0 +1,42 @@
+// An enum VALUE written as a literal (`E::B`, `E::Other(code: 3)`) is an operand like any other. It used
+// not to be: `exprClass` answers for class-typed operands, an enum literal is not one, so a comparison
+// against a literal never reached the contract-driven `==` rule at all and fell through to the raw C
+// operator — emitting `==` between two structs, and reporting it as *"no operator '==' — define
+// `operator==` on the type"*, which names a thing kama does not have and rejects if written.
+//
+// Filed by the first engine consumer (KB-17) against the shape below: a frame opcode compared to a named
+// case. Binding the literal to a local first worked, which is what made it look like a rule rather than a
+// hole. All four operand shapes are covered here — literal on either side, both sides literal, and a
+// payload-carrying construction, which reaches the classifier through a different node kind.
+
+type enum WsOpcode implements Equatable<This> {
+    Text, Binary, Other(uint8 code);
+
+    public const fn bool equals(const ref WsOpcode other) {
+        return match (this) {
+            case Text:   match (other) { case Text: true;  case Binary: false; case Other(code: c): false; };
+            case Binary: match (other) { case Text: false; case Binary: true;  case Other(code: c): false; };
+            case Other(code: mine):
+                match (other) { case Text: false; case Binary: false; case Other(code: theirs): mine == theirs; };
+        };
+    }
+}
+
+fn int32 main() {
+    WsOpcode op = WsOpcode::Text;
+    int32 n = 0;
+
+    if (op == WsOpcode::Text)   { n = n + 1; }    // the filed shape: literal on the right
+    if (WsOpcode::Text == op)   { n = n + 2; }    // and on the left
+    if (op != WsOpcode::Binary) { n = n + 4; }    // `!=` goes through the same rule
+
+    // A payload variant is a CONSTRUCTION (a different AST node), and it types as the enum too.
+    if (WsOpcode::Other(code: 7ui8) == WsOpcode::Other(code: 7ui8)) { n = n + 8; }
+    if (op != WsOpcode::Other(code: 7ui8)) { n = n + 16; }
+
+    // The named local still works, which is what the consumer had to write instead.
+    WsOpcode wantText = WsOpcode::Text;
+    if (op == wantText) { n = n + 32; }
+
+    return n;   // 1 + 2 + 4 + 8 + 16 + 32 = 63
+}

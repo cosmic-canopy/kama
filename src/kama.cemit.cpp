@@ -1154,12 +1154,26 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                     for (size_t i = 0; i + 1 < id->qualifier->size(); ++i)
                         enumQual->push_back((*id->qualifier)[i]);
                     std::string en = resolveUserName(*id->qualifier->back(), enumQual);
-                    // Either spelling of a payload-less enum. A PROMOTED one (it declared a method or a
-                    // contract) has left `_enums` for `_classes`, and answering "" for `Color::Red` left
-                    // every rule that asks this question — the comparison lowering, the enum -> integer
-                    // cast — unable to see that the operand is an enum at all, so both fell through to a
-                    // raw C operator over a struct and were caught by clang, if at all.
-                    if (isEnum(en) || isUnitEnum(en)) ct = en;
+                    // …in ALL THREE spellings an enum has. `_enums` is a bare C integer; a payload-less
+                    // enum PROMOTED for declaring a method has left it for `_classes`; and a tagged enum
+                    // was never in it. Answering "" for the last two left every rule that asks this
+                    // question unable to see that `E::B` is an `E` at all: the comparison lowering fell
+                    // through to a raw C operator (`==` between two structs, refused by clang, and for a
+                    // payload enum reported as "no operator '==' — define `operator==`", which kama does
+                    // not have), and the enum -> integer cast emitted a cast of a struct. The member NAME
+                    // is checked, so `Color::NotAVariant` still resolves to nothing and reaches the
+                    // unresolved-name diagnostic that names the enum.
+                    //
+                    // A GENERIC enum's variant (`Optional::None`) deliberately misses: its template is in
+                    // `_genericTypes`, never `_classes`, and the instance a literal belongs to comes from
+                    // the target-type context, which this function does not have.
+                    if (isEnum(en)) ct = en;
+                    else {
+                        auto cit = _classes.find(en);
+                        if (cit != _classes.end() && cit->second.isVariant)
+                            for (auto& vc : cit->second.variants)
+                                if (vc.name == *id->value) { ct = en; break; }
+                    }
                 }
         return ct;
     }
@@ -3613,14 +3627,27 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
 {
     std::string lc = exprClass(lhs);
     std::string rc = exprClass(rhs);
-    // An enum VALUE (`Color::Red`) is not a class expression, so `exprClass` — which answers for class-typed
-    // operands only — leaves it blank. For an unpromoted enum that is right: it is a bare C integer and the
-    // all-primitive path below gives it the raw operator. A PROMOTED one is a `struct { Tag tag; }`, and
-    // arriving here as nothing sent `Color::Red == c` down that same path, emitting `==` between two structs
-    // for clang to refuse. `typeOfExpr` does answer for an enum value; accepting only a promoted enum from it
-    // widens the classifier for nothing else.
-    if (lc.empty()) { std::string t = typeOfExpr(lhs); if (isUnitEnum(t)) lc = t; }
-    if (rc.empty()) { std::string t = typeOfExpr(rhs); if (isUnitEnum(t)) rc = t; }
+    // An enum VALUE (`Color::Red`, `WsOpcode::Text`) is not a class expression, so `exprClass` — which
+    // answers for class-typed operands only — leaves it blank. For an UNPROMOTED payload-less enum that is
+    // right: it is a bare C integer and the all-primitive path below gives it the raw operator. For the
+    // other two spellings it was a hole, and the same one twice:
+    //
+    //   - a PROMOTED payload-less enum is a `struct { Tag tag; }`, so `Color::Red == c` reached the raw
+    //     operator and emitted `==` between two structs for clang to refuse;
+    //   - a TAGGED enum that declares `Equatable<This>` — the hand-written conformance, which is the
+    //     sanctioned answer until the derive ships — compared fine against a named local and was refused
+    //     against a variant literal, with a message naming `operator==`, a thing kama does not have and
+    //     rejects if written. The first consumer's report (KB-17) is exactly this line.
+    //
+    // `typeOfExpr` answers for an enum value in every spelling, so both are one rule. Accepting only a
+    // variant class from it widens the classifier for nothing else.
+    auto enumOperandClass = [&](SharedExpression e) {
+        std::string t = typeOfExpr(e);
+        auto it = _classes.find(t);
+        return (it != _classes.end() && it->second.isVariant) ? t : std::string();
+    };
+    if (lc.empty()) lc = enumOperandClass(lhs);
+    if (rc.empty()) rc = enumOperandClass(rhs);
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
     // `string` is a primitive (kama_string), not a user-operator type, so `+`/`==`/`!=` are compiler
@@ -24926,6 +24953,15 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i)
             prefix->push_back((*inv->identifier->qualifier)[i]);
         std::string cls = resolveUserName(*inv->identifier->qualifier->back(), prefix);
+        // `Union::Variant(field: v)` — a CONSTRUCTION, not a call, and it yields the enum. Read the same
+        // way the emitter reads it (resolveVariantType, so a generic instance resolves through the
+        // target-type context), and checked BEFORE the static-method arm because a variant and a static
+        // method share this spelling. Without it a payload variant literal was typed as nothing, so
+        // `x == E::Other(code: 3)` never reached the comparison rule and emitted a raw C `==` between two
+        // structs — the same hole the payload-less literal had, one node kind along.
+        if (ClassInfo* vt = resolveVariantType(cls))
+            for (auto& v : vt->variants)
+                if (v.name == *inv->identifier->value) return vt->name;
         if (_classes.count(cls)) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&_classes[cls], *inv->identifier->value, &owner);
