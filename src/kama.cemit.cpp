@@ -11864,6 +11864,10 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     // bind a type parameter — `abs(x: -5.0)` failed to infer while `abs(x: 5.0)` succeeded. The operand
     // carries the type for every prefix operator kama has (`-`, `+`, `!`, `~`).
     if (auto* u  = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return exprTypeNode(u->expression, localTys);
+    // `give x` / `copy x` is the VALUE of `x` with an ownership marker on it, and a `string`/collection by
+    // value MUST carry one — so without this arm an owning argument to a by-value generic parameter was
+    // uninferable (`ident(x: copy m)`: "not a literal or a locally-typed value") while the turbofish worked.
+    if (auto* h  = dynamic_cast<HandoffNode*>(n)) return exprTypeNode(h->value, localTys);
     // A call's type is its callee's declared return type, which makes a NESTED call inferable
     // (`log(x: exp(x: 1.0))`). Only for a non-generic callee: a generic one returns its own `T`, which is
     // exactly the thing not yet known here, so it is left to the "bind it to a local" rule.

@@ -1,0 +1,12 @@
+// Generic inference sees through an ownership hand-off. A `string` or collection passed by value MUST say
+// `copy` or `give`, and the inference scan had no arm for that marker — so an owning argument to a
+// by-value generic parameter was uninferable ("cannot infer generic type parameter 'T' — argument 'x' is
+// not a literal or a locally-typed value") while the turbofish spelling worked. `give x` / `copy x` is the
+// value of `x` with a marker on it; it has `x`'s type.
+fn T ident<T>(T x) { return x; }
+fn int32 main() {
+    string m = "abcd";
+    string k = ident(x: copy m);             // T = string, from the operand under the `copy`
+    string g = ident(x: give m);             // and under `give`
+    return cast<int32>(k.length()) + cast<int32>(g.length());   // 8
+}
