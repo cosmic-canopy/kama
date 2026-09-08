@@ -1154,7 +1154,12 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                     for (size_t i = 0; i + 1 < id->qualifier->size(); ++i)
                         enumQual->push_back((*id->qualifier)[i]);
                     std::string en = resolveUserName(*id->qualifier->back(), enumQual);
-                    if (isEnum(en)) ct = en;
+                    // Either spelling of a payload-less enum. A PROMOTED one (it declared a method or a
+                    // contract) has left `_enums` for `_classes`, and answering "" for `Color::Red` left
+                    // every rule that asks this question — the comparison lowering, the enum -> integer
+                    // cast — unable to see that the operand is an enum at all, so both fell through to a
+                    // raw C operator over a struct and were caught by clang, if at all.
+                    if (isEnum(en) || isUnitEnum(en)) ct = en;
                 }
         return ct;
     }
@@ -3597,10 +3602,25 @@ MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const
 // primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched). The
 // method form passes `self` by pointer (an rvalue is wrapped by addrOfOperand); the free form passes
 // both operands by value.
+std::string CEmitter::unitEnumTag(SharedExpression e)
+{
+    const bool thisRecv = dynamic_cast<ThisAccessNode*>(e.get()) != nullptr;
+    const std::string t = emitExpression(e);
+    return thisRecv ? t + "->tag" : "(" + t + ").tag";
+}
+
 std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line)
 {
     std::string lc = exprClass(lhs);
     std::string rc = exprClass(rhs);
+    // An enum VALUE (`Color::Red`) is not a class expression, so `exprClass` — which answers for class-typed
+    // operands only — leaves it blank. For an unpromoted enum that is right: it is a bare C integer and the
+    // all-primitive path below gives it the raw operator. A PROMOTED one is a `struct { Tag tag; }`, and
+    // arriving here as nothing sent `Color::Red == c` down that same path, emitting `==` between two structs
+    // for clang to refuse. `typeOfExpr` does answer for an enum value; accepting only a promoted enum from it
+    // widens the classifier for nothing else.
+    if (lc.empty()) { std::string t = typeOfExpr(lhs); if (isUnitEnum(t)) lc = t; }
+    if (rc.empty()) { std::string t = typeOfExpr(rhs); if (isUnitEnum(t)) rc = t; }
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
     // `string` is a primitive (kama_string), not a user-operator type, so `+`/`==`/`!=` are compiler
@@ -3779,6 +3799,17 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         if (satisfiesBound(lc, need) && ci != _classes.end()) {
             auto m = ci->second.methods.find(meth);
             if (m != ci->second.methods.end()) cm = &m->second;
+        }
+        // `==`/`!=` between two values of the SAME payload-less enum is the one comparison an enum keeps
+        // without declaring anything (SPEC § *Enums*: everything else goes through `match`). An unpromoted
+        // one never reaches here — it is a bare C integer, so the all-primitive path above already
+        // answered it with the raw operator — and a PROMOTED one (it declared a method or a contract, so
+        // it is a `struct { Tag tag; }`) must not lose the operator merely for having done so. Comparing
+        // the tags is what the integer form compiles to. Ordering is NOT included: `<` on an enum needs
+        // `Comparable`, which the message below still says.
+        if (!cm && eq && isUnitEnum(lc)) {
+            const std::string l = unitEnumTag(lhs), r = unitEnumTag(rhs);
+            return "(" + l + (token == EQEQ ? " == " : " != ") + r + ")";
         }
         if (!cm) {
             unsupported(("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
@@ -4578,7 +4609,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          "by passing the object where a `" + nm + "` is expected").c_str(), v->line);
             return "0";
         }
-        if (_classes.count(target)) {
+        // A PROMOTED payload-less enum is in `_classes` (it is a `struct { Tag tag; }`), so it would take
+        // the aggregate message below and be told to use `bitcast` — which is not the answer for an enum.
+        // Judged with the unpromoted form, one rule down, so both spellings of the same type say the same
+        // thing: an integer becomes an enum only through `try cast`.
+        if (_classes.count(target) && !isUnitEnum(target)) {
             if (opaqueScalarUnknown(target)) return "0";   // an opaque param — see the header
             unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
                          "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
@@ -4597,7 +4632,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         //
         // `truncate` is excluded so its own message wins below: it keeps low bits, and pointing its
         // reader at `try cast` would answer a question they did not ask.
-        if (!v->isTruncate && isEnum(target)) {
+        if (!v->isTruncate && (isEnum(target) || isUnitEnum(target))) {
             unsupported(("`" + verb + "<" + nm + ">(…)` — an integer is not a `" + nm + "` until it has "
                          "been checked against the variants. Name the variant when you know it "
                          "(`" + nm + "::…`), or use `try cast<" + nm + ">(…)` for a value from outside, "
@@ -4638,8 +4673,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // `try cast<T>` yields `Optional<T>`; both skip this.
         if (!v->isTruncate && !v->isTry) {
             const std::string checked = narrowCheck(target, v->unaryExpression);
-            if (!checked.empty()) return checked;
+            if (!checked.empty()) return checked;   // (declines for an enum source — a kind crossing, not a narrowing)
         }
+        // Enum -> integer is TOTAL and stays legal (SPEC § *Enums*). When the source is a PROMOTED
+        // payload-less enum the value is its tag, so that is what converts: without this the emitted C is
+        // `((int32_t)(c))` over a struct, which kama accepted and clang rejected — a promoted enum lost
+        // the one cast direction the language grants every enum, for having declared a method.
+        const bool unitEnumSrc = isUnitEnum(typeOfExpr(v->unaryExpression));   // classify BEFORE emitting
+        if (unitEnumSrc) return "((" + target + ")(" + unitEnumTag(v->unaryExpression) + "))";
         return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
@@ -16448,6 +16489,12 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 if (!_enums.count(name)) continue;   // unknown/errored earlier — already diagnosed
                 _classes[name] = buildVariantClassInfo(ed, name);
                 _classes[name].declFile = u && u->name ? *u->name : std::string();
+                // KEEP the EnumInfo, in `_promotedEnums`. What the enum still IS — its member values and
+                // its membership list — lives nowhere else: `foldEnumMembers` walks `_enums` (so a
+                // promoted `Green = 5` was silently dropped and the C enumerator emitted bare), and
+                // `emitTryCast`'s membership test reads the same table. Moved rather than left, because
+                // `_enums.count()` is the "bare C integer?" test and this one is now a struct.
+                _promotedEnums[name] = _enums[name];
                 _enums.erase(name);   // now a tagged class: match/construction take the variant path
                 ci = _classes.find(name);
             }
@@ -22697,7 +22744,21 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
     // field is the pinned integer type, but the constants are still needed for `switch` labels).
     if (ci.tagCType.empty()) *_out << "typedef enum " << ci.name << "_Tag {\n";
     else                     *_out << "enum {\n";
-    for (auto& v : ci.variants) { indent(1); *_out << ci.name << "_" << v.name << ",\n"; }
+    // A PROMOTED payload-less enum keeps its member VALUES (`type enum Code implements Hashable { Ok,
+    // Bad = 5 }`) — they are the enum's surface, and promotion is an implementation detail of giving it
+    // somewhere to hang a method. Written as the FOLDED decimal, exactly as emitEnum writes an unpromoted
+    // one; a tagged enum has no member values to write (the grammar gives a payload variant no `= expr`),
+    // so this lookup simply misses for one. Matched by NAME rather than by index: the two lists are built
+    // from the same `ed->body` and agree today, and a name is the thing that cannot silently drift.
+    const EnumInfo* pe = nullptr;
+    { auto pit = _promotedEnums.find(ci.name); if (pit != _promotedEnums.end()) pe = &pit->second; }
+    for (auto& v : ci.variants) {
+        indent(1); *_out << ci.name << "_" << v.name;
+        if (pe)
+            for (auto& m : pe->members)
+                if (m.name == v.name) { if (m.value && m.hasFolded) *_out << " = " << m.folded; break; }
+        *_out << ",\n";
+    }
     if (ci.tagCType.empty()) *_out << "} " << ci.name << "_Tag;\n";
     else                     *_out << "};\n";
 
@@ -26037,7 +26098,12 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     // unrepresentable in safe kama. It cannot share the numeric path: an enum's valid values are a SET of
     // named constants, not a range, so the test is membership. `None` is where a byte off a wire gets
     // handled, which keeps `match` the one construct that reads an enum.
-    const bool enumDst = isEnum(dst);
+    // …in EITHER of its two spellings: a PROMOTED payload-less enum (one that declared a method or a
+    // contract, so it is a `struct { Tag tag; }`) is the same set of named constants and gets the same
+    // door. Without this it fell to the message below and was told a `Color` conversion cannot fail —
+    // leaving a promoted enum with no way in from an integer at all.
+    const bool enumDst  = isEnum(dst) || isUnitEnum(dst);
+    const bool unitDst  = isUnitEnum(dst);
     std::string lo, hi;
     if (!enumDst && !cNumRangeText(dst, lo, hi)) {
         unsupported(("`try cast<" + disp + ">(…)` — only a NUMERIC or `enum` conversion can fail, and `"
@@ -26085,17 +26151,26 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
         // `--keep-c` output. One explicit `= <expr>` anywhere breaks the run (`{ Ok, Warn = 5, Bad }` is
         // 0,5,6), and then the only honest test is membership, written against the emitted constants so
         // it stays correct whatever the author wrote. clang folds either shape back into a jump table.
-        const EnumInfo& ei = _enums[dst];
-        bool contiguous = !ei.members.empty();
-        for (auto& m : ei.members) if (m.value) { contiguous = false; break; }
+        // The member NAMES come from whichever form this enum is in — `_enums` for a bare C integer,
+        // `ci.variants` for a promoted one (whose tag constants carry the same names). Whether any member
+        // has an EXPLICIT value is asked of the EnumInfo, which a promoted enum keeps in `_promotedEnums`;
+        // a generic payload-less enum instance (`type enum E<T> { A, B }` at `E<int32>`) has no EnumInfo at
+        // all and no way to write one, so it is contiguous by construction — which is why this reads the
+        // two facts separately instead of dereferencing a lookup that can legitimately miss.
+        std::vector<std::string> names;
+        if (unitDst) { for (auto& v : _classes[dst].variants) names.push_back(v.name); }
+        else         { for (auto& m : _enums[dst].members)    names.push_back(m.name); }
+        bool contiguous = !names.empty();
+        if (const EnumInfo* ei = enumInfo(dst))
+            for (auto& m : ei->members) if (m.value) { contiguous = false; break; }
         if (contiguous) {
-            const std::string top = std::to_string((long long)ei.members.size() - 1);
+            const std::string top = std::to_string((long long)names.size() - 1);
             test = unsignedSrc ? (t + " > " + top + "ULL")
                                : (t + " < 0 || " + t + " > " + top + "LL");
         } else {
-            for (auto& m : ei.members) {
+            for (auto& nmm : names) {
                 if (!test.empty()) test += " && ";
-                test += t + " != (" + tt + ")" + ei.name + "_" + m.name;
+                test += t + " != (" + tt + ")" + dst + "_" + nmm;
             }
             if (test.empty()) test = "1";        // a memberless enum admits nothing
         }
@@ -26107,8 +26182,14 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     std::string s;
     s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";
     s += "if (" + test + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
-    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = ("
-             + dst + ")" + t + " } }; }";
+    // The checked value, as the destination spells it: a C cast for a bare enum or a number, a tag-field
+    // initializer for a PROMOTED one (`(Color)__t` over a struct is not a C conversion).
+    const std::string tagTy = unitDst ? (_classes[dst].tagCType.empty() ? dst + "_Tag" : _classes[dst].tagCType)
+                                      : std::string();
+    const std::string val = unitDst ? "(" + dst + "){ .tag = (" + tagTy + ")" + t + " }"
+                                    : "(" + dst + ")" + t;
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+             + val + " } }; }";
     return s;
 }
 

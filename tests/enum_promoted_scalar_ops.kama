@@ -1,0 +1,50 @@
+// A payload-less enum that declares a method or a contract is PROMOTED to a variant ClassInfo — it needs
+// somewhere to hang the method — and that promotion used to change what the enum IS. SPEC says a
+// payload-less enum "lowers to an integer", and lists exactly which scalar operations one keeps: `==`/`!=`
+// between two values of the same enum, the total `cast<intN>` out of it, `try cast` back in, and member
+// values written by hand. Every one of those broke on promotion: `==` demanded `implements Equatable`,
+// `cast<int32>` reached clang as a cast of a struct, `try cast` was told a `Color` conversion cannot fail,
+// and `Green = 5` was silently emitted as 1.
+//
+// The counterpart is tests/enum_map_key.kama, which covers the CONTRACT half of the same promotion.
+
+type enum Color implements Hashable {
+    Red, Green = 5, Blue;                      // explicit value: the run is 0, 5, 6 — not 0, 1, 2
+    public const fn uint64 hash() { return cast<uint64>(cast<int32>(this)); }
+}
+
+// A promoted enum's member is still a compile-time integer, so another enum's initializer may read it.
+type enum Next { After = Color::Green + 1 }    // 6
+
+// The tag comparison is a FALLBACK, not an override: a declared `Equatable` still wins, so an enum that
+// says what equality means for it gets that meaning from `==` too. Here every value is equal to every
+// other, which no tag compare would ever produce.
+type enum Grade implements Equatable<This> {
+    Low, High;
+    public const fn bool equals(const ref Grade other) { return true; }
+}
+
+fn int32 main() {
+    Color a = Color::Red;
+    Color b = Color::Red;
+    Color c = Color::Green;
+    int32 n = 0;
+
+    if (a == b) { n = n + 1; }                 // `==` stays, with no `Equatable` declared
+    if (a != c) { n = n + 2; }
+
+    n = n + cast<int32>(c);                    // 5 — enum -> integer is total
+
+    Optional<Color> hit = try cast<Color>(6);  // Blue: 5 + 1, so membership and not a 0..N-1 range
+    int32 hitN = match (hit) { case Some(value: v): 10; case None: 0; };
+
+    Optional<Color> miss = try cast<Color>(7); // names no variant
+    int32 missN = match (miss) { case Some(value: v): 0; case None: 20; };
+
+    n = n + hitN + missN;
+    n = n + cast<int32>(Next::After);          // 6 — folded from the promoted enum's member
+
+    if (Grade::Low == Grade::High) { n = n + 8; }   // the declared `equals`, not the tags
+
+    return n;   // 1 + 2 + 5 + 10 + 20 + 6 + 8 = 52
+}

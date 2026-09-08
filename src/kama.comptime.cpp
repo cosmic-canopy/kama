@@ -185,12 +185,14 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         if (tc != _typeConsts.end() && tc->second.hasValue) { asInt(tc->second.value); return true; }
         // A plain enum's member (`K::A`), folded ON DEMAND — so an enum initializer may name a sibling
         // declared after it, or another enum's member, whatever order the enums are collected in.
-        auto ei = _enums.find(owner);
-        if (ei != _enums.end())
-            for (size_t i = 0; i < ei->second.members.size(); ++i)
-                if (ei->second.members[i].name == *id->value) {
+        // Through `enumInfo`, so a PROMOTED payload-less enum answers too: promotion moves the member
+        // list to `_promotedEnums`, and a bare `_enums` lookup made `Promoted::A` unresolvable from any
+        // comptime expression — the member is still a compile-time integer, wherever its list is kept.
+        if (EnumInfo* ei = enumInfo(owner))
+            for (size_t i = 0; i < ei->members.size(); ++i)
+                if (ei->members[i].name == *id->value) {
                     int64_t v;
-                    if (!enumMemberValue(ei->second, i, v)) return false;
+                    if (!enumMemberValue(*ei, i, v)) return false;
                     asInt(v);
                     return true;
                 }
@@ -842,10 +844,15 @@ bool CEmitter::enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out)
 // read one). Each top-level evaluation resets the interpreter's budget the way evalComptimeConsts does.
 void CEmitter::foldEnumMembers()
 {
-    for (auto& kv : _enums)
-        for (size_t i = 0; i < kv.second.members.size(); ++i) {
-            _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
-            int64_t v;
-            enumMemberValue(kv.second, i, v);
-        }
+    // Both tables: a PROMOTED payload-less enum (one that declared members or a contract) has left
+    // `_enums` for `_promotedEnums`, and its values still have to fold — they are what `emitVariantStruct`
+    // writes on the tag enumerators and what `emitTryCast` tests membership against. Skipping them meant a
+    // promoted `type enum Code implements Hashable { Ok, Bad = 5 }` emitted `Bad` as 1.
+    for (auto* tbl : { &_enums, &_promotedEnums })
+        for (auto& kv : *tbl)
+            for (size_t i = 0; i < kv.second.members.size(); ++i) {
+                _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+                int64_t v;
+                enumMemberValue(kv.second, i, v);
+            }
 }

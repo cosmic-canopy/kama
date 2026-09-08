@@ -1231,6 +1231,14 @@ private:
     // themselves are injected later in applyIntrinsicImpl, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _intrinsicConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
+    // A PAYLOAD-LESS enum that was PROMOTED to a variant ClassInfo (it declared members or a contract, so
+    // it needed somewhere to hang them — collectEnumConformances). Promotion moves it out of `_enums` and
+    // into `_classes`, which used to LOSE the two things a payload-less enum still is: its member VALUES
+    // (`Green = 5`, folded by foldEnumMembers, which walks `_enums`) and its membership list (what
+    // `try cast<Color>(n)` tests against). Its EnumInfo is kept here rather than left in `_enums`, because
+    // `_enums.count()` is what every "is this a bare C integer?" test asks and a promoted enum is a
+    // `struct { Tag tag; }`. Read by foldEnumMembers, emitVariantStruct and emitTryCast; see isUnitEnum.
+    std::map<std::string, EnumInfo>      _promotedEnums;
     // Every enum's decl node, keyed by qualified name. Its remaining consumer is the LSP/query def-site
     // table (kama.query.cpp), which is the ONLY place either kind of enum gets a def-site: a tagged enum
     // is lowered to a variant ClassInfo and never reaches `_enums`, and the `_classes` loop skips variant
@@ -1699,6 +1707,31 @@ private:
     ClassInfo buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name);   // tagged-union ClassInfo
     void emitEnum(EnumInfo& ei);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
+    // A PROMOTED payload-less enum: a variant ClassInfo whose every variant carries no payload, so it
+    // lowers to `struct { Tag tag; }` — the same information a bare C enum holds, in a wrapper that
+    // exists only so the type has somewhere to hang its methods. SPEC says a payload-less enum "lowers
+    // to an integer", and every scalar operation the language grants one (`==`/`!=`, `cast<intN>`,
+    // `try cast<E>`, a member value) must therefore keep working after promotion — each reads `.tag`.
+    // Not the same question as `isEnum`, which asks whether the name is still a bare C integer.
+    // An enum's member list, wherever it lives: `_enums` for a bare C integer, `_promotedEnums` for one
+    // that was promoted to a variant ClassInfo. Every consumer that asks "what are this enum's members
+    // and their values" wants both — a promotion does not change the answer, only where it is stored.
+    EnumInfo* enumInfo(const std::string& name) {
+        auto it = _enums.find(name);
+        if (it != _enums.end()) return &it->second;
+        auto pt = _promotedEnums.find(name);
+        return pt == _promotedEnums.end() ? nullptr : &pt->second;
+    }
+    // One payload-less-enum operand's tag, spelled for how that operand EMITS: `this` inside the enum's
+    // own method is already `self`, a pointer (addrOfOperand says the same), and everything else is a
+    // value. Emits the operand exactly once; call it after the operand has been classified.
+    std::string unitEnumTag(SharedExpression e);
+    bool isUnitEnum(const std::string& cty) const {
+        auto it = _classes.find(cty);
+        if (it == _classes.end() || !it->second.isVariant || it->second.variants.empty()) return false;
+        for (auto& v : it->second.variants) if (!v.payload.empty()) return false;
+        return true;
+    }
     void collectClasses(SharedCompilationUnit unit);
 
     // Contract-conformance plumbing, shared by every path that grants a type a contract —
