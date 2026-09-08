@@ -8101,9 +8101,25 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
             ClassInfo ci = buildVariantClassInfo(ed, name);
             ci.declFile = unit && unit->name ? *unit->name : std::string();
+            // The `@generate` flags are read ABOVE the template/concrete fork, because a generic enum
+            // needs them on its TEMPLATE. Reading them inside the concrete branch is why `@generate` on
+            // a generic enum was not refused but SILENTLY IGNORED: the attribute parsed nowhere, the
+            // program built, and the missing conformance surfaced much later as `==` complaining that
+            // `Msg<int32>` "needs `implements Equatable`". The flags come off the ONE accept-list; what
+            // they MEAN is decided by registerDerives, below for a concrete enum and per instance for a
+            // generic one.
+            if (ed->attributes)
+                for (auto& at : *ed->attributes)
+                    if (at && at->name && *at->name == "generate") parseGenerateAttr(at, ci, ed->line);
+            const bool anyDerive = ci.genSerialize || ci.genDeserialize || ci.genFormat
+                                || ci.genEquatable || ci.genHashable || ci.genOf || ci.genZero;
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
                 // each `Optional<Arg>` becomes a specialized ClassInfo at discovery (registerGenericTypeInst).
+                // ⚠️ The FLAGS ride along on the template and nothing else does: registerDerives is never
+                // called here. The instance is a whole-struct copy of the template, so a conformance
+                // minted at the template would be inherited — identically, and identically wrong — by
+                // every instance, when the whole point is that each instance answers for its own payload.
                 std::vector<std::string> ps;
                 for (auto& p : *ed->typeParams) if (p) ps.push_back(*p);
                 _genericTypeParams[name] = ps;
@@ -8113,17 +8129,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
             } else {
-                // `@generate` on a concrete tagged enum: the flags come off the ONE accept-list, and
-                // registerDerives turns them into conformances + synth methods exactly as it does for a
-                // `value`. This used to be a second, two-name parser and a hand-rolled registration of
-                // the two serde kinds — which is why `Formattable`/`Equatable`/`Hashable` on an enum
-                // were not "unsupported" so much as unknown to a copy nobody grew.
-                if (ed->attributes)
-                    for (auto& at : *ed->attributes)
-                        if (at && at->name && *at->name == "generate") parseGenerateAttr(at, ci, ed->line);
-                if (ci.genSerialize || ci.genDeserialize || ci.genFormat || ci.genEquatable
-                    || ci.genHashable || ci.genOf || ci.genZero)
-                    registerDerives(ci, ed->identifier, ed->line);
+                if (anyDerive) registerDerives(ci, ed->identifier, ed->line);
                 _classes[name] = ci;
             }
             continue;

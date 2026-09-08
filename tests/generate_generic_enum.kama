@@ -1,0 +1,57 @@
+// `@generate(...)` on a GENERIC enum. The attribute was not refused here — it was parsed NOWHERE. The
+// enum collector read it inside the concrete branch of the template/concrete fork, so a generic enum's
+// attribute was silently dropped: the program built, no conformance appeared, and the report arrived
+// much later as `==` complaining that `Msg<int32>` "needs `implements Equatable`", pointing at the use
+// site of a type whose declaration says it derives one. The parse moved above the fork; the flags ride
+// on the TEMPLATE and the conformance is decided PER INSTANCE, which is where the payload is known.
+//
+// ⚠️ The hash and equality assertions below are not ceremony. A variant's data lives in its payload, not
+// in `fields` — so an instance routed to the class-side emitters would have produced `return true` for
+// equals and a seed-only hash: valid C, no diagnostic, and every `Msg<int32>` equal to every other. The
+// two `Put`s carrying DIFFERENT payloads are what catch that, and nothing else here would.
+import { std::collections::Map, std::serialization::json::encode, std::serialization::json::decode };
+
+@generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
+type enum Msg<T> { Put(T v), Nop }
+
+fn int32 main() {
+    Msg<int32> a  = Msg::Put(v: 3);
+    Msg<int32> a2 = Msg::Put(v: 3);
+    Msg<int32> c  = Msg::Put(v: 4);     // same tag, DIFFERENT payload
+    Msg<int32> n  = Msg::Nop;
+
+    int32 acc = 0;
+    if (a == a2) { acc = acc + 1; }     // same tag, equal payload
+    if (a != c)  { acc = acc + 2; }     // the payload is what separates them
+    if (a != n)  { acc = acc + 4; }     // different tags are never equal
+
+    if (!"${a}".equals(other: "Put { v: 3 }")) { return 91; }
+    if (!"${n}".equals(other: "Nop"))          { return 92; }
+
+    // Two payloads that differ must not collide in a Map — a seed-only hash would put them in one slot
+    // and the derived `equals` would then have to tell them apart. Both have to be right.
+    Map<Msg<int32>, int32> m = Map.empty();
+    m.put(key: a, value: 6);
+    m.put(key: c, value: 9);
+    m.put(key: n, value: 5);
+    int32 ha = match (m.get(key: a2)) { case Some(value: v): v; case None: 0; };   // a2 == a
+    int32 hc = match (m.get(key: c))  { case Some(value: v): v; case None: 0; };
+    int32 hn = match (m.get(key: n))  { case Some(value: v): v; case None: 0; };
+    if (ha != 6) { return 93; }
+    if (hc != 9) { return 94; }
+    if (hn != 5) { return 95; }
+
+    // A generic enum on the wire: the payload is written through the SUBSTITUTED field type, which is
+    // where a generic instance's field node still being the template's `T` would have shown up.
+    Result<string, Owned<Error>> j = encode(v: c);
+    string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
+    if (!js.equals(other: "{\"tag\":\"Put\",\"value\":{\"v\":4}}")) { return 96; }
+
+    Result<Msg<int32>, Owned<Error>> back = decode::<Msg<int32>>(src: give js);
+    int32 bv = match (back) {
+        case Ok(value: q): match (q) { case Put(v: v2): v2; case Nop: 0; };
+        case Err(error: e2): 0 - 1;
+    };
+
+    return acc + ha + hc + hn + bv;   // 7 + 6 + 9 + 5 + 4 = 31
+}

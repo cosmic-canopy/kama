@@ -1,0 +1,18 @@
+// The enum sibling of xfail/generate_generic_unmet: a generic ENUM's derive is conditional on its
+// PAYLOAD, in exactly the way a generic struct's is conditional on its fields. `Msg<int32>` compares;
+// `Msg<Plain>` does not, from one attribute and no `when` clause.
+//
+// ⚠️ The message names the variant AND the field, because a sum type gives the reader two places to
+// look: "`Put`'s field `v` (`Plain`)" says which arm of which enum failed the condition. Being told to
+// add `@generate(Equatable)` would send the author to a line that already says it.
+@generate(Equatable)
+type enum Msg<T> { Put(T v), Nop }
+
+type value Plain { public int32 n; public ctor of(int32 n) { this.n = n; } }   // conforms to nothing
+
+fn int32 main() {
+    Msg<Plain> a = Msg::Put(v: Plain.of(n: 5));
+    Msg<Plain> b = Msg::Put(v: Plain.of(n: 5));
+    if (a == b) { return 1; }
+    return 0;
+}
