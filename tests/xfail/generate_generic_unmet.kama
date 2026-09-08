@@ -1,0 +1,18 @@
+// The other half of tests/generate_generic: the instance that does NOT qualify. `@generate(Equatable)`
+// on `Box<T>` is a conditional conformance — the instance carries it exactly when every substituted field
+// does — so `Box<int32>` compares and `Box<Plain>` does not, from one attribute and no `when` clause.
+//
+// ⚠️ What is being pinned here is the MESSAGE as much as the refusal. The condition is invisible at the
+// use site: the author wrote `@generate(Equatable)` and can see it right there, so being told to "add
+// `@generate(Equatable)`" would send them to a line that already says it. It names the field instead.
+@generate(Equatable, of)
+type value Box<T> { public T v; }
+
+type value Plain { public int32 n; public ctor of(int32 n) { this.n = n; } }   // conforms to nothing
+
+fn int32 main() {
+    Box<Plain> a = Box::<Plain>.of(v: Plain.of(n: 5));
+    Box<Plain> b = Box::<Plain>.of(v: Plain.of(n: 5));
+    if (a == b) { return 1; }
+    return 0;
+}

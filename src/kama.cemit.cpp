@@ -3839,10 +3839,14 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             return "(" + l + (token == EQEQ ? " == " : " != ") + r + ")";
         }
         if (!cm) {
-            unsupported(("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
-                         + "` — declare `implements " + need + " for " + lc + " { … }`"
-                         + (eq ? " (or `@generate(Equatable)`)" : "")
-                         + "; `" + binaryOperator(token) + "` calls its `" + meth + "`").c_str(), line);
+            const std::string dnote = derivedUnmetNote(lc, need);
+            unsupported((dnote.empty()
+                         ? ("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
+                            + "` — declare `implements " + need + " for " + lc + " { … }`"
+                            + (eq ? " (or `@generate(Equatable)`)" : "")
+                            + "; `" + binaryOperator(token) + "` calls its `" + meth + "`")
+                         : ("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
+                            + "`" + dnote)).c_str(), line);
             return "0";
         }
         canAccess(&ci->second, cm->visibility, cm->cName, line);
@@ -3989,9 +3993,13 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     {
         std::string hc = exprClass(hole);
         if (!hc.empty() && _classes.count(hc) && !satisfiesBound(hc, "Formattable")) {
+            const std::string dnote = derivedUnmetNote(hc, "Formattable");
             unsupported(("`" + hc + "` cannot be interpolated — `${…}` renders a value through the "
-                         "`Formattable` contract; add `implements Formattable` (or `@generate(Formattable)`), or call a "
-                         "method that returns a string").c_str(), hole->line);
+                         "`Formattable` contract"
+                         + (dnote.empty() ? std::string("; add `implements Formattable` (or "
+                                                        "`@generate(Formattable)`), or call a method that "
+                                                        "returns a string")
+                                          : dnote)).c_str(), hole->line);
             return;   // reported; synthesizing the call would add a second error against the synth line
         }
         // The same question for a PRIMITIVE hole, which took a very different road to a much worse
@@ -8262,6 +8270,205 @@ struct ScopedThis { std::map<std::string, SharedIdentifier>& m; bool had; Shared
     ~ScopedThis() { if (had) m["This"] = prev; else m.erase("This"); } }; }
 
 // Build the class table: ordered fields, methods, and the (single) constructor.
+// Register the conformances and synthesized methods a type's `@generate(...)` asks for.
+//
+// One function for every subject that can carry the attribute, because the attribute means the same
+// thing on each: a plain type (from collectClasses, where this always lived) and a generic INSTANCE
+// (from registerGenericTypeInst, once its fields are substituted concrete). The four "not a generic"
+// refusals that used to stand where the call now is are gone — a generic type derives per
+// instantiation, which is the only place its fields have types to walk.
+//
+// `selfNode` is the type node this type is spelled by — the declaration's name for a plain type, a
+// synthesized identifier naming the instance for a generic one. It is what the fallible `deserialize`
+// builds its `Result<This, Owned<Error>>` from and what a bag ctor returns, so passing it in is what
+// lets one function serve both callers.
+//
+// ⚠️ CONDITIONAL BY FIELD, for an instance. `@generate(Equatable)` on `Box<T>` cannot hold for every
+// `T` — `Box<Handle>` has no `equals` to walk into — so an instance registers a derive only when every
+// substituted field satisfies it, which is Rust's `impl<T: PartialEq> PartialEq for Box<T>` and
+// Haskell's `instance Eq a => Eq (Box a)`. The condition is not written by the author because it is not
+// the author's choice: it is a mechanical consequence of the fields, and kama's own `when [T: Bound]`
+// exists for the case where a type says something a field walk cannot derive. A use on an instance that
+// does not qualify is refused at the USE site, naming the field that disqualified it (`derivedUnmet`).
+//
+// A plain type keeps the stricter rule it always had — an unmet field is an error at the DECLARATION,
+// because there is exactly one subject and the author can see it. The body emitters carry those checks
+// (eqFieldTest, emitFmtFieldWrite, serdeRejectsField), so nothing here duplicates them.
+std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string& bound)
+{
+    auto it = _classes.find(cty);
+    if (it == _classes.end()) return "";
+    auto u = it->second.derivedUnmet.find(bound);
+    if (u == it->second.derivedUnmet.end()) return "";
+    // Name the TEMPLATE, not the instance: the attribute is written once, on `Box<T>`, and that is the
+    // line the author will go to.
+    std::string tmpl = cty;
+    auto of = _genericTypeInstOf.find(cty);
+    if (of != _genericTypeInstOf.end()) tmpl = of->second;
+    return " — `@generate(" + bound + ")` on `" + demangleForDisplay(tmpl) + "` holds for an instance "
+           "whose every field conforms, and " + u->second + " does not implement `" + bound + "`. Derive "
+           "or implement `" + bound + "` for that field, or write the conformance on this instance by hand";
+}
+
+void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int line)
+{
+    // Every derive this type asked for that its FIELDS cannot support, for an instance whose conformance
+    // is therefore conditional. Empty for a plain type, which errors instead.
+    if (ci.isGenericInst) {
+        auto unmet = [&](const char* bound) -> std::string {
+            auto bad = [&](const FieldInfo& f) -> bool {
+                if (f.serSkip) return false;              // `@skip` is out of the walk entirely
+                if (!f.type) return false;
+                // ⚠️ `primKey`, NOT `cType`. It hops `_typeSubst` (so the template's `T` answers as the
+                // instance's argument) and it returns the KAMA name for a scalar, which is the key a
+                // primitive's conformance is filed under — `_intrinsicConformances["int32"]`, never
+                // `"int32_t"`. Asking with the C spelling reports every primitive as non-conforming, so
+                // the first draft of this rule disqualified `Box<int32>` from every derive it asked for.
+                // For a user type primKey falls through to `cType`, which is that key.
+                const std::string k = primKey(f.type);
+                if (k.empty() || opaqueScalarUnknown(k)) return false;   // nothing known — do not guess
+                return !satisfiesBound(k, bound);
+            };
+            for (auto& f : ci.fields)
+                if (bad(f)) return "field `" + f.name + "` (`" + demangleForDisplay(primKey(f.type)) + "`)";
+            for (auto& v : ci.variants)
+                for (auto& f : v.payload)
+                    if (bad(f)) return "`" + v.name + "`'s field `" + f.name
+                                     + "` (`" + demangleForDisplay(primKey(f.type)) + "`)";
+            return "";
+        };
+        auto drop = [&](bool& flag, const char* bound) {
+            if (!flag) return;
+            std::string why = unmet(bound);
+            if (why.empty()) return;
+            flag = false;
+            ci.derivedUnmet[bound] = why;
+        };
+        drop(ci.genEquatable,   "Equatable");
+        drop(ci.genHashable,    "Hashable");
+        drop(ci.genFormat,      "Formattable");
+        drop(ci.genSerialize,   "Serializable");
+        drop(ci.genDeserialize, "Deserializable");
+    }
+    // Register the nominal conformance whenever `@generate` opts in — INDEPENDENT of whether the
+    // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
+    // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
+    // the type must still satisfy the `Serializable`/`Deserializable` bound (`decode::<T>` checks it).
+    auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
+    if (ci.genSerialize) {
+        if (!hasItf("Serializable")) ci.interfaces.push_back("Serializable");
+        if (!ci.methods.count("serialize")) {
+            MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
+            mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
+            mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
+            scanTypeForCollections(mi.returnType);   // monomorphize Result<Unit, Owned<Error>>
+            ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
+            ci.methods["serialize"] = mi;   // `fn Result<Unit, Owned<Error>> serialize(ref Serializer w)`
+        }
+    }
+    if (ci.genDeserialize) {
+        if (!hasItf("Deserializable")) ci.interfaces.push_back(synthConformanceName("Deserializable", ci.name));
+        if (!ci.methods.count("deserialize")) {
+            MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
+            // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
+            // a trust boundary. (The graph two-pass returns `Result<Shared<This>, Owned<Error>>`; its
+            // return node is rebuilt in computeGraphNodeTypes.)
+            mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
+            mi.returnType = resultOwnedErrorTypeNode(selfNode);
+            scanTypeForCollections(mi.returnType);   // monomorphize Result<This, Owned<Error>>
+            ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
+            ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
+            ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+        }
+    }
+    // `@generate(Formattable)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
+    // (`Type { f1: v1, … }`). The display analog of Serializable: register the nominal `Formattable`
+    // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
+    // returnType stays null -> cType(null) == "void".
+    if (ci.genFormat) {
+        if (!hasItf("Formattable")) ci.interfaces.push_back("Formattable");
+        if (!ci.methods.count("format")) {
+            MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
+            mi.isSynthFormat = true; mi.isConst = true;   // the dump writes to `f`, never to `this`
+            if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+            mi.returnType = synthId("void", IDENTIFIER_VOID_VAL);
+            ParamSig f; f.name = "f"; f.byRef = true; f.className = "Formatter"; mi.params.push_back(f);
+            ci.methods["format"] = mi;   // `fn void format(ref Formatter f)`
+        }
+    }
+    // `@generate(of|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of`
+    // = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor `V.zero()`. Both are
+    // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
+    // emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
+    if (ci.genOf || ci.genZero) {
+        if (ci.kind != TypeKind::Value)
+            unsupported("`@generate(of, zero)` applies only to a `value` whose fields are all public "
+                        "(a data bag) — not a `resource`, `view`, or `enum`", line);
+        else if (!isTransparentValue(ci)) {
+            std::string bad;
+            for (auto& f : ci.fields) if (f.visibility != Visibility::Public) { bad = f.name; break; }
+            unsupported(("`@generate(of, zero)` needs an all-public `value` (a data bag); field '"
+                         + bad + "' is not public").c_str(), line);
+        } else {
+            if (ci.genOf && !ci.methods.count("of")) {
+                MethodInfo mi; mi.cName = ci.name + "__of"; mi.visibility = Visibility::Public;
+                mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = selfNode;
+                for (auto& f : ci.fields) {
+                    ParamSig ps; ps.name = f.name; ps.byRef = false; ps.className = cType(f.type);
+                    mi.params.push_back(ps);
+                }
+                ci.methods["of"] = mi;
+                ci.ctors["of"] = CtorInfo{ nullptr, mi.params, Visibility::Public, false, selfNode };
+            }
+            if (ci.genZero && !ci.methods.count("zero")) {
+                // A `value` owns nothing (the "a value owns nothing" rule rejects an `Owned`/`Shared`
+                // field before we get here), so zero-init is always a valid, never-null state.
+                MethodInfo mi; mi.cName = ci.name + "__zero"; mi.visibility = Visibility::Public;
+                mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = selfNode;
+                ci.methods["zero"] = mi;
+                ci.ctors["zero"] = CtorInfo{ nullptr, {}, Visibility::Public, false, selfNode };
+            }
+        }
+    }
+    // `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`, plus the nominal
+    // conformance. Since comparison is contract-driven, deriving `Equatable` is also what gives the
+    // type its `==`/`!=`; deriving `Hashable` alongside it makes the type a `Map`/`Set` key without
+    // hand-rolling an FNV loop. Structural equality remains OPT-IN — that is the whole stance; the
+    // attribute is where you ask for it. A hand-written `equals`/`hash` wins via the `!count` guard
+    // (body only — the conformance is still registered). Per-field conformance is checked at emit,
+    // like `@generate(Formattable)`, because impl blocks are not all collected yet at this point.
+    if (ci.genEquatable) {
+        // `Equatable` PINS its parameter, so the conformance is recorded as `Equatable_<Type>`.
+        // There is no source node here to carry `<This>` — the attribute is the whole declaration —
+        // so the instance is named AND MINTED here, by synthConformanceName. Naming it without minting
+        // is what "unknown contract in implements" means: the vtable emit resolves the name and finds
+        // nothing. A plain type used to be rescued by a separate mint in the collect sweep, which walks
+        // ClassDeclarationNodes and so could never reach a generic INSTANCE; one call covers both, and
+        // the sweep's special case is gone.
+        std::string eqName = synthConformanceName(resolveUserName("Equatable", nullptr), ci.name);
+        if (!hasItf(eqName)) ci.interfaces.push_back(eqName);
+        if (!ci.methods.count("equals")) {
+            MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
+            mi.isSynthCmp = true; mi.isConst = true;   // a derived comparison reads `this` and nothing else
+            if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+            mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
+            ParamSig o; o.name = "other"; o.byRef = true; o.isConst = true;   // `Equatable` borrows
+            o.className = ci.name; mi.params.push_back(o);                   // the operand read-only
+            ci.methods["equals"] = mi;   // `fn bool equals(ref This other)`
+        }
+    }
+    if (ci.genHashable) {
+        if (!hasItf("Hashable")) ci.interfaces.push_back("Hashable");
+        if (!ci.methods.count("hash")) {
+            MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
+            mi.isSynthCmp = true; mi.isConst = true;   // ditto — a hash is a pure read of the fields
+            if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+            mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
+            ci.methods["hash"] = mi;     // `fn uint64 hash()`
+        }
+    }
+}
+
 void CEmitter::collectClasses(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
@@ -8908,148 +9115,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + ci.name + "` implements `Copyable` but doesn't declare its bare-hand-off default "
                              "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd->line);
         }
-        // By-value serialization intrinsic (Phase C): synthesize `serialize`/`deserialize` in C for a
-        // `@generate` tree struct that supplies NEITHER a hand-written impl NOR a driver-generated graph
-        // impl — both land a method in `ci.methods`, so the `!count` guard makes hand-written / graph win.
-        // Concrete product types only (a generic template specializes per instance; enums are driver-side).
-        // Registers the conformance exactly like `implements Serializable` (interfaces + method) so the normal
-        // vtable/dispatch machinery works; only the BODY is emitted specially (isSynthSer/isSynthDe).
-        if (!(cd->typeParams && !cd->typeParams->empty()) && !ci.isVariant) {
-            // Register the nominal conformance whenever `@generate` opts in — INDEPENDENT of whether the
-            // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
-            // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
-            // the type must still satisfy the `Serializable`/`Deserializable` bound (`decode::<T>` checks it).
-            auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
-            if (ci.genSerialize) {
-                if (!hasItf("Serializable")) ci.interfaces.push_back("Serializable");
-                if (!ci.methods.count("serialize")) {
-                    MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
-                    mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
-                    scanTypeForCollections(mi.returnType);   // monomorphize Result<Unit, Owned<Error>>
-                    ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
-                    ci.methods["serialize"] = mi;   // `fn Result<Unit, Owned<Error>> serialize(ref Serializer w)`
-                }
-            }
-            if (ci.genDeserialize) {
-                if (!hasItf("Deserializable")) ci.interfaces.push_back(synthConformanceName("Deserializable", ci.name));
-                if (!ci.methods.count("deserialize")) {
-                    MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
-                    // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
-                    // a trust boundary. (The graph two-pass returns `Result<Shared<This>, Owned<Error>>`; its
-                    // return node is rebuilt in computeGraphNodeTypes.)
-                    mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
-                    mi.returnType = resultOwnedErrorTypeNode(cd->name);
-                    scanTypeForCollections(mi.returnType);   // monomorphize Result<This, Owned<Error>>
-                    ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
-                    ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
-                    ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
-                }
-            }
-            // `@generate(Formattable)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
-            // (`Type { f1: v1, … }`). The display analog of Serializable: register the nominal `Formattable`
-            // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
-            // returnType stays null -> cType(null) == "void".
-            if (ci.genFormat) {
-                if (!hasItf("Formattable")) ci.interfaces.push_back("Formattable");
-                if (!ci.methods.count("format")) {
-                    MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
-                    mi.isSynthFormat = true; mi.isConst = true;   // the dump writes to `f`, never to `this`
-                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = synthId("void", IDENTIFIER_VOID_VAL);
-                    ParamSig f; f.name = "f"; f.byRef = true; f.className = "Formatter"; mi.params.push_back(f);
-                    ci.methods["format"] = mi;   // `fn void format(ref Formatter f)`
-                }
-            }
-            // `@generate(of|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of`
-            // = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor `V.zero()`. Both are
-            // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
-            // emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
-            if (ci.genOf || ci.genZero) {
-                if (ci.kind != TypeKind::Value)
-                    unsupported("`@generate(of, zero)` applies only to a `value` whose fields are all public "
-                                "(a data bag) — not a `resource`, `view`, or `enum`", cd->line);
-                else if (!isTransparentValue(ci)) {
-                    std::string bad;
-                    for (auto& f : ci.fields) if (f.visibility != Visibility::Public) { bad = f.name; break; }
-                    unsupported(("`@generate(of, zero)` needs an all-public `value` (a data bag); field '"
-                                 + bad + "' is not public").c_str(), cd->line);
-                } else {
-                    if (ci.genOf && !ci.methods.count("of")) {
-                        MethodInfo mi; mi.cName = ci.name + "__of"; mi.visibility = Visibility::Public;
-                        mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = cd->name;
-                        for (auto& f : ci.fields) {
-                            ParamSig ps; ps.name = f.name; ps.byRef = false; ps.className = cType(f.type);
-                            mi.params.push_back(ps);
-                        }
-                        ci.methods["of"] = mi;
-                        ci.ctors["of"] = CtorInfo{ nullptr, mi.params, Visibility::Public, false, cd->name };
-                    }
-                    if (ci.genZero && !ci.methods.count("zero")) {
-                        // A `value` owns nothing (the "a value owns nothing" rule rejects an `Owned`/`Shared`
-                        // field before we get here), so zero-init is always a valid, never-null state.
-                        MethodInfo mi; mi.cName = ci.name + "__zero"; mi.visibility = Visibility::Public;
-                        mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = cd->name;
-                        ci.methods["zero"] = mi;
-                        ci.ctors["zero"] = CtorInfo{ nullptr, {}, Visibility::Public, false, cd->name };
-                    }
-                }
-            }
-            // `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`, plus the nominal
-            // conformance. Since comparison is contract-driven, deriving `Equatable` is also what gives the
-            // type its `==`/`!=`; deriving `Hashable` alongside it makes the type a `Map`/`Set` key without
-            // hand-rolling an FNV loop. Structural equality remains OPT-IN — that is the whole stance; the
-            // attribute is where you ask for it. A hand-written `equals`/`hash` wins via the `!count` guard
-            // (body only — the conformance is still registered). Per-field conformance is checked at emit,
-            // like `@generate(Formattable)`, because impl blocks are not all collected yet at this point.
-            if (ci.genEquatable) {
-                // `Equatable` PINS its parameter, so the conformance is recorded as `Equatable_<Type>`.
-                // There is no source node here to carry `<This>` — the attribute is the whole declaration —
-                // so the instance name is formed directly. registerGeneratedContractInsts mints it.
-                std::string eqName = pinnedInstanceName(resolveUserName("Equatable", nullptr), ci.name);
-                if (!hasItf(eqName)) ci.interfaces.push_back(eqName);
-                if (!ci.methods.count("equals")) {
-                    MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
-                    mi.isSynthCmp = true; mi.isConst = true;   // a derived comparison reads `this` and nothing else
-                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
-                    ParamSig o; o.name = "other"; o.byRef = true; o.isConst = true;   // `Equatable` borrows
-                    o.className = ci.name; mi.params.push_back(o);                   // the operand read-only
-                    ci.methods["equals"] = mi;   // `fn bool equals(ref This other)`
-                }
-            }
-            if (ci.genHashable) {
-                if (!hasItf("Hashable")) ci.interfaces.push_back("Hashable");
-                if (!ci.methods.count("hash")) {
-                    MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
-                    mi.isSynthCmp = true; mi.isConst = true;   // ditto — a hash is a pure read of the fields
-                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
-                    ci.methods["hash"] = mi;     // `fn uint64 hash()`
-                }
-            }
-        } else if (ci.genOf || ci.genZero) {
-            // A generic `value<T>` template or a variant: `of`/`zero` apply only to a plain (non-generic,
-            // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6 — the *Derive follow-ons* ROADMAP row.
-            unsupported("`@generate(of, zero)` applies only to a plain transparent `value` (all public fields) "
-                        "— not a generic or variant type; write a `ctor`", cd->line);
-        } else if (ci.genFormat) {
-            // A generic `value<T>` template or a variant: `@generate(Formattable)` is out of scope for a first cut;
-            // write a hand `implements Formattable` (per-instance synthesis for generics is the *Derive follow-ons* ROADMAP row).
-            unsupported("`@generate(Formattable)` applies only to a plain (non-generic, non-variant) type "
-                        "— write `implements Formattable` by hand for a generic or variant", cd->line);
-        } else if (ci.genEquatable || ci.genHashable) {
-            // Same v1 scope as `@generate(Formattable)`: a generic template specializes per instance and a variant
-            // needs per-tag walks — both are the *Derive follow-ons* ROADMAP row, not a silent half-derive.
-            unsupported("`@generate(Equatable, Hashable)` applies only to a plain (non-generic, non-variant) "
-                        "type — write `implements Equatable`/`Hashable` by hand for a generic or variant", cd->line);
-        } else if (ci.genSerialize || ci.genDeserialize) {
-            // The only two kinds that had NO arm here, so they were accepted in silence: the type read as
-            // conforming, nothing synthesized the conformance, and the first `encode(v: b)` died in the C
-            // compiler on a missing `_F<file>__Box_int32__as_Serialize` vtable. Its four siblings above all say so.
-            unsupported("`@generate(Serializable, Deserializable)` applies only to a plain (non-generic, non-variant) "
-                        "type — write `implements Serializable`/`Deserializable` by hand for a generic or variant", cd->line);
-        }
+        // What `@generate(...)` asks for — see registerDerives. A generic TEMPLATE is skipped here and
+        // derived PER INSTANCE instead (registerGenericTypeInst), which is the only place its fields have
+        // concrete types to walk; the template's flags ride into `_genericTypes` with the rest of its shape.
+        if (!(cd->typeParams && !cd->typeParams->empty())) registerDerives(ci, cd->name, cd->line);
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
         // methods) is parked in _genericTypes; the specialized instances are the real classes.
@@ -11151,6 +11220,23 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                              + "`) — it borrows and would escape via the enum; a view is local/parameter-only").c_str(),
                             line);
 
+    // `@generate(...)` on the TEMPLATE, applied here — this is the only place a generic type's fields
+    // have concrete types to walk, which is why the four "not a generic" refusals this replaces existed.
+    //
+    // ⚠️ ORDER, three ways, and each was a defect in an earlier draft:
+    //   - AFTER `_classes[mangled] = ci` (11165), because the synthesized `deserialize` builds a
+    //     `Result<This, …>` from `synthId(mangled)` and a name resolves only once its key is in `_classes`.
+    //   - AFTER the transitive scans just above, because the conditional rule asks each field type
+    //     whether it conforms — and for `Box<Box<int32>>` the inner instance does not EXIST until that
+    //     scan registers it, so the outer would decide against a type that was about to qualify.
+    //   - and on `_classes[mangled]`, not the local `ci`: the map holds the copy every later pass reads.
+    // The `_genericTypeInsts` guard at the top of this function is what stops a self-referential template
+    // recursing here.
+    if (_classes[mangled].genSerialize || _classes[mangled].genDeserialize || _classes[mangled].genFormat
+        || _classes[mangled].genEquatable || _classes[mangled].genHashable
+        || _classes[mangled].genOf || _classes[mangled].genZero)
+        registerDerives(_classes[mangled], synthId(mangled), line);
+
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
 }
@@ -11572,18 +11658,8 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 ScopedThis _tt(_typeSubst, synthId(qualify(*cd->name->value)));
                 for (auto& itf : *cd->baseTypes->interfaces) scanTypeForGenericContracts(itf);
             }
-            // `@generate(Equatable)` declares a conformance with no source node for the scan above to
-            // walk, so its pinned instance would name a contract that is never minted — the vtable emit
-            // then reports "unknown contract in implements". Mint it here, beside the source-written ones.
-            {
-                auto gci = _classes.find(qualify(*cd->name->value));
-                if (gci != _classes.end() && gci->second.genEquatable) {
-                    std::string eq = resolveUserName("Equatable", nullptr);
-                    if (pinnedInstanceName(eq, gci->second.name) != eq)
-                        registerGenericContractInst(eq, std::make_shared<IdentifierList>(
-                            IdentifierList{ synthId(gci->second.name) }));
-                }
-            }
+            // (`@generate(Equatable)`'s pinned instance is minted by registerDerives itself, which is
+            // the only site a generic INSTANCE also passes through — this sweep skips generic templates.)
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
@@ -17255,10 +17331,14 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
             // it is the channel crossing's gate, and "does not satisfy" alone sent the author hunting.
             const std::string why = (!_sendableContract.empty() && contract == _sendableContract)
                                   ? unsendableReason(cls) : std::string();
-            if (_silentBounds == 0)   // a consequence of an already-refused outer instance says nothing (see registerGenericTypeInst)
+            if (_silentBounds == 0) {  // a consequence of an already-refused outer instance says nothing (see registerGenericTypeInst)
+                // …and a failed bound on a `@generate`d generic INSTANCE says which field lost it the
+                // derive, for the same reason: the condition is invisible at the use site.
+                const std::string dnote = derivedUnmetNote(cls, *b->value);
                 unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                              + "` does not satisfy bound `" + *b->value + "`"
-                             + (why.empty() ? "" : " — " + why)).c_str(), line);
+                             + (why.empty() ? "" : " — " + why) + dnote).c_str(), line);
+            }
             ok = false;
         }
     }
@@ -23124,9 +23204,12 @@ void CEmitter::rejectContractNonConformance(const std::string& itf, SharedExpres
     std::string c = exprClass(value);
     if (c.empty()) c = typeOfExpr(value);                          // a plain enum / primitive place
     if (valueReachesContract(value, c, itf)) return;
+    const std::string dnote = derivedUnmetNote(c, itf);
     unsupported((std::string(what) + " expects the contract `" + itf + "`, and `" + idTypeName(c)
-                 + "` does not implement it — a contract value borrows a concrete object that declares "
-                   "the conformance (`implements " + itf + "`), or a primitive that does").c_str(), line);
+                 + "` does not implement it"
+                 + (dnote.empty() ? std::string(" — a contract value borrows a concrete object that declares "
+                                                "the conformance (`implements ") + itf + "`), or a primitive that does"
+                                  : dnote)).c_str(), line);
 }
 
 // True for a bare C identifier (a local/param) — cheap and side-effect-free to read more than
@@ -23739,6 +23822,12 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
 void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                                  const std::string& resultCType)
 {
+    // ⚠️ A generic INSTANCE's field node is still the TEMPLATE's `T`, so `ty->builtInVal` reads NONE for
+    // what is really an `int32` and every scalar arm below would be skipped — the field would take the
+    // composite path and emit a call to `int32_t__serialize`, which nothing defines. `cType` hops
+    // `_typeSubst` on its own; the NODE has to be substituted explicitly. Returns `ty` unchanged when
+    // nothing is bound, so this costs a non-generic type one map check.
+    ty = deepSubstType(ty);
     if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {   // Some -> inner value, None -> null
         std::string oc = cType(ty);
         indent(depth); *_out << "switch ((" << access << ").tag) {\n";
@@ -23816,6 +23905,12 @@ void CEmitter::emitFmtLiteral(const std::string& s)
 // its own `__format` into the SAME Formatter (one buffer, no per-field allocation).
 void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line)
 {
+    // ⚠️ A generic INSTANCE's field node is still the TEMPLATE's `T`, so `ty->builtInVal` reads NONE for
+    // what is really an `int32` and every scalar arm below would be skipped — the field would take the
+    // composite path and emit a call to `int32_t__format`, which nothing defines. `cType` hops
+    // `_typeSubst` on its own; the NODE has to be substituted explicitly. Returns `ty` unchanged when
+    // nothing is bound, so this costs a non-generic type one map check.
+    ty = deepSubstType(ty);
     int bv = ty ? ty->builtInVal : 0;
     switch (bv) {
         case IDENTIFIER_STRING_VAL:  indent(1); *_out << "Formatter__writeStr(f, &" << access << ");\n";  return;
@@ -23849,6 +23944,12 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
 // would be wrong for any type whose equality is not its representation).
 std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, const std::string& b, int line)
 {
+    // ⚠️ A generic INSTANCE's field node is still the TEMPLATE's `T`, so `ty->builtInVal` reads NONE for
+    // what is really an `int32` and every scalar arm below would be skipped — the field would take the
+    // composite path and emit a call to `int32_t__equals`, which nothing defines. `cType` hops
+    // `_typeSubst` on its own; the NODE has to be substituted explicitly. Returns `ty` unchanged when
+    // nothing is bound, so this costs a non-generic type one map check.
+    ty = deepSubstType(ty);
     if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL)
         return "kama_string__equals(&" + a + ", " + b + ")";
     std::string ct = cType(ty);
@@ -23893,16 +23994,19 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
     indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
     for (auto& fld : ci.fields) {
         if (fld.serSkip) continue;
-        std::string ct = cType(fld.type);
+        // Substituted, for the reason emitSerFieldWrite gives: a generic instance's field node is the
+        // template's `T`, and the string arm below reads `builtInVal`.
+        SharedIdentifier fty = deepSubstType(fld.type);
+        std::string ct = cType(fty);
         std::string acc = "self->" + fld.name;
         std::string fh;
-        if (fld.type && fld.type->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
+        if (fty && fty->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
         else if (!_classes.count(ct))                       // primitive / UnsafePtr — its own value IS the content hash
             fh = "(uint64_t)(" + acc + ")";
         else {
             if (!satisfiesBound(ct, "Hashable"))
                 unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
-                             "`implements Hashable`; field type `" + (fld.type && fld.type->value ? *fld.type->value : ct)
+                             "`implements Hashable`; field type `" + (fty && fty->value ? *fty->value : ct)
                              + "` does not").c_str(), line);
             fh = ct + "__hash(&" + acc + ")";
         }
@@ -23957,6 +24061,12 @@ bool CEmitter::isScalarDeType(SharedIdentifier ty)
 void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,
                                const std::string& resultCType, const std::string& cleanup)
 {
+    // ⚠️ A generic INSTANCE's field node is still the TEMPLATE's `T`, so `ty->builtInVal` reads NONE for
+    // what is really an `int32` and every scalar arm below would be skipped — the field would take the
+    // composite path and emit a call to `int32_t__deserialize`, which nothing defines. `cType` hops
+    // `_typeSubst` on its own; the NODE has to be substituted explicitly. Returns `ty` unchanged when
+    // nothing is bound, so this costs a non-generic type one map check.
+    ty = deepSubstType(ty);
     // Optional<T>: null → None; else read the inner value (fallible if composite) and wrap Some.
     if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {
         std::string oc = cType(ty);
@@ -28288,6 +28398,29 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         *_out << "\n";
     }
 
+    // A PROMOTED PRELUDE ENUM's `<Enum>__as_<C>` VTABLE, ahead of every generic instantiation below.
+    // The vtables used to go out with the rest of the prelude-enum block further down, which is after the
+    // generic bodies — and a generic instance that serializes boxes a `SerError` into `Owned<Error>`
+    // through `&SerError__as_Error`, so it referenced a `static const` that C had not seen yet. It never
+    // surfaced before `@generate` reached generic types, because a plain type's synth serde body is
+    // emitted in its HOME MODULE, long after this header.
+    //
+    // Only the vtables move: they reference method PROTOTYPES, which went out much earlier, so they have
+    // nothing to wait for. The member bodies and the enum's own synth serde stay where they were, below
+    // the prelude class bodies they may call into.
+    if (_preludeUnit) {
+        _emitStaticClass = true;
+        for (const std::string& name : _preludeEnums) {
+            auto it = _classes.find(name);
+            if (it == _classes.end() || !it->second.isVariant) continue;
+            ClassInfo& eci = it->second;
+            scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
+            ScopedStr _cu(_collectingUnitPath, eci.declFile);
+            emitClassInterfaceVtables(eci);
+        }
+        _emitStaticClass = false;
+    }
+
     // generic-function instantiations — one `static` C function per (template, type-args),
     // in the header so every module can call them (like the collection macros). Forward-declare
     // all, then define, so a generic that calls another (or recurses) resolves.
@@ -28330,7 +28463,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, eci.declFile);   // whose code this is — see diagFile()
             if (eci.destructible) emitDtorDefinition(eci);
-            emitClassInterfaceVtables(eci);
+            // (its vtables went out ahead of the generic instantiations above — see there for why)
             emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
             if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
             if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);

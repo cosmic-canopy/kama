@@ -361,6 +361,12 @@ struct ClassInfo {
     // equality stays a deliberate NON-default: you ask for it. Bodies: emitEqualsDefinition/emitHashDefinition.
     bool                              genEquatable = false;
     bool                              genHashable = false;
+    // For a generic INSTANCE: the derives its own fields disqualified it from, bound name -> the field
+    // that did it ("field `v` (`Handle`)"). `@generate(Equatable)` on `Box<T>` holds for `Box<int32>`
+    // and not for `Box<Handle>`, and the difference is not an error at the template — it is the
+    // conditional conformance Rust and Haskell write as `impl<T: PartialEq>`. Read at the USE site, so
+    // the refusal names the field rather than leaving the reader to work out why the derive did nothing.
+    std::map<std::string, std::string> derivedUnmet;
     // `@align(N)` / `@packed` — LAYOUT CONTROL, passed through to the C compiler as
     // `__attribute__((aligned(N)))` / `((packed))` on the emitted struct. kama does not own layout (it
     // emits C; the C compiler lays the struct out) and deliberately does not acquire a second source of
@@ -1705,6 +1711,15 @@ private:
                                   const char* what, int line);
     void collectEnums(SharedCompilationUnit unit);
     ClassInfo buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name);   // tagged-union ClassInfo
+    // Everything `@generate(...)` registers, for every subject that can carry it: a plain type, and a
+    // generic INSTANCE (where the derive is conditional on the substituted fields). See its definition.
+    void registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int line);
+    // Why an INSTANCE of a `@generate`d generic does not carry `bound`, as a clause to append to
+    // whatever refused it (" — `@generate(Equatable)` on `Box<T>` holds for an instance whose every
+    // field conforms, and field `v` (`Handle`) does not"). Empty when that is not the reason, so every
+    // call site is one `+`. It exists because the derive is conditional and the condition is invisible
+    // at the use site: without it the author is told to add the attribute they already wrote.
+    std::string derivedUnmetNote(const std::string& cty, const std::string& bound);
     void emitEnum(EnumInfo& ei);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     // A PROMOTED payload-less enum: a variant ClassInfo whose every variant carries no payload, so it

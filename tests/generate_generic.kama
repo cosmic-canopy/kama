@@ -1,0 +1,65 @@
+// `@generate(...)` on a GENERIC type. The attribute used to be refused on one — four arms in the emitter
+// said "not a generic or variant type" — because synthesis happens against one concrete ClassInfo and a
+// template has none: its fields are typed `T`. A generic derives PER INSTANTIATION instead, where the
+// fields have real types to walk, which is the only place the question can be answered.
+//
+// ⚠️ And it is answered CONDITIONALLY, because it has to be: `@generate(Equatable)` on `Box<T>` cannot
+// hold for every `T`. An instance carries a derive exactly when every substituted field satisfies it —
+// Rust's `impl<T: PartialEq> PartialEq for Box<T>`, Haskell's `instance Eq a => Eq (Box a)`. The author
+// does not write that condition because it is not a choice: it is a consequence of the fields.
+// tests/xfail/generate_generic_unmet covers the instance that does not qualify.
+import { std::collections::Map, std::serialization::json::encode };
+
+@generate(Serializable, Formattable, Equatable, Hashable, of, zero)
+type value Box<T> {
+    @field public T v;
+}
+
+// Two type parameters, and the bag ctor takes them in declaration order.
+@generate(of)
+type value Pair<A, B> {
+    public A a;
+    public B b;
+}
+
+// A field that is itself a derived generic — the nested case, which is what fixes the ORDER this all
+// depends on: the inner instance must be registered, and its own condition decided, before the outer
+// instance asks whether its field conforms.
+fn int32 main() {
+    int32 n = 0;
+
+    Box<int32> a = Box::<int32>.of(v: 42);
+    Box<int32> b = Box::<int32>.of(v: 42);
+    Box<int32> c = Box::<int32>.of(v: 7);
+
+    if (a == b) { n = n + 1; }                 // derived memberwise `equals`
+    if (a != c) { n = n + 2; }
+
+    // Derived `zero`, and the two-parameter bag ctor, which takes its fields in declaration order.
+    Box<int32> z = Box::<int32>.zero();
+    Pair<int32, bool> p = Pair::<int32, bool>.of(a: 2, b: true);
+    if (z.v == 0 && p.a == 2 && p.b) { n = n + 4; }
+
+    string s = "${a}";                          // derived field dump
+    if (s == "Box { v: 42 }") { n = n + 8; }
+
+    // Derived `hash` + `equals` make the instance a Map key with no further work.
+    Map<Box<int32>, int32> m = Map.empty();
+    m.put(key: a, value: 5);
+    m.put(key: b, value: 9);                    // equal key -> overwrite, not a second entry
+    if (m.length() == 1) { n = n + 16; }
+
+    // Serde round trip through the derived `serialize`.
+    Result<string, Owned<Error>> r = encode(v: a);
+    string j = match (give r) { case Ok(value: ok): give ok; case Err(error: e): { return 100; } };
+    if (j == "{\"v\":42}") { n = n + 32; }
+
+    // NESTED: `Box<Box<int32>>` derives only because `Box<int32>` derived first.
+    Box<Box<int32>> outer = Box::<Box<int32>>.of(v: Box::<int32>.of(v: 3));
+    Box<Box<int32>> outer2 = Box::<Box<int32>>.of(v: Box::<int32>.of(v: 3));
+    if (outer == outer2) { n = n + 64; }
+    string ns = "${outer}";
+    if (ns == "Box { v: Box { v: 3 } }") { n = n + 128; }
+
+    return n;   // 1+2+4+8+16+32+64+128 = 255, and an exit code is one byte
+}
