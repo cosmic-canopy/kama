@@ -220,6 +220,20 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
   (Hinnant's algorithms), ISO-8601 format/parse of a `SystemTime`, leap-year and weekday arithmetic; no zone
   database (a package, as `chrono-tz` is), no locale.
 
+**Fixture hygiene — 23 `tests/xfail` fixtures still use the retired class-named constructor.** Measured
+2026-09-08 on `0.9.249`: `grep -l "public [A-Z][A-Za-z0-9]*(" tests/xfail/*.kama` lists 23 files (none
+under `tests/` proper), and every one of them produces between 2 and 13 kama errors where its `.msg` asserts
+one — `cond_move_live` reports five, `iface_collection` thirteen. They pass because the harness checks that
+the asserted message APPEARS, and it does, beside "class-named constructor `Res(...)` is no longer allowed",
+"unknown type `DynamicArray` in a field" (the import form changed too) and their cascades. That is not a
+false green — if the asserted diagnostic vanished the fixture would still fail — but a fixture that errors
+for four reasons no longer demonstrates that its program is refused for the ONE reason it names, and the
+extra errors can mask a position drift `DIAGNOSTIC_LINES` would otherwise see. The chore: rewrite each to
+`public ctor make(…)` / `Type.make(…)` and `import { std::collections::DynamicArray };`, and confirm it
+produces exactly one error before committing. Tests only, no VERSION bump; roughly a session-third. Worth
+considering alongside it: a guard that an `xfail` fixture's error count matches a declared expectation, so
+the syntax retiring a spelling cannot silently pad a fixture again.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -1299,6 +1313,21 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   — which is false and points away from the real problem, that `runtime` is not a compile-time constant.
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
+
+- **A `foreach` variable or `match` payload binding named like a FIELD of the enclosing type.** The
+  field-shadow ban ("local `x` shadows a field — rename it") is checked at a DECLARATION only; the two
+  binders are exempt from the shadowing ban by design (they name a value the loop or arm hands them), so
+  `foreach (int32 count in xs)` inside a method of a type with a field `count` is accepted. Inside the loop
+  the bare name resolves through `lvalueCType`/`receiverScalarCType`, which fall through to the CURRENT
+  CLASS's field wherever the local tables have no entry — and after `0.9.248` a binder deliberately HIDES
+  the enclosing local's entry for its extent, so that fall-through is reached in one more case than before
+  (previously the enclosing local's stale type answered instead, which was wrong differently). The binder's
+  own type node still wins where it is consulted, so this is a diagnostic-shaped gap, not a known
+  miscompile — but it is the same rule the declaration form already enforces, and a member and a loop
+  variable sharing a name inside one body is the shape the ban exists to refuse. Extend the field-shadow
+  diagnostic to both binders (the check at the declarator, `_currentClass->fieldNames.count(nm)`, gated
+  by the same static/ctor exemptions), with an `xfail` per binder. S; found by probing while fixing
+  consumer KB-20, unreported by any consumer.
 
 <a id="s3"></a>
 
