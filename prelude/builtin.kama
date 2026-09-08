@@ -148,4 +148,8 @@ type value BindableFunctionPtr<Sig> { }
 // `sizeof(T) * N` must be 16: 128 bits is the only width every kama target has. The element must be a
 // numeric primitive. A target with no vector unit is not an error — the operations lower to correct
 // scalar code, which is why this is a type rather than a bag of per-CPU intrinsics.
+//
+// The surface is `lane`/`toArray`, `abs`/`min`/`max`, the comparisons (a `Mask<T>#(N)`), the reductions,
+// `shuffle`/`blend`, and — on FLOAT lanes only — `sqrt`/`floor`/`ceil`, which are libm on each lane. It is
+// a compiler intrinsic: the body below is empty because every method is an emitter arm (registerSimd).
 type value Simd<T> comptime(int32 N) { }

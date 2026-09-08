@@ -1018,13 +1018,13 @@ static inline NAME   NAME##__fill(T x) {                                        
 //     *implicit function declaration*, a warning, which is the same silent-miscompile shape that
 //     disqualified `ext_vector_type`.
 //   * no libm, because this header is FREESTANDING (stdint/stdbool/stddef/limits only — see the top) and
-//     an MCU target has no `<math.h>`. That is what confines this set to what arithmetic and comparison
-//     can express. `sqrt`/`floor`/`ceil` genuinely need libm and are NOT here for that reason; they want
-//     the `kama_math.h` seam that `lib/std/math/scalar.kama` already uses, which an intrinsic cannot
-//     reach today (ROADMAP_DETAIL §2).
-//     ⚠️ They also need `-fno-math-errno` to vectorize at all: WITH it a per-lane `sqrtf` loop folds to
-//     `fsqrt v0.4s` on both gcc and clang; WITHOUT it neither folds, because the errno side effect makes
-//     the call unsinkable. Measured — do not re-derive.
+//     an MCU target may have no `<math.h>`. That is what confines this set to what arithmetic and
+//     comparison can express. `sqrt`/`floor`/`ceil` genuinely need libm and are NOT here for that
+//     reason: they are KAMA_SIMD_MATH in `kama_math.h`, which the compiler emits beside a FLOAT lane
+//     batch's `_FUNCS` instance (an integer batch has no such methods).
+//     ⚠️ `sqrt` also needs `-fno-math-errno` to vectorize at all: WITH it a per-lane `sqrtf` loop folds
+//     to `fsqrt v0.4s` on both gcc and clang; WITHOUT it neither folds, because the errno side effect
+//     makes the call unsinkable. The driver passes it on every C compile. Measured — do not re-derive.
 #define KAMA_SIMD_FUNCS(T, N, NAME, ARR)                                        \
 static inline NAME NAME##__splat(T x) {                                         \
     NAME r; for (int i = 0; i < (N); ++i) r[i] = x; return r;                    \

@@ -10633,6 +10633,15 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     addMethod("abs", {}, simdType, true);
     addMethod("min", { rhs }, simdType, true);
     addMethod("max", { rhs }, simdType, true);
+    // The libm trio, on FLOAT lanes only — the first methods here whose existence depends on `T`, so an
+    // integer batch gets "no method `sqrt`" rather than a per-lane `sqrtf(int)`. Their bodies come from
+    // `kama_math.h` (KAMA_SIMD_MATH, emitted beside the `_FUNCS` instance), not from the freestanding
+    // runtime header, because they need libm; see emitCollectionDefs for the include and the `-lm` hint.
+    if (cNumFloat(elemCType)) {
+        addMethod("sqrt",  {}, simdType, true);
+        addMethod("floor", {}, simdType, true);
+        addMethod("ceil",  {}, simdType, true);
+    }
     // The lane permutations — the operations that have NO scalar spelling, and the reason this type
     // exists at all. Registered here so dispatch resolves them; the CALL is intercepted in emitDispatch
     // and folded to `__builtin_shufflevector`, because the lane indices must be literals.
@@ -13584,6 +13593,19 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 if (cNumSigned(info.elemCType) && !cNumFloat(info.elemCType))
                     *_out << "KAMA_SIMD_ICHK(" << info.elemCType << ", u" << info.elemCType
                          << ", " << info.constValue << ", " << info.cName << ")\n";
+                // A FLOAT lane also gets `sqrt`/`floor`/`ceil`, from `kama_math.h` rather than the
+                // freestanding runtime header: they need libm. The include is guarded and the functions
+                // are static inline, so a program that never calls them pays only the `#include`; the
+                // `<math.h>` record is what makes the driver append `-lm` on native (wasm bundles libm).
+                // Emitted here, after emitIncludes, so it lands below `kama_runtime.h` in every TU.
+                if (cNumFloat(info.elemCType)) {
+                    const bool f32 = info.elemCType == "float";
+                    *_out << "#include \"kama_math.h\"\n"
+                          << "KAMA_SIMD_MATH(" << info.elemCType << ", " << info.constValue << ", " << info.cName
+                          << ", " << (f32 ? "kama_sqrtf" : "kama_sqrt") << ", " << (f32 ? "kama_floorf" : "kama_floor")
+                          << ", " << (f32 ? "kama_ceilf" : "kama_ceil") << ")\n";
+                    _externedHeaders.insert("<math.h>");
+                }
             }
         }
         else if (info.kind == CollKind::Mask) {

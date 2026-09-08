@@ -47,6 +47,26 @@ KAMA_MATH_2(fmod)
 KAMA_MATH_2(atan2)
 KAMA_MATH_2(hypot)
 
+// The lane-batch trio: `sqrt`/`floor`/`ceil` on a `Simd<float32|float64>#(N)`. The compiler emits one
+// instance per float lane batch beside its KAMA_SIMD_FUNCS (kama_runtime.h), passing the width-matched
+// libm name (`sqrtf` for a float lane, `sqrt` for a double one). Written as PER-LANE LOOPS for the same
+// reason every KAMA_SIMD_FUNCS member is: both gcc and clang fold the loop to the vector instruction
+// (`fsqrt.4s`, `frintm.4s`, `frintp.4s`; `f32x4.sqrt/floor/ceil` on wasm) and neither has a portable
+// elementwise builtin. ⚠️ `sqrt` folds only under `-fno-math-errno`, which the driver passes on every C
+// compile: with errno live, the call is unsinkable and stays a per-lane libm call. Measured — see
+// ROADMAP_DETAIL §2. It lives here and not in kama_runtime.h because that header is freestanding and
+// these need `<math.h>`; a program that never calls them pays nothing — the functions are static inline.
+#define KAMA_SIMD_MATH(T, N, NAME, SQRT, FLOOR, CEIL)                             \
+static inline NAME NAME##__sqrt(const NAME* self) {                              \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (T)SQRT((*self)[i]); return r;  \
+}                                                                               \
+static inline NAME NAME##__floor(const NAME* self) {                             \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (T)FLOOR((*self)[i]); return r; \
+}                                                                               \
+static inline NAME NAME##__ceil(const NAME* self) {                              \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (T)CEIL((*self)[i]); return r;  \
+}
+
 #undef KAMA_MATH_1
 #undef KAMA_MATH_2
 

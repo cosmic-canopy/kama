@@ -2408,8 +2408,15 @@ Simd<float32>#(4) c = a * k + a;                           // elementwise; C's o
 float32          x = c.lane(index: 2);                    // a bounds-checked lane read
 Simd<float32>#(4) p = c.abs();
 Simd<float32>#(4) lo = c.min(rhs: k);                      // also `max(rhs:)`
+Simd<float32>#(4) rt = c.sqrt();                           // also `floor()` / `ceil()` — FLOAT lanes only
 InlineArray<float32>#(4) back = c.toArray();               // back to addressable memory
 ```
+
+- **`sqrt`/`floor`/`ceil` exist on float lanes only.** They are libm on each lane (`kama_math.h`, which
+  the compiler includes beside a float batch; the runtime header stays freestanding), folded to the vector
+  instruction by both C compilers — `sqrt` under `-fno-math-errno`, which the driver passes on every C
+  compile. An integer batch has no such method; the diagnostic says so rather than inventing a per-lane <!-- xfail: simd_int_sqrt -->
+  `sqrtf(int)`. The other operations are the same on every lane type (`tests/simd_basic`). <!-- test: simd_basic -->
 
 - **Integer lanes obey kama's arithmetic rules, lane by lane.** A signed `+ - *` overflow **traps in
   debug and wraps in release**, exactly as the scalar of that type does, and a `<<` into the sign bit is

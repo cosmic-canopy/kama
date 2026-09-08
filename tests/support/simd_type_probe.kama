@@ -71,6 +71,15 @@ expose fn InlineArray<float32>#(4) simdSelect(InlineArray<float32>#(4) a, float3
     return r.toArray();
 }
 
+// The libm trio. Per-lane `sqrtf`/`floorf`/`ceilf` loops that the guard requires to have FOLDED to the
+// vector instructions (`fsqrt.4s`, `frintm.4s`, `frintp.4s`) — which `sqrt` does only under
+// `-fno-math-errno`, the flag the driver passes and the guard mirrors. Same shape rules as above.
+expose fn InlineArray<float32>#(4) simdSqrtFloorCeil(InlineArray<float32>#(4) a) {
+    Simd<float32>#(4) v = [a[0], a[1], a[2], a[3]];
+    Simd<float32>#(4) r = v.sqrt().floor() + v.ceil();
+    return r.toArray();
+}
+
 // `main` seeds real data and checks the result, so a build of this probe is also a correctness test —
 // the same property tests/support/simd_probe.kama has.
 fn int32 main() {
@@ -89,5 +98,8 @@ fn int32 main() {
     r = r + cast<int32>(sh[0]);                                       // 4            => 43
     r = r + cast<int32>(bl[1]);                                       // 22           => 65
     r = r + cast<int32>(se[3]);                                       // 4            => 69
+
+    InlineArray<float32>#(4) mt = simdSqrtFloorCeil(a: src);           // floor(sqrt)+ceil: 2, 3, 4, 6
+    r = r + cast<int32>(mt[3]);                                       // 6            => 75
     return r;
 }

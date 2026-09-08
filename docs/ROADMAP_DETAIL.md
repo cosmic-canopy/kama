@@ -681,8 +681,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   intermediate product, Lemire's unbiased range — needs the PRODUCT: `std::num::mulWideU64`/`mulHighU64`/
   `mulWideI64`, four 32-bit limb multiplies in plain unsigned arithmetic on every target. Both consumers are
   now *optional* follow-ons, recorded beside their code.
-- **`Simd` `sqrt`/`floor`/`ceil` — scheduled, S.** A `kama_math.h`-backed intrinsic arm on a lane batch; the
-  wasm leg must prove the `-msimd128` lowering, which is why it is a row and not a footnote.
 - **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in
   [SPEC.md](SPEC.md) (*Explicit SIMD*); this entry keeps only the MEASUREMENTS behind it, because each one
   cost real time to obtain and every one of them contradicted an assumption someone held first.
@@ -700,8 +698,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     which both backends fold to the branchless vector form.
   - ⚠️ **`-fno-math-errno` is what lets a per-lane libm loop vectorize.** With it, `sqrtf` per lane folds
     to `fsqrt v0.4s` on gcc and clang; without it neither folds. macOS defaults to it and Linux does not,
-    which is how a host reading came to disagree with the container's. `sqrt`/`floor`/`ceil` are NOT in
-    `kama_runtime.h` for a different reason — it is freestanding, and they need libm.
+    which is how a host reading came to disagree with the container's. **The driver passes it on every C
+    compile since `0.9.256`** (kama reads no `errno` after a libm call; results are bit-identical), and
+    `check-simd-type.sh` mirrors it. `floor`/`ceil` fold (`frintm`/`frintp`) with or without it — only
+    `sqrt` has the errno side effect. `sqrt`/`floor`/`ceil` are NOT in `kama_runtime.h` for a different
+    reason — it is freestanding, and they need libm — so they are `KAMA_SIMD_MATH` in `kama_math.h`,
+    emitted beside a FLOAT lane batch's `_FUNCS` (an integer batch has no such methods; SPEC § *Explicit
+    SIMD*). Both guards assert the fold by opcode name: `fsqrt|frintm|frintp` / `sqrtps|roundps` on native,
+    `f32x4.sqrt|floor|ceil` on wasm.
   - ⚠️ **UBSan does not instrument vector arithmetic.** Same build, same flags: a scalar `int32 MAX + 1`
     trapped and the identical addition in a lane wrapped. The overflow check for signed lanes is emitted
     by the compiler because nothing else supplies it.
@@ -722,8 +726,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   Not built, and each is a decision rather than an omission: **widths above 128 bits** wait for the
   CPU-tuning knob (§9) — no AOT language ships wider lanes without a build flag, so this is parity, not a
   gap; **per-ISA intrinsics** are a declared non-goal, being the half every surveyed language keeps
-  `unsafe` or experimental; and **`sqrt`/`floor`/`ceil` on a lane batch** want the `kama_math.h` seam — now a ROADMAP row (S), pending the wasm leg's proof of the lowering — and that
-  `lib/std/math/scalar.kama` uses and an intrinsic cannot reach.
+  `unsafe` or experimental. (**`sqrt`/`floor`/`ceil` on a lane batch** shipped `0.9.256` through the
+  `kama_math.h` seam, with the wasm leg's opcode-level proof — the `-fno-math-errno` bullet above.)
 
   ⚠️ **On the 1.0 tag:** the row is done, so the question it raised is closed — nothing here was
   source-breaking, and the surface is additive.

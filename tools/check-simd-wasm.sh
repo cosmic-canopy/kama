@@ -48,6 +48,15 @@ fi
 # `v128.load`/`v128.store`/`f32x4.*` — the whole vector opcode family is spelled with one of these two
 # prefixes, so this cannot match a scalar build.
 PAT='f32x4|v128'
+# The libm trio on an EXPLICIT lane batch (`Simd<float32>#(4)`.sqrt/floor/ceil) must fold to its own
+# opcodes — each is asserted BY NAME in §2 below, because a build where `sqrt` stayed a per-lane libm call
+# would still score on PAT through the surrounding loads. It is measured on tests/support/simd_type_probe.kama,
+# NOT on the auto-vectorization probe above: an explicit vector type emits vector instructions at every
+# optimization level, so putting it in simd_probe.kama breaks check-simd-native.sh's -O0 control (measured:
+# 1 match at -O0, guard failed). The two probes measure two different claims and must stay apart.
+MATH='f32x4\.sqrt f32x4\.floor f32x4\.ceil'
+TYPE_PROBE="$ROOT/tests/support/simd_type_probe.kama"
+[ -f "$TYPE_PROBE" ] || { echo "check-simd-wasm: missing $TYPE_PROBE" >&2; exit 1; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -101,4 +110,32 @@ if command -v node >/dev/null 2>&1 && [ -f "$tmp/probe" ]; then
     fi
 fi
 
-echo "check-simd-wasm: PASS ($rel v128 instruction(s) in --release, 0 without -msimd128 — the control holds)"
+# ---- §2. The explicit lane batch's libm trio folds to wasm SIMD opcodes ------------------------------
+# Same instrument, second probe: `--release --target wasm` must contain `f32x4.sqrt`/`.floor`/`.ceil`, and
+# the same C without `-msimd128` must contain none of them (an explicit vector type without the flag lowers
+# to scalar code, so a hit there means the pattern is matching prose or the disassembler is lying). The
+# VALUES are not re-run here: tests/simd_basic asserts the trio's results on the wasm leg already.
+"$KAMA" build "$TYPE_PROBE" -o "$tmp/tprobe" --target wasm --release >"$tmp/tbuild.log" 2>&1 || {
+    echo "check-simd-wasm: FAIL — kama build --target wasm --release failed on the type probe" >&2
+    sed 's/^/  /' "$tmp/tbuild.log" >&2; exit 1; }
+"$DIS" -d "$tmp/tprobe.wasm" >"$tmp/trel.txt" 2>/dev/null || {
+    echo "check-simd-wasm: FAIL — $DIS could not disassemble the type probe's .wasm" >&2; exit 1; }
+"$KAMA" transpile "$TYPE_PROBE" -o "$tmp/tp.c" >/dev/null 2>&1 || {
+    echo "check-simd-wasm: FAIL — kama transpile failed on the type probe" >&2; exit 1; }
+emcc -std=c11 -Oz -DNDEBUG -I "$ROOT/include" -c "$tmp/tp.c" -o "$tmp/tnoflag.o" 2>"$tmp/temcc.err" || {
+    echo "check-simd-wasm: FAIL — emcc could not compile the transpiled type probe" >&2
+    sed 's/^/  /' "$tmp/temcc.err" >&2; exit 1; }
+"$DIS" -d "$tmp/tnoflag.o" >"$tmp/tctl.txt" 2>/dev/null || true
+for op in $MATH; do
+    if grep -qE "$op" "$tmp/tctl.txt"; then
+        echo "check-simd-wasm: FAIL — the instrument is broken: \`$op\` appears in a build with NO -msimd128." >&2
+        exit 1
+    fi
+    if ! grep -qE "$op" "$tmp/trel.txt"; then
+        echo "check-simd-wasm: FAIL — the --release wasm build has no \`$op\`: the lane-batch libm trio" >&2
+        echo "  (kama_math.h KAMA_SIMD_MATH, a per-lane loop) did not fold to its wasm SIMD opcode." >&2
+        echo "  Inspect: $tmp/trel.txt" >&2; exit 1
+    fi
+done
+
+echo "check-simd-wasm: PASS ($rel v128 instruction(s) in --release, 0 without -msimd128 — the control holds; the libm trio folds to f32x4.sqrt/floor/ceil)"

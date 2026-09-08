@@ -681,6 +681,7 @@ shadow_param	shadow_param.kama:3
 signflip_local	signflip_local.kama:1
 simd_bad_elem	simd_bad_elem.kama:6 simd_bad_elem.kama:7
 simd_bad_width	simd_bad_width.kama:10 simd_bad_width.kama:9
+simd_int_sqrt	simd_int_sqrt.kama:6
 simd_mask_arith	simd_mask_arith.kama:10
 simd_shuffle_oob	simd_shuffle_oob.kama:5
 simd_shuffle_runtime	simd_shuffle_runtime.kama:9

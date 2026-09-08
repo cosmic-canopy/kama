@@ -1,0 +1,8 @@
+// `sqrt`/`floor`/`ceil` exist on a FLOAT lane batch only — they are libm on each lane, and an integer
+// lane has no square root to take. They are the one part of `Simd`'s surface that depends on `T`, so an
+// integer batch simply has no such method, rather than a per-lane `sqrtf(int)` nobody asked for.
+fn int32 main() {
+    Simd<int32>#(4) v = [4, 9, 16, 25];
+    Simd<int32>#(4) s = v.sqrt();   // -> REJECT: no `sqrt` on an integer lane batch
+    return cast<int32>(s.lane(index: 0));
+}

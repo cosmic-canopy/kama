@@ -88,15 +88,19 @@ fi
 case "$(uname -m)" in
     # aarch64 has TWO spellings and matching one is how this was got wrong before: Apple puts the
     # arrangement on the OPCODE (`fmul.4s v0, ...`), GNU/LLVM on the REGISTERS (`fmul v0.4s, ...`).
-    arm64|aarch64)  PAT='[a-z][a-z0-9]*\.4s|v[0-9]+\.4s' ; ISA='NEON (.4s)' ;;
+    # MATH is the libm trio's vector form — `sqrt`/`floor`/`ceil` on a float lane batch are per-lane
+    # libm loops in kama_math.h that must FOLD to these; a libm call left behind (`bl _sqrtf`) fails §4.
+    arm64|aarch64)  PAT='[a-z][a-z0-9]*\.4s|v[0-9]+\.4s' ; ISA='NEON (.4s)' ; MATH='fsqrt|frintm|frintp' ;;
     # x86-64: the PACKED forms only — `mulss`/`addss` are scalar and must NOT match.
-    x86_64|amd64)   PAT='(^|[^a-z])v?(addps|mulps|subps|divps|andps|maxps|minps)([^a-z]|$)' ; ISA='SSE (packed)' ;;
+    x86_64|amd64)   PAT='(^|[^a-z])v?(addps|mulps|subps|divps|andps|maxps|minps)([^a-z]|$)' ; ISA='SSE (packed)' ; MATH='sqrtps|roundps' ;;
     *)              echo "SKIP check-simd-type (§1/§2 passed; no asm pattern for $(uname -m))"; exit 0 ;;
 esac
 
-# `--release` is `-O3 -DNDEBUG` on native (kama.driver.cpp), reproduced exactly so this reads what a
-# user's release build gets.
-clang -std=c11 -O3 -DNDEBUG -I "$ROOT/include" -S "$tmp/p.c" -o "$tmp/o3.s" 2>"$tmp/cc.err" || {
+# `--release` is `-O3 -DNDEBUG -fno-math-errno` on native (kama.driver.cpp), reproduced exactly so this
+# reads what a user's release build gets. ⚠️ The errno flag is load-bearing for §4: without it a per-lane
+# `sqrtf` loop stays four libm calls on Linux (macOS defaults to the flag, which is how two hosts once
+# disagreed about the same C).
+clang -std=c11 -O3 -DNDEBUG -fno-math-errno -I "$ROOT/include" -S "$tmp/p.c" -o "$tmp/o3.s" 2>"$tmp/cc.err" || {
     echo "check-simd-type: FAIL — clang could not compile the transpiled probe at -O3" >&2
     sed 's/^/  /' "$tmp/cc.err" >&2; exit 1; }
 
@@ -119,7 +123,7 @@ float control(void) {
     return r;
 }
 EOF
-clang -std=c11 -O3 -DNDEBUG -S "$tmp/control.c" -o "$tmp/control.s" 2>>"$tmp/cc.err" || {
+clang -std=c11 -O3 -DNDEBUG -fno-math-errno -S "$tmp/control.c" -o "$tmp/control.s" 2>>"$tmp/cc.err" || {
     echo "check-simd-type: FAIL — clang could not compile the scalar control" >&2
     sed 's/^/  /' "$tmp/cc.err" >&2; exit 1; }
 
@@ -139,4 +143,19 @@ if [ "$hot" -eq 0 ]; then
     exit 1
 fi
 
-echo "check-simd-type: PASS (Simd<float32>#(4) -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s); scalar control 0 — the control holds)"
+# --- §4. The libm trio FOLDED — sqrt/floor/ceil are vector instructions, not four calls into libm -----
+# The probe's `simdSqrtFloorCeil` is a per-lane `sqrtf`/`floorf`/`ceilf` loop (kama_math.h). Two
+# assertions, because either alone can lie: the vector opcodes must be present AND no libm call for the
+# three may remain. A build without `-fno-math-errno` keeps `bl _sqrtf` per lane (measured), which is
+# exactly the regression this section exists to catch if the driver flag is ever dropped.
+math=$(grep -cE "$MATH" "$tmp/o3.s" || true)
+libm=$(grep -cE '(bl|call)[[:space:]]+_?(sqrtf|floorf|ceilf)([^a-z]|$)' "$tmp/o3.s" || true)
+if [ "$math" -eq 0 ] || [ "$libm" -ne 0 ]; then
+    echo "check-simd-type: FAIL — the lane-batch libm trio did not fold: $math vector op(s) matching" >&2
+    echo "                  '$MATH', $libm libm call(s) left. kama_math.h's KAMA_SIMD_MATH loops must" >&2
+    echo "                  become vector instructions; \`sqrt\` needs -fno-math-errno (kama.driver.cpp)" >&2
+    echo "                  to do so. Inspect: $tmp/o3.s" >&2
+    exit 1
+fi
+
+echo "check-simd-type: PASS (Simd<float32>#(4) -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s), libm trio folded ($math); scalar control 0 — the control holds)"

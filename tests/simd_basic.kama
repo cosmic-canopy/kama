@@ -68,5 +68,19 @@ fn int32 main() {
     r = r + cast<int32>(vals.reduceMax());                          //  7  => 76
     r = r + cast<int32>(vals.reduceMin());                          //  1  => 77
 
+    // sqrt / floor / ceil — the libm trio, on FLOAT lanes only (kama_math.h; an integer batch has no
+    // `sqrt` — tests/xfail/simd_int_sqrt). Both float widths, so each KAMA_SIMD_MATH instance is built.
+    Simd<float32>#(4) sq = [4.0f32, 9.0f32, 16.0f32, 2.25f32];
+    r = r + cast<int32>(sq.sqrt().lane(index: 2));                  //  4  => 81
+    Simd<float32>#(4) fr = [1.5f32, 0.0f32 - 1.5f32, 2.75f32, 0.0f32 - 0.25f32];
+    r = r + cast<int32>(fr.floor().lane(index: 0));                 //  1  => 82
+    r = r + cast<int32>(fr.floor().lane(index: 1));                 // -2  => 80
+    r = r + cast<int32>(fr.ceil().lane(index: 2));                  //  3  => 83
+    r = r + cast<int32>(fr.ceil().lane(index: 3));                  //  0  => 83  (-0.25 ceils to -0)
+    Simd<float64>#(2) dq = [49.0, 0.25];
+    r = r + cast<int32>(dq.sqrt().lane(index: 0));                  //  7  => 90
+    r = r + cast<int32>(dq.floor().lane(index: 1));                 //  0  => 90
+    r = r + cast<int32>(dq.ceil().lane(index: 1));                  //  1  => 91
+
     return r;
 }

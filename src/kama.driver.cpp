@@ -10208,6 +10208,14 @@ int main(int argc, char** argv)
         // ⚠️ It reaches `kama transpile` output not at all — the flag lives on the command line, not in
         // the C. A `#pragma STDC FP_CONTRACT` would travel, but GCC does not implement it.
         if (g_target.reproFloat) cmd << "-ffp-contract=off ";
+        // `-fno-math-errno`: kama never reads `errno` after a libm call (a domain error is a NaN, and
+        // `std::io::lastError` is for OS calls), so the side effect only costs — with it live, a per-lane
+        // `sqrtf` loop over a `Simd<float32>#(4)` cannot fold to `fsqrt.4s` and a scalar `sqrt` cannot
+        // inline to the instruction, on gcc and clang alike (measured, ROADMAP_DETAIL §2). macOS defaults
+        // to this and Linux does not, which is how one host read "vectorizes" and another "does not".
+        // Results are bit-identical either way. Same placement rule as the flag above: fixed base, so a
+        // raw `cflags` can put `-fmath-errno` back.
+        cmd << "-fno-math-errno ";
         // The target's own toolchain settings from kama.json (a sysroot and any extra compile flags).
         if (!g_target.sysroot.empty()) cmd << "--sysroot=\"" << g_target.sysroot << "\" ";
         // ⚠️ The span the user's `cflags` occupy is RECORDED, because the per-TU path reuses this whole
