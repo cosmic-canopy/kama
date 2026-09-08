@@ -19,6 +19,15 @@ agents=$1; shift
 skill=$1; shift
 package=$1; shift
 
+# The fixture markers are REPO metadata and do not travel. `check-doc-claims.sh` requires every "the
+# compiler rejects this" sentence in agents/AGENTS.md to name the `tests/xfail/` fixture that proves it —
+# which is what keeps this file honest, and is there because three of its claims had gone stale unnoticed.
+# But the file is INSTALLED into other people's projects, where `tests/xfail/foreach_char_over_string`
+# names nothing. So the marker is stripped on the way in, exactly as a stub's `dest:` line is: the source
+# carries the proof, the installed copy carries the claim. `check-agents.sh` asserts the two match under
+# the same strip, so the DRY property is still exact rather than approximate.
+strip_markers() { sed -E 's/[[:space:]]*<!-- *(xfail|test): *[^>]*-->//g' "$1"; }
+
 # A stub declares its own destination on line 1 as `<!-- dest: <path> -->`; that line is stripped from
 # the emitted text, so what lands in the project is only the pointer.
 emit() {   # emit <name> <file>
@@ -28,7 +37,7 @@ emit() {   # emit <name> <file>
     exit 1
   fi
   printf '  { "%s", "%s", R"KAMAGENTS(\n' "$1" "$dest"
-  sed '1d' "$2"
+  sed '1d' "$2" | sed -E 's/[[:space:]]*<!-- *(xfail|test): *[^>]*-->//g'
   printf ')KAMAGENTS" },\n'
 }
 
@@ -45,17 +54,17 @@ done
 
   printf 'const char* KAMA_AGENTS_MD =\n'
   printf 'R"KAMAGENTS(\n'
-  cat "$agents"
+  strip_markers "$agents"
   printf ')KAMAGENTS";\n\n'
 
   printf 'const char* KAMA_AGENTS_SKILL =\n'
   printf 'R"KAMAGENTS(\n'
-  cat "$skill"
+  strip_markers "$skill"
   printf ')KAMAGENTS";\n\n'
 
   printf 'const char* KAMA_AGENTS_PACKAGE =\n'
   printf 'R"KAMAGENTS(\n'
-  cat "$package"
+  strip_markers "$package"
   printf ')KAMAGENTS";\n\n'
 
   printf 'const KamaAgentStub KAMA_AGENT_STUBS[] = {\n'

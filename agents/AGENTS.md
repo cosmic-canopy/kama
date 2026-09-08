@@ -53,7 +53,7 @@ kama check <file>      # FAST SUBSET — see below
 
 `kama check` runs name resolution, named-argument matching, ownership/move analysis, and type checking
 **by kind** — a value is a number, a `bool`, a `string`, or a type value, and crossing between two of
-them (`int32 x = "oops";`) is rejected — wherever a value crosses into a destination of a stated type
+them (`int32 x = "oops";`) is rejected — wherever a value crosses into a destination of a stated type <!-- xfail: narrow_local, narrow_argument -->
 (an initializer, an assignment, a `return`, a `match` arm, an argument, an enum payload). It also checks
 **width**, at those same places: **kama has no implicit numeric conversion**, so `int8 a = big;` is an
 error and wants `cast<int8>(big)`. That covers every crossing, not just narrowing — widening
@@ -74,7 +74,7 @@ narrowing on a 64-bit host. Bare `int`, `uint`, `double` and `float` are **not**
 
 A **literal** is typed by its destination, so it is not a conversion and needs no cast: `int8 a = 100;`,
 `float32 f = 3;` and `int8 a = 2 + 3;` are all fine, while a constant that does not fit its destination
-(`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. A **named** constant is not a literal —
+(`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. <!-- xfail: lit_oob_assign, cast_const_oob --> A **named** constant is not a literal —
 `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a cast like any other value.
 
 **A `cast` that does not fit TRAPS at runtime** — `cast<T>` preserves the *value*, so `cast<int8>(big)`
@@ -105,9 +105,9 @@ feature.
   makes it work. (A non-generic call nests freely — this is about inference, not about nesting.)
 - **`match`, never `switch`.** `switch` does not exist. `match` is exhaustive and produces a value.
 - **No `null`, no exceptions.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
-  safe type is a compile error. A **constructor may fail** — the return type goes between `ctor` and
+  safe type is a compile error. <!-- xfail: null_safe_compare --> A **constructor may fail** — the return type goes between `ctor` and
   the name: `public ctor Result<Buffer, SizeError> create(int32 size)`, and an infallible ctor returns
-  the bare type. Do NOT write a `static fn` returning its own type; that is rejected as a disguised
+  the bare type. Do NOT write a `static fn` returning its own type; that is rejected as a disguised <!-- xfail: self_returning_static_fn -->
   constructor. `null` exists only for `UnsafePtr<T>` / `UnsafeConstPtr<T>` at the FFI boundary.
 - **A `type resource`'s fields are always private.** Expose behavior, not state. (A `type value`
   owns nothing, so its fields may be public.)
@@ -115,7 +115,7 @@ feature.
   On a generic static the turbofish is mandatory: `Box::<int32>::tag()`.
 - **A `string` is UTF-8 bytes.** `length()` counts bytes and `s[i]` is a `uint8`. Iterate bytes with
   `foreach (uint8 b in s)` and codepoints with `foreach (char c in s.chars())` — a `foreach` binding
-  must have the type the collection actually yields, so `foreach (char c in s)` is rejected. Casing
+  must have the type the collection actually yields, so `foreach (char c in s)` is rejected. <!-- xfail: foreach_char_over_string --> Casing
   and whitespace are ASCII-only by design.
 - **`@generate` requires every field to be marked** `@field` or `@skip`. An unmarked field is an
   error, so adding one can never silently start serializing it.
@@ -139,14 +139,17 @@ feature.
 - **Every C keyword is reserved** — `out`, `short`, `long`, `signed`, `register`, … cannot name a
   binding, because kama lowers to C. The message names the word; pick another.
 - **A `ref`-returning method call cannot feed a `ref` parameter** — a call result is a temporary and
-  its mutation would be lost. Pass the owner by `ref` instead (`seal(from: pair)`, not
-  `seal(from: pair.secretKey())`), or copy a value out to a local first.
-- **A buffer reaches C through `ref`, never `const ref`.** There is no const raw pointer, and
-  `addr(of:)` on a const receiver is refused ("const is deep"). An FFI wrapper that only reads still
-  takes `ref`.
+  its mutation would be lost. A **`const ref` parameter takes one fine**, so a reader's signature is the
+  usual fix (`hash(of: const ref …)` fed by `pair.secretKey()`); only a MUTATING callee needs the owner
+  passed by `ref` instead, or a value copied out to a local first.
+- **A read-only buffer reaches C as `UnsafeConstPtr<T>`** — the read-only raw pointer, C's `T const*`.
+  `dataPtr()` is `const fn` and returns one (`dataPtrMut()` is the writable half), `cstr()` is
+  read-only, and `addr(of:)` on a const root hands one back. So an FFI wrapper that only reads takes
+  `const ref` all the way down, and const-correctness survives the crossing.
 - **Member visibility is per TYPE.** A non-`public` ctor or method is invisible even to a free function
-  in the same file; a helper ctor a free function fills has to be `public`. (Free functions and types
-  are per FILE — a different rule.)
+  in the same file. Do **not** reach for `public` to fix that — a `friend` grant names the exact
+  members one accessor may touch (`friend fill[blank, bytes];`), which is what keeps a raw accessor out
+  of the API. (Free functions and types are per FILE — a different rule.)
 - **Unwrapping a `Result`/`Optional` into a local:** a *value* payload copies out of a borrowing
   `match (r) { case Ok(value: x): x; … }`; a *resource* payload leaves a consuming
   `match (give r) { case Ok(value: x): give x; … }`. The subject must be a local — bind a call's result

@@ -75,19 +75,28 @@ grep -q '"schema":1' "$tmp/j.txt" && ok "--json carries a schema version" || bad
 # ---------------------------------------------------------------------------------------------------
 echo "check-agents: DRY — one copy of the content, everything else a pointer"
 
+# ⚠️ Compared under the SAME marker strip the embed applies (tools/embed_agents.sh explains why the
+# `<!-- xfail: … -->` proofs are repo metadata that must not travel into an installed project). This is
+# still an exact assertion, not a loosened one: source-minus-markers must equal embedded, byte for byte.
+# A marker surviving into the binary fails here, and so does any other divergence, as before.
+srcstrip() { sed -E 's/[[:space:]]*<!-- *(xfail|test): *[^>]*-->//g' "$1" > "$2"; }
+
 "$KAMA" agents print > "$tmp/embedded.md" 2>/dev/null || true
-if diff -q "$tmp/embedded.md" "$ROOT/agents/AGENTS.md" >/dev/null 2>&1; then
-    ok "the embedded AGENTS.md is byte-identical to agents/AGENTS.md"
+srcstrip "$ROOT/agents/AGENTS.md" "$tmp/src-agents.md"
+if diff -q "$tmp/embedded.md" "$tmp/src-agents.md" >/dev/null 2>&1; then
+    ok "the embedded AGENTS.md is byte-identical to agents/AGENTS.md (markers stripped)"
 else
     bad "the binary's AGENTS.md differs from agents/AGENTS.md — rebuild, or reconcile:"
-    diff -u "$ROOT/agents/AGENTS.md" "$tmp/embedded.md" | head -20 >&2
+    diff -u "$tmp/src-agents.md" "$tmp/embedded.md" | head -20 >&2
 fi
 "$KAMA" agents print --skill > "$tmp/skill.md" 2>/dev/null || true
-diff -q "$tmp/skill.md" "$ROOT/agents/skill/SKILL.md" >/dev/null 2>&1 \
+srcstrip "$ROOT/agents/skill/SKILL.md" "$tmp/src-skill.md"
+diff -q "$tmp/skill.md" "$tmp/src-skill.md" >/dev/null 2>&1 \
     && ok "the embedded SKILL.md is byte-identical to agents/skill/SKILL.md" \
     || bad "the binary's SKILL.md differs from agents/skill/SKILL.md"
 "$KAMA" agents print --package > "$tmp/package.md" 2>/dev/null || true
-diff -q "$tmp/package.md" "$ROOT/agents/PACKAGE.md" >/dev/null 2>&1 \
+srcstrip "$ROOT/agents/PACKAGE.md" "$tmp/src-package.md"
+diff -q "$tmp/package.md" "$tmp/src-package.md" >/dev/null 2>&1 \
     && ok "the embedded PACKAGE.md is byte-identical to agents/PACKAGE.md" \
     || bad "the binary's PACKAGE.md differs from agents/PACKAGE.md"
 # The package half is read only by a library that will be published, so it is not on the always-on

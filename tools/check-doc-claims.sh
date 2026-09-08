@@ -46,7 +46,20 @@ note() { echo "check-doc-claims: FAIL — $1" >&2; fail=1; }
 # The NORMATIVE docs — the ones that describe what the language IS. `ROADMAP_DETAIL.md`, `packages.md`,
 # `agents.md` and `GOALS.md` are deliberately absent: they are narrative, and their "is an error" sentences
 # are historical rationale about a decision, not a rule a fixture can pin.
-DOCS="docs/SPEC.md docs/KEYWORDS.md docs/TYPE_MODEL.md docs/coming-from-other-languages.md docs/tour.md"
+#
+# ⚠️ `agents/AGENTS.md` is here because it is normative IN EFFECT, and the omission cost a package a
+# release cycle. It is not a doc about kama — it is the file `kama agents install` writes into every new
+# project from inside the binary, and an agent reading it has been told to trust it. It carried three
+# claims the compiler had stopped honouring up to thirty versions ago ("there is no const raw pointer",
+# reported by the first external package at 0.9.233), and nothing could have caught them: the marker
+# discipline that keeps SPEC honest simply did not reach it. Generated guidance that reinstalls itself
+# needs MORE of an instrument than a doc a reader consults once, not less.
+#
+# `agents/PACKAGE.md` stays out on the guard's own rule. Its two claim lines are about the publish and
+# manifest TOOLING ("a re-publish of the same version is refused"), which no `tests/xfail/` fixture can
+# express — `check-manifest.sh` and `check-packages.sh` are where those live. Admitting it would need
+# waivers, and this guard's header records why waivers are refused.
+DOCS="docs/SPEC.md docs/KEYWORDS.md docs/TYPE_MODEL.md docs/coming-from-other-languages.md docs/tour.md agents/AGENTS.md"
 
 # Every spelling of "the compiler rejects this". The last two arrived late and are worth their own note:
 # the strongest promise in the whole no-heap section — "make every emitter-visible heap allocation a
