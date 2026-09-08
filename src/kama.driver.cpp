@@ -10210,7 +10210,23 @@ int main(int argc, char** argv)
         if (g_target.reproFloat) cmd << "-ffp-contract=off ";
         // The target's own toolchain settings from kama.json (a sysroot and any extra compile flags).
         if (!g_target.sysroot.empty()) cmd << "--sysroot=\"" << g_target.sysroot << "\" ";
+        // ⚠️ The span the user's `cflags` occupy is RECORDED, because the per-TU path reuses this whole
+        // prefix for the LINK — deliberately, so a `--cc "clang -fsanitize=…"` reaches both — and a
+        // compile flag on a link line is not merely redundant, it can be fatal. `-x <lang>` is a sticky
+        // clang MODE flag: on the link command it applies to the `.o` inputs, so clang lexes Mach-O bytes
+        // as source and emits a wall of `null character ignored` before `too many errors emitted`.
+        // Reported by the first engine consumer (KB-16) against a dependency whose `cflags` carried
+        // `-x objective-c`: its own build was fine and every CONSUMER's link died, naming an object file
+        // and nothing else. `ldflags` is the tier that reaches a link.
+        //
+        // Recorded as a SPAN rather than held back and appended later, because position is load-bearing
+        // here: a `-I` in `cflags` sits ahead of kama's own include paths and is expected to shadow them,
+        // and the `-ffp-contract=off` above is emitted before this point precisely so a raw flag can
+        // override it. Appending at the end would silently reverse both. The compile command is therefore
+        // byte-for-byte what it always was; only the link-only command has this span cut out.
+        const size_t cflagsPos = (size_t)cmd.tellp();
         for (const auto& f : g_target.cflags) cmd << f << " ";
+        const size_t cflagsEnd = (size_t)cmd.tellp();
         // Binding a callback-based C API (WebGPU/GLFW/SDL/…) means handing a kama `fnptr` to a C
         // callback field. At the `extern` boundary the user asserts ABI compatibility the same way a
         // C cast would — but a kama callback lowers enums to `int` and typed handles to `void*`, which
@@ -10775,8 +10791,11 @@ int main(int argc, char** argv)
                     // Link the objects with the SAME flag prefix the compiles used, not a bare compiler
                     // name: `--cc "clang -fsanitize=address,undefined"` (the sanitizer leg) needs those
                     // flags on the link too, or the runtime is never pulled in.
+                    // The user's `cflags` span comes OUT here, and only here: this command compiles
+                    // nothing, it consumes objects. See where the span is recorded for what a compile
+                    // flag on a link line does (KB-16).
                     std::ostringstream ld;
-                    ld << base << linkGc;
+                    ld << base.substr(0, cflagsPos) << base.substr(cflagsEnd) << linkGc;
                     // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).
                     for (auto& o : objs) ld << "\"" << toolPath(o) << "\" ";
                     ld << link.str() << "-o \"" << toolPath(linkOut) << "\"";

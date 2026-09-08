@@ -714,6 +714,42 @@ else
     bad "the link line lost the section-GC flag"; printf '%s\n' "$lines" | sed 's/^/    /' >&2
 fi
 
+echo "check-buildsettings: and the mirror — a COMPILE flag does not ride the link line"
+# The other direction of the same rule, and the one that was actually wrong (KB-16, the first engine
+# consumer). The per-TU path reuses the compile prefix for the link — deliberately, so a
+# `--cc "clang -fsanitize=…"` reaches both — and that carried the user's `cflags` onto a command that
+# compiles nothing. `-x <lang>` is the flag that turns this from redundant into fatal: it is a sticky
+# clang MODE flag, so on the link it applies to the `.o` inputs and clang lexes Mach-O bytes as source.
+# The consumer saw twenty `source file is not valid UTF-8`, each naming an object file and nothing else.
+#
+# Asserted with `-x objective-c` itself rather than a stand-in, because the flag's stickiness IS the bug.
+app xmode <<'JSON'
+{ "name": "xmode", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/shim.c"], "cflags": ["-DXMODE_TIER"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/xmode/csrc"; printf 'int xmode_shim(void) { return 1; }\n' > "$tmp/xmode/csrc/shim.c"
+lines=$("$KAMA" build "$tmp/xmode/kama.json" --cc "echo CC:" -o "$tmp/xmode/app" 2>/dev/null | grep "^CC:" || true)
+if printf '%s\n' "$lines" | grep -v -- " -c " | grep -q -- "-DXMODE_TIER"; then
+    bad "the link line carries the project's \`cflags\` — a compile flag on a link command (KB-16)"
+    printf '%s\n' "$lines" | sed 's/^/    /' >&2
+else ok "the link line carries none of the project's \`cflags\`"; fi
+if printf '%s\n' "$lines" | grep -- " -c " | grep -q -- "-DXMODE_TIER"; then
+    ok "every per-TU compile line still carries them"
+else
+    bad "a per-TU compile line LOST the project's \`cflags\` — the excision took too much"
+    printf '%s\n' "$lines" | sed 's/^/    /' >&2
+fi
+# Position, not just presence: a `-I` in `cflags` is expected to shadow kama's own include paths, so the
+# span must be cut out of the link WITHOUT moving it on the compile.
+if printf '%s\n' "$lines" | grep -- " -c " | grep -q -- "-DXMODE_TIER.*-I"; then
+    ok "they keep their position, ahead of kama's own include paths"
+else
+    bad "the project's \`cflags\` moved: they no longer precede kama's \`-I\` flags"
+    printf '%s\n' "$lines" | sed 's/^/    /' >&2
+fi
+
 echo "check-buildsettings: PASS (a dependency contributes cflags/ldflags/link, before the project and
   deduped for link, resolved per-manifest so its target's \`link\` replaces only its own; and it cannot
-  reach the consumer's no-heap, webgpu or working directory; the section-GC flags ride the link line only)"
+  reach the consumer's no-heap, webgpu or working directory; the section-GC flags ride the link line
+  only, and the project's \`cflags\` ride the compile lines only, in position)"
