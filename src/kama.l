@@ -110,7 +110,7 @@ hex_digit                   [0-9A-Fa-f]
 oct_digit                   [0-7]
 based_digit                 [0-9A-Za-z]
 int_suffix                  u?i(8|16|32|64)
-  /* Digit separators (0.9.226): an underscore BETWEEN two digits of a run is ignored — `1_000_000`,
+  /* Digit separators (0.9.227): an underscore BETWEEN two digits of a run is ignored — `1_000_000`,
      `0xFFFF_0000`, `0b1010_0101_2`, `1_000.5`. The run shape `{d}+(_{d}+)*` is what makes the rule
      "between two digits": `1__0`, `10_` and `0x_F` do not lex as one literal and fall to a parse error
      (tests/xfail/digit_sep_*). A based literal's BASE TAIL is still `_<2..32>` after the last run, so the
@@ -436,12 +436,15 @@ static struct name_value keywords [] = {
     {"break",       BREAK},
     {"case",        CASE},
     {"cast",        CAST},
+    {"cchar",       CCHAR},
     {"char",        CHAR},
+    {"clong",       CLONG},
     {"comptime",    COMPTIME},
     {"const",       CONST},
     {"continue",    CONTINUE},
     {"copy",        COPY},
     {"ctor",        CTOR},
+    {"culong",      CULONG},
     {"default",     DEFAULT},
     {"do",          DO},
     {"else",        ELSE},
@@ -668,6 +671,9 @@ static std::string cReservedWhy(const std::string& w)
   if (w == "int")
     return "`int` is a reserved word — write `int32` for a fixed 32-bit integer, or `isize` for a "
            "platform-width size (the type of a length or index)";
+  if (w == "long")
+    return "`long` is a reserved word — write `clong` (or `culong`) for C's `long` in an `extern` signature, "
+           "`int64` for a fixed 64-bit integer, or `isize` for a platform-width size";
   if (w == "double" || w == "float")
     return "`" + w + "` is a reserved word — every kama float states its width: write `float64`"
          + (w == "float" ? " or `float32`" : " (`double` was an alias for it)");

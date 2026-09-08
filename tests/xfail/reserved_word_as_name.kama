@@ -3,7 +3,7 @@
 // bison's own message is `unexpected BASE, expecting IDENTIFIER or file or SLOT or TYPE` — it names the TOKEN and
 // never says what the token IS, so it reads like a parser fault. The first external project reported
 // three of these (`base`, `type`, `slot`) as possible compiler bugs for exactly that reason. `type` and
-// `slot` are contextual keywords now and name bindings freely; `base` is one of the 75 that do not, and
+// `slot` are contextual keywords now and name bindings freely; `base` is one of the 78 that do not, and
 // this is the message those get.
 //
 // ⚠️ The note is gated on the parser having WANTED an identifier. `unexpected ELSE` in a malformed `if`

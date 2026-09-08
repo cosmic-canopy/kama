@@ -728,3 +728,51 @@ fn const ref int32 pick(const ref Cell c) { return c.view(); }
             (identifier)
             (identifier))
           (argument_list))))))
+
+================================================================================
+The C ABI elements: cchar as a raw-pointer element, clong and culong as values
+================================================================================
+
+extern fn clong strtol(UnsafeConstPtr<cchar> s, UnsafePtr end, int32 radix);
+
+fn void main()
+{
+    clong a = 1;
+    culong b = 2;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list
+      (parameter
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type)))
+        (identifier))
+      (parameter
+        (type_name
+          (identifier))
+        (identifier))
+      (parameter
+        (primitive_type)
+        (identifier))))
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))

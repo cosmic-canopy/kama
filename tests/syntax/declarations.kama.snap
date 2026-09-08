@@ -333,6 +333,39 @@
 #                       ^^^ source.kama
 #                          ^ source.kama constant.numeric.integer.kama
 #                           ^^ source.kama
+>    clong cl = 1;                         // C's `long`, a target-width value (0.9.232)
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^ source.kama constant.numeric.integer.kama
+#                ^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama
+#                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>    culong cu = 2;
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^ source.kama constant.numeric.integer.kama
+#                 ^^ source.kama
+>    if (cl > 0 && cu > 1) { nop(); }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^ source.kama
+#           ^ source.kama keyword.operator.relational.kama
+#            ^ source.kama
+#             ^ source.kama constant.numeric.integer.kama
+#              ^ source.kama
+#               ^^ source.kama keyword.operator.logical.kama
+#                 ^^^^ source.kama
+#                     ^ source.kama keyword.operator.relational.kama
+#                      ^ source.kama
+#                       ^ source.kama constant.numeric.integer.kama
+#                        ^^^^ source.kama
+#                            ^^^ source.kama entity.name.function.kama
+#                               ^^^^^^ source.kama
 >    nop();
 #^^^^ source.kama
 #    ^^^ source.kama entity.name.function.kama

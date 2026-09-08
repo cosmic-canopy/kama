@@ -779,7 +779,8 @@ CEmitter::TKind CEmitter::kindOfCType(const std::string& ct)
     if (ct == "int8_t"  || ct == "int16_t"  || ct == "int32_t"  || ct == "int64_t"
      || ct == "uint8_t" || ct == "uint16_t" || ct == "uint32_t" || ct == "uint64_t"
      || ct == "float"   || ct == "double"   || ct == "kama_char"
-     || ct == "size_t"  || ct == "ptrdiff_t")           return TKind::Num;
+     || ct == "size_t"  || ct == "ptrdiff_t"
+     || ct == "long"    || ct == "unsigned long")       return TKind::Num;   // `clong`/`culong` (0.9.232)
     // A CONTRACT or a `sig` is deliberately Unknown, not an aggregate. A contract value accepts a class,
     // another contract, AND a widened primitive — `Hashable h = n;` over an `int32` is a shipped feature
     // (tests/intrinsic_widen.kama), and calling that an aggregate rejected three fixtures that are right.
@@ -851,10 +852,10 @@ int cNumBits(const std::string& ct)
 bool cNumSigned(const std::string& ct)
 {
     return ct == "int8_t" || ct == "int16_t" || ct == "int32_t" || ct == "int64_t"
-        || ct == "float"  || ct == "double"  || ct == "ptrdiff_t";
+        || ct == "float"  || ct == "double"  || ct == "ptrdiff_t" || ct == "long";
 }
 bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
-bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t"; }
+bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t" || ct == "long" || ct == "unsigned long"; }
 
 // A numeric target's range as C TEXT, for the runtime narrowing check. Deliberately not numbers:
 // `size_t`/`ptrdiff_t` have no width this compiler can know, and `<stdint.h>`'s macros are exactly the
@@ -877,6 +878,8 @@ bool cNumRangeText(const std::string& ct, std::string& lo, std::string& hi)
     if (ct == "uint64_t")  { lo = "0";           hi = "UINT64_MAX";  return true; }
     if (ct == "ptrdiff_t") { lo = "PTRDIFF_MIN"; hi = "PTRDIFF_MAX"; return true; }
     if (ct == "size_t")    { lo = "0";           hi = "SIZE_MAX";    return true; }
+    if (ct == "long")          { lo = "LONG_MIN";    hi = "LONG_MAX";    return true; }   // `clong` (0.9.232)
+    if (ct == "unsigned long") { lo = "0";           hi = "ULONG_MAX";   return true; }   // `culong`
     return false;   // float/double (see below) and everything that is not a number
 }
 
@@ -1389,7 +1392,7 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
 
     const char* cat;
     if (isNumericLiteral(value.get()))                            cat = "literal";
-    else if (cNumTargetWidth(src) || cNumTargetWidth(dstCType))   cat = "usize-width";
+    else if (cNumTargetWidth(src) || cNumTargetWidth(dstCType))   cat = "target-width";
     else if (cNumFloat(src) != cNumFloat(dstCType))               cat = "int-float";
     else if (cNumBits(dstCType) <  cNumBits(src))                 cat = "narrowing";
     else if (cNumSigned(src)   != cNumSigned(dstCType))           cat = "signedness";
@@ -1476,7 +1479,7 @@ void CEmitter::noteNumericOperands(int opToken, SharedExpression lhs, SharedExpr
         if (!constValue(lLit ? lhs : rhs, v)) cat = "op-literal";        // a float literal: no fold, no check
         else cat = constOutOfRange(destT, v, litT) ? "op-literal-oob" : "op-literal";
     }
-    else if (cNumTargetWidth(lt) || cNumTargetWidth(rt))       cat = "op-usize-width";
+    else if (cNumTargetWidth(lt) || cNumTargetWidth(rt))       cat = "op-target-width";
     else if (cNumFloat(lt) != cNumFloat(rt))                   cat = "op-int-float";
     else if (cNumBits(lt) != cNumBits(rt))
         cat = cNumSigned(lt) != cNumSigned(rt) ? "op-mixed-both" : "op-mixed-width";
@@ -2655,6 +2658,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     };
     auto check = [&](const SharedIdentifier& t, const char* what) {
         if (!t || !t->value) return;
+        if (rejectBareCChar(t, what, t->line)) return;   // a C `char` element outside a raw pointer
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
         // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
         // `Base` is resolved against that type's BASE, so it is not on the stack here either; a `Base` in
@@ -2750,7 +2754,12 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // `CompareFn` typedef the header declares is deliberately NOT a kama type, and `cType`
                 // passes such a name through verbatim as the literal C spelling. That is the FFI seam
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
-                if (isExtern(fn)) continue;
+                if (isExtern(fn)) {
+                    // ...except the one rule that IS about the C spelling: a bare `cchar` in an extern signature.
+                    rejectBareCChar(fn->returnType, "a return type", fn->line);
+                    if (fn->parameters) for (auto& p : *fn->parameters) if (p) rejectBareCChar(p->type, "a parameter", p->line);
+                    continue;
+                }
                 ownerExported = fn->name && fn->name->value && _exported.count(qualify(*fn->name->value));
                 bindTypeParams(fn->typeParams, fn->comptimeParams,
                                fn->name ? fn->name->line : fn->line, "a function");
@@ -2813,6 +2822,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
                 tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
+                if (ii->targets) for (auto& tgt : *ii->targets) if (tgt) rejectBareCChar(tgt, "a `type intrinsic` target", tgt->line);
                 if (ii->members) for (auto& m : *ii->members)
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
@@ -3109,6 +3119,13 @@ std::string CEmitter::cType(SharedIdentifier type)
         // that they now arrive as a `builtInVal` instead of being string-compared ahead of this switch.
         case IDENTIFIER_ISIZE_VAL:   return "ptrdiff_t";
         case IDENTIFIER_USIZE_VAL:   return "size_t";
+        // The C ABI elements (0.9.232). `cchar` gets its OWN C name for the reason `kama_char` has one: every
+        // identity rule compares lowered spellings, and a bare `char` would collide with the codepoint key in
+        // `primKeyOfCType`. A typedef is the same C type, so `kama_cchar const*` reaches `puts(const char*)`
+        // with no warning. `long`/`unsigned long` collide with nothing and lower to themselves.
+        case IDENTIFIER_CCHAR_VAL:   return "kama_cchar";
+        case IDENTIFIER_CLONG_VAL:   return "long";
+        case IDENTIFIER_CULONG_VAL:  return "unsigned long";
         default:
             // User-defined type (class/enum/interface) — resolve through the
             // current file's namespace scope + usings to its mangled C name.
@@ -3154,19 +3171,23 @@ std::string CEmitter::primKey(SharedIdentifier type)
         // one type in a single translation unit.
         case IDENTIFIER_ISIZE_VAL:   return "isize";
         case IDENTIFIER_USIZE_VAL:   return "usize";
+        case IDENTIFIER_CLONG_VAL:   return "clong";     // same reason: the key must agree with mangleElem
+        case IDENTIFIER_CULONG_VAL:  return "culong";
+        // `cchar` has NO arm on purpose: it never names a value, so nothing conforms on it and no diagnostic
+        // should key on it — rejectBareCChar fires before any conformance lookup could.
         default: break;
     }
     return cType(type);
 }
 
-// True for the fourteen keys the switch above can produce — i.e. "this key names a scalar primitive", as
+// True for the sixteen keys the switch above can produce — i.e. "this key names a scalar primitive", as
 // opposed to the C name `primKey` hands back for everything else. A caller that resolved a key from a kama
 // type node uses this to decide whether that key is authoritative or whether to fall back to the C type.
 bool CEmitter::isScalarPrimKey(const std::string& k)
 {
     static const std::set<std::string> kScalars = {
         "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
-        "bool", "float32", "float64", "char", "isize", "usize" };
+        "bool", "float32", "float64", "char", "isize", "usize", "clong", "culong" };
     return kScalars.count(k) != 0;
 }
 
@@ -3187,6 +3208,8 @@ std::string CEmitter::primKeyOfCType(const std::string& ct)
 {
     if (ct == "ptrdiff_t") return "isize";
     if (ct == "size_t")    return "usize";
+    if (ct == "long")          return "clong";
+    if (ct == "unsigned long") return "culong";
     if (ct == "int8_t")   return "int8";
     if (ct == "int16_t")  return "int16";
     if (ct == "int32_t")  return "int32";
@@ -4391,6 +4414,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 unsupported("raw pointer access requires an `unsafe fn`", ea->line);
                 return "0";
             }
+            // (not during a poisoned instance's re-walk — the user's spelling was reported already)
+            if (_typeSubst.empty() && rawElemIsCChar(v->unaryExpression)) { rejectBareCChar(synthId("cchar", IDENTIFIER_CCHAR_VAL), "an element written through the pointer", ea->line); return "0"; }
             if (*placeOpMacro(v->token))
                 return std::string(placeOpMacro(v->token)) + "(&((" + emitExpression(recv) + ")[" + ridx + "]), ("
                      + emitExpression(v->expression) + "))";
@@ -4457,6 +4482,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             unsupported("raw pointer access requires an `unsafe fn`", ea->line);
             return "0";
         }
+        if (_typeSubst.empty() && rawElemIsCChar(expr)) { rejectBareCChar(synthId("cchar", IDENTIFIER_CCHAR_VAL), "an element read through the pointer", ea->line); return "0"; }
         return "(" + emitExpression(recv) + ")[" + ridx + "]";
     }
 
@@ -4514,6 +4540,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
+        if (rejectBareCChar(v->type, "a cast target", v->line)) return "0";
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
         // `try cast` is a STATEMENT form (see emitTryCast) — the declaration path and the value-position
         // hoist (tryHoistInlineValue) intercept it before the expression walk. Arriving here means it was
@@ -4624,6 +4651,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     // `usize`). `cType` resolves a generic `T` under substitution, so `n * sizeof(T)` inside a
     // `Vec<T>` monomorphizes to the concrete size. `_Alignof` is C11 (kama emits strict ISO C11).
     if (auto* v = dynamic_cast<SizeofNode*>(n)) {
+        if (rejectBareCChar(v->type, v->isAlign ? "an `alignof` operand" : "a `sizeof` operand", v->line)) return "0";
         return std::string(v->isAlign ? "_Alignof(" : "sizeof(") + cType(v->type) + ")";
     }
 
@@ -5847,6 +5875,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
+            if (_typeSubst.empty()) rejectBareCChar(declType, "a local", n->line);   // not during a poisoned instance's re-walk
             rejectMintProtocolValue(declType, "a local", n->line);
             // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal
             // (every container depends on it), but naming one as a local is holding raw memory in a body,
@@ -9051,13 +9080,16 @@ bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
         case IDENTIFIER_INT32_VAL: case IDENTIFIER_UINT32_VAL: case IDENTIFIER_CHAR_VAL:
         case IDENTIFIER_FLOAT32_VAL:                                                      out = 4; return true;
         case IDENTIFIER_INT64_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_FLOAT64_VAL: out = 8; return true;
-        // ⚠️ REFUSED ON PURPOSE, and named rather than left to `default:`. `isize`/`usize` are the only
+        // ⚠️ REFUSED ON PURPOSE, and named rather than left to `default:`. `isize`/`usize` are
         // platform-varying types (`ptrdiff_t`/`size_t` — 8 bytes on x86_64/arm64, 4 on wasm32/thumbv6m),
         // so there is no one number to fold and `sizeof(usize)` stays a runtime `sizeof`. They reached
         // this switch for the first time in 0.9.136, when they became reserved words; before that they
         // fell out here anyway, invisibly. A silent `default:` is how `char` slipped past strict numeric
         // checking, so the refusal is spelled out. Guarded by tests/xfail/sizeof_usize_not_foldable.
         case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL:                             return false;
+        // ...and C's `long`/`unsigned long` (4 bytes on Windows, 8 elsewhere) — the same refusal, guarded by
+        // tests/xfail/sizeof_clong_not_foldable. `cchar` is refused as a VALUE position at the sizeof site.
+        case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: case IDENTIFIER_CCHAR_VAL: return false;
         default: return false;
     }
 }
@@ -9149,7 +9181,7 @@ bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
     // `char` is ranged by its WIDTH rather than by 0x10FFFF: "that is not a codepoint" is a different
     // rule from "that does not fit", and this campaign is only about the second.
     if (ct == "kama_char"){ lo = 0;               hi = 4294967295LL;   return true; }
-    return false;             // int64_t (holds every fold), uint64_t, floats, size_t/ptrdiff_t, classes
+    return false;             // int64_t (holds every fold), uint64_t, floats, size_t/ptrdiff_t, long/unsigned long, classes
 }
 
 bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
@@ -9172,6 +9204,7 @@ bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
         // width has no one range to check against, so "does this literal fit" cannot be answered here
         // without knowing the target. Named rather than left to `default:` — see the note there.
         case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL: return false;
+        case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: return false;   // target-width too (0.9.232)
         default: return false;    // int64 (always fits), uint64, floats, everything else
     }
 }
@@ -9663,6 +9696,12 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         // never compiled.
         case IDENTIFIER_ISIZE_VAL:   return "isize";
         case IDENTIFIER_USIZE_VAL:   return "usize";
+        // The C ABI elements mangle by their kama spelling too — `cchar` included, because a raw-pointer generic
+        // argument (`DynamicArray<UnsafeConstPtr<cchar>>`) reaches this switch, and `default:` would hand
+        // `resolveUserName("cchar")` back empty: the unmangled-call defect the size types had.
+        case IDENTIFIER_CCHAR_VAL:   return "cchar";
+        case IDENTIFIER_CLONG_VAL:   return "clong";
+        case IDENTIFIER_CULONG_VAL:  return "culong";
         // A source-spelled `char` used to survive on the `default:` arm (resolveUserName("char") finds no
         // user type and hands the spelling back), but a char LITERAL argument synthesizes its type node
         // (primTypeNode) with an empty `value` — which mangled to "" and gave one type two monomorphs.
@@ -10084,7 +10123,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // into a literal (measured 2026-09-06). Naming the type closes both.
         {
             auto cstrRet = synthId("UnsafeConstPtr");
-            auto ch = synthId("char", IDENTIFIER_CHAR_VAL);
+            auto ch = synthId("cchar", IDENTIFIER_CCHAR_VAL);   // C's `char`, not the codepoint (0.9.232)
             cstrRet->genericArg  = ch;
             cstrRet->genericArgs = std::make_shared<IdentifierList>();
             cstrRet->genericArgs->push_back(ch);
@@ -10785,7 +10824,8 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // NOT part of the INT8..UINT64 span above — that span is the FIXED widths, and these two are the
         // platform-varying pair, deliberately appended after it in kama.ast.h. They are still lock-free
         // machine words, so they are named here on purpose rather than by widening the span.
-        bool isSize = el->builtInVal == IDENTIFIER_ISIZE_VAL || el->builtInVal == IDENTIFIER_USIZE_VAL;
+        bool isSize = el->builtInVal == IDENTIFIER_ISIZE_VAL || el->builtInVal == IDENTIFIER_USIZE_VAL
+                   || el->builtInVal == IDENTIFIER_CLONG_VAL || el->builtInVal == IDENTIFIER_CULONG_VAL;   // C `long`: a word too
         bool isPtr  = isRawPtrName(el);
         // `bool` is a lock-free byte too — the done-flag the docs advertise. What it cannot do is
         // `fetchAdd`/`fetchSub`: the shim adds the raw bytes, and `true + 1` is the byte 2, which is not a
@@ -10794,7 +10834,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // compareExchange are bit movement the width switch already does (compareExchange compares BITS,
         // which is C++20 `atomic<float>`), and only `fetchAdd`/`fetchSub` are refused at the call — no
         // hardware has a lock-free float add; the idiom is a compareExchange loop. It used to stay out
-        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.227).
+        // "with no use", which the consumer-driven audit ruled is not a reason (0.9.228).
         bool isBool  = el->builtInVal == IDENTIFIER_BOOL_VAL;
         bool isFloat = el->builtInVal == IDENTIFIER_FLOAT32_VAL || el->builtInVal == IDENTIFIER_FLOAT64_VAL;
         if (!isInt && !isSize && !isPtr && !isBool && !isFloat) {
@@ -10917,6 +10957,10 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
             if (!checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl))   // `line` is null-args-safe (bare all-defaulted use)
                 boundsOk = false;
+    // A `T = cchar` instance is POISONED like a failed bound, silently: the declared-type hooks already report
+    // the user's spelling, and every nested instantiation the poisoned body forces would otherwise report
+    // again from a library line (nine errors for one `DynamicArray<cchar>`). The turbofish path reports.
+    for (auto& c : concrete) if (containsBareCChar(c)) boundsOk = false;
     // A type argument the bound REFUSED must not be carried into the template's body. Registration
     // continues — the instance's shape has to exist or every later reference to it becomes a second,
     // unrelated cascade ("unknown type") — but `emitGenericTypeInst` skips its member BODIES, so the
@@ -12116,6 +12160,12 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
             if ((*tmpl->typeParams)[i])
                 if (!checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key))
                     boundsOk = false;
+    // A user-spelled turbofish (`pick::<cchar>()`) has no declared-type site, so it reports here; the same
+    // call reached while a poisoned instance's body is re-walked under substitution (`relocate::<T>` with
+    // `T` bound to `cchar`) only poisons — the user's spelling was reported already, and reporting again
+    // would name a library line.
+    for (auto& c : concrete)
+        if (containsBareCChar(c)) { boundsOk = false; if (_typeSubst.empty()) rejectBareCChar(c, "a type argument", line); }
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -15479,7 +15529,8 @@ bool CEmitter::fieldTypeDeeplyImmutable(const SharedIdentifier& type) const
     // through to `deeplyImmutable(cType)`, found no class named `ptrdiff_t`, and returned false the same
     // way. That campaign converted ~13 such sites and this one was missed, which is what makes the span
     // comment in kama.ast.h worth obeying literally rather than trusting a sweep to have been complete.
-    if (type->builtInVal == IDENTIFIER_ISIZE_VAL || type->builtInVal == IDENTIFIER_USIZE_VAL)
+    if (type->builtInVal == IDENTIFIER_ISIZE_VAL || type->builtInVal == IDENTIFIER_USIZE_VAL
+        || type->builtInVal == IDENTIFIER_CLONG_VAL || type->builtInVal == IDENTIFIER_CULONG_VAL)   // (0.9.232) named, per the span rule
         return true;
     std::string ct = const_cast<CEmitter*>(this)->cType(type);
     if (isEnum(ct)) return true;
@@ -15576,6 +15627,32 @@ bool CEmitter::namesUnsafePtr(SharedIdentifier type)
         for (auto& a : *type->genericArgs) if (namesUnsafePtr(a)) return true;
     } else if (namesUnsafePtr(type->genericArg)) return true;
     return false;
+}
+
+// `cchar` is C's `char`: an FFI ELEMENT, legal only as what a raw pointer points at — `UnsafePtr<cchar>`,
+// `UnsafeConstPtr<cchar>`, nested (`UnsafePtr<UnsafeConstPtr<cchar>>`), in an extern signature, a `type
+// extern value` field, a local holding such a pointer. It never names a value: kama's `char` is a 32-bit
+// codepoint and C's is a byte that is a third type beside `int8`/`uint8`, so a `cchar` VALUE would be a
+// number with no width story and a codepoint with no encoding. Reading the bytes is a cast to
+// `UnsafePtr<uint8>`. This predicate reads the SOURCE spelling, never `cType`, so it is safe on an extern
+// signature, on `This`/`Base` and on an unbound `T` (the shape of `namesUnsafePtr` above).
+bool CEmitter::containsBareCChar(SharedIdentifier type, bool underRawPtr)
+{
+    if (!type) return false;
+    if (type->builtInVal == IDENTIFIER_CCHAR_VAL) return !underRawPtr;
+    const bool raw = type->value && isRawPtrName(*type->value);
+    if (type->genericArgs) {
+        for (auto& a : *type->genericArgs) if (containsBareCChar(a, raw)) return true;
+    } else if (containsBareCChar(type->genericArg, raw)) return true;
+    return false;
+}
+bool CEmitter::rejectBareCChar(const SharedIdentifier& type, const char* what, int line)
+{
+    if (!containsBareCChar(type)) return false;
+    unsupported((std::string("`cchar` is C's `char`, an FFI element only — it may appear only inside "
+                 "`UnsafePtr<…>`/`UnsafeConstPtr<…>`, not as ") + what
+                 + "; cast to `UnsafePtr<uint8>` to read bytes").c_str(), line);
+    return true;
 }
 
 // One diagnostic for every raw-pointer position, so the seam reads the same wherever it is hit.
@@ -16938,12 +17015,30 @@ std::string CEmitter::ptrElemType(SharedExpression e)
 
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
-// local pointer, and (0.9.227) to type the RECEIVER of a method call on such an element, which borrows it
+// local pointer, and (0.9.228) to type the RECEIVER of a method call on such an element, which borrows it
 // in place. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of exprClass —
 // an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on) must keep its
 // plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
 // -> `void*` is not indexable (excluded). Only locals/params live in `_localCTypes`, and a `ref T` param
 // lowers to `T` (no `*`), so no false positives.
+// Is `recv` (the receiver of a raw-element access) a pointer to `cchar`? The element C type comes from
+// the field or local pointer's own type; one `*` is stripped for a nested `pp[i][j]`. `UnsafeConstPtr`
+// leaves a trailing ` const`, hence the prefix test.
+bool CEmitter::rawElemIsCChar(SharedExpression access)
+{
+    auto* ea = dynamic_cast<ElementAccessNode*>(access.get());
+    if (!ea) return false;
+    std::string et = ptrElemType(access);
+    if (et.empty()) et = ptrLocalElemType(access);
+    if (et.empty() && ea->expression && dynamic_cast<ElementAccessNode*>(ea->expression.get())) {
+        // `pp[i][j]`: the outer access names a pointer-to-pointer element; strip one `*` for the inner.
+        std::string outer = ptrElemType(ea->expression);
+        if (outer.empty()) outer = ptrLocalElemType(ea->expression);
+        if (outer.size() > 1 && outer.back() == '*') et = outer.substr(0, outer.size() - 1);
+    }
+    return et.rfind("kama_cchar", 0) == 0;
+}
+
 std::string CEmitter::ptrLocalElemType(SharedExpression e)
 {
     auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
@@ -18302,7 +18397,7 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
 // that ban today, and for an ordinary name the exemption is harmless (the inner binding wins, which is
 // what the author wrote). It is only a const param that gets discarded instead of shadowed. Widening the
 // general ban to these two binders was a separate question, and the consumer-driven audit answered it
-// (0.9.230): the exemption STAYS. A runtime binder that shadows is the inner binding winning, which is what
+// (0.9.231): the exemption STAYS. A runtime binder that shadows is the inner binding winning, which is what
 // the author wrote; only a comptime parameter is DISCARDED instead of shadowed, and that is what this rule
 // catches.
 void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, int srcLine)
@@ -19681,7 +19776,7 @@ void CEmitter::resolveFriends()
                 // (a free function). The first two used to be spelled only bare: `resolveUserName` was
                 // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
-                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.229.
+                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.230.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
                 if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
                 if (!resolved) {                                           // `mod::Type::method`
@@ -21414,7 +21509,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                         call->line);
         // An element or field IS a place, but not when its ROOT is a temporary: `addr(of: f.view()[0])`
         // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
-        // dangle — and until 0.9.230 it escaped the front end and died in clang ("cannot take the address
+        // dangle — and until 0.9.231 it escaped the front end and died in clang ("cannot take the address
         // of an rvalue"), which a package author who does not read C could not act on (the first external
         // package's KAMA_GAPS #3). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
         // still owns and stays fine, as it does for `isNamedValue`.
@@ -23494,8 +23589,9 @@ static const char* serScalarSuffix(int builtInVal)
 // Zero kama diagnostics for a defect kama can see. Everything non-primitive falls through as before: a
 // user type / enum / collection legitimately reaches its own generated `__serialize`.
 //
-// `isize`/`usize` are the only primitives this fires for, and deliberately so — see the note above the
-// `Serializable` block in prelude/global.kama. A platform-varying width has no wire format.
+// `isize`/`usize` and C's `long`/`unsigned long` (`clong`/`culong`, 0.9.232) are the only primitives this
+// fires for, and deliberately so — see the note above the `Serializable` block in prelude/global.kama. A
+// platform-varying width has no wire format, whichever axis it varies on.
 bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line)
 {
     if (!ty || ty->genericArg) return false;              // a generic instance is composite — not ours
@@ -23512,7 +23608,8 @@ bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& acc
     unsupported(("field `" + field + "` is an `" + kt + "`, which cannot be "
                  + (writing ? "serialized" : "deserialized")
                  + " — `" + kt + "` is a platform-varying width (`" + cType(ty)
-                 + "`: 8 bytes natively, 4 on wasm32), so it has no wire format and implements neither "
+                 + (kt == "clong" || kt == "culong" ? "`: 4 bytes on Windows, 8 elsewhere)" : "`: 8 bytes natively, 4 on wasm32)")
+                 + ", so it has no wire format and implements neither "
                    "`Serializable` nor `Deserializable`. Give the field a fixed width (`int64`/`uint64`) and "
                    "`cast` at the boundary, or mark it `@skip`").c_str(), line);
     return true;
@@ -23606,10 +23703,10 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
         // 64-bit host it is the identity, on wasm32 it widens. Rendering never needs to know the width,
         // which is why these two join in (`Formattable`) where `sizeof` and `bitcast` refuse them.
         case IDENTIFIER_INT8_VAL: case IDENTIFIER_INT16_VAL:
-        case IDENTIFIER_INT32_VAL: case IDENTIFIER_INT64_VAL: case IDENTIFIER_ISIZE_VAL:
+        case IDENTIFIER_INT32_VAL: case IDENTIFIER_INT64_VAL: case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_CLONG_VAL:
             indent(1); *_out << "Formatter__writeI64(f, (int64_t)(" << access << "));\n";  return;
         case IDENTIFIER_UINT8_VAL: case IDENTIFIER_UINT16_VAL:
-        case IDENTIFIER_UINT32_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_USIZE_VAL:
+        case IDENTIFIER_UINT32_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_USIZE_VAL: case IDENTIFIER_CULONG_VAL:
             indent(1); *_out << "Formatter__writeU64(f, (uint64_t)(" << access << "));\n"; return;
         case IDENTIFIER_FLOAT32_VAL: indent(1); *_out << "Formatter__writeF32(f, " << access << ");\n";    return;
         case IDENTIFIER_FLOAT64_VAL: indent(1); *_out << "Formatter__writeF64(f, " << access << ");\n";    return;
@@ -26129,7 +26226,9 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
             // members on some target and not others. Named rather than left to `default:`, like the two
             // width helpers above. `cast`/`truncate` are the conversions that do work on them.
             case IDENTIFIER_ISIZE_VAL:
-            case IDENTIFIER_USIZE_VAL:   return {0, ""};
+            case IDENTIFIER_USIZE_VAL:
+            case IDENTIFIER_CLONG_VAL:
+            case IDENTIFIER_CULONG_VAL:  return {0, ""};   // C `long` is target-width too
             default:                     return {0, ""};
         }
     };
@@ -26550,7 +26649,7 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      flag + width 8, NO prefix — the prefix is only ever the lone `0` directly before the letter, so
     //      `:0x` and `:08x` mean different things, as `%#x` and `%08x` do). Precision has no meaning on an
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
-    //      wholesale as "not yet" until the consumer-driven audit (0.9.227). ----
+    //      wholesale as "not yet" until the consumer-driven audit (0.9.228). ----
     if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
         if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
@@ -26602,7 +26701,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // exprClass feeds the store path; widening it was measured to break 45 fixtures). A CALL is not a
     // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
-    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.227 this was
+    // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.228 this was
     // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
     if (cls.empty()) {
         const std::string et = ptrLocalElemType(receiver);
@@ -26750,7 +26849,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
         // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
-        // Since 0.9.227 the receiver is typed at the top of this function — a call borrows the element in
+        // Since 0.9.228 the receiver is typed at the top of this function — a call borrows the element in
         // place, as the field form always did — so a class-typed local element never reaches this line;
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);

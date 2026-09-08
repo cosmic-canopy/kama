@@ -37,7 +37,7 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner);
 static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner);
-/* Digit separators (0.9.226): the lexer admits `_` between two digits of a run; every numeric parse below
+/* Digit separators (0.9.227): the lexer admits `_` between two digits of a run; every numeric parse below
    strips them first, so strtoull/strtod see the plain digits. The token keeps the source spelling. */
 static std::string stripDigitSeps(const std::string& s);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
@@ -371,6 +371,11 @@ struct kamayystype {
    `marked_intrinsic_declaration`, whose legal target set falls out of every target's first token being
    reserved. They were plain IDENTIFIERs until 0.9.136, and every `switch` over a builtin type missed them. */
 %token <string> ISIZE USIZE
+/* The C ABI elements (0.9.232): `cchar` is C's `char`, an OPAQUE element legal only inside a raw pointer
+   (`primitive_type`, never `integral_type`); `clong`/`culong` are C's `long`/`unsigned long`, value types of
+   target width (4 on Windows, 8 elsewhere) — the `isize`/`usize` shape, in `integral_type` below. Token
+   names equal the spellings uppercased: the parser's reserved-word note case-folds them against the table. */
+%token <string> CCHAR CLONG CULONG
 %token <string> UNSAFE VIRTUAL VOID
 %token <string> WHILE
 
@@ -637,7 +642,7 @@ literal
   | BASED_LITERAL_NO_SUFFIX   { std::string::size_type underscoreIndex = $1->rfind('_');   /* the base tail follows the LAST run: `0b1010_1010_2` */
     int base = (int)strtoll($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
     /* The digit run is [2, underscoreIndex): `underscoreIndex - 2` characters. This said `- 3` and dropped the
-       LAST digit of every based literal (`0b101010_2` was 21) — found by the digit-separator fixture (0.9.226). */
+       LAST digit of every based literal (`0b101010_2` was 21) — found by the digit-separator fixture (0.9.227). */
     $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2, underscoreIndex - 2), base, &@1, scanner);
   }
   | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1, *$1, &@1, scanner ); }
@@ -778,6 +783,10 @@ primitive_type
   : numeric_type
   | BOOL   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_BOOL_VAL); }
   | CHAR   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CHAR_VAL); }
+  /* `cchar` is a primitive but NOT an integral type: an integral type gets the four value conformances and
+     admits a value, and a C `char` element has neither — it exists to be pointed at. The emitter refuses
+     every bare use (rejectBareCChar). */
+  | CCHAR  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CCHAR_VAL); }
   ;
 numeric_type
   : integral_type
@@ -797,6 +806,10 @@ integral_type
      through a `default:`. Being integral types here is what gives them the four value conformances. */
   | ISIZE   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_ISIZE_VAL); }
   | USIZE   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_USIZE_VAL); }
+  /* ...and C's `long`/`unsigned long` (0.9.232), whose width is the TARGET's — 4 bytes on Windows, 8
+     elsewhere — so they take the same explicit refusals as the size types at every fixed-width rule. */
+  | CLONG   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CLONG_VAL); }
+  | CULONG  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CULONG_VAL); }
   ;
 floating_point_type
   : FLOAT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT32_VAL); }

@@ -63,6 +63,9 @@ fn int32 main() {
     a = a * 2 - 1;
     if (a == 40 && a != 0) { a = twice(n: a) - 41; }
     int32 b = a > 0 ? 1 : 0;
+    clong cl = 1;                         // C's `long`, a target-width value (0.9.232)
+    culong cu = 2;
+    if (cl > 0 && cu > 1) { nop(); }
     nop();
     return a + b;
 }

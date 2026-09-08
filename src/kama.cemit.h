@@ -2132,6 +2132,9 @@ private:
     // Holding a raw pointer is legal (an `UnsafePtr` FIELD is legal by design); it is naming one in a
     // signature, and producing or handling one in a body, that the marker exists to make greppable.
     static bool namesUnsafePtr(SharedIdentifier type);
+    static bool containsBareCChar(SharedIdentifier type, bool underRawPtr = false);   // a `cchar` outside a raw pointer?
+    bool rejectBareCChar(const SharedIdentifier& type, const char* what, int line);   // ...the one diagnostic for it
+    bool rawElemIsCChar(SharedExpression access);                                     // a `p[i]` whose element is `cchar`?
     // The two raw-pointer spellings. `UnsafePtr<T>` is `T*`; `UnsafeConstPtr<T>` is `T const*` — the
     // read-only capability, which is what lets a `const fn` hand a buffer to C without laundering deep
     // const (rejectConstPtrWiden / checkConstWrite). ONE predicate, so a site that means "any raw pointer"

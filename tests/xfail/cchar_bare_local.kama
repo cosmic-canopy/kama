@@ -1,0 +1,2 @@
+// `cchar` is an FFI element, legal only inside a raw pointer — a bare local is refused.
+fn int32 main() { cchar c = 0; return 0; }

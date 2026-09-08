@@ -1,0 +1,3 @@
+// A turbofish binds `T = cchar` with no declared-type site to refuse it — the instantiation path reports.
+fn T pick<T>(T a) { return a; }
+fn int32 main() { int32 x = pick::<cchar>(a: 0); return x; }

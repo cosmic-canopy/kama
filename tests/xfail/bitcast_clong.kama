@@ -1,0 +1,2 @@
+// `bitcast` is an equal-width reinterpret, and `clong` has no width until the target is known.
+fn int32 main() { clong x = 1; uint64 b = bitcast<uint64>(x); return cast<int32>(b); }

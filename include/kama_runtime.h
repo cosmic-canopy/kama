@@ -1187,6 +1187,11 @@ static inline T NAME##__reduceMax(const NAME* self) {                           
 // as the byte/codepoint bug AGENTS.md opens with. Giving it a name of its own is what enforces it; C
 // behaviour is byte-for-byte unchanged, since this is a typedef and not a wrapper.
 typedef uint32_t kama_char;
+// `cchar` — C's own `char`, the element `UnsafePtr<cchar>`/`UnsafeConstPtr<cchar>` point at (`string.cstr()`
+// returns one). A typedef for the same reason `kama_char` is one: identity is decided on lowered
+// spellings, and a bare `char` would read as the codepoint key. Same C type, so it passes to any `char*`
+// prototype unchanged; it is never a value in kama, only a pointee.
+typedef char kama_cchar;
 
 // kama `string` lowers to a fat, length-prefixed value. `cap == 0` means
 // the bytes are BORROWED (e.g. a C string literal in static storage) and must

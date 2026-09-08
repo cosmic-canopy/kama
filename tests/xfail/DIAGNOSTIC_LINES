@@ -50,6 +50,7 @@ bind_foreach_narrow	bind_foreach_narrow.kama:3
 bind_foreach_operand	bind_foreach_operand.kama:3
 bind_match_narrow	bind_match_narrow.kama:4
 bind_match_operand	bind_match_operand.kama:3
+bitcast_clong	bitcast_clong.kama:2
 bitcast_nonscalar	bitcast_nonscalar.kama:6 bitcast_nonscalar.kama:7
 bitcast_width	bitcast_width.kama:5
 borrow_alias_reseat	borrow_alias_reseat.kama:15
@@ -82,6 +83,12 @@ cast_const_oob_unsigned	cast_const_oob_unsigned.kama:3
 cast_enum_rejected	cast_enum_rejected.kama:16
 cast_to_contract	cast_to_contract.kama:19
 cast_to_struct	cast_to_struct.kama:14
+cchar_bare_local	cchar_bare_local.kama:2
+cchar_elem_read	cchar_elem_read.kama:2
+cchar_field	cchar_field.kama:2
+cchar_generic_arg	cchar_generic_arg.kama:3
+cchar_intrinsic_target	cchar_intrinsic_target.kama:3
+cchar_turbofish	cchar_turbofish.kama:3
 channel_send_shared	channel_send_shared.kama:12
 channel_send_shared_collection	channel_send_shared_collection.kama:17
 channel_send_shared_variant	channel_send_shared_variant.kama:17
@@ -89,6 +96,7 @@ class_identity_generic_fn	class_identity_generic_fn.kama:7
 class_identity_generic_type	class_identity_generic_type.kama:8
 class_identity_operator	class_identity_operator.kama:18
 class_identity_value	class_identity_value.kama:14 class_identity_value.kama:17 class_identity_value.kama:19 class_identity_value.kama:20
+clong_serialize	clong_serialize.kama:3
 compilefor_dangling	compilefor_dangling.kama:8
 compilefor_on_method	compilefor_on_method.kama:9
 comptime_args_arity	comptime_args_arity.kama:3
@@ -661,6 +669,7 @@ simd_bad_width	simd_bad_width.kama:10 simd_bad_width.kama:9
 simd_mask_arith	simd_mask_arith.kama:10
 simd_shuffle_oob	simd_shuffle_oob.kama:5
 simd_shuffle_runtime	simd_shuffle_runtime.kama:9
+sizeof_clong_not_foldable	sizeof_clong_not_foldable.kama:2
 sizeof_const_generic_unfoldable	sizeof_const_generic_unfoldable.kama:13
 sizeof_usize_not_foldable	sizeof_usize_not_foldable.kama:9
 slot_assignment_fill	slot_assignment_fill.kama:8

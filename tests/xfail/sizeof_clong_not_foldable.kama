@@ -1,0 +1,3 @@
+// `sizeof(clong)` does not fold: its width belongs to the target (4 on Windows, 8 elsewhere), like `usize`.
+comptime int32 W = cast<int32>(sizeof(clong));
+fn int32 main() { return W; }

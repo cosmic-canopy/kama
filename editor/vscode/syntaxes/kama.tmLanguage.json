@@ -170,7 +170,7 @@
     },
     "types": {
       "patterns": [
-        { "name": "storage.type.primitive.kama", "match": "\\b(bool|char|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|isize|usize|float32|float64|double|string|void)\\b" },
+        { "name": "storage.type.primitive.kama", "match": "\\b(bool|cchar|char|clong|culong|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|isize|usize|float32|float64|double|string|void)\\b" },
         { "comment": "A capitalized word is PROBABLY a type — a regex cannot know. `textDocument/semanticTokens` is the layer that corrects it, because only the resolver can tell a type from a value.", "name": "entity.name.type.kama", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
       ]
     },

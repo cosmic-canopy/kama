@@ -1,0 +1,4 @@
+// A `clong` has no wire format: its width is the target's, so serializing it would be silently lossy across targets.
+@generate(Serializable)
+type value Rec { public clong n; }
+fn int32 main() { return 0; }

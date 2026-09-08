@@ -331,6 +331,12 @@ public:
 // them explicitly instead.
 #define IDENTIFIER_ISIZE_VAL 15
 #define IDENTIFIER_USIZE_VAL 16
+// The C ABI elements (0.9.232), appended for the same reason: OUTSIDE every span above. `cchar` is opaque
+// (a C `char`, legal only inside a raw pointer); `clong`/`culong` are target-width integers like the two
+// size types and are named explicitly at each site that admits those.
+#define IDENTIFIER_CCHAR_VAL 17
+#define IDENTIFIER_CLONG_VAL 18
+#define IDENTIFIER_CULONG_VAL 19
 
 
 class IdentifierNode : public ExpressionNode {

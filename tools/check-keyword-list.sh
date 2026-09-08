@@ -45,6 +45,13 @@ awk '
 ' "$SPEC" | tr -s ' \t' '\n' | grep -vE '^$' | LC_ALL=C sort -u > "$tmp/doc"
 
 [ -s "$tmp/lex" ] || fail "read no keywords from src/kama.l — the table's shape changed, so this guard is measuring nothing"
+
+# The COUNT the doc's lead paragraph publishes ("— N words, six of them contextual —") must be the table's
+# size. A number in prose rots silently: the roadmap said "80" for weeks after `file` made it 81, and
+# nothing checked it because this guard held only the SET.
+n=$(wc -l < "$tmp/lex" | tr -d ' ')
+grep -qE "^\*\*The complete list — $n words, six of them contextual —" "$SPEC" \
+    || fail "docs/SPEC.md § kama's keywords does not say \"— $n words, six of them contextual —\" (the table has $n rows)"
 [ -s "$tmp/doc" ] || fail "read no keywords from docs/SPEC.md — is the '## kama's keywords' section or its fenced block gone?"
 
 missing=$(LC_ALL=C comm -23 "$tmp/lex" "$tmp/doc" | tr '\n' ' ')

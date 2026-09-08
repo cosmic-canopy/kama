@@ -2,7 +2,7 @@
   "name": "kama",
   "displayName": "kama",
   "description": "Syntax highlighting and zero-config debugging for the kama language (.kama). Press F5 in a .kama to build + debug via CodeLLDB.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "cosmic-canopy",
   "license": "MIT",
   "icon": "icon.png",

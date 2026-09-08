@@ -255,6 +255,10 @@ primitive_type
   : numeric_type
   | BOOL
   | CHAR
+  /* `cchar` is a primitive but NOT an integral type: an integral type gets the four value conformances and
+     admits a value, and a C `char` element has neither — it exists to be pointed at. The emitter refuses
+     every bare use (rejectBareCChar). */
+  | CCHAR
   ;
 numeric_type
   : integral_type
@@ -274,6 +278,10 @@ integral_type
      through a `default:`. Being integral types here is what gives them the four value conformances. */
   | ISIZE
   | USIZE
+  /* ...and C's `long`/`unsigned long` (0.9.232), whose width is the TARGET's — 4 bytes on Windows, 8
+     elsewhere — so they take the same explicit refusals as the size types at every fixed-width rule. */
+  | CLONG
+  | CULONG
   ;
 floating_point_type
   : FLOAT32

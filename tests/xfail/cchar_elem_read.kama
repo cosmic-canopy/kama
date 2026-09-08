@@ -1,0 +1,3 @@
+// Reading through a `cchar` pointer yields an opaque element — cast to `UnsafePtr<uint8>` to read bytes.
+unsafe fn int32 first(const ref string s) { UnsafeConstPtr<cchar> p = s.cstr(); return cast<int32>(p[0]); }
+fn int32 main() { string s = "a"; return first(s: s); }

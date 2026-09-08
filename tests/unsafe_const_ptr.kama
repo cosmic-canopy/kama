@@ -2,7 +2,7 @@
 // implicit (as in C), reading through it is the ordinary `unsafe` read, and a `const T*` C API takes
 // either pointer with no cast. The reverse conversion and every store are compile errors —
 // tests/xfail/const_ptr_*.
-extern fn usize strlen(UnsafeConstPtr<char> s);
+extern fn usize strlen(UnsafeConstPtr<cchar> s);
 
 // `addr(of:)` on a const root hands back the read-only pointer, so a `const fn` can honestly return one
 // (returning it as `UnsafePtr<int32>` is tests/xfail/const_addr).

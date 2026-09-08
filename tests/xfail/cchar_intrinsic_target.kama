@@ -1,0 +1,4 @@
+// A conformance on `cchar` is refused: it has no value, so nothing to conform.
+type contract Tagged for intrinsic { fn int32 tag(); }
+type intrinsic <cchar> implements Tagged { public fn int32 tag() { return 1; } }
+fn int32 main() { return 0; }

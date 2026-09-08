@@ -19,7 +19,9 @@ borrow — a slice/span), or `type contract` (an interface).
 |---|---|
 | `int8 int16 int32 int64` | `int8_t … int64_t` |
 | `uint8 uint16 uint32 uint64` | `uint8_t … uint64_t` |
-| `isize` / `usize` | `ptrdiff_t` / `size_t` — the ONLY platform-varying types (8 bytes on x86_64/arm64, 4 on wasm32/thumbv6m) |
+| `isize` / `usize` | `ptrdiff_t` / `size_t` — platform-varying (8 bytes on x86_64/arm64, 4 on wasm32/thumbv6m) |
+| `clong` / `culong` | `long` / `unsigned long` — platform-varying the other way (4 bytes on Windows, 8 elsewhere); for an `extern` that mirrors a C `long` |
+| `cchar` | `char` — C's byte, as a raw-pointer element only (`UnsafeConstPtr<cchar>` is `const char*`; `string.cstr()` returns one); never a value |
 | `float32` / `float64` | `float` / `double` |
 | `bool` | `bool` |
 | `string` | `kama_string` (borrowed view or heap-owned RAII string) |
@@ -1311,9 +1313,21 @@ container answered `false` for a value it held (`tests/constref_literal_width.ka
 `operator[]`, every index parameter, `string`/`Fixed`/`View` included. `usize` is reserved for quantities
 crossing into C: `sizeof`, an allocation size, an `extern fn` mirroring a `size_t`.
 
-`isize`/`usize` are the **only** platform-varying types in the language (`ptrdiff_t`/`size_t` — 8 bytes on
-x86_64/arm64, 4 on wasm32/thumbv6m), which is why they keep `size` in their names: the name is what says a
-crossing to a fixed width needs a cast, and `isize → int32` is a genuine narrowing on a 64-bit host.
+`isize`/`usize` are platform-varying (`ptrdiff_t`/`size_t` — 8 bytes on x86_64/arm64, 4 on wasm32/thumbv6m),
+which is why they keep `size` in their names: the name is what says a crossing to a fixed width needs a
+cast, and `isize → int32` is a genuine narrowing on a 64-bit host. The other two platform-varying types
+are **`clong`/`culong`**, C's `long`/`unsigned long` — 4 bytes on Windows, 8 elsewhere, so an `extern`
+mirroring a C `long` must say `clong`, never `isize`. All four take the same refusals: `sizeof` does not <!-- test: clong_extern -->
+fold, `bitcast` is refused (no width until the target is known), and there is no wire format. <!-- xfail: sizeof_clong_not_foldable, bitcast_clong, clong_serialize -->
+
+**`cchar` is C's `char`, and never a value.** kama's `char` is a 32-bit codepoint; C's is a byte that is a
+third type beside `int8` and `uint8`, and a libc prototype spelled `const char*` warns on either. So `cchar`
+exists only as what a raw pointer points at — `UnsafeConstPtr<cchar>` is `const char*` (what `string.cstr()` <!-- test: cchar_extern -->
+returns), `UnsafePtr<cchar>` is `char*`, nested and in a `type extern value` field alike — and every bare use
+is a compile error: a local, a field, a parameter or return outside a pointer, a generic argument, a `cast` <!-- xfail: cchar_bare_local, cchar_field, cchar_generic_arg, cchar_intrinsic_target, cchar_elem_read -->
+target, `sizeof`, and reading `p[i]` through one; the bytes are a `cast<UnsafePtr<uint8>>` away. A raw
+pointer's `char` meaning C `char` was the alternative, and is a non-goal: `DynamicArray<char>.dataPtr()`
+would declare a 1-byte stride over a 4-byte buffer.
 
 The size type is **signed**, which is the part that is easy to get wrong. The intuition says a length
 cannot be negative, so make it unsigned — but unsigned does not *prevent* the invalid state, it makes it
@@ -1618,7 +1632,7 @@ the literal C name. It has no ctor; construct it either by binding a struct-retu
 above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
 (unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
-`UnsafeConstPtr<char>` — C's `const char*`, read-only.
+`UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).
 
 ### Time (`std::time`) ✅
 
@@ -1965,7 +1979,7 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.231` the local form was refused, the field form never was). What stays
+through a field one (until `0.9.232` the local form was refused, the field form never was). What stays
 refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
 release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
@@ -4808,19 +4822,19 @@ however, **reserved** — see below.
 
 ## kama's keywords
 
-**The complete list, and the reason it is printed here**: every one that is not published is found by
+**The complete list — 84 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
 walking into it. The first external project found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
 drift.
 
 ```
-abstract alignof as asm base bitcast bool borrow break case cast char comptime const continue
-copy ctor default do else enum export expose extends extern false file final float32 float64 fn
-fnptr for foreach friend give hardware if immutable implements import in int16 int32 int64 int8
-isize match new null operator out override parallel_for parallel_spawn private protected public
-ref return scope sizeof slot spawn static string this true truncate try type uint16 uint32
-uint64 uint8 unsafe usize virtual void when while
+abstract alignof as asm base bitcast bool borrow break case cast cchar char clong comptime const
+continue copy ctor culong default do else enum export expose extends extern false file final
+float32 float64 fn fnptr for foreach friend give hardware if immutable implements import in int16
+int32 int64 int8 isize match new null operator out override parallel_for parallel_spawn private
+protected public ref return scope sizeof slot spawn static string this true truncate try type
+uint16 uint32 uint64 uint8 unsafe usize virtual void when while
 ```
 
 **Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any

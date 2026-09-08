@@ -3032,6 +3032,18 @@
         },
         {
           "type": "STRING",
+          "value": "cchar"
+        },
+        {
+          "type": "STRING",
+          "value": "clong"
+        },
+        {
+          "type": "STRING",
+          "value": "culong"
+        },
+        {
+          "type": "STRING",
           "value": "double"
         },
         {

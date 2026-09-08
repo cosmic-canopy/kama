@@ -3,7 +3,7 @@
 // that only reads its buffer — can pass it to a `const T*` C API with no cast and no mutable borrow.
 // Before 0.9.205 every such wrapper had to take `ref`, and its callers had to drop their `const`.
 import { std::collections::DynamicArray, std::collections::FixedArray };
-extern fn usize strlen(UnsafeConstPtr<char> s);
+extern fn usize strlen(UnsafeConstPtr<cchar> s);
 
 unsafe fn int32 first(const ref DynamicArray<uint8> d) { return cast<int32>(d.dataPtr()[0]); }
 unsafe fn int32 last(const ref FixedArray<int32> f)    { return f.dataPtr()[2]; }

@@ -27,9 +27,10 @@
 
 // ---- the scalar primitives ------------------------------------------------------------------------
 //
-// Fixed-width, all of them, and that is the language's position rather than an omission: a width you can
-// read is worth more than a width that follows the host. `int` is reserved and rejected with a message
-// naming these two replacements, because a C or Go reader will try it.
+// Fixed-width, all but the four whose width is the TARGET's (the two size types and C's `long` pair below),
+// and that is the language's position rather than an omission: a width you can read is worth more than a
+// width that follows the host. `int` is reserved and rejected with a message naming its replacements,
+// because a C or Go reader will try it; so is `long`.
 
 type value bool { }        // `true` / `false`
 
@@ -54,6 +55,18 @@ type value char { }        // one Unicode CODEPOINT, not a byte — `.chars()` y
 type value isize { }       // signed platform width   (C `ptrdiff_t`)
 type value usize { }       // unsigned platform width (C `size_t`)
 
+// The C ABI elements, for an `extern` that must agree with a C prototype byte for byte. `clong`/`culong`
+// are C's `long`/`unsigned long` — 4 bytes on Windows, 8 elsewhere, so `isize` would be WRONG there — and
+// take the same refusals as the size types (`sizeof` does not fold, a literal's range is not checked, no
+// wire format). `cchar` is C's `char`: NOT a value — kama's `char` is a 32-bit codepoint and C's is a byte
+// that is a third type beside `int8`/`uint8` — but the element `UnsafePtr<cchar>`/`UnsafeConstPtr<cchar>`
+// point at, which is what `string.cstr()` returns and what a `const char*` parameter is spelled as. Any
+// bare `cchar` (a local, a field, a generic argument, `p[i]`, `sizeof`) is refused; the bytes are a
+// `cast<UnsafePtr<uint8>>` away.
+type value cchar { }       // C `char`, as a raw-pointer element only
+type value clong { }       // C `long`          (target width)
+type value culong { }      // C `unsigned long` (target width)
+
 type value void { }        // no value — a return type only, never a variable's
 
 // ---- string ---------------------------------------------------------------------------------------
@@ -70,7 +83,7 @@ type value string {
     public fn isize length();                                   // length in BYTES, not codepoints
     public fn bool equals(string other);                        // also what `==` resolves to
     public fn string concat(string other);                      // a new owned string
-    public fn UnsafeConstPtr<char> cstr();                      // FFI: the NUL-terminated C pointer, read-only
+    public fn UnsafeConstPtr<cchar> cstr();                     // FFI: the NUL-terminated C pointer (`const char*`), read-only
     public fn uint8 get(isize index);                           // `s[i]` — the i-th BYTE
     public fn Chars chars();                                    // codepoint iterator (see the prelude)
 

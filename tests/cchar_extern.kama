@@ -1,0 +1,13 @@
+// `cchar` is C's `char` — an FFI element that lives only inside a raw pointer. `string.cstr()` returns
+// `UnsafeConstPtr<cchar>` (C's `const char*`), so it binds to a typed local and reaches a libc prototype
+// with no cast and no `-Wpointer-sign`. Before 0.9.232 a written `UnsafeConstPtr<char>` was a pointer to
+// 32-bit codepoints, so `UnsafeConstPtr<char> p = s.cstr();` died in the C compiler, and every
+// `const char*` extern in the tree was spelled `<int8>` to dodge the warning.
+extern "<string.h>";
+extern fn usize strlen(UnsafeConstPtr<cchar> s);
+unsafe fn int32 len(const ref string s) {
+    UnsafeConstPtr<cchar> p = s.cstr();           // the binding that used to fail
+    UnsafeConstPtr<uint8> bytes = cast<UnsafeConstPtr<uint8>>(p);   // reading the bytes is a cast away
+    return cast<int32>(strlen(s: p)) + cast<int32>(bytes[0]) - 97;  // "abc": 3 + 0
+}
+fn int32 main() { string s = "abc"; return len(s: s) + 39; }   // 42

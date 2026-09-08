@@ -1,0 +1,3 @@
+// A `cchar` FIELD is refused; a raw pointer to one is fine (`UnsafeConstPtr<cchar>` in a `type extern value`).
+type value P { cchar c; }
+fn int32 main() { return 0; }

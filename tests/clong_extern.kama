@@ -1,0 +1,16 @@
+// `clong`/`culong` are C's `long`/`unsigned long` — value types of TARGET width (32 bits on Windows, 64
+// elsewhere), the `isize`/`usize` shape: arithmetic and comparison work, `sizeof` does not fold and a
+// literal's range is not checked at compile time, and neither has a wire format. `strtol` is the libc
+// prototype that uses both new spellings at once.
+extern "<stdlib.h>";
+extern fn clong strtol(UnsafeConstPtr<cchar> s, UnsafePtr end, int32 radix);
+unsafe fn clong parse(const ref string s) { return strtol(s: s.cstr(), end: null, radix: 10); }
+fn int32 main() {
+    string a = "40"; string b = "2";
+    clong x = parse(s: a);
+    clong y = parse(s: b);
+    clong z = x + y;
+    culong u = 7;
+    if (z > x && u == 7) { return cast<int32>(z); }
+    return 0;
+}
