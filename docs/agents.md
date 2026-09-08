@@ -13,16 +13,23 @@ A new project can have it from the start — `kama seed --agents` (or `--claude`
 `--skill`) runs exactly the command below once the manifest is written. For an existing project:
 
 ```sh
-kama agents install            # write AGENTS.md — read natively by most agent tools
-kama agents install --claude   # ...and a CLAUDE.md that imports it
-kama agents install --all-tools  # ...and a pointer file for every tool that reads neither
-kama agents list               # which tools are covered, and what each one gets
-kama agents print              # the content on stdout, to paste or pipe anywhere
+kama agents install kama.json             # write AGENTS.md — read natively by most agent tools
+kama agents install kama.json --claude    # ...and a CLAUDE.md that imports it
+kama agents install kama.json --all-tools # ...and a pointer file for every tool that reads neither
+kama agents list                          # which tools are covered, and what each one gets
+kama agents print                         # the content on stdout, to paste or pipe anywhere
+kama agents print --package               # the package half, for a library that will be published
 ```
 
 The content lives in **`AGENTS.md`, once**. Every other file is a pointer, never a copy, so there is
 one thing to edit and nothing to keep in sync. `AGENTS.md` is an
 [open cross-tool standard](https://agents.md) read natively by 25+ agents.
+
+A project whose manifest says `"kind": "library"` also gets **`AGENTS.package.md`** beside it — the half
+only a package that will be published needs: the `"kama"` floor, `tests/` as one program, vendoring a C
+library with a pinned script, the C seam, publishing. It is keyed on the manifest, not a flag, so a
+re-install with `--force` writes it again without being told; an executable project never gets it.
+`AGENTS.md` points at it under *Where the truth is*.
 
 Nothing is overwritten without `--force`. If you already have an `AGENTS.md`, use
 `kama agents print` and merge by hand.

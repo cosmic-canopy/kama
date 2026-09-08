@@ -6954,8 +6954,9 @@ void agentsUsage()
     fprintf(stderr,
         "usage:\n"
         "  kama agents install <kama.json> [--claude] [--tool <name>]... [--all-tools] [--skill] [--force]\n"
-        "                                      write AGENTS.md (+ pointers) into <dir> (default: .)\n"
-        "  kama agents print [--skill]         write the guidance to stdout instead\n"
+        "                                      write AGENTS.md (+ pointers) beside the manifest; a library\n"
+        "                                      (`\"kind\": \"library\"`) also gets AGENTS.package.md\n"
+        "  kama agents print [--skill|--package] write the guidance to stdout instead\n"
         "  kama agents list                    which tools are covered, and the file each one gets\n");
 }
 
@@ -7015,8 +7016,15 @@ static bool embeddedWrite(const char* who, const std::string& dir, const std::st
 // collision before the first write — a typo used to be caught halfway through, after AGENTS.md had already
 // landed, leaving a half-installed project behind an exit 2. The name check has been here a while; the
 // collision pre-flight has not, and an existing CLAUDE.md could still strand a freshly written AGENTS.md.
+//
+// `kind` is the project's manifest kind ("library" / "executable" / ""). A library also gets the package
+// half, AGENTS.package.md, beside AGENTS.md: the guidance only a package that will be published needs
+// (agents/PACKAGE.md — the manifest floor, `tests/` as one program, vendoring a C library, the C seam,
+// publishing). It is keyed on the MANIFEST rather than a flag because `--force` rewrites every file this
+// command owns, and a flag a re-install forgets would silently drop the addendum; `kama agents install
+// <kama.json>` already names the manifest, so the kind is one read away, and `kama seed` knows it.
 static int cmdAgentsInstall(const std::string& dir, const std::vector<std::string>& tools,
-                            bool skill, bool force)
+                            bool skill, bool force, const std::string& kind)
 {
     std::vector<const KamaAgentStub*> chosen;
     for (const auto& t : tools) {
@@ -7032,6 +7040,7 @@ static int cmdAgentsInstall(const std::string& dir, const std::vector<std::strin
 
     std::vector<std::pair<std::string, const char*>> files;
     files.push_back({ "AGENTS.md", KAMA_AGENTS_MD });
+    if (kind == "library") files.push_back({ "AGENTS.package.md", KAMA_AGENTS_PACKAGE });
     for (const auto* s : chosen) files.push_back({ s->dest, s->src });
     if (skill) files.push_back({ ".claude/skills/kama/SKILL.md", KAMA_AGENTS_SKILL });
 
@@ -7530,7 +7539,7 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
             tools.clear();
             for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) tools.push_back(KAMA_AGENT_STUBS[i].name);
         }
-        int rc = cmdAgentsInstall(dir, tools, o.skill, o.force);
+        int rc = cmdAgentsInstall(dir, tools, o.skill, o.force, kind == SeedKind::Library ? "library" : "executable");
         if (rc) return rc;
     }
 
@@ -8836,7 +8845,7 @@ int main(int argc, char** argv)
         // input/flag handling. It is deliberately NOT in maybeReExec's run-in-place list — the
         // guidance is version-specific, so a pinned project should get its pinned toolchain's copy.
         std::string verb = argc > 2 && argv[2][0] != '-' ? argv[2] : "";
-        bool wantClaude = false, allTools = false, skill = false, force = false;
+        bool wantClaude = false, allTools = false, skill = false, force = false, package = false;
         std::string dir;
         std::vector<std::string> tools;
         for (int i = verb.empty() ? 2 : 3; i < argc; ++i) {
@@ -8844,6 +8853,7 @@ int main(int argc, char** argv)
             if      (a == "--claude")                 wantClaude = true;
             else if (a == "--all-tools")              allTools = true;
             else if (a == "--skill")                  skill = true;
+            else if (a == "--package")                package = true;
             else if (a == "--force")                  force = true;
             else if (a == "--tool" && i + 1 < argc)   tools.push_back(argv[++i]);
             else if (!a.empty() && a[0] == '-') {
@@ -8853,7 +8863,7 @@ int main(int argc, char** argv)
             else { fprintf(stderr, "kama agents: unexpected arg '%s'\n", a.c_str()); return 2; }
         }
         if (verb.empty() || verb == "list") {
-            if (verb.empty() && (wantClaude || allTools || skill || force || !tools.empty() || !dir.empty())) {
+            if (verb.empty() && (wantClaude || allTools || skill || package || force || !tools.empty() || !dir.empty())) {
                 fprintf(stderr, "kama agents: say `install` or `print`\n"); agentsUsage(); return 2;
             }
             return verb == "list" ? cmdAgentsList() : (agentsUsage(), 2);
@@ -8861,7 +8871,7 @@ int main(int argc, char** argv)
         if (verb == "print") {
             // The primitive the whole feature rests on: stdout, so it composes with anything —
             // pasting into a file this command has never heard of, or diffing against one.
-            printf("%s", embeddedBody(skill ? KAMA_AGENTS_SKILL : KAMA_AGENTS_MD));
+            printf("%s", embeddedBody(package ? KAMA_AGENTS_PACKAGE : skill ? KAMA_AGENTS_SKILL : KAMA_AGENTS_MD));
             return 0;
         }
         if (verb != "install") {
@@ -8882,7 +8892,14 @@ int main(int argc, char** argv)
             fprintf(stderr, "kama agents install: guidance is written per project — name a member's kama.json\n");
             return 2;
         }
-        return cmdAgentsInstall(agDir, tools, skill, force);
+        if (package) { fprintf(stderr, "kama agents install: --package is a `print` option — install writes the package half by the manifest's kind\n"); return 2; }
+        // The operand is the manifest itself (projectOperandDir insisted on that), so its kind is one read
+        // away — and a library gets AGENTS.package.md by that fact, never by a flag (see cmdAgentsInstall).
+        // A manifest with no `kind` is treated as an executable here rather than refused: this command
+        // writes guidance, it does not police the manifest — `kama build` does that.
+        std::string kind, kerr;
+        if (!loadManifestKind(dir, kind, kerr)) { fprintf(stderr, "kama agents install: %s\n", kerr.c_str()); return 2; }
+        return cmdAgentsInstall(agDir, tools, skill, force, kind);
     }
 
     if (subcommand == "update") {

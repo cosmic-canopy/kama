@@ -2,9 +2,10 @@
 # Embed the agent-guidance files into a generated C++ translation unit, so `kama agents` works from
 # any install — including `--no-std`, which ships only bin/kama (see install.sh, kama.agents.h).
 #
-#   usage: embed_agents.sh OUT AGENTS SKILL STUB...
+#   usage: embed_agents.sh OUT AGENTS SKILL PACKAGE STUB...
 #
-# AGENTS is agents/AGENTS.md (the content, once). SKILL is the richer on-demand cookbook. Each STUB is
+# AGENTS is agents/AGENTS.md (the content, once). SKILL is the richer on-demand cookbook. PACKAGE is
+# the addendum a `kind: library` project gets beside AGENTS.md (agents/PACKAGE.md). Each STUB is
 # a per-tool POINTER file, named for the tool it serves: the basename before `.md` becomes the key
 # `kama agents --tool <key>` takes, so adding a tool is a new file plus a Makefile entry, and touches
 # no C++.
@@ -16,6 +17,7 @@ set -eu
 out=$1; shift
 agents=$1; shift
 skill=$1; shift
+package=$1; shift
 
 # A stub declares its own destination on line 1 as `<!-- dest: <path> -->`; that line is stripped from
 # the emitted text, so what lands in the project is only the pointer.
@@ -30,7 +32,7 @@ emit() {   # emit <name> <file>
   printf ')KAMAGENTS" },\n'
 }
 
-for f in "$agents" "$skill" "$@"; do
+for f in "$agents" "$skill" "$package" "$@"; do
   if grep -q ')KAMAGENTS"' "$f"; then
     echo "embed_agents: $f contains the raw-string delimiter — rename it" >&2
     exit 1
@@ -49,6 +51,11 @@ done
   printf 'const char* KAMA_AGENTS_SKILL =\n'
   printf 'R"KAMAGENTS(\n'
   cat "$skill"
+  printf ')KAMAGENTS";\n\n'
+
+  printf 'const char* KAMA_AGENTS_PACKAGE =\n'
+  printf 'R"KAMAGENTS(\n'
+  cat "$package"
   printf ')KAMAGENTS";\n\n'
 
   printf 'const KamaAgentStub KAMA_AGENT_STUBS[] = {\n'

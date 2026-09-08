@@ -237,10 +237,22 @@ g="$tmp/ag"
 "$KAMA" seed "$g" --yes --claude >/dev/null 2>&1 || bad "seed --claude failed"
 [ -f "$g/AGENTS.md" ] && [ -f "$g/CLAUDE.md" ] && ok "--claude writes AGENTS.md + CLAUDE.md" \
                                                || bad "--claude did not write the agent files"
+[ -e "$g/AGENTS.package.md" ] && bad "an executable seed wrote AGENTS.package.md; only a library gets it" \
+                              || ok "an executable seed writes no AGENTS.package.md"
 h="$tmp/noag"
 "$KAMA" seed "$h" --yes >/dev/null 2>&1
 [ -f "$h/AGENTS.md" ] && bad "a plain seed wrote AGENTS.md; it is opt-in" \
                       || ok "a plain seed writes no AGENTS.md"
+# A library that opts in gets the package half too — keyed on the kind seed already knows, the same
+# manifest-kind rule `agents install` applies (tools/check-agents.sh).
+l="$tmp/libag"
+"$KAMA" seed "$l" --yes --kind library --name demolib --claude >/dev/null 2>&1 || bad "seed --kind library --claude failed"
+[ -f "$l/AGENTS.package.md" ] && ok "a library seed with --claude writes AGENTS.package.md" \
+                              || bad "a library seed with --claude wrote no AGENTS.package.md"
+m="$tmp/libnoag"
+"$KAMA" seed "$m" --yes --kind library --name demolib2 >/dev/null 2>&1
+[ -e "$m/AGENTS.package.md" ] && bad "a plain library seed wrote AGENTS.package.md; it is opt-in with the rest" \
+                              || ok "a plain library seed writes no AGENTS.package.md"
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-seed: --license writes the body AND records the id, or refuses by name"

@@ -143,12 +143,13 @@ $(BUILD)/kama.prelude.gen.cpp: $(PRELUDE_GLOBAL) $(PRELUDE_MODULES) tools/embed_
 # The agent-guidance files `kama agents` writes, embedded for the same reason as the prelude: a
 # `--no-std` install ships only bin/kama. AGENTS.md is the content; every stub is a pointer to it,
 # and declares its own destination path on line 1 (see tools/embed_agents.sh).
-AGENTS_MD    = agents/AGENTS.md
-AGENTS_SKILL = agents/skill/SKILL.md
+AGENTS_MD      = agents/AGENTS.md
+AGENTS_SKILL   = agents/skill/SKILL.md
+AGENTS_PACKAGE = agents/PACKAGE.md
 AGENTS_STUBS = $(sort $(wildcard agents/stubs/*.md))
 
-$(BUILD)/kama.agents.gen.cpp: $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS) tools/embed_agents.sh | $(BUILD)
-	sh tools/embed_agents.sh $@ $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS)
+$(BUILD)/kama.agents.gen.cpp: $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_PACKAGE) $(AGENTS_STUBS) tools/embed_agents.sh | $(BUILD)
+	sh tools/embed_agents.sh $@ $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_PACKAGE) $(AGENTS_STUBS)
 
 # The project templates `kama seed` writes, embedded for the same reason as the prelude and the agent
 # files: a `--no-std` install ships only bin/kama. Positional, not a wildcard — the four are four roles

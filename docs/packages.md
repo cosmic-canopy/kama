@@ -21,7 +21,8 @@ It asks for a name, a version, and a **kind** — `executable`, `library`, or `m
 manifest, a starter source file, a `.gitignore`, and a README stub. Prompting happens only when it has a
 terminal to prompt on; a pipe, a script or a CI runner behaves as `--yes`, so `kama seed` never hangs a
 build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), `--agents` adds
-the [AI-agent guidance](agents.md), and `--license mit` writes a `LICENSE` and records `"license": "MIT"`
+the [AI-agent guidance](agents.md) — and for `--kind library` the package half of it, `AGENTS.package.md`
+(publishing, vendoring, `tests/` as one program) — and `--license mit` writes a `LICENSE` and records `"license": "MIT"`
 in the manifest — the bundle a package publishes with. A license is a flag and never a prompt, because it
 is a decision the author brings, and `mit` is the one body `seed` can write: any other value is refused by
 name. It refuses to touch a directory that already has a `kama.json`, and if any other file it would

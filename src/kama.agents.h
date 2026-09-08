@@ -20,6 +20,13 @@ extern const char* KAMA_AGENTS_MD;
 // relevant, where AGENTS.md is paid for on every turn: different budgets, so different content.
 extern const char* KAMA_AGENTS_SKILL;
 
+// agents/PACKAGE.md — the package half, written as AGENTS.package.md beside AGENTS.md when the project's
+// manifest says `kind: library`. Its own file rather than a section of AGENTS.md because AGENTS.md is
+// paid for on every turn of every project and has a line budget, while this is read only by a library
+// that will be published — and because `install --force` rewrites AGENTS.md whole, so an addendum inside
+// it would not survive a re-install.
+extern const char* KAMA_AGENTS_PACKAGE;
+
 // A per-tool pointer file, for the tools that read neither AGENTS.md nor a skill.
 //   name — the key `kama agents --tool <name>` takes (the stub file's basename)
 //   dest — where `install` writes it, relative to the project root. Declared by the stub file's own

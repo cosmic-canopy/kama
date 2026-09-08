@@ -166,6 +166,8 @@ In descending order of authority. Prefer running the compiler over reading any o
 - `kama query` and `kama build` — what the compiler resolved. Always current, by construction.
 - The language reference and full spec: <https://kama-lang.org>
 - `kama.json` — this project's manifest: dependencies, build flags, targets, toolchain pin.
+- `AGENTS.package.md`, when present — the package half for a library that will be published: the
+  manifest floor, `tests/` as one program, vendoring a C library, the C seam, publishing.
 - `<https://kama-lang.org/llms.txt>` — the machine-readable index of all of the above.
 
 If a doc and the compiler disagree, the compiler is right and the doc is a bug worth reporting.

@@ -86,6 +86,15 @@ fi
 diff -q "$tmp/skill.md" "$ROOT/agents/skill/SKILL.md" >/dev/null 2>&1 \
     && ok "the embedded SKILL.md is byte-identical to agents/skill/SKILL.md" \
     || bad "the binary's SKILL.md differs from agents/skill/SKILL.md"
+"$KAMA" agents print --package > "$tmp/package.md" 2>/dev/null || true
+diff -q "$tmp/package.md" "$ROOT/agents/PACKAGE.md" >/dev/null 2>&1 \
+    && ok "the embedded PACKAGE.md is byte-identical to agents/PACKAGE.md" \
+    || bad "the binary's PACKAGE.md differs from agents/PACKAGE.md"
+# The package half is read only by a library that will be published, so it is not on the always-on
+# budget — but it is still one page, and a page that grows into a second manual stops being read.
+plines=$(grep -c '' "$ROOT/agents/PACKAGE.md")
+[ "$plines" -le 120 ] && ok "agents/PACKAGE.md is $plines lines (<= 120)" \
+                      || bad "agents/PACKAGE.md is $plines lines — the package half is one page, not a manual"
 
 # THE DRY INVARIANT. A per-tool file must POINT at AGENTS.md, never restate it. Five lines is a
 # generous ceiling for "@AGENTS.md" or one sentence; anything longer is guidance text getting copied.
@@ -134,6 +143,20 @@ for stub in "$ROOT"/agents/stubs/*.md; do
 done
 [ -f "$proj/.claude/skills/kama/SKILL.md" ] && ok "install --skill writes the skill" \
                                             || bad "install --skill wrote no skill"
+# The package half is keyed on the MANIFEST's kind, not a flag — the fixture above is a library, so it
+# gets AGENTS.package.md without being asked; an executable never does. Keyed on the manifest because
+# `install --force` rewrites every file it owns, and a flag a re-install forgets would silently drop it.
+[ -f "$proj/AGENTS.package.md" ] && ok "a library install writes AGENTS.package.md" \
+                                 || bad "a library install did not write AGENTS.package.md"
+diff -q "$proj/AGENTS.package.md" "$ROOT/agents/PACKAGE.md" >/dev/null 2>&1 \
+    && ok "the written AGENTS.package.md is the embedded one" \
+    || bad "the written AGENTS.package.md differs from agents/PACKAGE.md"
+exe="$tmp/exe"; mkdir -p "$exe"
+printf '{ "name": "exeproj", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama" }\n' > "$exe/kama.json"
+"$KAMA" agents install "$exe/kama.json" >/dev/null 2>&1 || bad "\`agents install\` on an executable failed"
+[ -f "$exe/AGENTS.md" ] && ok "an executable install writes AGENTS.md" || bad "an executable install wrote no AGENTS.md"
+[ -e "$exe/AGENTS.package.md" ] && bad "an executable install wrote AGENTS.package.md; only a library gets it" \
+                                || ok "an executable install writes no AGENTS.package.md"
 
 # Writing into somebody's repository must not clobber.
 if "$KAMA" agents install "$proj/kama.json" >/dev/null 2>&1; then
@@ -142,6 +165,8 @@ else
     ok "install refuses to overwrite without --force"
 fi
 "$KAMA" agents install "$proj/kama.json" --force >/dev/null 2>&1 && ok "--force overwrites" || bad "--force failed"
+[ -f "$proj/AGENTS.package.md" ] && ok "a --force re-install on a library keeps AGENTS.package.md" \
+                                 || bad "a --force re-install dropped AGENTS.package.md"
 
 # A bad argument must write NOTHING — a typo used to leave a half-installed tree behind an exit 2.
 fresh="$tmp/fresh"; mkproj "$fresh" freshproj
