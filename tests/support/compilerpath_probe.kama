@@ -1,0 +1,175 @@
+// Compiler-path probe, driven by tools/check-compiler-path.sh (NOT the standard harness — that runs
+// fixtures with no args, and this one needs a compiler to drive). The subject is `kama.exe` ITSELF, not
+// std::fs: the two sibling probes (longpath_probe, unicodepath_probe) prove a kama PROGRAM copes with a
+// deep or non-ASCII path; this one proves the COMPILER copes with a PROJECT living at one.
+//
+// Contract with the script: three user args — the compiler (an absolute path), a SHORT ASCII working
+// directory, and the executable suffix to ask for (`.exe`, or omitted). Prints `len=<n>` for the deepest
+// project directory it lays down, so the script can refuse to pass vacuously. Returns 0 iff every case
+// passes; a distinct nonzero code pinpoints the first failure (decoded by the script).
+//
+// ⚠️ This is a kama-spawns-kama fixture, and that shape is the point, not a convenience. msys2 bash
+// converts a native child's arguments through the ANSI code page, so a `日本語` in the SCRIPT's argv
+// reaches kama.exe as `???` — the guard would then be testing the shell, not the compiler. The names live
+// here as `\u{...}` escapes, are composed on this side of argv, and reach the compiler through
+// std::process, which is UTF-16 at the edge on Windows (CreateProcessW). The depth is built here for the
+// same reason longpath_probe builds its own: only the short ASCII base ever crosses the shell boundary.
+//
+// ⚠️ Never `cwd()` into the deep directory: CreateProcessW refuses a >MAX_PATH working directory
+// regardless of prefix (docs/platforms/windows.md). Every path the compiler sees is absolute.
+//
+// Each case lays down a two-module PROJECT (kama.json + src/main.kama importing src/util.kama) rather
+// than a lone file, so the compiler's manifest reader, its module discovery (the directory listing that
+// silently lists the WRONG directory on a `\\?\` path — windows.md), and a two-TU `-j 2` build (the
+// Windows pool) are all on the path. Then the built program is RUN and must return 42: a compiler that
+// listed the wrong directory and compiled the wrong modules cannot pass that, even if it "built".
+//
+// Measured on Windows before the compiler-side fix landed (0.9.218): exit 14 on the first case — the
+// compiler's own argv is ANSI-decoded, so what it printed was
+//     kama: C:/msys64/tmp/tmp.xxx/w\???-??????\kama.json does not exist
+// (the manifest operand is checked before the output directory, so this is the FIRST ceiling here; the
+// roadmap's `cannot create output directory` was measured with a lone .kama file as the operand).
+import { std::fs::exists, std::fs::createDirAll, std::fs::writeFile,
+         std::io::IoError, std::collections::DynamicArray, std::path::join,
+         std::process::Command, std::process::Process, std::process::ExitStatus };
+
+// 日本語 — CJK, 3 bytes per character. No precomposed Latin (HFS+ NFD normalization — see unicodepath_probe).
+fn string cjk()      { return "\u{65E5}\u{672C}\u{8A9E}"; }
+// Привет — Cyrillic, 2 bytes per character.
+fn string cyrillic() { return "\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}"; }
+// Exactly 40 characters, same recipe as longpath_probe: seven of them plus a mktemp base clears 260.
+fn string comp(int32 i) { return "d${i}" + "_23456789_123456789_123456789_12345678"; }
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    isize i = 0;
+    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
+    return give d;
+}
+
+fn bool put(const ref string path, const ref string text) {
+    DynamicArray<uint8> b = bytesOf(s: text);
+    isize want = text.length();
+    return match (writeFile(path: path, bytes: b)) {
+        case Ok(value: w): (w == want);
+        case Err(error: e): false;
+    };
+}
+
+// The project. `answer` lives in a second module so the build has two translation units of its own.
+fn int32 layProject(const ref string dir) {
+    string src = join(path: dir, with: "src");
+    match (createDirAll(path: src)) { case Err(error: e): { return 1; } case Ok(value: u): { } };
+    string manifest = "{\n  \"name\": \"cpprobe\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"executable\",\n"
+                    + "  \"entry\": \"src/main.kama\",\n  \"modules\": { \".\": { \"visibility\": \"internal\" } }\n}\n";
+    if (!put(path: join(path: dir, with: "kama.json"), text: manifest)) { return 2; }
+    string util = "export { answer };\nfn int32 answer() { return 42; }\n";
+    if (!put(path: join(path: src, with: "util.kama"), text: util)) { return 2; }
+    string mainSrc = "import { cpprobe::answer };\nfn int32 main() { return answer(); }\n";
+    if (!put(path: join(path: src, with: "main.kama"), text: mainSrc)) { return 2; }
+    return 0;
+}
+
+// Spawn with INHERITED streams: whatever the compiler says lands in the guard's run.log, which is the
+// diagnostic a failure needs. -1 = could not spawn; otherwise the child's exit code.
+fn int32 runWait(ref Command c) {
+    Result<Process, IoError> sp = c.start();
+    return match (give sp) {
+        case Ok(value: p): {
+            int32 code = match (p.wait()) {
+                case Ok(value: st): st.code;
+                case Err(error: e): -1;
+            };
+            := code;
+        }
+        case Err(error: e): -1;
+    };
+}
+
+// `kama build <dir>/kama.json -o <exe> -j 2`. 0, or a step code: 3 = could not spawn the compiler,
+// 4 = it exited nonzero, 5 = it said nothing was wrong but the output is not there.
+fn int32 buildAt(const ref string kama, const ref string dir, const ref string exe) {
+    Command build = Command.make(program: copy kama);
+    build.arg(a: "build");
+    build.arg(a: join(path: dir, with: "kama.json"));
+    build.arg(a: "-o"); build.arg(a: copy exe);
+    build.arg(a: "-j"); build.arg(a: "2");
+    int32 brc = runWait(c: build);
+    if (brc < 0)  { return 3; }
+    if (brc != 0) { return 4; }
+    if (!exists(path: exe)) { return 5; }
+    return 0;
+}
+
+// One case: lay the project at `dir`, build it INTO `dir` (the output directory the compiler has to
+// create there is the first ceiling both axes hit), then prove the right modules were compiled by
+// running the program and reading its exit code. 0 or `caseId` + a step code.
+//
+// `runFrom` non-empty means the run happens from a SECOND build of the same project into that short
+// directory: CreateProcessW cannot start an executable whose path is past MAX_PATH, prefixed or not
+// (docs/platforms/windows.md — a Win32 limit, not kama's), so a deep case cannot be run in place on
+// Windows, and the probe has no platform branch. The second build reads the same manifest and lists the
+// same deep tree, so it proves exactly what running the first one would have.
+fn int32 runCase(const ref string kama, const ref string dir, const ref string outName, int32 caseId,
+                 const ref string runFrom) {
+    int32 laid = layProject(dir: dir);
+    if (laid != 0) { return caseId + laid; }
+
+    string exe = join(path: join(path: dir, with: "out"), with: outName);
+    int32 built = buildAt(kama: kama, dir: dir, exe: exe);
+    if (built != 0) { return caseId + built; }
+
+    string toRun = copy exe;
+    if (!runFrom.isEmpty()) {
+        match (createDirAll(path: runFrom)) { case Err(error: e): { return caseId + 1; } case Ok(value: u): { } };
+        toRun = join(path: runFrom, with: outName);
+        int32 again = buildAt(kama: kama, dir: dir, exe: toRun);
+        if (again != 0) { return caseId + again; }
+    }
+    Command app = Command.make(program: copy toRun);
+    int32 arc = runWait(c: app);
+    if (arc < 0)   { return caseId + 6; }
+    if (arc != 42) { return caseId + 7; }
+    return 0;
+}
+
+fn int32 main() {
+    string kama   = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
+    string work   = match (args().get(at: 1)) { case Some(value: v): copy v; case None: ""; };
+    string suffix = match (args().get(at: 2)) { case Some(value: v): copy v; case None: ""; };
+    if (kama.isEmpty() || work.isEmpty()) { return 1; }
+    string outName = "app" + suffix;
+
+    // ---- the three project directories -----------------------------------------------------
+    // (i) non-ASCII: a directory mixing 3-byte CJK and 2-byte Cyrillic.
+    string uni = join(path: work, with: cjk() + "-" + cyrillic());
+    // (ii) deep: seven 40-character components under the base.
+    string deep = join(path: work, with: "lp");
+    int32 i = 0;
+    while (i < 7) { deep = join(path: deep, with: comp(i: i)); i = i + 1; }
+    // (iii) both: the non-ASCII name at the bottom of the deep tree.
+    string both = join(path: deep, with: cjk());
+
+    // The vacuity line: the deepest project directory. The script refuses to pass if this is <= 260.
+    isize dlen = both.length();
+    print(s: "len=${dlen}\n");
+
+    // (i) runs in place — a program in a non-ASCII directory is an everyday thing to start.
+    int32 r1 = runCase(kama: kama, dir: uni,  outName: outName, caseId: 10, runFrom: "");
+    if (r1 != 0) { return r1; }
+    // (i-b) the same project with a non-ASCII OUTPUT NAME — what `kama build 日本語.kama` asks for by
+    // default, and a different ceiling from the directory: a file that does not exist yet has no 8.3
+    // alias for the linker to borrow.
+    int32 r1b = runCase(kama: kama, dir: uni,  outName: cjk() + suffix, caseId: 50, runFrom: "");
+    if (r1b != 0) { return r1b; }
+    int32 r2 = runCase(kama: kama, dir: deep, outName: outName, caseId: 20, runFrom: join(path: work, with: "run2"));
+    if (r2 != 0) { return r2; }
+    int32 r3 = runCase(kama: kama, dir: both, outName: outName, caseId: 30, runFrom: join(path: work, with: "run3"));
+    if (r3 != 0) { return r3; }
+
+    // No teardown here, on purpose: the script's `rm -rf` trap owns it. A first draft removed the trees
+    // itself and failed under load — Windows keeps a just-exited executable's image open a moment past
+    // exit (docs/platforms/windows.md), and the program this probe has just RUN is in the tree it would
+    // be removing. Removal is not what this guard tests; the sibling probes cover it.
+    return 0;
+}
