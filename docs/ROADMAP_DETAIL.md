@@ -1362,26 +1362,69 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   ✅ The enum half of this bullet SHIPPED with the derives: a bare `encode`/`decode` of an enum value works
   (consumer KB-18 — it was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
   generic enums, per instantiation. See *Derive follow-ons* in §2.
-- **Binary backend follow-on.** `@bits(n)` bit-packing (tighter integers/bools) and a schema-locked
-  *positional* mode (needs an emitter change; trades forward-compat for max compactness) stay **deferred**.
+- **Binary backend follow-on.** `@bits(n)` bit-packing (tighter integers/bools) stays **deferred**.
   Delta/snapshot replication stays ENGINE-level (above serde); generic byte compression is an io-adapter
-  layer (§1 transform adapters), not a serde concern.
-  **Field-name interning is no longer one of the deferred three — it is SCHEDULED**, the *KBIN field-name
-  interning* row, and a consumer measurement is what moved it. KBIN writes every field NAME in full, in
-  every object. That is the design and not a bug — the names are what let `skipValue` work without a schema,
-  so an old client talking to a new server degrades instead of erroring, and CBOR and MessagePack make the
-  same trade. What was missing was any way to stop paying for it when both ends DO have the schema.
-  Measured at `0.9.239` on a six-field frame — five fixed-width fields plus an `int32`: **24 bytes of data,
-  91 on the wire** (the consumer measured 97 on their own field names, 68 with one-character `@field(name:)`
-  renames). Roughly 4x, on the message a 60 Hz game sends most; an opaque `DynamicArray<uint8>` costs 2xN for
-  the same reason.
-  ⚠️ **The fix needs no compiler change and no schema, which is why it is worth doing before the two above.**
-  `Serializer.fieldName(string)` and `Deserializer.fieldName() -> string` are ordinary tokens, so the BACKEND
-  can intern them: write each distinct name in full the first time behind a "new name" tag, and a small index
-  every time after; the reader builds the same table as it goes. Entirely inside `lib/std/serialization/`.
-  `skipValue` and forward compatibility both survive intact — which a field-NUMBER scheme would not, and
-  which is the reason to prefer this shape. On a repeated frame it turns ~10 bytes per field into ~1.
-  (Consumer KG-34, filed 2026-09-08 with the numbers above.)
+  layer (§1 transform adapters), not a serde concern. The schema-locked positional mode is no longer
+  deferred: it is the *Positional binary backend* row, built on the design below.
+
+- **Field addressing — the design, decided 2026-09-08 (three NOW rows: the contract change, then the
+  positional and numbered backends).** Where it came from: consumer KG-34 measured a six-field frame at
+  **24 bytes of data, 91 on the wire** under KBIN, because every object carries every field NAME. A
+  per-stream name-interning scheme (each name in full once behind a `name-def`, a 2-byte index after — the
+  shape `encoding/gob` and Java serialization use) was BUILT and measured at 226 bytes where 338 was, then
+  **reverted before commit** on design grounds: kama's serialization sits behind contracts precisely so that
+  there can be several serializers, and a size knob on the self-describing one hard-codes one consumer's
+  problem into the stdlib while making KBIN stateful (objects no longer self-contained, a table scan per
+  field write) and still stopping short of what an agreed-shape format gives. KBIN stays what it is: the
+  self-describing save/load format — stateless, order-independent, unknown fields skip.
+  **The axis every serde-style framework lands on is how a field is ADDRESSED on the wire**, and it has three
+  points: *named* (JSON, CBOR/MessagePack maps, KBIN; no schema at read time, skips unknowns, pays the name),
+  *numbered* (protobuf, int-keyed CBOR; the numbers compiled in, skips unknowns because the tag carries a
+  wire type — ⚠️ an earlier note here claiming a number scheme "breaks `skipValue`" was WRONG), and
+  *positional* (bincode, postcard, Borsh, the Cap'n Proto/FlatBuffers layouts; the whole shape compiled in,
+  no skipping, value bytes only). Rust serde's derived visitor implements BOTH `visit_map` (named) and
+  `visit_seq` (positional) and the FORMAT picks; that is the precedent for one derived body serving every
+  addressing.
+  **The design: the key carries both forms, and the backend keeps the one it is.**
+  - `@field`, `@field(name: …)`, `@field(id: …)`, `@field(name: …, id: …)` are all valid; `name` defaults to
+    the property name (as today), `id` to the DECLARATION INDEX. A duplicate name or id within a type is
+    refused. It is `id`, not `index`, because an author may override it with a stable, sparse protobuf-style
+    number: a positional backend uses its ORDER, a numbered backend its VALUE, and **the derive emits fields
+    in ascending id order**, which is what makes ids and positions one thing. No third label: a backend that
+    keys by a hash hashes the name it is already handed.
+  - Writer: `Serializer.fieldName(string)` becomes `field(string name, uint32 id)`; `beginObject()` becomes
+    `beginObject(usize count)`, mirroring the existing `beginArray(count)`. JSON/KBIN write the name, a
+    numbered backend the id, a positional backend nothing.
+  - Reader: `Deserializer.fieldName() -> string` becomes `field() -> FieldKey`, a prelude enum
+    `Name(string name) | Id(uint32 id)`. JSON/KBIN answer `Name(readStr())`, a numbered reader
+    `Id(readU32())`, a positional reader `Id(counter++)` and `moreFields()` = counter < count. The derived
+    `deserialize` has ONE loop: `match (r.field()) { case Name: compare names … else skipValue; case Id: switch
+    ids … else skipValue }`. A positional reader cannot skip, so a shape mismatch is `Err` — the agreed-shape
+    contract stated honestly. Enum variants get the same pair: name or variant index.
+  - The writer/reader asymmetry is deliberate: a writer is TOLD everything, a reader REPORTS what it found;
+    the enum exists because a reader can only report one of the two and the derive must be told which.
+  - **Who picks the backend: the caller**, exactly as today — the writer or reader handed in, spelled by the
+    entry points (`json::encode`, `binary::encode`, `positional::encode`). Nothing on the type, nothing in
+    the attribute, no capability query on the contract. A type opts in ONCE and works with every backend —
+    SPEC's existing promise, kept.
+  - ⚠️ **Why not a generic `Serializer<K>` / `Serializable<K>` — MEASURED.** A type conforming to
+    `Emit<string>` and `Emit<int32>` at once needs two `emit` bodies differing only in a parameter type, and
+    kama refuses that as overloading ("a member name may be declared only once in its type"). So a generic
+    contract would force a type to pick ONE addressing, breaking the promise above. A `fieldAddressing()`
+    capability query was the earlier proposal and is unnecessary once the key carries both forms.
+  - **`@deprecated` on a `@field` — decided:** read when present, never written; its name and id stay
+    RESERVED, so no later field may take either. In a positional stream it is simply no longer part of the
+    shape (positional has no evolution story, by design). Reserving a name/id AFTER the field is deleted
+    (protobuf's `reserved`) is a later row if anyone asks. `@skip` is unchanged: absent from every backend.
+  **Language inventory:** three member signatures on the two prelude contracts, one prelude enum, one
+  attribute key, `@deprecated`'s meaning. No grammar, no keywords, no new semantics; the derive changes
+  internally. **The source break, measured:** the two backends, `Map`/`SortedMap`'s hand-written entry
+  objects (`map.kama:402-425`, `sorted_map.kama:454-594`), `tests/decode_user_override`,
+  `tests/ser_bin_graph_dangling`, `tests/xfail/deserialize_turbofish_bad_method`; nothing outside the tree
+  implements a backend (the consumer's fixed-layout writer is a hand-written `serialize`). Before the tag.
+  **Order:** the contract row first (M); then the positional backend (S, library — usable even before the
+  contract change with a hand-written `deserialize`, which SPEC already allows); then the numbered backend
+  (S, library, needs nothing further from the contract). KG-34 is answered by the positional row.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `encode`/`decode`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
