@@ -466,7 +466,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
-  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.225: combining a
+  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.226: combining a
   base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Formattable)`
   on a **generic**/**variant**/**enum** type; a `${x:?}`-routed `@generate(Debug)` (spec hook already exists);
   per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
@@ -589,7 +589,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   one fixture, `kama build`. If it fails, the fix is the two quotes plus a guard shaped like
   `check-clean-tree.sh` (a private temp root, five build shapes); if it passes, write down why here and
   delete the row. Sized `?` until the probe has run.
-- **Windows path residuals after `0.9.222`.** The compiler-side seam shipped
+- **Windows path residuals after `0.9.223`.** The compiler-side seam shipped
   ([platforms/windows.md](platforms/windows.md) § *Where the remaining work is* has the record and the
   measurements). What it left, with a verdict each, so nothing here is "out of scope" by silence:
   * **`CreateProcessW`'s cwd and executable stay ≤ 260 characters** — `ERROR_DIRECTORY_INVALID` prefixed
@@ -611,7 +611,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.
   * **A volume with 8dot3 names disabled.** The linker fix rests on an 8.3 alias because GNU `ld`/`ar` are
     narrow (windows.md has the measurements); a non-ASCII or 248+ path on a volume that keeps no aliases
-    fails at the link exactly as it did before `0.9.222` — honestly, with ld's own message. The system
+    fails at the link exactly as it did before `0.9.223` — honestly, with ld's own message. The system
     volume has them on by default, and that is where a user profile is. Verdict **genuinely optional**
     until someone reports it: the two answers are `-fuse-ld=lld` when `ld.lld` is on PATH (lld is LLVM
     and reads UTF-16 argv; the CI clang package does not install it) or staging the link in an ASCII
@@ -641,22 +641,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   is the library's contract), and the sugar stays deferred by the maintainer's ruling — SPEC § *Ordering
   comes from a contract* carries the idiom.
   (The row that sat in NOW as "No capturing closures" is gone: this is its verdict.)
-- **C ABI element spellings for externs (`cchar`, `clong`/`culong`) — scheduled, M.** Not a const question:
-  `UnsafeConstPtr<T>` is done. It is an ELEMENT question — kama's `char` is a 32-bit codepoint, C's `char` is a
-  byte that is a third type beside `signed char` (`int8`) and `unsigned char` (`uint8`), and clang's
-  `-Wpointer-sign` fires on either. Every FFI-capable language names it (Rust `c_char`, Zig `c_char`, Swift
-  `CChar`, Go `C.char`, Nim `cchar`). Measured 2026-09-07: `UnsafeConstPtr<char> p = s.cstr();` dies under
-  `-Werror=incompatible-pointer-types`; `examples/httpd`'s `puts` casts to `int8` and warns. Design: `cchar` is
-  opaque — legal only inside a raw pointer, `p[i]` and `cchar x` refused ("cast to `UnsafePtr<uint8>` to read
-  bytes") — so `primKeyOfCType`, `scalarByteSize` and the Formattable switches never see it; `clong`/`culong`
-  are VALUE types of target-varying width, excluded from folding and range checks by explicit case like
-  `isize` (kama.y's fixed-width rule). Touches: `kama.l` reserved table, `kama.y` primitive_type (×2),
-  `IDENTIFIER_*_VAL` (appended AFTER `USIZE`, outside the `INT8..CHAR`/`..UINT64` spans), `cType`/`primKey`/
-  `mangleElem`, `prelude/builtin.kama` (`check-builtin-doc.sh` derives from the list), tree-sitter + VS Code
-  grammars, SPEC. The two alternatives are non-goals: `char` inside a raw pointer meaning C `char` breaks
-  `DynamicArray<char>.dataPtr()` (a 1-byte stride declared over a 4-byte buffer), and `-Wno-pointer-sign` +
-  "spell everything `uint8`" would silence a real `int8`/`uint8` mismatch everywhere to save one keyword.
-- **`int128` — non-goal; the wide product shipped (0.9.230).** `__int128` exists in clang and gcc on 64-bit
+- **`int128` — non-goal; the wide product shipped (0.9.231).** `__int128` exists in clang and gcc on 64-bit
   targets only (not MSVC, not gcc on thumbv6m), so a kama `int128` would be a numeric type that exists on some
   targets, which the fixed-width position forbids. What reached for it — a `Fixed<int64>` backing's
   intermediate product, Lemire's unbiased range — needs the PRODUCT: `std::num::mulWideU64`/`mulHighU64`/
@@ -1072,7 +1057,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     is kept here so it is not re-derived. (The seam it was mistaken for — a local `UnsafePtr<T>` element
     is deliberately untyped to ownership so `nd[i] = od[i]` stays a bitwise relocate; widening `exprClass`
     fixes their KB-14 and breaks 45 fixtures — became DIAGNOSTICS in `0.9.174`, and then the audit found the
-    narrower fix: a CALL is not a store, so `0.9.226` types the RECEIVER alone through `ptrLocalElemType`
+    narrower fix: a CALL is not a store, so `0.9.227` types the RECEIVER alone through `ptrLocalElemType`
     and `p[0].m()` resolves on a local as it always did on a field, `exprClass` untouched; `drop` through a
     raw element stays refused, the SPEC has *The raw seam*.)
     - **kama's `static` is a fenced MCU tool, not a general global.** Per-isolate (`KAMA_ISOLATE_LOCAL`),
@@ -1954,11 +1939,3 @@ rather than here, so there is one number to keep current. Forward work:
   (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on the no-GC/AOT
   (or VM-scripted) runtime — the flagship *application* of the language + package manager + scripting tiers
   together. See [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md). Aspirational, post-ecosystem.
-
-- **Seeding the package half of the agent guidance.** `agents/AGENTS.md` carries the language rules every
-  project needs; a `--kind library` project that will be PUBLISHED needs a second page — publishing to a
-  registry, `csources`/`cincludes`, vendoring a C library with a pinned script, `tests/` as one program the
-  runner builds debug and release, `--license`. `kama seed --kind library --agents` knows the kind and
-  could append it; `kama agents install` does not, and rewrites AGENTS.md, so the addendum wants its own
-  file (`AGENTS.package.md`, pointed at from AGENTS.md) or a marker `agents install` preserves. The content
-  exists: `../kama-sodium/AGENTS.md` § "This package" and its README are the first draft.
