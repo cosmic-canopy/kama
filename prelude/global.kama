@@ -657,7 +657,7 @@ extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
 extern fn void kama_str_push(UnsafePtr<string> buf, const ref string src);
 extern fn string kama_str_take(UnsafePtr<string> buf);
-type contract Formattable for value, resource, intrinsic { const fn void format(ref Formatter f); }
+type contract Formattable for value, resource, enum, intrinsic { const fn void format(ref Formatter f); }
 // The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes
 // its decimal/UTF-8 text via a runtime formatter, whose bytes are appended to the single backing buffer, so a
 // whole nested value materializes in ONE growing allocation rather than one per `+`.

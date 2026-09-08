@@ -24163,7 +24163,11 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
 void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
 {
     std::string resC = cType(ci.methods["serialize"].returnType);   // Result<Unit, Owned<Error>>
-    *_out << resC << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    // The linkage every class-side synth emitter carries, and these two lacked: a body emitted into the
+    // HEADER (a prelude enum, a generic enum instance) must match the `static inline` prototype
+    // emitClassPrototypes already wrote for it, or each TU gets its own external copy of the same symbol.
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
+          << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
     indent(1); *_out << "switch (self->tag) {\n";
     for (auto& v : ci.variants) {
@@ -24200,7 +24204,8 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     std::string resC = cType(ci.methods["deserialize"].returnType);   // Result<This, Owned<Error>>
     std::string dflt;
     for (auto& v : ci.variants) if (v.payload.empty()) { dflt = v.name; break; }
-    *_out << resC << " " << ci.name << "__deserialize(Deserializer r)\n{\n";
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
+          << "__deserialize(Deserializer r)\n{\n";   // linkage: see emitEnumSerializeDefinition
     indent(1); *_out << ci.name << " __result = (" << ci.name << "){0};\n";
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";

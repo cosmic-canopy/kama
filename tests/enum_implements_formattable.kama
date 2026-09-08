@@ -1,0 +1,44 @@
+// `Formattable` is declared `for value, resource, enum, intrinsic`. The `enum` was missing, so an enum
+// could implement `Hashable` and `Equatable` (both of which name it) but not the one contract that makes
+// a value printable — `${shape}` on an enum had no legal spelling at all, hand-written or derived.
+//
+// Nothing about an enum made this hard: a promoted enum is a variant ClassInfo like any other, and the
+// contract-kind gate was simply not told it qualified. The derive (`@generate(Formattable)` on an enum)
+// rides on the same one-word fix; this fixture pins the hand-written half, which is what the gate governs.
+type enum Shape implements Formattable {
+    Circle(int32 r),
+    Nil;
+
+    const fn void format(ref Formatter f) {
+        match (this) {
+            case Circle(r: r): { f.writeStr(s: "circle:"); f.writeI64(v: cast<int64>(r)); }
+            case Nil:          { f.writeStr(s: "nil"); }
+        };
+    }
+}
+
+// A payload-less enum reaches the same gate through promotion.
+type enum Color implements Formattable {
+    Red,
+    Green;
+
+    const fn void format(ref Formatter f) {
+        match (this) {
+            case Red:   { f.writeStr(s: "red"); }
+            case Green: { f.writeStr(s: "green"); }
+        };
+    }
+}
+
+fn int32 main() {
+    Shape s = Shape::Circle(r: 7);
+    if (!"${s}".equals(other: "circle:7")) { return 1; }
+
+    Shape n = Shape::Nil;
+    if (!"${n}".equals(other: "nil")) { return 2; }
+
+    Color c = Color::Green;
+    if (!"a ${c} b".equals(other: "a green b")) { return 3; }
+
+    return 44;
+}
