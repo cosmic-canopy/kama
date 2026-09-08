@@ -257,15 +257,38 @@ Worth knowing before debugging, because each of these produced a confident wrong
   dirent returns a valid `DIR*` and then enumerates the **current working directory**; measured twice on
   a 357-character tree, which listed this repo's scratch files instead of the one file actually there.
   Unprefixed at that length it fails honestly, so adding the prefix turns a reportable error into a wrong
-  answer. `FindFirstFileA`/`FindNextFileA` on the same tree is correct (3 entries). Nothing shipped hits
-  this yet — `std::fs` uses the `W` pair — but `src/kama.driver.cpp` lists directories with `opendir` for
-  module discovery, which is why it is written down here and not only in the roadmap.
+  answer. `FindFirstFileA`/`FindNextFileA` on the same tree is correct (3 entries). Nothing under
+  `include/` or `src/` uses dirent on Windows any more — `std::fs` uses the `W` pair, and the compiler's
+  `listDir` goes through `src/kama.winpath.cpp` — and this entry is why a future one must not either.
 - **A UTF-8 `activeCodePage` manifest makes the NARROW API UTF-8, process-wide.** Windows 10 1903+.
   Measured: the same program given a `日本語` argument sees `63 63 63` (`???`) without it and the exact
   nine UTF-8 bytes with it — and `argv`, `fopen`, `_mkdir`, `stat`, `system()` and the `A` family all
   follow, with no call-site changes. It does **not** lift `MAX_PATH`: that is the `\\?\` prefix's job,
   and the prefix works with the narrow CRT too (`_mkdir` to 356, `fopen` to 365, with
-  `LongPathsEnabled = 0`). Relevant to the compiler, not to `std::fs`, which is already wide.
+  `LongPathsEnabled = 0`). `kama.exe` carries one (`src/kama.manifest`); `std::fs` is wide and needs none.
+- ⚠️ **cmd.exe parses a batch FILE in the CONSOLE code page, not the process code page.** Measured: a
+  UTF-8 `.bat` holding `type "…\日本語\x.txt"` prints the file under `chcp 65001` and says "The system
+  cannot find the path specified" under `chcp 437` — which is what a console-less process (kama under
+  msys2 bash, the LSP under an editor) gets by default. The identical text on cmd's COMMAND LINE works
+  under both, because a command line arrives as UTF-16. So a manifest cannot rescue a generated `.bat`,
+  and the `-j` pool hands its lines to `CreateProcessW` instead of writing them to disk.
+- ⚠️ **GNU `ld` and `ar` are narrow programs: a non-ASCII path in their argv is `???` and "Invalid
+  argument", input or output.** Measured on the UCRT64 toolchain (binutils 2.47) against a `日本語`
+  directory: `clang -c` into it, out of it and with `-I` on it all work — clang is LLVM and reads its
+  UTF-16 command line — while `ld` cannot find an object in it, cannot open an output in it, and `ar`
+  fails both ways. The same tree through its **8.3 alias** (`6A7A~1`) links fine, which is what the
+  compiler now hands them (`toolPath`). 8dot3 name creation is on by default on the system volume
+  (`fsutil 8dot3name query C:`), where a user profile — the common non-ASCII directory — lives; a data
+  volume may have it off, and there the linker fails as it always did.
+- ⚠️ **cmd.exe's redirections stop at MAX_PATH.** `>"<300-char path>"` on a `cmd /c` line says "The system
+  cannot find the path specified" even though the directory exists and the CRT with a `\\?\` prefix can
+  write there. The 8.3 alias answers this one too: every component shrinks to eight characters.
+- ⚠️ **A non-ASCII `%TEMP%` breaks clang's own one-step link, with no non-ASCII path on the command
+  line.** `clang hello.c -o hello.exe` — every path ASCII — compiles to a temporary object under `%TEMP%`
+  and hands THAT to `ld`, which cannot read it (`ld: cannot find …\???\hello-dbca23.o`). `-save-temps=obj`
+  works, `-fuse-ld=lld` would, and a user whose Windows account name is non-ASCII has exactly this `%TEMP%`.
+  It is the toolchain's, not kama's: kama's own intermediates go beside the output, which is why its
+  per-TU `-j` path is unaffected; the single-invocation path (one TU, or `-j 1` with several) is not.
 
 ## Where the remaining work is
 
@@ -273,6 +296,10 @@ Worth knowing before debugging, because each of these produced a confident wrong
 410 s of guards; measured 2026-09-06 at 0.9.209), and the `windows-test` CI leg is no longer
 `continue-on-error`. Windows is a supported platform, not a
 best-effort one, and a program kama builds here is distributable as it stands.
+
+⚠️ **Building `kama.exe` needs `windres`** (binutils) since `0.9.219`, for the manifest. The msys2 clang
+package depends on it transitively (clang → gcc → binutils), so the install line at the top of this page
+is still complete; a toolchain assembled some other way fails the build loudly at the `.res.o` step.
 
 **What shape a Windows *application* is, as opposed to a Windows console tool**, used to be two open
 entries here. One has shipped:
@@ -328,12 +355,47 @@ entries here. One has shipped:
   `tools/check-path-unicode.sh` hold both halves down; they were landed RED first (exit 2 and exit 12),
   which is the observation that they guard anything.
 
-  ⚠️ Two things this did NOT close, both recorded in [ROADMAP.md](../ROADMAP.md):
+  ⚠️ One thing this did NOT close, rowed in [ROADMAP.md](../ROADMAP.md) (*Windows path residuals*):
+  **`CreateProcessW`'s cwd and executable stay ≤ 260** — a Win32 limit, not a seam limit (below).
 
-  * **`CreateProcessW`'s cwd and executable stay ≤ 260** — a Win32 limit, not a seam limit (below).
-  * **The compiler itself is still narrow** — `src/kama.driver.cpp` reads sources through `fopen`, and
-    `absolutePath` uses `_fullpath` / `GetFinalPathNameByHandleA` with a `_MAX_PATH` buffer. A project
-    under a non-ASCII or very deep directory is a compiler-side problem, separate from a program's.
+- **The compiler itself is UTF-8 and long-path clean — SHIPPED `0.9.219`.** The other side of the same
+  boundary: `kama.exe`'s own argv, the manifests and sources it reads, the directories it lists for
+  module discovery, the output directory it creates, the C it writes and the compiler command lines it
+  runs. Held by `tools/check-compiler-path.sh`, a kama-spawns-kama guard (the shell cannot pass a
+  non-ASCII argument — below) that builds and RUNS a two-module project under `日本語-Привет`, under a
+  330-character directory, under both, and with a non-ASCII output name. Landed RED first: exit 14,
+  `kama: …\???-??????\kama.json does not exist`. Then it went RED four more times before it was green,
+  each at the next ceiling — the record below is in that order. **None of it is "go wide"**:
+  `<windows.h>` cannot enter the driver's TU (its token enum collides), and measured, it never needed to.
+
+  * **Encoding is the manifest** (`src/kama.manifest`, embedded by `windres` via `src/kama.rc` in the
+    Makefile's MINGW branch): the process ANSI code page is UTF-8, so the narrow CRT and every `A` call
+    see kama's bytes with zero call-site changes. Windows 10 1903+; older keeps the old behaviour.
+  * **Length is the `\\?\` prefix, applied at the OS edge only** — `osp()` in `kama.driver.cpp` wraps
+    the argument of every `fopen`/`ifstream`/`stat`/`_mkdir`/`remove`/`rename`, and nothing stored or
+    compared ever carries it. Same 248 threshold and `GetFullPathNameW` normalization as the runtime's
+    `kama__wpath`, in `src/kama.winpath.cpp`, the one TU under `src/` that includes `<windows.h>`.
+  * **Directory listing is `FindFirstFileW`**, because `opendir` on such a path lists the WRONG directory
+    (below). `listDir` replaced all seven `opendir` loops.
+  * **The `-j` pool no longer writes `.bat` files.** cmd.exe parses a batch FILE in the console code page
+    (below), so the manifest could not have saved it; the line goes to `CreateProcessW` verbatim.
+  * **The linker and the archiver get 8.3 aliases.** GNU `ld` and `ar` ANSI-decode their argv and cannot
+    open a non-ASCII path in either direction, and cmd.exe's `>out 2>err` redirections stop at MAX_PATH
+    (both below); clang's own compile step has neither limit. `toolPath()` spells every object, the `-o`
+    and the two redirections by the 8.3 alias of the longest existing prefix when the path is non-ASCII
+    or 248+ characters, and byte-for-byte otherwise. A non-ASCII OUTPUT NAME has no alias yet (the file
+    does not exist), so it is linked under an ASCII stand-in in the same directory and renamed into place.
+  * **Two spellings of the verbatim prefix are stripped** — `\\?\`, which `GetFinalPathNameByHandle`
+    always answers in (`absolutePath`), and `//?/`, which is what **msys2 hands a native child for a long
+    POSIX argument** and what `cygpath -m` prints for one (measured: `kama build /tmp/<319 chars>/kama.json`
+    arrived as `//?/C:/msys64/tmp/…`; `cliPath()` strips it at the operand). The kernel recognizes neither
+    with forward slashes inside, and a lexical join collapses the second to `/?/`, which names nothing.
+
+  What is deliberately NOT covered, rowed in [ROADMAP.md](../ROADMAP.md) (*Windows path residuals*):
+  starting an executable past MAX_PATH (`CreateProcessW`, below — the guard runs its deep cases from a
+  second build into a short directory); a volume with 8dot3 names disabled, where the linker fails exactly
+  as it did before; and a non-ASCII `%TEMP%`, which breaks clang's own single-invocation link with no
+  kama path involved at all (below).
 
   **`args()`, `env()` and `programPath()` followed in `0.9.218`** (`include/kama_runtime.h`): the CRT's
   `main` argv, `getenv` and `_get_pgmptr` are the ANSI re-encodings of the process's UTF-16 command line,

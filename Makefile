@@ -119,6 +119,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.query.o  \
             kama.lsp.o    \
             kama.driver.o \
+            kama.winpath.o \
             kama.prelude.gen.o \
             kama.agents.gen.o \
             kama.seed.gen.o)
@@ -173,7 +174,7 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: src/kama.l $(BUILD)/kama.parser
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
 HEADERS = $(addprefix src/, kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h \
-                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h)
+                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h kama.winpath.h)
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.
@@ -219,6 +220,16 @@ $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
 # msys2 environments (MINGW64/UCRT64/CLANG64) all report MINGW*.
 ifneq (,$(findstring MINGW,$(shell uname -s)))
 LDFLAGS += -static
+# The application manifest (src/kama.manifest: the process ANSI code page is UTF-8) is a resource, and a
+# resource enters a PE through the link as an object windres makes. Appended here, AFTER the
+# `$(OBJECTS): $(HEADERS)` line above was read, so it does not inherit the header dependency it does not
+# have — and before the link rule below, which it must be part of. windres ships with binutils, which the
+# clang package depends on transitively; if it is missing the build fails loudly rather than silently
+# producing a compiler that reads `日本語` as `???` again.
+WINDRES ?= windres
+OBJECTS += $(BUILD)/kama.res.o
+$(BUILD)/kama.res.o: src/kama.rc src/kama.manifest | $(BUILD)
+	$(WINDRES) -I src -i src/kama.rc -o $@
 endif
 
 $(BUILD)/kama: $(OBJECTS)

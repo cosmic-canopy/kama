@@ -31,12 +31,16 @@
 
 #include <limits.h>
 #include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
-#include <dirent.h>             // opendir / readdir (module directory listing) — POSIX + mingw-w64 UCRT
 #ifdef _WIN32
   // NB: do NOT include <windows.h> here — it is compiled in the same TU as kama.parser.hpp, whose token
-  // enum (BOOL, CHAR, CONST, INT8, VOID, …) collides with windows.h typedefs/macros. mingw-w64's POSIX
-  // dirent/stat cover everything the driver needs, so windows.h is unnecessary.
-  #include <stdlib.h>           // _fullpath, _MAX_PATH
+  // enum (BOOL, CHAR, CONST, INT8, VOID, …) collides with windows.h typedefs/macros. What needs the real
+  // header lives on the other side of kama.winpath.h, in a TU of its own: the `\\?\` long-path spelling,
+  // the directory listing, and the `-j` pool's spawn. ⚠️ NOT <dirent.h>: mingw-w64's opendir on a `\\?\`
+  // path past MAX_PATH returns a valid DIR* and then lists the CURRENT WORKING DIRECTORY (measured —
+  // docs/platforms/windows.md), which for module discovery means silently compiling the wrong files.
+  // listDir below goes through FindFirstFileW instead.
+  #include "kama.winpath.h"
+  #include <stdlib.h>           // _MAX_PATH
   #include <direct.h>           // _mkdir (package view materialization)
   #include <process.h>          // _getpid (staging dir name for the package store)
   #include <io.h>               // _fileno / _setmode — binary stdio, and `kama seed`'s terminal check
@@ -48,9 +52,10 @@
   // interactive. HANDLE is void*, DWORD is unsigned long; __stdcall is a no-op on x64/ARM64 and correct on x86.
   extern "C" void* __stdcall GetStdHandle(unsigned long);
   extern "C" int   __stdcall GetConsoleMode(void*, unsigned long*);
-  // Three more, for absolutePath's reparse-point resolution — see the note there. The CRT's _fullpath
+  // Three more, for absolutePath's reparse-point resolution — see the note there. GetFullPathName
   // canonicalizes text and never touches the disk, so it cannot see a junction; only a handle to the
-  // opened object can be asked where it actually landed.
+  // opened object can be asked where it actually landed. The `A` spellings are UTF-8 under the manifest
+  // src/kama.manifest embeds (the process ANSI code page), which is what lets this TU stay narrow.
   extern "C" void*         __stdcall CreateFileA(const char*, unsigned long, unsigned long, void*,
                                                  unsigned long, unsigned long, void*);
   extern "C" unsigned long __stdcall GetFinalPathNameByHandleA(void*, char*, unsigned long, unsigned long);
@@ -59,6 +64,7 @@
     #define PATH_MAX _MAX_PATH
   #endif
 #else
+  #include <dirent.h>           // opendir / readdir — listDir's POSIX arm
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
   #include <signal.h>           // sigaction — the `-j` pool ignores SIGINT once per wave, not per job
@@ -140,11 +146,57 @@ std::string tempDir()
     return d;
 }
 
+// The spelling a path gets at the moment it is handed to the OS — and ONLY then. Every path this driver
+// stores, joins, prints or compares is the `/`-joined UTF-8 spelling absolutePath mints; `osp` is applied
+// to the argument of the call (`fopen(osp(p).c_str(), …)`, `std::ifstream in(osp(p))`) and its result is
+// never kept. On POSIX it is the identity. On Windows it is kama_win_ospath: under 248 characters the
+// path passes through untouched, past that it becomes the absolute, backslash, `\\?\`-prefixed spelling
+// the narrow CRT accepts beyond MAX_PATH (kama.winpath.h has the measurements). Encoding needs nothing
+// here — the manifest makes the narrow CRT UTF-8 process-wide.
+#ifdef _WIN32
+static std::string osp(const std::string& p) { return kama_win_ospath(p); }
+#else
+static const std::string& osp(const std::string& p) { return p; }
+#endif
+
+// A path exactly as the SHELL handed it over. msys2 converts a long POSIX argument into the verbatim
+// `//?/C:/…` spelling when it spawns a native child, and `cygpath -m` answers the same for one (both
+// measured). Left alone, that prefix survives the driver's `/`-joins as `/?/C:/…` once a lexical join
+// collapses the doubled slash, and then names nothing. Stripped here at the operand, the path is an
+// ordinary long one: osp() re-derives the prefix at the OS edge when the length calls for it, and
+// absolutePath strips whatever Win32 answers in. Identity everywhere else and for everything shorter.
+static std::string cliPath(const std::string& p)
+{
+#ifdef _WIN32
+    if (p.size() >= 4 && ((p[0] == '/' && p[1] == '/' && p[2] == '?' && p[3] == '/') ||
+                          (p[0] == '\\' && p[1] == '\\' && p[2] == '?' && p[3] == '\\'))) {
+        std::string q = p.substr(4);
+        if (q.size() >= 4 && (q[0] == 'U' || q[0] == 'u') && (q[1] == 'N' || q[1] == 'n') && (q[2] == 'C' || q[2] == 'c')
+            && (q[3] == '/' || q[3] == '\\'))
+            q = "//" + q.substr(4);
+        return q;
+    }
+#endif
+    return p;
+}
+
+// A path for a TOOL's command line — the C compiler's linker and archiver, and cmd.exe's redirections in
+// the `-j` pool. On Windows the first two are GNU ld and ar, which ANSI-decode their argv and cannot open
+// a non-ASCII path in either direction, and the third stops at MAX_PATH (all measured; clang's own
+// compile step has neither limit), so a path with any byte past 0x7F or 248+ characters is spelled by
+// its 8.3 alias instead. Everything else passes through byte-for-byte. Never stored: the driver's own
+// spelling stays what it was, and this is applied only where the object list, `-o` and the per-job
+// `>out 2>err` are written into a command line.
+#ifdef _WIN32
+static std::string toolPath(const std::string& p) { return kama_win_shortpath(p); }
+#else
+static const std::string& toolPath(const std::string& p) { return p; }
+#endif
+
 std::string absolutePath(const std::string& path)
 {
-    char buf[PATH_MAX];
 #ifdef _WIN32
-    // ⚠️ `_fullpath` returns BACKSLASHES, and everything else in this driver builds paths by joining with
+    // ⚠️ Win32 answers in BACKSLASHES, and everything else in this driver builds paths by joining with
     // '/' (`dir + "/" + name`, the project enumeration, the module resolver). Mixing the two produces
     // `D:\a\proj/app.kama` from one code path and `D:\a\proj\app.kama` from another for the SAME file — and
     // several comparisons here are exact string equality (CEmitter::unitForUri re-picks a unit by name), so
@@ -157,7 +209,7 @@ std::string absolutePath(const std::string& path)
     // function is realpath(), and the rest of the driver leans on that. `joinPathLexical` exists purely to
     // opt OUT of it; `owningPackageDir` opts IN, and that is load-bearing: a fetched package is reached
     // through the `.kama/deps/<name>` link, and the check that a package's manifest is not the user's to
-    // edit is "did I land inside the store?". _fullpath is pure text manipulation and never touches the
+    // edit is "did I land inside the store?". GetFullPathName is pure text manipulation and never touches the
     // disk, so on Windows — where linkDir materializes the view with `mklink /J`, a JUNCTION — that walk
     // stopped at the view entry, the store test failed, and `kama build` told the user to go edit a
     // kama.json inside the content-addressed store, whose tree hash the edit would invalidate.
@@ -165,31 +217,55 @@ std::string absolutePath(const std::string& path)
     // Only a handle knows. FILE_FLAG_BACKUP_SEMANTICS is what makes CreateFile open a DIRECTORY at all,
     // and access 0 asks for metadata only, so this neither locks the file nor needs rights to read it.
     // A path that does not exist yet cannot be opened — a `-o` output, say — so that falls through to
-    // _fullpath, mirroring realpath's own failure mode (POSIX falls back to the path as given).
+    // GetFullPathName, mirroring realpath's own failure mode (POSIX falls back to the path as given).
     std::string s;
-    void* h = CreateFileA(path.c_str(), 0, 0x7 /* FILE_SHARE_READ|WRITE|DELETE */, nullptr,
+    void* h = CreateFileA(osp(path).c_str(), 0, 0x7 /* FILE_SHARE_READ|WRITE|DELETE */, nullptr,
                           3 /* OPEN_EXISTING */, 0x02000000 /* FILE_FLAG_BACKUP_SEMANTICS */, nullptr);
     if (h != (void*)-1) {          // INVALID_HANDLE_VALUE
-        char fin[PATH_MAX];
+        // 32767 is the NT path ceiling, so a `\\?\` answer always fits and there is no MAX_PATH here.
+        char fin[32768];
         // 0 == FILE_NAME_NORMALIZED | VOLUME_NAME_DOS: the long-name spelling on a drive letter, not the
-        // \\?\Volume{GUID} form. A return >= the buffer means "needed this much" — treat it as a miss and
-        // fall back, which keeps the MAX_PATH ceiling this file already documents as a known limit.
+        // \\?\Volume{GUID} form. A return >= the buffer means "needed this much" — a miss, fall through.
         unsigned long n = GetFinalPathNameByHandleA(h, fin, (unsigned long)sizeof fin, 0);
         CloseHandle(h);
         if (n > 0 && n < (unsigned long)sizeof fin) s.assign(fin, n);
     }
-    if (s.empty()) s = _fullpath(buf, path.c_str(), PATH_MAX) ? std::string(buf) : path;
+    if (s.empty()) { s = kama_win_fullpath(path); if (s.empty()) s = path; }
     // GetFinalPathNameByHandle always answers in the \\?\ extended form. Strip it: everything downstream
     // (and every C compiler command line) wants the ordinary spelling, and a UNC path comes back as
-    // \\?\UNC\server\share, whose ordinary spelling is \\server\share.
-    if      (s.rfind("\\\\?\\UNC\\", 0) == 0) s = "\\\\" + s.substr(8);
-    else if (s.rfind("\\\\?\\",      0) == 0) s = s.substr(4);
+    // \\?\UNC\server\share, whose ordinary spelling is \\server\share. The forward-slash spelling is the
+    // one msys2 hands a native child for a long POSIX argument (`//?/C:/…`, measured) — same treatment,
+    // or the operand it names "does not exist" to every narrow call that follows.
+    if      (s.rfind("\\\\?\\UNC\\", 0) == 0 || s.rfind("//?/UNC/", 0) == 0) s = "\\\\" + s.substr(8);
+    else if (s.rfind("\\\\?\\",      0) == 0 || s.rfind("//?/",     0) == 0) s = s.substr(4);
     for (char& c : s) if (c == '\\') c = '/';
     return s;
 #else
+    char buf[PATH_MAX];
     if (realpath(path.c_str(), buf)) return std::string(buf);
     return path; // fall back to as-given (e.g. file doesn't exist yet)
 #endif
+}
+
+// The entries of `dir`, without `.` and `..`, in the filesystem's order — every caller that needs
+// determinism sorts. Empty when the directory cannot be opened, which no caller distinguishes from empty.
+// POSIX: dirent. Windows: FindFirstFileW through kama.winpath — see the include block for why not dirent.
+static std::vector<std::string> listDir(const std::string& dir)
+{
+    std::vector<std::string> out;
+#ifdef _WIN32
+    kama_win_listdir(dir, out);
+#else
+    if (DIR* d = opendir(dir.c_str())) {
+        while (struct dirent* e = readdir(d)) {
+            const char* n = e->d_name;
+            if (n[0] == '.' && (n[1] == 0 || (n[1] == '.' && n[2] == 0))) continue;
+            out.push_back(n);
+        }
+        closedir(d);
+    }
+#endif
+    return out;
 }
 
 // Split on either separator so the same code works on Windows paths.
@@ -270,7 +346,7 @@ std::string stripExtension(const std::string& path)
 
 bool fileExists(const std::string& p)
 {
-    std::ifstream f(p.c_str());
+    std::ifstream f(osp(p).c_str());
     return f.good();
 }
 
@@ -298,7 +374,7 @@ std::string resolveRuntimeDir(const char* argv0)
 bool dirExists(const std::string& p)
 {
     struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);   // POSIX + mingw-w64
+    return stat(osp(p).c_str(), &st) == 0 && S_ISDIR(st.st_mode);   // POSIX + mingw-w64
 }
 
 // The `*.kama` files directly inside `dir`, sorted for deterministic emit order.
@@ -308,10 +384,7 @@ std::vector<std::string> listKamaFiles(const std::string& dir)
     auto keep = [&](const std::string& name) {
         return name.size() > 5 && name.compare(name.size() - 5, 5, ".kama") == 0;
     };
-    if (DIR* d = opendir(dir.c_str())) {   // POSIX + mingw-w64 (wraps FindFirstFile internally on Windows)
-        while (struct dirent* e = readdir(d)) { std::string n = e->d_name; if (keep(n)) out.push_back(dir + "/" + n); }
-        closedir(d);
-    }
+    for (const std::string& n : listDir(dir)) if (keep(n)) out.push_back(dir + "/" + n);
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -326,11 +399,8 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
 {
     if (seen > budget) return;
     std::string dir = rel.empty() ? root : root + "/" + rel;
-    DIR* d = opendir(dir.c_str());
-    if (!d) return;
-    while (struct dirent* e = readdir(d)) {
-        std::string n = e->d_name;
-        if (n.empty() || n[0] == '.') continue;          // ".", "..", .git, .kama (the package store) …
+    for (const std::string& n : listDir(dir)) {
+        if (n.empty() || n[0] == '.') continue;          // .git, .kama (the package store) …
         std::string childRel = rel.empty() ? n : rel + "/" + n;
         if (dirExists(dir + "/" + n)) {
             if (n == "out" || n == "build") continue;    // generated C + objects, never sources
@@ -342,7 +412,6 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
             out.push_back(dir + "/" + n);
         }
     }
-    closedir(d);
 }
 
 // The first `kama.json` at or below `dir`, or "" if there is none. Projects do not nest: a manifest
@@ -355,11 +424,8 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
 // collectKamaFiles does, for the same reasons.
 static std::string nestedManifestUnder(const std::string& dir)
 {
-    DIR* d = opendir(dir.c_str());
-    if (!d) return std::string();
     std::string found;
-    while (struct dirent* e = readdir(d)) {
-        std::string n = e->d_name;
+    for (const std::string& n : listDir(dir)) {
         if (n.empty() || n[0] == '.') continue;
         const std::string child = dir + "/" + n;
         if (dirExists(child)) {
@@ -370,7 +436,6 @@ static std::string nestedManifestUnder(const std::string& dir)
         }
         if (!found.empty()) break;
     }
-    closedir(d);
     return found;
 }
 
@@ -409,7 +474,7 @@ static const char* embeddedSourceOf(const std::string& unitName)
 // costs a path, while a spurious match is the whole fault this exists to prevent.
 static bool fileMatchesEmbedded(const std::string& path, const char* embedded)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) return false;
     std::string disk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::string src(embedded);
@@ -492,7 +557,7 @@ static const std::map<std::string, SrcRange>& builtinDocIndex()
     built = true;
     const std::string path = builtinSourcePath("<builtin>");
     if (path.empty()) return idx;                       // no such file (a --no-std install): no locations
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) return idx;
     auto isIdent = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
     std::string line, curType;
@@ -648,14 +713,10 @@ std::vector<std::string> expandProjectsEntry(const std::string& dir, const std::
     std::vector<std::string> out;
     if (rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0) {
         std::string parent = dir + "/" + rel.substr(0, rel.size() - 2);
-        if (DIR* d = opendir(parent.c_str())) {
-            while (struct dirent* e = readdir(d)) {
-                std::string n = e->d_name;
-                if (n.empty() || n[0] == '.') continue;
-                if (dirExists(parent + "/" + n) && fileExists(parent + "/" + n + "/kama.json"))
-                    out.push_back(parent + "/" + n);
-            }
-            closedir(d);
+        for (const std::string& n : listDir(parent)) {
+            if (n.empty() || n[0] == '.') continue;
+            if (dirExists(parent + "/" + n) && fileExists(parent + "/" + n + "/kama.json"))
+                out.push_back(parent + "/" + n);
         }
         std::sort(out.begin(), out.end());
     } else if (fileExists(dir + "/" + rel + "/kama.json")) {
@@ -1664,7 +1725,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     // is absent from mingw-w64, and the two invalidations above make sub-second resolution moot.
     struct stat st;
     bool cacheable = false;
-    if (g_parseCache && stat(inputFile.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+    if (g_parseCache && stat(osp(inputFile).c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
         cacheable = (st.st_mtime + 1 < time(nullptr));
         if (cacheable) {
             auto it = g_parseCacheMap.find(inputFile);
@@ -1688,7 +1749,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
 
     yylex_init_extra(&extra, &scanner);
 
-    FILE* input = fopen(inputFile.c_str(), "r");
+    FILE* input = fopen(osp(inputFile).c_str(), "r");
     if (!input) {
         fprintf(stderr, "kama: error: cannot open input file '%s'\n", inputFile.c_str());
         yylex_destroy(scanner);
@@ -3740,7 +3801,7 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
     ManifestModules m;
     std::string err, rawName;
     if (fileExists(manifest)) {
-        std::ifstream in(manifest, std::ios::binary);
+        std::ifstream in(osp(manifest), std::ios::binary);
         std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         std::set<std::string> declared, defaults;
         ManifestReader r(src, declared, defaults);
@@ -4032,7 +4093,7 @@ static bool loadManifestTargets(const std::string& path, std::map<std::string, T
                                 std::map<std::string, SelectGroup>& groupsOut, std::string& err,
                                 std::string* defaultTargetOut = nullptr)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> ignoredDeclared, ignoredDefaults;
@@ -4073,7 +4134,7 @@ static bool loadManifestFlags(const std::string& path,
                               std::set<std::string>& defaults,
                               std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     ManifestReader r(src, declared, defaults);
@@ -4087,7 +4148,7 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
                              std::map<std::string, DepSpec>* devDeps = nullptr, RegConfig* reg = nullptr,
                              std::string* kamaReq = nullptr)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4125,7 +4186,7 @@ const std::set<std::string>& declaredImportNames(const std::string& packageDir)
 static bool loadManifestLocalInstall(const std::string& path, std::map<std::string, DepSpec>& overrides,
                                      RegConfig& reg, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4142,7 +4203,7 @@ static bool loadManifestLocalInstall(const std::string& path, std::map<std::stri
 // (M2.3 — read by `kama run` when no file is passed.)
 static bool loadManifestEntry(const std::string& path, std::string& entryOut, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4156,7 +4217,7 @@ static bool loadManifestEntry(const std::string& path, std::string& entryOut, st
 // which the caller reads as the default "out". Returns false + sets `err` only on malformed JSON.
 static bool loadManifestOutDir(const std::string& path, std::string& outDir, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4171,7 +4232,7 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
 static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap,
                                       bool& reproFloat, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4186,7 +4247,7 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
 // (with the target tier merged in) every dependency's, through loadBuildSettings.
 static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4209,7 +4270,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
 // must reject it; the value itself is validated by the reader. Returns false + `err` on malformed JSON.
 static bool loadManifestKind(const std::string& path, std::string& kindOut, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4224,7 +4285,7 @@ static bool loadManifestKind(const std::string& path, std::string& kindOut, std:
 // the PATH selector — a cheap read of one key, done *before* any compiler runs. (M1.)
 static bool loadManifestToolchain(const std::string& path, std::string& tcOut, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4246,7 +4307,7 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
 // subdirectory keeps all four structurally outside it and the rule exemption-free.
 static bool loadManifestSource(const std::string& path, std::string& out, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4274,7 +4335,7 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
 // compose to the project's own name), and reading it separately would mean two parses of one file.
 static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>& out, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4304,7 +4365,7 @@ static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>
 static bool loadWorkspace(const std::string& path, std::vector<std::pair<std::string, bool>>& out,
                           std::map<std::string, DepSpec>* depsOut, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4320,7 +4381,7 @@ static bool loadWorkspace(const std::string& path, std::vector<std::pair<std::st
 // Reuses ManifestReader. Returns false + `err` on malformed JSON or an invalid level name. (M5.)
 static bool loadManifestLog(const std::string& path, LogConfig& out, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4335,7 +4396,7 @@ static bool loadManifestLog(const std::string& path, LogConfig& out, std::string
 static bool loadManifestNameVersion(const std::string& path, std::string& nameOut, std::string& versionOut,
                                     std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
@@ -4654,7 +4715,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // mechanism, honoured by every editor and by the CLI, and gitignored so CI never sees it.
         std::string mdir = dirName(manifest);
         std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
-        if (std::ifstream(localManifest).good()) {
+        if (std::ifstream(osp(localManifest)).good()) {
             out.localManifest = localManifest;
             std::set<std::string> ldeclared, ldefaults;
             if (!loadManifestFlags(localManifest, ldeclared, ldefaults, err)) {
@@ -4755,15 +4816,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
         std::vector<std::string> depCflags, depLdflags, depLink;
         for (const std::string& view : views) {
-            std::vector<std::string> names;
-            if (DIR* d = opendir(view.c_str())) {
-                while (struct dirent* e = readdir(d)) {
-                    std::string n = e->d_name;
-                    if (n == "." || n == "..") continue;
-                    names.push_back(n);
-                }
-                closedir(d);
-            }
+            std::vector<std::string> names = listDir(view);
             std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
             for (const std::string& n : names) {
                 // ⚠️ LEXICAL, never absolutePath — that is realpath(), and a dependency reaches its
@@ -4964,7 +5017,7 @@ static std::string jsonEscape(const std::string& s)
 // Write `kama.lock` deterministically (sorted std::map => byte-stable => reproducible re-install).
 static bool writeLockFile(const std::string& path, const std::map<std::string, LockEntry>& pkgs)
 {
-    std::ofstream out(path);
+    std::ofstream out(osp(path));
     if (!out) return false;
     out << "{\n  \"lockVersion\": 1,\n  \"packages\": {";
     bool first = true;
@@ -5101,7 +5154,7 @@ struct LockReader {
 // Read a kama.lock into name -> LockEntry (empty file / `{}` -> empty map + true). Caller does fileExists.
 static bool parseLockFile(const std::string& path, std::map<std::string, LockEntry>& pkgs, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     LockReader r(src);
@@ -5117,7 +5170,7 @@ static bool makeDirs(const std::string& path)
         std::string part = (slash == std::string::npos) ? path : path.substr(0, slash);
         if (!part.empty() && !dirExists(part))
 #ifdef _WIN32
-            _mkdir(part.c_str());
+            _mkdir(osp(part).c_str());
 #else
             mkdir(part.c_str(), 0755);
 #endif
@@ -5172,7 +5225,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
                         bool* externsGpu = nullptr, bool* externsIsolate = nullptr)
 {
-    std::ofstream out(outPath);
+    std::ofstream out(osp(outPath));
     if (!out) {
         fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str());
         return 1;
@@ -5208,13 +5261,13 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsGpu = nullptr,     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
                      bool* externsIsolate = nullptr) // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
 {
-    std::ofstream header(headerPath);
+    std::ofstream header(osp(headerPath));
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
 
     std::vector<std::unique_ptr<std::ofstream>> moduleFiles;
     std::vector<std::ostream*> moduleStreams;
     for (auto& cp : cPaths) {
-        auto f = std::unique_ptr<std::ofstream>(new std::ofstream(cp));
+        auto f = std::unique_ptr<std::ofstream>(new std::ofstream(osp(cp)));
         if (!*f) { fprintf(stderr, "kama: error: cannot write '%s'\n", cp.c_str()); return 1; }
         moduleStreams.push_back(f.get());
         moduleFiles.push_back(std::move(f));
@@ -5264,13 +5317,13 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
                          externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate) != 0) return 1;
 
-    std::ofstream out(outPath);
+    std::ofstream out(osp(outPath));
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }
-    { std::ifstream h(headerPath); out << h.rdbuf(); }
+    { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
     out << "\n";
     std::string incLine = "#include \"" + headerName + "\"";
     for (auto& cp : cPaths) {
-        std::ifstream u(cp);
+        std::ifstream u(osp(cp));
         std::string line;
         while (std::getline(u, line)) {
             if (line.find(incLine) != std::string::npos) continue;   // header already inlined above
@@ -5278,8 +5331,8 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
         }
     }
     out.close();
-    remove(headerPath.c_str());
-    for (auto& cp : cPaths) remove(cp.c_str());
+    remove(osp(headerPath).c_str());
+    for (auto& cp : cPaths) remove(osp(cp).c_str());
     return 0;
 }
 
@@ -5343,16 +5396,22 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
     // no matter what the user asked for, on the platform where process startup is most expensive. That
     // is the single largest lever on Windows build time.
     //
-    // Two documented CRT calls do it, both from <process.h>, which is already included: _spawn with
-    // _P_NOWAIT starts a child without blocking, and _cwait reaps one. No <windows.h>, which cannot come
-    // into this TU (its token macros collide with kama.parser.hpp's enum).
+    // CreateProcessW does it, behind kama.winpath.h (this TU cannot include <windows.h>: its token macros
+    // collide with kama.parser.hpp's enum), and the COMMAND LINE IS PASSED VERBATIM. That matters twice:
     //
-    // ⚠️ Each command goes through a generated .bat rather than being passed to `cmd /c` as an argument.
-    // The command is a SHELL STRING carrying its own quotes (`"…/zig" cc`, `-o "out dir/x.o"`), and the
-    // CRT builds a child's command line by quoting each argv entry and escaping inner quotes with
-    // backslashes — rules cmd.exe does not use. `cmd /c "clang \"a b.c\""` reaches clang with the
-    // backslashes intact. A file has no such layer: cmd reads the line verbatim. It also keeps the
-    // POSIX branch's contract that a "compiler" is a shell string, not a tokenized argv.
+    //  * The command is a SHELL STRING carrying its own quotes (`"…/zig" cc`, `-o "out dir/x.o"`), and the
+    //    CRT's _spawn family builds a child's command line by quoting each argv entry and escaping inner
+    //    quotes with backslashes — rules cmd.exe does not use, so `cmd /c "clang \"a b.c\""` reached clang
+    //    with the backslashes intact. CreateProcess has no such layer; cmd reads the line as written, which
+    //    keeps the POSIX branch's contract that a "compiler" is a shell string, not a tokenized argv.
+    //  * ⚠️ It used to be a generated .bat per job for exactly that reason, and that is the wrong vehicle:
+    //    cmd.exe parses a batch FILE in the CONSOLE code page (437 by default — measured, and 437 is also
+    //    what a console-less kama.exe hands it), not in the process code page the manifest sets. So a
+    //    non-ASCII path in the .bat was mojibake and the wave "could not find the path" while the same
+    //    text on cmd's command line, which arrives as UTF-16, was fine. No file, no code page.
+    //
+    // The same leading-quote rule runCmd applies to system() applies here: cmd strips the outer pair of a
+    // `/c` string that begins with `"`, so one is wrapped around it.
     if (jobs < 1) jobs = 1;
     if (jobs == 1) {
         for (size_t i = 0; i < cmds.size(); ++i) {
@@ -5365,18 +5424,15 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
     // Which cmd.exe, and found how. %COMSPEC% is the right answer when it is set — but an msys2 shell
     // does NOT export it, so this cannot rely on it. (Asking cmd.exe to print %COMSPEC% says it is set;
     // that is cmd defining the variable for itself, not evidence about kama's environment.) Fall back to
-    // %SystemRoot%, and finally to the bare name resolved through PATH by _spawnLP — the `p` matters,
-    // because _spawnl does no PATH search at all and failed with ENOENT for every job in the wave.
-    std::string comspecBuf;
-    if (const char* cs = getenv("COMSPEC")) { if (*cs) comspecBuf = cs; }
-    if (comspecBuf.empty()) {
-        if (const char* sr = getenv("SystemRoot")) { if (*sr) comspecBuf = std::string(sr) + "\\System32\\cmd.exe"; }
+    // %SystemRoot%, and finally to the bare name, which CreateProcess resolves through PATH when the
+    // program is the first token of the line.
+    std::string comspec;
+    if (const char* cs = getenv("COMSPEC")) { if (*cs) comspec = cs; }
+    if (comspec.empty()) {
+        if (const char* sr = getenv("SystemRoot")) { if (*sr) comspec = std::string(sr) + "\\System32\\cmd.exe"; }
     }
-    if (comspecBuf.empty()) comspecBuf = "cmd.exe";
-    const char* comspec = comspecBuf.c_str();
+    if (comspec.empty()) comspec = "cmd.exe";
 
-    const std::string base = tempDir() + "/kama-j-" + std::to_string((long)getpid()) + "-";
-    std::vector<std::string> bats(cmds.size());
     struct Live { intptr_t h; size_t idx; };
     std::vector<Live> live;          // in LAUNCH order; reaped from the front
     size_t next = 0;
@@ -5384,15 +5440,13 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
     int firstFail = 0, firstFailIdx = -1;
 
     auto reapFront = [&]() {
-        int status = 0;
         Live l = live.front();
         live.erase(live.begin());
-        // _cwait waits for ONE named child — there is no wait-for-any here without <windows.h> — so the
-        // pool reaps in launch order. It still keeps `jobs` compiles in flight, which is where the win
-        // is; the only cost is that a slot behind an unusually slow job opens later than it could.
-        if (_cwait(&status, l.h, 0) == -1) status = 1;
+        // One named child at a time, so the pool reaps in launch order. It still keeps `jobs` compiles
+        // in flight, which is where the win is; the only cost is that a slot behind an unusually slow
+        // job opens later than it could.
+        int status = kama_win_wait(l.h);
         rcs[l.idx] = status;
-        remove(bats[l.idx].c_str());
         if (status != 0 && (firstFailIdx < 0 || (int)l.idx < firstFailIdx)) {
             firstFail = status; firstFailIdx = (int)l.idx;
             stop = true;   // stop LAUNCHING; drain what is already running (see the note above)
@@ -5401,21 +5455,10 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
 
     while (next < cmds.size() || !live.empty()) {
         while (!stop && next < cmds.size() && (int)live.size() < jobs) {
-            bats[next] = base + std::to_string((unsigned long)next) + ".bat";
-            {
-                std::ofstream b(bats[next], std::ios::binary | std::ios::trunc);
-                if (!b) { rcs[next] = 1; firstFail = 1; firstFailIdx = (int)next; stop = true; ++next; break; }
-                // @echo off so the command is not echoed into the compiler's own diagnostics.
-                b << "@echo off\r\n" << cmds[next] << "\r\n";
-            }
-            // BACKSLASHES for the spawn argument. Everything else in this driver joins paths with '/',
-            // and the CRT file APIs accept that — but this string is handed to cmd.exe as the command to
-            // RUN, and cmd reads a leading '/' as a switch introducer, so a forward-slash path is not a
-            // program to it. The children simply failed, silently, and the wave produced no objects.
-            std::string batArg = bats[next];
-            for (char& c : batArg) if (c == '/') c = '\\';
-            intptr_t h = _spawnlp(_P_NOWAIT, comspec, comspec, "/c", batArg.c_str(), (const char*)NULL);
-            if (h == -1) { rcs[next] = 1; remove(bats[next].c_str());
+            const std::string& c = cmds[next];
+            std::string line = "\"" + comspec + "\" /c " + (!c.empty() && c[0] == '"' ? "\"" + c + "\"" : c);
+            intptr_t h = kama_win_spawn_shell(line);
+            if (h == -1) { rcs[next] = 1;
                            if (firstFailIdx < 0) { firstFail = 1; firstFailIdx = (int)next; }
                            stop = true; ++next; continue; }
             live.push_back(Live{h, next});
@@ -5486,13 +5529,13 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
 // in input order reproduces exactly that.
 static void replayAndRemove(const std::string& path, FILE* to)
 {
-    if (FILE* f = fopen(path.c_str(), "rb")) {
+    if (FILE* f = fopen(osp(path).c_str(), "rb")) {
         char buf[8192];
         size_t n;
         while ((n = fread(buf, 1, sizeof buf, f)) > 0) fwrite(buf, 1, n, to);
         fclose(f);
     }
-    remove(path.c_str());
+    remove(osp(path).c_str());
 }
 
 // Fetch `version` ("" = latest) into the versioned store via the canonical installer, which re-detects a C
@@ -5617,8 +5660,8 @@ static bool sshSign(const std::string& file, const std::string& keyPath,
     runCmd(rmRfCmd(sigfile));
     int rc = runCmd("ssh-keygen -Y sign -f \"" + keyPath + "\" -n " + kSigNamespace + " \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
     if (rc != 0) { err = "ssh-keygen -Y sign failed (is the key '" + keyPath + "' an SSH private key?)"; return false; }
-    { std::ifstream f(sigfile, std::ios::binary); sigOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
-    { std::ifstream f(keyPath + ".pub", std::ios::binary); pubKeyOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+    { std::ifstream f(osp(sigfile), std::ios::binary); sigOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+    { std::ifstream f(osp(keyPath + ".pub"), std::ios::binary); pubKeyOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
     runCmd(rmRfCmd(sigfile));
     // trim a trailing newline on the public key line (keeps the index tidy)
     while (!pubKeyOut.empty() && (pubKeyOut.back() == '\n' || pubKeyOut.back() == '\r')) pubKeyOut.pop_back();
@@ -5631,7 +5674,7 @@ static bool sshSign(const std::string& file, const std::string& keyPath,
 static bool sshVerify(const std::string& file, const std::string& signature, const std::string& stagingDir)
 {
     std::string sigTmp = stagingDir + ".sig";
-    { std::ofstream o(sigTmp, std::ios::binary); if (!o) return false; o << signature; }
+    { std::ofstream o(osp(sigTmp), std::ios::binary); if (!o) return false; o << signature; }
     int rc = runCmd("ssh-keygen -Y check-novalidate -n " + std::string(kSigNamespace) +
                     " -s \"" + sigTmp + "\" < \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
     runCmd(rmRfCmd(sigTmp));
@@ -5643,15 +5686,10 @@ static bool sshVerify(const std::string& file, const std::string& signature, con
 static void collectFilesRel(const std::string& root, const std::string& rel, std::vector<std::string>& out)
 {
     std::string dir = rel.empty() ? root : root + "/" + rel;
-    if (DIR* d = opendir(dir.c_str())) {
-        while (struct dirent* e = readdir(d)) {
-            std::string n = e->d_name;
-            if (n == "." || n == "..") continue;
-            std::string childRel = rel.empty() ? n : rel + "/" + n;
-            if (dirExists(root + "/" + childRel)) collectFilesRel(root, childRel, out);
-            else out.push_back(childRel);
-        }
-        closedir(d);
+    for (const std::string& n : listDir(dir)) {
+        std::string childRel = rel.empty() ? n : rel + "/" + n;
+        if (dirExists(root + "/" + childRel)) collectFilesRel(root, childRel, out);
+        else out.push_back(childRel);
     }
 }
 
@@ -5664,17 +5702,17 @@ std::string treeHashOf(const std::string& dir)
     collectFilesRel(dir, "", files);
     std::sort(files.begin(), files.end());
     std::string tmp = dir + ".hashinput";
-    std::ofstream out(tmp, std::ios::binary);
+    std::ofstream out(osp(tmp), std::ios::binary);
     if (!out) return "";
     for (auto& rel : files) {
         out.write(rel.data(), rel.size()); out.put('\0');
-        std::ifstream f(dir + "/" + rel, std::ios::binary);
+        std::ifstream f(osp(dir + "/" + rel), std::ios::binary);
         std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         out.write(bytes.data(), bytes.size());
     }
     out.close();
     std::string h = sha256Of(tmp);
-    remove(tmp.c_str());
+    remove(osp(tmp).c_str());
     return h;
 }
 
@@ -5803,7 +5841,7 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
 
     std::string finalDir = store + "/" + storeLabel(name) + "-" + hash.substr(sizeof("sha256-") - 1);
     if (dirExists(finalDir)) runCmd(rmRfCmd(staging));   // dedup: identical content already stored
-    else if (rename(staging.c_str(), finalDir.c_str()) != 0) {
+    else if (rename(osp(staging).c_str(), osp(finalDir).c_str()) != 0) {
         err = "cannot finalize store entry for '" + name + "'"; runCmd(rmRfCmd(staging)); return false;
     }
 
@@ -6073,7 +6111,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     // touch the lock at all — so CI (which has no `kama.local.json`) reproduces the identical build.
     std::map<std::string, DepSpec> overrides;
     std::string localManifest = base + "/kama.local.json";
-    if (std::ifstream(localManifest).good()) {
+    if (std::ifstream(osp(localManifest)).good()) {
         RegConfig localReg; std::string lerr;
         if (!loadManifestLocalInstall(localManifest, overrides, localReg, lerr)) {
             fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str()); return 2;
@@ -6591,7 +6629,7 @@ static bool findSection(const std::string& s, const std::string& section,
 static bool manifestAddDep(const std::string& path, const std::string& name, const DepSpec& d,
                            bool dev, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
     std::string section = dev ? "dev-dependencies" : "dependencies";
@@ -6620,7 +6658,7 @@ static bool manifestAddDep(const std::string& path, const std::string& name, con
         if (empty) out = s.substr(0, topOpen) + "{\n" + topInd + secText + "\n}" + s.substr(topClose + 1);
         else       out = s.substr(0, topOpen + 1) + "\n" + topInd + secText + "," + s.substr(topOpen + 1);
     }
-    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    std::ofstream o(osp(path), std::ios::binary | std::ios::trunc);
     if (!o) { err = "cannot write '" + path + "'"; return false; }
     o << out; return true;
 }
@@ -6628,7 +6666,7 @@ static bool manifestAddDep(const std::string& path, const std::string& name, con
 // Remove `name` from whichever section holds it. Returns true even if absent (idempotent); sets *found.
 static bool manifestRemoveDep(const std::string& path, const std::string& name, std::string& err, bool* found = nullptr)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
     if (found) *found = false;
@@ -6643,7 +6681,7 @@ static bool manifestRemoveDep(const std::string& path, const std::string& name, 
         if (!here) continue;
         std::string sec = reemitSection(kept, indentBefore(s, keyPos));
         std::string out = s.substr(0, objOpen) + sec + s.substr(objClose + 1);
-        std::ofstream o(path, std::ios::binary | std::ios::trunc);
+        std::ofstream o(osp(path), std::ios::binary | std::ios::trunc);
         if (!o) { err = "cannot write '" + path + "'"; return false; }
         o << out; if (found) *found = true; return true;
     }
@@ -6694,13 +6732,13 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
                              const std::string& entryJson, std::string& err)
 {
     if (!fileExists(indexPath)) {
-        std::ofstream o(indexPath, std::ios::binary | std::ios::trunc);
+        std::ofstream o(osp(indexPath), std::ios::binary | std::ios::trunc);
         if (!o) { err = "cannot write '" + indexPath + "'"; return false; }
         o << "{\n  \"name\": \"" << jsonEscape(name) << "\",\n  \"versions\": [\n    "
           << entryJson << "\n  ]\n}\n";
         return true;
     }
-    std::ifstream in(indexPath, std::ios::binary);
+    std::ifstream in(osp(indexPath), std::ios::binary);
     if (!in) { err = "cannot open '" + indexPath + "'"; return false; }
     std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
     size_t vk = s.find("\"versions\"");
@@ -6709,7 +6747,7 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
     size_t j = br + 1; while (j < s.size() && (s[j]==' '||s[j]=='\t'||s[j]=='\n'||s[j]=='\r')) ++j;
     bool hasExisting = (j < s.size() && s[j] != ']');
     std::string out = s.substr(0, br + 1) + "\n    " + entryJson + (hasExisting ? "," : "") + s.substr(br + 1);
-    std::ofstream o(indexPath, std::ios::binary | std::ios::trunc);
+    std::ofstream o(osp(indexPath), std::ios::binary | std::ios::trunc);
     if (!o) { err = "cannot write '" + indexPath + "'"; return false; }
     o << out; return true;
 }
@@ -6744,7 +6782,7 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     std::string pkgDir = regDir + "/" + name;
     std::string indexPath = pkgDir + "/index.json";
     if (fileExists(indexPath)) {   // immutability: refuse to overwrite an already-published version
-        std::ifstream f(indexPath, std::ios::binary);
+        std::ifstream f(osp(indexPath), std::ios::binary);
         std::string idx((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         std::vector<IndexEntry> existing; IndexReader ir(idx);
         if (!ir.parse(existing)) { fprintf(stderr, "kama publish: malformed %s: %s\n", indexPath.c_str(), ir.err.c_str()); return 1; }
@@ -6797,7 +6835,7 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     if (!makeDirs(pkgDir)) { fprintf(stderr, "kama publish: cannot create %s\n", pkgDir.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
     std::string finalTarball = pkgDir + "/" + version + ".tar.gz";
     runCmd(rmRfCmd(finalTarball));
-    if (rename(tarball.c_str(), finalTarball.c_str()) != 0) {
+    if (rename(osp(tarball).c_str(), osp(finalTarball).c_str()) != 0) {
         // rename can fail across volumes; fall back to a copy.
         if (runCmd("cp \"" + tarball + "\" \"" + finalTarball + "\"") != 0) {
             fprintf(stderr, "kama publish: cannot place the tarball at %s\n", finalTarball.c_str()); runCmd(rmRfCmd(tmp)); return 1;
@@ -6960,7 +6998,7 @@ static bool embeddedWrite(const char* who, const std::string& dir, const std::st
         fprintf(stderr, "%s: cannot create %s\n", who, parent.c_str());
         return false;
     }
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(osp(path), std::ios::binary);
     if (!out) { fprintf(stderr, "%s: cannot write %s\n", who, path.c_str()); return false; }
     out << body;
     if (!out) { fprintf(stderr, "%s: failed writing %s\n", who, path.c_str()); return false; }
@@ -7599,7 +7637,7 @@ void toolchainUsage()
 // `~/.kama/default` record.
 static std::string readTrimmedFile(const std::string& path)
 {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(osp(path), std::ios::binary);
     if (!f) return "";
     std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     while (!s.empty() && (s.back()=='\n'||s.back()=='\r'||s.back()==' '||s.back()=='\t')) s.pop_back();
@@ -7657,7 +7695,7 @@ static std::string resolvePin(const std::string& manifest)
 {
     if (!manifest.empty()) {
         std::string local = dirName(manifest) + "/kama.local.json";
-        if (std::ifstream(local).good()) {
+        if (std::ifstream(osp(local)).good()) {
             std::string tc, err;
             if (loadManifestToolchain(local, tc, err) && !tc.empty()) return tc;
         }
@@ -7673,7 +7711,7 @@ static std::string resolvePin(const std::string& manifest)
 static bool manifestSetTopString(const std::string& path, const std::string& key,
                                  const std::string& value, std::string& err)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
     size_t topOpen = s.find('{');
@@ -7695,7 +7733,7 @@ static bool manifestSetTopString(const std::string& path, const std::string& key
         if (top.empty()) out = s.substr(0, topOpen) + "{\n" + topInd + member + "\n}" + s.substr(topClose + 1);
         else             out = s.substr(0, topOpen + 1) + "\n" + topInd + member + "," + s.substr(topOpen + 1);
     }
-    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    std::ofstream o(osp(path), std::ios::binary | std::ios::trunc);
     if (!o) { err = "cannot write '" + path + "'"; return false; }
     o << out; return true;
 }
@@ -7704,14 +7742,8 @@ static bool manifestSetTopString(const std::string& path, const std::string& key
 int cmdToolchainList()
 {
     std::vector<std::string> versions;
-    if (DIR* d = opendir(versionsDir().c_str())) {
-        while (struct dirent* e = readdir(d)) {
-            std::string n = e->d_name;
-            if (n == "." || n == "..") continue;
-            if (dirExists(versionDir(n))) versions.push_back(n);
-        }
-        closedir(d);
-    }
+    for (const std::string& n : listDir(versionsDir()))
+        if (dirExists(versionDir(n))) versions.push_back(n);
     std::sort(versions.begin(), versions.end());
     std::string def = readTrimmedFile(defaultVersionFile());
     // The one caller that still WALKS: `kama toolchain list` reports what this DIRECTORY resolves to, and
@@ -7758,7 +7790,7 @@ int cmdToolchainDefault(const std::string& v)
         fprintf(stderr, "kama toolchain default: '%s' is not installed — run `kama toolchain install %s`\n", v.c_str(), v.c_str());
         return 1;
     }
-    std::ofstream o(defaultVersionFile(), std::ios::binary | std::ios::trunc);
+    std::ofstream o(osp(defaultVersionFile()), std::ios::binary | std::ios::trunc);
     if (!o) { fprintf(stderr, "kama toolchain default: cannot write %s\n", defaultVersionFile().c_str()); return 1; }
     o << v << "\n";
     printf("default is now kama %s\n", v.c_str());
@@ -9039,7 +9071,7 @@ int main(int argc, char** argv)
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--") { for (++i; i < argc; ++i) progArgs.push_back(argv[i]); break; }   // rest are program args
-        else if ((a == "-o" || a == "--output") && i + 1 < argc) output = argv[++i];
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) output = cliPath(argv[++i]);
         // How many C compiles may run at once. Every option in this CLI has a long form; a short form
         // exists only where the convention is universal enough that its absence would surprise (`-o`,
         // `-v`, `-j`). `0`/negative/non-numeric is a mistake worth naming, not rounding to 1.
@@ -9098,7 +9130,7 @@ int main(int argc, char** argv)
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
-        else                                      inputs.push_back(a);
+        else                                      inputs.push_back(cliPath(a));
     }
 
     // `-- <args>` are forwarded to the program `kama run` launches; they mean nothing to build/transpile.
@@ -9612,7 +9644,7 @@ int main(int argc, char** argv)
         bool needText = false;
         for (const auto& q : questions) needText = needText || qNeedsText(q.mode);
         if (needText) {
-            std::ifstream in(input, std::ios::binary);
+            std::ifstream in(osp(input), std::ios::binary);
             if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
             fileText.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         }
@@ -10018,7 +10050,7 @@ int main(int argc, char** argv)
         struct GenCleanup {
             const std::vector<std::string>& files;
             const bool& keep;
-            ~GenCleanup() { if (!keep) for (auto& f : files) remove(f.c_str()); }
+            ~GenCleanup() { if (!keep) for (auto& f : files) remove(osp(f).c_str()); }
         } genCleanup{genFiles, keepC};
         std::string headerDir;
 
@@ -10672,6 +10704,19 @@ int main(int argc, char** argv)
             return 2;
         }
 
+        // ⚠️ A non-ASCII OUTPUT NAME (`kama build 日本語.kama` defaults to one) needs one more step than a
+        // non-ASCII directory. toolPath borrows a path's 8.3 alias, and a file that does not exist yet has
+        // none — so GNU ld would be asked to create `???.exe` and refuse. Link under an ASCII stand-in in
+        // the SAME directory (its alias covers the path, and the move into place stays on one volume),
+        // then rename. Everywhere else `linkOut` IS `outPath`.
+        std::string linkOut = outPath;
+#if defined(_WIN32)
+        for (unsigned char c : baseName(outPath)) if (c >= 0x80) {
+            linkOut = dirName(outPath) + "/kama-out-" + std::to_string((long)getpid())
+                    + outPath.substr(stripExtension(outPath).size());       // keep the extension
+            break;
+        }
+#endif
         int rc;
         if (perTU) {
             std::string base = cmd.str();
@@ -10684,15 +10729,16 @@ int main(int argc, char** argv)
                 // Capture each job's streams separately — not `2>&1` — because stream identity matters:
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
-                cmds.push_back(base + dashC + in.tok + "-o \"" + in.obj + "\""
-                               + " >\"" + in.obj + ".out\" 2>\"" + in.obj + ".err\"");
+                const std::string obj = toolPath(in.obj);   // the object AND cmd's two redirections (see toolPath)
+                cmds.push_back(base + dashC + in.tok + "-o \"" + obj + "\""
+                               + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"");
             }
             std::vector<int> rcs;
             rc = runCmdsParallel(cmds, nJobs, rcs);
             // Replay in INPUT order, whatever order they finished in. Logs are not build artifacts, so
             // they go regardless of --keep-c.
             for (size_t i = 0; i < cmds.size(); ++i) {
-                if (rcs[i] < 0) { remove((objs[i] + ".out").c_str()); remove((objs[i] + ".err").c_str()); continue; }
+                if (rcs[i] < 0) { remove(osp(objs[i] + ".out").c_str()); remove(osp(objs[i] + ".err").c_str()); continue; }
                 replayAndRemove(objs[i] + ".out", stdout);
                 replayAndRemove(objs[i] + ".err", stderr);
             }
@@ -10704,8 +10750,8 @@ int main(int argc, char** argv)
                     // than the host's (an ar from another toolchain writes an index the target linker
                     // cannot read).
                     std::ostringstream ar;
-                    ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << outPath << "\"";
-                    for (auto& o : objs) ar << " \"" << o << "\"";
+                    ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << toolPath(linkOut) << "\"";
+                    for (auto& o : objs) ar << " \"" << toolPath(o) << "\"";
                     rc = runCmd(ar.str());
                     if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
                 } else {
@@ -10714,20 +10760,30 @@ int main(int argc, char** argv)
                     // flags on the link too, or the runtime is never pulled in.
                     std::ostringstream ld;
                     ld << base << linkGc;
-                    for (auto& o : objs) ld << "\"" << o << "\" ";
-                    ld << link.str() << "-o \"" << outPath << "\"";
+                    // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).
+                    for (auto& o : objs) ld << "\"" << toolPath(o) << "\" ";
+                    ld << link.str() << "-o \"" << toolPath(linkOut) << "\"";
                     rc = runCmd(ld.str());
                 }
             }
         } else {
             for (auto& in : ccInputs) cmd << in.tok;
-            cmd << linkGc << link.str() << "-o \"" << outPath << "\"";
+            cmd << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
             rc = runCmd(cmd.str());
         }
 
         if (rc != 0) {                       // genCleanup removes the generated files on the way out
             fprintf(stderr, "kama: %s failed (exit %d)\n", compiler.c_str(), rc);
+            if (linkOut != outPath) remove(osp(linkOut).c_str());
             return rc;
+        }
+        if (linkOut != outPath) {
+            remove(osp(outPath).c_str());    // a previous build's output — rename does not replace
+            if (rename(osp(linkOut).c_str(), osp(outPath).c_str()) != 0) {
+                fprintf(stderr, "kama: cannot move the output into place as %s\n", outPath.c_str());
+                remove(osp(linkOut).c_str());
+                return 1;
+            }
         }
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
@@ -10744,9 +10800,9 @@ int main(int argc, char** argv)
             // sub-millisecond, and <windows.h> — where Sleep lives — cannot be included in this TU.
             // If it somehow never clears, let the temp file go: the run already has the child's exit code,
             // and failing `kama run` over a leftover file in the temp directory would be the worse trade.
-            for (int i = 0; i < 20000; ++i) if (remove(outPath.c_str()) == 0) break;
+            for (int i = 0; i < 20000; ++i) if (remove(osp(outPath).c_str()) == 0) break;
 #else
-            remove(outPath.c_str());
+            remove(osp(outPath).c_str());
 #endif
             return prc;
         }

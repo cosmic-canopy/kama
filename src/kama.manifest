@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  kama.exe's application manifest, embedded by windres via kama.rc (Makefile, the MINGW branch).
+
+  One setting: the process ANSI code page is UTF-8. On Windows 10 1903+ that makes the narrow CRT and
+  every `A` entry point UTF-8 by definition, so the compiler's own argv, fopen, ifstream, stat, _mkdir and
+  system() all see the bytes a kama string is made of — with no call-site changes. Measured (docs/
+  platforms/windows.md): the same program given `日本語` sees `???` without this and the exact nine UTF-8
+  bytes with it. Older Windows ignores the element and keeps today's behaviour; nothing regresses.
+
+  It does NOT lift MAX_PATH — that is the `\\?\` prefix's job (src/kama.winpath.cpp) — and `longPathAware`
+  is deliberately absent: it only works with the machine's LongPathsEnabled registry flag, which the
+  prefix makes unnecessary and which no user should have to be told to set.
+
+  The assemblyIdentity version is fixed on purpose; it is not the compiler version (`kama - -version` is).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="kama" version="1.0.0.0"/>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings xmlns:ws2="http://schemas.microsoft.com/SMI/2019/WindowsSettings">
+      <ws2:activeCodePage>UTF-8</ws2:activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

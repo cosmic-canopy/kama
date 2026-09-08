@@ -1,0 +1,3 @@
+// kama.rc — the one resource kama.exe carries: its application manifest (see kama.manifest).
+// 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID, 24 = RT_MANIFEST; the literals keep <winuser.h> out of it.
+1 24 "kama.manifest"
