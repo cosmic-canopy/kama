@@ -466,9 +466,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
-  `@generate(Formattable)`, and tagged strings all ship (SPEC). Settled by the audit (2026-09-07). Shipped 0.9.226: combining a
-  base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Formattable)`
-  on a **generic**/**variant**/**enum** type; a `${x:?}`-routed `@generate(Debug)` (spec hook already exists);
+  `@generate(Formattable)`, and tagged strings all ship (SPEC), on every subject including a generic and an
+  `enum` (0.9.246 — see *Derive follow-ons* above). Settled by the audit (2026-09-07). Shipped 0.9.226: combining a
+  base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `${x:?}`-routed
+  `@generate(Debug)` (spec hook already exists);
   per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
   parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears); and tagged-string
   *type-preserved params* (Model B — each hole keeping its static type into the params list, `html` returning
@@ -489,15 +490,28 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   runtime alive after `main`, so shipping this work means making that flag conditional again — on the
   artifact **kind** (program vs module), never on which library the program happens to use, which is the
   keying that was wrong before.
-- **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Scheduled — the
-  *Derive follow-ons* ROADMAP row (M): the same derives on a **generic** or **variant** type (the same v1 boundary
-  `@generate(Formattable)` draws — all of them now error rather than half-deriving; `Serializable`/`Deserializable`
-  were the two kinds with no arm, so they were *accepted in silence* and died in the C compiler on a
-  missing `_F<file>__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
-  and on a payload-less **enum**, which
-  has no struct to walk and today declares `implements` on its own `type enum` line instead. A `Copyable` derive is a
-  **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
-  walk can make (a memberwise copy of a raw handle double-frees).
+- **Derive follow-ons — SHIPPED `0.9.234`–`0.9.246`** (SPEC § *Derives* carries the surface; this entry keeps
+  only the verdicts, which is what a shipped row leaves behind). Every subject derives now: a generic type
+  **per instantiation** and **conditionally on its fields** (the implicit conditional conformance Rust writes
+  as `impl<T: PartialEq>`; the use site names the field that disqualified an instance), a tagged `enum` and a
+  payload-less one **per tag**, and a generic `enum` by both rules at once. The prelude's `Optional`/`Result`
+  carry `@generate(Equatable, Hashable, Formattable)`.
+  Four **non-goals** were settled on the way, each because something already answers the need:
+  - `of`/`zero` on an `enum` — a variant IS its own memberwise constructor (`Shape::Circle(r:)`), and `zero`
+    names no variant. Refused, with that as the message.
+  - `Serializable` on the prelude's `Optional` — an `Optional` FIELD already has a wire form (the inline
+    `null`/value case), so a derived `{"tag":"Some",…}` would be a second form for one type.
+  - A `Copyable` derive — a value/view copies by kind, and a resource's `copy` ctor is an ownership decision
+    no field walk can make (a memberwise copy of a raw handle double-frees).
+  - A payload-less enum's wire form is a bare string (`"Green"`), not `{"tag":"Green"}` — it is a name, not a
+    record, and the shape is fixed per TYPE so a schema still reads cleanly.
+  ⚠️ Two lessons worth more than the feature. The refusal on an enum ("accepts only Serializable,
+  Deserializable") was not a judgement about enums but a SECOND attribute parser holding a stale copy of the
+  accept-list — the four newer derives were not unsupported there, they were unknown to a copy nobody grew.
+  And the first shape a newly-legal feature opens is the one no fixture covers: `@generate` on a generic
+  became legal at `0.9.239` and a derived template that *nobody instantiates* then failed to compile, because
+  the uninstantiated-template probe asked an opaque `T` whether it conformed and three rules answered "no"
+  (`0.9.240`).
 - **A generic FREE function cannot call a generic free function with its own type parameter.**
   `fn T outer<T>(T v) { return ident(x: v); }` reports "cannot infer generic type parameter 'T' —
   argument 'x' is not a literal or a locally-typed value". `collectGenericInsts` walks each body ONCE,
@@ -1308,11 +1322,30 @@ Serialization ships today (by-value + object-graph + polymorphic contracts) with
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
 
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `encode`/`decode` of an
-  intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
-- **Binary backend follow-on (deferred).** `@bits(n)` bit-packing (tighter integers/bools), field-name
-  interning, and a schema-locked *positional* mode (needs an emitter change; trades forward-compat for max
-  compactness). Delta/snapshot replication stays ENGINE-level (above serde); generic byte compression is an
-  io-adapter layer (§1 transform adapters), not a serde concern.
+  intrinsic value. (A `const` field is a separate general language gap — doesn't parse today.)
+  ✅ The enum half of this bullet SHIPPED with the derives: a bare `encode`/`decode` of an enum value works
+  (consumer KB-18 — it was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
+  generic enums, per instantiation. See *Derive follow-ons* in §2.
+- **Binary backend follow-on.** `@bits(n)` bit-packing (tighter integers/bools) and a schema-locked
+  *positional* mode (needs an emitter change; trades forward-compat for max compactness) stay **deferred**.
+  Delta/snapshot replication stays ENGINE-level (above serde); generic byte compression is an io-adapter
+  layer (§1 transform adapters), not a serde concern.
+  **Field-name interning is no longer one of the deferred three — it is SCHEDULED**, the *KBIN field-name
+  interning* row, and a consumer measurement is what moved it. KBIN writes every field NAME in full, in
+  every object. That is the design and not a bug — the names are what let `skipValue` work without a schema,
+  so an old client talking to a new server degrades instead of erroring, and CBOR and MessagePack make the
+  same trade. What was missing was any way to stop paying for it when both ends DO have the schema.
+  Measured at `0.9.239` on a six-field frame — five fixed-width fields plus an `int32`: **24 bytes of data,
+  91 on the wire** (the consumer measured 97 on their own field names, 68 with one-character `@field(name:)`
+  renames). Roughly 4x, on the message a 60 Hz game sends most; an opaque `DynamicArray<uint8>` costs 2xN for
+  the same reason.
+  ⚠️ **The fix needs no compiler change and no schema, which is why it is worth doing before the two above.**
+  `Serializer.fieldName(string)` and `Deserializer.fieldName() -> string` are ordinary tokens, so the BACKEND
+  can intern them: write each distinct name in full the first time behind a "new name" tag, and a small index
+  every time after; the reader builds the same table as it goes. Entirely inside `lib/std/serialization/`.
+  `skipValue` and forward compatibility both survive intact — which a field-NUMBER scheme would not, and
+  which is the reason to prefer this shape. On a repeated frame it turns ~10 bytes per field into ~1.
+  (Consumer KG-34, filed 2026-09-08 with the numbers above.)
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `encode`/`decode`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)

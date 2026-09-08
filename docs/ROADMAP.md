@@ -52,17 +52,17 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | # | item | size | detail |
 |---|---|---|---|
-| 1 | **Derive follow-ons** — `@generate(Formattable)` and `@generate(Equatable, Hashable)` on a generic, a variant and a payload-less enum: three "out of scope for M6" arms in the emitter, each refused with a message today | M | [§4](ROADMAP_DETAIL.md#s4) |
-| 2 | **Honest FFI surface** — the 8 externs that return a genuinely nullable pointer, wrapped as `Optional` in `lib/std/ptr/` | S | [§2](ROADMAP_DETAIL.md#s2) |
-| 3 | **`Simd` `sqrt`/`floor`/`ceil`** — a `kama_math.h`-backed intrinsic arm on a lane batch; wants the wasm leg to prove the `-msimd128` lowering | S | [§2](ROADMAP_DETAIL.md#s2) |
-| 4 | **`Copyable` conformance checks parameter constness** — `checkConformanceSignature` compares `ref`/`out` but not `const ref`; tightening it is a source break for every external `Copyable`, so it is its own step | S | [§2](ROADMAP_DETAIL.md#s2) |
-| 5 | **`std::time` calendar** — civil-from-days, ISO-8601 format/parse, no zone database; whole or not at all | — | [§1](ROADMAP_DETAIL.md#s1) |
-| 6 | **No incremental build** — every build recompiles everything. ⚠️ Largely already answered and never rowed: `zig cc` has a content-addressed per-TU object cache (measured 4.13 s cold, **0.11 s after editing one file**), so a bundled install is incremental today and kama's own object cache is mostly moot. What is left is the SLIM install, which uses clang and has no cache | — | [§9](ROADMAP_DETAIL.md#s9) |
-| 7 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
-| 8 | **Modular / opt-in stdlib** — whether emit-on-instantiation + `--gc-sections` pruning scales, or explicit per-module opt-in / dead-function elimination is wanted before the stdlib grows | — | [§3](ROADMAP_DETAIL.md#s3) |
-| 9 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
-| 10 | **`std::net`** — IPv6, UDP multicast | — | [§2](ROADMAP_DETAIL.md#s2) |
-| 11 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |
+| 1 | **Honest FFI surface** — the 8 externs that return a genuinely nullable pointer, wrapped as `Optional` in `lib/std/ptr/` | S | [§2](ROADMAP_DETAIL.md#s2) |
+| 2 | **`Simd` `sqrt`/`floor`/`ceil`** — a `kama_math.h`-backed intrinsic arm on a lane batch; wants the wasm leg to prove the `-msimd128` lowering | S | [§2](ROADMAP_DETAIL.md#s2) |
+| 3 | **`Copyable` conformance checks parameter constness** — `checkConformanceSignature` compares `ref`/`out` but not `const ref`; tightening it is a source break for every external `Copyable`, so it is its own step | S | [§2](ROADMAP_DETAIL.md#s2) |
+| 4 | **`std::time` calendar** — civil-from-days, ISO-8601 format/parse, no zone database; whole or not at all | — | [§1](ROADMAP_DETAIL.md#s1) |
+| 5 | **No incremental build** — every build recompiles everything. ⚠️ Largely already answered and never rowed: `zig cc` has a content-addressed per-TU object cache (measured 4.13 s cold, **0.11 s after editing one file**), so a bundled install is incremental today and kama's own object cache is mostly moot. What is left is the SLIM install, which uses clang and has no cache | — | [§9](ROADMAP_DETAIL.md#s9) |
+| 6 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
+| 7 | **Modular / opt-in stdlib** — whether emit-on-instantiation + `--gc-sections` pruning scales, or explicit per-module opt-in / dead-function elimination is wanted before the stdlib grows | — | [§3](ROADMAP_DETAIL.md#s3) |
+| 8 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
+| 9 | **`std::net`** — IPv6, UDP multicast | — | [§2](ROADMAP_DETAIL.md#s2) |
+| 10 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |
+| 11 | **KBIN field-name interning** — the binary backend writes every field NAME in full in every object: measured 24 bytes of data, 91 on the wire. A backend-only fix (write each name once behind a "new name" tag, then a small index), no compiler change, no schema, and `skipValue`/forward-compat survive | S | [§4](ROADMAP_DETAIL.md#s4) |
 | 12 | **Serialization follow-ups** — deserialize breadth, more back ends, `@deprecated` | — | [§4](ROADMAP_DETAIL.md#s4) |
 | 13 | **Paths with spaces** — two of the C compiler's `-I` entries are unquoted while everything else on the line is quoted, so a project under `C:\Users\John Smith\` (or `/home/x/my project/`) likely hands clang a torn include path, on every platform. Found reading the command builder; not yet measured — the probe is one build from a `mktemp -d` with a space in it | ? | [§2](ROADMAP_DETAIL.md#s2) |
 | 14 | **Windows path residuals after `0.9.222`** — `CreateProcessW`'s cwd/executable ≤ 260 (non-goal, a Win32 limit; document "pass absolute paths" on `Command.cwd`), the two 260-byte cosmetic buffers (`selfExePath`, `relativizeToCwd`), the long-`~/.kama` store with no guard, `longPathAware` (non-goal, registry-gated), a volume with 8dot3 names off (the linker fails as before; `lld` is the answer), and a non-ASCII `%TEMP%` breaking clang's own one-step link (toolchain; `targets.md` should say so). Verdicts written in the detail | S | [§2](ROADMAP_DETAIL.md#s2) |

@@ -205,8 +205,10 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
 
   Strings render **raw/unquoted** (uniform single-contract dispatch — no special-case). A hand-written
   `format` wins over the derive; `@skip` omits a field. Every non-skipped field must itself be a
-  primitive/string or a type that `implements Formattable` (an `Optional`/collection/enum-typed field, or a
-  generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
+  primitive/string or a type that `implements Formattable`; one that is neither is refused, naming it. <!-- xfail: gen_format_unconformed_field -->
+  A generic, a tagged `enum` and a payload-less `enum` may all carry the attribute (see *Derives*); an
+  `Optional`-typed field renders because the prelude derives `Formattable` for it, and a collection-typed
+  one does not.
   It is named after the **contract** (`Formattable`), not `display`/`debug` — Kama has one to-string contract, no
   Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
 - **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
@@ -2898,8 +2900,8 @@ call site is a compile error naming that choice rather than a silently synthesiz
 
 ### Derives — `@generate(...)` ✅
 
-One opt-in surface, on a plain (non-generic, non-variant) type. Every name is **opt-in by design**; a
-hand-written member always wins over the synthesized body, and the nominal conformance is registered either way.
+One opt-in surface. Every name is **opt-in by design**; a hand-written member always wins over the
+synthesized body, and the nominal conformance is registered either way.
 
 | Name | Synthesizes |
 | --- | --- |
@@ -2912,8 +2914,37 @@ hand-written member always wins over the synthesized body, and the nominal confo
 
 `Equatable`/`Hashable` walk each field through *its own* `equals`/`hash` — never a bitwise compare, which
 would read padding and be wrong for any type whose equality is not its representation — so every field must
-itself conform, and `@skip` is honored by both (which is what keeps "equal values hash equal" true). A
-payload-less `enum` has no struct to walk: declare the contract on the enum and write the method.
+itself conform, and `@skip` is honored by both (which is what keeps "equal values hash equal" true).
+
+**What may carry it.** Any `value`, `resource` or `enum`, generic or not:
+
+| Subject | Derives | Shape |
+| --- | --- | --- |
+| plain `value` / `resource` | all seven | `Type { f: v, … }` |
+| generic `Box<T>` | all seven, **per instantiation** | as above, for each instance |
+| tagged `enum` | the five contract names (`of`/`zero` are a non-goal) | per tag: `Circle { r: 2 }`, or the bare name for a payload-less variant | <!-- xfail: generate_of_on_enum -->
+| payload-less `enum` | the five contract names | the bare variant name; on the wire a plain string `"Green"`, not an object | <!-- test: generate_plain_enum -->
+| generic `enum` (`Optional<T>`, `Msg<T>`) | the five, **per instantiation** | as the tagged/payload-less rows | <!-- test: generate_generic_enum -->
+
+A derive on a **generic** type is a *conditional conformance*: the instance carries it exactly when every
+substituted field (or payload) conforms. `@generate(Equatable)` on `Box<T>` cannot hold for every `T`, and
+the author does not write the condition because it is not a choice — it is a consequence of the fields, the
+same rule Rust spells `impl<T: PartialEq>` and Haskell `instance Eq a => Eq (Box a)`. An instance that
+does not qualify is refused at the **use** site, naming the field that disqualified it. <!-- xfail: generate_generic_unmet, generate_generic_enum_unmet -->
+For an enum it names the variant too — "`Put`'s field `v` (`Plain`)" — because a sum type gives the
+reader two places to look.
+
+A payload-less `enum` has no struct to walk, so a derive **promotes** it to the same tagged representation
+that `implements` on such an enum has always produced — losslessly: `==`, `cast<IntType>`, `try cast`, its
+explicit member values and `match` all survive. <!-- test: enum_promoted_scalar_ops -->
+
+`of`/`zero` on an `enum` is a **non-goal**, not a gap: a variant is already its own memberwise constructor
+(`Shape::Circle(r: 2)`), and `zero` names no variant. So is `Serializable` on the prelude's `Optional`,
+whose wire form is the inline `null`/value case an `Optional` field already has.
+
+The prelude's `Optional<T>` and `Result<T, E>` carry `@generate(Equatable, Hashable, Formattable)`, which
+is why `opt == opt`, an `Optional` `Map` key and `${opt}` work for a payload that supports them — and,
+conditionally, why they do not for one that does not. <!-- test: generate_generic_enum -->
 
 ### Deliberately not in the model
 
@@ -4448,7 +4479,9 @@ Sendable, and nothing holding it may claim to be. <!-- xfail: sendable_undeclare
 What may cross **without** a declaration is exactly what cannot carry one: a primitive and `string`
 (declared for them in the prelude, like `Hashable`), a payload-less `enum`, a bare `fnptr` value, and the C
 seam — `UnsafePtr` and an extern struct. A **generic enum** (`Optional<T>`, a user `Msg<T>`) cannot declare
-a contract yet, so it alone is judged by its payloads: a sum type has nothing they do not show. The stdlib
+a contract yet — it can *derive* one with `@generate` (see *Derives*), but a derive registers a conformance
+and gives the author no way to write `implements` — so it alone is judged by its payloads: a sum type has
+nothing they do not show. The stdlib
 writes its own rules in the same words — `Sendable when [T: Sendable, A: Sendable]` on every container, so <!-- test: sendable_when_gate -->
 an arena-backed `DynamicArray<T, BumpAllocator>` cannot cross (its allocator points into the parent's <!-- xfail: sendable_arena_container -->
 arena), and `Sendable when [T: Immutable]` on `Shared`/`Weak`, which is the rule "a shared handle may cross
