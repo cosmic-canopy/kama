@@ -1,0 +1,25 @@
+// The discovery pass that infers an inline variant-ctor `match` subject (`match (Optional::Some(value: m))`)
+// reads its own name->type map, and that map had the same flaw the emitter's tables had: a sibling
+// block's `string m` outlived its block. Here the subject's `m` is the loop's `E`, but the pass answered
+// `string`, registered `Optional<string>`, and the arm binding `e` came out a string — a WRONG instance,
+// not a diagnostic (and the emitter then refused `takeE(v: e)` for handing a `string`).
+//
+// Two fixes meet here: the pass restores its map when a block closes, and it records a `foreach`
+// binding's type for the body, as the generics scan always did — so the same `match` over a loop
+// variable with NO sibling in sight, which used to fail with "subject's type could not be resolved",
+// now infers `Optional<E>` too.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
+    int32 r = 0;
+    if (r == 1) {
+        string m = "boom";
+        r = cast<int32>(m.length());
+    } else {
+        foreach (E m in xs) {
+            match (Optional::Some(value: m)) { case Some(value: e): { r = r + takeE(v: e); } case None: { } };
+        }
+    }
+    return r;   // 5
+}

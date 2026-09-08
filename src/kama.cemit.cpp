@@ -11630,8 +11630,13 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         // (which has no way to re-infer it).
         { std::string inst = inferMatchSubjInst(mm->subject); if (!inst.empty()) _matchSubjInst[mm] = inst; }
         if (mm->arms) for (auto& a : *mm->arms) if (a) {
+            // An arm's payload bindings shadow whatever their names meant outside; this pass does not
+            // resolve their types, so it hides the outer entries for the arm rather than mistyping them.
+            auto savedTys = _scanLocalTys;
+            if (a->bindings) for (auto& bn : *a->bindings) if (bn) _scanLocalTys.erase(*bn);
             scanExprForCollections(a->body);
             scanStmtForCollections(a->block);
+            _scanLocalTys = savedTys;
         }
     }
 }
@@ -11641,7 +11646,13 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
     if (!s) return;
     ASTNode* n = s.get();
     if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        // A block's declarations end with the block. Both maps are flat and this pass has no scope stack,
+        // so the block is the scope: restore what it inherited when it closes. Without this a sibling
+        // block's `string m` typed a later `match (Optional::Some(value: m))` whose `m` was something else
+        // entirely — the subject inferred `Optional<string>` and the arms were typed off the wrong instance.
+        auto savedTys = _scanLocalTys; auto savedConsts = _constLocalVals;
         if (b->statements) for (auto& st : *b->statements) scanStmtForCollections(st);
+        _scanLocalTys = savedTys; _constLocalVals = savedConsts;
     } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         scanTypeForCollections(d->type);
         // A1: record each local's declared type (name->type node) so an inline variant-ctor `match` subject
@@ -11681,7 +11692,18 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         scanTypeForCollections(fe->type);
         scanExprForCollections(fe->expression);
-        scanStmtForCollections(fe->body);
+        // The binding is a locally-typed value for the body, like a declaration — and like the generics
+        // scan already records it. So `match (Optional::Some(value: m))` over a loop variable infers, and
+        // an enclosing `m` of another type cannot answer for it. Restored after the body.
+        {
+            auto savedTys = _scanLocalTys;
+            if (fe->name && fe->name->value) {
+                if (fe->type) _scanLocalTys[*fe->name->value] = fe->type;
+                else          _scanLocalTys.erase(*fe->name->value);
+            }
+            scanStmtForCollections(fe->body);
+            _scanLocalTys = savedTys;
+        }
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanTypeForCollections(pf->type);
         scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
@@ -12549,11 +12571,16 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     if (!s) return;
     ASTNode* n = s.get();
     if (auto* b = dynamic_cast<BlockNode*>(n)) {
-        if (b->statements) for (auto& st : *b->statements) scanStmtForGenerics(st, localTys);
+        // Per-block COPY, the way the match arms below already do it: a block's declarations end with
+        // the block, so they must not type a same-named binding in a later sibling block.
+        std::map<std::string, SharedIdentifier> blockTys = localTys;
+        if (b->statements) for (auto& st : *b->statements) scanStmtForGenerics(st, blockTys);
     } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         if (d->variables) for (auto& v : *d->variables) if (v) {
             scanExprForGenerics(v->initializer, localTys);
-            // Flat name->type map, no scope-pop — correct without shadowing.
+            // Flat name->type map; scoping is the CALLER's (a block, a loop, an arm) — each recurses on a
+            // copy, so a name declared inside ends with its scope. Declarations do not shadow (a compile
+            // error), but `foreach`/`match` bindings do, and those binders scope their own copy too.
             if (v->name && v->name->value && d->type) localTys[*v->name->value] = d->type;
         }
     } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
@@ -12573,31 +12600,38 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
         scanExprForGenerics(dw->booleanExpression, localTys); scanStmtForGenerics(dw->doWhileStatement, localTys);
     } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
-        if (fr->initializerStatements) for (auto& st : *fr->initializerStatements) scanStmtForGenerics(st, localTys);
-        scanExprForGenerics(fr->booleanExpression, localTys);
-        if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanStmtForGenerics(st, localTys);
-        scanStmtForGenerics(fr->body, localTys);
+        // The counter the init declares is the loop's, not the enclosing block's — a copy for the loop.
+        std::map<std::string, SharedIdentifier> loopTys = localTys;
+        if (fr->initializerStatements) for (auto& st : *fr->initializerStatements) scanStmtForGenerics(st, loopTys);
+        scanExprForGenerics(fr->booleanExpression, loopTys);
+        if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanStmtForGenerics(st, loopTys);
+        scanStmtForGenerics(fr->body, loopTys);
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         scanExprForGenerics(fe->expression, localTys);
         // A foreach BINDING is a locally-typed value exactly like the declaration arm above, and this is
         // the table generic inference reads. Without it, passing a loop variable to ANY generic function
         // fails to infer — `toString(x: v)` inside a `foreach` demanded an explicit `::<int32>`, while the
         // identical call one line outside the loop did not.
-        if (fe->type && fe->name && fe->name->value) localTys[*fe->name->value] = fe->type;
-        scanStmtForGenerics(fe->body, localTys);
+        // Bound in a COPY for the body: the binding may shadow an enclosing local, and it ends with the
+        // loop. Bound in the shared map, `string m; foreach (int32 m in xs) {…} ident(x: m)` inferred
+        // `T = int32` for a `string` argument after the loop.
+        std::map<std::string, SharedIdentifier> bodyTys = localTys;
+        if (fe->type && fe->name && fe->name->value) bodyTys[*fe->name->value] = fe->type;
+        scanStmtForGenerics(fe->body, bodyTys);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
         scanStmtForGenerics(pf->body, localTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+        std::map<std::string, SharedIdentifier> bodyTys = localTys;   // the aliases live in the window only
         if (bn->bindings) for (auto& b : *bn->bindings) if (b) {
             scanExprForGenerics(b->host, localTys);
             // A `borrow` ALIAS is a locally-typed value like the declaration and `foreach` arms above —
             // and the only one whose type is never written, so it has to be resolved from the mint.
             if (b->alias && b->alias->value)
                 if (SharedIdentifier at = mintReturnTypeNode(b->host, localTys))
-                    localTys[*b->alias->value] = at;
+                    bodyTys[*b->alias->value] = at;
         }
-        scanStmtForGenerics(bn->body, localTys);
+        scanStmtForGenerics(bn->body, bodyTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }

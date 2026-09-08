@@ -1,0 +1,15 @@
+// Generic inference reads a discovery-time name->type map, and a `foreach` binding used to be written
+// into the SHARED map rather than a copy for the loop body. So after the loop the enclosing `E m` was
+// still typed `int32` there, and `ident(x: m)` instantiated `ident<int32>` for an `E` argument —
+// "argument `x` expects a number, so it cannot be given a type value", on a line where `m` is an `E`.
+// The binding now lives in a per-body copy, as a `match` arm's bindings always did.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn T ident<T>(T x) { return x; }
+fn int32 main() {
+    InlineArray<int32>#(2) xs = [3, 4];
+    E m = E.of(n: 2);
+    int32 r = 0;
+    foreach (int32 m in xs) { r = r + m; }   // 7 — the elements
+    E k = ident(x: m);                        // T = E — the enclosing local again
+    return r + k.n;                           // 9
+}
