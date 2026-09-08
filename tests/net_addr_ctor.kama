@@ -11,6 +11,8 @@ fn int32 main() {
     int32 pa = cast<int32>(a.port);          // 8080
     int32 pb = cast<int32>(b.port);          // 53
     int32 cnt = cast<int32>(rf.count);       // 12
-    int32 octet = match (a.ip) { case V4(a: a, b: b, c: c, d: d): cast<int32>(d); };   // 1 (127.0.0.1 -> d=1)
+    // The payload LABELS are the variant's field names (`a:`…`d:`); the BINDINGS may not reuse a live
+    // name, and `a`/`b` are the two `SocketAddr` locals above — the subject here is the outer `a`.
+    int32 octet = match (a.ip) { case V4(a: o1, b: o2, c: o3, d: o4): cast<int32>(o4); };   // 1 (127.0.0.1 -> d=1)
     return pa - pb - cnt - octet - 8014;     // 8080 - 53 - 12 - 1 - 8014 = 0
 }

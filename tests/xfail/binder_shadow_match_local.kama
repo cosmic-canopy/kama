@@ -1,0 +1,14 @@
+// A `match` payload binding may not take a live name. This is the spelling consumer KB-20 was filed
+// against — the binding silently took the enclosing local's TYPE and the error landed at the first use,
+// naming the argument and mentioning neither the binding nor the declaration it collided with.
+//
+// The LABEL is the variant's field name and is unrestricted; only the BINDING is a new name.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    Optional<E> inner = Optional::Some(value: E.of(n: 5));
+    string m = "boom";
+    int32 r = 0;
+    match (inner) { case Some(value: m): { r = takeE(v: m); } case None: { } };   // ERROR: shadows `m`
+    return r + cast<int32>(m.length());
+}

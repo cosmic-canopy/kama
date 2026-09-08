@@ -1,0 +1,14 @@
+// A `foreach` variable may not take a PARAMETER's name either — the same ban, the same message the
+// declaration spelling gives (`int32 m = …;` here is "local `m` shadows a parameter").
+//
+// This shape was the quietest of the three: until 0.9.248 the loop body emitted `(*m)` on a plain int,
+// because the binding inherited the `ref` parameter's indirection, and the failure surfaced as a clang
+// error against generated C with no kama diagnostic at all.
+fn int32 bump(ref int32 m) {
+    InlineArray<int32>#(2) xs = [3, 4];
+    int32 r = 0;
+    foreach (int32 m in xs) { r = r + m; }   // ERROR: shadows the parameter `m`
+    m = m + r;
+    return m;
+}
+fn int32 main() { int32 v = 1; return bump(m: ref v); }

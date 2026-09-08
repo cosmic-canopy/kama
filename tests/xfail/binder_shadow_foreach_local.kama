@@ -1,0 +1,18 @@
+// kama has no shadowing, and a `foreach` variable is a binding like any other.
+//
+// The ban was enforced only at a DECLARATION until 0.9.253, so the three body-level binders slipped past
+// it. It was never a decision — and it did not even hold together: this exact shape used to fail at the
+// first USE with a bogus type error (the outer `m`'s type answered for the binding), which is what
+// consumer KB-20 reported. 0.9.248 answered that by making the shadow work; this is the reversal.
+//
+// Sibling-scope reuse stays legal — see tests/local_scope_sibling_foreach. Two blocks that never coexist
+// are not shadowing.
+type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 takeE(E v) { return v.n; }
+fn int32 main() {
+    InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
+    string m = "boom";
+    int32 r = 0;
+    foreach (E m in xs) { r = r + takeE(v: m); }   // ERROR: shadows the enclosing local `m`
+    return r + cast<int32>(m.length());
+}

@@ -1,0 +1,12 @@
+// A `for` counter is a binding too, and the ban reaches it — the third binder, and the one whose scope
+// only arrived in 0.9.247 (the init clause used to declare straight into the enclosing block).
+//
+// ⚠️ Two SEQUENTIAL loops over `i` stay legal and must: the counter dies with its loop, so they never
+// coexist. It is the NESTED case — and this one, over a live local — that the ban is about.
+// See tests/local_scope_for_init for the sequential form.
+fn int32 main() {
+    int32 i = 10;
+    int32 t = 0;
+    for (int32 i = 0; i < 3; i = i + 1) { t = t + i; }   // ERROR: shadows the enclosing local `i`
+    return t + i;
+}

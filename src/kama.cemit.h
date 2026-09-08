@@ -2903,6 +2903,11 @@ private:
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
     // name of a comptime param bound in this instantiation — see the definition for why.
     void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);
+    // kama's shadowing ban, at a BINDER rather than a declaration — a `for` counter, a `foreach` variable
+    // or a `match` payload binding may no more take a live name than `T x = …` may. Same three questions
+    // and the same three messages as the declarator's check, so the rule reads identically wherever it
+    // fires; `kind` names the binder. See the definition for why the binders were ever outside it.
+    void        checkBinderShadow(const std::string& nm, const char* kind, int srcLine);
     bool        isConstReceiver(SharedExpression receiver);             // const-call restriction (a const root, or a const raw pointer step)
     // Never-null definite assignment for `Owned`/`Shared` fields (Stage 1): each must be set before the
     // ctor returns and never read before it is set. `Weak` is exempt (nullable). v1 = straight-line.

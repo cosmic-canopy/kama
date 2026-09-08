@@ -50,6 +50,12 @@ bind_foreach_narrow	bind_foreach_narrow.kama:3
 bind_foreach_operand	bind_foreach_operand.kama:3
 bind_match_narrow	bind_match_narrow.kama:4
 bind_match_operand	bind_match_operand.kama:3
+binder_shadow_for_local	binder_shadow_for_local.kama:10
+binder_shadow_foreach_field	binder_shadow_foreach_field.kama:14
+binder_shadow_foreach_local	binder_shadow_foreach_local.kama:16
+binder_shadow_foreach_param	binder_shadow_foreach_param.kama:10
+binder_shadow_match_field	binder_shadow_match_field.kama:13
+binder_shadow_match_local	binder_shadow_match_local.kama:12
 bitcast_clong	bitcast_clong.kama:2
 bitcast_nonscalar	bitcast_nonscalar.kama:6 bitcast_nonscalar.kama:7
 bitcast_width	bitcast_width.kama:5
@@ -466,7 +472,7 @@ lit_wide_into_int32	lit_wide_into_int32.kama:5
 lit_wide_negative_past_int64	lit_wide_negative_past_int64.kama:5
 lit_wide_past_uint64	lit_wide_past_uint64.kama:5
 local_no_initializer	local_no_initializer.kama:9
-local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:18
+local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6

@@ -1029,13 +1029,15 @@ void CEmitter::noteScopedBinding(const std::string& name)
     if (!_scopes.empty()) _scopes.back().bindings.push_back(saveLocalBinding(name));
 }
 
-// `_localCTypes` is NOT written for these binders on purpose (see bindArmPayloadTypes: a `foreach (string
-// s …)` binding is a borrow on the indexed path and an owned value on the iterator path, and an entry
-// perturbs `ownsByValue` LHS detection). Hiding is not writing: with no entry the resolvers fall through
-// to the binding's own type node, which is exactly what happens when no enclosing local shares the name.
-// Before this, `string m; foreach (E m in xs) { takeE(v: m); }` was refused for handing a `string`, a
-// `foreach (int32 m …)` inside `fn f(ref int32 m)` emitted `(*m)` on a plain int (a clang error leaked
-// through), and a payload binding `m` over an outer `Res m` read the outer's type and move state.
+// A binder that shadows a live name is now REJECTED (`checkBinderShadow`), so on a valid program there is
+// nothing here to hide — every erase below is a no-op. It earns its keep on an INVALID one: `unsupported`
+// records the diagnostic and emission continues, and without this the doomed body would go on resolving
+// the binder through the outer entry and pile cascade errors on top of the one true message. One binder,
+// one diagnostic, which is what makes the `xfail` fixtures for this rule assert exactly one error.
+//
+// `_localCTypes` is deliberately never WRITTEN for these binders (see bindArmPayloadTypes: a
+// `foreach (string s …)` binding is a borrow on the indexed path and an owned value on the iterator path,
+// and an entry perturbs `ownsByValue` LHS detection). Erasing is not writing.
 void CEmitter::hideShadowedLocal(const std::string& name, bool refBinder)
 {
     _localCTypes.erase(name);
@@ -6846,8 +6848,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         // Ahead of the iterator/collection split below, so BOTH shapes are covered by the one check.
-        if (fe->name && fe->name->value)
+        if (fe->name && fe->name->value) {
             checkConstParamBinder(*fe->name->value, "`foreach` variable", fe->name->line);
+            checkBinderShadow(*fe->name->value, "`foreach` variable", fe->name->line);
+        }
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
         // A user type (not a built-in collection) iterates via the iterator protocol (structural).
@@ -7503,10 +7507,18 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
                 // A `for` init declares a LOCAL. Record it in the binding tables exactly as emitDeclarator
                 // does — it used to be invisible to all of them, so the counter of every `for` loop in the
                 // corpus reached the identifier arm as a name nothing bound. Not pushed onto the scope's
-                // `declaredNames`: two sequential loops over `i` in one function are ordinary, not shadowing.
                 // Owned by the `for`'s wrapper scope (emitStatement's ForNode arm), so it dies with the loop.
+                // It IS pushed onto `declaredNames` — the counter is a binding like any other, and the ban
+                // applies to it (a `for (int32 i …)` over a live `i` is the same hazard as `int32 i = …`).
+                // The comment here used to say it must not be, so that two sequential loops over `i` would
+                // not read as shadowing; that was true when the counter had no scope of its own and is not
+                // now — the wrapper scope pops between them, so sequential loops never coexist while a
+                // NESTED one is caught, which is the distinction the ban is actually about.
                 if (!nm.empty()) {
+                    checkConstParamBinder(nm, "`for` counter", decl->line);
+                    checkBinderShadow(nm, "`for` counter", decl->line);
                     noteScopedBinding(nm);
+                    if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
                     _localTypes[nm]     = (isClass(ty) || isInterface(ty)) ? ty : "";
                     _localCTypes[nm]    = ty;
                     _localTypeNodes[nm] = decl->type;
@@ -18697,18 +18709,47 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
 // an uninstantiated generic is covered. A binder lives in a body, and a body is walked per instantiation
 // — which is exactly where `_comptimeSubst` is bound, so this is the right and only place for it.
 //
-// Note this is narrower than kama's general shadowing ban: `foreach` and `match` binders are exempt from
-// that ban today, and for an ordinary name the exemption is harmless (the inner binding wins, which is
-// what the author wrote). It is only a const param that gets discarded instead of shadowed. Widening the
-// general ban to these two binders was a separate question, and the consumer-driven audit answered it
-// (0.9.231): the exemption STAYS. A runtime binder that shadows is the inner binding winning, which is what
-// the author wrote; only a comptime parameter is DISCARDED instead of shadowed, and that is what this rule
-// catches.
+// This one stays SEPARATE from the general binder ban below even though both now fire at the same sites: a
+// comptime parameter is not a parameter, a local or a field, it lives in `_comptimeSubst`, and its message
+// names the thing the author has to rename. (The comment that used to sit here said the general ban did
+// not reach these binders and that "the consumer-driven audit answered it (0.9.231): the exemption STAYS".
+// That verdict was recorded in a source comment and nowhere else — no row, no SPEC sentence, no fixture —
+// and the maintainer's ruling is the opposite: kama does not have shadowing. See `checkBinderShadow`.)
 void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, int srcLine)
 {
     if (nm.empty() || !_comptimeSubst.count(nm)) return;
     unsupported((std::string(kind) + " `" + nm + "` shadows a comptime parameter — rename it").c_str(),
                 srcLine);
+}
+
+// The shadowing ban, at a binder. **kama has no shadowing** — "one name = one binding within any live
+// scope", which is what keeps name resolution and move tracking unambiguous — and that rule was only ever
+// enforced at a DECLARATION (`emitDeclarator`). The three body-level binders never went through it, so
+// `foreach (int32 count in xs)` was accepted inside a method with a field `count`, over a parameter, and
+// over an enclosing local, where `int32 count = …` in the same body is refused.
+//
+// That was never a decision. It was the check not reaching these sites, and it did not even hold together:
+// until `0.9.248` a binder shadowing an enclosing local read the OUTER local's type and failed at the first
+// use with a bogus type error, and one shadowing a `ref` parameter emitted `(*m)` on a plain int and died
+// in clang with no kama diagnostic at all. Those were two shapes of the KB-20 class. `0.9.248` answered
+// them by making the shadow WORK, which settled a language question inside a bug fix and in the wrong
+// direction; this is that reversal. Sibling-scope reuse is untouched and stays legal — two blocks that
+// never coexist are not shadowing, and that half of KB-20 (`0.9.247`) is the real fix.
+//
+// Same three questions, in the same order, with the same three messages as the declarator's check, so the
+// rule reads identically wherever it fires. The `ctor`/static exemptions come along for the same reason
+// they exist there: a bare name in a `ctor` body is always a local or a param (the value under
+// construction is reached only through `this`), and a static method has no `this` to shadow.
+void CEmitter::checkBinderShadow(const std::string& nm, const char* kind, int srcLine)
+{
+    if (nm.empty() || _probingTemplate) return;
+    const std::string what = std::string(kind) + " `" + nm + "` shadows ";
+    if (_paramNames.count(nm)) { unsupported((what + "a parameter — rename it").c_str(), srcLine); return; }
+    for (auto& sc : _scopes)
+        for (auto& dn : sc.declaredNames)
+            if (dn == nm) { unsupported((what + "an enclosing-scope local — rename it").c_str(), srcLine); return; }
+    if (_currentClass && !_inStaticMethod && !_inNamedCtorBody && _currentClass->fieldNames.count(nm))
+        unsupported((what + "a field — rename it").c_str(), srcLine);
 }
 
 // writing TO or THROUGH a `const` binding is a hard error (deep const, so
@@ -20708,9 +20749,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // LSP index: the binding's own node (parallel list, same order) carries the span.
                 if (a->bindingIds && i < a->bindingIds->size())
                     registerBinding((*a->bindingIds)[i].get(), SymKind::Local);
-                checkConstParamBinder(bn, "`match` binding",
-                                      (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
-                                          ? (*a->bindingIds)[i]->line : a->line);
+                int bnLine = (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
+                                 ? (*a->bindingIds)[i]->line : a->line;
+                checkConstParamBinder(bn, "`match` binding", bnLine);
+                checkBinderShadow(bn, "`match` binding", bnLine);
                 const FieldInfo& pf = vc->payload[slotOf[i]];
                 // Containment, on the position that made a TOKEN-based rule leak. `match (a.allocate(…))
                 // { case Some(value: p): … }` binds an `UnsafePtr` and never spells the word — a rule

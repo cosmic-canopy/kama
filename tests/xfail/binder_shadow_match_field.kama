@@ -1,0 +1,17 @@
+// A `match` payload binding may not take an in-scope FIELD's name.
+//
+// `tests/net_addr_ctor.kama` carried the local twin of this in the corpus for releases, and only a
+// hostile check found it: `case V4(a: a, b: b, …)` rebound `a` and `b` to `uint8` octets while two
+// `SocketAddr` locals of those names were live — and the match SUBJECT was the outer `a`. It read as
+// destructuring `a` into itself. That is the confusion this rule is about.
+type value Counter {
+    int32 count;
+    public ctor make() { this.count = 100; }
+    public fn int32 pick() {
+        Optional<int32> o = Optional::Some(value: 7);
+        int32 t = 0;
+        match (o) { case Some(value: count): { t = count; } case None: { } };   // ERROR: shadows the field
+        return t;
+    }
+}
+fn int32 main() { Counter c = Counter.make(); return c.pick(); }

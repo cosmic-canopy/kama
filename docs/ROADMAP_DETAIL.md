@@ -1314,29 +1314,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
   is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
 
-- **A `foreach` variable or `match` payload binding named like a FIELD of the enclosing type — a
-  CONSISTENCY question, and the measurement says it is not a defect.** The field-shadow ban (*"local `x`
-  shadows a field — rename it"*) is checked at a DECLARATION only. The two binders are exempt from the
-  shadowing ban by design — they name a value the loop or arm hands them, not a new declaration — so
-  `foreach (int32 count in xs)` inside a method of a type with a field `count` is accepted where
-  `int32 count = 5;` in the same body is refused.
-  ⚠️ **Probed on `0.9.252`, six shapes, and every one behaves correctly**: reading the name inside the
-  loop yields the ELEMENT (6, not the field's 300); writing it leaves the field untouched (the field
-  still reads 100); a `match` payload yields the PAYLOAD (7); and with a PARAMETER also sharing the
-  field's name — the only way a local table can hold that name at all, since a local sharing a field's
-  name is itself refused — the binder still wins inside and the parameter is restored after (56). So
-  there is **no miscompile here and no wrong answer**, which is what separates this from
-  `constparam_shadow_foreach`: that binder exemption WAS silently wrong (a const param is resolved ahead
-  of every runtime name and got discarded rather than shadowed), and it earned a rule for that reason.
-  This one earns a rule only if *readability* is the argument — the ban's own stated purpose is "one name
-  = one binding within any live scope", and a field and a loop variable sharing a name inside one body
-  reads exactly as badly as the refused declaration does.
-  **The verdict is therefore the maintainer's, not this file's**, and it is one of three: SCHEDULE it
-  (extend the check at the declarator, `_currentClass->fieldNames.count(nm)`, to both binders under the
-  same static/`ctor` exemptions, plus an `xfail` per binder — S, an hour); declare it OPTIONAL (the
-  exemption is deliberate, the behaviour is correct, and a binder is not a declaration — then say so here
-  and delete this row); or leave the asymmetry documented in SPEC so a reader is not surprised by it.
-  Found by probing while fixing consumer KB-20; unreported by any consumer, and no in-tree code does it.
+- ~~**A `foreach`/`match` binder named like a FIELD.**~~ **ANSWERED and SHIPPED `0.9.253` — kama has no
+  shadowing, and the ban now reaches every binder.** The row asked whether to extend the field check to
+  binders; the right question was why binders were outside the ban at all, and the answer is that they
+  never were by decision. The check simply lived in `emitDeclarator` and nothing else called it. Its
+  absence was rationalized once in a source comment (*"the consumer-driven audit answered it: the
+  exemption STAYS"*) that no row, SPEC sentence or fixture ever backed, and `0.9.248` had made the
+  shadow WORK while fixing consumer KB-20 — a language decision taken inside a bug fix, in the wrong
+  direction. `checkBinderShadow` now refuses a `for` counter, a `foreach` variable and a `match` payload
+  binding that takes the name of a parameter, an enclosing-scope local or an in-scope field, with the
+  same three messages the declarator gives. Sibling-scope reuse is untouched (`0.9.247`), which is the
+  half of KB-20 that was a real bug. Six `tests/xfail/binder_shadow_*` fixtures, one per binder × message.
+  ⚠️ **The corpus had exactly one instance and it is the argument for the rule**: `tests/net_addr_ctor`
+  wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
+  match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
 <a id="s3"></a>
 

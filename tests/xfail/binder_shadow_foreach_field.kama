@@ -1,0 +1,18 @@
+// A `foreach` variable may not take an in-scope FIELD's name. A field is reachable as a bare name inside
+// a method, so `count` in the loop body would mean the element while `count` on the line above means
+// `this.count` — the ambiguity the ban exists to remove, whichever one the compiler happens to pick.
+//
+// The `ctor`/static exemptions of the declaration rule carry over: a bare name in a `ctor` body is always
+// a local or a parameter (the value under construction is reached only through `this`), and a static
+// method has no `this` to shadow.
+type value Counter {
+    int32 count;
+    public ctor make() { this.count = 100; }
+    public fn int32 sum() {
+        InlineArray<int32>#(3) xs = [1, 2, 3];
+        int32 t = 0;
+        foreach (int32 count in xs) { t = t + count; }   // ERROR: shadows the field `count`
+        return t;
+    }
+}
+fn int32 main() { Counter c = Counter.make(); return c.sum(); }
