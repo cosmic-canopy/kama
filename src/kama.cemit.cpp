@@ -8108,53 +8108,17 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
             } else {
-                // `@generate` serialization for a concrete tagged enum: register the Serializable/Deserializable
-                // conformance + synthesized methods so the emitter emits `E__serialize`/`E__deserialize` in C
-                // (externally-tagged `{"tag":…[,"value":{…}]}`). An enum can't carry a fat-pointer method, so
-                // the conformance is nominal-only (staticOnlyInterfaces → static dispatch, satisfies a `<T: Serializable>`
-                // bound + resolves `e.serialize()`); the body is emitted separately (emitEnumSerializeDefinition).
-                bool eser = false, ede = false;
+                // `@generate` on a concrete tagged enum: the flags come off the ONE accept-list, and
+                // registerDerives turns them into conformances + synth methods exactly as it does for a
+                // `value`. This used to be a second, two-name parser and a hand-rolled registration of
+                // the two serde kinds — which is why `Formattable`/`Equatable`/`Hashable` on an enum
+                // were not "unsupported" so much as unknown to a copy nobody grew.
                 if (ed->attributes)
-                    for (auto& at : *ed->attributes) {
-                        if (!at || !at->name || *at->name != "generate" || !at->args) continue;
-                        for (auto& a : *at->args)
-                            if (a && a->name && a->name->value && !a->expression) {
-                                if      (*a->name->value == "Serializable")   eser = true;
-                                else if (*a->name->value == "Deserializable") ede = true;
-                                else unsupported("`@generate(...)` on an enum accepts only Serializable, Deserializable", ed->line);
-                            }
-                    }
-                if (eser) {
-                    ci.genSerialize = true;
-                    ci.interfaces.push_back("Serializable"); ci.staticOnlyInterfaces.push_back("Serializable");
-                    MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
-                    mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
-                    scanTypeForCollections(mi.returnType);
-                    ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
-                    ci.methods["serialize"] = mi;
-                }
-                // Deserializable needs a payload-less variant as the unknown-tag fallback (else defer, as before).
-                bool hasUnit = false;
-                for (auto& v : ci.variants) if (v.payload.empty()) { hasUnit = true; break; }
-                if (ede && hasUnit) {
-                    ci.genDeserialize = true;
-                    {   // pinned: the conformance is `Deserialize_<Enum>`, not the bare name — see synthConformanceName
-                        std::string dn = synthConformanceName("Deserializable", name);
-                        ci.interfaces.push_back(dn); ci.staticOnlyInterfaces.push_back(dn);
-                    }
-                    MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
-                    // A ctor, exactly like the value/resource synthesis below: `deserialize` CONSTRUCTS, so
-                    // it is one across every type that has it. Registered as a static-only method here left
-                    // an enum's `deserialize` answering to `::` while every other type's answered to `.`, so
-                    // no single spelling worked from a generic `T` — the element type decided the syntax.
-                    mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;   // P4: fallible `Result<This, Owned<Error>>`
-                    mi.returnType = resultOwnedErrorTypeNode(ed->identifier);
-                    scanTypeForCollections(mi.returnType);
-                    ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
-                    ci.methods["deserialize"] = mi;
-                    ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
-                }
+                    for (auto& at : *ed->attributes)
+                        if (at && at->name && *at->name == "generate") parseGenerateAttr(at, ci, ed->line);
+                if (ci.genSerialize || ci.genDeserialize || ci.genFormat || ci.genEquatable
+                    || ci.genHashable || ci.genOf || ci.genZero)
+                    registerDerives(ci, ed->identifier, ed->line);
                 _classes[name] = ci;
             }
             continue;
@@ -8310,6 +8274,47 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
            "or implement `" + bound + "` for that field, or write the conformance on this instance by hand";
 }
 
+// One `@generate(...)` attribute, read onto `ci`'s derive flags. THE accept-list — there is exactly one,
+// which is the point: the enum path used to carry its own two-name copy (`Serializable, Deserializable`),
+// so the four newer derives were not "unsupported on an enum", they were unknown to a second parser that
+// nobody remembered to grow. What each flag then means is decided in registerDerives, once, for every
+// subject. The caller decides WHERE the flags land — for a generic they land on the TEMPLATE, and the
+// instance is what registers a conformance.
+void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int line)
+{
+    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, of, zero";
+    if (!at || !at->name || *at->name != "generate") return;
+    if (!at->args || at->args->empty()) {
+        unsupported((std::string("`@generate(...)` needs at least one of ") + kNames).c_str(), line);
+        return;
+    }
+    for (auto& a : *at->args) {
+        // bare identifier args only (Serializable/Deserializable/of/zero); a `key: value` form is invalid here
+        std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
+        if      (which == "Serializable")   ci.genSerialize = true;
+        else if (which == "Deserializable") ci.genDeserialize = true;
+        else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields
+        else if (which == "zero") ci.genZero = true;
+        else if (which == "Formattable") ci.genFormat = true;   // field-dump Formattable impl
+        // Memberwise `equals` / field-walked `hash` + the nominal conformance — so a data bag
+        // becomes comparable (and a `Map` key) without hand-rolling an FNV loop. Rust's
+        // `#[derive(PartialEq, Hash)]`. Registered + validated once the fields are known.
+        else if (which == "Equatable") ci.genEquatable = true;
+        else if (which == "Hashable")  ci.genHashable = true;
+        else unsupported((std::string("`@generate(...)` accepts only ") + kNames).c_str(), line);
+    }
+}
+
+// True when this declaration carries a `@generate(...)` at all — asked by collectEnumConformances, which
+// has to decide whether a payload-less enum needs promoting BEFORE anything has parsed its attributes.
+bool CEmitter::hasGenerateAttr(const SharedAttributeList& attrs)
+{
+    if (attrs)
+        for (auto& at : *attrs)
+            if (at && at->name && *at->name == "generate") return true;
+    return false;
+}
+
 void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int line)
 {
     // Every derive this type asked for that its FIELDS cannot support, for an instance whose conformance
@@ -8354,9 +8359,20 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
     // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
     // the type must still satisfy the `Serializable`/`Deserializable` bound (`decode::<T>` checks it).
+    // ⚠️ A derived conformance is a WHOLE conformance, on an enum exactly as on a `value` — it does NOT
+    // go into `staticOnlyInterfaces`. The enum path used to put it there, reasoning that "an enum cannot
+    // carry a fat-pointer method", and that reasoning is simply false: `emitClassInterfaceVtables` runs
+    // for an enum (that is how `type enum E implements Error` gets dynamic dispatch), and the emitter
+    // will happily box one into a contract existential. What static-only did was suppress the
+    // `<Enum>__as_<C>` vtbl the boxing then referenced — so `encode(v: msg)`, whose parameter IS the
+    // `Serializable` existential, emitted a call naming a symbol nothing defined and failed in CLANG.
+    // Consumer bug KB-18: the one obvious thing to do with a derived message type was the one thing that
+    // did not work, while the same value as a FIELD (reached statically through a `when [T: Serializable]`
+    // clause) round-tripped fine. A derive registers what the derive needs.
     auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
+    auto addItf = [&](const std::string& n) { if (!hasItf(n)) ci.interfaces.push_back(n); };
     if (ci.genSerialize) {
-        if (!hasItf("Serializable")) ci.interfaces.push_back("Serializable");
+        addItf("Serializable");
         if (!ci.methods.count("serialize")) {
             MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
             mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
@@ -8367,7 +8383,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         }
     }
     if (ci.genDeserialize) {
-        if (!hasItf("Deserializable")) ci.interfaces.push_back(synthConformanceName("Deserializable", ci.name));
+        addItf(synthConformanceName("Deserializable", ci.name));
         if (!ci.methods.count("deserialize")) {
             MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
             // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
@@ -8386,7 +8402,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
     // returnType stays null -> cType(null) == "void".
     if (ci.genFormat) {
-        if (!hasItf("Formattable")) ci.interfaces.push_back("Formattable");
+        addItf("Formattable");
         if (!ci.methods.count("format")) {
             MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
             mi.isSynthFormat = true; mi.isConst = true;   // the dump writes to `f`, never to `this`
@@ -8401,7 +8417,15 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
     // emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
     if (ci.genOf || ci.genZero) {
-        if (ci.kind != TypeKind::Value)
+        // On an enum this is a NON-GOAL, not a gap, and the message says which: a variant already IS its
+        // own memberwise constructor (`Shape::Circle(r: 2)` names the tag and takes the payload), so `of`
+        // would be a second spelling of the one that exists — and `zero` names no variant at all, since
+        // an enum has no "all fields zeroed" state, only a choice between tags.
+        if (ci.isVariant)
+            unsupported("`@generate(of, zero)` is not offered on an `enum`: a variant is already its own "
+                        "memberwise constructor (`E::Variant(field: …)`), and `zero` names no variant. "
+                        "Construct the one you mean", line);
+        else if (ci.kind != TypeKind::Value)
             unsupported("`@generate(of, zero)` applies only to a `value` whose fields are all public "
                         "(a data bag) — not a `resource`, `view`, or `enum`", line);
         else if (!isTransparentValue(ci)) {
@@ -8446,7 +8470,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         // ClassDeclarationNodes and so could never reach a generic INSTANCE; one call covers both, and
         // the sweep's special case is gone.
         std::string eqName = synthConformanceName(resolveUserName("Equatable", nullptr), ci.name);
-        if (!hasItf(eqName)) ci.interfaces.push_back(eqName);
+        addItf(eqName);
         if (!ci.methods.count("equals")) {
             MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
             mi.isSynthCmp = true; mi.isConst = true;   // a derived comparison reads `this` and nothing else
@@ -8458,7 +8482,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         }
     }
     if (ci.genHashable) {
-        if (!hasItf("Hashable")) ci.interfaces.push_back("Hashable");
+        addItf("Hashable");
         if (!ci.methods.count("hash")) {
             MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
             mi.isSynthCmp = true; mi.isConst = true;   // ditto — a hash is a pure read of the fields
@@ -8536,25 +8560,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             for (auto& at : *cd->attributes) {
                 if (!at || !at->name) continue;
                 if (*at->name == "generate") {
-                    if (!at->args || at->args->empty())
-                        unsupported("`@generate(...)` needs at least one of Serializable, Deserializable, Formattable, "
-                                    "Equatable, Hashable, of, zero", cd->line);
-                    else for (auto& a : *at->args) {
-                        // bare identifier args only (Serializable/Deserializable/of/zero); a `key: value` form is invalid here
-                        std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
-                        if      (which == "Serializable")   ci.genSerialize = true;
-                        else if (which == "Deserializable") ci.genDeserialize = true;
-                        else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
-                        else if (which == "zero") ci.genZero = true;
-                        else if (which == "Formattable") ci.genFormat = true;   // field-dump Formattable impl — registered below
-                        // Memberwise `equals` / field-walked `hash` + the nominal conformance — so a data bag
-                        // becomes comparable (and a `Map` key) without hand-rolling an FNV loop. Rust's
-                        // `#[derive(PartialEq, Hash)]`. Registered + validated after the fields are known.
-                        else if (which == "Equatable") ci.genEquatable = true;
-                        else if (which == "Hashable")  ci.genHashable = true;
-                        else unsupported("`@generate(...)` accepts only Serializable, Deserializable, Formattable, "
-                                         "Equatable, Hashable, of, zero", cd->line);
-                    }
+                    parseGenerateAttr(at, ci, cd->line);
                 } else if (*at->name == "viewable") {
                     // `@viewable` is a grant a contract carries, never a property of one type. Marking the
                     // type itself would say "I may be minted anywhere", which is the forge the private ctor
@@ -24246,7 +24252,21 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "}\n";
         first = false;
     }
-    indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
+    // An unknown tag. With a unit variant to hand, park the result on it and let the shared `failed()`
+    // boundary below do the reporting. WITHOUT one there is no benign value to park on — the old code
+    // emitted `(E){ .tag = E_ }` and did not compile, which is why `Deserializable` used to be silently
+    // DROPPED from an enum whose every variant carries a payload. Return the Err here instead: nothing
+    // has been constructed, so there is no partial to drop and `__result` is never touched.
+    if (!dflt.empty()) {
+        indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
+    } else {
+        indent(1); *_out << "else {\n";
+        indent(2); *_out << "r.vtbl->fail(r.obj);\n";
+        indent(2); *_out << "kama_string__dtor(&__tag);\n";
+        std::string ubox = emitStickyErrBox(2);
+        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ubox << " } };\n";
+        indent(1); *_out << "}\n";
+    }
     indent(1); *_out << "kama_string__dtor(&__tag);\n";
     // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
     indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";

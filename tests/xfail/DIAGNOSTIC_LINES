@@ -309,6 +309,7 @@ gencontract_arity	gencontract_arity.kama:5
 gencontract_unsat	gencontract_unsat.kama:15
 generate_eq_unconformed_field	generate_eq_unconformed_field.kama:8
 generate_generic_unmet	generate_generic_unmet.kama:16
+generate_of_on_enum	generate_of_on_enum.kama:7
 generate_on_plain_enum	generate_on_plain_enum.kama:4
 generate_unknown_name	generate_unknown_name.kama:4
 generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2

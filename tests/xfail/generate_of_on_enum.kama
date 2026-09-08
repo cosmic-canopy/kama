@@ -1,0 +1,9 @@
+// `of`/`zero` on an enum is a NON-GOAL, not a gap, and the message says which. A variant is already its
+// own memberwise constructor — `Shape::Circle(r: 2)` names the tag and takes the payload — so `of` would
+// be a second spelling of the one that exists. And `zero` has nothing to mean: an enum has no
+// "every field zeroed" state, only a choice between tags, and no tag is more zero than another.
+//
+// The four contract derives DO apply to an enum (tests/generate_enum_derives). These two do not.
+@generate(Equatable, of)
+type enum Shape { Circle(int32 r), Nil }
+fn int32 main() { Shape s = Shape::Nil; return 0; }

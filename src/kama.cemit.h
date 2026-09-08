@@ -1713,6 +1713,10 @@ private:
     ClassInfo buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name);   // tagged-union ClassInfo
     // Everything `@generate(...)` registers, for every subject that can carry it: a plain type, and a
     // generic INSTANCE (where the derive is conditional on the substituted fields). See its definition.
+    // THE `@generate(...)` accept-list, and the "does it carry one at all?" question its callers ask
+    // before any parsing has happened. See parseGenerateAttr for why there is exactly one of each.
+    void parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int line);
+    bool hasGenerateAttr(const SharedAttributeList& attrs);
     void registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int line);
     // Why an INSTANCE of a `@generate`d generic does not carry `bound`, as a clause to append to
     // whatever refused it (" — `@generate(Equatable)` on `Box<T>` holds for an instance whose every

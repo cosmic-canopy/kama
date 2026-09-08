@@ -1,0 +1,78 @@
+// `@generate(...)` on a tagged enum, past the two serde names it used to accept. The refusal read
+// "`@generate(...)` on an enum accepts only Serializable, Deserializable" — which was not a limitation
+// of enums so much as a SECOND attribute parser, holding a two-name copy of the list, that nobody grew
+// when Formattable/Equatable/Hashable were added. There is one accept-list now, and one registration.
+//
+// A variant derives per TAG: its data is `variants[i].payload`, not `fields`. Format renders the variant
+// (`Circle { r: 2 }`, or a bare `Nil`), equality is tag-then-payload, and the hash mixes the tag FIRST —
+// which is what keeps two variants carrying equal payloads apart. Returns 45.
+//
+// Two consumer bugs live here too, both filed against a derived `type enum` and both the same shape —
+// the derive doing its work without registering what the work needs:
+//   KB-18  a derived enum could not be passed to anything taking the `Serializable` EXISTENTIAL
+//          (`binary::encode(v:)` is exactly that), because the conformance was registered "static only"
+//          and the `<Enum>__as_Serializable` vtbl the boxing referenced was therefore never emitted.
+//          It failed in clang, naming a mangled symbol. Neither `ser_bin_enum` nor `ser_enum_coll`
+//          caught it: both wrap the enum in a value or a collection, which reaches `.serialize()`
+//          statically. This fixture encodes one BARE.
+//   KB-19  `Deserializable` registered only for the MIXED shape — some variants with payloads, some
+//          without. `NoUnit` below is the all-payload half of that (the all-unit half is a payload-less
+//          enum, which could not carry `@generate` at all; see generate_plain_enum).
+import { std::collections::Map, std::collections::DynamicArray,
+         std::serialization::json::decode, std::serialization::binary::encode };
+
+@generate(Formattable, Equatable, Hashable)
+type enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Nil }
+
+// Every variant carries a payload — so there is no unit variant to fall back on for an unknown tag, and
+// `Deserializable` used to be SILENTLY DROPPED from an enum shaped like this: the attribute compiled, the
+// conformance never appeared, and the report arrived far away as "`NoUnit` does not satisfy bound
+// `Deserializable`". An unknown tag returns `Err` directly now, which is what it always should have done.
+@generate(Serializable, Deserializable)
+type enum NoUnit { A(int32 x), B(int32 y) }
+
+fn int32 main() {
+    Shape a = Shape::Circle(r: 2);
+    Shape b = Shape::Circle(r: 2);
+    Shape c = Shape::Nil;
+    Shape d = Shape::Rect(w: 2, h: 3);
+
+    int32 n = 0;
+    if (a == b) { n = n + 1; }                       // same tag, equal payload
+    if (a != c) { n = n + 2; }                       // different tags are never equal
+    if (a != d) { n = n + 4; }
+
+    // The dump names the VARIANT, not the type — a variant name is never mangled.
+    if (!"${a}".equals(other: "Circle { r: 2 }"))     { return 91; }
+    if (!"${d}".equals(other: "Rect { w: 2, h: 3 }")) { return 92; }
+    if (!"${c}".equals(other: "Nil"))                 { return 93; }
+
+    // Derived `hash` + `equals` is exactly what a Map key needs, and the tag is mixed in first.
+    Map<Shape, int32> m = Map.empty();
+    m.put(key: a, value: 7);
+    m.put(key: c, value: 9);
+    int32 hit = match (m.get(key: b)) { case Some(value: v): v; case None: 0; };   // `b` == `a`
+    int32 nil = match (m.get(key: c)) { case Some(value: v): v; case None: 0; };
+    n = n + hit + nil;                               // 7 + 9
+
+    // KB-18: the BARE enum through the `Serializable` existential — `encode(v:)` takes the contract, so
+    // this boxes the value and dispatches through `NoUnit__as_Serializable`. Not a field, not an element.
+    NoUnit one = NoUnit::A(x: 1);
+    Result<DynamicArray<uint8>, Owned<Error>> enc = encode(v: one);
+    int32 bytes = match (enc) { case Ok(value: bs): cast<int32>(bs.length()); case Err(error: e3): 0 - 50; };
+    if (bytes <= 0) { return 94; }
+
+    Result<NoUnit, Owned<Error>> ok = decode::<NoUnit>(src: "{\"tag\":\"B\",\"value\":{\"y\":5}}");
+    int32 got = match (ok) {
+        case Ok(value: q): match (q) { case A(x: x): x; case B(y: y): y; };
+        case Err(error: e): 0 - 50;
+    };
+    n = n + got;                                     // 5
+
+    // The tag nothing matches: an Err, not a wrong variant and not a C compile error.
+    Result<NoUnit, Owned<Error>> bad = decode::<NoUnit>(src: "{\"tag\":\"Z\",\"value\":{\"y\":5}}");
+    int32 rej = match (bad) { case Ok(value: q2): 0 - 50; case Err(error: e2): 17; };
+    n = n + rej;                                     // 17
+
+    return n;                                        // 1+2+4+7+9+5+17 = 45
+}
