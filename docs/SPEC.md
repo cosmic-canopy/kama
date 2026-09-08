@@ -2084,6 +2084,13 @@ bytes are still there — so the caller must vacate it (tombstone the entry, dec
 value is dropped twice. Every container's move-out goes through it, which is what keeps `addr(of: …)` on a
 [`slot`](#uninitialized-storage--slot-) out of the call site.
 
+The module's other member is the honest reading of a C pointer that may be null: **`std::ptr::nonNull(p:)`** <!-- test: ptr_nonnull -->
+returns `Optional<UnsafePtr>` — `Some(p)` or `None`, decided once at the FFI seam, so the fact reaches a
+`match` instead of a `== null` test someone can forget. An `extern fn` cannot return an `Optional` (its
+prototype comes from the C header), so this is how the stdlib reads every extern that genuinely returns null
+(`kama_diropen`, `kama_poller_create`, the process argv/envp builders, `malloc` behind `Arena`); `readDir` on <!-- test: fs_readdir_missing -->
+a missing directory is the `Err` that path produces. It is the inverse of the prelude's `unwrapPtr`/`ptrOrNull`.
+
 ### Inline assembly — `asm("...")` ✅
 
 Some operations have **no C-level equivalent**: `wfi`/`wfe` (idle-sleep), `cpsid i`/`cpsie i`

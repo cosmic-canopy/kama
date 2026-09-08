@@ -413,10 +413,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   **So: `UnsafePtr` containment, above, is the cheaper and more direct route to the same goal.** Every
   genuine `null` in the tree (75/75) targets an `UnsafePtr`; if `UnsafePtr` can only be handled inside
   `unsafe`, `null` is confined by construction — no `Optional`, no niche opt, no unwrap ergonomic, no
-  token deletion, no `tree-sitter` change. What remains is the honest FFI surface, now a ROADMAP row (S): only **8** extern declarations return a genuinely nullable pointer (`malloc` ×3,
-  `kama_poller_create`, `kama_diropen`, `kama_channel_new`, `kama_argv_new`, `kama_envp_build`) —
-  `fopen`/`dlopen`/`getenv`/`realloc`/`mmap` are not declared at all, since kama routes them through
-  `kama_*` seams that already return `bool` + an out-param or a `Result`.
+  token deletion, no `tree-sitter` change. What remained was the honest FFI surface — **shipped `0.9.255`** as
+  `std::ptr::nonNull` (SPEC § *`unsafe fn` — raw pointer memory access*). The count was **7**, not the 8 the row said: `kama_channel_new`
+  never returns null (`kama_channel.h` panics on allocation failure), so it is honest as declared, and making
+  it fallible would be a `Channel.bounded` API decision, not a seam fix. Three of the seven were UNCHECKED
+  before the row (`Shared.adopt` wrote through an unchecked `malloc`; the process argv/envp builders handed an
+  unchecked `calloc` result to a writer) — the row's payoff. `fopen`/`dlopen`/`getenv`/`realloc`/`mmap` are
+  not declared at all, since kama routes them through `kama_*` seams that already return `bool` + an
+  out-param or a `Result`. ⚠️ `lib/std/memory/*` is EMBEDDED in the compiler as prelude modules and cannot
+  import a disk module (`import { std::ptr::nonNull }` there reports "does not export"); `Shared.adopt` reads
+  its null through the prelude's own `GlobalAllocator.allocate` instead.
 
   **The `unsafe UnsafePtr<T> p = null;` field modifier and the token-level `null` ban are dropped**, and the
   reason is worth keeping: both existed to force raw-pointer declarations to be greppable, and the rename
@@ -675,9 +681,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   intermediate product, Lemire's unbiased range — needs the PRODUCT: `std::num::mulWideU64`/`mulHighU64`/
   `mulWideI64`, four 32-bit limb multiplies in plain unsigned arithmetic on every target. Both consumers are
   now *optional* follow-ons, recorded beside their code.
-- **Honest FFI surface — scheduled, S.** The 8 externs returning a genuinely nullable pointer (`malloc` ×3,
-  `kama_poller_create`, `kama_diropen`, `kama_channel_new`, `kama_argv_new`, `kama_envp_build`) wrapped as
-  `Optional` in `lib/std/ptr/`; the sentence above that scoped it "on its own schedule" is that schedule.
 - **`Simd` `sqrt`/`floor`/`ceil` — scheduled, S.** A `kama_math.h`-backed intrinsic arm on a lane batch; the
   wasm leg must prove the `-msimd128` lowering, which is why it is a row and not a footnote.
 - **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in

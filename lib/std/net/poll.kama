@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError };
+import { std::io::IoError, std::io::lastError, std::ptr::nonNull };
 
 export { Poller, Interest, Ready };
 
@@ -32,9 +32,10 @@ type resource Poller {
     private unsafe ctor make(UnsafePtr state) { this.state = state; }
 
     public unsafe ctor Result<Poller, IoError> create() {
-        UnsafePtr s = kama_poller_create();
-        if (s == null) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: Poller.make(state: s));
+        return match (nonNull(p: kama_poller_create())) {
+            case Some(value: s): Result::Ok(value: Poller.make(state: s));
+            case None: Result::Err(error: lastError());
+        };
     }
 
     // Watch `fd` (a socket's rawHandle()) for `interest`. Re-adding an fd updates its interest.

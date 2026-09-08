@@ -9,7 +9,20 @@
 // it four times put a raw bitwise relocate in four places where a reader had to re-derive the invariant.
 // Behind an `out` parameter the same operation states it: the callee fills the hole, and the caller's
 // declaration reads as what it is.
-export { relocate };
+//
+// `nonNull` is the other honest reading of raw memory: the pointer a C function hands back MAY be null,
+// and the language has one spelling for "a value or nothing" — `Optional`. An `extern fn` cannot return
+// one (its prototype comes from the C header), so the reading happens once, here, at the seam, and the
+// `Optional` carries the fact to a `match` instead of a `== null` test someone can forget. It is the
+// inverse of the prelude's `unwrapPtr`/`ptrOrNull`, and like them it is not generic: the externs that
+// need it return a bare `UnsafePtr`, and a typed one is `cast` at the site that knows the type.
+export { relocate, nonNull };
+
+// `Some(p)` when `p` is not null, else `None`. Decided once, at the FFI seam.
+unsafe fn Optional<UnsafePtr> nonNull(UnsafePtr p) {
+    if (p == null) { return Optional::None; }
+    return Optional::Some(value: p);
+}
 
 // Move `from[at]` OUT of raw storage into `into`, bitwise. The source slot is left STALE — it still holds
 // the bytes, so the caller must vacate it (tombstone the entry, decrement the length) or the value will be

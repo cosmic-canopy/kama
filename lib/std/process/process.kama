@@ -10,7 +10,7 @@
 // leaves a growing pile of zombies either. Explicit `wait()` is the blocking reap that returns the exit
 // code. POSIX only (M1); Windows (CreateProcess) is a later milestone; wasm has no fork/exec.
 
-import { std::io::IoError, std::io::lastError, std::fs::File, std::collections::DynamicArray };
+import { std::io::IoError, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
 export { Command, Process, ExitStatus, Output, Stdio };
 
@@ -86,31 +86,39 @@ unsafe fn ExitStatus statusOf(int32 st) {
     return ExitStatus.of(code: -1, signal: 0);
 }
 
-// Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
-unsafe fn UnsafePtr buildArgv(const ref string program, ref DynamicArray<string> args) {
+// Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free. `None` when
+// the C side could not allocate the vector (a bare `calloc`; `errno` says ENOMEM).
+unsafe fn Optional<UnsafePtr> buildArgv(const ref string program, ref DynamicArray<string> args) {
     isize n = 1 + args.length();
-    UnsafePtr v = kama_argv_new(n: cast<int32>(n));
+    UnsafePtr v = match (nonNull(p: kama_argv_new(n: cast<int32>(n)))) {
+        case Some(value: p): p;
+        case None: { return Optional::None; }
+    };
     kama_argv_set(v: v, i: 0, s: program.cstr());
     isize i = 0;
     while (i < args.length()) {
         kama_argv_set(v: v, i: cast<int32>(i) + 1, s: args[i].cstr());
         i = i + 1;
     }
-    return v;
+    return Optional::Some(value: v);
 }
 
 // Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
 // merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
-unsafe fn UnsafePtr buildEnvp(bool clear, const ref DynamicArray<string> keys, const ref DynamicArray<string> vals) {
+// `None` when either C allocation failed.
+unsafe fn Optional<UnsafePtr> buildEnvp(bool clear, const ref DynamicArray<string> keys, const ref DynamicArray<string> vals) {
     isize n = keys.length();
-    UnsafePtr ov = kama_argv_new(n: cast<int32>(n));
+    UnsafePtr ov = match (nonNull(p: kama_argv_new(n: cast<int32>(n)))) {
+        case Some(value: p): p;
+        case None: { return Optional::None; }
+    };
     isize i = 0;
     while (i < n) {
         string kv = keys[i] + "=" + vals[i];
         kama_argv_set(v: ov, i: cast<int32>(i), s: kv.cstr());
         i = i + 1;
     }
-    UnsafePtr envp = kama_envp_build(overrides: ov, clear: clear ? 1 : 0);
+    Optional<UnsafePtr> envp = nonNull(p: kama_envp_build(overrides: ov, clear: clear ? 1 : 0));
     kama_argv_free(v: ov);
     return envp;
 }
@@ -231,10 +239,16 @@ type resource Command {
         int32 childOut = match (this.outCfg) { case Inherit: -1; case _: outGive.rawFd(); };
         int32 childErr = match (this.errCfg) { case Inherit: -1; case _: errGive.rawFd(); };
 
-        UnsafePtr argv = buildArgv(program: ref this.program, args: ref this.args);
+        UnsafePtr argv = match (buildArgv(program: ref this.program, args: ref this.args)) {
+            case Some(value: v): v;
+            case None: { return Result::Err(error: lastError()); }
+        };
         UnsafePtr envp = null;
         if (this.envClear || this.envKeys.length() > 0) {
-            envp = buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals);
+            envp = match (buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals)) {
+                case Some(value: e): e;
+                case None: { kama_argv_free(v: argv); return Result::Err(error: lastError()); }
+            };
         }
 
         isize handle = 0;

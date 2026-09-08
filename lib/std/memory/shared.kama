@@ -1,7 +1,6 @@
 export { Shared };
 
 extern "<stdlib.h>";
-extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 
 // M6.2: the refcount seam. Every strong/weak count mutation routes through kama_ctrl.h so the two flavors
@@ -63,8 +62,11 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
     // `when [A: default]` gate (a custom `A` box comes through `adoptIn`). `GlobalAllocator` is stateless — its
     // `deallocate` == `free` (matching the malloc) and never reads the handle, so an unset value is inert.
     public unsafe ctor adopt(UnsafePtr<T> raw) when [A: default] {
+        // Drawn through `GlobalAllocator.allocate`, whose `Optional` is the honest reading of `malloc`'s null,
+        // so an OOM is the same `unwrapPtr` panic `adoptIn` gets — not a write through a null block. (This
+        // file is embedded in the compiler as a prelude module and imports nothing from disk.)
         UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0;
+        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: GlobalAllocator.make().allocate(bytes: sizeof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
         this.p = raw; this.c = ctrl;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`

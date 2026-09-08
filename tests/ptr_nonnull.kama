@@ -1,0 +1,16 @@
+// std::ptr::nonNull — the honest reading of a C pointer that may be null: `Some(p)` or `None`, decided
+// once at the FFI seam. A null is `None`; a real address is `Some` carrying that address. Returns 6.
+import { std::ptr::nonNull };
+
+unsafe fn int32 probe() {
+    int32 x = 5;
+    UnsafePtr none = null;
+    int32 r = 0;
+    match (nonNull(p: none)) { case Some(value: _): { r = r + 100; } case None: { r = r + 1; } };
+    match (nonNull(p: cast<UnsafePtr>(addr(of: x)))) {
+        case Some(value: v): { UnsafePtr<int32> t = cast<UnsafePtr<int32>>(v); r = r + t[0]; }
+        case None: { r = r + 100; }
+    };
+    return r;
+}
+fn int32 main() { return probe(); }

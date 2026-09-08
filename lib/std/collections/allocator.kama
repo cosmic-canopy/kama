@@ -1,3 +1,5 @@
+import { std::ptr::nonNull };
+
 export { Arena, BumpAllocator };
 
 extern "<stdlib.h>";
@@ -19,8 +21,10 @@ type resource Arena {
     UnsafePtr<uint8> buffer = null; isize capacity = 0; isize offset = 0;
 
     public unsafe ctor make(isize capacity) {
-        this.buffer = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(capacity)));
-        if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
+        match (nonNull(p: malloc(n: cast<usize>(capacity)))) {
+            case Some(value: p): { this.buffer = cast<UnsafePtr<uint8>>(p); }
+            case None: { panic(msg: "Arena: out of memory"); }
+        };
         this.capacity = capacity; this.offset = 0;
     }
 

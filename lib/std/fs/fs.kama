@@ -10,6 +10,7 @@ import {
     std::time::SystemTime,
     std::path::parent,
     std::path::join,
+    std::ptr::nonNull,
 };
 
 export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove,
@@ -309,8 +310,10 @@ unsafe fn Result<Unit, IoError> remove(const ref string path) {
 
 // DynamicArray a directory's entries (excluding "." and ".."), each as an owned string.
 unsafe fn Result<DynamicArray<string>, IoError> readDir(const ref string path) {
-    UnsafePtr dirp = kama_diropen(path: path.cstr());
-    if (dirp == null) { return Result::Err(error: lastError()); }
+    UnsafePtr dirp = match (nonNull(p: kama_diropen(path: path.cstr()))) {
+        case Some(value: d): d;
+        case None: { return Result::Err(error: lastError()); }
+    };
     DynamicArray<string> names = DynamicArray.empty();
     while (true) {
         string name = kama_dirnext(dirp: dirp);
