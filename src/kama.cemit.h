@@ -2245,6 +2245,8 @@ private:
     // True (and diagnosed) for a PRIMITIVE serde field with no wire form — `isize`/`usize`, whose width
     // is platform-varying. Both directions funnel through it; see the definition for why.
     bool serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line);
+    // Its composite sibling: a field whose type has no `serialize`/`deserialize` symbol to call.
+    bool serdeRejectsField(SharedIdentifier ty, const std::string& access, bool writing);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                            const std::string& resultCType);   // resultCType empty => graph-node/void context (sticky only)
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,

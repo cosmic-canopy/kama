@@ -1,0 +1,22 @@
+// A composite field is written through its OWN `serialize`, so a field type that has none is a defect the
+// compiler can see — and used to emit anyway: `Color__serialize(&(self->c), w)` against a function nothing
+// defines, so the kama build was clean and clang failed on an implicit declaration. The sibling
+// `serdeRejectsPrimitive` had already closed the same hole for `isize`; this is its composite half.
+//
+// A payload-less enum is the shape that reaches it most easily — it cannot carry `@generate` today, so
+// nothing about it looks wrong at the field's declaration.
+import { std::serialization::json::encode };
+
+type enum Color { Red, Green }
+
+@generate(Serializable, of)
+type value Paint {
+    @field public Color c;
+    @field public int32 n;
+}
+
+fn int32 main() {
+    Paint p = Paint.of(c: Color::Green, n: 1);
+    Result<string, Owned<Error>> r = encode(v: p);
+    return match (r) { case Ok(value: s): cast<int32>(s.length()); case Err(error: e): 9; };
+}

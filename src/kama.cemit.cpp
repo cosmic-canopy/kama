@@ -23676,6 +23676,39 @@ bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& acc
     return true;
 }
 
+// A COMPOSITE field whose type has no `serialize`/`deserialize` to call. The generator emitted the call
+// regardless — `Color__serialize(&(self->c), w)` against a function nothing defines — so a
+// `@generate(Serializable)` type with a plain-enum or an un-marked user-type field produced a clean kama
+// build and an implicit-declaration error from the C compiler. Zero kama diagnostics for a defect kama can
+// see, which is the same hole `serdeRejectsPrimitive` above closed for `isize` and `clong`.
+//
+// The test is the SYMBOL, not the bound: what the next line emits is `<cType>__serialize`, and that exists
+// exactly when the type carries the method. A conditional collection conformance (`when [T: Serializable]`)
+// is therefore answered correctly without reasoning about the gate — the instance either got the method or
+// it did not. Reached only after the string/scalar/`Optional` arms have had their say.
+bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access, bool writing)
+{
+    const std::string ct = cType(ty);
+    const char* which = writing ? "serialize" : "deserialize";
+    auto it = _classes.find(ct);
+    if (it != _classes.end() && it->second.methods.count(which)) return false;
+    // An opaque type parameter inside a generic body: nothing is known about it here, and a wrong guess
+    // would report a defect at a type that is never instantiated. Same silence as the cast rules.
+    if (opaqueScalarUnknown(ct)) return false;
+
+    std::string field = access;                       // `self->n` / `self->u.Some.n` / a local dst
+    size_t dot = field.find_last_of(".>");
+    if (dot != std::string::npos) field = field.substr(dot + 1);
+    const std::string disp = (ty && ty->value) ? *ty->value : demangleForDisplay(ct);
+    const char* contract = writing ? "Serializable" : "Deserializable";
+    unsupported(("field `" + field + "` has type `" + disp + "`, which cannot be "
+                 + (writing ? "serialized" : "deserialized") + " — a composite field is written through "
+                   "its OWN `" + which + "`, and `" + disp + "` has none. Give it `@generate("
+                 + contract + ")`, write `implements " + contract + "` for it, or leave the field out of "
+                   "the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+    return true;
+}
+
 void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                                  const std::string& resultCType)
 {
@@ -23701,6 +23734,7 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
         return;
     }
     if (serdeRejectsPrimitive(ty, access, /*writing=*/true, ty ? ty->line : 0)) return;
+    if (serdeRejectsField(ty, access, /*writing=*/true)) return;
     // enum / nested struct / collection -> its own FALLIBLE serialize (self by pointer, Serializer* through).
     std::string innerRes = cType(resultUnitOwnedErrorTypeNode());
     std::string t = "__sw" + std::to_string(_tempCounter++);
@@ -23916,6 +23950,7 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     // Scalar/string: bare sticky read (the enclosing `failed()` check wraps a failure into `Err`).
     if (isScalarDeType(ty)) { indent(depth); *_out << dst << " = " << deReadExpr(ty) << ";\n"; return; }
     if (serdeRejectsPrimitive(ty, dst, /*writing=*/false, ty ? ty->line : 0)) return;
+    if (serdeRejectsField(ty, dst, /*writing=*/false)) return;
     // Composite (user type / collection): fallible read via its `deserialize`.
     std::string innerRes = cType(resultOwnedErrorTypeNode(ty));
     std::string t = "__dr" + std::to_string(_tempCounter++);
