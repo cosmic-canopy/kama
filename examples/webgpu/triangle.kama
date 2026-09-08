@@ -21,7 +21,7 @@ extern "<stdlib.h>";
 // The platform seam (std::gpu): surface creation, present, and the per-tick pump — the only
 // web-vs-native differences. Same source builds for `--target wasm` and native (see kama_gpu.h).
 extern "kama_gpu.h";
-extern fn UnsafePtr   kama_gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafeConstPtr<int8> title);
+extern fn UnsafePtr   kama_gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafeConstPtr<cchar> title);
 extern fn void  kama_gpu_present(UnsafePtr surface);
 extern fn int32 kama_gpu_pump(UnsafePtr device);
 extern fn void  kama_gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT present — see frameTick
@@ -30,7 +30,7 @@ extern fn void  kama_gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT pr
 extern fn UnsafePtr calloc(usize count, usize size);
 
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
-type extern value WGPUStringView { UnsafeConstPtr<int8> data; usize length; }
+type extern value WGPUStringView { UnsafeConstPtr<cchar> data; usize length; }
 type extern value WGPUChainedStruct { UnsafePtr next; int32 sType; }
 type extern value WGPUSurfaceConfiguration {
     UnsafePtr nextInChain; UnsafePtr device; int32 format; uint64 usage;

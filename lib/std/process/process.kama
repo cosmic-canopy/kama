@@ -18,12 +18,12 @@ extern "kama_os.h";
 // argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
 // survives the source kama-string RAII across fork). kama holds only the opaque `UnsafePtr` + scalars.
 extern fn UnsafePtr   kama_argv_new(int32 n);
-extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafeConstPtr<int8> s);
+extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafeConstPtr<cchar> s);
 extern fn void  kama_argv_free(UnsafePtr v);
 extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
 extern fn int32 kama_pipe(UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
-extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
+extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
 extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
 extern fn int32 kama_proc_exited(int32 st);
 extern fn int32 kama_proc_exit_code(int32 st);

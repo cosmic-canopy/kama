@@ -23,7 +23,7 @@ import {
 };
 
 extern "<stdio.h>";
-extern fn int32 puts(UnsafeConstPtr<int8> s);
+extern fn int32 puts(UnsafeConstPtr<cchar> s);
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it is
 // never `export`ed or `import`ed, so a file that names one declares it.
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
@@ -99,7 +99,7 @@ fn string mimeType(ref string path) {
 // Null-terminate `bytes` and write it to stdout as one line (cross-platform via CRT puts).
 unsafe fn void logLine(ref DynamicArray<uint8> bytes) {
     bytes.add(item: cast<uint8>(0));
-    puts(s: cast<UnsafePtr<int8>>(addr(of: bytes[0])));
+    puts(s: cast<UnsafeConstPtr<cchar>>(addr(of: bytes[0])));   // a byte buffer handed to a `char*` API: the cast says so
 }
 
 // ---- request handling -------------------------------------------------------

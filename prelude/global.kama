@@ -64,7 +64,7 @@ type contract Sendable for value, resource, enum, intrinsic { }
 // the last member that escaped it by taking `self`). The source is BORROWED (`ref This`) — copying
 // never consumes it. Emitted C is unchanged (`X__copy(X* source)`), so `copy x` lowers as before.
 // The borrow is deliberately MUTABLE, unlike `Equatable`/`Comparable`'s `const ref`, and this was
-// MEASURED (0.9.225, the consumer-driven audit): a RETAINING copy bumps a refcount reached through the
+// MEASURED (0.9.226, the consumer-driven audit): a RETAINING copy bumps a refcount reached through the
 // source, and const is deep — `source.c[0].strong = source.c[0].strong + 1` through a `const ref` is
 // refused at the write, raw pointer or not (seven in-tree `Rc` fixtures do exactly that). The stdlib's
 // `Shared`/`Weak` would slip through only because they hand the pointer to C; a user-written handle
@@ -481,7 +481,7 @@ extern fn string kama_args_at(int32 i);
 extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
 extern fn bool   kama_program_name(UnsafePtr<string> dst);
 extern fn bool   kama_program_path(UnsafePtr<string> dst);
-extern fn bool   kama_env_lookup(UnsafeConstPtr<int8> name, UnsafePtr<string> dst);
+extern fn bool   kama_env_lookup(UnsafeConstPtr<cchar> name, UnsafePtr<string> dst);
 type value Args implements Iterator<string> {
     int32 pos;
     public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
@@ -582,7 +582,7 @@ unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h:
 // Each reads its own `s` by borrow (`cstr()`/`length()`) — it never re-passes the string by value, so there
 // is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
 // string is passed with `copy`/`give` like anywhere else in the value model.
-extern fn void kama_print_write(int32 fd, UnsafeConstPtr<int8> bytes, usize len);
+extern fn void kama_print_write(int32 fd, UnsafeConstPtr<cchar> bytes, usize len);
 extern fn void kama_print_nl(int32 fd);
 unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
 unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
@@ -676,7 +676,7 @@ type resource Formatter {
     // and `prefix` are 0/1 flags; the integer is masked to `width` bits so a signed negative round-trips.
     public unsafe fn void writeF64Prec(float64 v, int32 prec, int32 width, int32 flags) { string t = kama_fmt_f64_prec(v: v, prec: prec, width: width, flags: flags); this.writeStr(s: ref t); }
     // `width` is the BIT width the value is masked to; `pad` the minimum field width and `flags` the
-    // `0`/`-` bits — `${n:08x}` composes a base with padding since 0.9.224.
+    // `0`/`-` bits — `${n:08x}` composes a base with padding since 0.9.225.
     public unsafe fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix, pad: pad, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     public unsafe fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }

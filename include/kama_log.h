@@ -158,7 +158,7 @@ static int kama_log_threshold(const char* tag, size_t tagLen) {
     return kama_log_global;
 }
 
-// The filter — kama binds this as `extern fn bool kama_log_enabled(int32 level, UnsafePtr<int8> tag, usize tagLen)`.
+// The filter — kama binds this as `extern fn bool kama_log_enabled(int32 level, UnsafeConstPtr<cchar> tag, usize tagLen)`.
 // Strings cross the seam as borrowed byte spans (the floor `print` discipline), never by value, so no kama
 // ownership is transferred through the facade.
 static inline bool kama_log_enabled(int32_t level, const char* tag, size_t tagLen) {
@@ -195,7 +195,7 @@ static inline void kama_log_puts(const char* s) {
 }
 
 // The sink entry — kama binds this as
-// `extern fn void kama_log_dispatch(int32 level, UnsafePtr<int8> tag, usize tagLen, UnsafePtr<int8> msg, usize msgLen)`.
+// `extern fn void kama_log_dispatch(int32 level, UnsafeConstPtr<cchar> tag, usize tagLen, UnsafeConstPtr<cchar> msg, usize msgLen)`.
 // A registered sink wins (fed borrowed kama_strings valid for the call); otherwise the C console default
 // runs. All byte spans are borrowed (the caller still owns them) — read only, never freed here.
 static inline void kama_log_dispatch(int32_t level, const char* tag, size_t tagLen,

@@ -1,6 +1,6 @@
 // FFI: pass a kama string to a C const char* via .cstr() (header-based).
 extern "<string.h>";
-extern fn usize strlen(UnsafeConstPtr<int8> s);
+extern fn usize strlen(UnsafeConstPtr<cchar> s);
 unsafe fn int32 run() { string s = "**"; int32 n = cast<int32>(strlen(s: s.cstr())); return n * 21; }  // 2*21=42
 
 // The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
