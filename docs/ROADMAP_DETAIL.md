@@ -1409,74 +1409,40 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   one declaration with a wire form chosen elsewhere and never visible at the declaration, which is a hint, and
   GOALS favors explicit over implicit. It would also have cost two permanent contract members only one backend
   could honor.
-- **Serde: the graph moves to the LIBRARY, and the contracts keep only the public token protocol.**
-  Decided 2026-09-09 with the maintainer. An XL design item: it reshapes the serde layering, so settle it
-  before the KNUM-graph row or any further contract change. Everything below was MEASURED this session —
-  probes, not reasoning. Do not re-derive it.
-
-  **Why.** `Serializer`/`Deserializer` serve two audiences at once, and only one of them is a user:
-  - the **token protocol** (`beginObject`/`endObject`/`field`/`variant`/`beginArray`/`moreFields`/`read*`/
-    `write*`/`skipValue`) has **7 hand-written callers** in the tree, including the stdlib's own
-    `map.kama` and `sorted_map.kama` and the `decode_user_override` fixture. SPEC promises a hand-written
-    `serialize` wins, so this is a real user surface and belongs public.
-  - the **graph envelope** (`beginGraph`/`beginTableEntry`/`endTableEntry`/`endGraph`/`writeRef`/
-    `rewindGraph`/`entryKey`/`readRef`) has **one** hand-written caller — `ser_bin_graph_dangling`, which
-    is deliberately forging a corrupt wire for a negative test. Everything else is compiler-emitted:
-    `emitGraphSerializeDefinition` (beginGraph/endGraph), `emitGraphNodeHelpers.__serializeNode`
-    (beginTableEntry/endTableEntry/writeRef), `emitGraphDeserializeDefinition` (beginGraph/entryKey/
-    rewindGraph), `emitGraphRefRead` (readRef).
-
-  **The decision.** The graph algorithm — id table, pointee dedup, two-pass wire, cycles through `Weak`,
-  heap shells, ownership transfer — is an algorithm over values, not a language guarantee, so it moves to
-  the library. What the compiler keeps is the part only it can do: **reflection, still opt-in.**
-  ⚠️ This is NOT a move toward universal reflection, which would break pay-for-what-you-use. `@generate`
-  plus `reachesPointer(T)` remain the gate; the derive simply emits a small per-type ADAPTER (visit my
-  pointer edges, allocate my shell) instead of the whole algorithm inline. Strictly less generated code per
-  type, and nothing at all for a type that did not opt in.
-
-  **What that buys, beyond layering:** the 8 intrinsic-only members leave the contracts, so there is
-  nothing left that a user must be prevented from calling — which **removes the need for the
-  protected-base machinery** the split first appeared to require. A graph writer becomes a library type
-  that HOLDS a `Serializer` and drives the ordinary public protocol, not a second kind of serializer.
-
-  **Measured constraints any design here must respect:**
-  - A **contract member must be `public`** — unconditionally. Probed four ways (private; `protected` on a
-    plain `resource`; `protected` on a `type abstract(maxDepth: 1) resource`; with and without a subclass).
-    The check is `src/kama.cemit.cpp`'s conformance loop and its comment states the rationale: *"an
-    interface is a PUBLIC contract — a method that satisfies it must be public too (else it's reachable
-    through the interface but not by name: a leak)."* So kama forbids asymmetric reachability, which is the
-    inverse of the API-surface concern; both are coherent and this is a live language question.
-  - An **overridable member must be `protected`** (*"public polymorphism belongs on a contract"*), so a
-    contract member can **never be overridden** — a conformance implementation is fixed at whichever class
-    declares `implements`, and the base's body always serves a derived instance.
-  - An **abstract type CANNOT be a generic bound**: `<S: Base>` is refused with *"bound it with a contract
-    that declares …"*. Only contracts are bounds. So a base is an IMPLEMENTATION device (shared private
-    helpers — the three binary back ends genuinely share `byte`/`putVarint`/`putFixed`/sink handling),
-    never a second interface. It works fine as a dynamic parameter (`ref Base`).
-  - `friend` on a contract is now **refused** (`0.9.266`) — it was accepted and inert. So there is no
-    named-access mechanism on a contract at all; that is what a `type` is for.
-  - Single inheritance, base embedded as `__base` at **offset 0**, so an erased `void* self` reaches the
-    base subobject unchanged.
-
-  **Contract NAMING is already right, and the `-able` worry is answered.** The tree splits cleanly:
-  `-able` names a passive capability of a value (`Serializable`, `Copyable`, `Sendable`, `Hashable`,
-  `Viewable`, `Parseable`, …); a NOUN names an active role (`Allocator`, `Hasher`, `Iterator`, `Reader`,
-  `Writer`, `Job`, `Order`, `Error`). `Serializer`/`Deserializer` are agents and direct peers of
-  `Writer`/`Reader`/`Hasher`/`Allocator`, so they are correctly named — English `-able` is passive, which
-  is exactly why no `-able` form fits an agent. Being a contract is right too: `Allocator` and `Hasher` are
-  agent contracts swapped as type parameters, the same way a serializer is.
-
-  **Graph support per back end, today:** `json` YES · KBIN (`named`) YES — five fixtures pass, envelope
-  tags `0x14`–`0x17` · KNUM (`numbered`) NO, but it **could** (keys plus `GROUP_START`/`GROUP_END`: the
-  table is a group, each entry a group keyed by its node id, `rewindGraph` bookmarks `pos` as KBIN's does)
-  — the "not available" comment in `numbered.kama` overstates and should go · POS (`positional`)
-  **genuinely cannot**: no delimiters, and both the table size and an entry's field count are runtime facts
-  no positional writer states. ⚠️ Under this row the capability question CHANGES SHAPE — it stops being
-  "does the backend implement a graph contract" and becomes "can the backend carry what the library's graph
-  walker emits", i.e. is it self-describing enough to skip. That may reduce to a marker rather than a
-  second contract pair. Today a user gets no signal at all: POS/KNUM fail at runtime with
-  `Malformed`/`NotRepresentable`, indistinguishable from corrupt input — a dedicated `GraphUnsupported`
-  is the cheap interim fix either way.
+- **Serde layering — SHIPPED `0.9.267`–`0.9.269` (2026-09-09).** The graph algorithm is
+  `std::serialization::graph::ObjectGraph<T>`, a library type over the ordinary token protocol; the compiler
+  emits per-node ADAPTERS against five prelude contracts (`GraphSerializable`/`GraphDeserializable`/`GraphRoot`,
+  `GraphSerializer`/`GraphDeserializer`); the 8 envelope members left `Serializer`/`Deserializer`; the C
+  substrate left `kama_runtime.h`; `Owned<X>` serializes inline (the triad's own conformance); the envelope is
+  ordinary tokens, so **every backend carries a graph** (`ser_pos_graph`, `ser_num_graph`); the root is spelled
+  `ObjectGraph<T>`. What the language surface now is lives in [SPEC.md](SPEC.md) § *Serialization*; the
+  reasoning in the git log. Verdicts on what the design surfaced, each measured while building:
+  - **A tagged-enum payload holding `Shared`/`Weak`** — *scheduled*: extend the enum derive with the adapter
+    form (`writeNode`/`readInto`/`wireEdges` over the live variant's payload); mechanical now that the node
+    adapters exist. Today refused with "`Shared` has none" (probed 2026-09-09).
+  - **A collection OF graph nodes / edges** (`DynamicArray<Shared<X>>`, `DynamicArray<Node>`) — *scheduled*:
+    needs an edge protocol on the collection's conformance (a `GraphSerializable when [T: …]` on the
+    collections, walking elements inline). Refused with a message that says so; hold nodes in a node type.
+  - **A collection OF `Owned<X>`** (`DynamicArray<Owned<X>>`) — *scheduled*, and it is a language question:
+    the element helper takes `const ref T`, and "a `const ref` may not name a smart pointer" fires even when
+    `T` is a type parameter. Decide whether a generic `const ref T` admits a smart-pointer `T`.
+  - **A fat `Owned<Contract>` field** — *scheduled*: the tagged inline form (`{tag: variant, value}` through a
+    per-contract closed-world resolver over `@generate` implementors), the `Owned<X>` rule applied to a
+    polymorphic pointee. Refused today with "`Owned` has none" (it was a graph edge before this row).
+  - **Stable explicit type indices for graph nodes** — *optional*: `typeIndex` is the node type's position
+    in the program's sorted node set, so adding a node type renumbers a positional/numbered graph wire; the
+    named backends are the schema-evolution-safe ones, exactly as fields were before `@field(id:)`. A
+    `@generate(index: N)`-shaped knob is the answer if a consumer asks.
+  - **`ObjectGraph` over an `Owned<T>` root** — *non-goal*: an `Owned` tree is a by-value tree now.
+  - **The stdlib `Weak<Contract>` does not monomorphize** (`weak.kama:36`, `tryUpgrade`'s `Shared.make` cannot
+    infer its arguments over a contract element; no fixture ever used it) — a *bug*, its own row.
+  - **A temporary passed to a contract-typed parameter** (`serializeJsonBuffer(v: ObjectGraph::<T>.of(…))`)
+    takes the address of an rvalue in the emitted C — a *bug*, its own row; bind a local meanwhile.
+  - **A generic ctor in argument position does not infer its type argument from the ctor's own arguments**
+    (`f(v: ObjectGraph.of(root: r))` needs `ObjectGraph::<T>`) — the known "inference reads the destination"
+    limit; recorded, not scheduled.
+  - **A fat→concrete downcast** (`cast<Shared<T>>(fat)`) — a language question the design surfaced; not
+    needed (root recovery is the synthesized `takeRoot`).
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `serializeJsonBuffer`/`deserializeJsonBuffer`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)

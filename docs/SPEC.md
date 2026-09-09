@@ -4728,26 +4728,28 @@ never-blocking data-parallel layer. The "multiplex thousands of connections over
 ergonomic is a **library** concern above the language — a native scheduler can back the very same
 blocking-shaped surface with fibers, with no language change and no effect on wasm.
 
-## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §4)
+## Serialization — `@`-attributes + `@generate` ✅ (by-value + object graphs + polymorphic `Shared<Contract>` on every backend; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §4)
 
 Opt-in, compile-time serialization. The **user-facing surface is just contracts + attributes**; the *wire
-format* is library; **everything structural (the field walk + the object-graph machinery) is a compiler
-intrinsic** — a lowering to C, not synthesized kama. This split is deliberate: reflection and the
-ownership-graph rebuild are core language guarantees (the compiler already owns type layout, the RAII model,
-and the smart-pointer internals), so it emits them directly and correctly rather than fighting surface-language
-restrictions — and nothing leaks into the public API.
+format* is library; the *object-graph algorithm* is library; **what the compiler contributes is reflection,
+still opt-in** — the per-type field walk, synthesized only for a `@generate` type, as a lowering to C.
+Nothing is a runtime type registry: a type that did not opt in gets nothing.
 
 **Three layers.**
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
   `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
   `@field(id: N)` / `@deprecated` / `@skip`, and one
-  entry pair `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
+  entry pair per backend, `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the derive
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
-  `beginObject`/`field`/`variant`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. A type opts into
-  serialization ONCE (`@generate(Serializable, Deserializable)`) and works with every backend automatically, since
-  the generated code drives only the format-agnostic token contract; yaml/xml/user backends are just new
-  implementors — no compiler change.
+  `beginObject`/`field`/`variant`/…) + `DeError`. That token vocabulary is the WHOLE protocol — an object graph
+  is written in it too — so a type opts into serialization ONCE (`@generate(Serializable, Deserializable)`) and
+  works with every backend automatically; yaml/xml/user backends are just new implementors — no compiler change.
+  **The object-graph walker is library as well:** `std::serialization::graph::ObjectGraph<T>` holds a
+  `Serializer` and drives the token protocol through the compiler's per-node adapters (the prelude contracts
+  `GraphSerializable` / `GraphDeserializable` / `GraphRoot`, and the walker's own `GraphSerializer` /
+  `GraphDeserializer`). A different driver — a single-pass writer for a self-describing backend, say — is a
+  library type against the same adapters.
   **Four back ends ship, and the three binary ones differ by ADDRESSING, not by medium** — so they live in one
   module, `std::serialization::binary`, and each entry point names its addressing (none owns a bare `serializeJsonBuffer`,
   because none is the default). Every binary form is byte-oriented: `serializeJsonBuffer` yields a `DynamicArray<uint8>` and
@@ -4771,15 +4773,15 @@ restrictions — and nothing leaks into the public API.
 
   A `…Stream` encoder CONSUMES its sink (kama refuses a move out of a field, so it cannot hand it back); to
   keep writing to the same sink, construct the serializer yourself and call `encodeValue` on it. A
-  `…Stream` decoder drains its reader fully before parsing — graph decode seeks backward for its two-pass
-  rewind, so the input is resident either way, and the streaming form is a convenience, not laziness.
+  `…Stream` decoder drains its reader fully before parsing (Go's buffer-a-value model) — nothing seeks, so
+  the streaming form is a convenience, not laziness.
 
   KBIN stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue` works and unknown
   fields skip cleanly. KNUM keys each value with `(id << 3) | wireType` and zigzag-varints its integers, so a
   small negative costs one byte; the wire type is what lets an unknown id be measured and stepped over. POS
   writes no names, no tags and no object framing at all — a six-field `int32` record is 24 bytes — and therefore
-  cannot skip: a stream that does not match the type is `DeError::Malformed`, and **graph mode is unavailable to
-  it**, since a table's size and an entry's field count are runtime facts no positional writer can state.
+  cannot skip: a stream that does not match the type is `DeError::Malformed`. It carries an object graph all the
+  same (`tests/ser_pos_graph`): the envelope is ordinary tokens, whose shapes it can count. <!-- test: ser_pos_graph -->
   <!-- test: ser_pos_size -->
   **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
   (RFC 8259 §8.1), so escaping buys nothing — and only `"`, `\` and the control bytes are escaped. On
@@ -4789,28 +4791,41 @@ restrictions — and nothing leaks into the public API.
   combined at the wire edge and nothing above it ever sees a UTF-16 code unit — kama stays UTF-8
   everywhere. An **unpaired** surrogate is malformed input and is rejected, not encoded as WTF-8. <!-- test: ser_json_unicode -->
   (Fixture: `tests/ser_json_unicode`.)
-- **Intrinsic (compiler):** the per-type field walk and the whole graph machinery (id table, heap shells,
-  two-pass wire, ownership transfer, ordering, cycles). Zero-cost — emitted **only** for `@generate` types.
+- **Compiler (opt-in reflection):** the per-type field walk — the by-value `serialize`/`deserialize` for a
+  tree type, the graph ADAPTERS for a node type (what its fields are; visit/write/read/re-wire its edges).
+  Zero-cost — emitted **only** for `@generate` types, and only the half a type needs.
 
-**Two modes, gated by `reachesPointer(T)`** — a precomputed per-type flag (the tighter sibling of the
-`destructible` transitive-ownership walk): true iff `T` transitively reaches a `Shared`/`Weak`/`Owned` field
-(recursing through owned fields and collection elements; strings/scalars/enums add nothing). You get back
-exactly what you name:
+**Two modes, gated by whether `T` reaches a `Shared`/`Weak` field** — a precomputed per-type flag (the
+tighter sibling of the `destructible` transitive-ownership walk): true iff `T` transitively reaches a
+`Shared`/`Weak` field, recursing through by-value fields, collection elements **and `Owned` pointees**
+(strings/scalars/enums add nothing). You get back exactly what you name:
 
-| You name | `reachesPointer` | Result |
+| You name | reaches `Shared`/`Weak` | Result |
 |---|---|---|
 | `int32` / `MyEnum` / `MyValueType` | — / false | by value (stack) |
-| tree `resource` (`User { string name }`, `DynamicArray<int32>`) | false | by value (stack) |
-| `Shared<T>` (value **or** resource) | any | heap graph (one node or many) |
-| bare graph type (`deserializeJsonBuffer::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a pointer; deserializeJsonBuffer as `Shared<Node>`" |
+| tree `resource` (`User { string name }`, `DynamicArray<int32>`, `Tree { Optional<Owned<Tree>> left }`) | false | by value (stack) |
+| `ObjectGraph<T>` (`T` a `value` **or** a resource) | any | heap graph (one node or many) |
+| bare graph type (`serializeJsonBuffer(v: node)`, `deserializeJsonBuffer::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a `Shared`/`Weak` field, so it is a graph: serialize `ObjectGraph<Node>`" <!-- xfail: graph_root_unwrapped --> |
+| `Shared<Node>` as a serde target | — | **compile error** → "a graph root is `ObjectGraph<T>`, not `Shared<T>`" <!-- xfail: graph_root_shared --> |
 
-- **By-value (tree):** a `value` type (owns nothing) or a pointer-free `resource` (strings, collections, nested
-  owned data — a tree, no aliasing) serializes to a bare object/array and `deserializeJsonBuffer::<T>` returns it **by value**.
-- **Graph (heap):** anything reaching a `Shared`/`Weak`/`Owned` is a graph — it can alias, cycle, or hold a
-  `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
-  `serializeJsonBuffer` writes the id-table envelope `{"root":id,"objects":{id:{"__type":…,…}}}`; `deserializeJsonBuffer::<Shared<T>>`
-  rebuilds it and returns the owning root handle. A `value` type is welcome in a graph *via* `Shared` (a
-  one-node heap graph); a live pointer field in a `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource -->
+- **By-value (tree):** a `value` type (owns nothing) or a `resource` reaching no `Shared`/`Weak` (strings,
+  collections, nested owned data — a tree, no aliasing) serializes to a bare object/array and
+  `deserializeJsonBuffer::<T>` returns it **by value**. **An `Owned<X>` field is a unique subtree, so on the
+  wire it is exactly an `X`** — byte-identical to a by-value field of that type; absence is spelled
+  `Optional<Owned<X>>`, like every other field. The conformance is the triad's own
+  (`lib/std/memory/owned.kama`), reached through the derive's ordinary composite arm. <!-- test: ser_owned_tree -->
+  (Fixture: `tests/ser_owned_tree`; KBIN: `tests/ser_bin_owned_tree`.)
+- **Graph (heap):** anything reaching a `Shared`/`Weak` is a graph — it can alias, cycle, or hold a
+  `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node,
+  and never a by-value `Serializable`. The root is spelled **`ObjectGraph<T>`** (`import
+  { std::serialization::graph::ObjectGraph }`, like importing a backend): `ObjectGraph.of(root: give r)` on
+  the way out, `deserializeJsonBuffer::<ObjectGraph<Node>>` then `.root()` on the way in — through ANY
+  backend's entry points, since `ObjectGraph<T>` is an ordinary `Serializable`/`Deserializable`. The wire is
+  the id-table envelope `{"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}`, every frame an
+  ordinary token (the table an array, an entry a fixed `{id, type, value}` object with the type as a
+  `variant`, a node's fields its own object), which is why the positional and numbered backends carry a
+  graph too. A `value` type is welcome in a graph (`ObjectGraph<Pt>`: a one-node heap graph, and `Pt` keeps
+  its by-value pair); a live pointer field in a `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource --> <!-- test: ser_graph_value_node -->
 
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
@@ -4840,35 +4855,46 @@ exactly what you name:
   one byte on it where a name costs the whole string. A named backend writes the name, unchanged.
 - **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
 
-**Graph specifics.** `Shared`/`Weak`/`Owned` fields serialize as integer ids into the side table (`0` = null /
-expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only while a strong handle exists.
-`Owned` is unique-owner (a tree of nodes), reconstructed **give-once** — a duplicate owned id on the wire is a
-`DeError::DuplicateId`. Cycles ride `Weak` back-edges; a dangling id → `DeError::UnresolvedReference`. A
-polymorphic edge — `Shared`/`Weak`/`Owned<Contract>` — reconstructs the concrete type from each node's `__type`
-tag and re-forms the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the
-contract → `DeError::TypeMismatch`. Every nominal implementor of a contract used as a graph edge **must** be
-`@generate(Serializable, Deserializable)` — this is **compile-enforced**: a non-`@generate` implementor (which would
-have no node writer and be silently dropped from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
+**Graph specifics.** `Shared`/`Weak` fields serialize as `u64` ids into the table (an absent `Optional` edge
+is `null`; an expired `Weak` is `0`), 1-based in discovery order, the root first. `Shared`/`Weak` dedup by
+pointee identity; a `Weak` is interned only while a strong handle exists. Cycles ride `Weak` back-edges; a
+dangling id → `DeError::UnresolvedReference`; a table id seen twice → `DeError::DuplicateId`. A polymorphic
+edge — `Shared`/`Weak<Contract>` — reconstructs the concrete type from each entry's `type` tag and re-forms
+the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the contract →
+`DeError::TypeMismatch`. A node's nested parts are walked inline: a by-value field whose type itself reaches
+a `Shared`, or an `Owned` pointee that does, contributes its edges to the OWNER's entry — one table, one id
+per pointee. <!-- test: ser_graph_nested_reach --> Every nominal implementor of a contract used as a graph
+edge, and every pointee of a concrete one, **must** be `@generate(Serializable, Deserializable)` — this is
+**compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
+from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 `DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
+The write is two passes (discover every pointee, so the table's length is exact before the first entry — a
+positional array carries its length up front; then write), the read two passes with no rewind (allocate each
+shell and stash its edge ids; then wire). The `type` index an index backend writes is the node type's position
+in the program's closed set of node types, so adding a node type renumbers a positional/numbered graph wire —
+the named backends are the schema-evolution-safe ones, as for fields before `@field(id:)`.
 
 The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the
 core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 
 ```kama
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };   // wire backend (library); the triad needs no import
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,   // wire backend (library)
+         std::serialization::graph::ObjectGraph };                                                          // the graph walker (library); the triad needs no import
 
-// by-value (tree): a pointer-free resource round-trips on the stack
+// by-value (tree): a resource reaching no Shared/Weak round-trips on the stack — an Owned child included
 @generate(Serializable, Deserializable)
 type resource User { @field(name: "user_name") string name; @field int32 age;
     public ctor make(string name, int32 age) { User r; r.name = give name; r.age = age; return give r; } }
 string j = serializeJsonBuffer(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
 Result<User, DeError> u = deserializeJsonBuffer::<User>(src: give j);            // by value
 
-// graph (heap): reaches a pointer -> only via Shared; cycles rebuilt through the Weak back-edge
+// graph (heap): reaches a Shared -> the root is an ObjectGraph; cycles rebuilt through the Weak back-edge
 @generate(Serializable, Deserializable)
 type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
-Result<Shared<Node>, DeError> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire);
-// deserializeJsonBuffer::<Node>(...) would be a compile error: Node reaches a pointer -> decode as Shared<Node>
+ObjectGraph<Node> graph = ObjectGraph.of(root: give a);
+string wire = serializeJsonBuffer(v: graph);                                   // {"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}
+Result<ObjectGraph<Node>, DeError> g = deserializeJsonBuffer::<ObjectGraph<Node>>(src: give wire);   // .root() -> Shared<Node>
+// serializeJsonBuffer(v: a) / deserializeJsonBuffer::<Node> / ::<Shared<Node>> are compile errors that name ObjectGraph
 ```
 
 ## Building & debugging ✅
