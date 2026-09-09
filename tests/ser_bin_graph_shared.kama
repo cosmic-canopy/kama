@@ -1,10 +1,10 @@
 // KBIN object-graph round-trip: two owners share one leaf. Serializable dedups the leaf into the id table (both
-// pointer fields reference one id); decodeJsonBuffer rebuilds a `Shared<Pair>` re-sharing the single leaf. Proven by a
-// decodeJsonBuffer -> re-encodeJsonBuffer producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
+// pointer fields reference one id); decode rebuilds a `Shared<Pair>` re-sharing the single leaf. Proven by a
+// decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
 // refcounts balance. Returns 55.
 import {
-    std::serialization::binary::encodeBinaryNamedBuffer,
-    std::serialization::binary::decodeBinaryNamedBuffer,
+    std::serialization::binary::serializeBinaryNamedBuffer,
+    std::serialization::binary::deserializeBinaryNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Shared,
 };
@@ -36,13 +36,13 @@ fn int32 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Pair p = Pair.make(a: give leaf, b: give l2);
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeBinaryNamedBuffer(v: p);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: p);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Pair>, Owned<Error>> res = decodeBinaryNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
+    Result<Shared<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeBinaryNamedBuffer(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

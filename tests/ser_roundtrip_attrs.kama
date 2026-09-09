@@ -1,5 +1,5 @@
 // Round-trip a resource with a string field, a @field(name:) rename, and a @skip field (ctor-initialized).
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type resource User {
     @field(name: "user_name") string name;
@@ -10,8 +10,8 @@ type resource User {
 }
 fn int32 main() {
     User u = User.make(name: "kai", id: 39);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: u);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: u);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };                       // {"user_name":"kai","id":39}
-    Result<User, Owned<Error>> res = decodeJsonBuffer::<User>(src: give j);
+    Result<User, Owned<Error>> res = deserializeJsonBuffer::<User>(src: give j);
     return match (res) { case Ok(value: q): q.tag(); case Err(error: e): 0 - 1; };   // 39 + 3 = 42
 }

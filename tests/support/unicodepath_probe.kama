@@ -16,7 +16,7 @@
 // surrogate PAIR in UTF-16, which is the case a naive converter gets wrong in both directions.
 //
 // Measured on Windows before the wide-path seam landed: the shipped runtime called the ANSI path
-// functions (`_mkdir`, `_open`, `GetFileAttributesA`, `FindFirstFileA`), which decodeJsonBuffer a path in the
+// functions (`_mkdir`, `_open`, `GetFileAttributesA`, `FindFirstFileA`), which decode a path in the
 // process ANSI code page. A kama string is UTF-8 by definition (lib/std/path/path.kama), so these
 // names were mojibake before they reached the filesystem — at ANY length, with no MAX_PATH involved.
 import { std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,

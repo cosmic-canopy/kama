@@ -23,7 +23,7 @@ type contract Name { … }   // a public-only guarantee (an interface)
 
 ## Why reframe
 
-`class` / `struct` / `pod` (and value-vs-reference) are C/C++ legacy framings that encodeJsonBuffer the *wrong*
+`class` / `struct` / `pod` (and value-vs-reference) are C/C++ legacy framings that serializeJsonBuffer the *wrong*
 axis. The axis a no-GC / RAII language actually turns on is: **does this type own a resource?** Rust
 (`Copy` vs move), Hylo/Val (value semantics), Swift (`~Copyable`), and Mojo are all converging here.
 kama makes ownership the **declared nature** of a type, so the designer picks the right lever at

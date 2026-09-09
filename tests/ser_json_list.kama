@@ -1,5 +1,5 @@
 // A DynamicArray field serializes to a JSON array — both a primitive element list and a nested-object element list.
-import { std::serialization::json::encodeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::json::serializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable)
 type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
 @generate(Serializable)
@@ -15,7 +15,7 @@ fn int32 main() {
     DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
     DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: s);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: s);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"name\":\"lvl1\",\"ids\":[7,8],\"pts\":[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]}") { return 0; }
     isize n = j.length();

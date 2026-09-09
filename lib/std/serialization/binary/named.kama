@@ -3,7 +3,7 @@
 // SAME format-agnostic `Serializer`/`Deserializer` token model (no compiler changes). Self-describing and
 // little-endian: every value is one TAG byte + a fixed-width LE payload, so `skipValue` works without a schema
 // and the format stays forward-compatible (unknown fields skip cleanly). Binary output is raw bytes (embedded
-// nulls, non-UTF-8), so `encodeJsonBuffer` yields a `DynamicArray<uint8>` and `decodeJsonBuffer` takes bytes — NOT a `string`.
+// nulls, non-UTF-8), so `serializeJsonBuffer` yields a `DynamicArray<uint8>` and `deserializeJsonBuffer` takes bytes — NOT a `string`.
 //
 // TAG TABLE (1 byte):
 //   0x01 I8   0x02 I16  0x03 I32  0x04 I64        (LE two's-complement)
@@ -31,13 +31,13 @@ import {
 
 // One module holds all three BINARY addressings — they differ by how a field is addressed, not by
 // medium, so a module per addressing would have split one idea three ways. Each entry point NAMES its
-// addressing: none of the three owns the unqualified `encodeJsonBuffer`, because none of them is the default.
+// addressing: none of the three owns the unqualified `serializeJsonBuffer`, because none of them is the default.
 //
 // NAMING: `{Addressing}{Medium}Serializer` — not `…Writer`/`…Reader`, which collided with the
 // `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>` used "Writer" for two unrelated
 // things in one declaration).
 export { NamedBinarySerializer, NamedBinaryDeserializer,
-         encodeBinaryNamedBuffer, encodeBinaryNamedStream, decodeBinaryNamedBuffer, decodeBinaryNamedStream };
+         serializeBinaryNamedBuffer, serializeBinaryNamedStream, deserializeBinaryNamedBuffer, deserializeBinaryNamedStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
@@ -51,7 +51,7 @@ extern fn uint64 kama_f64_bits(float64 v);
 extern fn float64 kama_f64_from_bits(uint64 b);
 
 // Serializes KBIN straight into an owned `W: Writer` sink (a file, socket, buffered writer, or the in-memory
-// `StringWriter` behind `encodeJsonBuffer`). Owns its sink by value (kama forbids stored borrows). A failed byte write
+// `StringWriter` behind `serializeJsonBuffer`). Owns its sink by value (kama forbids stored borrows). A failed byte write
 // LATCHES the sticky `err`/`code`; the generated `serialize` surfaces it once at the end.
 type resource NamedBinarySerializer<W: Writer> implements Serializer {
     W sink;
@@ -66,12 +66,12 @@ type resource NamedBinarySerializer<W: Writer> implements Serializer {
         this.code = SerError::NotRepresentable;
     }
 
-    // Borrow the underlying sink (e.g. so `encodeJsonBuffer` can `takeBytes()` its concrete StringWriter). W-agnostic.
+    // Borrow the underlying sink (e.g. so `serializeJsonBuffer` can `takeBytes()` its concrete StringWriter). W-agnostic.
     public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
     public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
-    // `encodeJsonBuffer` sugar (a generic free fn can't instantiate `NamedBinarySerializer<W>`, so this is an instance method the
+    // `serializeJsonBuffer` sugar (a generic free fn can't instantiate `NamedBinarySerializer<W>`, so this is an instance method the
     // caller builds at a concrete site). Mirrors JsonSerializer.encodeValue.
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
@@ -154,7 +154,7 @@ type resource NamedBinarySerializer<W: Writer> implements Serializer {
 
 // A KBIN reader over an owned byte buffer, implementing Deserializer with a STICKY error flag (a malformed
 // token sets `err` and returns a default; the caller checks `failed()` once). The whole source is held so the
-// two-pass object-graph decodeJsonBuffer can `rewindGraph` to the table — the same bounded-memory boundary as JSON.
+// two-pass object-graph decode can `rewindGraph` to the table — the same bounded-memory boundary as JSON.
 type resource NamedBinaryDeserializer implements Deserializer {
     DynamicArray<uint8> buf;
     isize pos;
@@ -279,7 +279,7 @@ type resource NamedBinaryDeserializer implements Deserializer {
 
 // Serializable any `Serializable` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a
 // `DynamicArray<uint8>`, not a `string`. A concrete value auto-wraps behind the `Serializable` interface.
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeBinaryNamedBuffer(Serializable v) {
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> serializeBinaryNamedBuffer(Serializable v) {
     NamedBinarySerializer<StringWriter> w = NamedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -288,15 +288,15 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeBinaryNamedBuffe
 }
 
 // Deserializable a KBIN byte buffer into a `Deserializable` type. Name the target with turbofish:
-// `binary::decodeBinaryNamedBuffer::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
-fn Result<T, Owned<Error>> decodeBinaryNamedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
+// `binary::deserializeBinaryNamedBuffer::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
+fn Result<T, Owned<Error>> deserializeBinaryNamedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
     NamedBinaryDeserializer r = NamedBinaryDeserializer.make(src: give src);
     return T.deserialize(r: r);
 }
 
-// Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `decodeJsonBuffer`. Drains the reader fully
-// into a byte buffer first (graph decodeJsonBuffer seeks backward), then parses. A read `IoError` auto-boxes.
-fn Result<T, Owned<Error>> decodeBinaryNamedStream<T: Deserializable<T>>(Reader from) {
+// Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully
+// into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
+fn Result<T, Owned<Error>> deserializeBinaryNamedStream<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
@@ -305,13 +305,13 @@ fn Result<T, Owned<Error>> decodeBinaryNamedStream<T: Deserializable<T>>(Reader 
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without
-// materializing the whole encoding first. The streaming twin of `encodeBinaryNamedBuffer`, and the write-side peer of
-// `decodeBinaryNamedStream`.
+// materializing the whole encoding first. The streaming twin of `serializeBinaryNamedBuffer`, and the write-side peer of
+// `deserializeBinaryNamedStream`.
 //
 // The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
 // When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
 // the sink through `innerRefMut()`.
-fn Result<Unit, std::memory::Owned<Error>> encodeBinaryNamedStream<W: Writer>(Serializable v, W to) {
+fn Result<Unit, std::memory::Owned<Error>> serializeBinaryNamedStream<W: Writer>(Serializable v, W to) {
     NamedBinarySerializer<W> w = NamedBinarySerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
 }

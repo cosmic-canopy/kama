@@ -1,13 +1,13 @@
 // A DynamicArray of enums with a string payload, an int payload, and a no-payload variant — composition + tag dispatch.
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable, Deserializable)
 type enum Tok { Word(string s), Num(int32 n), End }
 fn int32 main() {
     DynamicArray<Tok> ts = DynamicArray.empty(); string w = "hi";
     ts.add(item: Tok::Word(s: give w)); ts.add(item: Tok::Num(n: 42)); ts.add(item: Tok::End);
-    Result<string, Owned<Error>> __enc = encodeJsonBuffer(v: ts);
+    Result<string, Owned<Error>> __enc = serializeJsonBuffer(v: ts);
     string __encStr = match (give __enc) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<Tok>, Owned<Error>> res = decodeJsonBuffer::<DynamicArray<Tok>>(src: give __encStr);
+    Result<DynamicArray<Tok>, Owned<Error>> res = deserializeJsonBuffer::<DynamicArray<Tok>>(src: give __encStr);
     return match (res) { case Ok(value: b):
         (match (b[0]) { case Word(s: s): cast<int32>(s.length()); case Num(n: n): 0; case End: 0; })
         + (match (b[1]) { case Num(n: n): n; case Word(s: s): 0; case End: 0; })

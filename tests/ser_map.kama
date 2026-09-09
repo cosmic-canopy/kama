@@ -1,11 +1,11 @@
 // Map<K,V> serializes as an array of {"key","value"} pairs (a generic Map can't emit a JSON object).
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::Map };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::Map };
 fn int32 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: m);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: m);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Map<string, int32>, Owned<Error>> res = decodeJsonBuffer::<Map<string, int32>>(src: give j);
+    Result<Map<string, int32>, Owned<Error>> res = deserializeJsonBuffer::<Map<string, int32>>(src: give j);
     return match (res) {
         case Ok(value: b): cast<int32>(b.length()) * 10 + (match (b.get(key: "b")) { case Some(value: x): x; case None: 0; });   // 22
         case Err(error: e): 0 - 1;

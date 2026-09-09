@@ -1,13 +1,13 @@
 // The intrinsic Serializable/Deserializable conformances compose inside a collection for every scalar width.
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::DynamicArray };
 fn int32 main() {
     DynamicArray<bool> bs = DynamicArray.empty(); bs.add(item: true); bs.add(item: false); bs.add(item: true);
-    Result<string, Owned<Error>> __encB = encodeJsonBuffer(v: bs);
+    Result<string, Owned<Error>> __encB = serializeJsonBuffer(v: bs);
     string __bsj = match (give __encB) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } };
     if (!__bsj.equals(other: "[true,false,true]")) { return 1; }
     DynamicArray<float64> fs = DynamicArray.empty(); fs.add(item: 1.5); fs.add(item: 2.5);
-    Result<string, Owned<Error>> __encF = encodeJsonBuffer(v: fs);
+    Result<string, Owned<Error>> __encF = serializeJsonBuffer(v: fs);
     string __fsStr = match (give __encF) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<float64>, Owned<Error>> res = decodeJsonBuffer::<DynamicArray<float64>>(src: give __fsStr);
+    Result<DynamicArray<float64>, Owned<Error>> res = deserializeJsonBuffer::<DynamicArray<float64>>(src: give __fsStr);
     return match (res) { case Ok(value: b): cast<int32>(b[0] + b[1]); case Err(error: e): 0 - 1; };  // 4
 }

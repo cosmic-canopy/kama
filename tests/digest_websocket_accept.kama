@@ -1,7 +1,7 @@
 // RFC 6455 § 4.2.2: Sec-WebSocket-Accept = base64(SHA1(Sec-WebSocket-Key + GUID)) — the handshake the
 // first external project needed a digest for, spelled with std::digest + std::encoding. Exit 0 on the
 // RFC's own example.
-import { std::digest::sha1::Sha1, std::encoding::base64::encodeJsonBuffer as b64Encode,
+import { std::digest::sha1::Sha1, std::encoding::base64::encode as b64Encode,
          std::collections::DynamicArray, std::collections::View };
 
 fn DynamicArray<uint8> bytesOf(const ref string s) {

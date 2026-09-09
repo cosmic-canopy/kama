@@ -1,5 +1,5 @@
 // Field-level attributes: `@field(name: "…")` renames the wire key; `@skip` omits a field entirely.
-import { std::serialization::json::encodeJsonBuffer };
+import { std::serialization::json::serializeJsonBuffer };
 @generate(Serializable)
 type value Config {
     @field(name: "max_retries") int32 maxRetries;
@@ -11,7 +11,7 @@ type value Config {
 }
 fn int32 main() {
     Config c = Config.make(maxRetries: 5, internalCounter: 999, enabled: true);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: c);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: c);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"max_retries\":5,\"enabled\":true}") { return 0; }   // internalCounter skipped
     isize n = j.length();

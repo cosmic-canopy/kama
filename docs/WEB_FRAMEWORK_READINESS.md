@@ -26,7 +26,7 @@ and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundati
   `type contract HttpHandler { fn Result<Response, Error> handle(ref Request); }` with many implementations
   (middleware, route handlers) works today. This is the plugin/middleware backbone.
 - **Intrinsic serialization + JSON** — `@generate` Serializable/Deserializable with a `std::serialization::json` backend
-  (`encodeJsonBuffer`/`decodeJsonBuffer::<T>`). JSON request/response bodies work out of the box.
+  (`serializeJsonBuffer`/`deserializeJsonBuffer::<T>`). JSON request/response bodies work out of the box.
 - **UTF-8 strings + growable bytes** — `string` (find/split/substring/trim/replace/startsWith/…, byte index `s[i]`,
   `.chars()` codepoints), `DynamicArray<uint8>` as a growable buffer, and `View<T>` for non-owning slices — enough
   to hand-parse HTTP/1.1 (the `examples/httpd` static server proves the composition).

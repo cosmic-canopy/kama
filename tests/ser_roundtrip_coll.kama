@@ -1,6 +1,6 @@
 // Round-trip Optional<T> (Some/None) and DynamicArray<T> (array) fields — deserialize now matches serialize for
 // these container shapes (natural defaults: Optional::None, empty DynamicArray).
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable, Deserializable)
 type resource Rec {
     @field int32 id;
@@ -21,8 +21,8 @@ fn int32 main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
     Rec r = Rec.make(id: 10, parent: par, next: nx, tags: give tg);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: r);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: r);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
-    Result<Rec, Owned<Error>> res = decodeJsonBuffer::<Rec>(src: give j);
+    Result<Rec, Owned<Error>> res = deserializeJsonBuffer::<Rec>(src: give j);
     return match (res) { case Ok(value: q): q.score(); case Err(error: e): 0 - 1; };   // 10+3+7+5+6 = 31
 }

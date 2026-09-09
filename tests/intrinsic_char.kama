@@ -14,7 +14,7 @@
 // index into an array — recovers its key from the C type, and `uint32_t` answers `uint32`. That is why
 // nothing here reaches a char through a container.
 
-import { std::serialization::binary::encodeBinaryNamedBuffer, std::collections::DynamicArray };
+import { std::serialization::binary::serializeBinaryNamedBuffer, std::collections::DynamicArray };
 
 // A user contract over both types proves the mechanism independently of the prelude: one body per target,
 // visibly different results, dispatched through a bound.
@@ -75,14 +75,14 @@ fn int32 main() {
     assert(cond: widthOf(v: ref u) == 7, msg: "uint32 has its own Widthy");
     if (widthOf(v: ref c) == 100 && widthOf(v: ref u) == 7) { score = score + 40; }
 
-    // Serializable, on the WIRE. A round-trip alone proves nothing here — encodeJsonBuffer and decodeJsonBuffer would agree
+    // Serializable, on the WIRE. A round-trip alone proves nothing here — encode and decode would agree
     // whichever conformance they shared. What discriminates is the KBIN tag: `writeChar` emits 14,
     // `writeU32` emits 7, and before the re-key a `char` element rode the latter. This element reaches
     // `Serializable` through the collection's `<T: Serializable>` bound inside a monomorph, where the recorded
     // type node is still the unsubstituted `T` — the case that needs `primKey`'s substitution hop.
     DynamicArray<char> arr = DynamicArray.empty();
     arr.add(item: 'k');
-    Result<DynamicArray<uint8>, Owned<Error>> enc = encodeBinaryNamedBuffer(v: arr);
+    Result<DynamicArray<uint8>, Owned<Error>> enc = serializeBinaryNamedBuffer(v: arr);
     DynamicArray<uint8> wire = match (give enc) { case Ok(value: w): give w; case Err(error: __e): { return 1; } };
     uint8 tag = wire[1];                      // [0] is beginArray (18), [1] is the element's tag
     assert(cond: tag == 14ui8, msg: "a char element serializes as a char, not as a uint32");

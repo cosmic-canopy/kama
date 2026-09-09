@@ -396,7 +396,7 @@ type contract Deserializer for resource {
     fn void endGraph(); fn void failWith(DeError e); const fn DeError errorCode();
 }
 // The read side of serde. It DECLARES its factory rather than standing as a marker, because a bound that
-// promises nothing constrains nothing: `decodeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the
+// promises nothing constrains nothing: `deserializeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the
 // contract named that member the call was checked only once a concrete `T` reached a use site — so a
 // library could ship `kama check`-green and hand its consumers the error. The self-type is a PINNED
 // parameter (`<T is This>`) because the factory returns the implementing type and a contract may not name

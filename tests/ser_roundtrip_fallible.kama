@@ -1,6 +1,6 @@
-// Landing D: the two fallible boundaries compose — a value round-trips through the fallible `encodeJsonBuffer`
-// (Result<string, Owned<Error>>) and the fallible `decodeJsonBuffer` (Result<This, Owned<Error>>), both `Ok`.
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+// Landing D: the two fallible boundaries compose — a value round-trips through the fallible `encode`
+// (Result<string, Owned<Error>>) and the fallible `deserializeJsonBuffer` (Result<This, Owned<Error>>), both `Ok`.
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type value Point {
     @field int32 x;
@@ -10,8 +10,8 @@ type value Point {
 }
 fn int32 main() {
     Point p = Point.make(x: 30, y: 12);
-    Result<string, Owned<Error>> je = encodeJsonBuffer(v: p);
+    Result<string, Owned<Error>> je = serializeJsonBuffer(v: p);
     string j = match (give je) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
-    Result<Point, Owned<Error>> pr = decodeJsonBuffer::<Point>(src: give j);
+    Result<Point, Owned<Error>> pr = deserializeJsonBuffer::<Point>(src: give j);
     return match (pr) { case Ok(value: q): q.sum(); case Err(error: e): 0 - 1; };   // 42
 }

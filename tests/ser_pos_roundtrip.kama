@@ -4,8 +4,8 @@
 // (one presence byte, both ways), and a tagged enum (a varint variant index).
 import {
     std::collections::DynamicArray,
-    std::serialization::binary::encodeBinaryPositionalBuffer,
-    std::serialization::binary::decodeBinaryPositionalBuffer,
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
 };
 
 @generate(Serializable, Deserializable)
@@ -66,9 +66,9 @@ type resource Rec {
 }
 
 fn int32 main() {
-    Result<DynamicArray<uint8>, Owned<Error>> b = encodeBinaryPositionalBuffer(v: Rec.make());
+    Result<DynamicArray<uint8>, Owned<Error>> b = serializeBinaryPositionalBuffer(v: Rec.make());
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
-    Result<Rec, Owned<Error>> d = decodeBinaryPositionalBuffer::<Rec>(src: give bytes);
+    Result<Rec, Owned<Error>> d = deserializeBinaryPositionalBuffer::<Rec>(src: give bytes);
     Rec r = match (give d) { case Ok(value: v): give v; case Err(error: e): { return 251; } };
 
     int32 bad = r.verify();

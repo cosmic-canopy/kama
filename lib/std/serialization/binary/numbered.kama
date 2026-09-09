@@ -42,8 +42,8 @@ import {
 
 // One module for all three binary addressings — see the note in `positional.kama`.
 // NAMING: `{Addressing}{Medium}Serializer`.
-export { NumberedBinarySerializer, NumberedBinaryDeserializer, encodeBinaryNumberedBuffer,
-         encodeBinaryNumberedStream, decodeBinaryNumberedBuffer, decodeBinaryNumberedStream };
+export { NumberedBinarySerializer, NumberedBinaryDeserializer, serializeBinaryNumberedBuffer,
+         serializeBinaryNumberedStream, deserializeBinaryNumberedBuffer, deserializeBinaryNumberedStream };
 
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 extern fn uint32 kama_f32_bits(float32 v);
@@ -394,7 +394,7 @@ type resource NumberedBinaryDeserializer implements Deserializer {
     public const fn DeError errorCode() { return this.code; }
 }
 
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeBinaryNumberedBuffer(Serializable v) {
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> serializeBinaryNumberedBuffer(Serializable v) {
     NumberedBinarySerializer<StringWriter> w = NumberedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -402,12 +402,12 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeBinaryNumberedBu
     return Result::Ok(value: w.innerRefMut().takeBytes());
 }
 
-fn Result<T, Owned<Error>> decodeBinaryNumberedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
+fn Result<T, Owned<Error>> deserializeBinaryNumberedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
     NumberedBinaryDeserializer r = NumberedBinaryDeserializer.make(src: give src);
     return T.deserialize(r: r);
 }
 
-fn Result<T, Owned<Error>> decodeBinaryNumberedStream<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> deserializeBinaryNumberedStream<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
@@ -416,13 +416,13 @@ fn Result<T, Owned<Error>> decodeBinaryNumberedStream<T: Deserializable<T>>(Read
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without
-// materializing the whole encoding first. The streaming twin of `encodeBinaryNumberedBuffer`, and the write-side peer of
-// `decodeBinaryNumberedStream`.
+// materializing the whole encoding first. The streaming twin of `serializeBinaryNumberedBuffer`, and the write-side peer of
+// `deserializeBinaryNumberedStream`.
 //
 // The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
 // When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
 // the sink through `innerRefMut()`.
-fn Result<Unit, std::memory::Owned<Error>> encodeBinaryNumberedStream<W: Writer>(Serializable v, W to) {
+fn Result<Unit, std::memory::Owned<Error>> serializeBinaryNumberedStream<W: Writer>(Serializable v, W to) {
     NumberedBinarySerializer<W> w = NumberedBinarySerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
 }

@@ -1,9 +1,9 @@
 // Graph deserialize surfaces a TYPE MISMATCH: a polymorphic `Shared<Shape>` edge references a node whose wire
 // `__type` (`Tag`) does not implement `Shape`. The two-pass rebuild recovers the pointee's concrete type from
-// its `__type`, finds no `Shape` conformance for it, and `decodeJsonBuffer` returns `DeError::TypeMismatch` (not the
+// its `__type`, finds no `Shape` conformance for it, and `deserializeJsonBuffer` returns `DeError::TypeMismatch` (not the
 // generic `Malformed`). `Tag` is a real graph node (a concrete `Shared<Tag>` pointee) with no pointer fields,
 // so only the mismatching edge fails — mirroring `ser_graph_dangling.kama`'s specific-error assertion.
-import { std::serialization::json::decodeJsonBuffer, std::memory::Shared };
+import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
@@ -27,7 +27,7 @@ type resource Scene {
 fn int32 main() {
     // `a` (a `Shared<Shape>`) wrongly points at id 2, whose `__type` is `Tag` (not a `Shape` implementor).
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"t\":2},\"2\":{\"__type\":\"Tag\",\"n\":9}}}";
-    Result<Shared<Scene>, Owned<Error>> res = decodeJsonBuffer::<Shared<Scene>>(src: give j);
+    Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: give j);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {

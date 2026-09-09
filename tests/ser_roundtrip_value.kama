@@ -1,5 +1,5 @@
-// Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `decodeJsonBuffer` one-liner.
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+// Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `deserializeJsonBuffer` one-liner.
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type value Vec {
     @field int32 x;
@@ -10,8 +10,8 @@ type value Vec {
 }
 fn int32 main() {
     Vec v = Vec.make(x: 10, y: 20, z: 12);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: v);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: v);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Vec, Owned<Error>> res = decodeJsonBuffer::<Vec>(src: give j);
+    Result<Vec, Owned<Error>> res = deserializeJsonBuffer::<Vec>(src: give j);
     return match (res) { case Ok(value: q): q.dot(); case Err(error: e): 0 - 1; };   // 42
 }

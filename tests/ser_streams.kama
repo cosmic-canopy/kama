@@ -1,13 +1,13 @@
 // std::io streams M2 — the JSON serde backend now rides the streaming byte substrate. Exercises:
-//   (a) `encodeJsonBuffer` still returns the byte-identical string (JsonSerializer<StringWriter>);
+//   (a) `serializeJsonBuffer` still returns the byte-identical string (JsonSerializer<StringWriter>);
 //   (b) `encodeTo` streams into an owned sink — a bare StringWriter AND a BufWriter<StringWriter> —
 //       proving the generic writer instantiates over distinct W monomorphs and the flush path drains.
-//       (encodeTo shares JsonSerializer's exact byte path with encodeJsonBuffer, verified byte-exact by (a).)
-//   (c) `decodeJsonStream` over a SliceReader round-trips through readAll + pump + JsonDeserializer.
+//       (encodeTo shares JsonSerializer's exact byte path with encode, verified byte-exact by (a).)
+//   (c) `deserializeJsonStream` over a SliceReader round-trips through readAll + pump + JsonDeserializer.
 // A free fn takes a `Serializable` as a second-class borrow, so `r` stays usable across calls. Returns 0.
 import {
-    std::serialization::json::encodeJsonBuffer,
-    std::serialization::json::decodeJsonStream,
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonStream,
     std::serialization::json::JsonSerializer,
     std::io::Writer,
     std::io::Reader,
@@ -31,7 +31,7 @@ fn int32 main() {
     Rec r = Rec.make(id: 7, name: "hi", ok: true);
 
     // (a) sugar path — byte-identical to pre-streams output.
-    Result<string, Owned<Error>> ja = encodeJsonBuffer(v: r);
+    Result<string, Owned<Error>> ja = serializeJsonBuffer(v: r);
     string j = match (give ja) { case Ok(value: s): give s; case Err(error: e): { return 10; } };
     if (!(j == "{\"id\":7,\"name\":\"hi\",\"ok\":true}")) { return 11; }
 
@@ -44,8 +44,8 @@ fn int32 main() {
     Result<Unit, Owned<Error>> e2 = w2.encodeValue(v: r);
     match (give e2) { case Ok(value: _): {} case Err(error: e): { return 13; } };
 
-    // (c) reader path — decodeJsonBuffer straight out of a SliceReader over the encoded bytes.
-    Result<Rec, Owned<Error>> d = decodeJsonStream::<Rec>(from: SliceReader.make(src: give j));
+    // (c) reader path — decode straight out of a SliceReader over the encoded bytes.
+    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: SliceReader.make(src: give j));
     Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
     return q.verify();
 }

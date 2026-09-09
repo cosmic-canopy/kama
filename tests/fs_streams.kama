@@ -1,6 +1,6 @@
 // std::io streams M3 — std::fs::File now implements Reader/Writer, so serde streams straight to/from disk
 // with no whole-file string buffering. Write a record's JSON directly to an fd via JsonSerializer::<File>, close,
-// reopen, and decodeJsonBuffer it back straight from the File (as a Reader). Each phase is scoped in a helper so the
+// reopen, and decode it back straight from the File (as a Reader). Each phase is scoped in a helper so the
 // owning JsonSerializer/File drops (closes the fd) before the next phase. Returns 42 on full round-trip success.
 import {
     std::fs::File,
@@ -10,7 +10,7 @@ import {
     std::io::Writer,
     std::io::IoError,
     std::serialization::json::JsonSerializer,
-    std::serialization::json::decodeJsonStream,
+    std::serialization::json::deserializeJsonStream,
 };
 
 @generate(Serializable, Deserializable)
@@ -34,12 +34,12 @@ fn int32 writeRec(ref string path, ref Rec rec) {
     return match (give e) { case Ok(value: _): 0; case Err(error: er): 21; };
 }
 
-// Reopen the file for reading and decodeJsonBuffer a Rec straight out of it (File as a bare Reader). The File drops
+// Reopen the file for reading and decode a Rec straight out of it (File as a bare Reader). The File drops
 // (closes) at scope end. Returns 0 iff the decoded record round-trips.
 fn int32 readRec(ref string path) {
     Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Read);
     File f = match (give fo) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
-    Result<Rec, Owned<Error>> d = decodeJsonStream::<Rec>(from: f);
+    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: f);
     Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
     if (!q.matches()) { return 32; }
     return 0;

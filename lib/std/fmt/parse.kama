@@ -12,7 +12,7 @@ export { ParseError, Parseable, parse, ParseableRadix, parseRadix };
 // shapes throw that away.
 //
 // Reached generically — `parse::<int32>(s: t)` — so there is no `parseI32`/`parseI64`/… ladder of
-// suffixed spellings. The mechanism is the one the serde path already uses (`json::decodeJsonBuffer<T: Deserializable>`
+// suffixed spellings. The mechanism is the one the serde path already uses (`json::decode<T: Deserializable>`
 // calling `T.deserialize(...)`): a MARKER contract plus a per-type conformance supplying a fallible ctor.
 // One `type intrinsic` block per target — each body carries that width's own range limits, so there is no
 // shared body for a set to hold.

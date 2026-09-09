@@ -1,6 +1,6 @@
 // @generate on an enum: externally-tagged {"tag":"V"[,"value":{fields}]}, here as a nested field.
 // Exercises a payload field named `w` (which must not shadow the Serializer parameter).
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
 @generate(Serializable, Deserializable)
@@ -8,9 +8,9 @@ type enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
 type value Drawing { @field public int32 id; @field public Geo shape; }
 fn int32 main() {
     Drawing d = Drawing.of(id: 3, shape: Geo::Rect(w: 4, h: 5));
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: d);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: d);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (!j.equals(other: "{\"id\":3,\"shape\":{\"tag\":\"Rect\",\"value\":{\"w\":4,\"h\":5}}}")) { return 1; }
-    Result<Drawing, Owned<Error>> res = decodeJsonBuffer::<Drawing>(src: give j);
+    Result<Drawing, Owned<Error>> res = deserializeJsonBuffer::<Drawing>(src: give j);
     return match (res) { case Ok(value: b): b.id + (match (b.shape) { case Rect(w: w, h: h): w*h; case Circle(r: r): r; case Empty: 0; }); case Err(error: e): 0 - 1; };  // 23
 }

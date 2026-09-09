@@ -62,7 +62,7 @@ fn int32 viaContinue(int32 v) {
 }
 
 // A CONSUMED subject (`match (give r)`) whose payload is a smart-pointer handle, `give`n straight out
-// again — `std::serialization::json::encodeJsonBuffer`'s own shape. The binding must take ownership: it is neither
+// again — `std::serialization::json::encode`'s own shape. The binding must take ownership: it is neither
 // `ownsByValue` nor a borrow, so it used to alias a box the subject still owned, and `give e` moved it out
 // from under a live owner. That was a latent double free the missing subject drop was hiding.
 type enum Boom implements Error {

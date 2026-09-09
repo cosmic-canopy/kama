@@ -1,7 +1,7 @@
 // Landing D: `serialize` is FALLIBLE (the write mirror of the fallible `deserialize` ctor). JSON can't
 // represent a non-finite float, so encoding one surfaces `Err(SerError::NotRepresentable)` — never a
 // half-written string — recovered via `err.as<SerError>()`. A finite value encodes to `Ok`.
-import { std::serialization::json::encodeJsonBuffer };
+import { std::serialization::json::serializeJsonBuffer };
 @generate(Serializable)
 type value Measure {
     @field float64 v;
@@ -10,13 +10,13 @@ type value Measure {
 fn int32 main() {
     // finite -> Ok
     Measure ok = Measure.make(v: 1.5);
-    Result<string, Owned<Error>> okr = encodeJsonBuffer(v: ok);
+    Result<string, Owned<Error>> okr = serializeJsonBuffer(v: ok);
     int32 okv = match (okr) { case Ok(value: s): 40; case Err(error: e): 0 - 1; };
 
     // non-finite (Inf via overflow) -> Err(NotRepresentable), recovered as a concrete SerError
     float64 big = 1.0e308; float64 inf = big * 10.0;
     Measure bad = Measure.make(v: inf);
-    Result<string, Owned<Error>> badr = encodeJsonBuffer(v: bad);
+    Result<string, Owned<Error>> badr = serializeJsonBuffer(v: bad);
     int32 errv = match (badr) {
         case Ok(value: s): 0 - 3;                                   // must NOT succeed
         case Err(error: e): match (e.as<SerError>()) {              // recover the concrete serialize error

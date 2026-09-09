@@ -9,7 +9,7 @@
 // Closes the second half of consumer bug KB-19: `Deserializable` on an enum used to register only for
 // the MIXED shape — some variants with payloads, some without. All-payload was the `hasUnit` gate
 // (tests/generate_enum_derives); all-unit was this refusal.
-import { std::collections::Map, std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+import { std::collections::Map, std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Color { Red, Green = 5, Blue }
@@ -36,15 +36,15 @@ fn int32 main() {
 
     // On the wire it is a NAME, not a record: `"Green"`, never `{"tag":"Green"}`. There is no payload
     // for an object to carry, and the shape is decided by the TYPE, so a schema still reads cleanly.
-    Result<string, Owned<Error>> j = encodeJsonBuffer(v: g);
+    Result<string, Owned<Error>> j = serializeJsonBuffer(v: g);
     string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
     if (!js.equals(other: "\"Green\"")) { return 96; }
 
-    Result<Color, Owned<Error>> back = decodeJsonBuffer::<Color>(src: give js);
+    Result<Color, Owned<Error>> back = deserializeJsonBuffer::<Color>(src: give js);
     int32 bv = match (back) { case Ok(value: c): cast<int32>(c); case Err(error: e2): 0 - 1; };
 
     // A name that matches no variant is an `Err` — not a silently-wrong variant.
-    Result<Color, Owned<Error>> bad = decodeJsonBuffer::<Color>(src: "\"Puce\"");
+    Result<Color, Owned<Error>> bad = deserializeJsonBuffer::<Color>(src: "\"Puce\"");
     int32 rej = match (bad) { case Ok(value: c2): 0 - 50; case Err(error: e3): 20; };
 
     return red + blue + bv + rej;   // 4 + 8 + 5 + 20 = 37

@@ -9,7 +9,7 @@
 // in `fields` — so an instance routed to the class-side emitters would have produced `return true` for
 // equals and a seed-only hash: valid C, no diagnostic, and every `Msg<int32>` equal to every other. The
 // two `Put`s carrying DIFFERENT payloads are what catch that, and nothing else here would.
-import { std::collections::Map, std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
+import { std::collections::Map, std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
 
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Msg<T> { Put(T v), Nop }
@@ -43,11 +43,11 @@ fn int32 main() {
 
     // A generic enum on the wire: the payload is written through the SUBSTITUTED field type, which is
     // where a generic instance's field node still being the template's `T` would have shown up.
-    Result<string, Owned<Error>> j = encodeJsonBuffer(v: c);
+    Result<string, Owned<Error>> j = serializeJsonBuffer(v: c);
     string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
     if (!js.equals(other: "{\"tag\":\"Put\",\"value\":{\"v\":4}}")) { return 96; }
 
-    Result<Msg<int32>, Owned<Error>> back = decodeJsonBuffer::<Msg<int32>>(src: give js);
+    Result<Msg<int32>, Owned<Error>> back = deserializeJsonBuffer::<Msg<int32>>(src: give js);
     int32 bv = match (back) {
         case Ok(value: q): match (q) { case Put(v: v2): v2; case Nop: 0; };
         case Err(error: e2): 0 - 1;

@@ -2,10 +2,10 @@
 // with two concrete `@generate` implementors (`Sq`, `Circle`). Each node carries its concrete `__type` on the
 // wire; serialize resolves the per-node writer from the fat handle's vtable, deserialize rebuilds the correct
 // concrete behind each contract edge (recovered from the node's `__type`) and re-forms the fat `Shared<Shape>`
-// handle — proven by a re-encodeJsonBuffer reproducing the exact wire AND by dynamic dispatch (`area()`) surviving the
+// handle — proven by a re-encode reproducing the exact wire AND by dynamic dispatch (`area()`) surviving the
 // trip. ASan proves each concrete frees exactly once. (v1 rule: a contract graph edge's implementors are
 // `@generate(Serializable, Deserializable)`.)
-import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::memory::Shared };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
@@ -38,16 +38,16 @@ fn int32 main() {
     Shared<Circle> ci = new Circle.make(r: 2);
     Shared<Shape> sb = ci;
     Scene sc = Scene.make(a: give sa, b: give sb);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: sc);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: sc);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     // root Scene=1; a -> Sq=2, b -> Circle=3; each concrete carries its own `__type`.
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"b\":3},\"2\":{\"__type\":\"Sq\",\"side\":4},\"3\":{\"__type\":\"Circle\",\"r\":2}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Scene>, Owned<Error>> res = decodeJsonBuffer::<Shared<Scene>>(src: copy j);
+    Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: copy j);
     match (res) {
         case Ok(value: sh): {
-            Result<string, Owned<Error>> j2_r = encodeJsonBuffer(v: sh);
+            Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: sh);
             string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
             if (j2 != j) { return 1; }
             if (sh.areaA() != 16) { return 2; }   // Sq: 4*4

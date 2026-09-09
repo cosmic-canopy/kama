@@ -1,5 +1,5 @@
 // Optional<T> fields serialize as the inner value (Some) or JSON null (None).
-import { std::serialization::json::encodeJsonBuffer };
+import { std::serialization::json::serializeJsonBuffer };
 @generate(Serializable)
 type value Node {
     @field int32 id;
@@ -13,7 +13,7 @@ fn int32 main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
     Node n = Node.make(id: 7, parent: par, next: nx);
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: n);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: n);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"id\":7,\"parent\":3,\"next\":null}") { return 0; }
     isize k = j.length();

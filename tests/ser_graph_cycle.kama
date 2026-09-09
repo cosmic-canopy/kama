@@ -1,12 +1,12 @@
 // Object-graph round-trip with a cycle: node 1 owns node 2 (Shared forward edge), node 2 holds a Weak
 // back-edge to node 1. Serializable terminates (the parent is already interned, so the back-edge writes its id)
 // and is leak-free (the Weak breaks the ownership cycle). Deserializable rebuilds both edges — the forward
-// `Shared` and the `Weak` back-edge (re-`downgrade`d onto the reconstructed owner) — proven by a re-encodeJsonBuffer
+// `Shared` and the `Weak` back-edge (re-`downgrade`d onto the reconstructed owner) — proven by a re-encode
 // that reproduces the exact wire; ASan proves the rebuilt cycle is still leak-free. A never-null Shared can't
 // bootstrap a cycle, so the edges are nullable (Optional); `0` = absent/expired.
 import {
-    std::serialization::json::encodeJsonBuffer,
-    std::serialization::json::decodeJsonBuffer,
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
     std::memory::Shared,
     std::memory::Weak,
 };
@@ -26,15 +26,15 @@ fn int32 main() {
     Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
-    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: a);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: a);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     // root a = id 1 (next -> 2, no back); b = id 2 (no next, back -> 1). 0 = absent/expired.
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Node\",\"id\":1,\"next\":2,\"back\":0},\"2\":{\"__type\":\"Node\",\"id\":2,\"next\":0,\"back\":1}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Node>, Owned<Error>> res = decodeJsonBuffer::<Shared<Node>>(src: copy j);
+    Result<Shared<Node>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
     match (res) {
-        case Ok(value: sh): { Result<string, Owned<Error>> j2_r = encodeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
+        case Ok(value: sh): { Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(error: e): { return 2; }
     };
     return 3;
