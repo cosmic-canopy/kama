@@ -1,11 +1,11 @@
 // Object-graph round-trip with a UNIQUELY-OWNED child: a `Parent` owns a `Child` via `Owned<Child>` (a
 // pointer field, so `Parent` is graph mode). Serializable writes the child once (id 2) and the owner's field as
 // its id; deserialize rebuilds into a `Shared<Parent>`, transferring the child by GIVE-ONCE (the reconstructed
-// child is moved out of its shell into the `Owned` field — no refcount) — proven by a re-encode that
+// child is moved out of its shell into the `Owned` field — no refcount) — proven by a re-encodeJsonBuffer that
 // reproduces the exact wire, and ASan proves the single-owner path frees the child exactly once.
 import {
-    std::serialization::json::encode,
-    std::serialization::json::decode,
+    std::serialization::json::encodeJsonBuffer,
+    std::serialization::json::decodeJsonBuffer,
     std::memory::Shared,
     std::memory::Owned,
 };
@@ -22,14 +22,14 @@ type resource Parent {
 fn int32 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
-    Result<string, Owned<Error>> j_r = encode(v: p);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: p);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Parent\",\"kid\":2},\"2\":{\"__type\":\"Child\",\"v\":7}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Parent>, Owned<Error>> res = decode::<Shared<Parent>>(src: copy j);
+    Result<Shared<Parent>, Owned<Error>> res = decodeJsonBuffer::<Shared<Parent>>(src: copy j);
     match (res) {
-        case Ok(value: sh): { Result<string, Owned<Error>> j2_r = encode(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
+        case Ok(value: sh): { Result<string, Owned<Error>> j2_r = encodeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(error: e): { return 2; }
     };
     return 3;

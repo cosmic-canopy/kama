@@ -41,15 +41,15 @@ import {
 
 // All three BINARY back ends live in this one module — they differ by addressing, not by medium, so a
 // separate module per addressing would have split one idea three ways. KBIN keeps the unqualified
-// `encode`/`decode` (it was here first, and nothing outside the tree has to change); the other two carry
+// `encodeJsonBuffer`/`decodeJsonBuffer` (it was here first, and nothing outside the tree has to change); the other two carry
 // their addressing in the entry-point name.
 //
 // NAMING: `{Addressing}{Medium}Serializer` — the axes that actually distinguish the back ends, rather than
 // `…Writer`/`…Reader`, which collide with the `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>`
 // used "Writer" for two unrelated things in one declaration). The older `JsonSerializer`/`BinaryWriter` and the
 // module folder names are due the same treatment in a later pass — see the ROADMAP row.
-export { PositionalBinarySerializer, PositionalBinaryDeserializer,
-         encodePositional, decodePositional, decodeFromPositional };
+export { PositionalBinarySerializer, PositionalBinaryDeserializer, encodeBinaryPositionalBuffer,
+         encodeBinaryPositionalStream, decodeBinaryPositionalBuffer, decodeBinaryPositionalStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it.
@@ -80,7 +80,7 @@ type resource PositionalBinarySerializer<W: Writer> implements Serializer {
     public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's POS into this writer's owned sink, then flush — the streaming twin of
-    // `encode`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
+    // `encodeJsonBuffer`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
         Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -314,7 +314,7 @@ type resource PositionalBinaryDeserializer implements Deserializer {
 
 // Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a
 // `DynamicArray<uint8>`, not a `string`.
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodePositional(Serializable v) {
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeBinaryPositionalBuffer(Serializable v) {
     PositionalBinarySerializer<StringWriter> w = PositionalBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -323,17 +323,29 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodePositional(Seria
 }
 
 // Decode a POS byte buffer into a `Deserializable` type. Name the target with turbofish:
-// `binary::decodePositional::<Point>(src)`. Both ends must be built from the same declarations.
-fn Result<T, Owned<Error>> decodePositional<T: Deserializable<T>>(DynamicArray<uint8> src) {
+// `binary::decodeBinaryPositionalBuffer::<Point>(src)`. Both ends must be built from the same declarations.
+fn Result<T, Owned<Error>> decodeBinaryPositionalBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
     PositionalBinaryDeserializer r = PositionalBinaryDeserializer.make(src: give src);
     return T.deserialize(r: r);
 }
 
-// Decode from any `Reader` (a file, socket, …) — the streaming twin of `decode`.
-fn Result<T, Owned<Error>> decodeFromPositional<T: Deserializable<T>>(Reader from) {
+// Decode from any `Reader` (a file, socket, …) — the streaming twin of `decodeJsonBuffer`.
+fn Result<T, Owned<Error>> decodeBinaryPositionalStream<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     PositionalBinaryDeserializer r = PositionalBinaryDeserializer.make(src: give sw.takeBytes());
     return T.deserialize(r: r);
+}
+
+// Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without
+// materializing the whole encoding first. The streaming twin of `encodeBinaryPositionalBuffer`, and the write-side peer of
+// `decodeBinaryPositionalStream`.
+//
+// The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
+// When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
+// the sink through `innerRefMut()`.
+fn Result<Unit, std::memory::Owned<Error>> encodeBinaryPositionalStream<W: Writer>(Serializable v, W to) {
+    PositionalBinarySerializer<W> w = PositionalBinarySerializer::<W>.make(sink: give to);
+    return w.encodeValue(v: v);
 }

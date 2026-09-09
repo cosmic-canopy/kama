@@ -44,14 +44,14 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
     UnsafePtr<Ctrl> c;
     A alloc;
     public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
-    // Deserializable INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
+    // Deserializable INTO a Shared: a graph root is heap + shared-owned, so `decodeJsonBuffer::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
     // `N` the `@generate(Deserializable)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
     // driver, emitted directly in C), so this simply forwards it (the `T: Deserializable` bound is what makes
     // `T::deserialize` resolve, exactly like the `__kamaDeserialize` trampoline). Only type-checks when
     // `N::deserialize` yields a `Shared<N>` — i.e. `N` is a graph type. Instantiating `Shared<X>::deserialize`
-    // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
-    // `decode::<X>` instead.
+    // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decodeJsonBuffer a plain value as
+    // `decodeJsonBuffer::<X>` instead.
     public ctor Result<Shared<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
         return T.deserialize(r: r);
     }

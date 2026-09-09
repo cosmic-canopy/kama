@@ -1,11 +1,11 @@
-// A bare collection is a first-class Serializable/Deserializable value — encode/decode a DynamicArray directly.
-import { std::serialization::json::encode, std::serialization::json::decode, std::collections::DynamicArray };
+// A bare collection is a first-class Serializable/Deserializable value — encodeJsonBuffer/decodeJsonBuffer a DynamicArray directly.
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::DynamicArray };
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
-    Result<string, Owned<Error>> j_r = encode(v: xs);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: xs);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (!j.equals(other: "[10,20,30]")) { return 1; }
-    Result<DynamicArray<int32>, Owned<Error>> res = decode::<DynamicArray<int32>>(src: give j);
+    Result<DynamicArray<int32>, Owned<Error>> res = decodeJsonBuffer::<DynamicArray<int32>>(src: give j);
     return match (res) { case Ok(value: b): b[0] + b[1] + b[2]; case Err(error: e): 0 - 1; };   // 60
 }

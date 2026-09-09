@@ -1357,9 +1357,9 @@ drop emitted. See SPEC § *Uninitialized storage*.)*
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
 
-- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `encode`/`decode` of an
+- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `encodeJsonBuffer`/`decodeJsonBuffer` of an
   intrinsic value. (A `const` field is a separate general language gap — doesn't parse today.)
-  ✅ The enum half of this bullet SHIPPED with the derives: a bare `encode`/`decode` of an enum value works
+  ✅ The enum half of this bullet SHIPPED with the derives: a bare `encodeJsonBuffer`/`decodeJsonBuffer` of an enum value works
   (consumer KB-18 — it was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
   generic enums, per instantiation. See *Derive follow-ons* in §2.
 - **Binary backend follow-on.** Delta/snapshot replication stays ENGINE-level (above serde); generic byte
@@ -1410,19 +1410,19 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   GOALS favors explicit over implicit. It would also have cost two permanent contract members only one backend
   could honor.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
-  impl + `encode`/`decode`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
+  impl + `encodeJsonBuffer`/`decodeJsonBuffer`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
 - **A back end's ENTRY POINTS are a convention, not a contract** — the defect the line above quietly
   describes. `Serializer`/`Deserializer`/`Serializable`/`Deserializable` are real contracts
-  ([prelude/global.kama:207](../prelude/global.kama)), but `encode`/`decode`/`decodeFrom` are **bare free
+  ([prelude/global.kama:207](../prelude/global.kama)), but `encodeJsonBuffer`/`decodeJsonBuffer`/`decodeJsonStream` are **bare free
   functions**, duplicated per back end (`json.kama:198,538,546`, `binary.kama:253,263,270`) with nothing
   checking that a back end supplies them or that their signatures agree. "A drop-in twin of the JSON back
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
-  measurement (`encode`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
+  measurement (`encodeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
 - **Serde naming pass (rows 8–9's sibling)** — the TYPE names now say `{Addressing}{Medium}Serializer`
   (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
-  binary module's entry points each name their addressing, so none owns a bare `encode`. `…Writer`/`…Reader`
+  binary module's entry points each name their addressing, so none owns a bare `encodeJsonBuffer`. `…Writer`/`…Reader`
   went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used
   "Writer" for two unrelated things in one declaration. What is LEFT is the MODULE names, which still mix axes:
   `json` names a format, `binary` a medium. Renaming a module is a source break, so it lands before the tag or

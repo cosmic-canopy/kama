@@ -1,19 +1,19 @@
 // Composition: a DynamicArray of a @generate type, and a DynamicArray of Lists — everything chains .serialize()/deserialize().
-import { std::serialization::json::encode, std::serialization::json::decode, std::collections::DynamicArray };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable, Deserializable, of)
 type value Point { @field public int32 x; @field public int32 y; }
 fn int32 main() {
     DynamicArray<Point> ps = DynamicArray.empty(); ps.add(item: Point.of(x: 1, y: 2)); ps.add(item: Point.of(x: 3, y: 4));
-    Result<string, Owned<Error>> __enc1 = encode(v: ps);
+    Result<string, Owned<Error>> __enc1 = encodeJsonBuffer(v: ps);
     string __encStr1 = match (give __enc1) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<Point>, Owned<Error>> r1 = decode::<DynamicArray<Point>>(src: give __encStr1);
+    Result<DynamicArray<Point>, Owned<Error>> r1 = decodeJsonBuffer::<DynamicArray<Point>>(src: give __encStr1);
     int32 a = match (r1) { case Ok(value: b): b[1].x + b[1].y; case Err(error: e): 0 - 1; };   // 7
 
     DynamicArray<DynamicArray<int32>> nested = DynamicArray.empty();
     DynamicArray<int32> inner = DynamicArray.empty(); inner.add(item: 5); inner.add(item: 6); nested.add(item: give inner);
-    Result<string, Owned<Error>> __enc2 = encode(v: nested);
+    Result<string, Owned<Error>> __enc2 = encodeJsonBuffer(v: nested);
     string __encStr2 = match (give __enc2) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<DynamicArray<int32>>, Owned<Error>> r2 = decode::<DynamicArray<DynamicArray<int32>>>(src: give __encStr2);
+    Result<DynamicArray<DynamicArray<int32>>, Owned<Error>> r2 = decodeJsonBuffer::<DynamicArray<DynamicArray<int32>>>(src: give __encStr2);
     int32 b2 = match (r2) { case Ok(value: b): b[0][0] + b[0][1]; case Err(error: e): 0 - 1; };  // 11
     return a + b2;   // 18
 }

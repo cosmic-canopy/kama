@@ -1,8 +1,8 @@
 import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
-export { encode, decode, DecodeError };
+export { encodeJsonBuffer, decodeJsonBuffer, DecodeError };
 
-// Hexadecimal — bytes to text and back. `encode` writes LOWERCASE (what every tool prints, and what
-// Rust's `hex`, Go's `encoding/hex` and Python's `bytes.hex()` agree on); `decode` accepts either case,
+// Hexadecimal — bytes to text and back. `encodeJsonBuffer` writes LOWERCASE (what every tool prints, and what
+// Rust's `hex`, Go's `encoding/hex` and Python's `bytes.hex()` agree on); `decodeJsonBuffer` accepts either case,
 // because input is what other people wrote. Decoding is STRICT: an odd number of digits or a byte that is
 // not a hex digit is an error, and whitespace is not skipped — the position of the offending byte comes
 // back in the error so a caller can say where.
@@ -11,7 +11,7 @@ export { encode, decode, DecodeError };
 // the `${x}` formatters cover the number. The two meet only at a single byte, and even there this
 // module always writes two digits.
 //
-// A decode FAILS, it does not come up absent, so the result is `Result`, not `Optional` (the
+// A decodeJsonBuffer FAILS, it does not come up absent, so the result is `Result`, not `Optional` (the
 // `std::fmt::parse` line, GOALS #3d). Both functions allocate their result and are dropped from a
 // `--no-heap` build rather than reaching the allocator there.
 
@@ -46,7 +46,7 @@ fn uint8 nibble(uint8 c) {
 
 // Two lowercase digits per byte.
 @compileFor(!NOHEAP)
-unsafe fn string encode(ConstView<uint8> bytes) {
+unsafe fn string encodeJsonBuffer(ConstView<uint8> bytes) {
     isize n = bytes.length();
     if (n == 0) { return ""; }
     DynamicArray<uint8> text = DynamicArray::<uint8>.withCapacity(capacity: n * 2);
@@ -62,7 +62,7 @@ unsafe fn string encode(ConstView<uint8> bytes) {
 
 // Digits in either case, an even number of them, nothing else.
 @compileFor(!NOHEAP)
-fn Result<DynamicArray<uint8>, DecodeError> decode(const ref string text) {
+fn Result<DynamicArray<uint8>, DecodeError> decodeJsonBuffer(const ref string text) {
     isize n = text.length();
     if (n % 2 != 0) { return Result::Err(error: DecodeError::InvalidLength); }
     DynamicArray<uint8> bytes = DynamicArray::<uint8>.withCapacity(capacity: n / 2);

@@ -1,9 +1,9 @@
 // Set<K> serializes as a JSON array of its members.
-import { std::serialization::json::encode, std::serialization::json::decode, std::collections::Set };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer, std::collections::Set };
 fn int32 main() {
     Set<int32> s = Set.empty(); s.add(key: 10); s.add(key: 20);
-    Result<string, Owned<Error>> j_r = encode(v: s);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: s);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Set<int32>, Owned<Error>> res = decode::<Set<int32>>(src: give j);
+    Result<Set<int32>, Owned<Error>> res = decodeJsonBuffer::<Set<int32>>(src: give j);
     return match (res) { case Ok(value: b): (b.contains(key: 10) && b.contains(key: 20)) ? cast<int32>(b.length()) : 0; case Err(error: e): 0 - 1; };  // 2
 }

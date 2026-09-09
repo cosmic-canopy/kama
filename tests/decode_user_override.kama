@@ -1,9 +1,9 @@
 // A hand-written `ctor deserialize` override reads each field by naming the type — `T.deserialize(r: r)`,
-// the same spelling the stdlib's own `decode<T>` uses — composing with the flat destructure-move
+// the same spelling the stdlib's own `decodeJsonBuffer<T>` uses — composing with the flat destructure-move
 // `match (give …)` — Ok binds the value,
 // Err propagates its boxed `Owned<Error>`. Proves: the override wins over the synth, a nested composite
 // reads through the same spelling, and a malformed field surfaces as `Err(nothing)` via `.as<DeError>()`.
-import { std::serialization::json::encode, std::serialization::json::decode };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Point {
@@ -53,14 +53,14 @@ type value Line {
 fn int32 main() {
     // good input -> the override reads both Points, round-trips to Ok
     Line ln = Line.make(start: Point.make(x: 30, y: 12), end: Point.make(x: 3, y: 5));
-    Result<string, Owned<Error>> j_r = encode(v: ln);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: ln);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Line, Owned<Error>> good = decode::<Line>(src: give j);
+    Result<Line, Owned<Error>> good = decodeJsonBuffer::<Line>(src: give j);
     int32 okv = match (good) { case Ok(value: q): q.total(); case Err(error: e): 0 - 1; };   // 42 + 8 = 50
 
     // malformed start.x -> the sugar's read fails, the override returns Err(nothing)
     string bad = "{\"start\":{\"x\":!,\"y\":2},\"end\":{\"x\":3,\"y\":5}}";
-    Result<Line, Owned<Error>> fail = decode::<Line>(src: give bad);
+    Result<Line, Owned<Error>> fail = decodeJsonBuffer::<Line>(src: give bad);
     int32 errv = match (fail) {
         case Ok(value: q): 0 - 2;                                   // must NOT succeed
         case Err(error: e): match (e.as<DeError>()) {               // recover the concrete deserialize error

@@ -1,10 +1,10 @@
 // A METHOD takes no type arguments. There is one way to name a type argument on a call and it is on the
-// callee — a free fn (`decode::<T>(…)`) or a type (`T.deserialize(r:)`, `T::<Arg>.make(…)`).
+// callee — a free fn (`decodeJsonBuffer::<T>(…)`) or a type (`T.deserialize(r:)`, `T::<Arg>.make(…)`).
 //
 // `r.deserialize::<T>()` used to be the single exception, lowered through a `__kamaDeserialize<T>`
-// trampoline. It was pure sugar for `T.deserialize(r: r)` — the spelling the stdlib's own `decode<T>`
+// trampoline. It was pure sugar for `T.deserialize(r: r)` — the spelling the stdlib's own `decodeJsonBuffer<T>`
 // already uses — so the exception, the trampoline, and the prelude name all went together.
-import { std::serialization::json::decode };
+import { std::serialization::json::decodeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Bad {
@@ -20,6 +20,6 @@ type value Bad {
 }
 
 fn int32 main() {
-    Result<Bad, Owned<Error>> b = decode::<Bad>(src: give "{\"v\":1}");
+    Result<Bad, Owned<Error>> b = decodeJsonBuffer::<Bad>(src: give "{\"v\":1}");
     return 0;
 }

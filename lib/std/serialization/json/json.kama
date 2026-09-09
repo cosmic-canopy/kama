@@ -1,6 +1,6 @@
 
 // JSON backend for the serialization framework. `JsonSerializer` implements `Serializer` by accumulating UTF-8
-// text in a byte buffer; `encode` is the entry point that runs a value's generated `serialize` against a
+// text in a byte buffer; `encodeJsonBuffer` is the entry point that runs a value's generated `serialize` against a
 // fresh writer. A single `needComma` flag tracks whether the next value/field needs a leading comma — correct
 // for arbitrary nesting because endObject/endArray leave a complete value (a following sibling gets its
 // comma) while a value right after a field key does not.
@@ -26,7 +26,8 @@ import {
     std::io::IoError,
 };
 
-export { JsonSerializer, JsonDeserializer, encode, decode, decodeFrom };   // stream-write via JsonSerializer.encodeValue
+export { JsonSerializer, JsonDeserializer,
+         encodeJsonBuffer, encodeJsonStream, decodeJsonBuffer, decodeJsonStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
@@ -34,7 +35,7 @@ export { JsonSerializer, JsonDeserializer, encode, decode, decodeFrom };   // st
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
 // Serializes JSON tokens straight into an owned `W: Writer` sink — a file, socket, buffered writer, or the
-// in-memory `StringWriter` behind `encode -> string`. Owns its sink by value (kama forbids stored borrows,
+// in-memory `StringWriter` behind `encodeJsonBuffer -> string`. Owns its sink by value (kama forbids stored borrows,
 // so a serializer owns `W` exactly as a collection owns its allocator). A byte write that fails LATCHES the
 // sticky `err`/`code`; the generated `serialize` surfaces it once at the end (mirror of JsonDeserializer).
 type resource JsonSerializer<W: Writer> implements Serializer {
@@ -52,12 +53,12 @@ type resource JsonSerializer<W: Writer> implements Serializer {
         this.code = SerError::NotRepresentable;
     }
 
-    // Borrow the underlying sink (e.g. so `encode` can `finish()` its concrete StringWriter). W-agnostic body.
+    // Borrow the underlying sink (e.g. so `encodeJsonBuffer` can `finish()` its concrete StringWriter). W-agnostic body.
     public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
     public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's JSON into this writer's owned sink, then flush — the streaming twin of the
-    // `encode` sugar, without materializing the whole string. The ergonomic write-to-a-sink entry (a generic
+    // `encodeJsonBuffer` sugar, without materializing the whole string. The ergonomic write-to-a-sink entry (a generic
     // free fn / static method can't instantiate `JsonSerializer<W>`, so this is an INSTANCE method on a writer the
     // caller builds at a concrete site):
     //   JsonSerializer<StringWriter> w = JsonSerializer::<StringWriter>.make(sink: give mySink);
@@ -219,10 +220,10 @@ type resource JsonSerializer<W: Writer> implements Serializer {
 }
 
 // Serializable any `Serializable` value to a JSON string. Takes the value behind the `Serializable` interface
-// (dynamic dispatch), so a concrete value auto-wraps at the call site (`json::encode(v: point)`); the
+// (dynamic dispatch), so a concrete value auto-wraps at the call site (`json::encodeJsonBuffer(v: point)`); the
 // value's vtable travels in the fat pointer, sidestepping cross-module static-vtable visibility. A `value`
 // copies cheaply; pass `copy`/`give` for a `resource` you want to keep or move.
-fn Result<string, std::memory::Owned<Error>> encode(Serializable v) {
+fn Result<string, std::memory::Owned<Error>> encodeJsonBuffer(Serializable v) {
     JsonSerializer<StringWriter> w = JsonSerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;              // borrow the writer behind the Serializer interface
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -556,25 +557,25 @@ type resource JsonDeserializer implements Deserializer {
     public fn uint64 readRef() { return this.readUint(); }
     // Close the graph envelope: the objects table `}` was consumed by the entry loop, so this eats the outer `}`.
     public fn void endGraph() { this.expect(b: 125ui8); }
-    // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `decode` surfaces it instead of
+    // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `decodeJsonBuffer` surfaces it instead of
     // the generic `Malformed`.
     public fn void failWith(DeError e) { this.err = true; this.code = e; }
     public const fn DeError errorCode() { return this.code; }
 }
 
 // Deserializable a JSON string into a `Deserializable` type — the one-liner entry. Name the target with turbofish:
-// `json::decode::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
+// `json::decodeJsonBuffer::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
-fn Result<T, Owned<Error>> decode<T: Deserializable<T>>(string src) {
+fn Result<T, Owned<Error>> decodeJsonBuffer<T: Deserializable<T>>(string src) {
     JsonDeserializer r = JsonDeserializer.make(src: give src);
     return T.deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
 }
 
-// Deserializable from any `Reader` — the streaming twin of `decode`. Drains the reader fully into a string
-// first (`readAll`), then parses: JSON graph decode seeks backward (`rewindGraph`), so the source must be
+// Deserializable from any `Reader` — the streaming twin of `decodeJsonBuffer`. Drains the reader fully into a string
+// first (`readAll`), then parses: JSON graph decodeJsonBuffer seeks backward (`rewindGraph`), so the source must be
 // whole — the accepted bounded-memory boundary. A read `IoError` auto-boxes into `Owned<Error>`.
-fn Result<T, Owned<Error>> decodeFrom<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> decodeJsonStream<T: Deserializable<T>>(Reader from) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {
         case Ok(value: s):  { := give s; }
@@ -582,4 +583,16 @@ fn Result<T, Owned<Error>> decodeFrom<T: Deserializable<T>>(Reader from) {
     };
     JsonDeserializer r = JsonDeserializer.make(src: give src);
     return T.deserialize(r: r);
+}
+
+// Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without
+// materializing the whole encoding first. The streaming twin of `encodeJsonBuffer`, and the write-side peer of
+// `decodeJsonStream`.
+//
+// The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
+// When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
+// the sink through `innerRefMut()`.
+fn Result<Unit, std::memory::Owned<Error>> encodeJsonStream<W: Writer>(Serializable v, W to) {
+    JsonSerializer<W> w = JsonSerializer::<W>.make(sink: give to);
+    return w.encodeValue(v: v);
 }

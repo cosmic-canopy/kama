@@ -1,16 +1,16 @@
 // SortedMap serializes as a JSON array of {"key","value"} objects in ASCENDING key order (unlike Map, whose
-// order is hash-arbitrary), and round-trips through decode. String keys exercise an owning-key round-trip.
-import { std::collections::SortedMap, std::serialization::json::encode, std::serialization::json::decode };
+// order is hash-arbitrary), and round-trips through decodeJsonBuffer. String keys exercise an owning-key round-trip.
+import { std::collections::SortedMap, std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
 
 fn int32 main() {
     SortedMap<string, int32> m = SortedMap.empty();
     m.put(key: "cherry", value: 3); m.put(key: "apple", value: 1);
     m.put(key: "banana", value: 2); m.put(key: "date", value: 4);
 
-    Result<string, Owned<Error>> j_r = encode(v: m);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: m);
 
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<SortedMap<string, int32>, Owned<Error>> res = decode::<SortedMap<string, int32>>(src: give j);
+    Result<SortedMap<string, int32>, Owned<Error>> res = decodeJsonBuffer::<SortedMap<string, int32>>(src: give j);
     int32 r = 0;
     match (res) {
         case Ok(value: m2): {

@@ -4,7 +4,7 @@
 // a malformed request. Nothing in the corpus covered this, which is how it stayed invisible.
 //
 // Both directions are checked, because "rejects everything" would also pass the second half alone.
-import { std::serialization::json::encode, std::serialization::json::decode };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Small {
@@ -15,14 +15,14 @@ type value Small {
 
 fn int32 main() {
     // In range — including a NEGATIVE, whose sign bit is the half a width-only rule would miss.
-    Result<string, Owned<Error>> e = encode(v: Small.make(n: 0i8 - 56i8));
+    Result<string, Owned<Error>> e = encodeJsonBuffer(v: Small.make(n: 0i8 - 56i8));
     string js = match (give e) { case Ok(value: s): give s; case Err(error: _x): { return 250; } };
-    Result<Small, Owned<Error>> d = decode::<Small>(src: give js);
+    Result<Small, Owned<Error>> d = decodeJsonBuffer::<Small>(src: give js);
     int32 ok = match (d) { case Ok(value: v): (v.get() == 0i8 - 56i8 ? 1 : 0); case Err(error: _y): 0; };
 
     // Out of range — an error, and the program is still alive to report it.
     string tooBig = "{\"n\":300}";
-    Result<Small, Owned<Error>> bad = decode::<Small>(src: copy tooBig);
+    Result<Small, Owned<Error>> bad = decodeJsonBuffer::<Small>(src: copy tooBig);
     int32 rejected = match (bad) { case Ok(value: _v2): 0; case Err(error: _z): 1; };
 
     if (ok == 1 && rejected == 1) { return 42; }

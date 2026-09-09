@@ -1,9 +1,9 @@
 // std::encoding::hex — lowercase out, either case in, strict about length and digits, and the error
-// carries the byte position. Both codecs export `encode`/`decode`, so a file that wants both renames
+// carries the byte position. Both codecs export `encodeJsonBuffer`/`decodeJsonBuffer`, so a file that wants both renames
 // at the import (`… as hexEncode`) — the same `as` any two colliding symbols use. Eight flags sum to 255.
-import { std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as hexDecode,
+import { std::encoding::hex::encodeJsonBuffer as hexEncode, std::encoding::hex::decodeJsonBuffer as hexDecode,
          std::encoding::hex::DecodeError,
-         std::encoding::base64::encode as b64Encode,
+         std::encoding::base64::encodeJsonBuffer as b64Encode,
          std::collections::DynamicArray };
 
 fn int32 errCode(DecodeError e) {

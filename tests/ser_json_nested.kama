@@ -1,6 +1,6 @@
 // Nested @generate types: a resource with a string + a nested user-type field -> recursive JSON, with
 // string escaping (embedded quotes) and a nested object.
-import { std::serialization::json::encode };
+import { std::serialization::json::encodeJsonBuffer };
 @generate(Serializable)
 type resource Address {
     @field string city;
@@ -19,7 +19,7 @@ type resource Person {
 fn int32 main() {
     Address a = Address.make(city: "New \"York\"", zip: 10001);
     Person p = Person.make(name: "Sam", age: 30, addr: give a);
-    Result<string, Owned<Error>> j_r = encode(v: p);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: p);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"name\":\"Sam\",\"age\":30,\"addr\":{\"city\":\"New \\\"York\\\"\",\"zip\":10001}}") { return 0; }
     isize n = j.length();

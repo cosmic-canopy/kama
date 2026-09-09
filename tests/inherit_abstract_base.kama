@@ -25,7 +25,7 @@ type abstract(maxDepth: 1) resource Codec
     public ctor make(int32 tag) { this.tag = tag; }   // callable ONLY as a base install
     protected fn int32 getTag() { return this.tag; }
 
-    public fn int32 encode() { return this.body() + this.salt() + this.extra(); }   // surface at the root
+    public fn int32 encodeJsonBuffer() { return this.body() + this.salt() + this.extra(); }   // surface at the root
     protected abstract fn int32 body();                              // MUST be overridden
     protected virtual fn int32 salt() { return 1; }                  // MAY be overridden — defaulted here
     protected virtual fn int32 extra() { return 0; }
@@ -51,7 +51,7 @@ fn int32 main()
     int32 sum = 0;
     {
         Owned<Codec> c = new Doubler.make(seed: 5);   // upcast: leaf built, held as the abstract base
-        sum = c.encode();                             // body 10 + salt (1+10) + extra 100 = 121
+        sum = c.encodeJsonBuffer();                             // body 10 + salt (1+10) + extra 100 = 121
     }                                                 // drops through the BASE handle -> Doubler then Codec
     return sum + traceGet();                    // 121 + 63 = 184
 }

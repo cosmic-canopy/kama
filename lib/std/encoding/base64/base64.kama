@@ -1,9 +1,9 @@
 import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
-export { encode, decode, encodeUrl, decodeUrl, DecodeError };
+export { encodeJsonBuffer, decodeJsonBuffer, encodeUrl, decodeUrl, DecodeError };
 
 // Base64 (RFC 4648) — bytes to text and back, in the two alphabets that matter and no configuration:
 //
-//   `encode` / `decode`       § 4, the STANDARD alphabet (`+` `/`), padded with `=` to a multiple of
+//   `encodeJsonBuffer` / `decodeJsonBuffer`       § 4, the STANDARD alphabet (`+` `/`), padded with `=` to a multiple of
 //                             four. MIME, Basic auth, `data:` URLs, JSON blobs, PEM bodies.
 //   `encodeUrl` / `decodeUrl` § 5, the URL-SAFE alphabet (`-` `_`), UNPADDED. JWT, OAuth state, anything
 //                             that lands in a URL or a filename. (Go's `RawURLEncoding`, and what JWT
@@ -152,18 +152,18 @@ fn Result<DynamicArray<uint8>, DecodeError> decodeWith(const ref string text, bo
         i = i + 1;
     }
     // Whatever is left in `acc` is the tail of the last character that encodes no byte. RFC 4648 § 3.5
-    // wants it zero, and a decoder that ignores it makes several texts decode to one byte string.
+    // wants it zero, and a decoder that ignores it makes several texts decodeJsonBuffer to one byte string.
     if (acc != 0ui32) { return Result::Err(error: DecodeError::InvalidTrailingBits); }
     return Result::Ok(value: bytes);
 }
 
 // Standard alphabet, padded.
 @compileFor(!NOHEAP)
-unsafe fn string encode(ConstView<uint8> bytes) { return encodeWith(bytes: bytes, url: false, pad: true); }
+unsafe fn string encodeJsonBuffer(ConstView<uint8> bytes) { return encodeWith(bytes: bytes, url: false, pad: true); }
 
 // Standard alphabet, padded — strictly.
 @compileFor(!NOHEAP)
-fn Result<DynamicArray<uint8>, DecodeError> decode(const ref string text) { return decodeWith(text: text, url: false); }
+fn Result<DynamicArray<uint8>, DecodeError> decodeJsonBuffer(const ref string text) { return decodeWith(text: text, url: false); }
 
 // URL-safe alphabet, unpadded.
 @compileFor(!NOHEAP)

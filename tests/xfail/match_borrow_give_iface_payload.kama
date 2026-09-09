@@ -1,6 +1,6 @@
 // SOUNDNESS (1.0 blocker): `give` an owning payload out of a BORROWING `match (x)` double-frees in safe
 // code — the arm binding aliases the box the subject still owns. The interface-element fat-handle repr
-// (`Owned<Error>`) is the exact `encode`-class case. The compiler must REJECT it; the correct idiom is the
+// (`Owned<Error>`) is the exact `encodeJsonBuffer`-class case. The compiler must REJECT it; the correct idiom is the
 // consuming `match (give r)` (destructure-move).
 fn Result<int32, Owned<Error>> rewrap(Result<int32, Owned<Error>> r) {
     match (r) {                                          // BORROWING — `e` only aliases r's box

@@ -3,8 +3,8 @@
 // is no allocator on the wire), so a later free would route through a bogus `A` (leak/UAF). Deserializable is
 // GlobalAllocator-only by design, so a non-Global allocator on a graph edge must be REJECTED at compile time.
 import {
-    std::serialization::json::encode,
-    std::serialization::json::decode,
+    std::serialization::json::encodeJsonBuffer,
+    std::serialization::json::decodeJsonBuffer,
     std::memory::Shared,
     std::collections::BumpAllocator,
 };

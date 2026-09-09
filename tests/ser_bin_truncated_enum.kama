@@ -8,8 +8,8 @@
 // one, which a caller without an outer length cannot tell from a complete one. Closing now DRAINS to the
 // end tag: at the end of a truncated buffer that asks `next()` past the end, which is an error.
 import {
-    std::serialization::binary::encodeNamed,
-    std::serialization::binary::decodeNamed,
+    std::serialization::binary::encodeBinaryNamedBuffer,
+    std::serialization::binary::decodeBinaryNamedBuffer,
     std::collections::DynamicArray,
 };
 
@@ -17,7 +17,7 @@ import {
 type enum Cmd { Create(string name), Quit }
 
 fn bool decodes(DynamicArray<uint8> src) {
-    Result<Cmd, Owned<Error>> r = decodeNamed::<Cmd>(src: give src);
+    Result<Cmd, Owned<Error>> r = decodeBinaryNamedBuffer::<Cmd>(src: give src);
     return match (r) { case Ok(value: c): true; case Err(error: e): false; };
 }
 fn DynamicArray<uint8> prefix(ref DynamicArray<uint8> b, isize n) {
@@ -28,7 +28,7 @@ fn DynamicArray<uint8> prefix(ref DynamicArray<uint8> b, isize n) {
 fn int32 main() {
     int32 score = 0;
     Cmd c = Cmd::Create(name: "matt");
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeNamed(v: c);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeBinaryNamedBuffer(v: c);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
     isize n = bytes.length();
     if (decodes(src: prefix(b: ref bytes, n: n)))      { score = score + 1; }   // complete -> Ok
@@ -36,7 +36,7 @@ fn int32 main() {
     if (!decodes(src: prefix(b: ref bytes, n: n - 2))) { score = score + 4; }   // missing both ends -> Err
 
     Cmd q = Cmd::Quit;
-    Result<DynamicArray<uint8>, Owned<Error>> q_r = encodeNamed(v: q);
+    Result<DynamicArray<uint8>, Owned<Error>> q_r = encodeBinaryNamedBuffer(v: q);
     DynamicArray<uint8> qb = match (give q_r) { case Ok(value: b): give b; case Err(error: __e): { return 251; } };
     isize m = qb.length();
     if (decodes(src: prefix(b: ref qb, n: m)))      { score = score + 8; }    // complete -> Ok

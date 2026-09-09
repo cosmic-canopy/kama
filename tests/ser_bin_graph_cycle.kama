@@ -1,10 +1,10 @@
 // KBIN object-graph round-trip with a cycle: node 1 owns node 2 (Shared forward edge), node 2 holds a Weak
-// back-edge to node 1. Serializable terminates + is leak-free (Weak breaks the ownership cycle); decode rebuilds
-// both edges — proven by a byte-identical re-encode; ASan proves the rebuilt cycle stays leak-free. Nullable
+// back-edge to node 1. Serializable terminates + is leak-free (Weak breaks the ownership cycle); decodeJsonBuffer rebuilds
+// both edges — proven by a byte-identical re-encodeJsonBuffer; ASan proves the rebuilt cycle stays leak-free. Nullable
 // edges (Optional); 0 = absent/expired. Returns 55.
 import {
-    std::serialization::binary::encodeNamed,
-    std::serialization::binary::decodeNamed,
+    std::serialization::binary::encodeBinaryNamedBuffer,
+    std::serialization::binary::decodeBinaryNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Shared,
     std::memory::Weak,
@@ -38,13 +38,13 @@ fn int32 main() {
     Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeNamed(v: a);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeBinaryNamedBuffer(v: a);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Node>, Owned<Error>> res = decodeNamed::<Shared<Node>>(src: clone(src: ref b1));
+    Result<Shared<Node>, Owned<Error>> res = decodeBinaryNamedBuffer::<Shared<Node>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeNamed(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeBinaryNamedBuffer(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

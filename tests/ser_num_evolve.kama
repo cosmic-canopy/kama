@@ -10,8 +10,8 @@
 // Together those are schema evolution: `V2` adds fields and reorders them, and `V1` still reads its streams.
 import {
     std::collections::DynamicArray,
-    std::serialization::binary::encodeNumbered,
-    std::serialization::binary::decodeNumbered,
+    std::serialization::binary::encodeBinaryNumberedBuffer,
+    std::serialization::binary::decodeBinaryNumberedBuffer,
 };
 
 // The old declaration: two fields, ids 0 and 1.
@@ -47,30 +47,30 @@ type resource V2 {                          // a `resource`: it owns a `string`,
 fn int32 main() {
     // A V2 stream read by the OLD declaration: three unknown ids skip, the two known ones land correctly
     // even though V2 declared them in the opposite order.
-    Result<DynamicArray<uint8>, Owned<Error>> n = encodeNumbered(v: V2.make(a: 11, b: 22));
+    Result<DynamicArray<uint8>, Owned<Error>> n = encodeBinaryNumberedBuffer(v: V2.make(a: 11, b: 22));
     DynamicArray<uint8> nb = match (give n) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
-    Result<V1, Owned<Error>> old = decodeNumbered::<V1>(src: give nb);
+    Result<V1, Owned<Error>> old = decodeBinaryNumberedBuffer::<V1>(src: give nb);
     int32 ov = match (old) { case Ok(value: q): q.a * 100 + q.b; case Err(error: e): 0 - 1; };
     if (ov != 1122) { return 251; }
 
     // and the other direction: a V1 stream read as V2. The ids it does carry land; the rest keep whatever
-    // the decode started them at, which is the honest outcome for a field the wire never mentioned.
-    Result<DynamicArray<uint8>, Owned<Error>> o = encodeNumbered(v: V1.make(a: 33, b: 44));
+    // the decodeJsonBuffer started them at, which is the honest outcome for a field the wire never mentioned.
+    Result<DynamicArray<uint8>, Owned<Error>> o = encodeBinaryNumberedBuffer(v: V1.make(a: 33, b: 44));
     DynamicArray<uint8> ob = match (give o) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
-    Result<V2, Owned<Error>> up = decodeNumbered::<V2>(src: give ob);
+    Result<V2, Owned<Error>> up = decodeBinaryNumberedBuffer::<V2>(src: give ob);
     int32 uv = match (up) { case Ok(value: q): q.ab(); case Err(error: e): 0 - 1; };
     if (uv != 3344) { return 253; }
 
     // V2 round-trips itself, with its declared-vs-numbered order disagreeing throughout.
-    Result<DynamicArray<uint8>, Owned<Error>> r = encodeNumbered(v: V2.make(a: 5, b: 6));
+    Result<DynamicArray<uint8>, Owned<Error>> r = encodeBinaryNumberedBuffer(v: V2.make(a: 5, b: 6));
     DynamicArray<uint8> rb = match (give r) { case Ok(value: v): give v; case Err(error: e): { return 254; } };
-    Result<V2, Owned<Error>> back = decodeNumbered::<V2>(src: give rb);
+    Result<V2, Owned<Error>> back = decodeBinaryNumberedBuffer::<V2>(src: give rb);
     int32 bv = match (back) { case Ok(value: q): q.all(); case Err(error: e): 0 - 1; };
     if (bv != 5612) { return 255; }
     // the length-delimited field survives its own round trip too
-    Result<DynamicArray<uint8>, Owned<Error>> r2 = encodeNumbered(v: V2.make(a: 5, b: 6));
+    Result<DynamicArray<uint8>, Owned<Error>> r2 = encodeBinaryNumberedBuffer(v: V2.make(a: 5, b: 6));
     DynamicArray<uint8> rb2 = match (give r2) { case Ok(value: v): give v; case Err(error: e): { return 244; } };
-    Result<V2, Owned<Error>> back2 = decodeNumbered::<V2>(src: give rb2);
+    Result<V2, Owned<Error>> back2 = decodeBinaryNumberedBuffer::<V2>(src: give rb2);
     bool noteOk = match (back2) { case Ok(value: q): q.noteIs(s: "added later"); case Err(error: e): false; };
     if (!noteOk) { return 245; }
     return 42;

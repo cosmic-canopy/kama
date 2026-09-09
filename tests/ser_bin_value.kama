@@ -1,8 +1,8 @@
-// KBIN binary round-trip for a value type of mixed scalars: encode -> DynamicArray<uint8> -> decode.
+// KBIN binary round-trip for a value type of mixed scalars: encodeJsonBuffer -> DynamicArray<uint8> -> decodeJsonBuffer.
 // Exercises the tag+LE-payload path for i32 / f32 (exact bits) / bool / string / i64. Returns 55.
 import {
-    std::serialization::binary::encodeNamed,
-    std::serialization::binary::decodeNamed,
+    std::serialization::binary::encodeBinaryNamedBuffer,
+    std::serialization::binary::decodeBinaryNamedBuffer,
     std::collections::DynamicArray,
 };
 
@@ -29,8 +29,8 @@ type resource Rec {   // owns a `string` -> must be a resource (move-only)
 
 fn int32 main() {
     Rec v = Rec.make(x: 42, f: 1.5f32, b: true, name: "kbin", big: 9000000000i64);
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeNamed(v: v);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeBinaryNamedBuffer(v: v);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<Rec, Owned<Error>> res = decodeNamed::<Rec>(src: give bytes);
+    Result<Rec, Owned<Error>> res = decodeBinaryNamedBuffer::<Rec>(src: give bytes);
     return match (res) { case Ok(value: q): ((q.score() == 5) ? 55 : 40); case Err(error: e): 0 - 1; };
 }

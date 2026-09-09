@@ -379,7 +379,7 @@ entries here. One has shipped:
     (below). `listDir` replaced all seven `opendir` loops.
   * **The `-j` pool no longer writes `.bat` files.** cmd.exe parses a batch FILE in the console code page
     (below), so the manifest could not have saved it; the line goes to `CreateProcessW` verbatim.
-  * **The linker and the archiver get 8.3 aliases.** GNU `ld` and `ar` ANSI-decode their argv and cannot
+  * **The linker and the archiver get 8.3 aliases.** GNU `ld` and `ar` ANSI-decodeJsonBuffer their argv and cannot
     open a non-ASCII path in either direction, and cmd.exe's `>out 2>err` redirections stop at MAX_PATH
     (both below); clang's own compile step has neither limit. `toolPath()` spells every object, the `-o`
     and the two redirections by the 8.3 alias of the longest existing prefix when the path is non-ASCII

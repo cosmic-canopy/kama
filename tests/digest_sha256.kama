@@ -1,6 +1,6 @@
 // std::digest::sha256 against FIPS 180-4 vectors, cross-checked with `shasum -a 256` when written. Bits sum to 63.
 import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha256::DIGESTBYTES,
-         std::encoding::hex::encode as hexEncode, std::collections::DynamicArray, std::collections::View };
+         std::encoding::hex::encodeJsonBuffer as hexEncode, std::collections::DynamicArray, std::collections::View };
 
 fn DynamicArray<uint8> bytesOf(const ref string s) {
     DynamicArray<uint8> b = DynamicArray::<uint8>.withCapacity(capacity: s.length());

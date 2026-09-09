@@ -10,7 +10,7 @@
 //   2. `writeChar` emitted `\uXXXX` from the low 16 bits, silently corrupting any astral char
 //      (U+1F600 -> `\uF600`, a different character);
 //   3. `readChar` returned `s[0]`, the UTF-8 LEAD BYTE, so any non-ASCII char decoded to a mangled scalar.
-import { std::serialization::json::encode, std::serialization::json::decode };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type resource Msg {
@@ -33,9 +33,9 @@ fn int32 main() {
 
     // (a) kama's own round-trip: the writer emits raw UTF-8 (JSON is a UTF-8 format), the reader takes it back.
     Msg m = Msg.make(text: copy want);
-    Result<string, Owned<Error>> j_r = encode(v: m);
+    Result<string, Owned<Error>> j_r = encodeJsonBuffer(v: m);
     string j = match (give j_r) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
-    Result<Msg, Owned<Error>> back_r = decode::<Msg>(src: give j);
+    Result<Msg, Owned<Error>> back_r = decodeJsonBuffer::<Msg>(src: give j);
     Msg back = match (give back_r) { case Ok(value: q): give q; case Err(error: e): { return 251; } };
     if (!back.same(other: ref want)) { return 1; }
     if (back.len() != 11) { return 2; }
@@ -43,22 +43,22 @@ fn int32 main() {
     // (b) FOREIGN JSON, byte-for-byte what `python3 -c "import json; json.dumps(...)"` emits: every
     // non-ASCII char escaped, the astral one as a `\ud83d\ude00` surrogate PAIR.
     string escaped = "{\"text\":\"A\\u00e9\\u20ac\\ud83d\\ude00z\"}";
-    Result<Msg, Owned<Error>> foreign_r = decode::<Msg>(src: give escaped);
+    Result<Msg, Owned<Error>> foreign_r = decodeJsonBuffer::<Msg>(src: give escaped);
     Msg foreign = match (give foreign_r) { case Ok(value: q): give q; case Err(error: e): { return 252; } };
     if (!foreign.same(other: ref want)) { return 3; }
     if (foreign.len() != 11) { return 4; }        // 11, not 13 — one 4-byte sequence, not two 3-byte ones
 
-    // (c) an ASTRAL `char` field survives encode -> decode as the same scalar value.
+    // (c) an ASTRAL `char` field survives encodeJsonBuffer -> decodeJsonBuffer as the same scalar value.
     CharBox cb = CharBox.make(c: '\u{1F600}');
-    Result<string, Owned<Error>> cj_r = encode(v: cb);
+    Result<string, Owned<Error>> cj_r = encodeJsonBuffer(v: cb);
     string cj = match (give cj_r) { case Ok(value: s): give s; case Err(error: e): { return 253; } };
-    Result<CharBox, Owned<Error>> cback_r = decode::<CharBox>(src: give cj);
+    Result<CharBox, Owned<Error>> cback_r = decodeJsonBuffer::<CharBox>(src: give cj);
     CharBox cback = match (give cback_r) { case Ok(value: q): give q; case Err(error: e): { return 254; } };
     if (cback.code() != 128512) { return 5; }     // U+1F600
 
     // (d) an UNPAIRED surrogate is malformed input and must be REJECTED, not encoded as WTF-8.
     string lone = "{\"text\":\"\\ud83dz\"}";
-    Result<Msg, Owned<Error>> lone_r = decode::<Msg>(src: give lone);
+    Result<Msg, Owned<Error>> lone_r = decodeJsonBuffer::<Msg>(src: give lone);
     match (give lone_r) { case Ok(value: q): { return 6; } case Err(error: e): { } };
 
     return 42;

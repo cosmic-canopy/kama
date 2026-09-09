@@ -6,7 +6,7 @@
 // A payload-less enum is the shape that reaches it most easily. It CAN carry `@generate` now
 // (tests/generate_plain_enum) — the point here is the one that has not, so nothing about it looks
 // wrong at the field's declaration, and the diagnostic has to be the thing that says so.
-import { std::serialization::json::encode };
+import { std::serialization::json::encodeJsonBuffer };
 
 type enum Color { Red, Green }
 
@@ -18,6 +18,6 @@ type value Paint {
 
 fn int32 main() {
     Paint p = Paint.of(c: Color::Green, n: 1);
-    Result<string, Owned<Error>> r = encode(v: p);
+    Result<string, Owned<Error>> r = encodeJsonBuffer(v: p);
     return match (r) { case Ok(value: s): cast<int32>(s.length()); case Err(error: e): 9; };
 }

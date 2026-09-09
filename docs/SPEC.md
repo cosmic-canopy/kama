@@ -67,7 +67,7 @@ You never spell the borrowed-vs-owned distinction; the type carries it, and RAII
 ones. There is no separate capital-`String` collection type.
 
 **UTF-8 everywhere.** A `string` is **UTF-8 bytes**; `length()` is the **byte** length (O(1)), and literals
-encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
+encodeJsonBuffer `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
 never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
@@ -1597,7 +1597,7 @@ primitive (contracts carry no default methods: a contract is purely an interface
 stored borrows). `std::fs::File` implements both, and a reliable network stream is
 `type contract ReliableStream implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
 the web `WsConnection` are drop-in `Reader`/`Writer`s. The upshot: the serde backends and `fmt` stream over a
-file or a socket with no transport-specific code (`decodeFrom<T>(from: someReader)`), and unbounded data moves
+file or a socket with no transport-specific code (`decodeJsonStream<T>(from: someReader)`), and unbounded data moves
 in bounded memory. (Datagram endpoints — `UdpSocket`, WebTransport — are message-oriented, not byte streams, so
 they take the same view buffers but do **not** implement `Reader`/`Writer`.)
 
@@ -1779,23 +1779,23 @@ recorded next cut.
 
 ### Encoding (`std::encoding`) ✅
 
-`import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,
-std::encoding::base64::decodeUrl, std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as
-hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(ConstView<uint8>) -> string` and
-`decode(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
+`import { std::encoding::base64::encodeJsonBuffer, std::encoding::base64::decodeJsonBuffer, std::encoding::base64::encodeUrl,
+std::encoding::base64::decodeUrl, std::encoding::hex::encodeJsonBuffer as hexEncode, std::encoding::hex::decodeJsonBuffer as
+hexDecode };` — two submodules, `base64` and `hex`, each exporting `encodeJsonBuffer(ConstView<uint8>) -> string` and
+`decodeJsonBuffer(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
 `encoding/hex`), Rust (`base64` + `hex`), Zig and Python all converged on; only C# prefixes
 (`Convert.ToBase64String`). Both export the same two names, so a file that wants both renames at the
 import — the same `as` any colliding pair uses.
 
 ```kama
-string t = encode(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
-Result<DynamicArray<uint8>, DecodeError> b = decode(text: t);
+string t = encodeJsonBuffer(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
+Result<DynamicArray<uint8>, DecodeError> b = decodeJsonBuffer(text: t);
 string u = encodeUrl(bytes: v);                                 // § 5 alphabet, UNPADDED — what a JWT carries
 string h = hexEncode(bytes: v);                                 // "666f6f626172", lowercase
 ```
 
 **Five deliberate answers:** <!-- test: encoding_base64, encoding_hex -->
-1. **Two named pairs, not flags.** `encode`/`decode` is the standard alphabet with `=` padding;
+1. **Two named pairs, not flags.** `encodeJsonBuffer`/`decodeJsonBuffer` is the standard alphabet with `=` padding;
    `encodeUrl`/`decodeUrl` is the URL-safe alphabet without it. A call site reads which wire format it
    speaks. (The RFC's padded URL-safe form is `urlSafe` plus a stripped `=` tail; a third named pair would be a second spelling of two that exist.)
 2. **Decoding is strict**, as in Rust and Go and unlike Python: a byte outside the alphabet is
@@ -1807,11 +1807,11 @@ string h = hexEncode(bytes: v);                                 // "666f6f626172
    some bytes silently would have to decide which, and that decision is not its.
 4. **Hex writes lowercase and reads either case.** An odd digit count is `InvalidLength`. This is byte
    *encoding*, not integer *formatting* — `${x}` and `parseRadix` cover the number.
-5. **A decode fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
+5. **A decodeJsonBuffer fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
 
 Both directions allocate their result, so they are `@compileFor(!NOHEAP)` and absent from a `--no-heap`
 build, as `sort` is. The byte substrate is `ConstView<uint8>` in and `DynamicArray<uint8>` out; a `string`'s
-bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
+bytes reach `encodeJsonBuffer` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
 
 ### Command-line arguments + environment ✅
 
@@ -4741,7 +4741,7 @@ restrictions — and nothing leaks into the public API.
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
   `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
   `@field(id: N)` / `@deprecated` / `@skip`, and one
-  entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
+  entry pair `encodeJsonBuffer(v:)` / `decodeJsonBuffer::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
   `beginObject`/`field`/`variant`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. A type opts into
@@ -4749,17 +4749,27 @@ restrictions — and nothing leaks into the public API.
   the generated code drives only the format-agnostic token contract; yaml/xml/user backends are just new
   implementors — no compiler change.
   **Four back ends ship, and the three binary ones differ by ADDRESSING, not by medium** — so they live in one
-  module, `std::serialization::binary`, and each entry point names its addressing (none owns a bare `encode`,
-  because none is the default). Every binary form is byte-oriented: `encode` yields a `DynamicArray<uint8>` and
-  `decode` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
+  module, `std::serialization::binary`, and each entry point names its addressing (none owns a bare `encodeJsonBuffer`,
+  because none is the default). Every binary form is byte-oriented: `encodeJsonBuffer` yields a `DynamicArray<uint8>` and
+  `decodeJsonBuffer` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
   `Writer`/`Reader` substrate, so any of them flows to a file or socket.
 
-  | back end | addressing | entry points | what it is for |
-  |---|---|---|---|
-  | `std::serialization::json` | named | `encode` / `decode` / `decodeFrom` | text, human-readable, UTF-8 in and out |
-  | `binary::…Named` (**KBIN**) | named | `encodeNamed` / `decodeNamed` / `decodeFromNamed` | self-describing save/load: order-independent, unknown fields skip |
-  | `binary::…Numbered` (**KNUM**) | numbered | `encodeNumbered` / `decodeNumbered` / `decodeFromNumbered` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
-  | `binary::…Positional` (**POS**) | positional | `encodePositional` / `decodePositional` / `decodeFromPositional` | smallest: only values on the wire, shape agreed in advance |
+  **Entry points name the FORMAT and the SOURCE**, because kama has no module-qualified call — an `import`
+  brings a symbol in unqualified, so the module path never reaches the call site and the name must carry
+  everything. `…Buffer` works on a value already in memory; `…Stream` works on a `Reader`/`Writer` (a file, a
+  socket). Every back end offers all four, so the read and write sides are symmetric.
+
+  | back end | addressing | buffer | stream | what it is for |
+  |---|---|---|---|---|
+  | `std::serialization::json` | named | `encodeJsonBuffer` / `decodeJsonBuffer` | `encodeJsonStream` / `decodeJsonStream` | text, human-readable, UTF-8 in and out |
+  | `binary` — **KBIN** | named | `encodeBinaryNamedBuffer` / `decodeBinaryNamedBuffer` | `encodeBinaryNamedStream` / `decodeBinaryNamedStream` | self-describing save/load: order-independent, unknown fields skip |
+  | `binary` — **KNUM** | numbered | `encodeBinaryNumberedBuffer` / `decodeBinaryNumberedBuffer` | `encodeBinaryNumberedStream` / `decodeBinaryNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
+  | `binary` — **POS** | positional | `encodeBinaryPositionalBuffer` / `decodeBinaryPositionalBuffer` | `encodeBinaryPositionalStream` / `decodeBinaryPositionalStream` | smallest: only values on the wire, shape agreed in advance |
+
+  A `…Stream` encoder CONSUMES its sink (kama refuses a move out of a field, so it cannot hand it back); to
+  keep writing to the same sink, construct the serializer yourself and call `encodeValue` on it. A
+  `…Stream` decoder drains its reader fully before parsing — graph decode seeks backward for its two-pass
+  rewind, so the input is resident either way, and the streaming form is a convenience, not laziness.
 
   KBIN stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue` works and unknown
   fields skip cleanly. KNUM keys each value with `(id << 3) | wireType` and zigzag-varints its integers, so a
@@ -4789,13 +4799,13 @@ exactly what you name:
 | `int32` / `MyEnum` / `MyValueType` | — / false | by value (stack) |
 | tree `resource` (`User { string name }`, `DynamicArray<int32>`) | false | by value (stack) |
 | `Shared<T>` (value **or** resource) | any | heap graph (one node or many) |
-| bare graph type (`decode::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a pointer; decode as `Shared<Node>`" |
+| bare graph type (`decodeJsonBuffer::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a pointer; decodeJsonBuffer as `Shared<Node>`" |
 
 - **By-value (tree):** a `value` type (owns nothing) or a pointer-free `resource` (strings, collections, nested
-  owned data — a tree, no aliasing) serializes to a bare object/array and `decode::<T>` returns it **by value**.
+  owned data — a tree, no aliasing) serializes to a bare object/array and `decodeJsonBuffer::<T>` returns it **by value**.
 - **Graph (heap):** anything reaching a `Shared`/`Weak`/`Owned` is a graph — it can alias, cycle, or hold a
   `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
-  `encode` writes the id-table envelope `{"root":id,"objects":{id:{"__type":…,…}}}`; `decode::<Shared<T>>`
+  `encodeJsonBuffer` writes the id-table envelope `{"root":id,"objects":{id:{"__type":…,…}}}`; `decodeJsonBuffer::<Shared<T>>`
   rebuilds it and returns the owning root handle. A `value` type is welcome in a graph *via* `Shared` (a
   one-node heap graph); a live pointer field in a `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource -->
 
@@ -4842,20 +4852,20 @@ The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no
 core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 
 ```kama
-import { std::serialization::json::encode, std::serialization::json::decode };   // wire backend (library); the triad needs no import
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };   // wire backend (library); the triad needs no import
 
 // by-value (tree): a pointer-free resource round-trips on the stack
 @generate(Serializable, Deserializable)
 type resource User { @field(name: "user_name") string name; @field int32 age;
     public ctor make(string name, int32 age) { User r; r.name = give name; r.age = age; return give r; } }
-string j = encode(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
-Result<User, DeError> u = decode::<User>(src: give j);            // by value
+string j = encodeJsonBuffer(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
+Result<User, DeError> u = decodeJsonBuffer::<User>(src: give j);            // by value
 
 // graph (heap): reaches a pointer -> only via Shared; cycles rebuilt through the Weak back-edge
 @generate(Serializable, Deserializable)
 type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
-Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
-// decode::<Node>(...) would be a compile error: Node reaches a pointer -> decode as Shared<Node>
+Result<Shared<Node>, DeError> g = decodeJsonBuffer::<Shared<Node>>(src: give wire);
+// decodeJsonBuffer::<Node>(...) would be a compile error: Node reaches a pointer -> decodeJsonBuffer as Shared<Node>
 ```
 
 ## Building & debugging ✅

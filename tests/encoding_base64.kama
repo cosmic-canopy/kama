@@ -1,6 +1,6 @@
 // std::encoding::base64 — the RFC 4648 test vectors verbatim, the URL-safe pair, a round trip over every
 // byte value, and one input per strict-rejection variant with its position. Eight flags sum to 255.
-import { std::encoding::base64::encode, std::encoding::base64::decode,
+import { std::encoding::base64::encodeJsonBuffer, std::encoding::base64::decodeJsonBuffer,
          std::encoding::base64::encodeUrl, std::encoding::base64::decodeUrl,
          std::encoding::base64::DecodeError, std::collections::DynamicArray };
 
@@ -20,7 +20,7 @@ fn bool sameBytes(ref DynamicArray<uint8> a, const ref string s) {
 fn string enc(const ref string s) {
     DynamicArray<uint8> b = bytesOf(s: s);
     string t = "";
-    borrow b.view() as v { t = encode(bytes: v); }
+    borrow b.view() as v { t = encodeJsonBuffer(bytes: v); }
     return t;
 }
 
@@ -31,9 +31,9 @@ fn string encUrl(const ref string s) {
     return t;
 }
 
-// `decode(text)` equals the bytes of `want`?
+// `decodeJsonBuffer(text)` equals the bytes of `want`?
 fn bool decodesTo(const ref string text, const ref string want) {
-    Result<DynamicArray<uint8>, DecodeError> r = decode(text: text);
+    Result<DynamicArray<uint8>, DecodeError> r = decodeJsonBuffer(text: text);
     return match (r) {
         case Ok(value: b):  { := sameBytes(a: b, s: want); }
         case Err(error: e): { := false; }
@@ -51,7 +51,7 @@ fn int32 errCode(DecodeError e) {
 }
 
 fn int32 failsWith(const ref string text) {
-    Result<DynamicArray<uint8>, DecodeError> r = decode(text: text);
+    Result<DynamicArray<uint8>, DecodeError> r = decodeJsonBuffer(text: text);
     return match (r) { case Ok(value: b): 0; case Err(error: e): errCode(e: e); };
 }
 
@@ -63,12 +63,12 @@ fn int32 failsWithUrl(const ref string text) {
 fn int32 main() {
     int32 r = 0;
 
-    // RFC 4648 § 10, encode.
+    // RFC 4648 § 10, encodeJsonBuffer.
     if (enc(s: "").equals(other: "") && enc(s: "f").equals(other: "Zg==") && enc(s: "fo").equals(other: "Zm8=")
         && enc(s: "foo").equals(other: "Zm9v") && enc(s: "foob").equals(other: "Zm9vYg==")
         && enc(s: "fooba").equals(other: "Zm9vYmE=") && enc(s: "foobar").equals(other: "Zm9vYmFy")) { r = r + 1; }
 
-    // RFC 4648 § 10, decode.
+    // RFC 4648 § 10, decodeJsonBuffer.
     if (decodesTo(text: "", want: "") && decodesTo(text: "Zg==", want: "f") && decodesTo(text: "Zm8=", want: "fo")
         && decodesTo(text: "Zm9v", want: "foo") && decodesTo(text: "Zm9vYg==", want: "foob")
         && decodesTo(text: "Zm9vYmE=", want: "fooba") && decodesTo(text: "Zm9vYmFy", want: "foobar")) { r = r + 2; }
@@ -78,7 +78,7 @@ fn int32 main() {
     hiBytes.add(item: 251ui8); hiBytes.add(item: 255ui8);
     string stdText = "";
     string urlText = "";
-    borrow hiBytes.view() as hv { stdText = encode(bytes: hv); urlText = encodeUrl(bytes: hv); }
+    borrow hiBytes.view() as hv { stdText = encodeJsonBuffer(bytes: hv); urlText = encodeUrl(bytes: hv); }
     Result<DynamicArray<uint8>, DecodeError> ur = decodeUrl(text: "-_8");
     bool urlBack = match (ur) {
         case Ok(value: b):  { := b.length() == 2 && b[0] == 251ui8 && b[1] == 255ui8; }
@@ -93,8 +93,8 @@ fn int32 main() {
     while (i < 256) { all.add(item: cast<uint8>(i)); i = i + 1; }
     string allStd = "";
     string allUrl = "";
-    borrow all.view() as av { allStd = encode(bytes: av); allUrl = encodeUrl(bytes: av); }
-    Result<DynamicArray<uint8>, DecodeError> rs = decode(text: allStd);
+    borrow all.view() as av { allStd = encodeJsonBuffer(bytes: av); allUrl = encodeUrl(bytes: av); }
+    Result<DynamicArray<uint8>, DecodeError> rs = decodeJsonBuffer(text: allStd);
     Result<DynamicArray<uint8>, DecodeError> ru = decodeUrl(text: allUrl);
     bool stdRound = match (rs) {
         case Ok(value: b):  { bool ok = b.length() == 256; isize k = 0; while (k < 256) { if (b[k] != cast<uint8>(k)) { ok = false; } k = k + 1; } := ok; }

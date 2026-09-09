@@ -6,8 +6,8 @@
 // The values are chosen to exercise the SIGN BIT at each width, since a value that fits both signednesses
 // would round-trip either way and prove nothing.
 import {
-    std::serialization::binary::encodeNamed,
-    std::serialization::binary::decodeNamed,
+    std::serialization::binary::encodeBinaryNamedBuffer,
+    std::serialization::binary::decodeBinaryNamedBuffer,
     std::collections::DynamicArray,
 };
 
@@ -30,8 +30,8 @@ type value Neg {
 
 fn int32 main() {
     Neg v = Neg.make(a: 0i8 - 56i8, b: 0i16 - 300i16, c: 0 - 70000, d: 0i64 - 9000000000i64);
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeNamed(v: v);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeBinaryNamedBuffer(v: v);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<Neg, Owned<Error>> res = decodeNamed::<Neg>(src: give bytes);
+    Result<Neg, Owned<Error>> res = decodeBinaryNamedBuffer::<Neg>(src: give bytes);
     return match (res) { case Ok(value: q): ((q.score() == 4) ? 42 : 40); case Err(error: e): 0 - 1; };
 }

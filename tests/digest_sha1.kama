@@ -1,7 +1,7 @@
 // std::digest::sha1 against RFC 3174 / FIPS 180-4 vectors, cross-checked with `shasum -a 1` when written,
 // and the RFC 6455 handshake example — the reason SHA-1 is in the stdlib at all. Bits sum to 63.
 import { std::digest::sha1::Sha1, std::digest::sha1::sha1, std::digest::sha1::DIGESTBYTES,
-         std::encoding::hex::encode as hexEncode, std::encoding::base64::encode as b64Encode,
+         std::encoding::hex::encodeJsonBuffer as hexEncode, std::encoding::base64::encodeJsonBuffer as b64Encode,
          std::collections::DynamicArray, std::collections::View };
 
 fn DynamicArray<uint8> bytesOf(const ref string s) {

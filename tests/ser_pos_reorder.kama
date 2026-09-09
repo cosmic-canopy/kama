@@ -5,12 +5,12 @@
 //
 // `Wire` declares its fields in one order and numbers them in another. `Mirror` declares them in the order
 // `Wire` NUMBERS them, with default ids — so the two must produce byte-identical positional streams, and
-// each must decode the other's. Under a NAMED backend that would be false (the names differ in order but
+// each must decodeJsonBuffer the other's. Under a NAMED backend that would be false (the names differ in order but
 // not in content, so JSON would round-trip both too — which is exactly why the check below is on the bytes).
 import {
     std::collections::DynamicArray,
-    std::serialization::binary::encodePositional,
-    std::serialization::binary::decodePositional,
+    std::serialization::binary::encodeBinaryPositionalBuffer,
+    std::serialization::binary::decodeBinaryPositionalBuffer,
 };
 
 @generate(Serializable, Deserializable)
@@ -33,26 +33,26 @@ type value Mirror {
 
 fn int32 main() {
     // Wire: declared (1,2,3), emitted ascending-id => 3, 2, 1
-    Result<DynamicArray<uint8>, Owned<Error>> w = encodePositional(v: Wire.make(a: 1, b: 2, c: 3));
+    Result<DynamicArray<uint8>, Owned<Error>> w = encodeBinaryPositionalBuffer(v: Wire.make(a: 1, b: 2, c: 3));
     DynamicArray<uint8> wb = match (give w) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     if (wb.length() != 12) { return 251; }
 
     // Mirror written in that same emitted order must be byte-identical.
-    Result<DynamicArray<uint8>, Owned<Error>> m = encodePositional(v: Mirror.make(t: 3, s: 2, f: 1));
+    Result<DynamicArray<uint8>, Owned<Error>> m = encodeBinaryPositionalBuffer(v: Mirror.make(t: 3, s: 2, f: 1));
     DynamicArray<uint8> mb = match (give m) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
     if (mb.length() != wb.length()) { return 253; }
     isize i = 0;
     while (i < wb.length()) { if (wb[i] != mb[i]) { return 254; } i = i + 1; }
 
-    // and Wire's bytes decode as Mirror, in the emitted order
-    Result<Mirror, Owned<Error>> dm = decodePositional::<Mirror>(src: give wb);
+    // and Wire's bytes decodeJsonBuffer as Mirror, in the emitted order
+    Result<Mirror, Owned<Error>> dm = decodeBinaryPositionalBuffer::<Mirror>(src: give wb);
     int32 mv = match (dm) { case Ok(value: q): q.third * 100 + q.second * 10 + q.first; case Err(error: e): 0 - 1; };
     if (mv != 321) { return 255; }
 
     // and Wire round-trips itself, fields landing back on the names they were declared with
-    Result<DynamicArray<uint8>, Owned<Error>> w2 = encodePositional(v: Wire.make(a: 7, b: 8, c: 9));
+    Result<DynamicArray<uint8>, Owned<Error>> w2 = encodeBinaryPositionalBuffer(v: Wire.make(a: 7, b: 8, c: 9));
     DynamicArray<uint8> wb2 = match (give w2) { case Ok(value: v): give v; case Err(error: e): { return 240; } };
-    Result<Wire, Owned<Error>> dw = decodePositional::<Wire>(src: give wb2);
+    Result<Wire, Owned<Error>> dw = decodeBinaryPositionalBuffer::<Wire>(src: give wb2);
     int32 wv = match (dw) {
         case Ok(value: q): q.declaredFirst * 100 + q.declaredSecond * 10 + q.declaredThird;
         case Err(error: e): 0 - 1;

@@ -6,7 +6,7 @@
 //
 // Also pins `@deprecated`: read when present, never written. Its name and id stay reserved (it still takes
 // part in duplicate detection), so a stream written by an older version still decodes.
-import { std::serialization::json::encode, std::serialization::json::decode };
+import { std::serialization::json::encodeJsonBuffer, std::serialization::json::decodeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Rec {
@@ -17,18 +17,18 @@ type value Rec {
 }
 
 fn int32 main() {
-    Result<string, Owned<Error>> j = encode(v: Rec.make(a: 1, b: 2, old: 9));
+    Result<string, Owned<Error>> j = encodeJsonBuffer(v: Rec.make(a: 1, b: 2, old: 9));
     string s = match (give j) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     // ascending id, and the deprecated field is absent
     if (!s.equals(other: "{\"b\":2,\"a\":1}")) { return 251; }
 
     // an OLD stream still carries `old` — a deprecated field is READ
-    Result<Rec, Owned<Error>> d = decode::<Rec>(src: "{\"b\":2,\"a\":1,\"old\":7}");
+    Result<Rec, Owned<Error>> d = decodeJsonBuffer::<Rec>(src: "{\"b\":2,\"a\":1,\"old\":7}");
     int32 got = match (d) { case Ok(value: q): q.old + q.a + q.b; case Err(error: e): 0 - 1; };
     if (got != 10) { return 252; }          // 7 + 1 + 2
 
     // an unknown key still skips cleanly (the named backend's forward compatibility, unchanged)
-    Result<Rec, Owned<Error>> u = decode::<Rec>(src: "{\"b\":5,\"zz\":99,\"a\":4}");
+    Result<Rec, Owned<Error>> u = decodeJsonBuffer::<Rec>(src: "{\"b\":5,\"zz\":99,\"a\":4}");
     int32 uv = match (u) { case Ok(value: q): q.a + q.b; case Err(error: e): 0 - 1; };
     if (uv != 9) { return 253; }
     return 42;
