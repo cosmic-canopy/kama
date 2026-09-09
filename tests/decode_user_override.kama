@@ -26,13 +26,16 @@ type value Line {
         Point e = Point.make(x: 0, y: 0);
         r.beginObject(count: 2);
         while (r.moreFields()) {
-            // The two-arm read, which is the whole point of `FieldKey`: a NAMED backend reports the wire
-            // name, a numbered or positional one reports an id, and a hand-written reader answers both so
-            // the same body works with every backend — exactly as the derive does.
+            // The three-arm read, which is the whole point of `FieldKey`: a NAMED backend reports the wire
+            // name, a NUMBERED one an id whose value is looked up, a POSITIONAL one a rank in the emitted
+            // order. A hand-written reader answers all three and then works with every backend, exactly as
+            // the derive does — and the `match` is exhaustive, so adding an addressing cannot silently skip
+            // an override that never considered it.
             FieldKey key = r.field();
             bool isStart = match (key) {
-                case Name(name: n): n.equals(other: "start");
-                case Id(id: i):     i == 0ui32;
+                case Name(name: n):    n.equals(other: "start");
+                case Id(id: i):        i == 0ui32;
+                case Position(rank: p): p == 0ui32;
             };
             Result<Point, Owned<Error>> __pr = Point.deserialize(r: r);
             Point p = match (give __pr) {

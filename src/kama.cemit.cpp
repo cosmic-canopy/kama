@@ -24217,13 +24217,18 @@ void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const Fie
                                  << kamaStrLit(wire) << ")) __slot = " << i << ";\n";
         first = false;
     }
-    indent(depth); *_out << "} else {\n";
+    indent(depth); *_out << "} else if (__key.tag == FieldKey_Id) {\n";
     indent(depth + 1); *_out << "switch (__key.u.Id.id) {\n";
     for (size_t i = 0; i < fields.size(); ++i) {
         indent(depth + 2); *_out << "case " << serWireId(ci, *fields[i]) << "u: __slot = " << i << "; break;\n";
     }
     indent(depth + 2); *_out << "default: break;\n";
     indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "} else {\n";
+    // `Position` is already the slot: a positional reader counts fields in the order the derive emits them,
+    // which is ascending id, which is this list. It cannot report an id VALUE — it never saw one — and the two
+    // cannot share the `Id` switch, since an explicit id may collide numerically with another field's rank.
+    indent(depth + 1); *_out << "if (__key.u.Position.rank < " << fields.size() << "u) __slot = (int32_t)__key.u.Position.rank;\n";
     indent(depth); *_out << "}\n";
 }
 
@@ -24237,7 +24242,10 @@ void CEmitter::emitVariantKeySlot(const ClassInfo& ci, int depth)
                                  << kamaStrLit(ci.variants[i].name) << ")) __vslot = " << i << ";\n";
     }
     indent(depth); *_out << "} else {\n";
-    indent(depth + 1); *_out << "switch (__tag.u.Id.id) {\n";
+    // A variant's index IS its declaration index, so `Id` and `Position` mean the same number here and share
+    // one switch — unlike a field, whose id may be an author-chosen sparse value.
+    indent(depth + 1); *_out << "uint32_t __vk = (__tag.tag == FieldKey_Id) ? __tag.u.Id.id : __tag.u.Position.rank;\n";
+    indent(depth + 1); *_out << "switch (__vk) {\n";
     for (size_t i = 0; i < ci.variants.size(); ++i) {
         indent(depth + 2); *_out << "case " << i << "u: __vslot = " << i << "; break;\n";
     }

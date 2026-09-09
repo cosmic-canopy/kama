@@ -360,7 +360,12 @@ type enum DeError implements Error, Sendable {
 // report what it actually found — a named backend has no id to give, a positional one has no name — so the
 // derive must be told which it got. One derived body then serves every addressing with a single loop:
 // resolve the key to a slot by name OR by id, and read that field.
-type enum FieldKey { Name(string name), Id(uint32 id) }
+// One case per ADDRESSING, and the third is not redundant with the second. `Id` is a wire id whose VALUE the
+// derive looks up; `Position` is a rank in the emitted sequence, which the derive uses as the slot directly.
+// A positional reader can only ever report the latter — it counts fields, it does not know their ids — and
+// the two cannot share a case: with ids `(5, 1)` the number 1 means slot 0 read as an id and slot 1 read as a
+// rank, so a single switch over both would need two meanings for one label.
+type enum FieldKey { Name(string name), Id(uint32 id), Position(uint32 rank) }
 type contract Deserializer for resource {
     // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
     // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why

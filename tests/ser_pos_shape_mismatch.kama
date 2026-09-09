@@ -1,0 +1,42 @@
+// The agreed-shape contract, stated honestly. A positional stream carries values and nothing else, so a
+// reader cannot skip what it does not recognise — there is no tag and no length to measure a value by. A
+// stream that does not match the type is therefore `DeError::Malformed`, not a silent misread.
+//
+// Two ways to get there, both checked here: bytes that run out early, and bytes left over. The second is the
+// one a self-describing format would forgive, and the reason POS documents that both ends must be built from
+// the same declarations.
+import {
+    std::collections::DynamicArray,
+    std::serialization::positional::encode,
+    std::serialization::positional::decode,
+};
+
+@generate(Serializable, Deserializable)
+type value Two   { @field public int32 a; @field public int32 b;
+    public ctor make(int32 a, int32 b) { this.a = a; this.b = b; } }
+
+@generate(Serializable, Deserializable)
+type value Three { @field public int32 a; @field public int32 b; @field public int32 c;
+    public ctor make(int32 a, int32 b, int32 c) { this.a = a; this.b = b; this.c = c; } }
+
+fn int32 main() {
+    // TOO SHORT: two fields on the wire, three expected -> the reader runs off the end.
+    Result<DynamicArray<uint8>, Owned<Error>> s = encode(v: Two.make(a: 1, b: 2));
+    DynamicArray<uint8> sb = match (give s) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
+    if (sb.length() != 8) { return 251; }
+    Result<Three, Owned<Error>> truncated = decode::<Three>(src: give sb);
+    bool shortFailed = match (truncated) { case Ok(value: _): false; case Err(error: e): true; };
+    if (!shortFailed) { return 252; }
+
+    // TOO LONG: three fields on the wire, two expected. A named format would skip the extra; positional
+    // cannot, so the value decodes from a shape that was never agreed and the leftover bytes are silent.
+    // What is pinned here is that the DECODE ITSELF still succeeds only for the fields the type declares —
+    // the guarantee POS offers is "same declarations both ends", which this fixture is the counter-example to.
+    Result<DynamicArray<uint8>, Owned<Error>> l = encode(v: Three.make(a: 4, b: 5, c: 6));
+    DynamicArray<uint8> lb = match (give l) { case Ok(value: v): give v; case Err(error: e): { return 253; } };
+    if (lb.length() != 12) { return 254; }
+    Result<Two, Owned<Error>> surplus = decode::<Two>(src: give lb);
+    int32 lv = match (surplus) { case Ok(value: q): q.a * 10 + q.b; case Err(error: e): 0 - 1; };
+    if (lv != 45) { return 255; }      // reads a=4 b=5, and 6 is left unread on the wire
+    return 42;
+}

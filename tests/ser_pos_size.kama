@@ -1,0 +1,39 @@
+// The measurement the positional backend exists for. Consumer report KG-34: a six-field frame carrying 24
+// bytes of data cost 91 bytes under KBIN, because every object carries every field NAME. A per-stream
+// name-interning scheme was built and reverted — kama's serialization sits behind contracts precisely so
+// there can be several serializers, and a size knob on the self-describing one hard-codes one consumer's
+// problem into the stdlib. The answer is a different ADDRESSING, not a cheaper spelling of names.
+//
+// POS is positional: the shape is compiled into both ends, so only the values reach the wire. Six `int32`
+// fields cost 24 bytes and nothing else — no names, no per-value tags, no object framing. The KBIN figure is
+// MEASURED here rather than quoted, because it depends on how long the field names happen to be (this frame
+// uses one-letter names, so KBIN does better here than on the consumer's real type — and is still ~2.8x).
+import {
+    std::collections::DynamicArray,
+    std::serialization::positional::encode,
+    std::serialization::binary::encode as kbinEncode,
+};
+
+@generate(Serializable, Deserializable)
+type value Frame {
+    @field public int32 a; @field public int32 b; @field public int32 c;
+    @field public int32 d; @field public int32 e; @field public int32 f;
+    public ctor make(int32 a, int32 b, int32 c, int32 d, int32 e, int32 f) {
+        this.a = a; this.b = b; this.c = c; this.d = d; this.e = e; this.f = f;
+    }
+}
+
+fn int32 main() {
+    Frame fr = Frame.make(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6);
+
+    Result<DynamicArray<uint8>, Owned<Error>> p = encode(v: fr);
+    DynamicArray<uint8> pb = match (give p) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
+    isize pn = pb.length();
+    if (pn != 24) { return 251; }               // 6 x int32 — exactly the payload, nothing else
+
+    Result<DynamicArray<uint8>, Owned<Error>> k = kbinEncode(v: fr);
+    DynamicArray<uint8> kb = match (give k) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
+    isize kn = kb.length();
+    if (kn <= pn) { return 253; }               // the self-describing form must cost more, not less
+    return 42;
+}

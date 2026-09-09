@@ -1,0 +1,333 @@
+
+// POS — the agreed-shape binary backend, third of the three field ADDRESSINGS (SPEC § Serialization).
+// KBIN is *named*: every field carries its name, so a stream is self-describing, order-independent and
+// forward-compatible — and pays for all of it. POS is *positional*: the shape is compiled into both ends,
+// so nothing but the values reaches the wire. The six-field frame KBIN puts at 91 bytes lands at 24 here.
+//
+// What that buys and what it costs are two sides of one decision:
+//   - no field names, no per-value type tags, no framing bytes for an object;
+//   - a reader must therefore know the shape in advance. It cannot skip an unknown field (there is nothing
+//     to measure), so a shape mismatch is `DeError::Malformed` rather than a silent misread. Both ends
+//     must be built from the same declarations. That is the agreed-shape contract, stated honestly.
+//
+// How the derive drives it — the same `Serializable`/`Deserializable` bodies every backend gets:
+//   - `beginObject(count)` writes nothing; the READER uses `count` to bound `moreFields()`, since it has no
+//     delimiter to stop at. This is why the reader's `beginObject` takes a count at all (see the contract).
+//   - `field(name, id)` writes nothing: position IS the address. The derive emits fields in ascending id,
+//     so `@field(id:)` reorders the wire form deliberately and both ends agree.
+//   - `variant(name, index)` writes the index as a varint — the discriminant costs one byte for any enum
+//     with fewer than 128 variants, where a name costs the whole string. The writer is told the index but
+//     not how many variants exist, so a fixed width would have to assume the worst case.
+//   - `writeSome()`/`writeNull()` spend one byte on an `Optional`'s presence. Absence has to cost something
+//     positionally: with no tokens to look at, a reader cannot otherwise tell where the next field starts.
+//   - GRAPH mode is not available. A graph's object table is sized at runtime and a table entry's field
+//     count depends on the `__type` inside it, so neither can be stated in advance; the writer does not
+//     state them either (it frames with `beginTableEntry`). Every graph member fails with `Malformed`
+//     rather than producing a stream that cannot be read back. Use `json` or `binary` for a graph.
+//
+// LAYOUT: scalars are raw fixed-width little-endian with NO tag; `string` is a u32 LE byte length + raw
+// UTF-8; `bool` is one byte; `char` is a u32 LE codepoint; an array is a u32 LE element count + elements.
+
+import {
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+    std::io::Writer,
+    std::io::Reader,
+    std::io::StringWriter,
+    std::io::pump,
+    std::io::IoError,
+};
+
+// NAMING: `{Addressing}{Medium}Serializer` — the axes that actually distinguish the back ends, rather than
+// `…Writer`/`…Reader`, which collide with the `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>`
+// used "Writer" for two unrelated things in one declaration). The older `JsonWriter`/`BinaryWriter` and the
+// module folder names are due the same treatment in a later pass — see the ROADMAP row.
+export { PositionalBinarySerializer, PositionalBinaryDeserializer, encode, decode, decodeFrom };
+
+// The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
+// its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it.
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+
+// IEEE-754 exact bit reinterpretation (a value cast would round) — defined in kama_runtime.h.
+extern fn uint32 kama_f32_bits(float32 v);
+extern fn float32 kama_f32_from_bits(uint32 b);
+extern fn uint64 kama_f64_bits(float64 v);
+extern fn float64 kama_f64_from_bits(uint64 b);
+
+// Writes POS straight into an owned `W: Writer` sink. Owns its sink by value (kama forbids stored borrows).
+// A failed byte write LATCHES the sticky `err`/`code`; the generated `serialize` surfaces it once at the end.
+type resource PositionalBinarySerializer<W: Writer> implements Serializer {
+    W sink;
+    FixedArray<uint8> scratch;   // size-1 staging for a single-byte `sink.write`
+    bool err;
+    SerError code;
+
+    public ctor make(W sink) {
+        this.sink = give sink;
+        this.scratch = FixedArray.make(size: 1);
+        this.err = false;
+        this.code = SerError::NotRepresentable;
+    }
+
+    public const fn const ref W innerRef() { return this.sink; }
+    public fn ref W innerRefMut() { return this.sink; }
+
+    // Stream a `Serializable` value's POS into this writer's owned sink, then flush — the streaming twin of
+    // `encode`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
+    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
+        Serializer s = this;
+        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        Result<Unit, IoError> fr = this.sink.flush();
+        match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // --- low-level byte output ---
+    fn void byte(uint8 b) {
+        this.scratch[0] = b;
+        match (this.sink.write(bytes: this.scratch.view())) {
+            case Err(error: _): { this.failWith(e: SerError::IoError); }
+            case Ok(value: _): {}
+        };
+    }
+    // Write the low `n` bytes of `v`, little-endian.
+    fn void putU(uint64 v, isize n) {
+        isize i = 0;
+        while (i < n) { this.byte(b: cast<uint8>(v & 255ui64)); v = v >> 8ui64; i = i + 1; }
+    }
+    // LEB128: seven bits per byte, high bit set while more follow. Used only where the value's magnitude is
+    // not known at the declaration — a variant index.
+    fn void putVarint(uint64 v) {
+        while (v >= 128ui64) { this.byte(b: cast<uint8>((v & 127ui64) | 128ui64)); v = v >> 7ui64; }
+        this.byte(b: cast<uint8>(v));
+    }
+    fn void putStr(const ref string s) {
+        isize n = s.length();
+        this.putU(v: cast<uint64>(cast<uint32>(n)), n: 4);
+        isize i = 0;
+        while (i < n) { this.byte(b: s[i]); i = i + 1; }
+    }
+    fn void refuse() { this.failWith(e: SerError::NotRepresentable); }
+
+    // --- Serializer contract: structure costs nothing ---
+    public fn void beginObject(usize count) { }   // the shape is compiled in, not written
+    public fn void endObject()   { }
+    public fn void field(string name, uint32 id) { }   // position IS the address
+    public fn void variant(string name, uint32 index) { this.putVarint(v: cast<uint64>(index)); }
+    // An array's length IS runtime data, so unlike an object's field count it must go on the wire.
+    public fn void beginArray(usize count) { this.putU(v: cast<uint64>(count), n: 4); }
+    public fn void endArray()    { }
+
+    // --- scalars: raw little-endian, no tags ---
+    public fn void writeI8(int8 v)   { this.putU(v: cast<uint64>(bitcast<uint8>(v)),  n: 1); }
+    public fn void writeI16(int16 v) { this.putU(v: cast<uint64>(bitcast<uint16>(v)), n: 2); }
+    public fn void writeI32(int32 v) { this.putU(v: cast<uint64>(bitcast<uint32>(v)), n: 4); }
+    public fn void writeI64(int64 v) { this.putU(v: bitcast<uint64>(v),               n: 8); }
+    public fn void writeU8(uint8 v)   { this.putU(v: cast<uint64>(v), n: 1); }
+    public fn void writeU16(uint16 v) { this.putU(v: cast<uint64>(v), n: 2); }
+    public fn void writeU32(uint32 v) { this.putU(v: cast<uint64>(v), n: 4); }
+    public fn void writeU64(uint64 v) { this.putU(v: v, n: 8); }
+    // Raw IEEE-754 bits, so NaN/Inf round-trip exactly.
+    public unsafe fn void writeF32(float32 v) { this.putU(v: cast<uint64>(kama_f32_bits(v: v)), n: 4); }
+    public unsafe fn void writeF64(float64 v) { this.putU(v: kama_f64_bits(v: v), n: 8); }
+    public fn void writeBool(bool v) { this.byte(b: v ? 1ui8 : 0ui8); }
+    public fn void writeChar(char v) { this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
+    public fn void writeString(const ref string v) { this.putStr(s: ref v); }
+    // Presence: one byte, both ways. See the contract comment on `writeSome`.
+    public fn void writeSome() { this.byte(b: 1ui8); }
+    public fn void writeNull() { this.byte(b: 0ui8); }
+
+    // --- graph framing: not representable positionally (see the header) ---
+    public fn void writeRef(uint64 id) { this.refuse(); }
+    public fn void beginGraph(uint64 rootId) { this.refuse(); }
+    public fn void beginTableEntry(uint64 id, string ty) { this.refuse(); }
+    public fn void endTableEntry() { }
+    public fn void endGraph() { }
+
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(SerError e) { this.err = true; this.code = e; }
+    public const fn SerError errorCode() { return this.code; }
+}
+
+// The reader. Unlike every other `Deserializer` in the tree it keeps PER-OBJECT STATE: with no delimiters,
+// the only thing that can end a field loop is the count the derive passed to `beginObject`. `depth` indexes
+// a small stack of remaining-field counters, so nested objects each bound their own loop.
+type resource PositionalBinaryDeserializer implements Deserializer {
+    DynamicArray<uint8> buf;
+    isize pos;
+    isize len;
+    bool err;
+    DeError code;
+    // One frame per open object OR array: how many entries are left, and the index of the next one. Objects
+    // and arrays share the stack because they nest properly. An object is popped by `endObject`; an array by
+    // `moreElems` running out, since its count is exact and nothing asks again after that. A fixed depth is
+    // enough because the nesting is the TYPE's, which is finite and known at compile time; overflowing it is
+    // a shape error like any other, so it latches `Malformed` rather than growing without bound.
+    FixedArray<isize> remain;
+    FixedArray<isize> idx;
+    isize depth;
+
+    public ctor make(DynamicArray<uint8> src) {
+        this.len = src.length();
+        this.buf = give src;
+        this.pos = 0;
+        this.err = false;
+        this.code = DeError::Malformed;
+        this.remain = FixedArray.make(size: 64);
+        this.idx = FixedArray.make(size: 64);
+        this.depth = 0;
+    }
+
+    // --- low-level cursor ---
+    fn uint8 next() {
+        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        uint8 b = this.buf[this.pos];
+        this.pos = this.pos + 1;
+        return b;
+    }
+    fn uint64 getU(isize n) {
+        uint64 v = 0ui64;
+        isize i = 0;
+        while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
+        return v;
+    }
+    fn uint64 getVarint() {
+        uint64 v = 0ui64;
+        uint64 shift = 0ui64;
+        while (true) {
+            uint8 b = this.next();
+            v = v | (cast<uint64>(b & 127ui8) << shift);
+            if ((b & 128ui8) == 0ui8) { return v; }
+            shift = shift + 7ui64;
+            if (shift > 63ui64) { this.err = true; return 0ui64; }   // malformed: longer than a uint64
+        }
+        return v;
+    }
+    unsafe fn string readStr() {
+        if (this.err) { return ""; }
+        isize n = cast<isize>(this.getU(n: 4));
+        if (n == 0) { return ""; }
+        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        isize start = this.pos;
+        this.pos = this.pos + n;
+        return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
+    }
+    fn void refuse() { this.failWith(e: DeError::Malformed); }
+
+    // --- structure: the count is the only thing that ends a loop ---
+    // A count of 0 means the writer could not state the shape (a tagged enum's outer frame, a graph table),
+    // and `moreFields` then answers false at once. The derive ignores that result at those framing sites —
+    // it reads a fixed `{tag}`/`{tag, value}` shape — so an enum still decodes; a GRAPH does not, which is
+    // the honest outcome, since a positional stream cannot carry one.
+    fn void push(isize n) {
+        if (this.depth >= 64) { this.refuse(); return; }
+        this.remain[this.depth] = n;
+        this.idx[this.depth] = 0;
+        this.depth = this.depth + 1;
+    }
+    // Exhaustion does NOT pop — `endObject` does. The derive calls `moreFields` several times on one frame
+    // and ignores the result (a tagged enum's `{tag, value}` shape is fixed, so it is read positionally), so
+    // "returned false" cannot mean "this object is over". Popping here closed the frame early and every
+    // later framing call then decremented the PARENT's counter, walking the whole record off by one field.
+    fn bool step() {
+        if (this.err) { return false; }
+        if (this.depth <= 0) { return false; }
+        isize i = this.depth - 1;
+        if (this.remain[i] <= 0) { return false; }
+        this.remain[i] = this.remain[i] - 1;
+        return true;
+    }
+    fn void pop() { if (this.depth > 0) { this.depth = this.depth - 1; } }
+    public fn void beginObject(usize count) { this.push(n: cast<isize>(count)); }
+    public fn void endObject() { this.pop(); }
+    public fn bool moreFields() { return this.step(); }
+    // Position IS the address, so the reader reports a RANK in the emitted sequence — never an id, which it
+    // has never seen. The derive emits in ascending id, so rank N is the field whose id is Nth smallest, and
+    // `@field(id:)` therefore reorders the wire form deliberately with both ends agreeing.
+    //
+    // An EXHAUSTED frame answers `Id(0)` without advancing. That is the enum framing path, not defensive
+    // padding: a tagged enum's outer frame is opened with count 0 ("not statically known"), and the derive
+    // then asks for the `tag` and `value` keys anyway because that shape is fixed. Those keys carry no bytes
+    // positionally, so answering harmlessly is exactly right — the real read is the `variant()` after them.
+    public fn FieldKey field() {
+        if (this.depth <= 0) { return FieldKey::Position(rank: 0ui32); }
+        isize i = this.depth - 1;
+        isize k = this.idx[i];
+        this.idx[i] = k + 1;
+        return FieldKey::Position(rank: cast<uint32>(k));
+    }
+    public fn FieldKey variant() { return FieldKey::Id(id: cast<uint32>(this.getVarint())); }
+    // An array's length IS on the wire (it is runtime data), so unlike an object the reader reads it back.
+    public fn void beginArray() { this.push(n: cast<isize>(this.getU(n: 4))); }
+    // An array has no `endArray` on the read side, and needs none: its count is exact, so the frame is
+    // popped the one time `moreElems` runs out — unlike an object, nothing calls it again afterwards.
+    public fn bool moreElems() {
+        if (this.err) { return false; }
+        if (this.depth <= 0) { return false; }
+        isize i = this.depth - 1;
+        if (this.remain[i] <= 0) { this.pop(); return false; }
+        this.remain[i] = this.remain[i] - 1;
+        return true;
+    }
+
+    // --- scalars ---
+    // `bitcast` needs a named binding, not an expression — the same shape KBIN's reader uses.
+    public fn int8  readI8()  { uint8  u = cast<uint8>(this.getU(n: 1));  return bitcast<int8>(u); }
+    public fn int16 readI16() { uint16 u = cast<uint16>(this.getU(n: 2)); return bitcast<int16>(u); }
+    public fn int32 readI32() { uint32 u = cast<uint32>(this.getU(n: 4)); return bitcast<int32>(u); }
+    public fn int64 readI64() { uint64 u = this.getU(n: 8);               return bitcast<int64>(u); }
+    public fn uint8 readU8()   { return cast<uint8>(this.getU(n: 1)); }
+    public fn uint16 readU16() { return cast<uint16>(this.getU(n: 2)); }
+    public fn uint32 readU32() { return cast<uint32>(this.getU(n: 4)); }
+    public fn uint64 readU64() { return this.getU(n: 8); }
+    public unsafe fn float32 readF32() { return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
+    public unsafe fn float64 readF64() { return kama_f64_from_bits(b: this.getU(n: 8)); }
+    public fn bool readBool() { return this.next() != 0ui8; }
+    public fn char readChar() { return cast<char>(cast<uint32>(this.getU(n: 4))); }
+    public unsafe fn string readString() { return this.readStr(); }
+    public fn bool readNull() { return this.next() == 0ui8; }
+    // A positional reader cannot skip: there is no tag and no length to measure a value by. A stream whose
+    // shape does not match the type is `Malformed` — the agreed-shape contract, stated rather than guessed.
+    public fn void skipValue() { this.refuse(); }
+
+    // --- graph reads: not representable positionally (see the header) ---
+    public fn uint64 beginGraph() { this.refuse(); return 0ui64; }
+    public fn void rewindGraph() { this.refuse(); }
+    public fn uint64 entryKey() { this.refuse(); return 0ui64; }
+    public fn uint64 readRef() { this.refuse(); return 0ui64; }
+    public fn void endGraph() { }
+
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(DeError e) { this.err = true; this.code = e; }
+    public const fn DeError errorCode() { return this.code; }
+}
+
+// Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a
+// `DynamicArray<uint8>`, not a `string`.
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serializable v) {
+    PositionalBinarySerializer<StringWriter> w = PositionalBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
+    Serializer s = w;
+    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+    return Result::Ok(value: w.innerRefMut().takeBytes());
+}
+
+// Decode a POS byte buffer into a `Deserializable` type. Name the target with turbofish:
+// `positional::decode::<Point>(src)`. Both ends must be built from the same declarations.
+fn Result<T, Owned<Error>> decode<T: Deserializable<T>>(DynamicArray<uint8> src) {
+    PositionalBinaryDeserializer r = PositionalBinaryDeserializer.make(src: give src);
+    return T.deserialize(r: r);
+}
+
+// Decode from any `Reader` (a file, socket, …) — the streaming twin of `decode`.
+fn Result<T, Owned<Error>> decodeFrom<T: Deserializable<T>>(Reader from) {
+    StringWriter sw = StringWriter.make();
+    Result<isize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    PositionalBinaryDeserializer r = PositionalBinaryDeserializer.make(src: give sw.takeBytes());
+    return T.deserialize(r: r);
+}
