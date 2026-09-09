@@ -39,11 +39,17 @@ import {
     std::io::IoError,
 };
 
+// All three BINARY back ends live in this one module — they differ by addressing, not by medium, so a
+// separate module per addressing would have split one idea three ways. KBIN keeps the unqualified
+// `encode`/`decode` (it was here first, and nothing outside the tree has to change); the other two carry
+// their addressing in the entry-point name.
+//
 // NAMING: `{Addressing}{Medium}Serializer` — the axes that actually distinguish the back ends, rather than
 // `…Writer`/`…Reader`, which collide with the `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>`
-// used "Writer" for two unrelated things in one declaration). The older `JsonWriter`/`BinaryWriter` and the
+// used "Writer" for two unrelated things in one declaration). The older `JsonSerializer`/`BinaryWriter` and the
 // module folder names are due the same treatment in a later pass — see the ROADMAP row.
-export { PositionalBinarySerializer, PositionalBinaryDeserializer, encode, decode, decodeFrom };
+export { PositionalBinarySerializer, PositionalBinaryDeserializer,
+         encodePositional, decodePositional, decodeFromPositional };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it.
@@ -308,7 +314,7 @@ type resource PositionalBinaryDeserializer implements Deserializer {
 
 // Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a
 // `DynamicArray<uint8>`, not a `string`.
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serializable v) {
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodePositional(Serializable v) {
     PositionalBinarySerializer<StringWriter> w = PositionalBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -317,14 +323,14 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serializable v)
 }
 
 // Decode a POS byte buffer into a `Deserializable` type. Name the target with turbofish:
-// `positional::decode::<Point>(src)`. Both ends must be built from the same declarations.
-fn Result<T, Owned<Error>> decode<T: Deserializable<T>>(DynamicArray<uint8> src) {
+// `binary::decodePositional::<Point>(src)`. Both ends must be built from the same declarations.
+fn Result<T, Owned<Error>> decodePositional<T: Deserializable<T>>(DynamicArray<uint8> src) {
     PositionalBinaryDeserializer r = PositionalBinaryDeserializer.make(src: give src);
     return T.deserialize(r: r);
 }
 
 // Decode from any `Reader` (a file, socket, …) — the streaming twin of `decode`.
-fn Result<T, Owned<Error>> decodeFrom<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> decodeFromPositional<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };

@@ -2,8 +2,8 @@
 // rebuilds into a Shared<Parent>, transferring the child by GIVE-ONCE (no refcount) — proven by a byte-identical
 // re-encode; ASan proves the single-owner child frees exactly once. Returns 55.
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
     std::collections::DynamicArray,
     std::memory::Shared,
     std::memory::Owned,
@@ -34,13 +34,13 @@ fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
 fn int32 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: p);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeNamed(v: p);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Parent>, Owned<Error>> res = decode::<Shared<Parent>>(src: clone(src: ref b1));
+    Result<Shared<Parent>, Owned<Error>> res = decodeNamed::<Shared<Parent>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeNamed(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

@@ -9,8 +9,8 @@
 // not in content, so JSON would round-trip both too — which is exactly why the check below is on the bytes).
 import {
     std::collections::DynamicArray,
-    std::serialization::positional::encode,
-    std::serialization::positional::decode,
+    std::serialization::binary::encodePositional,
+    std::serialization::binary::decodePositional,
 };
 
 @generate(Serializable, Deserializable)
@@ -33,26 +33,26 @@ type value Mirror {
 
 fn int32 main() {
     // Wire: declared (1,2,3), emitted ascending-id => 3, 2, 1
-    Result<DynamicArray<uint8>, Owned<Error>> w = encode(v: Wire.make(a: 1, b: 2, c: 3));
+    Result<DynamicArray<uint8>, Owned<Error>> w = encodePositional(v: Wire.make(a: 1, b: 2, c: 3));
     DynamicArray<uint8> wb = match (give w) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     if (wb.length() != 12) { return 251; }
 
     // Mirror written in that same emitted order must be byte-identical.
-    Result<DynamicArray<uint8>, Owned<Error>> m = encode(v: Mirror.make(t: 3, s: 2, f: 1));
+    Result<DynamicArray<uint8>, Owned<Error>> m = encodePositional(v: Mirror.make(t: 3, s: 2, f: 1));
     DynamicArray<uint8> mb = match (give m) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
     if (mb.length() != wb.length()) { return 253; }
     isize i = 0;
     while (i < wb.length()) { if (wb[i] != mb[i]) { return 254; } i = i + 1; }
 
     // and Wire's bytes decode as Mirror, in the emitted order
-    Result<Mirror, Owned<Error>> dm = decode::<Mirror>(src: give wb);
+    Result<Mirror, Owned<Error>> dm = decodePositional::<Mirror>(src: give wb);
     int32 mv = match (dm) { case Ok(value: q): q.third * 100 + q.second * 10 + q.first; case Err(error: e): 0 - 1; };
     if (mv != 321) { return 255; }
 
     // and Wire round-trips itself, fields landing back on the names they were declared with
-    Result<DynamicArray<uint8>, Owned<Error>> w2 = encode(v: Wire.make(a: 7, b: 8, c: 9));
+    Result<DynamicArray<uint8>, Owned<Error>> w2 = encodePositional(v: Wire.make(a: 7, b: 8, c: 9));
     DynamicArray<uint8> wb2 = match (give w2) { case Ok(value: v): give v; case Err(error: e): { return 240; } };
-    Result<Wire, Owned<Error>> dw = decode::<Wire>(src: give wb2);
+    Result<Wire, Owned<Error>> dw = decodePositional::<Wire>(src: give wb2);
     int32 wv = match (dw) {
         case Ok(value: q): q.declaredFirst * 100 + q.declaredSecond * 10 + q.declaredThird;
         case Err(error: e): 0 - 1;

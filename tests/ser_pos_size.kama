@@ -10,8 +10,8 @@
 // uses one-letter names, so KBIN does better here than on the consumer's real type — and is still ~2.8x).
 import {
     std::collections::DynamicArray,
-    std::serialization::positional::encode,
-    std::serialization::binary::encode as kbinEncode,
+    std::serialization::binary::encodePositional,
+    std::serialization::binary::encodeNamed as kbinEncode,
 };
 
 @generate(Serializable, Deserializable)
@@ -26,7 +26,7 @@ type value Frame {
 fn int32 main() {
     Frame fr = Frame.make(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6);
 
-    Result<DynamicArray<uint8>, Owned<Error>> p = encode(v: fr);
+    Result<DynamicArray<uint8>, Owned<Error>> p = encodePositional(v: fr);
     DynamicArray<uint8> pb = match (give p) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     isize pn = pb.length();
     if (pn != 24) { return 251; }               // 6 x int32 — exactly the payload, nothing else

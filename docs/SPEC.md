@@ -4744,15 +4744,30 @@ restrictions — and nothing leaks into the public API.
   entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
-  `beginObject`/`field`/`variant`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
-  (text) and `std::serialization::binary` (**KBIN** — a compact self-describing little-endian tagged format) both
-  ship; yaml/xml/user backends are just new implementors — no compiler change. A type opts into serialization
-  ONCE (`@generate(Serializable, Deserializable)`) and works with every backend automatically, since the generated code
-  drives only the format-agnostic token contract. The **binary** backend is byte-oriented — `binary::encode`
-  yields a `DynamicArray<uint8>` and `decode` takes bytes (not a `string`, since binary isn't valid UTF-8) — and
-  streams over the same `Writer`/`Reader` substrate as JSON (so it flows to a file or socket for game-save /
-  network payloads). It stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue`
-  works and unknown fields skip cleanly (forward-compatible).
+  `beginObject`/`field`/`variant`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. A type opts into
+  serialization ONCE (`@generate(Serializable, Deserializable)`) and works with every backend automatically, since
+  the generated code drives only the format-agnostic token contract; yaml/xml/user backends are just new
+  implementors — no compiler change.
+  **Four back ends ship, and the three binary ones differ by ADDRESSING, not by medium** — so they live in one
+  module, `std::serialization::binary`, and each entry point names its addressing (none owns a bare `encode`,
+  because none is the default). Every binary form is byte-oriented: `encode` yields a `DynamicArray<uint8>` and
+  `decode` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
+  `Writer`/`Reader` substrate, so any of them flows to a file or socket.
+
+  | back end | addressing | entry points | what it is for |
+  |---|---|---|---|
+  | `std::serialization::json` | named | `encode` / `decode` / `decodeFrom` | text, human-readable, UTF-8 in and out |
+  | `binary::…Named` (**KBIN**) | named | `encodeNamed` / `decodeNamed` / `decodeFromNamed` | self-describing save/load: order-independent, unknown fields skip |
+  | `binary::…Numbered` (**KNUM**) | numbered | `encodeNumbered` / `decodeNumbered` / `decodeFromNumbered` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
+  | `binary::…Positional` (**POS**) | positional | `encodePositional` / `decodePositional` / `decodeFromPositional` | smallest: only values on the wire, shape agreed in advance |
+
+  KBIN stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue` works and unknown
+  fields skip cleanly. KNUM keys each value with `(id << 3) | wireType` and zigzag-varints its integers, so a
+  small negative costs one byte; the wire type is what lets an unknown id be measured and stepped over. POS
+  writes no names, no tags and no object framing at all — a six-field `int32` record is 24 bytes — and therefore
+  cannot skip: a stream that does not match the type is `DeError::Malformed`, and **graph mode is unavailable to
+  it**, since a table's size and an entry's field count are runtime facts no positional writer can state.
+  <!-- test: ser_pos_size -->
   **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
   (RFC 8259 §8.1), so escaping buys nothing — and only `"`, `\` and the control bytes are escaped. On
   READ, `\uXXXX` is decoded to UTF-8, **including surrogate pairs**: JSON inherited UTF-16 escapes from

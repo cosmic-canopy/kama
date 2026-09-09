@@ -1,0 +1,416 @@
+
+// KNUM — the numbered binary backend, the third of the three field ADDRESSINGS (SPEC § Serialization) and
+// the one that trades size for EVOLVABILITY. Where KBIN writes every field's name and POS writes nothing at
+// all, KNUM writes each field's `@field(id:)` together with a wire type. That is protobuf's shape, and it is
+// what buys the two properties neither of the others has both of:
+//
+//   - an UNKNOWN id can be skipped, because the wire type says how long the value is. A reader built from an
+//     older declaration reads a newer stream and ignores what it does not know.
+//   - a stream survives REORDERING, because a field is found by its number rather than by where it sits.
+//
+// So the three back ends are a real choice, not three spellings: KBIN is self-describing and costs names,
+// KNUM is schema-evolvable and costs a small key per field, POS is smallest and costs all flexibility.
+//
+// ⚠️ An earlier design note claimed a number scheme "breaks `skipValue`". That was wrong, and this backend is
+// the refutation: the tag carries a wire type, which is exactly the length information skipping needs.
+//
+// WIRE FORMAT. Every value inside an object is preceded by a KEY varint `(id << 3) | wiretype`:
+//   0 VARINT      every integer, `bool` and `char`
+//   1 FIXED64     `float64` (raw IEEE-754 bits, so NaN/Inf round-trip)
+//   2 BYTES       `string` — a varint byte length then raw UTF-8
+//   3 GROUP_START an object or array opens here; the key that carries it is the field's own
+//   4 GROUP_END   closes the innermost group
+//   5 FIXED32     `float32`
+//   6 NULL        an absent `Optional` — the key IS the value, there is no payload
+// Integers are LEB128 varints, and SIGNED ones are zigzagged first (`n >= 0 ? 2n : -2n-1`, computed on the
+// unsigned bit pattern) so that a small negative costs one byte instead of ten — protobuf's `sint64`, not its
+// `int64`. Inside an ARRAY values are bare: the array writes its element count once and the elements follow
+// without keys, since position within an array is not a field id and nothing would ever look one up.
+// A nested object or array is delimited by GROUP_END rather than a byte length, which is what lets the writer
+// stream without buffering a subtree to back-patch its size.
+
+import {
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+    std::io::Writer,
+    std::io::Reader,
+    std::io::StringWriter,
+    std::io::pump,
+    std::io::IoError,
+};
+
+// One module for all three binary addressings — see the note in `positional.kama`.
+// NAMING: `{Addressing}{Medium}Serializer`.
+export { NumberedBinarySerializer, NumberedBinaryDeserializer,
+         encodeNumbered, decodeNumbered, decodeFromNumbered };
+
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+extern fn uint32 kama_f32_bits(float32 v);
+extern fn float32 kama_f32_from_bits(uint32 b);
+extern fn uint64 kama_f64_bits(float64 v);
+extern fn float64 kama_f64_from_bits(uint64 b);
+
+type resource NumberedBinarySerializer<W: Writer> implements Serializer {
+    W sink;
+    FixedArray<uint8> scratch;
+    bool err;
+    SerError code;
+    uint32 pendingId;              // the id `field()` last named; consumed by the next value write
+    FixedArray<bool> isArray;      // per open frame: are its values bare (array) or key-prefixed (object)?
+    FixedArray<bool> grouped;      // per open frame: was it opened as a group, so it needs a GROUP_END?
+    isize depth;
+
+    public ctor make(W sink) {
+        this.sink = give sink;
+        this.scratch = FixedArray.make(size: 1);
+        this.err = false;
+        this.code = SerError::NotRepresentable;
+        this.pendingId = 0ui32;
+        this.isArray = FixedArray.make(size: 64);
+        this.grouped = FixedArray.make(size: 64);
+        this.depth = 0;
+    }
+
+    public const fn const ref W innerRef() { return this.sink; }
+    public fn ref W innerRefMut() { return this.sink; }
+
+    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
+        Serializer s = this;
+        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        Result<Unit, IoError> fr = this.sink.flush();
+        match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // --- low-level ---
+    fn void byte(uint8 b) {
+        this.scratch[0] = b;
+        match (this.sink.write(bytes: this.scratch.view())) {
+            case Err(error: _): { this.failWith(e: SerError::IoError); }
+            case Ok(value: _): {}
+        };
+    }
+    fn void putVarint(uint64 v) {
+        while (v >= 128ui64) { this.byte(b: cast<uint8>((v & 127ui64) | 128ui64)); v = v >> 7ui64; }
+        this.byte(b: cast<uint8>(v));
+    }
+    fn void putFixed(uint64 v, isize n) {
+        isize i = 0;
+        while (i < n) { this.byte(b: cast<uint8>(v & 255ui64)); v = v >> 8ui64; i = i + 1; }
+    }
+    // Zigzag on the unsigned bit pattern: the shift-out and the mask both wrap, which is the point.
+    fn uint64 zig(uint64 bits, bool negative) {
+        uint64 s = bits << 1ui64;
+        uint64 m = negative ? 18446744073709551615ui64 : 0ui64;
+        return s ^ m;
+    }
+    fn bool inArray() { return this.depth > 0 ? this.isArray[this.depth - 1] : false; }
+    // A value's key. Inside an array there is none — position in an array is not a field id.
+    fn void key(uint8 wt) {
+        if (this.inArray()) { return; }
+        this.putVarint(v: (cast<uint64>(this.pendingId) << 3ui64) | cast<uint64>(wt));
+    }
+    fn void push(bool asArray, bool asGroup) {
+        if (this.depth >= 64) { this.failWith(e: SerError::NotRepresentable); return; }
+        this.isArray[this.depth] = asArray;
+        this.grouped[this.depth] = asGroup;
+        this.depth = this.depth + 1;
+    }
+    fn void closeFrame() {
+        if (this.depth <= 0) { return; }
+        this.depth = this.depth - 1;
+        if (this.grouped[this.depth]) { this.putVarint(v: 4ui64); }   // (0 << 3) | GROUP_END
+    }
+
+    // --- structure ---
+    // The TOP-LEVEL object gets no group: there is nothing outside it to delimit it from, and the buffer's
+    // end is its end. Every nested one does, and its GROUP_START rides the field key that introduced it.
+    public fn void beginObject(usize count) {
+        bool nested = this.depth > 0;
+        if (nested) { this.key(wt: 3ui8); }
+        this.push(asArray: false, asGroup: nested);
+    }
+    public fn void endObject() { this.closeFrame(); }
+    public fn void field(string name, uint32 id) { this.pendingId = id; }
+    public fn void variant(string name, uint32 index) {
+        this.key(wt: 0ui8);
+        this.putVarint(v: cast<uint64>(index));
+    }
+    // An array writes its element COUNT (runtime data), then bare elements. The count means `moreElems` needs
+    // no sentinel, and bare elements mean an array costs no key per element.
+    public fn void beginArray(usize count) {
+        bool nested = this.depth > 0;
+        if (nested) { this.key(wt: 3ui8); }
+        this.push(asArray: true, asGroup: nested);
+        this.putVarint(v: cast<uint64>(count));
+    }
+    public fn void endArray() { this.closeFrame(); }
+
+    // --- scalars ---
+    fn void varintSigned(uint64 bits, bool negative) { this.key(wt: 0ui8); this.putVarint(v: this.zig(bits: bits, negative: negative)); }
+    fn void varintUnsigned(uint64 v) { this.key(wt: 0ui8); this.putVarint(v: v); }
+
+    // ⚠️ SIGN-EXTEND to 64 bits before zigzagging, never widen the unsigned bit pattern. `bitcast<uint32>(-9)`
+    // is 0xFFFFFFF7, and widening THAT to 64 bits gives 0x00000000FFFFFFF7 — zigzagging it produced a
+    // near-maximal varint, so `int32 -9` cost 10 bytes instead of 1. A value `cast` sign-extends, which is
+    // what makes zigzag mean the same thing at every width.
+    fn void signedAtWidth(int64 w) { this.varintSigned(bits: bitcast<uint64>(w), negative: w < 0); }
+    public fn void writeI8(int8 v)   { int64 w = cast<int64>(v); this.signedAtWidth(w: w); }
+    public fn void writeI16(int16 v) { int64 w = cast<int64>(v); this.signedAtWidth(w: w); }
+    public fn void writeI32(int32 v) { int64 w = cast<int64>(v); this.signedAtWidth(w: w); }
+    public fn void writeI64(int64 v) { this.signedAtWidth(w: v); }
+    public fn void writeU8(uint8 v)   { this.varintUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU16(uint16 v) { this.varintUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU32(uint32 v) { this.varintUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU64(uint64 v) { this.varintUnsigned(v: v); }
+    public unsafe fn void writeF32(float32 v) { this.key(wt: 5ui8); this.putFixed(v: cast<uint64>(kama_f32_bits(v: v)), n: 4); }
+    public unsafe fn void writeF64(float64 v) { this.key(wt: 1ui8); this.putFixed(v: kama_f64_bits(v: v), n: 8); }
+    public fn void writeBool(bool v) { this.varintUnsigned(v: v ? 1ui64 : 0ui64); }
+    public fn void writeChar(char v) { this.varintUnsigned(v: cast<uint64>(cast<uint32>(v))); }
+    public fn void writeString(const ref string v) {
+        this.key(wt: 2ui8);
+        isize n = v.length();
+        this.putVarint(v: cast<uint64>(cast<uint32>(n)));
+        isize i = 0;
+        while (i < n) { this.byte(b: v[i]); i = i + 1; }
+    }
+    // PRESENCE rides the KEY, not a value of its own. Giving `writeSome` a key of its own emitted two keyed
+    // entries for one field — the reader took the first as presence and then read the SECOND KEY as the
+    // value, so `Some(12)` came back as 4 (the zigzag of the key byte). So: absence is its own wire type
+    // (6, no payload) and presence writes nothing at all, leaving the inner value's own key to carry the id.
+    // Inside an ARRAY there is no key to ride, so the marker is a bare varint in both directions.
+    public fn void writeSome() { if (this.inArray()) { this.putVarint(v: 1ui64); } }
+    public fn void writeNull() {
+        if (this.inArray()) { this.putVarint(v: 0ui64); return; }
+        this.key(wt: 6ui8);
+    }
+
+    // --- graph framing: the object table is keyed by runtime ids, not by field numbers ---
+    fn void refuse() { this.failWith(e: SerError::NotRepresentable); }
+    public fn void writeRef(uint64 id) { this.refuse(); }
+    public fn void beginGraph(uint64 rootId) { this.refuse(); }
+    public fn void beginTableEntry(uint64 id, string ty) { this.refuse(); }
+    public fn void endTableEntry() { }
+    public fn void endGraph() { }
+
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(SerError e) { this.err = true; this.code = e; }
+    public const fn SerError errorCode() { return this.code; }
+}
+
+type resource NumberedBinaryDeserializer implements Deserializer {
+    DynamicArray<uint8> buf;
+    isize pos;
+    isize len;
+    bool err;
+    DeError code;
+    uint8 lastWt;                  // the wire type of the key `field()` last read — what `skipValue` needs
+    FixedArray<bool> isArray;
+    FixedArray<bool> grouped;
+    FixedArray<isize> remain;      // array frames only: elements left
+    isize depth;
+
+    public ctor make(DynamicArray<uint8> src) {
+        this.len = src.length();
+        this.buf = give src;
+        this.pos = 0;
+        this.err = false;
+        this.code = DeError::Malformed;
+        this.lastWt = 0ui8;
+        this.isArray = FixedArray.make(size: 64);
+        this.grouped = FixedArray.make(size: 64);
+        this.remain = FixedArray.make(size: 64);
+        this.depth = 0;
+    }
+
+    // --- low-level ---
+    fn bool atEnd() { return this.pos >= this.len; }
+    fn uint8 next() {
+        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        uint8 b = this.buf[this.pos];
+        this.pos = this.pos + 1;
+        return b;
+    }
+    fn uint64 getVarint() {
+        uint64 v = 0ui64;
+        uint64 shift = 0ui64;
+        while (!this.atEnd()) {
+            uint8 b = this.next();
+            v = v | (cast<uint64>(b & 127ui8) << shift);
+            if ((b & 128ui8) == 0ui8) { return v; }
+            shift = shift + 7ui64;
+            if (shift > 63ui64) { this.err = true; return 0ui64; }
+        }
+        this.err = true;
+        return 0ui64;
+    }
+    fn uint64 getFixed(isize n) {
+        uint64 v = 0ui64;
+        isize i = 0;
+        while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
+        return v;
+    }
+    // Undo zigzag: the low bit is the sign, the mask wraps to all-ones for a negative.
+    fn uint64 zag(uint64 zz) {
+        uint64 low = zz & 1ui64;
+        uint64 mask = 0ui64 - low;
+        return (zz >> 1ui64) ^ mask;
+    }
+    // Read a key without consuming it — `moreFields` has to look for GROUP_END before deciding.
+    fn uint64 peekVarint() {
+        isize save = this.pos;
+        uint64 v = this.getVarint();
+        this.pos = save;
+        return v;
+    }
+    fn void refuse() { this.failWith(e: DeError::Malformed); }
+    fn bool inArray() { return this.depth > 0 ? this.isArray[this.depth - 1] : false; }
+    fn void push(bool asArray, bool asGroup, isize n) {
+        if (this.depth >= 64) { this.refuse(); return; }
+        this.isArray[this.depth] = asArray;
+        this.grouped[this.depth] = asGroup;
+        this.remain[this.depth] = n;
+        this.depth = this.depth + 1;
+    }
+
+    // --- structure ---
+    // No key is consumed here: a nested object's GROUP_START rode the field key that `field()` already read,
+    // and the top-level object never had one.
+    public fn void beginObject(usize count) { this.push(asArray: false, asGroup: this.depth > 0, n: 0); }
+    // This is the member a numbered reader genuinely needs (as a positional one does): GROUP_END is a real
+    // byte that has to be consumed exactly once, and `moreFields` must be able to peek it without eating it.
+    public fn void endObject() {
+        if (this.depth <= 0) { return; }
+        this.depth = this.depth - 1;
+        if (this.grouped[this.depth] && !this.atEnd()) {
+            uint64 k = this.peekVarint();
+            if ((k & 7ui64) == 4ui64) { uint64 __ = this.getVarint(); }
+        }
+    }
+    public fn bool moreFields() {
+        if (this.err) { return false; }
+        if (this.atEnd()) { return false; }
+        uint64 k = this.peekVarint();
+        if ((k & 7ui64) == 4ui64) { return false; }   // GROUP_END — the object is over; endObject eats it
+        return true;
+    }
+    // The id comes off the wire, so an unknown one still skips: the wire type says how long its value is.
+    public fn FieldKey field() {
+        uint64 k = this.getVarint();
+        this.lastWt = cast<uint8>(k & 7ui64);
+        return FieldKey::Id(id: cast<uint32>(k >> 3ui64));
+    }
+    public fn FieldKey variant() { return FieldKey::Id(id: cast<uint32>(this.getVarint())); }
+    public fn void beginArray() {
+        bool nested = this.depth > 0;
+        isize n = cast<isize>(this.getVarint());
+        this.push(asArray: true, asGroup: nested, n: n);
+    }
+    // There is no `endArray` on the read side, so the exhausted call closes the frame.
+    public fn bool moreElems() {
+        if (this.err) { return false; }
+        if (this.depth <= 0) { return false; }
+        isize i = this.depth - 1;
+        if (this.remain[i] > 0) { this.remain[i] = this.remain[i] - 1; return true; }
+        this.depth = this.depth - 1;
+        if (this.grouped[i] && !this.atEnd()) {
+            uint64 k = this.peekVarint();
+            if ((k & 7ui64) == 4ui64) { uint64 __ = this.getVarint(); }
+        }
+        return false;
+    }
+
+    // --- scalars ---
+    fn int64 readSigned() { uint64 z = this.getVarint(); uint64 u = this.zag(zz: z); return bitcast<int64>(u); }
+    public fn int8  readI8()  { int64 v = this.readSigned(); return truncate<int8>(v); }
+    public fn int16 readI16() { int64 v = this.readSigned(); return truncate<int16>(v); }
+    public fn int32 readI32() { int64 v = this.readSigned(); return truncate<int32>(v); }
+    public fn int64 readI64() { return this.readSigned(); }
+    public fn uint8  readU8()  { uint64 v = this.getVarint(); return truncate<uint8>(v); }
+    public fn uint16 readU16() { uint64 v = this.getVarint(); return truncate<uint16>(v); }
+    public fn uint32 readU32() { uint64 v = this.getVarint(); return truncate<uint32>(v); }
+    public fn uint64 readU64() { return this.getVarint(); }
+    public unsafe fn float32 readF32() { return kama_f32_from_bits(b: cast<uint32>(this.getFixed(n: 4))); }
+    public unsafe fn float64 readF64() { return kama_f64_from_bits(b: this.getFixed(n: 8)); }
+    public fn bool readBool() { return this.getVarint() != 0ui64; }
+    public fn char readChar() { return cast<char>(cast<uint32>(this.getVarint())); }
+    public unsafe fn string readString() {
+        isize n = cast<isize>(this.getVarint());
+        if (this.err || n == 0) { return ""; }
+        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        isize start = this.pos;
+        this.pos = this.pos + n;
+        return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
+    }
+    // The twin of `writeSome`/`writeNull`: absence is wire type 6 with no payload, so a present value
+    // consumes nothing here and its own read then finds the payload the key introduced.
+    public fn bool readNull() {
+        if (this.inArray()) { return this.getVarint() == 0ui64; }
+        return this.lastWt == 6ui8;
+    }
+    // THE POINT OF A WIRE TYPE. An unknown field id is skipped by its wire type alone — no schema, no names —
+    // which is what makes a KNUM stream forward-compatible where a positional one cannot be.
+    public fn void skipValue() {
+        uint8 wt = this.lastWt;
+        if (wt == 6ui8) { return; }                        // NULL — the key was the whole thing
+        else if (wt == 0ui8) { uint64 __ = this.getVarint(); }
+        else if (wt == 1ui8) { uint64 __ = this.getFixed(n: 8); }
+        else if (wt == 5ui8) { uint64 __ = this.getFixed(n: 4); }
+        else if (wt == 2ui8) {
+            isize n = cast<isize>(this.getVarint());
+            if (n < 0 || this.pos + n > this.len) { this.err = true; return; }
+            this.pos = this.pos + n;
+        }
+        else if (wt == 3ui8) { this.skipGroup(); }
+        else { this.err = true; }
+    }
+    // Skip a whole subtree: read keys and their values until the matching GROUP_END, counting nesting so an
+    // inner group's terminator is not mistaken for this one's.
+    fn void skipGroup() {
+        isize open = 1;
+        while (open > 0 && !this.err && !this.atEnd()) {
+            uint64 k = this.getVarint();
+            uint8 wt = cast<uint8>(k & 7ui64);
+            if (wt == 4ui8) { open = open - 1; }
+            else if (wt == 3ui8) { open = open + 1; }
+            else { this.lastWt = wt; this.skipValue(); }
+        }
+        if (open > 0) { this.err = true; }
+    }
+
+    // --- graph reads: not available (see the writer) ---
+    public fn uint64 beginGraph() { this.refuse(); return 0ui64; }
+    public fn void rewindGraph() { this.refuse(); }
+    public fn uint64 entryKey() { this.refuse(); return 0ui64; }
+    public fn uint64 readRef() { this.refuse(); return 0ui64; }
+    public fn void endGraph() { }
+
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(DeError e) { this.err = true; this.code = e; }
+    public const fn DeError errorCode() { return this.code; }
+}
+
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encodeNumbered(Serializable v) {
+    NumberedBinarySerializer<StringWriter> w = NumberedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
+    Serializer s = w;
+    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+    return Result::Ok(value: w.innerRefMut().takeBytes());
+}
+
+fn Result<T, Owned<Error>> decodeNumbered<T: Deserializable<T>>(DynamicArray<uint8> src) {
+    NumberedBinaryDeserializer r = NumberedBinaryDeserializer.make(src: give src);
+    return T.deserialize(r: r);
+}
+
+fn Result<T, Owned<Error>> decodeFromNumbered<T: Deserializable<T>>(Reader from) {
+    StringWriter sw = StringWriter.make();
+    Result<isize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    NumberedBinaryDeserializer r = NumberedBinaryDeserializer.make(src: give sw.takeBytes());
+    return T.deserialize(r: r);
+}

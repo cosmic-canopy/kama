@@ -98,7 +98,7 @@ flagship is the stdlib pair `View<T>` (`{ UnsafePtr<T> data; isize len }`) and i
 `ConstView<T>` (`{ UnsafeConstPtr<T> data; isize len }`), but the kind is general: an engine can
 declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { ref World w; … }`.
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
-(`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonReader`).
+(`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonDeserializer`).
 
 ```kama
 type view View<T> {                               // a slice/span over a buffer it borrows

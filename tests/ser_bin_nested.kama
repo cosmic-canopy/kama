@@ -1,8 +1,8 @@
 // KBIN full round-trip of a nested aggregate: a resource owning a string + a primitive array + an array of
 // structs. Exercises arrays-of-objects both ways. Returns 25 (ids 7+8, pts 1+2+3+4, name len 4 gate).
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
     std::collections::DynamicArray,
 };
 
@@ -27,8 +27,8 @@ fn int32 main() {
     DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
     DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: s);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeNamed(v: s);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<Scene, Owned<Error>> res = decode::<Scene>(src: give bytes);
+    Result<Scene, Owned<Error>> res = decodeNamed::<Scene>(src: give bytes);
     return match (res) { case Ok(value: b): b.score(); case Err(error: e): 0 - 1; };
 }

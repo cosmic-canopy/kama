@@ -3,8 +3,8 @@
 // decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
 // refcounts balance. Returns 55.
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
     std::collections::DynamicArray,
     std::memory::Shared,
 };
@@ -36,13 +36,13 @@ fn int32 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Pair p = Pair.make(a: give leaf, b: give l2);
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: p);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeNamed(v: p);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: clone(src: ref b1));
+    Result<Shared<Pair>, Owned<Error>> res = decodeNamed::<Shared<Pair>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeNamed(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

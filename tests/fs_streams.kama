@@ -1,7 +1,7 @@
 // std::io streams M3 — std::fs::File now implements Reader/Writer, so serde streams straight to/from disk
-// with no whole-file string buffering. Write a record's JSON directly to an fd via JsonWriter::<File>, close,
+// with no whole-file string buffering. Write a record's JSON directly to an fd via JsonSerializer::<File>, close,
 // reopen, and decode it back straight from the File (as a Reader). Each phase is scoped in a helper so the
-// owning JsonWriter/File drops (closes the fd) before the next phase. Returns 42 on full round-trip success.
+// owning JsonSerializer/File drops (closes the fd) before the next phase. Returns 42 on full round-trip success.
 import {
     std::fs::File,
     std::fs::OpenMode,
@@ -9,7 +9,7 @@ import {
     std::io::Reader,
     std::io::Writer,
     std::io::IoError,
-    std::serialization::json::JsonWriter,
+    std::serialization::json::JsonSerializer,
     std::serialization::json::decodeFrom,
 };
 
@@ -24,12 +24,12 @@ type resource Rec {
     public fn bool matches() { return this.id == 7 && this.ok && this.name == "hi"; }
 }
 
-// Stream `rec` as JSON straight into a freshly-created file. The JsonWriter owns the File by value, so when it
+// Stream `rec` as JSON straight into a freshly-created file. The JsonSerializer owns the File by value, so when it
 // drops at the end of this scope the fd closes (flushing our unbuffered layer's no-op). Returns 0 on success.
 fn int32 writeRec(ref string path, ref Rec rec) {
     Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Write);
     File f = match (give fo) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
-    JsonWriter<File> w = JsonWriter::<File>.make(sink: give f);
+    JsonSerializer<File> w = JsonSerializer::<File>.make(sink: give f);
     Result<Unit, Owned<Error>> e = w.encodeValue(v: rec);
     return match (give e) { case Ok(value: _): 0; case Err(error: er): 21; };
 }

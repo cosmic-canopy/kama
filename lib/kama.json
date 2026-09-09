@@ -36,9 +36,8 @@
     "random":        { "visibility": "public" },
     "serialization": { "visibility": "public",
                        "modules": {
-                         "binary":     { "visibility": "public" },
-                         "json":       { "visibility": "public" },
-                         "positional": { "visibility": "public" }
+                         "binary": { "visibility": "public" },
+                         "json":   { "visibility": "public" }
                        } },
     "time":          { "visibility": "public" }
   }

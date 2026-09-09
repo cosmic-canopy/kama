@@ -1365,86 +1365,50 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 - **Binary backend follow-on.** Delta/snapshot replication stays ENGINE-level (above serde); generic byte
   compression is an io-adapter layer (§1 transform adapters), not a serde concern. The schema-locked
   positional mode is no longer deferred: it is the *Positional binary backend* row, built on the design below.
-- **`@bits(n)` per-field bit-packing — NON-GOAL, decided 2026-09-08.** It was never implemented: the name
-  entered the attribute list in `ce8fa66` (a commit about attribute *prefix* parsing) and its whole body is
-  `else if (an == "bits") { fMarked = true; }` — it never reads its arguments, so `@bits(4)` and
-  `@bits(banana)` are equally accepted, it appears in no SPEC text, and it is used in zero files. It also
-  sets the "field is marked" flag, so it silently stands in for `@field` under `@generate`. **The attribute
-  is deleted** (its parse arm and its mention in the member-attribute validator) as part of the *Field
-  addressing* row, which rewrites that loop.
-  **What answers the need instead**, which is the whole reason it is a non-goal rather than a deferral:
-  a packing BACKEND may spend one bit on a `bool` inside its own `writeBool` and flush at `endObject` —
-  that is Cap'n Proto's win, it needs no attribute and no contract member, and it stays available. An
-  author who wants bit-exact integer fields packs them into the smallest integer carrier in their own type
-  (shifts in a `ctor`, accessors reading back out) or hand-writes `serialize`, which SPEC already lets win
-  over the derive. Measured on a `bool`+`uint8`+`uint8` record: hand-packing into a `uint16` costs **2**
-  positional bytes, exactly what `@bits(1)/(3)/(7)` would have cost, against **3** for the natural fields —
-  so the attribute buys nothing a carrier does not. ⚠️ The carrier must be the SMALLEST that fits: the same
-  record packed into a `uint32` costs 4, *worse* than not packing.
-  The deciding argument is not size, though: `@bits(4)` would mean four bits positionally, a whole byte in
-  KBIN and a JSON number in text — one declaration with a wire form chosen by someone else and never
-  visible at the declaration. That is a hint, and GOALS favors explicit over implicit. A packed carrier is
-  the same integer to every backend. Keeping it would also have cost two permanent contract members
-  (`writeBits`/`readBits`) that only one backend could honor, plus a per-field overflow-trap obligation.
-
-- **Field addressing — the design, decided 2026-09-08 (three NOW rows: the contract change, then the
-  positional and numbered backends).** Where it came from: consumer KG-34 measured a six-field frame at
-  **24 bytes of data, 91 on the wire** under KBIN, because every object carries every field NAME. A
-  per-stream name-interning scheme (each name in full once behind a `name-def`, a 2-byte index after — the
-  shape `encoding/gob` and Java serialization use) was BUILT and measured at 226 bytes where 338 was, then
-  **reverted before commit** on design grounds: kama's serialization sits behind contracts precisely so that
-  there can be several serializers, and a size knob on the self-describing one hard-codes one consumer's
-  problem into the stdlib while making KBIN stateful (objects no longer self-contained, a table scan per
-  field write) and still stopping short of what an agreed-shape format gives. KBIN stays what it is: the
-  self-describing save/load format — stateless, order-independent, unknown fields skip.
-  **The axis every serde-style framework lands on is how a field is ADDRESSED on the wire**, and it has three
-  points: *named* (JSON, CBOR/MessagePack maps, KBIN; no schema at read time, skips unknowns, pays the name),
-  *numbered* (protobuf, int-keyed CBOR; the numbers compiled in, skips unknowns because the tag carries a
-  wire type — ⚠️ an earlier note here claiming a number scheme "breaks `skipValue`" was WRONG), and
-  *positional* (bincode, postcard, Borsh, the Cap'n Proto/FlatBuffers layouts; the whole shape compiled in,
-  no skipping, value bytes only). Rust serde's derived visitor implements BOTH `visit_map` (named) and
-  `visit_seq` (positional) and the FORMAT picks; that is the precedent for one derived body serving every
-  addressing.
-  **The design: the key carries both forms, and the backend keeps the one it is.**
-  - `@field`, `@field(name: …)`, `@field(id: …)`, `@field(name: …, id: …)` are all valid; `name` defaults to
-    the property name (as today), `id` to the DECLARATION INDEX. A duplicate name or id within a type is
-    refused. It is `id`, not `index`, because an author may override it with a stable, sparse protobuf-style
-    number: a positional backend uses its ORDER, a numbered backend its VALUE, and **the derive emits fields
-    in ascending id order**, which is what makes ids and positions one thing. No third label: a backend that
-    keys by a hash hashes the name it is already handed.
-  - Writer: `Serializer.fieldName(string)` becomes `field(string name, uint32 id)`; `beginObject()` becomes
-    `beginObject(usize count)`, mirroring the existing `beginArray(count)`. JSON/KBIN write the name, a
-    numbered backend the id, a positional backend nothing.
-  - Reader: `Deserializer.fieldName() -> string` becomes `field() -> FieldKey`, a prelude enum
-    `Name(string name) | Id(uint32 id)`. JSON/KBIN answer `Name(readStr())`, a numbered reader
-    `Id(readU32())`, a positional reader `Id(counter++)` and `moreFields()` = counter < count. The derived
-    `deserialize` has ONE loop: `match (r.field()) { case Name: compare names … else skipValue; case Id: switch
-    ids … else skipValue }`. A positional reader cannot skip, so a shape mismatch is `Err` — the agreed-shape
-    contract stated honestly. Enum variants get the same pair: name or variant index.
-  - The writer/reader asymmetry is deliberate: a writer is TOLD everything, a reader REPORTS what it found;
-    the enum exists because a reader can only report one of the two and the derive must be told which.
-  - **Who picks the backend: the caller**, exactly as today — the writer or reader handed in, spelled by the
-    entry points (`json::encode`, `binary::encode`, `positional::encode`). Nothing on the type, nothing in
-    the attribute, no capability query on the contract. A type opts in ONCE and works with every backend —
-    SPEC's existing promise, kept.
-  - ⚠️ **Why not a generic `Serializer<K>` / `Serializable<K>` — MEASURED.** A type conforming to
-    `Emit<string>` and `Emit<int32>` at once needs two `emit` bodies differing only in a parameter type, and
-    kama refuses that as overloading ("a member name may be declared only once in its type"). So a generic
-    contract would force a type to pick ONE addressing, breaking the promise above. A `fieldAddressing()`
-    capability query was the earlier proposal and is unnecessary once the key carries both forms.
-  - **`@deprecated` on a `@field` — decided:** read when present, never written; its name and id stay
-    RESERVED, so no later field may take either. In a positional stream it is simply no longer part of the
-    shape (positional has no evolution story, by design). Reserving a name/id AFTER the field is deleted
-    (protobuf's `reserved`) is a later row if anyone asks. `@skip` is unchanged: absent from every backend.
-  **Language inventory:** three member signatures on the two prelude contracts, one prelude enum, one
-  attribute key, `@deprecated`'s meaning. No grammar, no keywords, no new semantics; the derive changes
-  internally. **The source break, measured:** the two backends, `Map`/`SortedMap`'s hand-written entry
-  objects (`map.kama:402-425`, `sorted_map.kama:454-594`), `tests/decode_user_override`,
-  `tests/ser_bin_graph_dangling`, `tests/xfail/deserialize_turbofish_bad_method`; nothing outside the tree
-  implements a backend (the consumer's fixed-layout writer is a hand-written `serialize`). Before the tag.
-  **Order:** the contract row first (M); then the positional backend (S, library — usable even before the
-  contract change with a hand-written `deserialize`, which SPEC already allows); then the numbered backend
-  (S, library, needs nothing further from the contract). KG-34 is answered by the positional row.
+- **Field addressing — SHIPPED `0.9.257`–`0.9.262`.** Where it came from: consumer KG-34 measured a six-field
+  frame at 24 bytes of data and 91 on the wire under KBIN, because every object carries every field NAME. A
+  per-stream name-interning scheme (the `encoding/gob` shape) was BUILT, measured at 226 bytes where 338 was,
+  and **reverted before commit** — kama's serialization sits behind contracts precisely so there can be several
+  serializers, and a size knob on the self-describing one hard-codes one consumer's problem into the stdlib
+  while making KBIN stateful. ⚠️ **Do not re-propose interning.** The size need is answered by the positional
+  back end, which is a different ADDRESSING rather than a cheaper spelling of names.
+  What the language surface now is lives in [SPEC.md](SPEC.md) § *Serialization*; the reasoning is in the git
+  log. Five things worth keeping here because they were learned by BUILDING, against a design that said
+  otherwise:
+  - **A generic `Serializable<K>` cannot exist** (measured): a type conforming to `Emit<string>` and
+    `Emit<int32>` at once needs two `emit` bodies differing only in a parameter type, and kama refuses that as
+    overloading. That is why the key carries every form and the backend keeps the one it is — not a query.
+  - **`FieldKey` needed a third case, `Position(rank)`.** The design said a positional reader answers
+    `Id(counter++)`. It cannot: the derive looks an `Id` up by VALUE and a positional reader never sees one, so
+    `@field(id: 30/20/10)` reported 0,1,2 against a switch labelled 10,20,30 and every field missed. Rank and
+    id value also cannot share a switch — with ids `(5, 1)` the label 1 means slot 0 as an id and slot 1 as a
+    rank. One case per addressing.
+  - **`variant(name, index)` had to join the contract.** The derive spelled a tagged enum's discriminant
+    `writeString(variantName)`, so no addressing change could reach it — the name rode through as the *payload*
+    of the `"tag"` field. The value vocabulary had one member per scalar shape and none for a discriminant.
+  - **`writeSome()` and the reader's `endObject()` likewise.** An `Optional`'s `Some` arm carried no presence
+    marker (a self-describing reader recognises presence by the bytes; a positional one has nothing to look
+    at), and `moreFields` alone cannot tell a counting reader when to pop a frame, because the derive calls it
+    several times on one frame and ignores the result. Without `endObject` a positional reader is not
+    implementable at all.
+  - **`beginObject(count)` is asymmetric with `beginArray(count)` on purpose:** an array's length is RUNTIME
+    data so it goes on the wire and the reader reads it back; an object's field count is COMPILE-TIME shape, so
+    the reader is told instead. A corollary that has to be stated: a positional backend cannot carry a GRAPH,
+    because a table's size and an entry's field count are runtime facts no positional writer states either.
+- **`@bits(n)` per-field bit-packing — NON-GOAL, and now deleted** (it went with the field-addressing row).
+  It was never implemented: its whole body set the "field is marked" flag and it never read its arguments, so
+  `@bits(4)` and `@bits(banana)` were equally accepted, it appeared in no SPEC text, and it was used in zero
+  files — while silently standing in for `@field`. **What answers the need instead:** a packing BACKEND may
+  spend one bit on a `bool` inside its own `writeBool` and flush at `endObject` — that is Cap'n Proto's win, it
+  needs no attribute and no contract member, and it stays available. An author who wants bit-exact integer
+  fields packs them into the smallest integer carrier in their own type, or hand-writes `serialize`. Measured
+  on a `bool`+`uint8`+`uint8` record: hand-packing into a `uint16` costs 2 positional bytes, exactly what
+  `@bits(1)/(3)/(7)` would have cost, against 3 for the natural fields. ⚠️ The carrier must be the SMALLEST
+  that fits — the same record in a `uint32` costs 4, *worse* than not packing. The deciding argument was not
+  size though: `@bits(4)` would mean four bits positionally, a whole byte in KBIN and a JSON number in text —
+  one declaration with a wire form chosen elsewhere and never visible at the declaration, which is a hint, and
+  GOALS favors explicit over implicit. It would also have cost two permanent contract members only one backend
+  could honor.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `encode`/`decode`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
@@ -1456,8 +1420,18 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`encode`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
-- **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
-  emitting a use-site warning. Its own small task.
+- **Serde naming pass (rows 8–9's sibling)** — the TYPE names now say `{Addressing}{Medium}Serializer`
+  (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
+  binary module's entry points each name their addressing, so none owns a bare `encode`. `…Writer`/`…Reader`
+  went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used
+  "Writer" for two unrelated things in one declaration. What is LEFT is the MODULE names, which still mix axes:
+  `json` names a format, `binary` a medium. Renaming a module is a source break, so it lands before the tag or
+  waits for 2.0.
+- **`@deprecated` on a declaration (language, adjacent)** — the field-level meaning SHIPPED with field
+  addressing (read when present, never written; its name and id stay reserved). What is left is the general
+  declaration marker emitting a use-site warning. ⚠️ It must EXTEND the field meaning, not redefine it — which
+  is also why `@deprecated` is deliberately absent from the member-attribute misplacement validator, whose
+  message would otherwise claim the attribute is field-only just before a row makes it general.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)

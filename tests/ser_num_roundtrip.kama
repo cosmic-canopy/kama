@@ -1,11 +1,11 @@
-// The positional backend across the value shapes that exercise its layout rules: every scalar width, a
-// string (u32 LE length + raw UTF-8), a bool (one byte), a nested composite, a collection (u32 LE element
-// count + elements — an array's length IS runtime data, unlike an object's field count), an `Optional`
-// (one presence byte, both ways), and a tagged enum (a varint variant index).
+// The numbered backend across the value shapes that exercise its wire format: every scalar width through
+// zigzag varints (the negatives matter — sign-extension before zigzag is what keeps `int32 -9` at one byte
+// instead of ten), floats through fixed32/fixed64, a length-delimited string, a nested composite and a
+// collection as GROUP_START/GROUP_END subtrees, both `Optional` arms, and a tagged enum.
 import {
     std::collections::DynamicArray,
-    std::serialization::binary::encodePositional,
-    std::serialization::binary::decodePositional,
+    std::serialization::binary::encodeNumbered,
+    std::serialization::binary::decodeNumbered,
 };
 
 @generate(Serializable, Deserializable)
@@ -66,9 +66,9 @@ type resource Rec {
 }
 
 fn int32 main() {
-    Result<DynamicArray<uint8>, Owned<Error>> b = encodePositional(v: Rec.make());
+    Result<DynamicArray<uint8>, Owned<Error>> b = encodeNumbered(v: Rec.make());
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
-    Result<Rec, Owned<Error>> d = decodePositional::<Rec>(src: give bytes);
+    Result<Rec, Owned<Error>> d = decodeNumbered::<Rec>(src: give bytes);
     Rec r = match (give d) { case Ok(value: v): give v; case Err(error: e): { return 251; } };
 
     int32 bad = r.verify();

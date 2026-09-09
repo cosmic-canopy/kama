@@ -1,0 +1,77 @@
+// The two properties the NUMBERED addressing exists for, and that neither of the other two has both of:
+//
+//   1. an UNKNOWN id SKIPS. The key carries a wire type, so a reader can measure a value it has no field
+//      for and step over it. (⚠️ An earlier design note claimed a number scheme "breaks `skipValue`" — this
+//      is the refutation. It is the wire type that makes skipping possible, exactly as in protobuf.) A
+//      POSITIONAL stream cannot do this: with no tag and no length there is nothing to measure.
+//   2. REORDERING survives. A field is found by its number, not by where it sits, so two declarations that
+//      agree on ids but not on order interoperate in both directions.
+//
+// Together those are schema evolution: `V2` adds fields and reorders them, and `V1` still reads its streams.
+import {
+    std::collections::DynamicArray,
+    std::serialization::binary::encodeNumbered,
+    std::serialization::binary::decodeNumbered,
+};
+
+// The old declaration: two fields, ids 0 and 1.
+@generate(Serializable, Deserializable)
+type value V1 {
+    @field(id: 0) public int32 a;
+    @field(id: 1) public int32 b;
+    public ctor make(int32 a, int32 b) { this.a = a; this.b = b; }
+}
+
+// The new one: same ids for the same meanings, DECLARED in a different order, plus fields V1 never heard of
+// — including a string (length-delimited) and a nested object (a group), so the skip has to measure both
+// shapes, not just varints.
+@generate(Serializable, Deserializable)
+type value Extra { @field public int32 p; @field public int32 q;
+    public ctor make(int32 p, int32 q) { this.p = p; this.q = q; } }
+
+@generate(Serializable, Deserializable)
+type resource V2 {                          // a `resource`: it owns a `string`, so its fields are private
+    @field(id: 7) string note;             // unknown to V1, and length-delimited
+    @field(id: 1) int32 b;                 // same id as V1's b, declared FIRST here
+    @field(id: 9) Extra nested;            // unknown to V1, and a whole group
+    @field(id: 0) int32 a;                 // same id as V1's a, declared LAST here
+    @field(id: 5) bool flag;               // unknown to V1, a varint
+    public ctor make(int32 a, int32 b) {
+        this.note = "added later"; this.b = b; this.nested = Extra.make(p: 1, q: 2); this.a = a; this.flag = true;
+    }
+    public const fn int32 ab() { return this.a * 100 + this.b; }
+    public const fn int32 all() { return this.a * 1000 + this.b * 100 + this.nested.p * 10 + this.nested.q; }
+    public const fn bool noteIs(string s) { return this.note.equals(other: s); }
+}
+
+fn int32 main() {
+    // A V2 stream read by the OLD declaration: three unknown ids skip, the two known ones land correctly
+    // even though V2 declared them in the opposite order.
+    Result<DynamicArray<uint8>, Owned<Error>> n = encodeNumbered(v: V2.make(a: 11, b: 22));
+    DynamicArray<uint8> nb = match (give n) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
+    Result<V1, Owned<Error>> old = decodeNumbered::<V1>(src: give nb);
+    int32 ov = match (old) { case Ok(value: q): q.a * 100 + q.b; case Err(error: e): 0 - 1; };
+    if (ov != 1122) { return 251; }
+
+    // and the other direction: a V1 stream read as V2. The ids it does carry land; the rest keep whatever
+    // the decode started them at, which is the honest outcome for a field the wire never mentioned.
+    Result<DynamicArray<uint8>, Owned<Error>> o = encodeNumbered(v: V1.make(a: 33, b: 44));
+    DynamicArray<uint8> ob = match (give o) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
+    Result<V2, Owned<Error>> up = decodeNumbered::<V2>(src: give ob);
+    int32 uv = match (up) { case Ok(value: q): q.ab(); case Err(error: e): 0 - 1; };
+    if (uv != 3344) { return 253; }
+
+    // V2 round-trips itself, with its declared-vs-numbered order disagreeing throughout.
+    Result<DynamicArray<uint8>, Owned<Error>> r = encodeNumbered(v: V2.make(a: 5, b: 6));
+    DynamicArray<uint8> rb = match (give r) { case Ok(value: v): give v; case Err(error: e): { return 254; } };
+    Result<V2, Owned<Error>> back = decodeNumbered::<V2>(src: give rb);
+    int32 bv = match (back) { case Ok(value: q): q.all(); case Err(error: e): 0 - 1; };
+    if (bv != 5612) { return 255; }
+    // the length-delimited field survives its own round trip too
+    Result<DynamicArray<uint8>, Owned<Error>> r2 = encodeNumbered(v: V2.make(a: 5, b: 6));
+    DynamicArray<uint8> rb2 = match (give r2) { case Ok(value: v): give v; case Err(error: e): { return 244; } };
+    Result<V2, Owned<Error>> back2 = decodeNumbered::<V2>(src: give rb2);
+    bool noteOk = match (back2) { case Ok(value: q): q.noteIs(s: "added later"); case Err(error: e): false; };
+    if (!noteOk) { return 245; }
+    return 42;
+}

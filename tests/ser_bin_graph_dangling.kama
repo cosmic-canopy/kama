@@ -1,11 +1,11 @@
-// KBIN graph decode surfaces a DANGLING reference. We hand-drive a BinaryWriter to craft a graph whose only
+// KBIN graph decode surfaces a DANGLING reference. We hand-drive a NamedBinarySerializer to craft a graph whose only
 // entry (id 1, a Pair) references id 2 for both fields, but id 2 is never defined — so the two-pass wire can't
 // resolve it and `decode` returns `DeError::UnresolvedReference` (the specific code, via failWith), not a crash
 // or the generic Malformed. This is the binary analog of the JSON string-edit dangling test. Returns 0.
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
-    std::serialization::binary::BinaryWriter,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
+    std::serialization::binary::NamedBinarySerializer,
     std::collections::DynamicArray,
     std::io::StringWriter,
     std::memory::Shared,
@@ -23,7 +23,7 @@ type resource Pair {
 
 fn int32 main() {
     // Craft {root:1, objects:{ 1:{__type:Pair, a:ref(2), b:ref(2)} }} — id 2 (the Leaf) is MISSING.
-    BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
+    NamedBinarySerializer<StringWriter> w = NamedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
     w.beginGraph(rootId: cast<uint64>(1));
     w.beginTableEntry(id: cast<uint64>(1), ty: "Pair");
     w.field(name: "a", id: 0ui32); w.writeRef(id: cast<uint64>(2));
@@ -32,7 +32,7 @@ fn int32 main() {
     w.endGraph();
     DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();
 
-    Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: give bytes);
+    Result<Shared<Pair>, Owned<Error>> res = decodeNamed::<Shared<Pair>>(src: give bytes);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {

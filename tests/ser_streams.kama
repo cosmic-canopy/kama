@@ -1,14 +1,14 @@
 // std::io streams M2 — the JSON serde backend now rides the streaming byte substrate. Exercises:
-//   (a) `encode` still returns the byte-identical string (JsonWriter<StringWriter>);
+//   (a) `encode` still returns the byte-identical string (JsonSerializer<StringWriter>);
 //   (b) `encodeTo` streams into an owned sink — a bare StringWriter AND a BufWriter<StringWriter> —
 //       proving the generic writer instantiates over distinct W monomorphs and the flush path drains.
-//       (encodeTo shares JsonWriter's exact byte path with encode, verified byte-exact by (a).)
-//   (c) `decodeFrom` over a SliceReader round-trips through readAll + pump + JsonReader.
+//       (encodeTo shares JsonSerializer's exact byte path with encode, verified byte-exact by (a).)
+//   (c) `decodeFrom` over a SliceReader round-trips through readAll + pump + JsonDeserializer.
 // A free fn takes a `Serializable` as a second-class borrow, so `r` stays usable across calls. Returns 0.
 import {
     std::serialization::json::encode,
     std::serialization::json::decodeFrom,
-    std::serialization::json::JsonWriter,
+    std::serialization::json::JsonSerializer,
     std::io::Writer,
     std::io::Reader,
     std::io::StringWriter,
@@ -35,12 +35,12 @@ fn int32 main() {
     string j = match (give ja) { case Ok(value: s): give s; case Err(error: e): { return 10; } };
     if (!(j == "{\"id\":7,\"name\":\"hi\",\"ok\":true}")) { return 11; }
 
-    // (b) streaming path: build a JsonWriter over two different owned sinks and drive encodeValue on each
+    // (b) streaming path: build a JsonSerializer over two different owned sinks and drive encodeValue on each
     //     (proves the generic writer instantiates over distinct W monomorphs + the flush path drains).
-    JsonWriter<StringWriter> w1 = JsonWriter::<StringWriter>.make(sink: StringWriter.make());
+    JsonSerializer<StringWriter> w1 = JsonSerializer::<StringWriter>.make(sink: StringWriter.make());
     Result<Unit, Owned<Error>> e1 = w1.encodeValue(v: r);
     match (give e1) { case Ok(value: _): {} case Err(error: e): { return 12; } };
-    JsonWriter<BufWriter<StringWriter>> w2 = JsonWriter::<BufWriter<StringWriter>>.make(sink: BufWriter::<StringWriter>.make(inner: StringWriter.make()));
+    JsonSerializer<BufWriter<StringWriter>> w2 = JsonSerializer::<BufWriter<StringWriter>>.make(sink: BufWriter::<StringWriter>.make(inner: StringWriter.make()));
     Result<Unit, Owned<Error>> e2 = w2.encodeValue(v: r);
     match (give e2) { case Ok(value: _): {} case Err(error: e): { return 13; } };
 

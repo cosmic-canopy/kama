@@ -64,7 +64,7 @@ type value Metadata {
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
-// (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonWriter::<File>` / `decodeFrom`).
+// (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonSerializer::<File>` / `decodeFrom`).
 type resource File implements Reader, Writer {
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0

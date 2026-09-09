@@ -1,16 +1,16 @@
 // KBIN round-trip of a Map<K,V> (an array of key/value pair objects). Returns 22.
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
     std::collections::Map,
     std::collections::DynamicArray,
 };
 fn int32 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: m);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encodeNamed(v: m);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<Map<string, int32>, Owned<Error>> res = decode::<Map<string, int32>>(src: give bytes);
+    Result<Map<string, int32>, Owned<Error>> res = decodeNamed::<Map<string, int32>>(src: give bytes);
     return match (res) {
         case Ok(value: b): cast<int32>(b.length()) * 10 + (match (b.get(key: "b")) { case Some(value: x): x; case None: 0; });   // 22
         case Err(error: e): 0 - 1;

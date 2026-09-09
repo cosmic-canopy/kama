@@ -3,8 +3,8 @@
 // correct concrete behind each contract edge and re-forms the fat handle — proven by a byte-identical re-encode
 // AND by dynamic dispatch (area()) surviving the trip. ASan proves each concrete frees once. Returns 55.
 import {
-    std::serialization::binary::encode,
-    std::serialization::binary::decode,
+    std::serialization::binary::encodeNamed,
+    std::serialization::binary::decodeNamed,
     std::collections::DynamicArray,
     std::memory::Shared,
 };
@@ -53,13 +53,13 @@ fn int32 main() {
     Shared<Circle> ci = new Circle.make(r: 2);
     Shared<Shape> sb = ci;
     Scene sc = Scene.make(a: give sa, b: give sb);
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: sc);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encodeNamed(v: sc);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: clone(src: ref b1));
+    Result<Shared<Scene>, Owned<Error>> res = decodeNamed::<Shared<Scene>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encodeNamed(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             if (!bytesEqual(a: ref b1, b: ref b2)) { return 40; }
             if (sh.areaA() != 16) { return 41; }   // Sq: 4*4

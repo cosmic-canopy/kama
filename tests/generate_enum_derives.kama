@@ -10,7 +10,7 @@
 // Two consumer bugs live here too, both filed against a derived `type enum` and both the same shape —
 // the derive doing its work without registering what the work needs:
 //   KB-18  a derived enum could not be passed to anything taking the `Serializable` EXISTENTIAL
-//          (`binary::encode(v:)` is exactly that), because the conformance was registered "static only"
+//          (`binary::encodeNamed(v:)` is exactly that), because the conformance was registered "static only"
 //          and the `<Enum>__as_Serializable` vtbl the boxing referenced was therefore never emitted.
 //          It failed in clang, naming a mangled symbol. Neither `ser_bin_enum` nor `ser_enum_coll`
 //          caught it: both wrap the enum in a value or a collection, which reaches `.serialize()`
@@ -19,7 +19,7 @@
 //          without. `NoUnit` below is the all-payload half of that (the all-unit half is a payload-less
 //          enum, which could not carry `@generate` at all; see generate_plain_enum).
 import { std::collections::Map, std::collections::DynamicArray,
-         std::serialization::json::decode, std::serialization::binary::encode };
+         std::serialization::json::decode, std::serialization::binary::encodeNamed };
 
 @generate(Formattable, Equatable, Hashable)
 type enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Nil }
@@ -55,10 +55,10 @@ fn int32 main() {
     int32 nil = match (m.get(key: c)) { case Some(value: v): v; case None: 0; };
     n = n + hit + nil;                               // 7 + 9
 
-    // KB-18: the BARE enum through the `Serializable` existential — `encode(v:)` takes the contract, so
+    // KB-18: the BARE enum through the `Serializable` existential — `encodeNamed(v:)` takes the contract, so
     // this boxes the value and dispatches through `NoUnit__as_Serializable`. Not a field, not an element.
     NoUnit one = NoUnit::A(x: 1);
-    Result<DynamicArray<uint8>, Owned<Error>> enc = encode(v: one);
+    Result<DynamicArray<uint8>, Owned<Error>> enc = encodeNamed(v: one);
     int32 bytes = match (enc) { case Ok(value: bs): cast<int32>(bs.length()); case Err(error: e3): 0 - 50; };
     if (bytes <= 0) { return 94; }
 
