@@ -1362,10 +1362,30 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   ✅ The enum half of this bullet SHIPPED with the derives: a bare `encode`/`decode` of an enum value works
   (consumer KB-18 — it was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
   generic enums, per instantiation. See *Derive follow-ons* in §2.
-- **Binary backend follow-on.** `@bits(n)` bit-packing (tighter integers/bools) stays **deferred**.
-  Delta/snapshot replication stays ENGINE-level (above serde); generic byte compression is an io-adapter
-  layer (§1 transform adapters), not a serde concern. The schema-locked positional mode is no longer
-  deferred: it is the *Positional binary backend* row, built on the design below.
+- **Binary backend follow-on.** Delta/snapshot replication stays ENGINE-level (above serde); generic byte
+  compression is an io-adapter layer (§1 transform adapters), not a serde concern. The schema-locked
+  positional mode is no longer deferred: it is the *Positional binary backend* row, built on the design below.
+- **`@bits(n)` per-field bit-packing — NON-GOAL, decided 2026-09-08.** It was never implemented: the name
+  entered the attribute list in `ce8fa66` (a commit about attribute *prefix* parsing) and its whole body is
+  `else if (an == "bits") { fMarked = true; }` — it never reads its arguments, so `@bits(4)` and
+  `@bits(banana)` are equally accepted, it appears in no SPEC text, and it is used in zero files. It also
+  sets the "field is marked" flag, so it silently stands in for `@field` under `@generate`. **The attribute
+  is deleted** (its parse arm and its mention in the member-attribute validator) as part of the *Field
+  addressing* row, which rewrites that loop.
+  **What answers the need instead**, which is the whole reason it is a non-goal rather than a deferral:
+  a packing BACKEND may spend one bit on a `bool` inside its own `writeBool` and flush at `endObject` —
+  that is Cap'n Proto's win, it needs no attribute and no contract member, and it stays available. An
+  author who wants bit-exact integer fields packs them into the smallest integer carrier in their own type
+  (shifts in a `ctor`, accessors reading back out) or hand-writes `serialize`, which SPEC already lets win
+  over the derive. Measured on a `bool`+`uint8`+`uint8` record: hand-packing into a `uint16` costs **2**
+  positional bytes, exactly what `@bits(1)/(3)/(7)` would have cost, against **3** for the natural fields —
+  so the attribute buys nothing a carrier does not. ⚠️ The carrier must be the SMALLEST that fits: the same
+  record packed into a `uint32` costs 4, *worse* than not packing.
+  The deciding argument is not size, though: `@bits(4)` would mean four bits positionally, a whole byte in
+  KBIN and a JSON number in text — one declaration with a wire form chosen by someone else and never
+  visible at the declaration. That is a hint, and GOALS favors explicit over implicit. A packed carrier is
+  the same integer to every backend. Keeping it would also have cost two permanent contract members
+  (`writeBits`/`readBits`) that only one backend could honor, plus a per-field overflow-trap obligation.
 
 - **Field addressing — the design, decided 2026-09-08 (three NOW rows: the contract change, then the
   positional and numbered backends).** Where it came from: consumer KG-34 measured a six-field frame at
