@@ -1,0 +1,15 @@
+// A `friend` grant on a contract grants nothing: a contract is a PUBLIC interface, so it has no private
+// member to open — every method satisfying one must be `public`. It used to PARSE and be silently dropped
+// (`collectClasses` reads friend grants, `collectInterfaces` never did), so a non-granted caller still
+// reached the member and a grant naming a function that does not exist was accepted — while the same typo
+// on a TYPE is caught by `friend_unknown`. Accepted-and-inert surface that reads as protection.
+type contract Tok for resource {
+    fn void begin();
+    friend driver[begin];
+}
+type resource Impl implements Tok {
+    public ctor make() { }
+    public fn void begin() { }
+}
+fn void driver(ref Tok t) { t.begin(); }
+fn int32 main() { Impl i = Impl.make(); return 0; }

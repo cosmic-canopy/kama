@@ -2576,7 +2576,11 @@ private:
     void noteTypeIdentityOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
                                   const char* opName, int line);
     std::string idTypeName(const std::string& ct);       // the name a diagnostic gives an identity-bearing type
-    bool classDeclaresContract(const std::string& cls, const std::string& itf);   // itf on `cls` or any base
+    bool classDeclaresContract(const std::string& cls, const std::string& itf);
+    // Contracts a class needs a `C__as_I` vtable for — its own plus every one reached through a base — and
+    // whether an inherited one was declared static-only by whichever class in the chain declared it.
+    std::vector<std::string> contractsToEmitFor(const ClassInfo& ci) const;
+    bool contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& itf) const;   // itf on `cls` or any base
     bool valueReachesContract(SharedExpression e, const std::string& c, const std::string& itf);
     // A concrete value bound to a contract it does not implement. One-sided: silent unless certain.
     void rejectContractNonConformance(const std::string& itf, SharedExpression value,

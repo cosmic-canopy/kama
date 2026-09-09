@@ -1,0 +1,47 @@
+import { std::collections::DynamicArray };
+// A generic type parameter inferred from a DOT-ON-TYPE ctor call used as an argument. Construction is the
+// only way a type is made in kama, so `f(to: Sink.make())` is an everyday shape — but the receiver of a
+// dot-on-type ctor is a TYPE, not a value, so the method-call arm of `exprTypeNode` found no receiver type
+// and inference gave up: "cannot infer generic type parameter 'W' — argument 'to' is not a literal or a
+// locally-typed value". The workaround was a named local for a value used once.
+//
+// Covers both ctor shapes, since they answer differently: an infallible ctor types as the type it builds,
+// a fallible one as its declared `Result<…>`.
+// OWNS a heap buffer on purpose: a temporary passed to an owning by-value parameter must be dropped
+// exactly once, and the sanitizer leg is what proves it. (Passing by value MOVES whether or not `give` is
+// written — a named local is marked moved-from and use-after is refused — so inferring `W` from a temporary
+// is not a way around the ownership model, it is the same move with no name to leave behind.)
+type resource Sink {
+    DynamicArray<uint8> buf;
+    public ctor make() { this.buf = DynamicArray.empty(); }
+    public unsafe fn void add(uint8 b) { this.buf.add(item: b); }
+    public const fn isize value() { return this.buf.length(); }
+}
+type value Gauge {
+    public int32 v;
+    public ctor of(int32 v) { this.v = v; }
+    public ctor Result<Gauge, DeError> checked(int32 v) {
+        if (v < 0) { return Result::Err(error: DeError::Malformed); }
+        return Result::Ok(value: Gauge.of(v: v));
+    }
+}
+
+fn int32 takesSink<W>(W to) { return 1; }   // consumes `to`; its drop runs here
+fn int32 takesGauge<T>(T g) { return 2; }
+
+fn int32 main() {
+    // infallible ctor as an argument -> W = Sink
+    int32 a = takesSink::<Sink>(to: Sink.make());     // explicit, the control
+    int32 b = takesSink(to: Sink.make());             // INFERRED — this is what was refused
+    if (a != 1 || b != 1) { return 1; }
+
+    // a fallible ctor types as its Result, so inference binds that
+    Result<Gauge, DeError> r = Gauge.checked(v: 3);
+    int32 c = takesGauge(g: give r);
+    if (c != 2) { return 2; }
+
+    // and an infallible one on a `value` type
+    int32 d = takesGauge(g: Gauge.of(v: 9));
+    if (d != 2) { return 3; }
+    return 42;
+}

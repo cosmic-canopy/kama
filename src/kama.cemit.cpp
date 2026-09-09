@@ -8017,6 +8017,20 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m->line);
                 } else if (dynamic_cast<ClassConstructorDeclarationNode*>(m.get()) || dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
                     unsupported(("a `contract` has no constructor/destructor — `" + ii.name + "` is a guarantee").c_str(), m->line);
+                } else if (dynamic_cast<FriendGrantNode*>(m.get())) {
+                    // A `friend` grant opens a PRIVATE member to a named accessor, and a contract has no
+                    // private members: every method satisfying one must be `public` (see the conformance
+                    // check in emitClassInterfaceVtables). So the grant had nothing to widen.
+                    //
+                    // It parsed and was then silently dropped — `collectClasses` reads `friendGrantsRaw`,
+                    // `collectInterfaces` never did — so a non-granted caller still reached the member and
+                    // `friend nameThatDoesNotExist[m]` was accepted, while the same typo on a TYPE is caught
+                    // (tests/xfail/friend_unknown). Accepted-and-inert surface that reads as protection is
+                    // worse than no surface: refuse it and say where the mechanism does live.
+                    unsupported(("`friend` on `contract " + ii.name + "` grants nothing — a contract is a "
+                                 "PUBLIC interface, so it has no private member to open. For a hidden "
+                                 "member with named access, put it on a `type` (a `virtual`/`abstract` one "
+                                 "if it needs `protected`) and grant there").c_str(), m->line);
                 }
             }
         // a generic CONTRACT template (`type contract Iterator<T>`) is kept OUT of _interfaces — its
@@ -11960,6 +11974,20 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     // (`log(x: exp(x: 1.0))`). Only for a non-generic callee: a generic one returns its own `T`, which is
     // exactly the thing not yet known here, so it is left to the "bind it to a local" rule.
     if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
+        // A DOT-ON-TYPE ctor call (`StringWriter.make()`) types as the type it constructs — or as the
+        // ctor's declared `Result<…>` when it is fallible. Checked before the method-call arm because the
+        // receiver here is a TYPE, not a value, so `mintReturnTypeNode` finds no receiver type and gives
+        // up: `f(to: StringWriter.make())` reported "not a literal or a locally-typed value" and demanded
+        // `StringWriter w = StringWriter.make(); f(to: give w);` — a named local for a value used once.
+        // Construction is the ONLY way a type is made in kama, so this is the shape a generic sink
+        // parameter meets constantly (`serializeBinaryPositionalStream<W: Writer>(v:, to:)`).
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
+            std::string dt;
+            if (ma->identifier && ma->identifier->value && isTypeReceiver(ma, dt) && _classes.count(dt)) {
+                if (CtorInfo* ct = _classes[dt].ctorByName(*ma->identifier->value))
+                    return ct->returnType ? ct->returnType : synthId(dt);
+            }
+        }
         // A METHOD call on a typed receiver: the method's declared return type, with the host's generic
         // arguments substituted — `xs.length()` on a `DynamicArray<int32>` is an `isize`. mintReturnTypeNode
         // already answers this for a `borrow` alias; a generic call's argument is the same question
@@ -23327,12 +23355,11 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 // methods to the class's matching methods (cast to the type-erased slot signature).
 void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 {
-    for (auto& ifn : ci.interfaces) {
+    for (auto& ifn : contractsToEmitFor(ci)) {
         // An impl-block conformance dispatches statically (monomorphized) — no fat-pointer vtable.
         // EXCEPTION (Model C): a poly-DISPATCH contract (base `Error`, an enum-implemented contract) DOES
         // get a `<Impl>__as_<C>` vtbl even then, so an enum can be dispatched dynamically + boxed.
-        bool staticOnly = false;
-        for (auto& r : ci.staticOnlyInterfaces) if (r == ifn) { staticOnly = true; break; }
+        bool staticOnly = contractIsStaticOnlyFor(ci, ifn);
         if (staticOnly && !isPolyDispatchContract(ifn)) continue;
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.declLine()); continue; }
@@ -23440,6 +23467,43 @@ bool CEmitter::classDeclaresContract(const std::string& cls, const std::string& 
     if (it == _classes.end()) return false;
     for (ClassInfo* k = &it->second; k; k = k->base)
         for (auto& ifn : k->interfaces) if (ifn == itf) return true;
+    return false;
+}
+
+// Every contract a class must emit a `C__as_I` vtable for: the ones it declares, PLUS the ones it reaches
+// through a base. Both emission sites (the forward decls and the definitions) used to walk `ci.interfaces`
+// alone, while the CHECKER accepted a conformance declared further up (that is what `classDeclaresContract`
+// is for) — so `Derived d; Contract c = d;` passed analysis and then handed clang a reference to
+// `Derived__as_Contract`, which nothing ever defined.
+//
+// A per-DERIVED vtable rather than reusing the base's, for a reason the layout hides: the `__dtor` slot must
+// be the CONCRETE destructor, or dropping the contract handle would slice a derived object. (The methods
+// themselves are safe to inherit — a contract member must be `public` and an overridable one must be
+// `protected`, so a conformance can never be overridden and the base's implementation is always the right
+// one. `__base` sits at offset 0, so the erased `void* self` reaches it unchanged.)
+std::vector<std::string> CEmitter::contractsToEmitFor(const ClassInfo& ci) const
+{
+    std::vector<std::string> out(ci.interfaces.begin(), ci.interfaces.end());
+    for (const ClassInfo* k = ci.base; k; k = k->base)
+        for (auto& ifn : k->interfaces) {
+            bool seen = false;
+            for (auto& have : out) if (have == ifn) { seen = true; break; }
+            if (!seen) out.push_back(ifn);
+        }
+    return out;
+}
+
+// `staticOnlyInterfaces` is per-class too, so an inherited conformance must be judged against whichever
+// class in the chain actually declared it.
+bool CEmitter::contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& itf) const
+{
+    for (const ClassInfo* k = &ci; k; k = k->base) {
+        bool declaredHere = false;
+        for (auto& ifn : k->interfaces) if (ifn == itf) { declaredHere = true; break; }
+        if (!declaredHere) continue;
+        for (auto& r : k->staticOnlyInterfaces) if (r == itf) return true;
+        return false;
+    }
     return false;
 }
 
@@ -28868,9 +28932,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->isIntrinsicColl || ci->isExternStruct) continue;
         if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
         if (_preludeEnums.count(ci->name)) continue;   // a promoted prelude enum's vtbl is header-static (emitted below), no extern
-        for (auto& ifn : ci->interfaces) {
-            bool staticOnly = false;
-            for (auto& r : ci->staticOnlyInterfaces) if (r == ifn) { staticOnly = true; break; }
+        for (auto& ifn : contractsToEmitFor(*ci)) {
+            bool staticOnly = contractIsStaticOnlyFor(*ci, ifn);
             if (staticOnly && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end()) continue;

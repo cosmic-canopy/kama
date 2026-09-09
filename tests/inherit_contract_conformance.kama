@@ -1,0 +1,50 @@
+// A contract declared on a BASE and reached through a DERIVED type. The corpus had no fixture combining
+// `extends` with `implements` at all, which is why this was broken: `kama check` accepted it (the checker
+// walks the base chain — that is what `classDeclaresContract` is for) while the emitter wrote vtables from
+// `ci.interfaces` alone, so the generated C referenced a `Derived__as_Contract` nothing defined.
+//
+// Proves, in one program: analysis and emission agree; the base's implementation serves a derived instance
+// (a contract member must be `public` and an overridable one `protected`, so a conformance can NEVER be
+// overridden — the base's body is always the right one); a protected `abstract` seam still dispatches to the
+// derived override underneath it; and DESTRUCTION through the contract handle runs the CONCRETE destructor,
+// which is why each derived type needs its own vtable rather than borrowing the base's.
+type contract Reportable for resource { fn int32 report(); }
+
+type abstract(maxDepth: 1) resource Sensor implements Reportable {
+    int32 calls;
+    public ctor make() { this.calls = 0; }
+    // The contract's member: public, therefore final. It funnels through a protected seam the subclass fills.
+    public fn int32 report() { this.calls = this.calls + 1; return this.reading() * 10 + this.calls; }
+    protected abstract fn int32 reading();
+}
+
+type final resource Thermo extends Sensor {
+    public ctor make() { this.base = Sensor.make(); }
+    protected override fn int32 reading() { return 4; }
+}
+
+type final resource Baro extends Sensor {
+    public ctor make() { this.base = Sensor.make(); }
+    protected override fn int32 reading() { return 7; }
+}
+
+// Dispatch through the contract, not the base — this is the binding that used to fail to compile.
+fn int32 viaContract(ref Reportable r) { return r.report(); }
+
+fn int32 main() {
+    Thermo t = Thermo.make();
+    Baro b = Baro.make();
+
+    Reportable rt = t;
+    Reportable rb = b;
+    int32 a = viaContract(r: ref rt);      // 4*10 + 1 = 41
+    int32 c = viaContract(r: ref rb);      // 7*10 + 1 = 71
+    if (a != 41) { return 1; }
+    if (c != 71) { return 2; }
+
+    // the seam is per-derived, and the base's counter is per-object
+    int32 again = viaContract(r: ref rt);  // 4*10 + 2 = 42
+    if (again != 42) { return 3; }
+
+    return 42;
+}
