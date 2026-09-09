@@ -97,7 +97,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     }
 
     // --- Serializer contract ---
-    public fn void beginObject() { this.byte(b: 16ui8); }
+    public fn void beginObject(usize count) { this.byte(b: 16ui8); }   // self-delimiting; count unused
     public fn void endObject()   { this.byte(b: 17ui8); }
     public fn void beginArray(usize count) { this.byte(b: 18ui8); }   // self-delimiting; count unused
     public fn void endArray()    { this.byte(b: 19ui8); }
@@ -194,7 +194,7 @@ type resource BinaryReader implements Deserializer {
     }
 
     // --- structural (Deserializer) ---
-    public fn void beginObject() { this.expectTag(t: 16ui8); }
+    public fn void beginObject(usize count) { this.expectTag(t: 16ui8); }   // self-delimiting; count unused
     public fn void beginArray()  { this.expectTag(t: 18ui8); }
     public fn bool moreFields() {
         if (this.err) { return false; }
@@ -247,7 +247,7 @@ type resource BinaryReader implements Deserializer {
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8 || t == 22ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
         else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
-        else if (t == 16ui8) { while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
+        else if (t == 16ui8) { while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }   // the 0x10 was already consumed as `t`
         else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }
     }

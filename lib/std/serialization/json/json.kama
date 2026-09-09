@@ -134,7 +134,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
     }
 
     // --- Serializer contract ---
-    public fn void beginObject() { this.sep(); this.byte(b: 123ui8); this.needComma = false; }   // {
+    public fn void beginObject(usize count) { this.sep(); this.byte(b: 123ui8); this.needComma = false; }   // { — count unused (self-delimiting)
     public fn void endObject()   { this.byte(b: 125ui8); this.needComma = true; }                // }
     public fn void beginArray(usize count) { this.sep(); this.byte(b: 91ui8); this.needComma = false; }  // [
     public fn void endArray()    { this.byte(b: 93ui8); this.needComma = true; }                 // ]
@@ -291,7 +291,7 @@ type resource JsonReader implements Deserializer {
     }
 
     // --- structural (Deserializer) ---
-    public fn void beginObject() { this.expect(b: 123ui8); }   // {
+    public fn void beginObject(usize count) { this.expect(b: 123ui8); }   // { — count unused (self-delimiting)
     public fn void beginArray()  { this.expect(b: 91ui8); }    // [
     public fn bool moreFields() {
         if (this.err) { return false; }   // sticky failure: stop iterating (else a malformed byte loops forever)
@@ -520,7 +520,7 @@ type resource JsonReader implements Deserializer {
     public fn void skipValue() {
         this.skipWs();
         uint8 c = this.peek();
-        if (c == 123ui8) { this.beginObject(); while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
+        if (c == 123ui8) { this.beginObject(count: 0); while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
         else if (c == 91ui8) { this.beginArray(); while (this.moreElems()) { this.skipValue(); } }
         else if (c == 34ui8) { string s = this.readString(); }
         else if (c == 116ui8) { bool b = this.readBool(); }
@@ -535,7 +535,7 @@ type resource JsonReader implements Deserializer {
     // Consume `{"root":<id>,"objects":`, leaving the cursor at the objects table's `{`. Bookmark that spot
     // (`objMark`) so `rewindGraph` can re-enter the table for the second (wire) pass. Returns the root id.
     public fn uint64 beginGraph() {
-        this.beginObject();                       // {
+        this.beginObject(count: 2);               // { — "root" and "objects"
         string k0 = this.fieldName();             // "root":
         uint64 root = this.readUint();
         bool more = this.moreFields();            // ,

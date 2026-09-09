@@ -24,7 +24,7 @@ type value Line {
     public ctor Result<Line, Owned<Error>> deserialize(Deserializer r) {
         Point s = Point.make(x: 0, y: 0);
         Point e = Point.make(x: 0, y: 0);
-        r.beginObject();
+        r.beginObject(count: 2);
         while (r.moreFields()) {
             string key = r.fieldName();
             Result<Point, Owned<Error>> __pr = Point.deserialize(r: r);

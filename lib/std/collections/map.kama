@@ -399,7 +399,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         while (i < this.cap) {
             uint8 s = this.state[i];
             if (s == 1ui8) {
-                w.beginObject();
+                w.beginObject(count: 2);
                 w.fieldName(name: "key");
                 Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
                 match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
@@ -418,7 +418,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>] {
         r.beginArray();
         while (r.moreElems()) {
-            r.beginObject();
+            r.beginObject(count: 2);
             bool __f1 = r.moreFields(); string __n1 = r.fieldName();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };

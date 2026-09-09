@@ -271,7 +271,17 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // or a custom serializer hand-writes. Per-width scalar methods let a binary backend pack tight while text
 // backends widen. Declaration-only — zero cost unless a program actually serializes.
 type contract Serializer for resource {
-    fn void beginObject(); fn void endObject(); fn void fieldName(string name);
+    // `count` is how many fields follow, or 0 when the shape is not statically known (an enum's outer
+    // `{tag, value}` frame before the tag is read; a graph's object table, whose size is runtime data).
+    // A self-describing backend IGNORES it — JSON closes on `}` and KBIN on its end tag — but a POSITIONAL
+    // one has no delimiters and nothing else to bound a read with.
+    //
+    // ⚠️ Deliberately asymmetric with `beginArray(count)`, whose reader takes NO count, and the reason is
+    // worth keeping: an array's length is RUNTIME data, so it goes on the wire and the reader reads it
+    // back; an object's field count is COMPILE-TIME shape, so putting it on the wire would pay for
+    // something both sides already know. Hence the reader is told instead. (It also means a positional
+    // backend cannot carry a graph: the writer never states a table entry's field count.)
+    fn void beginObject(usize count); fn void endObject(); fn void fieldName(string name);
     // FIELD ADDRESSING. A key carries BOTH forms and the backend keeps the one it is: a named backend
     // (JSON/KBIN) writes `name`, a numbered one writes `id`, a positional one writes neither and relies on
     // order. `id` defaults to the field's declaration index and an author may override it with a stable,
@@ -345,7 +355,10 @@ type enum DeError implements Error, Sendable {
 // resolve the key to a slot by name OR by id, and read that field.
 type enum FieldKey { Name(string name), Id(uint32 id) }
 type contract Deserializer for resource {
-    fn void beginObject(); fn bool moreFields(); fn string fieldName();
+    // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
+    // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why
+    // `beginArray()` below stays count-less.
+    fn void beginObject(usize count); fn bool moreFields(); fn string fieldName();
     // The read twin of `Serializer.field`/`variant`. JSON and KBIN answer `Name(readString())`; a numbered
     // reader answers `Id(readU32())`; a positional reader answers `Id(counter++)`, since its shape is
     // agreed in advance rather than described on the wire.

@@ -11,7 +11,7 @@ type value Bad {
     @field int32 v;
     public ctor make(int32 v) { this.v = v; }
     public ctor Result<Bad, Owned<Error>> deserialize(Deserializer r) {
-        r.beginObject();
+        r.beginObject(count: 1);
         r.moreFields();
         string k = r.fieldName();
         int32 v = r.readI32::<int32>();   // ERROR: a method takes no type arguments

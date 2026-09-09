@@ -24249,8 +24249,9 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     std::string resC = cType(ci.methods["serialize"].returnType);
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
-    indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
-    for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
+    std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
+    indent(1); *_out << "w->vtbl->beginObject(w->obj, " << wf.size() << ");\n";
+    for (const FieldInfo* fp : wf) {
         const FieldInfo& f = *fp;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", "
@@ -24520,7 +24521,10 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // the write side). An unknown key falls to `skipValue`, which is what keeps a named stream
     // forward-compatible.
     std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
-    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    // ⚠️ The count is the WRITE-visible one. It describes what a writer PUT on the wire, so a
+    // `@deprecated` field — read when present, never written — must not be counted, or a positional
+    // reader expects one field too many and runs off the end of the record.
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
@@ -24577,7 +24581,17 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
         *_out << "}\n\n";
         return;
     }
-    indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
+    // The outer frame is `{tag}` or `{tag, value}`, so its field count is VARIANT-dependent — and
+    // `beginObject` has to run before the `switch`, since a backend may need the frame open before any key.
+    // Compute the count in its own switch rather than moving `beginObject` into the arms: the `default:
+    // break` below would then reach `endObject` with no matching begin, and JSON would emit a stray `}`.
+    indent(1); *_out << "size_t __n = 1;\n";
+    indent(1); *_out << "switch (self->tag) {\n";
+    for (auto& v : ci.variants)
+        if (!v.payload.empty()) { indent(2); *_out << "case " << ci.name << "_" << v.name << ": __n = 2; break;\n"; }
+    indent(2); *_out << "default: break;\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "w->vtbl->beginObject(w->obj, __n);\n";
     indent(1); *_out << "switch (self->tag) {\n";
     // The externally-tagged framing keys are addressed like any other key: "tag" is id 0 and "value" is
     // id 1. They cannot collide with a payload field's id because a payload is a NESTED object with its
@@ -24593,7 +24607,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
         indent(2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
         if (!v.payload.empty()) {
             indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 1u);\n";
-            indent(2); *_out << "w->vtbl->beginObject(w->obj);\n";
+            indent(2); *_out << "w->vtbl->beginObject(w->obj, " << v.payload.size() << ");\n";
             for (size_t pi = 0; pi < v.payload.size(); ++pi) {
                 auto& f = v.payload[pi];
                 // A payload field carries no attributes (the grammar gives a variant payload no slot for
@@ -24657,7 +24671,9 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
                             "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
     };
-    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    // 0 = "not statically known": which variant follows — and so whether the frame is `{tag}` or
+    // `{tag, value}` — is only known once the tag is read, and the tag is INSIDE this object.
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
     // The framing keys are read POSITIONALLY and discarded — the shape `{tag, value}` is fixed, so there is
     // nothing to dispatch on. Only the selector and the payload fields carry information.
@@ -24670,7 +24686,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         if (!v.payload.empty()) {
             indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
             indent(2); *_out << "FieldKey __kv = r.vtbl->field(r.obj); FieldKey__dtor(&__kv);\n";   // the "value" key
-            indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+            indent(2); *_out << "r.vtbl->beginObject(r.obj, " << v.payload.size() << ");\n";
             // an early Err while reading payload field i must free __tag + drop the already-read temps.
             std::string cleanup = "FieldKey__dtor(&__tag); ";
             for (size_t i = 0; i < v.payload.size(); ++i) {
@@ -25358,10 +25374,16 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     for (auto& K : _graphNodeOrder) { indent(1); *_out << "struct kama_de_arena __arena_" << K << "; kama_de_arena_init(&__arena_" << K << ");\n"; }
     indent(1); *_out << "uint64_t __root = r.vtbl->beginGraph(r.obj);\n";
     // PASS 1 — alloc + register
-    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    // Both counts are 0 = "not statically known", and neither can ever be otherwise: the objects TABLE is
+    // keyed by however many nodes the graph happens to hold (runtime data), and an ENTRY's field count
+    // depends on its `__type`, which is the first thing inside it. This is precisely why a positional
+    // backend cannot carry a graph — the writer never states an entry's field count either (it frames with
+    // `beginTableEntry`). Graph mode is a self-describing-format feature, and a positional reader given 0
+    // fails rather than misreading.
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
-    indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
     indent(2); *_out << "FieldKey __tk = r.vtbl->field(r.obj); FieldKey__dtor(&__tk);\n";
     indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
     bool f1 = true;
@@ -25376,10 +25398,11 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "}\n";
     // PASS 2 — wire
     indent(1); *_out << "r.vtbl->rewindGraph(r.obj);\n";
-    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    // 0 = not statically known, as in pass 1 above.
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
-    indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
     indent(2); *_out << "FieldKey __tk = r.vtbl->field(r.obj); FieldKey__dtor(&__tk);\n";
     indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
     bool f2 = true;
