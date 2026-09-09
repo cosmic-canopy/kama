@@ -176,9 +176,18 @@ struct FieldInfo {
     // A field's type is a fact about its class, never about whoever reads it — see bakeFieldCTypes.
     // Sibling of ParamSig::className and ClassInfo::tagCType, which bake the same kind of answer.
     std::string      cTypeBaked;
-    // Serialization metadata (from `@field`/`@skip` on a `@generate`d type; see collectClasses).
+    // Serialization metadata (from `@field`/`@skip`/`@deprecated` on a `@generate`d type; see collectClasses).
     bool             serSkip = false;   // `@skip` — omit from serialization
     std::string      serName;           // wire name (`@field(name: "…")`; empty => use `name`)
+    // Wire id (`@field(id: N)`). -1 = defaulted, and the default is the field's index in `ClassInfo::fields`
+    // — ALL of them, `@skip`ped and `@deprecated` included. Indexing among only the serialized fields would
+    // renumber every later field the moment a `@skip` was inserted, which is the exact silent wire break
+    // ids exist to prevent. Gaps are harmless: a positional backend uses rank in the emitted sequence, a
+    // numbered one uses this value.
+    int              serId = -1;
+    // `@deprecated` — read when present, never written. Its name and id stay RESERVED (it still takes part
+    // in duplicate detection, which is the whole of that guarantee).
+    bool             serDeprecated = false;
 };
 
 // One case of a discriminated-union `enum` (tagged union). `name` is the variant, `payload`
@@ -2268,6 +2277,30 @@ private:
     bool fieldTypeDeeplyImmutable(const SharedIdentifier& type) const;  // is a field/payload type immutable?
     bool isSharedOrWeakClass(const std::string& cls) const;   // an intrinsic/triad Shared or Weak (not Owned)
     bool isAtomicClass(const std::string& cls) const;         // an `Atomic<T>` instance (std::concurrent, M6)
+    // The fields a backend actually sees, in WIRE order — ascending `serId`, `@skip` dropped, and
+    // `@deprecated` dropped too when writing (it is read when present, never written).
+    //
+    // A LOCAL VIEW on purpose: `ClassInfo::fields` must never be reordered. That vector IS the C struct
+    // layout, the constructor's assignment order, the destructor's reverse-drop order, what
+    // bakeFieldCTypes walks, the `of`/`zero` synth constructors, `@generate(Equatable/Hashable/Formattable)`
+    // and the LSP's field order — sorting it in place would silently move all of them. The sort is STABLE,
+    // so a type whose ids are all defaulted keeps exact declaration order and its generated C is unchanged.
+    std::vector<const FieldInfo*> serWireFields(const ClassInfo& ci, bool forWrite) const;
+    // The effective wire id of a field: its `@field(id:)` when given, else its index in `ci.fields`.
+    uint32_t serWireId(const ClassInfo& ci, const FieldInfo& f) const;
+    // Refuse a duplicate wire name or wire id within one type. Runs ONCE per type after every member is
+    // registered — the attribute loop runs per DECLARATION and cannot see siblings, and the existing
+    // duplicate check there is on the FIELD name (consumer KB-21), not the wire name.
+    void validateSerFieldKeys(ClassInfo& ci, int line);
+    // Emit `FieldKey __key = …; int32_t __slot = …;` — the two-arm resolution a derived `deserialize`
+    // opens each iteration with. A named backend answers `Name`, a numbered or positional one answers
+    // `Id`, and both land on the same slot number, so the caller emits ONE `switch (__slot)` carrying each
+    // field's read body exactly once. (The obvious `match (r.field()) { case Name: … case Id: … }` shape
+    // would emit every body twice, roughly doubling the generated function for no gain.)
+    void emitFieldKeySlot(const ClassInfo& ci, const std::vector<const FieldInfo*>& fields, int depth);
+    // The same two-arm resolution for a tagged enum's SELECTOR: emits `FieldKey __tag = …; int32_t
+    // __vslot = …;`, where the slot is the variant's declaration index (also its C tag value).
+    void emitVariantKeySlot(const ClassInfo& ci, int depth);
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);

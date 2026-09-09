@@ -1069,7 +1069,7 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier type;
     SharedVariableDeclaratorList declarators;
-    // `attributes` (`@field`/`@skip`/`@bits(...)`) lives on ClassMemberDeclarationNode now — declaring it
+    // `attributes` (`@field`/`@skip`/`@deprecated`) lives on ClassMemberDeclarationNode now — declaring it
     // here too would SHADOW the base's, so the grammar would fill one and the emitter read the other.
     ClassFieldDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier type,

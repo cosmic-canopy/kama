@@ -8460,6 +8460,11 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // clause) round-tripped fine. A derive registers what the derive needs.
     auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
     auto addItf = [&](const std::string& n) { if (!hasItf(n)) ci.interfaces.push_back(n); };
+    // Wire keys must be unique before anything is emitted from them. Here rather than in the attribute
+    // loop because that loop runs per DECLARATION and cannot see a sibling's key; here rather than at the
+    // one call site because this is the funnel every path reaches — a plain type, a generic INSTANCE
+    // (registerGenericTypeInst), and a promoted enum. A no-op for a type that serializes nothing.
+    if (ci.genSerialize || ci.genDeserialize) validateSerFieldKeys(ci, line);
     if (ci.genSerialize) {
         addItf("Serializable");
         if (!ci.methods.count("serialize")) {
@@ -8776,34 +8781,65 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // FFI struct owns its layout.
                     Visibility fvis = fieldVisibility(ci, fd->modifiers, fd->line);
 
-                    // Serialization field metadata (`@field` / `@field(name: "…")` / `@skip` / `@bits(n)`).
-                    // On a `@generate`d type EVERY field must be marked `@field` or `@skip` — an unmarked
-                    // field is a compile error, so adding a field always forces an explicit in/out decision.
+                    // Serialization field metadata (`@field` / `@field(name: "…", id: N)` / `@skip` /
+                    // `@deprecated`). On a `@generate`d type EVERY field must be marked `@field` or `@skip` —
+                    // an unmarked field is a compile error, so adding a field always forces an explicit
+                    // in/out decision.
                     bool serGen = ci.genSerialize || ci.genDeserialize;
-                    bool fMarked = false, fSkip = false; std::string fName;
+                    bool fMarked = false, fSkip = false, fDeprecated = false; std::string fName;
+                    int64_t fId = -1; bool fIdSet = false;
                     if (fd->attributes)
                         for (auto& at : *fd->attributes) {
                             if (!at || !at->name) continue;
                             const std::string& an = *at->name;
                             if (an == "skip") { fSkip = true; fMarked = true; }
-                            else if (an == "bits") { fMarked = true; /* binary-only packing hint; ignored by JSON/YAML */ }
+                            // `@deprecated` REFINES `@field` rather than standing in for it: it does not set
+                            // `fMarked`, so a field carrying it alone still fails the mandatory-mark gate
+                            // below. That is deliberate — the mark says whether a field is on the wire at
+                            // all, and "read but never written" is a property of a field that IS on it.
+                            else if (an == "deprecated") { fDeprecated = true; }
                             else if (an == "field") {
                                 fMarked = true;
                                 if (at->args)
                                     for (auto& a : *at->args) {
-                                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression) {
+                                        const bool named = a && a->name && a->name->value && a->expression;
+                                        if (named && *a->name->value == "name") {
                                             if (auto* sn = dynamic_cast<StringNode*>(a->expression.get()))
                                                 fName = sn->value ? *sn->value : "";
                                             else unsupported("`@field(name: …)` needs a string literal", fd->line);
+                                        } else if (named && *a->name->value == "id") {
+                                            int64_t n = 0;
+                                            if (!constValue(a->expression, n))
+                                                unsupported("`@field(id: N)` needs one literal number — the field's "
+                                                            "wire id, e.g. `@field(id: 3)`", fd->line);
+                                            else if (n < 0 || n > 4294967295LL)
+                                                unsupported(("`@field(id: " + std::to_string(n) + ")` — a wire id is a "
+                                                             "uint32, so it must be from 0 to 4294967295").c_str(), fd->line);
+                                            else { fId = n; fIdSet = true; }
                                         } else {
-                                            unsupported("`@field(...)` accepts only `name: \"…\"`", fd->line);
+                                            unsupported("`@field(...)` accepts only `name: \"…\"` and `id: N`", fd->line);
                                         }
                                     }
                             }
                             else unsupported(("unknown field attribute `@" + an + "`").c_str(), fd->line);
                         }
+                    // `@skip` is absent from every backend; `@deprecated` means "still read, no longer
+                    // written". A field cannot be both, and silently letting `@skip` win would drop a field
+                    // an author explicitly asked to keep reading.
+                    if (fDeprecated && fSkip)
+                        unsupported("`@deprecated` and `@skip` on one field — `@skip` is absent from every "
+                                    "backend, while `@deprecated` is still READ. Drop one", fd->line);
+                    // An id names ONE field, so it cannot be shared by a declaration's sibling declarators.
+                    // Refused by name rather than left to the duplicate-id diagnostic, which would point at
+                    // this same line twice and read as a mystery.
+                    if (fIdSet && fd->declarators && fd->declarators->size() > 1) {
+                        unsupported("`@field(id: N)` on a declaration that declares several fields — an id "
+                                    "names one field. Give each its own `@field` declaration", fd->line);
+                        fIdSet = false;   // else every declarator takes the id and the duplicate check piles on
+                    }
                     if (!serGen && !ci.genFormat && fd->attributes && !fd->attributes->empty())
-                        unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
+                        unsupported("field attributes (`@field`/`@skip`/`@deprecated`) require `@generate(...)` "
+                                    "on the type", fd->line);
                     // `@generate(Formattable)` honors `@skip` (omit a field from the dump) but does NOT require every
                     // field marked — a field dump needs no wire names, so marking would be pointless ceremony.
                     if (serGen && !fMarked)
@@ -8844,6 +8880,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.visibility  = fvis;
                             fi.serSkip     = fSkip;
                             fi.serName     = fName;
+                            fi.serId       = fIdSet ? (int)fId : -1;
+                            fi.serDeprecated = fDeprecated;
                             // A member name is declared once (consumer KB-21). A duplicate FIELD used to
                             // reach clang as `duplicate member` in a generated file; the METHOD twin below
                             // was accepted outright and the last body won.
@@ -22384,7 +22422,11 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // asked for something kama HAS, one level down from where it belongs.
             unsupported(("`@" + an + "` marks a `type`, not a member of one — put it on the enclosing "
                          "type declaration").c_str(), line);
-        } else if (onMember && (an == "field" || an == "skip" || an == "bits")) {
+        // `@deprecated` is deliberately NOT listed here. Its meaning today is serialization metadata on a
+        // field, but a general declaration marker (a use-site warning, on a method as readily as a field)
+        // is already scheduled — baking "field-only" into a diagnostic we plan to contradict is worse than
+        // letting a misplaced one fall to the catch-all unknown-attribute message.
+        } else if (onMember && (an == "field" || an == "skip")) {
             unsupported(("`@" + an + "` marks a FIELD (it is serialization metadata), not a method, `ctor`, "
                          "destructor or operator").c_str(), line);
         } else {
@@ -24105,6 +24147,101 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
                          << "){ .tag = " << resultCType << "_Err, .u.Err = { .error = " << t << ".u.Err.error } }; }\n";
 }
 
+uint32_t CEmitter::serWireId(const ClassInfo& ci, const FieldInfo& f) const
+{
+    if (f.serId >= 0) return (uint32_t)f.serId;
+    for (size_t i = 0; i < ci.fields.size(); ++i)
+        if (&ci.fields[i] == &f) return (uint32_t)i;
+    return 0;   // not one of this class's fields (an enum variant payload) — the caller indexes those itself
+}
+
+std::vector<const FieldInfo*> CEmitter::serWireFields(const ClassInfo& ci, bool forWrite) const
+{
+    std::vector<const FieldInfo*> out;
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        if (forWrite && f.serDeprecated) continue;
+        out.push_back(&f);
+    }
+    // Ascending id is what makes ids and positions ONE thing: a positional backend keeps this order and a
+    // numbered one keeps the values, so an author who renumbers gets both consistently. Stable, so an
+    // all-defaulted type is byte-for-byte what it was before ids existed.
+    std::stable_sort(out.begin(), out.end(), [&](const FieldInfo* a, const FieldInfo* b) {
+        return serWireId(ci, *a) < serWireId(ci, *b);
+    });
+    return out;
+}
+
+void CEmitter::validateSerFieldKeys(ClassInfo& ci, int line)
+{
+    // `@deprecated` fields take part on purpose: that participation IS "its name and id stay reserved".
+    std::map<std::string, std::string> byName;   // wire name -> the field that owns it
+    std::map<uint32_t, std::string>    byId;
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;   // absent from every backend, so it reserves nothing
+        const std::string wire = f.serName.empty() ? f.name : f.serName;
+        auto n = byName.find(wire);
+        if (n != byName.end())
+            unsupported(("fields '" + n->second + "' and '" + f.name + "' in '" + ci.name
+                         + "' both serialize as \"" + wire + "\" — a wire name addresses one field. A name "
+                         "left off defaults to the field's own name, so an explicit `@field(name: \"…\")` "
+                         "can collide with one").c_str(),
+                        f.nameId ? f.nameId->line : line);
+        else byName[wire] = f.name;
+        const uint32_t id = serWireId(ci, f);
+        auto d = byId.find(id);
+        if (d != byId.end())
+            unsupported(("fields '" + d->second + "' and '" + f.name + "' in '" + ci.name
+                         + "' both have wire id " + std::to_string(id) + " — an id addresses one field. "
+                         "An id left off defaults to the field's declaration index, so an explicit "
+                         "`@field(id: N)` can collide with one").c_str(),
+                        f.nameId ? f.nameId->line : line);
+        else byId[id] = f.name;
+    }
+}
+
+void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const FieldInfo*>& fields, int depth)
+{
+    indent(depth); *_out << "FieldKey __key = r.vtbl->field(r.obj);\n";
+    indent(depth); *_out << "int32_t __slot = -1;\n";
+    indent(depth); *_out << "if (__key.tag == FieldKey_Name) {\n";
+    bool first = true;
+    for (size_t i = 0; i < fields.size(); ++i) {
+        const FieldInfo& f = *fields[i];
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        indent(depth + 1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key.u.Name.name, "
+                                 << kamaStrLit(wire) << ")) __slot = " << i << ";\n";
+        first = false;
+    }
+    indent(depth); *_out << "} else {\n";
+    indent(depth + 1); *_out << "switch (__key.u.Id.id) {\n";
+    for (size_t i = 0; i < fields.size(); ++i) {
+        indent(depth + 2); *_out << "case " << serWireId(ci, *fields[i]) << "u: __slot = " << i << "; break;\n";
+    }
+    indent(depth + 2); *_out << "default: break;\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "}\n";
+}
+
+void CEmitter::emitVariantKeySlot(const ClassInfo& ci, int depth)
+{
+    indent(depth); *_out << "FieldKey __tag = r.vtbl->variant(r.obj);\n";
+    indent(depth); *_out << "int32_t __vslot = -1;\n";
+    indent(depth); *_out << "if (__tag.tag == FieldKey_Name) {\n";
+    for (size_t i = 0; i < ci.variants.size(); ++i) {
+        indent(depth + 1); *_out << (i ? "else if" : "if") << " (kama_string__equals(&__tag.u.Name.name, "
+                                 << kamaStrLit(ci.variants[i].name) << ")) __vslot = " << i << ";\n";
+    }
+    indent(depth); *_out << "} else {\n";
+    indent(depth + 1); *_out << "switch (__tag.u.Id.id) {\n";
+    for (size_t i = 0; i < ci.variants.size(); ++i) {
+        indent(depth + 2); *_out << "case " << i << "u: __vslot = " << i << "; break;\n";
+    }
+    indent(depth + 2); *_out << "default: break;\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "}\n";
+}
+
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
@@ -24113,10 +24250,11 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
+    for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
+        const FieldInfo& f = *fp;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
+        indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", "
+                         << serWireId(ci, f) << "u);\n";
         emitSerFieldWrite(f.type, "self->" + f.name, 1, resC);
     }
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
@@ -24375,23 +24513,26 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
             indent(1); *_out << "result." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
         }
     }
-    // On an early Err inside the loop: free the current field-name string, then drop the partial result.
-    std::string cleanup = std::string("kama_string__dtor(&__key); ")
+    // On an early Err inside the loop: free the current key, then drop the partial result.
+    std::string cleanup = std::string("FieldKey__dtor(&__key); ")
                         + (ci.destructible ? (ci.name + "__dtor(&result); ") : "");
+    // READ-visible fields: `@deprecated` is still read, so it stays in this list (it is only dropped from
+    // the write side). An unknown key falls to `skipValue`, which is what keeps a named stream
+    // forward-compatible.
+    std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
-    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
-    bool first = true;
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
-        const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
-        emitDeFieldRead(f.type, "result." + f.name, 3, resC, cleanup);
-        indent(2); *_out << "}\n";
-        first = false;
+    emitFieldKeySlot(ci, rf, 2);
+    indent(2); *_out << "switch (__slot) {\n";
+    for (size_t i = 0; i < rf.size(); ++i) {
+        indent(3); *_out << "case " << i << ": {\n";
+        emitDeFieldRead(rf[i]->type, "result." + rf[i]->name, 4, resC, cleanup);
+        indent(3); *_out << "break;\n";
+        indent(3); *_out << "}\n";
     }
-    indent(2); *_out << (first ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
-    indent(2); *_out << "kama_string__dtor(&__key);\n";   // the field-name string is owned — free each iteration
+    indent(3); *_out << "default: r.vtbl->skipValue(r.obj); break;\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "FieldKey__dtor(&__key);\n";   // the key owns its name string — free each iteration
     indent(1); *_out << "}\n";
     // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
     indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
@@ -24419,9 +24560,10 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     // cleanly: a payload-less enum is always a string, a tagged one is always an object.
     if (isUnitEnum(ci.name)) {
         indent(1); *_out << "switch (self->tag) {\n";
-        for (auto& v : ci.variants) {
+        for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+            auto& v = ci.variants[vi];
             indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
-            indent(2); *_out << "kama_string __tv = " << kamaStrLit(v.name) << "; w->vtbl->writeString(w->obj, &__tv);\n";
+            indent(2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
             indent(2); *_out << "break;\n";
             indent(1); *_out << "}\n";
         }
@@ -24437,15 +24579,26 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     }
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
     indent(1); *_out << "switch (self->tag) {\n";
-    for (auto& v : ci.variants) {
+    // The externally-tagged framing keys are addressed like any other key: "tag" is id 0 and "value" is
+    // id 1. They cannot collide with a payload field's id because a payload is a NESTED object with its
+    // own `beginObject`, and its fields are numbered from 0 inside that.
+    for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+        auto& v = ci.variants[vi];
         indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
-        indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit("tag") << ");\n";
-        indent(2); *_out << "kama_string __tv = " << kamaStrLit(v.name) << "; w->vtbl->writeString(w->obj, &__tv);\n";
+        indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("tag") << ", 0u);\n";
+        // The selector goes through `variant`, not `writeString`: a discriminant is one of `n` known
+        // alternatives, so a positional or numbered backend spends one byte on it where a name costs the
+        // whole string. A named backend writes the name and its bytes are unchanged. The index is the
+        // variant's declaration index, which is also its C tag value.
+        indent(2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
         if (!v.payload.empty()) {
-            indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit("value") << ");\n";
+            indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 1u);\n";
             indent(2); *_out << "w->vtbl->beginObject(w->obj);\n";
-            for (auto& f : v.payload) {
-                indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(f.name) << ");\n";
+            for (size_t pi = 0; pi < v.payload.size(); ++pi) {
+                auto& f = v.payload[pi];
+                // A payload field carries no attributes (the grammar gives a variant payload no slot for
+                // one), so its id is positional by construction and can never be reordered.
+                indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(f.name) << ", " << pi << "u);\n";
                 emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2, resC);
             }
             indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
@@ -24477,16 +24630,15 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // The reader half of the bare-string form — read the name, match it against the variants, and Err on
     // one that names none (there is no "unknown" variant to park on and no payload to skip).
     if (isUnitEnum(ci.name)) {
-        indent(1); *_out << "kama_string __nm = r.vtbl->readString(r.obj);\n";
-        bool firstU = true;
-        for (auto& v : ci.variants) {
-            indent(1); *_out << (firstU ? "if" : "else if") << " (kama_string__equals(&__nm, " << kamaStrLit(v.name) << ")) {\n";
-            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << " };\n";
-            indent(1); *_out << "}\n";
-            firstU = false;
+        emitVariantKeySlot(ci, 1);
+        indent(1); *_out << "switch (__vslot) {\n";
+        for (size_t i = 0; i < ci.variants.size(); ++i) {
+            indent(2); *_out << "case " << i << ": __result = (" << ci.name << "){ .tag = "
+                             << ci.name << "_" << ci.variants[i].name << " }; break;\n";
         }
-        indent(1); *_out << "else { r.vtbl->fail(r.obj); }\n";
-        indent(1); *_out << "kama_string__dtor(&__nm);\n";
+        indent(2); *_out << "default: r.vtbl->fail(r.obj); break;\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "FieldKey__dtor(&__tag);\n";
         indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
         std::string nbox = emitStickyErrBox(2);
         indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << nbox << " } };\n";
@@ -24502,27 +24654,30 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // Draining makes the reader ask `next()` past the end, which IS an error, and skips any unknown
     // trailing field on the way — the same forward-compat rule the struct path above has always had.
     auto closeObj = [&](int d) {
-        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { kama_string __sk = r.vtbl->fieldName(r.obj); "
-                            "kama_string__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
+        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
+                            "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
     };
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
-    indent(1); *_out << "kama_string __k = r.vtbl->fieldName(r.obj); kama_string__dtor(&__k);\n";   // the "tag" key
-    indent(1); *_out << "kama_string __tag = r.vtbl->readString(r.obj);\n";
+    // The framing keys are read POSITIONALLY and discarded — the shape `{tag, value}` is fixed, so there is
+    // nothing to dispatch on. Only the selector and the payload fields carry information.
+    indent(1); *_out << "FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k);\n";   // the "tag" key
+    emitVariantKeySlot(ci, 1);
     bool first = true;
-    for (auto& v : ci.variants) {
-        indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tag, " << kamaStrLit(v.name) << ")) {\n";
+    for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+        auto& v = ci.variants[vi];
+        indent(1); *_out << (first ? "if" : "else if") << " (__vslot == " << vi << ") {\n";
         if (!v.payload.empty()) {
             indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-            indent(2); *_out << "kama_string __kv = r.vtbl->fieldName(r.obj); kama_string__dtor(&__kv);\n";   // the "value" key
+            indent(2); *_out << "FieldKey __kv = r.vtbl->field(r.obj); FieldKey__dtor(&__kv);\n";   // the "value" key
             indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
             // an early Err while reading payload field i must free __tag + drop the already-read temps.
-            std::string cleanup = "kama_string__dtor(&__tag); ";
+            std::string cleanup = "FieldKey__dtor(&__tag); ";
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
                 std::string idx = std::to_string(i);
                 indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-                indent(2); *_out << "kama_string __pk" << idx << " = r.vtbl->fieldName(r.obj); kama_string__dtor(&__pk" << idx << ");\n";
+                indent(2); *_out << "FieldKey __pk" << idx << " = r.vtbl->field(r.obj); FieldKey__dtor(&__pk" << idx << ");\n";
                 indent(2); *_out << cType(f.type) << " __p_" << f.name << ";\n";
                 emitDeFieldRead(f.type, "__p_" + f.name, 2, resC, cleanup);
                 if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
@@ -24550,12 +24705,12 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     } else {
         indent(1); *_out << "else {\n";
         indent(2); *_out << "r.vtbl->fail(r.obj);\n";
-        indent(2); *_out << "kama_string__dtor(&__tag);\n";
+        indent(2); *_out << "FieldKey__dtor(&__tag);\n";
         std::string ubox = emitStickyErrBox(2);
         indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ubox << " } };\n";
         indent(1); *_out << "}\n";
     }
-    indent(1); *_out << "kama_string__dtor(&__tag);\n";
+    indent(1); *_out << "FieldKey__dtor(&__tag);\n";
     // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
     indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&__result);\n"; }
@@ -24984,11 +25139,12 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
     indent(1); *_out << ci.name << "* self = (" << ci.name << "*)__obj;\n";
     indent(1); *_out << "Serializer* w = (Serializer*)__wv;\n";
     indent(1); *_out << "w->vtbl->beginTableEntry(w->obj, __id, " << kamaStrLit(graphWireName(ci)) << ");\n";
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
+    for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
+        const FieldInfo& f = *fp;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         GraphEdge e = graphEdgeOf(f.type);
-        indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
+        indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", "
+                         << serWireId(ci, f) << "u);\n";
         if (e.kind.empty()) { emitSerFieldWrite(f.type, "self->" + f.name, 1, ""); continue; }   // void node context — sticky only
         std::string acc = "self->" + f.name;
         if (e.optional) {
@@ -25022,21 +25178,27 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
             indent(1); *_out << "self->" << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
         }
     }
-    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
-    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
-    bool firstS = true;
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
-        if (!graphEdgeOf(f.type).kind.empty()) continue;   // pointer edge — pass 2
-        const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(2); *_out << (firstS ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
-        emitDeFieldRead(f.type, "self->" + f.name, 3, "", "");   // graph-shell: sticky carries failure to the boundary
+    // Pass 1 sees only the NON-edge fields; pass 2 (wireShell) sees only the edges. Each walks the whole
+    // entry and skips what is not its half, so the two slot numberings are per-function and need only be
+    // self-consistent — they are never compared with each other.
+    {
+        std::vector<const FieldInfo*> sf;
+        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false))
+            if (graphEdgeOf(fp->type).kind.empty()) sf.push_back(fp);
+        indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+        emitFieldKeySlot(ci, sf, 2);
+        indent(2); *_out << "switch (__slot) {\n";
+        for (size_t i = 0; i < sf.size(); ++i) {
+            indent(3); *_out << "case " << i << ": {\n";
+            emitDeFieldRead(sf[i]->type, "self->" + sf[i]->name, 4, "", "");   // graph-shell: sticky carries failure to the boundary
+            indent(3); *_out << "break;\n";
+            indent(3); *_out << "}\n";
+        }
+        indent(3); *_out << "default: r.vtbl->skipValue(r.obj); break;\n";
         indent(2); *_out << "}\n";
-        firstS = false;
+        indent(2); *_out << "FieldKey__dtor(&__key);\n";
+        indent(1); *_out << "}\n";
     }
-    indent(2); *_out << (firstS ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
-    indent(2); *_out << "kama_string__dtor(&__key);\n";
-    indent(1); *_out << "}\n";
     indent(1); *_out << "return __b;\n";
     *_out << "}\n\n";
 
@@ -25044,22 +25206,24 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
     //    constructing the Shared/Weak/Owned value over (ptr, ctrl). Scalar fields are skipped (already read).
     *_out << stat << "void " << ci.name << "__wireShell(kama_de_box* __b, Deserializer r, struct kama_de_graph* __g)\n{\n";
     indent(1); *_out << ci.name << "* self = (" << ci.name << "*)__b->ptr;\n";
-    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
-    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
-    bool firstW = true;
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
-        GraphEdge e = graphEdgeOf(f.type);
-        if (e.kind.empty()) continue;   // scalar — pass 1
-        const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(2); *_out << (firstW ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
-        emitGraphRefRead(f.type, e, "self->" + f.name, 3);
+    {
+        std::vector<const FieldInfo*> wf;
+        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false))
+            if (!graphEdgeOf(fp->type).kind.empty()) wf.push_back(fp);
+        indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+        emitFieldKeySlot(ci, wf, 2);
+        indent(2); *_out << "switch (__slot) {\n";
+        for (size_t i = 0; i < wf.size(); ++i) {
+            indent(3); *_out << "case " << i << ": {\n";
+            emitGraphRefRead(wf[i]->type, graphEdgeOf(wf[i]->type), "self->" + wf[i]->name, 4);
+            indent(3); *_out << "break;\n";
+            indent(3); *_out << "}\n";
+        }
+        indent(3); *_out << "default: r.vtbl->skipValue(r.obj); break;\n";
         indent(2); *_out << "}\n";
-        firstW = false;
+        indent(2); *_out << "FieldKey__dtor(&__key);\n";
+        indent(1); *_out << "}\n";
     }
-    indent(2); *_out << (firstW ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
-    indent(2); *_out << "kama_string__dtor(&__key);\n";
-    indent(1); *_out << "}\n";
     *_out << "}\n\n";
 }
 
@@ -25198,7 +25362,7 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
     indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
-    indent(2); *_out << "kama_string __tk = r.vtbl->fieldName(r.obj); kama_string__dtor(&__tk);\n";
+    indent(2); *_out << "FieldKey __tk = r.vtbl->field(r.obj); FieldKey__dtor(&__tk);\n";
     indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
     bool f1 = true;
     for (auto& K : _graphNodeOrder) {
@@ -25216,7 +25380,7 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
     indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
-    indent(2); *_out << "kama_string __tk = r.vtbl->fieldName(r.obj); kama_string__dtor(&__tk);\n";
+    indent(2); *_out << "FieldKey __tk = r.vtbl->field(r.obj); FieldKey__dtor(&__tk);\n";
     indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
     bool f2 = true;
     for (auto& K : _graphNodeOrder) {

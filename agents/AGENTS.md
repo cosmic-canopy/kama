@@ -118,7 +118,10 @@ feature.
   must have the type the collection actually yields, so `foreach (char c in s)` is rejected. <!-- xfail: foreach_char_over_string --> Casing
   and whitespace are ASCII-only by design.
 - **`@generate` requires every field to be marked** `@field` or `@skip`. An unmarked field is an
-  error, so adding one can never silently start serializing it.
+  error, so adding one can never silently start serializing it. A `@field` carries a wire NAME and an ID
+  (`@field(name: "wire")`, `@field(id: 3)`) — the name defaults to the property name, the id to the
+  declaration index — and the backend keeps whichever it addresses by, so one marked type works with every
+  backend. `@deprecated` on a field means read when present, never written.
 - **Integer overflow traps** in debug rather than wrapping; `std::num`'s `wrapping*` are the opt-in.
 - **A module is a FOLDER, and a file says nothing about which one it is in.** There is no `namespace`
   declaration — a file's module is its directory under the source root, and `kama.json`'s `modules` map

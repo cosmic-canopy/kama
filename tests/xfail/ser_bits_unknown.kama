@@ -1,0 +1,7 @@
+// `@bits(n)` is a ruled NON-GOAL and was deleted: it never read its arguments, appeared in no SPEC text and
+// in zero corpus files, yet set the "field is marked" flag, so it silently stood in for `@field`. A packing
+// backend spends one bit on a `bool` inside its own `writeBool`; an author wanting bit-exact integers packs
+// them into the smallest integer carrier in their own type.
+@generate(Serializable, Deserializable)
+type value R { @bits(3) int32 a; }
+fn int32 main() { return 0; }

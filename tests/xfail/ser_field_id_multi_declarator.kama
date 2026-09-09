@@ -1,0 +1,5 @@
+// One `@field(id:)` cannot cover several declarators — an id names ONE field. Refused by name rather than
+// left to the duplicate-id diagnostic, which would point at this line twice and read as a mystery.
+@generate(Serializable, Deserializable)
+type value R { @field(id: 2) int32 a, b; }
+fn int32 main() { return 0; }

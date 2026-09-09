@@ -1,0 +1,5 @@
+// `@field(id: N)` needs a literal number: the id is compiled into the wire form, so it cannot depend on
+// anything evaluated at run time.
+@generate(Serializable, Deserializable)
+type value R { @field(id: "three") int32 a; }
+fn int32 main() { return 0; }

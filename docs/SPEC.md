@@ -4739,11 +4739,12 @@ restrictions — and nothing leaks into the public API.
 
 **Three layers.**
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
-  `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` / `@skip`, and one
+  `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
+  `@field(id: N)` / `@deprecated` / `@skip`, and one
   entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
-  `beginObject`/`fieldName`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
+  `beginObject`/`field`/`variant`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
   (text) and `std::serialization::binary` (**KBIN** — a compact self-describing little-endian tagged format) both
   ship; yaml/xml/user backends are just new implementors — no compiler change. A type opts into serialization
   ONCE (`@generate(Serializable, Deserializable)`) and works with every backend automatically, since the generated code
@@ -4786,8 +4787,29 @@ exactly what you name:
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
   or `@skip` — an unmarked field is a **compile error** (no silent omission). <!-- xfail: ser_unmarked_field -->
+- **Field addressing — every key carries a NAME and an ID, and the backend keeps the one it is.** `name`
+  defaults to the property name and `id` to the field's **declaration index**, counting `@skip`ped and
+  `@deprecated` fields too (indexing among only the serialized fields would renumber every later field the
+  moment a `@skip` was inserted — the exact silent wire break ids exist to prevent). An author may override
+  `id` with a stable, sparse protobuf-style number. **The derive emits fields in ascending id**, which is
+  what makes ids and positions one thing: a *named* backend (JSON, KBIN) writes the name, a *numbered* one
+  writes the id, a *positional* one writes neither and relies on the order. So a type opts in ONCE and every
+  addressing works — there is no capability query and no generic `Serializable<K>`, which could not exist
+  anyway (two `field` bodies differing only in a parameter type is overloading). Within one type a duplicate
+  wire name is refused, <!-- xfail: ser_dup_field_name --> and so is a duplicate id — including an explicit
+  one colliding with another field's default. <!-- xfail: ser_dup_field_id_default --> `@field(id: N)` needs
+  a literal number <!-- xfail: ser_field_id_not_literal --> and cannot cover several declarators at once. <!-- xfail: ser_field_id_multi_declarator -->
+- **`@deprecated`** on a field: **read when present, never written.** Its name and id stay RESERVED — it
+  still takes part in duplicate detection, which is the whole of that guarantee — so a stream written by an
+  older version still decodes while new writes drop the field. It REFINES `@field` rather than replacing it,
+  so a field marked only `@deprecated` is still unmarked <!-- xfail: ser_deprecated_alone --> and combining
+  it with `@skip` is refused, since `@skip` is absent from every backend while `@deprecated` is still read. <!-- xfail: ser_deprecated_and_skip -->
+  (Fixture: `tests/ser_field_id`.) <!-- test: ser_field_id -->
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
-  deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`.
+  deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`. The **variant selector** has
+  its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:
+  a discriminant is one of `n` known alternatives, not a string, so a positional or numbered backend spends
+  one byte on it where a name costs the whole string. A named backend writes the name, unchanged.
 - **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
 
 **Graph specifics.** `Shared`/`Weak`/`Owned` fields serialize as integer ids into the side table (`0` = null /

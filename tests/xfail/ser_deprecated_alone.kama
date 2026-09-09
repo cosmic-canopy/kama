@@ -1,0 +1,5 @@
+// `@deprecated` REFINES `@field`, it does not stand in for it: the mark says whether a field is on the
+// wire at all, and "read but never written" is a property of a field that IS on it.
+@generate(Serializable, Deserializable)
+type value R { @deprecated int32 a; }
+fn int32 main() { return 0; }

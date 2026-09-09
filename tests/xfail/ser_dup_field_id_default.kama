@@ -1,0 +1,5 @@
+// The subtler half: an id left off defaults to the field's DECLARATION INDEX, so an explicit id can
+// collide with a defaulted one. `b` is field index 1, and `a` asks for 1 outright.
+@generate(Serializable, Deserializable)
+type value R { @field(id: 1) int32 a; @field int32 b; }
+fn int32 main() { return 0; }
