@@ -25062,7 +25062,7 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
 }
 
 // The wire `__type` tag for a graph node: the SOURCE type name (`Node`), not the mangled C name (`_F<file>__Node`).
-// Both the writer (beginTableEntry) and the reader (dispatch) must agree, so they share this.
+// Both the writer (`typeName`) and the reader (the shell chain) must agree, so they share this.
 std::string CEmitter::graphWireName(const ClassInfo& ci)
 {
     return (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
