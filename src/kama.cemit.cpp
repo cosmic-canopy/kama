@@ -15592,27 +15592,29 @@ void CEmitter::computeDestructible()
     }
 }
 
-// Serialization mode gate: does T transitively REACH a Shared/Weak/Owned pointer? The tighter sibling of
+// Serialization mode gate: does T transitively REACH a Shared/Weak pointer? The tighter sibling of
 // computeDestructible — same cycle-safe fixpoint (base + fields + variant payloads, generic instances
-// resolved under their binding), with two differences: it STOPS at a pointer (a smart-ptr field makes the
+// resolved under their binding), with two differences: it STOPS at a Shared/Weak (such a field makes the
 // owner graph-mode; it does NOT recurse through the pointee), and a plain heap collection (List/Array/
 // string) or a Fixed<T,N> contributes nothing unless its ELEMENT reaches a pointer (whereas every heap
-// collection is destructible). false => by-value/tree serialization; true => object-graph (Shared<T>).
+// collection is destructible). false => by-value/tree serialization; true => object-graph.
+// `Owned<X>` is NOT a pointer here: a unique subtree serializes inline, byte-identical to an `X` field
+// (the conformance is the triad's own, lib/std/memory/owned.kama), so an `Owned` reaches exactly when
+// its POINTEE does — it is walked THROUGH, the way a by-value field is.
 // Consumed by the serialization lowering (Phase C+); inert until then.
 void CEmitter::computeReachesPointer()
 {
-    // Seed: only the smart pointers ARE pointers. Everything else (scalars, strings, enums, other
-    // collections, user types) starts false and earns `true` only by transitively holding one.
+    // Seed: only the SHARED smart pointers ARE pointers. Everything else (scalars, strings, enums, other
+    // collections, user types, `Owned`) starts false and earns `true` only by transitively holding one.
     for (auto& kv : _classes) {
         bool intrinsicPtr = kv.second.isIntrinsicColl &&
-            (kv.second.collKind == CollKind::Owned || kv.second.collKind == CollKind::Shared ||
-             kv.second.collKind == CollKind::Weak);
+            (kv.second.collKind == CollKind::Shared || kv.second.collKind == CollKind::Weak);
         // A concrete-element triad instance (`Shared<Leaf>`) is a library generic instance, not intrinsic —
         // recognize it by its template key.
         bool triadPtr = false;
         auto g = _genericTypeInstOf.find(kv.first);
         if (g != _genericTypeInstOf.end())
-            triadPtr = (g->second == _sharedTmpl || g->second == _ownedTmpl || g->second == _weakTmpl);
+            triadPtr = (g->second == _sharedTmpl || g->second == _weakTmpl);
         kv.second.reachesPointer = intrinsicPtr || triadPtr;
     }
     bool changed = true;
@@ -15650,10 +15652,29 @@ void CEmitter::computeReachesPointer()
                 }
             // An intrinsic collection (List/Array/string/Fixed) reaches a pointer iff its ELEMENT does —
             // the element type isn't a walkable field, so consult the collection's elemClass directly.
+            // The interface-erased `Owned<Contract>` is walked through the same way, and its element is a
+            // contract: it reaches iff ANY nominal implementor does (the closed world the tagged inline form
+            // dispatches over).
             if (!r && ci.isIntrinsicColl) {
                 auto cit = _collections.find(ci.name);
                 if (cit != _collections.end()) {
-                    auto e = _classes.find(cit->second.elemClass);
+                    const std::string& elem = cit->second.elemClass;
+                    auto e = _classes.find(elem);
+                    if (e != _classes.end() && e->second.reachesPointer) r = true;
+                    else if (ci.collKind == CollKind::Owned && isInterface(elem))
+                        for (auto& kv2 : _classes) {
+                            const ClassInfo& c2 = kv2.second;
+                            if (!c2.reachesPointer) continue;
+                            if (std::find(c2.interfaces.begin(), c2.interfaces.end(), elem) != c2.interfaces.end()) { r = true; break; }
+                        }
+                }
+            }
+            // The library `Owned<X>` (a generic instance over a concrete pointee) likewise reaches iff `X` does:
+            // its own fields are an `UnsafePtr<X>` and an allocator, neither a walkable class.
+            if (!r && inst) {
+                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+                if (gi.templateKey == _ownedTmpl && !gi.typeArgs.empty()) {
+                    auto e = _classes.find(cType(gi.typeArgs[0]));
                     if (e != _classes.end() && e->second.reachesPointer) r = true;
                 }
             }
@@ -24966,8 +24987,9 @@ void CEmitter::emitVariantSynthBodies(ClassInfo& ci)
 // `std::serialization::graph` module + driver synthesis, lowering the id table / two-pass rebuild / ownership
 // transfer straight to C over `kama_ser_graph` / `kama_de_graph` (kama_runtime.h). Reproduces the exact wire.
 
-// One field's graph-pointer classification. kind is "" for a non-pointer field (scalar/string/nested/
-// collection — those flow through the by-value helpers), else "Shared"/"Weak"/"Owned" with elemC the pointee's
+// One field's graph-pointer classification. kind is "" for a non-edge field (scalar/string/nested/
+// collection/`Owned` — those flow through the by-value helpers; an `Owned<X>` is a unique subtree and
+// serializes inline through the triad's own conformance), else "Shared"/"Weak" with elemC the pointee's
 // C type. `optional` = the edge is wrapped in `Optional<…>` (nullable, e.g. a list tail / cycle bootstrap).
 CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
 {
@@ -24976,12 +24998,12 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
     bool opt = (*ty->value == "Optional" && ty->genericArg);
     SharedIdentifier inner = opt ? ty->genericArg : ty;
     std::string ic = cType(inner);
-    // Graph deserialize reconstructs a Shared/Weak/Owned edge with a ZEROED allocator (it has no handle on the
+    // Graph deserialize reconstructs a Shared/Weak edge with a ZEROED allocator (it has no handle on the
     // wire), so a STATEFUL-allocator edge would later free through a bogus/zeroed `A` -> leak/UAF. Deserializable
     // is GlobalAllocator-only by design; reject a non-Global edge at the one spot the box type is known.
     auto rejectStatefulEdge = [&](const std::string& a) {
         if (!a.empty() && a != "GlobalAllocator")
-            unsupported("graph-mode serialization is GlobalAllocator-only — a Shared/Weak/Owned<…, A> edge with "
+            unsupported("graph-mode serialization is GlobalAllocator-only — a Shared/Weak<…, A> edge with "
                         "a stateful allocator can't be reconstructed (deserialize wires a zeroed allocator); use "
                         "the default allocator for @generate graph fields", ty->line);
     };
@@ -24989,14 +25011,15 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
     auto g = _genericTypeInstOf.find(ic);
     if (g != _genericTypeInstOf.end()) {
         if      (g->second == _sharedTmpl) e.kind = "Shared";
-        else if (g->second == _ownedTmpl)  e.kind = "Owned";
         else if (g->second == _weakTmpl)   e.kind = "Weak";
         if (!e.kind.empty()) { rejectStatefulEdge(boxAllocatorArg(ic)); e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.elemIsContract = isInterface(e.elemC); e.optional = opt; return e; }
     }
-    // Interface-erased intrinsic smart pointer (`Owned<Contract>` / `Shared<Contract>` / Box<dyn>).
+    // Interface-erased intrinsic smart pointer (`Shared<Contract>` / `Weak<Contract>`). An `Owned<Contract>`
+    // is not an edge either — it is the tagged inline form, see emitSerFieldWrite.
     if (isSmartPtrClass(ic)) {
         CollKind k = smartKind(ic);
-        e.kind  = (k == CollKind::Shared) ? "Shared" : (k == CollKind::Weak) ? "Weak" : "Owned";
+        if (k == CollKind::Owned) return e;
+        e.kind  = (k == CollKind::Shared) ? "Shared" : "Weak";
         rejectStatefulEdge(_collections.count(ic) ? _collections[ic].allocType : "");
         e.elemC = _classes.count(ic) ? _classes[ic].collElemClass : "";
         e.elemIsContract = isInterface(e.elemC);
@@ -25225,7 +25248,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
             indent(d); *_out << "if ((" << val << ")" << cf << " && (" << val << ")" << cf << "->strong > 0) "
                              << "w->vtbl->writeRef(w->obj, " << intern << ");\n";
             indent(d); *_out << "else w->vtbl->writeRef(w->obj, 0);\n";
-        } else {   // Shared / Owned — always present
+        } else {   // Shared — always present
             indent(d); *_out << "w->vtbl->writeRef(w->obj, " << intern << ");\n";
         }
     };
@@ -25328,7 +25351,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const std::string& dst, int d)
 {
     std::string X = e.elemC;
-    std::string innerC = e.optional ? cType(ty->genericArg) : cType(ty);   // Shared_X / Weak_X / Owned_X
+    std::string innerC = e.optional ? cType(ty->genericArg) : cType(ty);   // Shared_X / Weak_X
     // the wiring of a resolved box `__t` into a smart-ptr value expression `place` of kind e.kind. A
     // concrete-element handle is the thin triad struct (`p` pointee, `c` control block); a CONTRACT-element
     // handle is the fat `{obj, vtbl, ctrl}`, whose vtable is recovered from the box's concrete type-id (a
@@ -25345,46 +25368,8 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
         } else if (e.kind == "Weak") {
             indent(dd); *_out << place << ".p = (" << X << "*)__t->ptr; " << place << ".c = (void*)__t->ctrl; __t->ctrl->weak++;\n";
         }
-        // Owned is handled separately (give-once move), never through wireInto.
     };
     indent(d); *_out << "uint64_t __rid = r.vtbl->readRef(r.obj);\n";
-
-    if (e.kind == "Owned") {   // give-once: exclusive transfer, claim-checked, no refcount
-        std::string ownedNull = e.optional ? ("(" + cType(ty) + "){ .tag = " + cType(ty) + "_None }") : "";
-        if (e.optional) { indent(d); *_out << "if (__rid == 0) { " << dst << " = " << ownedNull << "; }\n"; indent(d); *_out << "else "; }
-        else            { indent(d); *_out << "if (__rid == 0) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_Malformed }); }\n"; indent(d); *_out << "else "; }
-        *_out << "if (kama_de_graph_claim(__g, __rid)) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_DuplicateId }); }\n";
-        indent(d); *_out << "else {\n";
-        indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
-        indent(d + 1); *_out << "if (__t) {\n";
-        if (e.elemIsContract) {   // fat move: recover the concrete vtable, then transfer the pointee (no refcount)
-            indent(d + 2); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__implVtbl(__t->type_id);\n";
-            indent(d + 2); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_TypeMismatch }); }\n";
-            indent(d + 2); *_out << "else {\n";
-            if (e.optional) {
-                indent(d + 3); *_out << innerC << " __v = {0}; __v.obj = __t->ptr; __v.vtbl = __vt;\n";
-                indent(d + 3); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
-            } else {
-                indent(d + 3); *_out << dst << ".obj = __t->ptr; " << dst << ".vtbl = __vt;\n";
-            }
-            indent(d + 3); *_out << "__t->ptr = NULL;\n";
-            indent(d + 3); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
-            indent(d + 2); *_out << "}\n";
-        } else {
-            if (e.optional) {
-                indent(d + 2); *_out << innerC << " __v; __v.p = (" << X << "*)__t->ptr;\n";
-                indent(d + 2); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
-            } else {
-                indent(d + 2); *_out << dst << ".p = (" << X << "*)__t->ptr;\n";
-            }
-            indent(d + 2); *_out << "__t->ptr = NULL;\n";
-            indent(d + 2); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
-        }
-        indent(d + 1); *_out << "}\n";
-        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_UnresolvedReference });\n";
-        indent(d); *_out << "}\n";
-        return;
-    }
 
     // Shared / Weak. A miss is a dangling reference (UnresolvedReference); id 0 = null (None / expired).
     if (e.optional) {

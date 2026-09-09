@@ -9,9 +9,30 @@ export { Owned };
 // stores the handle in `alloc` (via `adoptIn`), so the dtor releases it through the SAME allocator —
 // letting a boxed object live in a caller-owned arena and be bulk-reclaimed on `reset()`. The allocator
 // is a copyable VALUE handle carried by value (zero-size for `GlobalAllocator`).
-type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable] {
+//
+// Serde: an `Owned<T>` is a unique subtree, so on the wire it is exactly a `T` — byte-identical to a
+// by-value field of that type (absence is spelled `Optional<Owned<T>>`, like every other field). The
+// conformances live HERE, not in the derive: the compiler's field walk reaches them through the ordinary
+// composite arm (`Owned_T__serialize`), the same way it reaches a collection's. (A collection OF `Owned`
+// does not yet follow: its element helper takes `const ref T`, and a `const ref` may not name a smart
+// pointer even when `T` is a type parameter — a language question recorded in ROADMAP_DETAIL §4.)
+// `deserialize` reads a `T` by value and heap-moves it into a fresh block; it exists only `when [A: default]`
+// because the wire carries no allocator handle (the same reason `adopt` is gated).
+type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable],
+                                   Serializable when [T: Serializable],
+                                   Deserializable<This> when [T: Deserializable<T>, A: default] {
     UnsafePtr<T> p;
     A alloc;
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        return this.deref().serialize(w: w);
+    }
+    public unsafe ctor Result<Owned<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>, A: default] {
+        Result<T, Owned<Error>> inner = T.deserialize(r: r);
+        T v = match (give inner) { case Ok(value: x): { := give x; } case Err(error: e): { return Result::Err(error: give e); } };
+        UnsafePtr<T> block = cast<UnsafePtr<T>>(unwrapPtr(o: GlobalAllocator.make().allocate(bytes: sizeof(T))));
+        block[0] = give v;
+        return Result::Ok(value: Owned.adopt(raw: block));
+    }
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). Leaves `alloc`
     // at its default, so it EXISTS only `when [A: default]` (the completeness gate would otherwise — correctly
     // — reject a custom `A` left unassigned; a custom-`A` box comes through `adoptIn`, the placement path).

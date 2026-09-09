@@ -406,9 +406,10 @@ struct ClassInfo {
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
     bool                              moveOnly = false;     // holds a move-only payload that owns nothing (a dtor-less resource) — see computeDestructible
     // Serialization mode gate (the tighter sibling of `destructible`): transitively reaches a
-    // Shared/Weak/Owned pointer field. false => by-value/tree serialization; true => object-graph.
-    // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse
-    // through it). Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
+    // Shared/Weak pointer field. false => by-value/tree serialization; true => object-graph.
+    // Recurses through collection elements, by-value fields AND `Owned` pointees (an `Owned` is a unique
+    // subtree and serializes inline), but STOPS at a Shared/Weak (doesn't recurse through it).
+    // Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
     bool                              reachesPointer = false;
     // (Sendability is not a computed flag here: a type DECLARES `implements Sendable`, which lands in
     // `interfaces` like any conformance, and checkSendableDeclarations verifies the claim over its fields.)

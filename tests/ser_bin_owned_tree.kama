@@ -1,21 +1,27 @@
-// KBIN object-graph round-trip with a UNIQUELY-OWNED child: a Parent owns a Child via `Owned<Child>`. Decode
-// rebuilds into a Shared<Parent>, transferring the child by GIVE-ONCE (no refcount) — proven by a byte-identical
-// re-encode; ASan proves the single-owner child frees exactly once. Returns 55.
+// KBIN round-trip of a tree of `Owned<Child>` nodes, BY VALUE: an `Owned` child is written inline as
+// the child's own object, so a `Parent` that owns children uniquely is not a graph and needs no
+// `Shared` root — decode hands back the `Parent` itself. Proven by a byte-identical re-encode; ASan
+// proves each child frees exactly once. Returns 55.
 import {
     std::serialization::binary::serializeBinaryNamedBuffer,
     std::serialization::binary::deserializeBinaryNamedBuffer,
     std::collections::DynamicArray,
-    std::memory::Shared,
     std::memory::Owned,
 };
 
 @generate(Serializable, Deserializable)
-type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 value() { return this.v; } }
 
 @generate(Serializable, Deserializable)
 type resource Parent {
     @field Owned<Child> kid;
-    public ctor make(Owned<Child> kid) { this.kid = give kid; }
+    @field Optional<Owned<Child>> spare;
+    public ctor make(Owned<Child> kid) { this.kid = give kid; this.spare = Optional::None; }
+    public fn void adopt(Owned<Child> c) { this.spare = Optional::Some(value: give c); }
+    public const fn int32 total() {
+        int32 s = match (this.spare) { case Some(value: c): c.value(); case None: 0; };
+        return this.kid.value() + s;
+    }
 }
 
 fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
@@ -34,13 +40,15 @@ fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
 fn int32 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
+    p.adopt(c: new Child.make(v: 3));
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: p);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Parent>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Parent>>(src: clone(src: ref b1));
+    Result<Parent, Owned<Error>> res = deserializeBinaryNamedBuffer::<Parent>(src: clone(src: ref b1));
     match (res) {
-        case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: sh);
+        case Ok(value: back): {
+            if (back.total() != 10) { return 30; }
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: back);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

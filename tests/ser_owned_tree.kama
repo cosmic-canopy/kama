@@ -1,0 +1,61 @@
+// An `Owned<X>` field serializes INLINE — on the wire it is exactly an `X`, byte-identical to a by-value
+// field of that type — and absence is spelled `Optional<Owned<X>>`, like every other field. A unique
+// subtree is not a graph: nothing else can point at it, so an id table would buy nothing and cost an
+// entry per node. So a hierarchy of values and `Owned` is a plain tree: it serializes by value and
+// `deserializeJsonBuffer::<Tree>` hands it back by value (this used to be refused — "`Owned` cannot be
+// deserialized" — and the only spelling was a graph `Shared<Tree>`, which put every node in a table).
+// The conformance is the triad's own (lib/std/memory/owned.kama), reached through the derive's ordinary
+// composite arm, which is why it works on every backend: json here and positional (no names, no
+// framing, still a tree) below. ASan proves each node frees exactly once. Returns the tree's sum, 42.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::collections::DynamicArray,
+    std::memory::Owned,
+};
+
+@generate(Serializable, Deserializable)
+type resource Tree {
+    @field int32 v;
+    @field Optional<Owned<Tree>> left;
+    @field Optional<Owned<Tree>> right;
+    public ctor make(int32 v) { this.v = v; this.left = Optional::None; this.right = Optional::None; }
+    public fn void setLeft(Owned<Tree> t)  { this.left  = Optional::Some(value: give t); }
+    public fn void setRight(Owned<Tree> t) { this.right = Optional::Some(value: give t); }
+    public const fn int32 sum() {
+        int32 l = match (this.left)  { case Some(value: t): t.sum(); case None: 0; };
+        int32 r = match (this.right) { case Some(value: t): t.sum(); case None: 0; };
+        return this.v + l + r;
+    }
+}
+
+fn Tree build() {
+    Tree root = Tree.make(v: 20);
+    Owned<Tree> l = new Tree.make(v: 10);
+    l.setLeft(t: new Tree.make(v: 5));
+    root.setLeft(t: give l);
+    root.setRight(t: new Tree.make(v: 7));
+    return give root;   // 20 + 10 + 5 + 7 = 42
+}
+
+fn int32 main() {
+    Tree t = build();
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: t);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // An Owned child is written as a nested object, exactly as a by-value child would be.
+    if (j != "{\"v\":20,\"left\":{\"v\":10,\"left\":{\"v\":5,\"left\":null,\"right\":null},\"right\":null},\"right\":{\"v\":7,\"left\":null,\"right\":null}}") {
+        return cast<int32>(j.length());
+    }
+    Result<Tree, Owned<Error>> back = deserializeJsonBuffer::<Tree>(src: give j);
+    Tree t2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (t2.sum() != 42) { return 252; }
+
+    // The same tree, positionally: values only, presence as one byte per Optional — and still a tree.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: t2);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 253; } };
+    Result<Tree, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Tree>(src: give bytes);
+    Tree t3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 254; } };
+    return t3.sum();
+}
