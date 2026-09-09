@@ -24113,6 +24113,10 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
         std::string oc = cType(ty);
         indent(depth); *_out << "switch ((" << access << ").tag) {\n";
         indent(depth); *_out << "case " << oc << "_Some: {\n";
+        // Mark presence BEFORE the value. A self-describing backend no-ops this (JSON and KBIN recognise a
+        // present value by its own bytes); a positional one has nothing to look at, so `Some` and `None`
+        // must differ by something the reader can count on.
+        indent(depth + 1); *_out << "w->vtbl->writeSome(w->obj);\n";
         emitSerFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1, resultCType);
         indent(depth + 1); *_out << "break;\n";
         indent(depth); *_out << "}\n";
@@ -24538,6 +24542,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     indent(2); *_out << "}\n";
     indent(2); *_out << "FieldKey__dtor(&__key);\n";   // the key owns its name string — free each iteration
     indent(1); *_out << "}\n";
+    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
     // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
     indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
@@ -24670,6 +24675,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     auto closeObj = [&](int d) {
         indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
                             "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
+        indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
     };
     // 0 = "not statically known": which variant follows — and so whether the frame is `{tag}` or
     // `{tag, value}` — is only known once the tag is read, and the tag is INSIDE this object.
@@ -25214,6 +25220,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         indent(2); *_out << "}\n";
         indent(2); *_out << "FieldKey__dtor(&__key);\n";
         indent(1); *_out << "}\n";
+        indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
     }
     indent(1); *_out << "return __b;\n";
     *_out << "}\n\n";
@@ -25239,6 +25246,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         indent(2); *_out << "}\n";
         indent(2); *_out << "FieldKey__dtor(&__key);\n";
         indent(1); *_out << "}\n";
+        indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
     }
     *_out << "}\n\n";
 }

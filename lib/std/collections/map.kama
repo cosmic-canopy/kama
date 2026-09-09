@@ -425,7 +425,8 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
-            bool __f3 = r.moreFields();   // consumes the closing `}`
+            bool __f3 = r.moreFields();   // consumes the closing `}` in a self-describing format
+            r.endObject();                // and tells a positional reader the entry frame is done
             this.put(key: give k, value: give v);
         }
         return Result::Ok(value: give this);

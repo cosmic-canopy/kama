@@ -595,6 +595,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();
+            r.endObject();
             result.put(key: give k, value: give v);
         }
         return Result::Ok(value: give result);

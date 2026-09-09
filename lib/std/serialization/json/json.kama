@@ -168,6 +168,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
     }
     public fn void writeBool(bool v) { this.sep(); this.ascii(s: boolStr(b: v)); this.needComma = true; }
     public fn void writeString(const ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
+    public fn void writeSome()   { }   // JSON marks presence by the value itself not being `null`
     public fn void writeNull() { this.sep(); this.ascii(s: "null"); this.needComma = true; }
     // --- graph/pointer framing ---
     // A pointer field is written as a bare integer id (0 = null/expired). The {"root":id,"objects":{...}}
@@ -287,6 +288,7 @@ type resource JsonReader implements Deserializer {
     // --- structural (Deserializer) ---
     public fn void beginObject(usize count) { this.expect(b: 123ui8); }   // { — count unused (self-delimiting)
     public fn void beginArray()  { this.expect(b: 91ui8); }    // [
+    public fn void endObject() { }   // `moreFields` already consumed the `}` — self-describing, nothing to pop
     public fn bool moreFields() {
         if (this.err) { return false; }   // sticky failure: stop iterating (else a malformed byte loops forever)
         this.skipWs();

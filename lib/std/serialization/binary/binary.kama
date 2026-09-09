@@ -120,6 +120,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void writeBool(bool v) { this.byte(b: v ? 12ui8 : 11ui8); }
     public fn void writeChar(char v) { this.byte(b: 14ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
     public fn void writeString(const ref string v) { this.putStr(s: ref v); }
+    public fn void writeSome() { }   // KBIN marks presence by the next tag not being 0x0D (null)
     public fn void writeNull() { this.byte(b: 13ui8); }
     // --- graph/pointer framing ---
     public fn void writeRef(uint64 id) { this.byte(b: 22ui8); this.putU(v: id, n: 8); }
@@ -195,6 +196,7 @@ type resource BinaryReader implements Deserializer {
     // --- structural (Deserializer) ---
     public fn void beginObject(usize count) { this.expectTag(t: 16ui8); }   // self-delimiting; count unused
     public fn void beginArray()  { this.expectTag(t: 18ui8); }
+    public fn void endObject() { }   // `moreFields` already consumed the obj-end tag — self-describing, nothing to pop
     public fn bool moreFields() {
         if (this.err) { return false; }
         if (this.at() == 17ui8) { this.pos = this.pos + 1; return false; }   // obj-end -> consume, done

@@ -41,6 +41,7 @@ type value Line {
             };
             if (isStart) { s = p; } else { e = p; }
         }
+        r.endObject();
         Line ln = Line.make(start: s, end: e);
         return Result::Ok(value: ln);
     }

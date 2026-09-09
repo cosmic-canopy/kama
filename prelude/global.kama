@@ -300,7 +300,14 @@ type contract Serializer for resource {
     fn void writeI8(int8 v); fn void writeI16(int16 v); fn void writeI32(int32 v); fn void writeI64(int64 v);
     fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);
     fn void writeF32(float32 v); fn void writeF64(float64 v);
-    fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(const ref string v); fn void writeNull();
+    fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(const ref string v);
+    // An `Optional<T>` field's PRESENCE, written before the two arms diverge: `writeSome()` then the inner
+    // value, or `writeNull()` alone. A self-describing backend no-ops `writeSome` — JSON reads a present
+    // value back by seeing something that is not `null`, KBIN by seeing a tag that is not 0x0D — but a
+    // POSITIONAL one has nothing to look at, so absence must cost a byte in both directions or a reader
+    // cannot tell where the next field starts. The pair is the value vocabulary's answer for presence, the
+    // way `variant` is its answer for a discriminant.
+    fn void writeSome(); fn void writeNull();
     // Graph/pointer serialization framing (used only by a graph `@generate` type — see std::serialization::graph).
     // `writeRef` writes a pointer field as an integer id; `beginGraph`/`beginTableEntry`/`endTableEntry`/`endGraph`
     // frame the `{"root":id,"objects":{id:{"__type":..,..}}}` id table. Text backends widen; a binary backend packs.
@@ -358,7 +365,13 @@ type contract Deserializer for resource {
     // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
     // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why
     // `beginArray()` below stays count-less.
-    fn void beginObject(usize count); fn bool moreFields();
+    // `endObject` is the read-side twin of the writer's, and it exists so a reader can know when an object
+    // is FINISHED. A self-describing one no-ops it (JSON has already eaten the `}` in `moreFields`, KBIN its
+    // end tag), but a positional reader keeps a stack of per-object field counters and `moreFields` alone
+    // cannot tell it when to pop one: the derive calls `moreFields` several times on a frame and ignores the
+    // result (a tagged enum's `{tag, value}` shape is fixed, so it is read positionally), which makes "it
+    // returned false" ambiguous. Without this member a positional reader is not implementable at all.
+    fn void beginObject(usize count); fn void endObject(); fn bool moreFields();
     // The read twin of `Serializer.field`/`variant`. JSON and KBIN answer `Name(readString())`; a numbered
     // reader answers `Id(readU32())`; a positional reader answers `Id(counter++)`, since its shape is
     // agreed in advance rather than described on the wire.
