@@ -272,6 +272,20 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // backends widen. Declaration-only — zero cost unless a program actually serializes.
 type contract Serializer for resource {
     fn void beginObject(); fn void endObject(); fn void fieldName(string name);
+    // FIELD ADDRESSING. A key carries BOTH forms and the backend keeps the one it is: a named backend
+    // (JSON/KBIN) writes `name`, a numbered one writes `id`, a positional one writes neither and relies on
+    // order. `id` defaults to the field's declaration index and an author may override it with a stable,
+    // sparse protobuf-style number; the derive emits fields in ascending `id`, which is what makes ids and
+    // positions one thing. So a type opts into serialization ONCE and every addressing works — no
+    // capability query, and no generic `Serializable<K>` (which cannot exist: two `field` bodies differing
+    // only in a parameter type is overloading, and a member name may be declared only once in its type).
+    fn void field(string name, uint32 id);
+    // A VARIANT SELECTOR — the tagged-enum discriminant. Its own member because the value vocabulary below
+    // has one method per scalar shape and a discriminant is not a string: it is one of `n` known
+    // alternatives. Without this the derive had to spend `writeString(variantName)`, so every backend paid
+    // a full UTF-8 name for a choice a positional or numbered stream encodes in one byte. Named backends
+    // write `name` (unchanged on the wire), the others write `index`.
+    fn void variant(string name, uint32 index);
     fn void beginArray(usize count); fn void endArray();
     fn void writeI8(int8 v); fn void writeI16(int16 v); fn void writeI32(int32 v); fn void writeI64(int64 v);
     fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);
@@ -324,8 +338,18 @@ type enum DeError implements Error, Sendable {
         };
     }
 }
+// What a reader ANSWERS when asked for the next field key (or variant selector). The writer/reader
+// asymmetry here is deliberate: a writer is TOLD everything (`field(name, id)`), while a reader can only
+// report what it actually found — a named backend has no id to give, a positional one has no name — so the
+// derive must be told which it got. One derived body then serves every addressing with a single loop:
+// resolve the key to a slot by name OR by id, and read that field.
+type enum FieldKey { Name(string name), Id(uint32 id) }
 type contract Deserializer for resource {
     fn void beginObject(); fn bool moreFields(); fn string fieldName();
+    // The read twin of `Serializer.field`/`variant`. JSON and KBIN answer `Name(readString())`; a numbered
+    // reader answers `Id(readU32())`; a positional reader answers `Id(counter++)`, since its shape is
+    // agreed in advance rather than described on the wire.
+    fn FieldKey field(); fn FieldKey variant();
     fn void beginArray(); fn bool moreElems();
     fn int8 readI8(); fn int16 readI16(); fn int32 readI32(); fn int64 readI64();
     fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();

@@ -144,6 +144,16 @@ type resource JsonWriter<W: Writer> implements Serializer {
         this.byte(b: 58ui8);                        // :
         this.needComma = false;
     }
+    // JSON is a NAMED format: it keeps the name and ignores the id, so the bytes are exactly `fieldName`'s.
+    public fn void field(string name, uint32 id) {
+        this.sep();
+        this.quoted(s: ref name);
+        this.byte(b: 58ui8);                        // :
+        this.needComma = false;
+    }
+    // A variant selector is a JSON string — the externally-tagged `{"tag":"Circle",…}` form. The index is
+    // what a positional/numbered backend keeps instead.
+    public fn void variant(string name, uint32 index) { this.sep(); this.quoted(s: ref name); this.needComma = true; }
     public fn void writeI8(int8 v)   { this.sep(); this.ascii(s: i8Str(v: v));  this.needComma = true; }
     public fn void writeI16(int16 v) { this.sep(); this.ascii(s: i16Str(v: v)); this.needComma = true; }
     public fn void writeI32(int32 v) { this.sep(); this.ascii(s: i32Str(v: v)); this.needComma = true; }
@@ -304,6 +314,14 @@ type resource JsonReader implements Deserializer {
         this.expect(b: 58ui8);   // :
         return give k;
     }
+    // JSON keys are strings, so a JSON reader can only ever report a NAME — never an id.
+    public fn FieldKey field() {
+        string k = this.readString();
+        this.expect(b: 58ui8);   // :
+        return FieldKey::Name(name: give k);
+    }
+    // The externally-tagged variant selector is a bare JSON string value (no `:` follows it).
+    public fn FieldKey variant() { return FieldKey::Name(name: this.readString()); }
 
     // --- scalars ---
     fn string numToken() {

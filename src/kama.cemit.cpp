@@ -8204,6 +8204,15 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 _genericTypes[name]      = ci;
             } else {
                 if (anyDerive) registerDerives(ci, ed->identifier, ed->line);
+                // A TAGGED prelude enum's bodies are emitted `static inline` by the `_preludeEnums` loop in
+                // the end pass, so its prototypes must carry the same linkage. collectEnumConformances sets
+                // `preludeStatic` too, but only for an enum that declares members, `implements` or
+                // `@generate` — it returns early otherwise. A prelude enum that declares NONE of those and
+                // still owns a payload (`FieldKey { Name(string), Id(uint32) }`) reached the end pass with a
+                // static-inline dtor definition and non-static prototypes, which clang refuses outright
+                // ("static declaration of 'FieldKey__dtor' follows non-static declaration"). Nothing hit it
+                // before because no prelude enum was both payload-carrying and destructible.
+                if (unit == _preludeUnit) ci.preludeStatic = true;
                 _classes[name] = ci;
             }
             continue;

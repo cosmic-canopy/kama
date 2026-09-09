@@ -102,6 +102,11 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void beginArray(usize count) { this.byte(b: 18ui8); }   // self-delimiting; count unused
     public fn void endArray()    { this.byte(b: 19ui8); }
     public fn void fieldName(string name) { this.putStr(s: ref name); }
+    // KBIN is self-describing and NAMED: it keeps the name and ignores the id, so the bytes are unchanged.
+    public fn void field(string name, uint32 id) { this.putStr(s: ref name); }
+    // The variant selector rides as a tagged string, exactly as it did when the derive spelled it
+    // `writeString(variantName)` — a positional/numbered backend keeps `index` instead.
+    public fn void variant(string name, uint32 index) { this.putStr(s: ref name); }
     public fn void writeI8(int8 v)   { this.byte(b: 1ui8); this.putU(v: cast<uint64>(bitcast<uint8>(v)),  n: 1); }
     public fn void writeI16(int16 v) { this.byte(b: 2ui8); this.putU(v: cast<uint64>(bitcast<uint16>(v)), n: 2); }
     public fn void writeI32(int32 v) { this.byte(b: 3ui8); this.putU(v: cast<uint64>(bitcast<uint32>(v)), n: 4); }
@@ -202,6 +207,9 @@ type resource BinaryReader implements Deserializer {
         return true;
     }
     public fn string fieldName() { return this.readStr(); }
+    // KBIN describes its own shape, so it can only ever report a NAME — never an id.
+    public fn FieldKey field()   { return FieldKey::Name(name: this.readStr()); }
+    public fn FieldKey variant() { return FieldKey::Name(name: this.readStr()); }
 
     // --- scalars ---
     // A signed scalar goes onto the wire as its unsigned peer's BIT PATTERN and comes back the same way,
