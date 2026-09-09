@@ -1,0 +1,19 @@
+// A type that reaches a `Shared`/`Weak` field is a graph node, never a by-value `Serializable`: it can alias,
+// cycle, or hold a `Weak` back-edge, none of which survive a by-value return. Forgetting the root spelling
+// (`ObjectGraph.of(root: …)`) is a compile error, not a wrong wire.
+import { std::serialization::json::serializeJsonBuffer, std::memory::Shared };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable, Deserializable)
+type resource Node {
+    @field Shared<Leaf> l;
+    public ctor make(Shared<Leaf> l) { this.l = give l; }
+}
+
+fn int32 main() {
+    Node n = Node.make(l: new Leaf.make(v: 1));
+    Result<string, Owned<Error>> r = serializeJsonBuffer(v: n);   // a graph node by value: rejected
+    return 0;
+}

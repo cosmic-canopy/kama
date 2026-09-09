@@ -1,0 +1,18 @@
+// `Shared<T>` is not a serde target any more: a graph root is spelled `ObjectGraph<T>`, the library type
+// that holds the walker. The old spelling is a compile error, not a silently different wire.
+import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable, Deserializable)
+type resource Node {
+    @field Shared<Leaf> l;
+    public ctor make(Shared<Leaf> l) { this.l = give l; }
+}
+
+fn int32 main() {
+    string j = "{}";
+    Result<Shared<Node>, Owned<Error>> r = deserializeJsonBuffer::<Shared<Node>>(src: give j);   // rejected
+    return 0;
+}

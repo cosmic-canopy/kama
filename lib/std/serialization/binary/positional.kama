@@ -20,10 +20,9 @@
 //     not how many variants exist, so a fixed width would have to assume the worst case.
 //   - `writeSome()`/`writeNull()` spend one byte on an `Optional`'s presence. Absence has to cost something
 //     positionally: with no tokens to look at, a reader cannot otherwise tell where the next field starts.
-//   - GRAPH mode is not available. A graph's object table is sized at runtime and a table entry's field
-//     count depends on the `__type` inside it, so neither can be stated in advance; the writer does not
-//     state them either (it frames with `beginTableEntry`). Every graph member fails with `Malformed`
-//     rather than producing a stream that cannot be read back. Use `json` or `binary` for a graph.
+//   - An object GRAPH rides the same rules: the walker (std::serialization::graph) frames its table as an
+//     array (length on the wire), each entry as a fixed `{id, type, value}` object (the type via `variant`,
+//     one index byte), and each node's fields as the node's own object with its static count.
 //
 // LAYOUT: scalars are raw fixed-width little-endian with NO tag; `string` is a u32 LE byte length + raw
 // UTF-8; `bool` is one byte; `char` is a u32 LE codepoint; an array is a u32 LE element count + elements.
@@ -145,13 +144,6 @@ type resource PositionalBinarySerializer<W: Writer> implements Serializer {
     public fn void writeSome() { this.byte(b: 1ui8); }
     public fn void writeNull() { this.byte(b: 0ui8); }
 
-    // --- graph framing: not representable positionally (see the header) ---
-    public fn void writeRef(uint64 id) { this.refuse(); }
-    public fn void beginGraph(uint64 rootId) { this.refuse(); }
-    public fn void beginTableEntry(uint64 id, string ty) { this.refuse(); }
-    public fn void endTableEntry() { }
-    public fn void endGraph() { }
-
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
@@ -224,10 +216,9 @@ type resource PositionalBinaryDeserializer implements Deserializer {
     fn void refuse() { this.failWith(e: DeError::Malformed); }
 
     // --- structure: the count is the only thing that ends a loop ---
-    // A count of 0 means the writer could not state the shape (a tagged enum's outer frame, a graph table),
-    // and `moreFields` then answers false at once. The derive ignores that result at those framing sites —
-    // it reads a fixed `{tag}`/`{tag, value}` shape — so an enum still decodes; a GRAPH does not, which is
-    // the honest outcome, since a positional stream cannot carry one.
+    // A count of 0 means the writer could not state the shape (a tagged enum's outer frame), and
+    // `moreFields` then answers false at once. The derive ignores that result at those framing sites — it
+    // reads a fixed `{tag}`/`{tag, value}` shape — so an enum still decodes.
     fn void push(isize n) {
         if (this.depth >= 64) { this.refuse(); return; }
         this.remain[this.depth] = n;
@@ -298,13 +289,6 @@ type resource PositionalBinaryDeserializer implements Deserializer {
     // A positional reader cannot skip: there is no tag and no length to measure a value by. A stream whose
     // shape does not match the type is `Malformed` — the agreed-shape contract, stated rather than guessed.
     public fn void skipValue() { this.refuse(); }
-
-    // --- graph reads: not representable positionally (see the header) ---
-    public fn uint64 beginGraph() { this.refuse(); return 0ui64; }
-    public fn void rewindGraph() { this.refuse(); }
-    public fn uint64 entryKey() { this.refuse(); return 0ui64; }
-    public fn uint64 readRef() { this.refuse(); return 0ui64; }
-    public fn void endGraph() { }
 
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }

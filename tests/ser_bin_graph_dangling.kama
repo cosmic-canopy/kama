@@ -9,6 +9,7 @@ import {
     std::collections::DynamicArray,
     std::io::StringWriter,
     std::memory::Shared,
+    std::serialization::graph::ObjectGraph,
 };
 
 @generate(Serializable, Deserializable)
@@ -22,17 +23,27 @@ type resource Pair {
 }
 
 fn int32 main() {
-    // Craft {root:1, objects:{ 1:{__type:Pair, a:ref(2), b:ref(2)} }} — id 2 (the Leaf) is MISSING.
+    // Craft {root:1, objects:[{id:1, type:Pair, value:{a:2, b:2}}]} through the ordinary token protocol —
+    // the envelope IS ordinary tokens now — with id 2 (the Leaf) MISSING from the table.
     NamedBinarySerializer<StringWriter> w = NamedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
-    w.beginGraph(rootId: cast<uint64>(1));
-    w.beginTableEntry(id: cast<uint64>(1), ty: "Pair");
-    w.field(name: "a", id: 0ui32); w.writeRef(id: cast<uint64>(2));
-    w.field(name: "b", id: 1ui32); w.writeRef(id: cast<uint64>(2));
-    w.endTableEntry();
-    w.endGraph();
+    w.beginObject(count: 2);
+    w.field(name: "root", id: 0ui32); w.writeU64(v: cast<uint64>(1));
+    w.field(name: "objects", id: 1ui32);
+    w.beginArray(count: cast<usize>(1));
+    w.beginObject(count: 3);
+    w.field(name: "id", id: 0ui32); w.writeU64(v: cast<uint64>(1));
+    w.field(name: "type", id: 1ui32); w.variant(name: "Pair", index: 0ui32);
+    w.field(name: "value", id: 2ui32);
+    w.beginObject(count: 2);
+    w.field(name: "a", id: 0ui32); w.writeU64(v: cast<uint64>(2));
+    w.field(name: "b", id: 1ui32); w.writeU64(v: cast<uint64>(2));
+    w.endObject();
+    w.endObject();
+    w.endArray();
+    w.endObject();
     DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();
 
-    Result<Shared<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Pair>>(src: give bytes);
+    Result<ObjectGraph<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<ObjectGraph<Pair>>(src: give bytes);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {

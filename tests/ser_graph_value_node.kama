@@ -1,0 +1,32 @@
+// A `value` type is welcome in a graph: `ObjectGraph<Pt>` over a pointer-free `@generate` type is a
+// one-node heap graph. `Pt` keeps its by-value pair too (it reaches nothing), so the same type serializes
+// both ways. Round trip through the named binary backend as well, to show the root spelling is the same
+// through every entry point.
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+         std::serialization::binary::serializeBinaryNamedBuffer, std::serialization::binary::deserializeBinaryNamedBuffer,
+         std::collections::DynamicArray, std::memory::Shared, std::serialization::graph::ObjectGraph };
+
+@generate(Serializable, Deserializable)
+type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } public const fn int32 sum() { return this.x + this.y; } }
+
+fn int32 main() {
+    Result<string, Owned<Error>> plain = serializeJsonBuffer(v: Pt.make(x: 1, y: 2));            // by value, as ever
+    string pj = match (give plain) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
+    if (pj != "{\"x\":1,\"y\":2}") { return 249; }
+
+    Shared<Pt> p = new Pt.make(x: 3, y: 4);
+    ObjectGraph<Pt> graph = ObjectGraph.of(root: give p);
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: graph);
+    string j = match (give jr) { case Ok(value: s): give s; case Err(error: e): { return 248; } };
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pt\",\"value\":{\"x\":3,\"y\":4}}]}") { return cast<int32>(j.length()); }
+    Result<ObjectGraph<Pt>, Owned<Error>> back = deserializeJsonBuffer::<ObjectGraph<Pt>>(src: give j);
+    int32 a = match (give back) { case Ok(value: og): og.root().sum(); case Err(error: e): { return 247; } };
+
+    Shared<Pt> q = new Pt.make(x: 10, y: 20);
+    ObjectGraph<Pt> graph2 = ObjectGraph.of(root: give q);
+    Result<DynamicArray<uint8>, Owned<Error>> br = serializeBinaryNamedBuffer(v: graph2);
+    DynamicArray<uint8> bytes = match (give br) { case Ok(value: b): give b; case Err(error: e): { return 246; } };
+    Result<ObjectGraph<Pt>, Owned<Error>> bback = deserializeBinaryNamedBuffer::<ObjectGraph<Pt>>(src: give bytes);
+    int32 b = match (give bback) { case Ok(value: og): og.root().sum(); case Err(error: e): { return 245; } };
+    return a + b;   // 7 + 30
+}

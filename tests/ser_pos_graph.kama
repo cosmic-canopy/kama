@@ -1,0 +1,84 @@
+// An object graph on the POS backend. The envelope is ordinary tokens — the table an array (length on the
+// wire), each entry a fixed `{id, type, value}` object with the type as a `variant` (an index here), each
+// node's fields its own object with a static count — so an index backend carries a graph exactly as it carries
+// a tagged enum. Cycle through a Weak back-edge + a polymorphic contract edge; byte-identical re-encode and
+// dynamic dispatch surviving the trip prove it. Returns 55.
+import {
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+    std::memory::Weak,
+    std::serialization::graph::ObjectGraph,
+};
+
+type contract Shape for resource { fn int32 area(); }
+
+@generate(Serializable, Deserializable)
+type resource Sq implements Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.side * this.side; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Circle implements Shape {
+    @field int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return 3 * this.r * this.r; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Node {
+    @field int32 id;
+    @field Optional<Shared<Node>> next;
+    @field Optional<Weak<Node>> back;
+    @field Shared<Shape> shape;
+    public ctor make(int32 id, Shared<Shape> shape) { this.id = id; this.next = Optional::None; this.back = Optional::None; this.shape = give shape; }
+    public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
+    public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
+    public fn int32 area() { return this.shape.area(); }
+    public fn int32 nextArea() { return match (this.next) { case Some(value: n): n.area(); case None: 0 - 1; }; }
+}
+
+fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    isize i = 0; isize n = src.length();
+    while (i < n) { c.add(item: src[i]); i = i + 1; }
+    return give c;
+}
+fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    isize i = 0; isize n = a.length();
+    while (i < n) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn int32 main() {
+    Shared<Sq> sq = new Sq.make(side: 4);
+    Shared<Shape> sa = sq;
+    Shared<Circle> ci = new Circle.make(r: 2);
+    Shared<Shape> sb = ci;
+    Shared<Node> a = new Node.make(id: 1, shape: give sa);
+    Shared<Node> b = new Node.make(id: 2, shape: give sb);
+    b.setBack(w: a.downgrade());
+    a.setNext(n: give b);
+    ObjectGraph<Node> graph = ObjectGraph.of(root: a);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryPositionalBuffer(v: graph);
+    DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
+
+    Result<ObjectGraph<Node>, Owned<Error>> res = deserializeBinaryPositionalBuffer::<ObjectGraph<Node>>(src: clone(src: ref b1));
+    match (res) {
+        case Ok(value: og): {
+            Shared<Node> root = og.root();
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryPositionalBuffer(v: graph);
+            DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
+            if (!bytesEqual(a: ref b1, b: ref b2)) { return 40; }
+            if (root.area() != 16) { return 41; }        // Sq: 4*4, through the rebuilt fat edge
+            if (root.nextArea() != 12) { return 42; }    // Circle: 3*2*2, one hop down the rebuilt Shared edge
+            return 55;
+        }
+        case Err(error: e): { return 2; }
+    };
+    return 3;
+}

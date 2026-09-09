@@ -130,21 +130,6 @@ type resource NamedBinarySerializer<W: Writer> implements Serializer {
     public fn void writeString(const ref string v) { this.putStr(s: ref v); }
     public fn void writeSome() { }   // KBIN marks presence by the next tag not being 0x0D (null)
     public fn void writeNull() { this.byte(b: 13ui8); }
-    // --- graph/pointer framing ---
-    public fn void writeRef(uint64 id) { this.byte(b: 22ui8); this.putU(v: id, n: 8); }
-    public fn void beginGraph(uint64 rootId) {
-        this.byte(b: 20ui8); this.putU(v: rootId, n: 8);   // graph-begin + root
-        this.byte(b: 16ui8);                               // then the table's obj-begin
-    }
-    public fn void beginTableEntry(uint64 id, string ty) {
-        this.byte(b: 21ui8); this.putU(v: id, n: 8);       // entry-key + id
-        this.byte(b: 16ui8);                               // entry obj-begin
-        string k = "__type";
-        this.putStr(s: ref k); this.putStr(s: ref ty);     // "__type": <ty>
-    }
-    public fn void endTableEntry() { this.byte(b: 17ui8); }              // entry obj-end
-    public fn void endGraph() { this.byte(b: 17ui8); this.byte(b: 23ui8); }   // table obj-end + graph-end
-
     // --- sticky error queries ---
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
@@ -153,14 +138,12 @@ type resource NamedBinarySerializer<W: Writer> implements Serializer {
 }
 
 // A KBIN reader over an owned byte buffer, implementing Deserializer with a STICKY error flag (a malformed
-// token sets `err` and returns a default; the caller checks `failed()` once). The whole source is held so the
-// two-pass object-graph decode can `rewindGraph` to the table — the same bounded-memory boundary as JSON.
+// token sets `err` and returns a default; the caller checks `failed()` once).
 type resource NamedBinaryDeserializer implements Deserializer {
     DynamicArray<uint8> buf;
     isize pos;
     isize len;
     bool err;
-    isize objMark;      // byte offset of the graph objects table (for the two-pass rewind)
     DeError code;
 
     public ctor make(DynamicArray<uint8> src) {
@@ -168,7 +151,6 @@ type resource NamedBinaryDeserializer implements Deserializer {
         this.buf = give src;
         this.pos = 0;
         this.err = false;
-        this.objMark = 0;
         this.code = DeError::Malformed;
     }
 
@@ -252,7 +234,7 @@ type resource NamedBinaryDeserializer implements Deserializer {
         if (t == 1ui8 || t == 5ui8) { this.pos = this.pos + 1; }
         else if (t == 2ui8 || t == 6ui8) { this.pos = this.pos + 2; }
         else if (t == 3ui8 || t == 7ui8 || t == 9ui8 || t == 14ui8) { this.pos = this.pos + 4; }
-        else if (t == 4ui8 || t == 8ui8 || t == 10ui8 || t == 22ui8) { this.pos = this.pos + 8; }
+        else if (t == 4ui8 || t == 8ui8 || t == 10ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
         else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
         else if (t == 16ui8) { while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // the 0x10 was already consumed as `t`
@@ -262,17 +244,6 @@ type resource NamedBinaryDeserializer implements Deserializer {
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
 
-    // --- graph (object-table) reads — the twin of writeRef/beginGraph/beginTableEntry/… ---
-    public fn uint64 beginGraph() {
-        this.expectTag(t: 20ui8);                // graph-begin
-        uint64 root = this.getU(n: 8);
-        this.objMark = this.pos;                 // at the table's obj-begin (0x10) — left for beginObject()
-        return root;
-    }
-    public fn void rewindGraph() { this.pos = this.objMark; }
-    public fn uint64 entryKey() { this.expectTag(t: 21ui8); return this.getU(n: 8); }   // leaves cursor at entry obj-begin
-    public fn uint64 readRef() { this.expectTag(t: 22ui8); return this.getU(n: 8); }
-    public fn void endGraph() { this.expectTag(t: 23ui8); }   // the table obj-end was consumed by moreFields
     public fn void failWith(DeError e) { this.err = true; this.code = e; }
     public const fn DeError errorCode() { return this.code; }
 }

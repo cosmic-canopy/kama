@@ -1,0 +1,145 @@
+// Object-graph serialization — the algorithm, as a library type over the ordinary token protocol.
+//
+// A `@generate` type that reaches a `Shared`/`Weak` field is a graph node: it can alias, cycle, or hold a
+// `Weak` back-edge, none of which survive a by-value return. Such a type is not `Serializable` by value;
+// the compiler synthesizes the prelude's ADAPTERS for it instead (`GraphSerializable`, `GraphDeserializable`,
+// `GraphRoot` — what its fields are, how to visit/write/read/re-wire its edges), and `ObjectGraph<T>` is
+// the spelling of a root: `serializeJsonBuffer(v: ObjectGraph.of(root: give r))` on the way out,
+// `deserializeJsonBuffer::<ObjectGraph<Node>>(src: …)` then `.root()` on the way in — through ANY backend's
+// entry points, since this type is an ordinary `Serializable`/`Deserializable`.
+//
+// WIRE. Every frame is the token vocabulary every backend already carries, so positional and numbered
+// carry a graph too:
+//     { root: u64, objects: [ { id: u64, type: variant(name, index), value: <the node's own object> } … ] }
+// Ids are 1-based discovery order (the root is 1); an edge is a `u64` id, `0` for None / an expired Weak.
+// The envelope's own frames have a FIXED shape — `{root, objects}` and each entry's `{id, type, value}` —
+// so they are read positionally, the way the derive reads a tagged enum's `{tag, value}`: the key is
+// consumed and the order is the contract (`type` before `value`, or the reader cannot dispatch). Only a
+// node's `value` object is keyed, by the derive. An `Owned<X>` is NOT an edge: a unique subtree is written
+// inline, byte-identical to an `X` field (lib/std/memory/owned.kama).
+//
+// WRITE is two passes: `visitEdges` over a worklist that grows as pointees are interned (so the table's
+// length is exact before the first entry — a positional array carries its length up front), then
+// `writeNode` per node in id order. READ is two passes with no rewind: `readShell` per entry (each node
+// allocated and its scalars read, every edge id stashed), then `wireEdges` per shell in read order (ids
+// become retained handles). The walker holds every shell strongly until it returns; a node no live edge
+// reaches is freed with the walker, so a forged wire cannot leak.
+//
+// The two context types below are the only things the adapters ever see, through the prelude contracts —
+// which is what makes a different driver possible against the same adapters (a single-pass writer for a
+// self-describing backend, say) without touching the compiler.
+import { std::collections::Map, std::collections::DynamicArray };
+
+export { ObjectGraph };
+
+// Write-side context: identity (a pointee address) -> id, and the retained nodes in id order.
+type resource GraphWriter implements GraphSerializer {
+    Map<usize, uint64> ids;
+    DynamicArray<Shared<GraphSerializable>> nodes;
+    public ctor make() { this.ids = Map.empty(); this.nodes = DynamicArray.empty(); }
+    public fn uint64 intern(usize identity, Shared<GraphSerializable> node) {
+        if (this.ids.contains(key: identity)) { return this.ids.getRef(key: identity); }   // `node` drops: already held
+        this.nodes.add(item: give node);
+        uint64 id = cast<uint64>(this.nodes.length());
+        this.ids.put(key: identity, value: id);
+        return id;
+    }
+    public const fn isize count() { return this.nodes.length(); }
+    public fn ref Shared<GraphSerializable> nodeAt(isize i) { return this.nodes[i]; }
+}
+
+// Read-side context: id -> shell (retained), the ids in read order, and a sticky error of its own.
+type resource GraphReader implements GraphDeserializer {
+    Map<uint64, Shared<GraphDeserializable>> shells;
+    DynamicArray<uint64> order;
+    bool err;
+    DeError code;
+    public ctor make() { this.shells = Map.empty(); this.order = DynamicArray.empty(); this.err = false; this.code = DeError::Malformed; }
+    public const fn bool has(uint64 id) { return this.shells.contains(key: id); }
+    public fn ref Shared<GraphDeserializable> resolve(uint64 id) { return this.shells.getRefMut(key: id); }
+    public fn void fail(DeError e) { this.err = true; this.code = e; }
+    public const fn bool failed() { return this.err; }
+    public const fn DeError errorCode() { return this.code; }
+    public const fn isize count() { return this.order.length(); }
+    public const fn uint64 orderAt(isize i) { return this.order[i]; }
+    // A table id may appear once; a second entry under it is `DuplicateId` (the shell just read drops).
+    public fn void enroll(uint64 id, Shared<GraphDeserializable> shell) {
+        if (id == 0ui64 || this.shells.contains(key: id)) { this.fail(e: DeError::DuplicateId); return; }
+        this.order.add(item: id);
+        this.shells.put(key: id, value: give shell);
+    }
+}
+
+// The root of an object graph, and the one type a graph is serialized AS. `T` is any `@generate` node type
+// (a `value` type is welcome: a one-node graph). `root()` hands the owning handle out — a bare `Shared`
+// hand-off retains, so the graph may be re-serialized afterwards.
+type resource ObjectGraph<T> implements Serializable when [T: GraphSerializable],
+                                       Deserializable<This> when [T: GraphRoot<T>] {
+    Shared<T> root;
+    public ctor of(Shared<T> root) { this.root = give root; }
+    public fn Shared<T> root() { return this.root; }
+
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: GraphSerializable] {
+        GraphWriter g = GraphWriter.make();
+        GraphSerializer gs = g;
+        Shared<GraphSerializable> up = this.root;
+        uint64 rootId = gs.intern(identity: cast<usize>(addr(of: this.root.deref())), node: give up);
+        // Pass 1 — discovery. The worklist grows under the loop; `count()` is re-read each time.
+        isize i = 0;
+        while (i < g.count()) { g.nodeAt(i: i).visitEdges(g: ref gs); i = i + 1; }
+        // Pass 2 — the envelope, every frame an ordinary token.
+        w.beginObject(count: 2);
+        w.field(name: "root", id: 0ui32); w.writeU64(v: rootId);
+        w.field(name: "objects", id: 1ui32);
+        w.beginArray(count: cast<usize>(g.count()));
+        i = 0;
+        while (i < g.count()) {
+            w.beginObject(count: 3);
+            w.field(name: "id", id: 0ui32); w.writeU64(v: cast<uint64>(i + 1));
+            w.field(name: "type", id: 1ui32); w.variant(name: g.nodeAt(i: i).typeName(), index: g.nodeAt(i: i).typeIndex());
+            w.field(name: "value", id: 2ui32); g.nodeAt(i: i).writeNode(w: w, g: ref gs);
+            w.endObject();
+            i = i + 1;
+        }
+        w.endArray();
+        w.endObject();
+        if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<ObjectGraph<T>, Owned<Error>> deserialize(Deserializer r) when [T: GraphRoot<T>] {
+        Result<Shared<T>, Owned<Error>> rs = ObjectGraph::<T>::readGraph(r: r);
+        return match (give rs) { case Ok(value: s): Result::Ok(value: ObjectGraph.of(root: give s)); case Err(error: e): Result::Err(error: give e); };
+    }
+    static fn Result<Shared<T>, Owned<Error>> readGraph(Deserializer r) when [T: GraphRoot<T>] {
+        GraphReader g = GraphReader.make();
+        GraphDeserializer gd = g;
+        r.beginObject(count: 2);
+        bool m0 = r.moreFields(); FieldKey k0 = r.field();
+        uint64 rootId = r.readU64();
+        bool m1 = r.moreFields(); FieldKey k1 = r.field();
+        r.beginArray();
+        while (r.moreElems()) {                                   // pass 1 — one shell per entry
+            r.beginObject(count: 3);
+            bool e0 = r.moreFields(); FieldKey ek0 = r.field();
+            uint64 id = r.readU64();
+            bool e1 = r.moreFields(); FieldKey ek1 = r.field();
+            FieldKey ty = r.variant();
+            bool e2 = r.moreFields(); FieldKey ek2 = r.field();
+            Optional<Shared<GraphDeserializable>> sh = T::readShell(which: give ty, r: r, g: ref gd);
+            match (give sh) { case Some(value: s): { g.enroll(id: id, shell: give s); } case None: { g.fail(e: DeError::TypeMismatch); } };
+            bool e3 = r.moreFields();
+            r.endObject();
+            if (r.failed()) { break; }                          // a malformed entry cannot be stepped over
+        }
+        bool m2 = r.moreFields();
+        r.endObject();
+        isize i = 0;                                              // pass 2 — ids become handles
+        while (i < g.count()) { g.resolve(id: g.orderAt(i: i)).wireEdges(g: ref gd); i = i + 1; }
+        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        if (g.failed()) { DeError e2 = g.errorCode(); return Result::Err(error: e2); }
+        if (!g.has(id: rootId)) { return Result::Err(error: DeError::UnresolvedReference); }
+        Optional<Shared<T>> rt = T::takeRoot(shell: copy g.resolve(id: rootId));
+        return match (give rt) { case Some(value: s): Result::Ok(value: give s); case None: Result::Err(error: DeError::TypeMismatch); };
+    }
+}

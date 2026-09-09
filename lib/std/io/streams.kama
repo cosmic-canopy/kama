@@ -70,9 +70,9 @@ fn Result<isize, IoError> pump(Reader from, Writer to) {
 }
 
 // Drain a `Reader` fully into an owned UTF-8 string (through a `StringWriter` + `pump`). The bounded-memory
-// boundary for readers that need whole-source access — e.g. serde's JSON graph decode seeks backward
-// (`rewindGraph`), so `deserializeJsonStream` reads all first. Buffers the whole source BY DESIGN (matches Go
-// `encoding/json`'s buffer-a-value model); genuine record-streaming is a separate future API.
+// boundary for readers that want whole-source access — serde's `deserialize…Stream` entry points read all
+// first. Buffers the whole source BY DESIGN (matches Go `encoding/json`'s buffer-a-value model); genuine
+// record-streaming is a separate future API.
 fn Result<string, IoError> readAll(Reader r) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: r, to: sw);

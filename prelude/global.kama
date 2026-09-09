@@ -279,8 +279,8 @@ type contract Serializer for resource {
     // ⚠️ Deliberately asymmetric with `beginArray(count)`, whose reader takes NO count, and the reason is
     // worth keeping: an array's length is RUNTIME data, so it goes on the wire and the reader reads it
     // back; an object's field count is COMPILE-TIME shape, so putting it on the wire would pay for
-    // something both sides already know. Hence the reader is told instead. (It also means a positional
-    // backend cannot carry a graph: the writer never states a table entry's field count.)
+    // something both sides already know. Hence the reader is told instead. (A graph's object table is an
+    // ARRAY for exactly this reason: its size is runtime data, so it rides the wire as a length.)
     fn void beginObject(usize count); fn void endObject();
     // FIELD ADDRESSING. A key carries BOTH forms and the backend keeps the one it is: a named backend
     // (JSON/KBIN) writes `name`, a numbered one writes `id`, a positional one writes neither and relies on
@@ -308,12 +308,9 @@ type contract Serializer for resource {
     // cannot tell where the next field starts. The pair is the value vocabulary's answer for presence, the
     // way `variant` is its answer for a discriminant.
     fn void writeSome(); fn void writeNull();
-    // Graph/pointer serialization framing (used only by a graph `@generate` type — see std::serialization::graph).
-    // `writeRef` writes a pointer field as an integer id; `beginGraph`/`beginTableEntry`/`endTableEntry`/`endGraph`
-    // frame the `{"root":id,"objects":{id:{"__type":..,..}}}` id table. Text backends widen; a binary backend packs.
-    fn void writeRef(uint64 id);
-    fn void beginGraph(uint64 rootId); fn void beginTableEntry(uint64 id, string ty);
-    fn void endTableEntry(); fn void endGraph();
+    // That is the WHOLE vocabulary — an object graph is written in it too. The graph walker
+    // (std::serialization::graph) frames its id table as ordinary objects and arrays and a pointer as a
+    // `writeU64` id, so a backend that carries values carries graphs, positional and numbered included.
     // STICKY error model (mirror of Deserializer): a write that can't proceed — an I/O sink error, or a
     // value the format can't represent (`NaN`/`Inf` in JSON) — sets `failed()` and records a `SerError`.
     // A fallible `serialize` writes bare (no per-write branching) and checks `failed()` once at the end.
@@ -387,13 +384,9 @@ type contract Deserializer for resource {
     fn float32 readF32(); fn float64 readF64();
     fn bool readBool(); fn char readChar(); fn string readString();
     fn bool readNull(); fn void skipValue(); const fn bool failed(); fn void fail();
-    // Graph (object-table) reads — the deserialize twin of the Serializer's writeRef/beginGraph/…: `beginGraph`
-    // consumes `{"root":id,"objects":` (bookmarking the objects `{` for the two-pass rewind) and returns the
-    // root id; `rewindGraph` re-enters that table for pass 2; `readRef` reads a bare id; `endGraph` closes the
-    // envelope; `failWith` records a specific DeError (so a dangling ref surfaces `UnresolvedReference`, not the
-    // generic `Malformed`). A non-graph backend can no-op these.
-    fn uint64 beginGraph(); fn void rewindGraph(); fn uint64 entryKey(); fn uint64 readRef();
-    fn void endGraph(); fn void failWith(DeError e); const fn DeError errorCode();
+    // `failWith` records a SPECIFIC DeError (so a dangling graph reference surfaces `UnresolvedReference`,
+    // not the generic `Malformed`); `errorCode` reads it back at the boundary.
+    fn void failWith(DeError e); const fn DeError errorCode();
 }
 // The read side of serde. It DECLARES its factory rather than standing as a marker, because a bound that
 // promises nothing constrains nothing: `deserializeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the
@@ -404,6 +397,50 @@ type contract Deserializer for resource {
 // earlier "kept method-less so its signature needn't name `This`" note pre-dates.
 type contract Deserializable<T is This> for value, resource, enum, intrinsic {
     ctor Result<T, std::memory::Owned<Error>> deserialize(Deserializer r);
+}
+// ---- Object graphs ---------------------------------------------------------------------------------------
+// A type that reaches a `Shared`/`Weak` field is a GRAPH NODE: it can alias, cycle, or hold a `Weak`
+// back-edge, none of which survive a by-value return — so it is never `Serializable` by value. Instead the
+// derive synthesizes these ADAPTERS (opt-in, per type, `@generate` + `@field` exactly as before): what the
+// node's own fields are, and how to visit, write, read and re-wire its pointer edges. The ALGORITHM — the id
+// table, pointee dedup, the two passes, cycles — is `std::serialization::graph::ObjectGraph<T>`, a library
+// type that HOLDS a `Serializer` and drives the ordinary token protocol above through these adapters. The
+// compiler knows only the contracts; the library implements the two contexts; nothing here is a runtime
+// type registry. Pay for what you use: a type that reaches no pointer gets none of this.
+// `-able` names a passive capability of a node; the nouns name the walker's two active roles.
+//
+// A node's write adapter. `visitEdges` is the DISCOVERY pass (intern every Shared/Weak pointee, so the table
+// size is known before the first entry is written — a positional backend needs the array length up front);
+// `writeNode` is the write pass (the fields as tokens, each edge as the id `intern` answered).
+// `typeName`/`typeIndex` are the node's wire tag: the named backends write the name, the index backends the
+// index (its position in the program's closed set of node types).
+type contract GraphSerializable for value, resource {
+    const fn string typeName();
+    const fn uint32 typeIndex();
+    const fn void visitEdges(ref GraphSerializer g);
+    const fn void writeNode(ref Serializer w, ref GraphSerializer g);
+}
+// A node's read adapter, pass 2: every edge id the shell stashed in pass 1 becomes a live handle via
+// `g.resolve`. (Pass 1 — allocate + read the fields — is `GraphRoot.readShell`, a static, because a shell
+// is made before any instance exists.)
+type contract GraphDeserializable for value, resource { fn void wireEdges(ref GraphDeserializer g); }
+// What a root type contributes: `readShell` allocates and reads ONE table entry's value object for the
+// node type the selector names (None when it names no node type in this program), and `takeRoot` recovers
+// the typed root from the shell the walker resolved (None when the shell is not a `T`). Pinned to the
+// implementing type, like `Deserializable<T is This>`.
+type contract GraphRoot<T is This> for value, resource {
+    static fn Optional<std::memory::Shared<GraphDeserializable>> readShell(FieldKey which, Deserializer r, ref GraphDeserializer g);
+    static fn Optional<std::memory::Shared<T>> takeRoot(std::memory::Shared<GraphDeserializable> shell);
+}
+// The walker's write-side context. `intern` answers a pointee's id: first sight registers the node (the
+// handle is RETAINED for the walk) and assigns the next id; a known identity answers the id it has.
+type contract GraphSerializer for resource { fn uint64 intern(usize identity, std::memory::Shared<GraphSerializable> node); }
+// The walker's read-side context. `resolve` hands out the registered shell as a place (precondition:
+// `has`); `fail` records a walker-side DeError, checked at the boundary beside the reader's own.
+type contract GraphDeserializer for resource {
+    const fn bool has(uint64 id);
+    fn ref std::memory::Shared<GraphDeserializable> resolve(uint64 id);
+    fn void fail(DeError e);
 }
 // Primitive Serializable/Deserializable conformances (pure-kama, like the Hashable/Equatable ones above) — so
 // EVERY type is a uniform serialization participant and a collection's generic element write

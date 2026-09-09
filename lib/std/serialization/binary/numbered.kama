@@ -187,14 +187,6 @@ type resource NumberedBinarySerializer<W: Writer> implements Serializer {
         this.key(wt: 6ui8);
     }
 
-    // --- graph framing: the object table is keyed by runtime ids, not by field numbers ---
-    fn void refuse() { this.failWith(e: SerError::NotRepresentable); }
-    public fn void writeRef(uint64 id) { this.refuse(); }
-    public fn void beginGraph(uint64 rootId) { this.refuse(); }
-    public fn void beginTableEntry(uint64 id, string ty) { this.refuse(); }
-    public fn void endTableEntry() { }
-    public fn void endGraph() { }
-
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
@@ -380,13 +372,6 @@ type resource NumberedBinaryDeserializer implements Deserializer {
         }
         if (open > 0) { this.err = true; }
     }
-
-    // --- graph reads: not available (see the writer) ---
-    public fn uint64 beginGraph() { this.refuse(); return 0ui64; }
-    public fn void rewindGraph() { this.refuse(); }
-    public fn uint64 entryKey() { this.refuse(); return 0ui64; }
-    public fn uint64 readRef() { this.refuse(); return 0ui64; }
-    public fn void endGraph() { }
 
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }

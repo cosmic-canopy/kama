@@ -350,6 +350,8 @@ give_inline_ctor_arg	give_inline_ctor_arg.kama:7
 give_ptr_local_reuse	give_ptr_local_reuse.kama:13 give_ptr_local_reuse.kama:16
 global_absolute_path	global_absolute_path.kama:10
 graph_alloc_iface	graph_alloc_iface.kama:23
+graph_root_shared	graph_root_shared.kama:16
+graph_root_unwrapped	graph_root_unwrapped.kama:17
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
 identity_char_constref_argument	identity_char_constref_argument.kama:10

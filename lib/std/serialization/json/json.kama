@@ -171,25 +171,6 @@ type resource JsonSerializer<W: Writer> implements Serializer {
     public fn void writeString(const ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
     public fn void writeSome()   { }   // JSON marks presence by the value itself not being `null`
     public fn void writeNull() { this.sep(); this.ascii(s: "null"); this.needComma = true; }
-    // --- graph/pointer framing ---
-    // A pointer field is written as a bare integer id (0 = null/expired). The {"root":id,"objects":{...}}
-    // envelope frames the flat id table; table-entry keys are the ids, each carrying a "__type" tag.
-    public fn void writeRef(uint64 id) { this.sep(); this.ascii(s: u64Str(v: id)); this.needComma = true; }
-    public fn void beginGraph(uint64 rootId) {
-        this.sep(); this.byte(b: 123ui8);                          // {
-        this.ascii(s: "\"root\":"); this.ascii(s: u64Str(v: rootId));
-        this.ascii(s: ",\"objects\":"); this.byte(b: 123ui8);      // {
-        this.needComma = false;
-    }
-    public fn void beginTableEntry(uint64 id, string ty) {
-        this.sep();
-        this.byte(b: 34ui8); this.ascii(s: u64Str(v: id)); this.byte(b: 34ui8);   // "<id>"
-        this.byte(b: 58ui8); this.byte(b: 123ui8);                 // :{
-        this.ascii(s: "\"__type\":"); this.quoted(s: ref ty);
-        this.needComma = true;
-    }
-    public fn void endTableEntry() { this.byte(b: 125ui8); this.needComma = true; }                  // }
-    public fn void endGraph() { this.byte(b: 125ui8); this.byte(b: 125ui8); this.needComma = true; }  // }}
     public fn void writeChar(char v) {
         this.sep();
         this.byte(b: 34ui8);                        // "
@@ -244,7 +225,6 @@ type resource JsonDeserializer implements Deserializer {
     isize pos;
     isize len;
     bool err;
-    isize objMark;      // start of the graph `objects` table (for the two-pass rewind); 0 until beginGraph
     DeError code;       // the specific error `failWith` recorded; `Malformed` by default
 
     public ctor make(string src) {
@@ -252,7 +232,6 @@ type resource JsonDeserializer implements Deserializer {
         this.src = give src;
         this.pos = 0;
         this.err = false;
-        this.objMark = 0;
         this.code = DeError::Malformed;
     }
 
@@ -523,40 +502,6 @@ type resource JsonDeserializer implements Deserializer {
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }   // the generated enum deserialize flags an unknown tag
 
-    // --- graph (object-table) reads: the deserialize twin of writeRef/beginGraph/beginTableEntry/… ---
-    // Consume `{"root":<id>,"objects":`, leaving the cursor at the objects table's `{`. Bookmark that spot
-    // (`objMark`) so `rewindGraph` can re-enter the table for the second (wire) pass. Returns the root id.
-    public fn uint64 beginGraph() {
-        this.beginObject(count: 2);               // { — "root" and "objects"
-        FieldKey k0 = this.field();               // "root":
-        uint64 root = this.readUint();
-        bool more = this.moreFields();            // ,
-        FieldKey k1 = this.field();               // "objects":
-        this.skipWs();
-        this.objMark = this.pos;                  // at the objects table `{`
-        return root;
-    }
-    // Re-position at the objects table for pass 2 (the JSON is single-pass, so we replay from the bookmark).
-    public fn void rewindGraph() { this.pos = this.objMark; }
-    // Read one table entry's key — a quoted integer id (`"7"`) followed by `:`. Leaves the cursor at the
-    // entry's value object `{`.
-    public fn uint64 entryKey() {
-        string k = this.readString();
-        this.expect(b: 58ui8);                    // :
-        isize n = k.length();
-        uint64 v = 0ui64; isize i = 0;
-        while (i < n) {
-            uint8 c = k[i];
-            if (c < 48ui8 || c > 57ui8) { break; }
-            v = v * 10ui64 + cast<uint64>(c - 48ui8);
-            i = i + 1;
-        }
-        return v;
-    }
-    // A pointer field's value: a bare integer id (0 = null/expired).
-    public fn uint64 readRef() { return this.readUint(); }
-    // Close the graph envelope: the objects table `}` was consumed by the entry loop, so this eats the outer `}`.
-    public fn void endGraph() { this.expect(b: 125ui8); }
     // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `deserializeJsonBuffer` surfaces it instead of
     // the generic `Malformed`.
     public fn void failWith(DeError e) { this.err = true; this.code = e; }
@@ -573,8 +518,8 @@ fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string sr
 }
 
 // Deserializable from any `Reader` — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully into a string
-// first (`readAll`), then parses: JSON graph decode seeks backward (`rewindGraph`), so the source must be
-// whole — the accepted bounded-memory boundary. A read `IoError` auto-boxes into `Owned<Error>`.
+// first (`readAll`), then parses — the buffer-a-value model (Go's `encoding/json`), a convenience rather
+// than a necessity: nothing seeks. A read `IoError` auto-boxes into `Owned<Error>`.
 fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader from) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {

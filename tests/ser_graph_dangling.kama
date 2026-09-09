@@ -1,7 +1,7 @@
 // Graph deserialize surfaces a DANGLING reference: the objects table references id 2 (the shared leaf) but
 // never defines it, so the two-pass wire can't resolve it and `deserializeJsonBuffer` returns `DeError::UnresolvedReference`
 // (not the generic `Malformed`) — the reader records the specific error via `failWith`.
-import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared, std::serialization::graph::ObjectGraph };
 
 @generate(Serializable, Deserializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
@@ -15,8 +15,8 @@ type resource Pair {
 
 fn int32 main() {
     // id 2 (the Leaf that `a`/`b` reference) is MISSING from the objects table -> dangling.
-    string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Pair\",\"a\":2,\"b\":2}}}";
-    Result<Shared<Pair>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Pair>>(src: give j);
+    string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2,\"b\":2}}]}";
+    Result<ObjectGraph<Pair>, Owned<Error>> res = deserializeJsonBuffer::<ObjectGraph<Pair>>(src: give j);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {
