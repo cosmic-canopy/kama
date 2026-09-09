@@ -210,7 +210,10 @@ static inline void NAME##__dtor(NAME* self) {                                  \
         self->obj = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
 }                                                                              \
-static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }
+static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }    \
+/* `copy h` — a retained duplicate (strong++). The emitter spells every deep copy `NAME__copy(&x)`; a */ \
+/* fat handle's copy is a retain, exactly what the library `Shared<T>::copy` does for a thin one.   */ \
+static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->strong++; return *self; }
 
 // Allocator-aware Shared<I> (M11d): fat handle carries its own `alloc` value copy + pointee `objsize`.
 // Both the pointee AND the ctrl block are drawn from `alloc` at the new-site, so the last strong drop frees
@@ -232,7 +235,8 @@ static inline void NAME##__dtor(NAME* self) {                                  \
         self->obj = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
 }                                                                              \
-static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }
+static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }    \
+static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->strong++; return *self; }
 
 // Weak<T> — a non-owning reference to a Shared<T>'s pointee. Counts `weak`, not
 // `strong`, so it does NOT keep the pointee alive (it breaks Shared cycles). You
@@ -278,7 +282,8 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
         self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl; \
     } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
     return s;                                                                 \
-}
+}                                                                              \
+static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->weak++; return *self; }
 
 // Allocator-aware Weak<I> (M11d): same fat layout as Shared + `alloc`/`objsize`; counts `weak`, never
 // touches the concrete object. Frees the ctrl (through its own `alloc` copy) when BOTH counts reach 0.
@@ -304,7 +309,8 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                        \
         s.ctrl = self->ctrl; s.alloc = self->alloc; s.objsize = self->objsize; \
     } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
     return s;                                                                 \
-}
+}                                                                              \
+static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->weak++; return *self; }
 
 // BindableFunctionPtr<Sig> — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:

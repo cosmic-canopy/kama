@@ -1,0 +1,36 @@
+// `copy` of a FAT handle — `Shared<Contract>` — is a retain, like the thin `Shared<T>::copy`. It used to
+// pass `kama check` and fail in clang: the emitter spelled the copy `Shared_Node__copy(&h)` (the one
+// spelling every deep copy has) and the runtime never defined that function for the interface-erased
+// families, so a library that copied a fat handle OUT of a container (a bare hand-off out of a `Map`
+// must say `copy`) could not be written at all.
+// The san leg is the proof: one pointee, two strong holders, exactly one drop.
+import { std::collections::Map };
+type contract Node for value, resource { const fn int32 tag(); }
+type resource Leaf implements Node {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 tag() { return this.v; }
+}
+type resource Registry {
+    Map<uint64, Shared<Node>> reg;
+    public ctor make() { this.reg = Map.empty(); }
+    public fn void enroll(uint64 id, Shared<Node> h) { this.reg.put(key: id, value: give h); }
+    public fn Optional<Shared<Node>> resolve(uint64 id) {
+        if (!this.reg.contains(key: id)) { return Optional::None; }
+        Shared<Node> res = copy this.reg.getRef(key: id);    // the fat copy: a retain
+        return Optional::Some(value: give res);
+    }
+}
+fn int32 main() {
+    Registry g = Registry.make();
+    {
+        Shared<Leaf> s = new Leaf.make(v: 3);
+        Shared<Node> up = s;
+        g.enroll(id: 1ui64, h: give up);
+    }
+    Optional<Shared<Node>> r = g.resolve(id: 1ui64);
+    int32 t = match (give r) { case Some(value: h): h.tag(); case None: 0; };
+    Optional<Shared<Node>> miss = g.resolve(id: 2ui64);
+    int32 m = match (give miss) { case Some(value: h): 100; case None: 10; };
+    return t + m;   // 3 + 10
+}
