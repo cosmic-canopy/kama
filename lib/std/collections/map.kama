@@ -388,7 +388,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
 
     // --- Serialization (present only when BOTH key and value are Serializable/Deserializable) ---
-    // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
+    // A generic `Map<K,V>` can't emit a JSON object (a field key needs a `string`, `K` is generic), so it
     // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
     // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
     const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
@@ -400,10 +400,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             uint8 s = this.state[i];
             if (s == 1ui8) {
                 w.beginObject(count: 2);
-                w.fieldName(name: "key");
+                w.field(name: "key", id: 0ui32);
                 Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
                 match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-                w.fieldName(name: "value");
+                w.field(name: "value", id: 1ui32);
                 Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
                 match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
                 w.endObject();
@@ -419,10 +419,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject(count: 2);
-            bool __f1 = r.moreFields(); string __n1 = r.fieldName();
+            bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };
-            bool __f2 = r.moreFields(); string __n2 = r.fieldName();
+            bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();   // consumes the closing `}`

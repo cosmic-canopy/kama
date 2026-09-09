@@ -452,10 +452,10 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
                 match (give __sc) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             }
             w.beginObject(count: 2);
-            w.fieldName(name: "key");
+            w.field(name: "key", id: 0ui32);
             Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
             match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-            w.fieldName(name: "value");
+            w.field(name: "value", id: 1ui32);
             Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
             match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             w.endObject();
@@ -588,10 +588,10 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject(count: 2);
-            bool __f1 = r.moreFields(); string __n1 = r.fieldName();
+            bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };
-            bool __f2 = r.moreFields(); string __n2 = r.fieldName();
+            bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();

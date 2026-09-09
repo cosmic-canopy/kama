@@ -281,7 +281,7 @@ type contract Serializer for resource {
     // back; an object's field count is COMPILE-TIME shape, so putting it on the wire would pay for
     // something both sides already know. Hence the reader is told instead. (It also means a positional
     // backend cannot carry a graph: the writer never states a table entry's field count.)
-    fn void beginObject(usize count); fn void endObject(); fn void fieldName(string name);
+    fn void beginObject(usize count); fn void endObject();
     // FIELD ADDRESSING. A key carries BOTH forms and the backend keeps the one it is: a named backend
     // (JSON/KBIN) writes `name`, a numbered one writes `id`, a positional one writes neither and relies on
     // order. `id` defaults to the field's declaration index and an author may override it with a stable,
@@ -358,7 +358,7 @@ type contract Deserializer for resource {
     // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
     // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why
     // `beginArray()` below stays count-less.
-    fn void beginObject(usize count); fn bool moreFields(); fn string fieldName();
+    fn void beginObject(usize count); fn bool moreFields();
     // The read twin of `Serializer.field`/`variant`. JSON and KBIN answer `Name(readString())`; a numbered
     // reader answers `Id(readU32())`; a positional reader answers `Id(counter++)`, since its shape is
     // agreed in advance rather than described on the wire.

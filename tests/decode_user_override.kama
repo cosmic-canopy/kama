@@ -26,13 +26,20 @@ type value Line {
         Point e = Point.make(x: 0, y: 0);
         r.beginObject(count: 2);
         while (r.moreFields()) {
-            string key = r.fieldName();
+            // The two-arm read, which is the whole point of `FieldKey`: a NAMED backend reports the wire
+            // name, a numbered or positional one reports an id, and a hand-written reader answers both so
+            // the same body works with every backend — exactly as the derive does.
+            FieldKey key = r.field();
+            bool isStart = match (key) {
+                case Name(name: n): n.equals(other: "start");
+                case Id(id: i):     i == 0ui32;
+            };
             Result<Point, Owned<Error>> __pr = Point.deserialize(r: r);
             Point p = match (give __pr) {
                 case Ok(value: v):   { := give v; }                                // read succeeded -> bind the Point
                 case Err(error: er): { return Result::Err(error: give er); }       // propagate the boxed error
             };
-            if (key.equals(other: "start")) { s = p; } else { e = p; }
+            if (isStart) { s = p; } else { e = p; }
         }
         Line ln = Line.make(start: s, end: e);
         return Result::Ok(value: ln);

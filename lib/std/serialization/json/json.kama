@@ -3,7 +3,7 @@
 // text in a byte buffer; `encode` is the entry point that runs a value's generated `serialize` against a
 // fresh writer. A single `needComma` flag tracks whether the next value/field needs a leading comma — correct
 // for arbitrary nesting because endObject/endArray leave a complete value (a following sibling gets its
-// comma) while a value right after fieldName does not.
+// comma) while a value right after a field key does not.
 
 import {
     std::collections::DynamicArray,
@@ -138,13 +138,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
     public fn void endObject()   { this.byte(b: 125ui8); this.needComma = true; }                // }
     public fn void beginArray(usize count) { this.sep(); this.byte(b: 91ui8); this.needComma = false; }  // [
     public fn void endArray()    { this.byte(b: 93ui8); this.needComma = true; }                 // ]
-    public fn void fieldName(string name) {
-        this.sep();
-        this.quoted(s: ref name);
-        this.byte(b: 58ui8);                        // :
-        this.needComma = false;
-    }
-    // JSON is a NAMED format: it keeps the name and ignores the id, so the bytes are exactly `fieldName`'s.
+    // JSON is a NAMED format: it keeps the name and ignores the id.
     public fn void field(string name, uint32 id) {
         this.sep();
         this.quoted(s: ref name);
@@ -308,11 +302,6 @@ type resource JsonReader implements Deserializer {
         if (c == 93ui8) { this.pos = this.pos + 1; return false; }              // ]
         if (c == 44ui8) { this.pos = this.pos + 1; this.skipWs(); return true; } // ,
         return true;
-    }
-    public fn string fieldName() {
-        string k = this.readString();
-        this.expect(b: 58ui8);   // :
-        return give k;
     }
     // JSON keys are strings, so a JSON reader can only ever report a NAME — never an id.
     public fn FieldKey field() {
@@ -520,7 +509,7 @@ type resource JsonReader implements Deserializer {
     public fn void skipValue() {
         this.skipWs();
         uint8 c = this.peek();
-        if (c == 123ui8) { this.beginObject(count: 0); while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
+        if (c == 123ui8) { this.beginObject(count: 0); while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }
         else if (c == 91ui8) { this.beginArray(); while (this.moreElems()) { this.skipValue(); } }
         else if (c == 34ui8) { string s = this.readString(); }
         else if (c == 116ui8) { bool b = this.readBool(); }
@@ -536,10 +525,10 @@ type resource JsonReader implements Deserializer {
     // (`objMark`) so `rewindGraph` can re-enter the table for the second (wire) pass. Returns the root id.
     public fn uint64 beginGraph() {
         this.beginObject(count: 2);               // { — "root" and "objects"
-        string k0 = this.fieldName();             // "root":
+        FieldKey k0 = this.field();               // "root":
         uint64 root = this.readUint();
         bool more = this.moreFields();            // ,
-        string k1 = this.fieldName();             // "objects":
+        FieldKey k1 = this.field();               // "objects":
         this.skipWs();
         this.objMark = this.pos;                  // at the objects table `{`
         return root;

@@ -26,8 +26,8 @@ fn int32 main() {
     BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
     w.beginGraph(rootId: cast<uint64>(1));
     w.beginTableEntry(id: cast<uint64>(1), ty: "Pair");
-    w.fieldName(name: "a"); w.writeRef(id: cast<uint64>(2));
-    w.fieldName(name: "b"); w.writeRef(id: cast<uint64>(2));
+    w.field(name: "a", id: 0ui32); w.writeRef(id: cast<uint64>(2));
+    w.field(name: "b", id: 1ui32); w.writeRef(id: cast<uint64>(2));
     w.endTableEntry();
     w.endGraph();
     DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();

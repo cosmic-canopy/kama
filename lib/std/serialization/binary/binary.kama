@@ -101,8 +101,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void endObject()   { this.byte(b: 17ui8); }
     public fn void beginArray(usize count) { this.byte(b: 18ui8); }   // self-delimiting; count unused
     public fn void endArray()    { this.byte(b: 19ui8); }
-    public fn void fieldName(string name) { this.putStr(s: ref name); }
-    // KBIN is self-describing and NAMED: it keeps the name and ignores the id, so the bytes are unchanged.
+    // KBIN is self-describing and NAMED: it keeps the name and ignores the id.
     public fn void field(string name, uint32 id) { this.putStr(s: ref name); }
     // The variant selector rides as a tagged string, exactly as it did when the derive spelled it
     // `writeString(variantName)` — a positional/numbered backend keeps `index` instead.
@@ -206,7 +205,6 @@ type resource BinaryReader implements Deserializer {
         if (this.at() == 19ui8) { this.pos = this.pos + 1; return false; }   // arr-end -> consume, done
         return true;
     }
-    public fn string fieldName() { return this.readStr(); }
     // KBIN describes its own shape, so it can only ever report a NAME — never an id.
     public fn FieldKey field()   { return FieldKey::Name(name: this.readStr()); }
     public fn FieldKey variant() { return FieldKey::Name(name: this.readStr()); }
@@ -247,7 +245,7 @@ type resource BinaryReader implements Deserializer {
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8 || t == 22ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
         else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
-        else if (t == 16ui8) { while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }   // the 0x10 was already consumed as `t`
+        else if (t == 16ui8) { while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // the 0x10 was already consumed as `t`
         else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }
     }
