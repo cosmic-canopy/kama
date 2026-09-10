@@ -1499,10 +1499,24 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     taken at module level (package scope). The only gap it closes over `private`-with-no-grant is stopping the
     declaring type from calling its OWN member, and kama polices that nowhere. Revisit only if protocol misuse
     actually bites.
-  - **Still open before anything is built:** is `ObjectGraph<T>` load-bearing after `43dd3dd`; can a
-    compiler-owned driver emit the token envelope with no `Serializer` graph members (decision A must
-    survive); does `Map` expose a mutable VALUE iterator; does the wire walk compose for nested containers;
-    can a synthesized conformance attach to the intrinsic fat `Shared<Contract>`.
+  - **Open questions, ANSWERED 2026-09-09 by probe:**
+    - **Is `ObjectGraph<T>` load-bearing after `43dd3dd`? NO.** A pure-`Owned` tree round-trips **by value**
+      today with no `ObjectGraph` anywhere, re-encoding byte-identically — which is the case that originally
+      motivated the wrapper. What remains is only the graph-root spelling, and `Shared<T>` as a root is
+      refused **by choice** (`tests/xfail/graph_root_shared`, *"a graph root is `ObjectGraph<T>`"*), having
+      been the working spelling at `6dac7f0`. So the ceremony is revertible.
+    - **Can a compiler-owned driver emit the token envelope with no `Serializer` graph members? YES, by
+      construction.** `graph.kama` already writes the whole envelope in ordinary tokens
+      (`beginObject`/`field`/`writeU64`/`beginArray`/`variant`/`endObject`) from library code, so emitted C
+      can make the same calls. **Decision A survives a compiler-owned walker.**
+    - **Does `Map` expose a mutable VALUE iterator? YES, and ungated** — `valuesMut()`
+      (`map.kama:266`), exactly like `iterMut()` on the sequence containers. Value-position edges are
+      walkable; key position stays impossible by bound.
+    - **Does the wire walk compose for nested containers? YES** — a nested mutable `foreach`
+      (`foreach (ref DynamicArray<int32> inner in outer) { foreach (ref int32 x in inner) … }`) compiles and
+      runs, so a compiler-emitted wire pass can nest.
+    - **Can a synthesized conformance attach to the intrinsic fat `Shared<Contract>`? MOOT** — the corrected
+      design keeps the triad method-free and recognizes edges by identity, so nothing is attached to it.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `serializeJsonBuffer`/`deserializeJsonBuffer`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
