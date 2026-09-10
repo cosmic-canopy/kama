@@ -1,1 +1,0 @@
-a graph root is `ObjectGraph<T>`

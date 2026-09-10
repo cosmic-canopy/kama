@@ -9,7 +9,6 @@ import {
     std::serialization::json::deserializeJsonBuffer,
     std::memory::Shared,
     std::memory::Weak,
-    std::serialization::graph::ObjectGraph,
 };
 
 @generate(Serializable, Deserializable)
@@ -27,14 +26,14 @@ fn int32 main() {
     Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
-    ObjectGraph<Node> og = ObjectGraph.of(root: a);
+    Shared<Node> og = a;
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: og);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     // root a = id 1 (next -> 2, no back); b = id 2 (no next, back -> 1). An absent Optional edge is null.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Node\",\"value\":{\"id\":1,\"next\":2,\"back\":null}},{\"id\":2,\"type\":\"Node\",\"value\":{\"id\":2,\"next\":null,\"back\":1}}]}") {
         return cast<int32>(j.length());
     }
-    Result<ObjectGraph<Node>, Owned<Error>> res = deserializeJsonBuffer::<ObjectGraph<Node>>(src: copy j);
+    Result<Shared<Node>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
     match (res) {
         case Ok(value: sh): { Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(error: e): { return 2; }

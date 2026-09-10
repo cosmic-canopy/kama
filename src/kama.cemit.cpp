@@ -8368,17 +8368,20 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
     // The serde bounds have two answers of their own. A graph node is never a by-value `Serializable`
     // (it can alias, cycle, or hold a `Weak` back-edge — none survive a by-value return), and `Shared<T>`
     // is not the spelling of a root: both name the type that is, so the author is not left to hunt.
+    // `Shared<X>` IS how a graph comes back — the root arrives behind a handle because a cycle cannot be
+    // returned by value — but only when `X` is a node. Name the half that is missing rather than the
+    // spelling, which is already right.
     if (bound == "Serializable" || bound == "Deserializable") {
-        if (it->second.isGraphNode && it->second.reachesPointer) {
-            const std::string n = demangleForDisplay(cty);
-            return " — `" + n + "` reaches a `Shared`/`Weak` field, so it is a graph: serialize `ObjectGraph<" + n
-                 + ">` (`ObjectGraph.of(root: …)`, from `std::serialization::graph`) and deserialize `ObjectGraph<" + n + ">`";
-        }
         auto g = _genericTypeInstOf.find(cty);
         bool shared = (g != _genericTypeInstOf.end() && g->second == _sharedTmpl)
                    || (isSmartPtrClass(cty) && smartKind(cty) == CollKind::Shared);
-        if (shared) return " — a graph root is `ObjectGraph<T>` (`std::serialization::graph`), not `Shared<T>`: "
-                           "the wrapper holds the walker, and `.root()` hands the `Shared<T>` back";
+        if (shared) {
+            const std::string x = sharedPointeeClass(cty);
+            return " — a graph is read back as `Shared<T>`, and "
+                 + (x.empty() ? std::string("its pointee") : "`" + demangleForDisplay(x) + "`")
+                 + " is not a graph node: a node is `@generate(Deserializable)` and reaches a `Shared`/`Weak` "
+                   "field. A pointer-free type is read by value, with no handle";
+        }
     }
     auto u = it->second.derivedUnmet.find(bound);
     if (u == it->second.derivedUnmet.end()) return "";
@@ -8520,15 +8523,11 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
             ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
         }
     }
-    // The graph ADAPTERS (prelude `GraphSerializable` / `GraphDeserializable` / `GraphRoot`), registered
-    // EAGERLY for every `@generate` class. Whether this type is a graph node is a whole-program fact
-    // (`reachesPointer`, computed after collection), but a generic instance decides its conditional
-    // conformances — `ObjectGraph<T> implements Serializable when [T: GraphSerializable]` — while it is being
-    // registered, which is DURING collection. So the conformance is declared here and PRUNED late in
-    // computeGraphNodeTypes for a type that turns out not to be a node (the same late erase a conditional
-    // `copy` gets), and the by-value pair above is erased there for a type that turns out to be one.
-    // Pay-for-what-you-use holds: nothing is emitted for a pruned conformance. An enum is never a node.
-    if (!ci.isVariant && (ci.genSerialize || ci.genDeserialize)) registerGraphAdapters(ci, selfNode);
+    // Nothing graph-specific is registered here. A graph node keeps exactly the pair declared above —
+    // `serialize`/`deserialize`, the same two members and the same two conformances a by-value type has —
+    // and computeGraphNodeTypes later retargets `deserialize`'s RESULT to `Result<Shared<This>, …>`, because
+    // a graph root comes back as a handle. The walk itself is emitted as internal C helpers keyed off
+    // `isGraphNode`, so a node type carries no extra public surface at all.
     // `@generate(Formattable)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
     // (`Type { f1: v1, … }`). The display analog of Serializable: register the nominal `Formattable`
     // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
@@ -9327,7 +9326,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if      (sn == "Shared") _sharedTmpl = ci.name;
                 else if (sn == "Owned")  _ownedTmpl  = ci.name;
                 else if (sn == "Weak")   _weakTmpl   = ci.name;
-                else if (sn == "ObjectGraph" && ci.scope == "std__serialization__graph") _objectGraphTmpl = ci.name;
                 else if (sn == "Channel"  && ci.scope == "std__concurrent") _channelTmpl  = ci.name;
                 else if (sn == "Sender"   && ci.scope == "std__concurrent") _senderTmpl   = ci.name;
                 else if (sn == "Receiver" && ci.scope == "std__concurrent") _receiverTmpl = ci.name;
@@ -14140,6 +14138,25 @@ CollKind CEmitter::smartKind(const std::string& cls) const
     return _classes.at(cls).collKind;   // precondition: isSmartPtrClass(cls)
 }
 
+// The pointee's C class for a `Shared<X>` — the LIBRARY generic instance (whose element rides its type
+// args) or the interface-erased intrinsic (whose element is recorded on the ClassInfo). "" for anything
+// else. Both shapes exist and only one of them carries `collElemClass`, which is why asking the ClassInfo
+// alone answered "" for every concrete `Shared<Node>`.
+std::string CEmitter::sharedPointeeClass(const std::string& cls)
+{
+    auto g = _genericTypeInstOf.find(cls);
+    if (g != _genericTypeInstOf.end() && g->second == _sharedTmpl) {
+        auto gi = _genericTypeInsts.find(cls);
+        if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) return cType(gi->second.typeArgs[0]);
+        return "";
+    }
+    if (isSmartPtrClass(cls) && smartKind(cls) == CollKind::Shared) {
+        auto it = _classes.find(cls);
+        return it == _classes.end() ? std::string() : it->second.collElemClass;
+    }
+    return "";
+}
+
 bool CEmitter::derefSmartPtr(std::string& cls, std::string& recvExpr)
 {
     if (!isSmartPtrClass(cls)) return false;
@@ -14491,6 +14508,28 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         return it->second.copyable;                            // a resource → only if `implements Copyable`
+    }
+    // A graph is read back as `Shared<X>`: the root arrives behind a handle because a cycle cannot be
+    // returned by value, so `deserializeJsonBuffer::<Shared<Node>>` is the spelling. That makes
+    // `Shared<X>: Deserializable` true exactly when `X` is a node — and it is DERIVED here, beside
+    // `Immutable`/`Sendable`/`Copyable`, rather than declared as a `deserialize` on `Shared`. A method on a
+    // handle would SHADOW the pointee's (the triad auto-derefs), which is the whole reason the triad is
+    // method-free; a bound has no such hazard, because nothing calls it by name.
+    // A graph is read back as `Shared<X>` — the root arrives behind a handle because a cycle cannot be
+    // returned by value — so `deserializeJsonBuffer::<Shared<Node>>` is the spelling and the bound has to
+    // hold for the handle. DERIVED here, beside `Immutable`/`Sendable`/`Copyable`, and deliberately not
+    // declared as a `deserialize` on `Shared`: a method on a handle SHADOWS the pointee's, since the triad
+    // auto-derefs, which is exactly why the triad is method-free. A bound has no such hazard — nothing
+    // calls it by name.
+    //
+    // ⚠️ It answers off the POINTEE's own bound, not off `graphDeserialize`: bounds are judged during
+    // collection, when a generic instance is registered, and the graph passes have not run yet. That is
+    // the same question the old `Shared<T> … when [T: Deserializable<T>]` clause asked, so the reach is
+    // unchanged — and as then, naming `Shared<X>` for a pointer-free `X` is a type error later, when the
+    // handle turns out to have no `deserialize` to forward to.
+    if (bound_ == "Deserializable" || (!bound.empty() && bound.compare(0, 15, "Deserializable_") == 0)) {
+        const std::string x = const_cast<CEmitter*>(this)->sharedPointeeClass(t);
+        if (!x.empty() && satisfiesBound(x, "Deserializable")) return true;
     }
     // A `type intrinsic <t> implements <bound>` block also satisfies it — including a PRIMITIVE target
     // (`int32`), whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a
@@ -16476,6 +16515,7 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
         // authored. This check exists to catch a DECLARED promise that drifted from its contract; there is
         // no such promise to hold. (Surfaced the moment `Deserializable` stopped being an empty marker and
         // started declaring its factory — the mismatch was always there, with nothing to compare against.)
+        if (mi->isSynthDe && tci.graphDeserialize) continue;
         const int at = mi->node ? mi->node->line : mi->opDecl ? mi->opDecl->line : line;
         // An operator is registered under a SYNTHETIC name (`op_add`); say what the author wrote.
         const std::string member = mi->isOperator && mi->opDecl && mi->opDecl->operatorDeclarator
@@ -17313,6 +17353,22 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     // boxed contract that requires it) — the same predicate `satisfiesBound` consults, so the two halves
     // of the bound check cannot disagree about it.
     if (!_sendableContract.empty() && contract == _sendableContract) return isSendableClass(ci->name);
+    // ...and the read half of serde's: a graph comes back as `Shared<X>`, because a cycle cannot be
+    // returned by value, so `deserializeJsonBuffer::<Shared<Node>>` needs the bound to hold for the HANDLE.
+    // Derived from the pointee rather than declared as a `deserialize` on `Shared`, which would shadow the
+    // pointee's through auto-deref — the hazard that keeps the triad method-free. `satisfiesBound` carries
+    // the same arm, so the two halves of a bound check cannot disagree about it.
+    if (contract.compare(0, 14, "Deserializable") == 0) {
+        const std::string x = sharedPointeeClass(ci->name);
+        auto e = x.empty() ? _classes.end() : _classes.find(x);
+        // ⚠️ Asked off the pointee's own bound, NOT off `reachesPointer`/`graphDeserialize`: bounds are
+        // judged while a generic instance is registered, during collection, and the graph passes have not
+        // run — requiring `reachesPointer` here made every real graph fixture fail its bound. The cost is
+        // that `Shared<PointerFreeType>` satisfies this and is refused later, at the ctor lookup, which
+        // carries its own diagnostic naming both halves.
+        if (e != _classes.end() && classSatisfiesBound(&e->second, pinnedInstanceName("Deserializable", x)))
+            return true;
+    }
     return implementsContractTemplate(ci, contract);
 }
 
@@ -23688,7 +23744,6 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
             else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << ci.name << "* self);\n";
             continue;
         }
-        if (!mi.synthGraph.empty()) { *_out << stat << graphAdapterSig(ci, kv.first, mi) << ";\n"; continue; }   // a graph adapter member
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.declLine()));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -23702,7 +23757,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
                            ci.isScalarRecv) << ");\n";   // static/free: no self
     }
     if (ci.isGraphNode)
-        emitGraphReadIntoProto(ci);   // the pass-1 shell reader every adapter set shares
+        emitGraphNodeHelperProtos(ci);   // the node's internal walk helpers (Phase D)
 }
 
 // void Name__dtor(Name* self): user body first, then destructible fields in
@@ -24049,7 +24104,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Every `@generate` body, through the one fork that knows a variant from a class — which is how a
         // GENERIC ENUM instance gets its per-tag bodies, since its instance comes through here like any
         // other (emitGenericTypeInst phase 2).
-        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp || !mi.synthGraph.empty()) {
+        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp) {
             emitSynthBody(ci, kv.first, mi);
             continue;
         }
@@ -24093,8 +24148,10 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
-    if (ci.isGraphNode)
-        emitGraphReadInto(ci);   // `K____readInto`: pass 1 of the graph read, shared by readShell and nesting
+    if (ci.isGraphNode) {
+        emitGraphNodeHelpers(ci);   // visitEdges / writeNode / wireEdges
+        emitGraphReadInto(ci);      // `K____readInto`: pass 1, shared by the shell reader and by nesting
+    }
 }
 
 // ---- By-value (tree) serialization intrinsic (Phase C) --------------------
@@ -25027,9 +25084,12 @@ void CEmitter::emitEnumHashDefinition(ClassInfo& ci)
 // sites that emit a concrete enum's bodies by hand.
 void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo& mi)
 {
-    if (!mi.synthGraph.empty()) { emitGraphAdapterBody(ci, name, mi); return; }   // a graph adapter member
-    if (mi.isSynthSer) { ci.isVariant ? emitEnumSerializeDefinition(ci)   : emitSerializeDefinition(ci);   return; }
-    if (mi.isSynthDe)  { ci.isVariant ? emitEnumDeserializeDefinition(ci) : emitDeserializeDefinition(ci); return; }
+    // A graph node's pair IS the walker: `serialize` writes the whole envelope from this root and
+    // `deserialize` reads it back as a handle. Everything else is the by-value derive.
+    if (mi.isSynthSer) { ci.isVariant ? emitEnumSerializeDefinition(ci)
+                       : (ci.reachesPointer ? emitGraphSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
+    if (mi.isSynthDe)  { ci.isVariant ? emitEnumDeserializeDefinition(ci)
+                       : (ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
     if (mi.isSynthFormat) { ci.isVariant ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
     if (mi.isSynthCmp) {                                              // keyed by the method name
         if (name == "equals") ci.isVariant ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
@@ -25210,45 +25270,6 @@ SharedIdentifier CEmitter::optionalTypeNode(SharedIdentifier elem)
     return node;
 }
 
-// ---- registration ---------------------------------------------------------------------------------------
-// The adapter conformances + MethodInfos for one `@generate` class (registerDerives says why EAGERLY). A
-// hand-written adapter member wins, exactly as a hand-written `serialize` does.
-void CEmitter::registerGraphAdapters(ClassInfo& ci, SharedIdentifier selfNode)
-{
-    auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
-    auto addItf = [&](const std::string& n) { if (!hasItf(n)) ci.interfaces.push_back(n); };
-    auto synth = [&](const char* name, bool isConst, bool isStatic, SharedIdentifier ret, std::vector<ParamSig> ps) {
-        if (ci.methods.count(name)) return;
-        MethodInfo mi; mi.cName = ci.name + "__" + name; mi.visibility = Visibility::Public;
-        mi.synthGraph = name; mi.isConst = isConst; mi.isStatic = isStatic;
-        mi.returnType = ret; if (ret) scanTypeForCollections(ret);
-        mi.params = ps;
-        ci.methods[name] = mi;
-    };
-    ParamSig gs; gs.name = "g"; gs.byRef = true; gs.className = "GraphSerializer";
-    ParamSig gd; gd.name = "g"; gd.byRef = true; gd.className = "GraphDeserializer";
-    ParamSig w;  w.name  = "w"; w.byRef  = true; w.className  = "Serializer";
-    if (ci.genSerialize) {
-        addItf("GraphSerializable");
-        synth("typeName",   true, false, synthId("string", IDENTIFIER_STRING_VAL), {});
-        synth("typeIndex",  true, false, synthId("uint32", IDENTIFIER_UINT32_VAL), {});
-        synth("visitEdges", true, false, nullptr, { gs });
-        synth("writeNode",  true, false, nullptr, { w, gs });
-    }
-    if (ci.genDeserialize) {
-        addItf("GraphDeserializable");
-        synth("wireEdges", false, false, nullptr, { gd });
-        addItf(synthConformanceName("GraphRoot", ci.name));
-        ParamSig which; which.name = "which"; which.className = "FieldKey";
-        ParamSig r;     r.name = "r";         r.className = "Deserializer";
-        ParamSig shell; shell.name = "shell"; shell.className = sharedGraphDeC();
-        synth("readShell", false, true, optionalTypeNode(sharedTypeNode(synthId("GraphDeserializable"))), { which, r, gd });
-        synth("takeRoot",  false, true, optionalTypeNode(sharedTypeNode(selfNode)), { shell });
-    }
-}
-
-std::string CEmitter::sharedGraphSerC() { return cType(sharedTypeNode(synthId("GraphSerializable"))); }
-std::string CEmitter::sharedGraphDeC()  { return cType(sharedTypeNode(synthId("GraphDeserializable"))); }
 
 // A nested by-value field, or an `Owned` pointee, whose type is itself a node with edges of its own: it is
 // walked INLINE by every pass. A pointee that reaches nothing is an ordinary value (its by-value pair).
@@ -25277,18 +25298,6 @@ void CEmitter::computeGraphNodeTypes()
         ClassInfo& ci = kv.second;
         if (!ci.isVariant && ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) seed(kv.first);
     }
-    // `ObjectGraph<X>` names X as a root — a one-node graph of a pointer-free type is still a graph.
-    if (!_objectGraphTmpl.empty())
-        for (auto& kv : _genericTypeInsts) {
-            const GenericTypeInst& gi = kv.second;
-            if (gi.templateKey != _objectGraphTmpl || gi.typeArgs.empty()) continue;
-            _nsCtx = _genericTypeInstCtx.count(gi.mangledName) ? _genericTypeInstCtx[gi.mangledName]
-                                                               : _genericTypeCtx[gi.templateKey];
-            _typeSubst.clear();
-            std::string x = cType(gi.typeArgs[0]);
-            auto it = _classes.find(x);
-            if (it != _classes.end() && !it->second.isVariant && (it->second.genSerialize || it->second.genDeserialize)) seed(x);
-        }
     while (!work.empty()) {
         std::string cur = work.back(); work.pop_back();
         ClassInfo& ci = _classes[cur];
@@ -25331,30 +25340,6 @@ void CEmitter::computeGraphNodeTypes()
         }
     }
     _nsCtx = saved; _typeSubst.clear();
-    // PRUNE. Eager registration declared the adapters on every `@generate` class; only a node keeps them.
-    static const char* kAdapters[] = { "typeName", "typeIndex", "visitEdges", "writeNode", "wireEdges", "readShell", "takeRoot" };
-    for (auto& kv : _classes) {
-        ClassInfo& ci = kv.second;
-        if (ci.isVariant || !(ci.genSerialize || ci.genDeserialize)) continue;
-        auto dropItf = [&](const std::string& n) {
-            ci.interfaces.erase(std::remove(ci.interfaces.begin(), ci.interfaces.end(), n), ci.interfaces.end());
-        };
-        if (!ci.isGraphNode) {
-            for (const char* m : kAdapters) {
-                auto it = ci.methods.find(m);
-                if (it != ci.methods.end() && !it->second.synthGraph.empty()) ci.methods.erase(it);
-            }
-            dropItf("GraphSerializable"); dropItf("GraphDeserializable"); dropItf(pinnedInstanceName("GraphRoot", ci.name));
-        } else if (ci.reachesPointer) {
-            auto s = ci.methods.find("serialize");
-            if (s != ci.methods.end() && s->second.isSynthSer) ci.methods.erase(s);
-            auto d = ci.methods.find("deserialize");
-            if (d != ci.methods.end() && d->second.isSynthDe) { ci.methods.erase(d); ci.ctors.erase("deserialize"); }
-            // A HAND-WRITTEN by-value `serialize`/`deserialize` on a node keeps its conformance: the author's.
-            if (!ci.methods.count("serialize"))   dropItf("Serializable");
-            if (!ci.methods.count("deserialize")) dropItf(pinnedInstanceName("Deserializable", ci.name));
-        }
-    }
     regateGenericInstances();
     _graphNodeOrder.clear();
     for (auto& kv : _classes) {
@@ -25362,6 +25347,55 @@ void CEmitter::computeGraphNodeTypes()
         if (!ci.isGraphNode) continue;
         ci.graphTypeId = (int)_graphNodeOrder.size();
         _graphNodeOrder.push_back(kv.first);
+        // A node keeps the same two members a by-value type has — so `serializeJsonBuffer(v: root)` and
+        // `deserializeJsonBuffer::<Shared<Node>>(src: …)` are the ordinary entry points, with no wrapper
+        // type and no ceremony. Only the READ's result changes: a graph comes back as a HANDLE, because a
+        // cycle cannot be returned by value. `serialize` needs no retarget — writing borrows.
+        auto it = ci.methods.find("deserialize");
+        if (it == ci.methods.end() || !it->second.isSynthDe || !it->second.returnType
+            || !it->second.returnType->genericArgs || it->second.returnType->genericArgs->empty()) continue;
+        SharedIdentifier inner = it->second.returnType->genericArgs->at(0);   // This — the Result's Ok arm
+        SharedIdentifier sh = sharedTypeNode(inner);                          // Shared<This>
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
+        _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
+        // ⚠️ A node reached only INLINE — a by-value part, or an `Owned` pointee — has no `Shared<X>`
+        // anywhere in the program, so it can never BE a root: there is no spelling that would call its
+        // driver. It keeps `K____readInto`, which is how its owner reads it, and loses the synthesized
+        // `deserialize` entirely. Leaving the by-value one in place was wrong in a way the C compiler
+        // caught rather than kama: its `Shared<Leaf>` field took the composite arm and emitted a call to
+        // `Shared_Leaf__deserialize`, which nothing defines (`ser_graph_nested_reach`, measured). Minting
+        // the monomorph here instead is too late — the instance would have no bodies emitted.
+        if (!_classes.count(cType(sh))) {
+            ci.methods.erase("deserialize");
+            ci.ctors.erase("deserialize");
+            const std::string d = pinnedInstanceName("Deserializable", ci.name);
+            ci.interfaces.erase(std::remove(ci.interfaces.begin(), ci.interfaces.end(), d), ci.interfaces.end());
+            _nsCtx = saved;
+            continue;
+        }
+        {
+            it->second.returnType = resultOwnedErrorTypeNode(sh);   // Result<Shared<This>, Owned<Error>>
+            scanTypeForCollections(it->second.returnType);
+            ci.graphDeserialize = true;
+            // `deserializeJsonBuffer::<Shared<Node>>(…)` calls `T.deserialize(r)` on `T = Shared<Node>`, and
+            // the function that actually reads a graph is the NODE's. Point `Shared<Node>`'s `deserialize`
+            // straight at it rather than special-casing the call site — and mark it abstract, so neither a
+            // prototype nor a body is emitted for a name that already exists. (`satisfiesBound` answers the
+            // matching bound the same way, by identity; neither is a method ON the handle.)
+            ClassInfo& sc = _classes[cType(sh)];
+            if (!sc.methods.count("deserialize")) {
+                MethodInfo fwd;
+                fwd.cName = ci.name + "__deserialize";
+                fwd.visibility = Visibility::Public;
+                fwd.isStatic = true; fwd.isCtor = true; fwd.isAbstract = true;
+                fwd.returnType = it->second.returnType;
+                ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer";
+                fwd.params.push_back(r);
+                sc.methods["deserialize"] = fwd;
+                sc.ctors["deserialize"] = CtorInfo{ nullptr, fwd.params, Visibility::Public, true, fwd.returnType };
+            }
+        }
+        _nsCtx = saved;
     }
 }
 
@@ -25415,35 +25449,37 @@ void CEmitter::regateGenericInstances()
 }
 
 // ---- prototypes ------------------------------------------------------------------------------------------
-std::string CEmitter::graphAdapterSig(const ClassInfo& ci, const std::string& name, const MethodInfo& mi)
+// A node's walk helpers, in the shared header so cross-referencing nodes link. These are INTERNAL C
+// functions, not members: nothing about them appears on the kama type, and a program that serializes no
+// graph gets none of them. They take the substrate structs directly (kama_runtime.h) — the walker is the
+// compiler's, so there is no contract in between and nothing to erase through.
+void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
 {
+    const char* stat = _emitStaticClass ? "static inline " : "";
     const std::string& K = ci.name;
-    if (name == "typeName")   return "kama_string " + K + "__typeName(" + K + "* self)";
-    if (name == "typeIndex")  return "uint32_t " + K + "__typeIndex(" + K + "* self)";
-    if (name == "visitEdges") return "void " + K + "__visitEdges(" + K + "* self, GraphSerializer* g)";
-    if (name == "writeNode")  return "void " + K + "__writeNode(" + K + "* self, Serializer* w, GraphSerializer* g)";
-    if (name == "wireEdges")  return "void " + K + "__wireEdges(" + K + "* self, GraphDeserializer* g)";
-    if (name == "readShell")  return cType(mi.returnType) + " " + K + "__readShell(FieldKey which, Deserializer r, GraphDeserializer* g)";
-    return cType(mi.returnType) + " " + K + "__takeRoot(" + sharedGraphDeC() + " shell)";
-}
-
-void CEmitter::emitGraphReadIntoProto(ClassInfo& ci)
-{
-    if (!ci.genDeserialize) return;
-    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
-          << "* self, Deserializer r, GraphDeserializer* g);\n";
+    if (ci.genSerialize) {
+        *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g);\n";
+        *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g);\n";
+    }
+    if (ci.genDeserialize) {
+        *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g);\n";
+        *_out << stat << "void " << K << "____readInto(" << K << "* self, Deserializer r, struct kama_de_graph* g);\n";
+    }
 }
 
 // ---- per-contract resolvers + the shell reader chain ----------------------------------------------------
 // Emitted once into the shared header, after the class prototypes and the `extern const <K>__as_<C>` decls.
-// For each contract used as a graph edge element, the crossing between its own vtable and the adapters':
-// `<C>__graphSerVtbl` (write: a fat `Shared<C>`'s `.vtbl` -> that concrete's GraphSerializable vtbl) and
-// `<C>__graphDeVtbl` (read: a shell's GraphDeserializable vtbl -> the concrete's `<K>__as_<C>`, NULL for a
-// non-implementor => TypeMismatch). Then `__kama_graph_readShell`: the one closed-world dispatch in the
-// program — a wire `type` selector (name, or index for the index backends) to a freshly allocated shell of
-// that node type. Every node's `readShell` forwards here.
+// A contract-typed edge (`Shared<Shape>`) erases its pointee, and both passes need the concrete back. Both
+// crossings are a CLOSED-WORLD table keyed on the node type id — the same tag the wire carries — so neither
+// needs a contract of its own:
+//   `<C>__graphTypeId`  (write): a fat handle's runtime `.vtbl` -> the pointee's node type id, or NO_NODE.
+//   `<C>__graphImplVtbl` (read): a shell's node type id -> that concrete's `&<K>__as_<C>`, NULL for a
+//                                non-implementor, which is a TypeMismatch on a forged wire.
+// Then `__kama_graph_readShell`, the one closed-world dispatch in the program: a wire `type` selector
+// (a name, or an index for the index backends) to a freshly allocated, scalar-filled shell of that type.
 void CEmitter::emitPolyContractResolvers()
 {
+    *_out << "#define KAMA_GRAPH_NO_NODE 0xFFFFFFFFu\n";
     for (auto& C : _polyContracts) {
         std::vector<std::string> impls;   // implementors that are graph nodes, in stable _graphNodeOrder
         for (auto& K : _graphNodeOrder) {
@@ -25452,19 +25488,17 @@ void CEmitter::emitPolyContractResolvers()
             bool staticOnly = std::find(ci.staticOnlyInterfaces.begin(), ci.staticOnlyInterfaces.end(), C) != ci.staticOnlyInterfaces.end();
             if (impl && !staticOnly) impls.push_back(K);
         }
-        *_out << "static inline const GraphSerializable_vtbl* " << C << "__graphSerVtbl(const struct " << C << "_vtbl* __vt)\n{\n";
-        for (auto& K : impls) if (_classes[K].genSerialize) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return &" << K << "__as_GraphSerializable;\n"; }
-        indent(1); *_out << "return 0;\n}\n";
-        *_out << "static inline const struct " << C << "_vtbl* " << C << "__graphDeVtbl(const GraphDeserializable_vtbl* __vt)\n{\n";
-        for (auto& K : impls) if (_classes[K].genDeserialize) { indent(1); *_out << "if (__vt == &" << K << "__as_GraphDeserializable) return &" << K << "__as_" << C << ";\n"; }
+        *_out << "static inline uint32_t " << C << "__graphTypeId(const struct " << C << "_vtbl* __vt)\n{\n";
+        for (auto& K : impls) if (_classes[K].genSerialize) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return " << _classes[K].graphTypeId << "u;\n"; }
+        indent(1); *_out << "return KAMA_GRAPH_NO_NODE;\n}\n";
+        *_out << "static inline const struct " << C << "_vtbl* " << C << "__graphImplVtbl(uint32_t __tid)\n{\n";
+        for (auto& K : impls) if (_classes[K].genDeserialize) { indent(1); *_out << "if (__tid == " << _classes[K].graphTypeId << "u) return &" << K << "__as_" << C << ";\n"; }
         indent(1); *_out << "return 0;\n}\n\n";
     }
     bool anyReader = false;
     for (auto& K : _graphNodeOrder) if (_classes[K].genDeserialize) { anyReader = true; break; }
     if (!anyReader) return;
-    std::string oc = cType(optionalTypeNode(sharedTypeNode(synthId("GraphDeserializable"))));
-    std::string sh = sharedGraphDeC();
-    *_out << "static inline " << oc << " __kama_graph_readShell(FieldKey which, Deserializer r, GraphDeserializer* g)\n{\n";
+    *_out << "static inline kama_de_box* __kama_graph_readShell(FieldKey which, Deserializer r, struct kama_de_graph* g)\n{\n";
     indent(1); *_out << "int32_t __slot = -1;\n";
     indent(1); *_out << "if (which.tag == FieldKey_Name) {\n";
     bool first = true;
@@ -25477,21 +25511,43 @@ void CEmitter::emitPolyContractResolvers()
     indent(1); *_out << "} else if (which.tag == FieldKey_Id) { __slot = (int32_t)which.u.Id.id; }\n";
     indent(1); *_out << "else { __slot = (int32_t)which.u.Position.rank; }\n";
     indent(1); *_out << "FieldKey__dtor(&which);\n";
-    indent(1); *_out << oc << " __out = { .tag = " << oc << "_None };\n";
+    indent(1); *_out << "kama_de_box* __b = 0;\n";
     indent(1); *_out << "switch (__slot) {\n";
     for (auto& K : _graphNodeOrder) {
         if (!_classes[K].genDeserialize) continue;
         indent(1); *_out << "case " << _classes[K].graphTypeId << ": {\n";
         indent(2); *_out << K << "* __obj = (" << K << "*)kama_calloc(1, sizeof(" << K << "));\n";
+        indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(2); *_out << K << "____readInto(__obj, r, g);\n";
-        indent(2); *_out << sh << " __h; __h.obj = (void*)__obj; __h.vtbl = &" << K << "__as_GraphDeserializable; __h.ctrl = kama_ctrl_new();\n";
-        indent(2); *_out << "__out = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = __h } };\n";
+        indent(2); *_out << "__b = (kama_de_box*)kama_alloc(sizeof(kama_de_box));\n";
+        indent(2); *_out << "if (!__b) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        indent(2); *_out << "__b->ptr = (void*)__obj; __b->ctrl = kama_ctrl_new(); __b->type_id = " << _classes[K].graphTypeId << "u;\n";
         indent(2); *_out << "break;\n";
         indent(1); *_out << "}\n";
     }
     indent(1); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return __out;\n";
+    indent(1); *_out << "return __b;\n";
+    *_out << "}\n\n";
+    // Drop one shell's CONSTRUCTION-strong reference and free its box. Every shell gets exactly one of
+    // these on the way out, so a node the root reaches survives on the reference the root took and a node
+    // nothing reaches — which is what a forged or cyclic-but-unreachable wire produces — is freed here.
+    *_out << "static inline void __kama_graph_dropBox(kama_de_box* __b)\n{\n";
+    indent(1); *_out << "if (!__b) return;\n";
+    indent(1); *_out << "if (__b->ctrl && --__b->ctrl->strong == 0) {\n";
+    indent(2); *_out << "if (__b->ptr) {\n";
+    indent(3); *_out << "switch (__b->type_id) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genDeserialize || !_classes[K].destructible) continue;
+        indent(3); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__dtor((" << K << "*)__b->ptr); break;\n";
+    }
+    indent(3); *_out << "default: break;\n";
+    indent(3); *_out << "}\n";
+    indent(3); *_out << "kama_free(__b->ptr);\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "if (__b->ctrl->weak == 0) kama_free(__b->ctrl);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "kama_free(__b);\n";
     *_out << "}\n\n";
 }
 
@@ -25538,11 +25594,17 @@ std::string CEmitter::graphInternExpr(const GraphEdge& e, const std::string& val
     std::string t = "__gid" + std::to_string(_tempCounter++);
     std::string obj = e.elemIsContract ? "(" + val + ").obj" : "(void*)(" + val + ").p";
     std::string ctl = e.elemIsContract ? "(" + val + ").ctrl" : "(kama_ctrl*)(" + val + ").c";
-    std::string vt  = e.elemIsContract ? (e.elemC + "__graphSerVtbl((" + val + ").vtbl)") : ("&" + e.elemC + "__as_GraphSerializable");
+    std::string tid = e.elemIsContract ? (e.elemC + "__graphTypeId((" + val + ").vtbl)")
+                                       : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
     indent(depth); *_out << "uint64_t " << t << " = 0;\n";
+    // A null control block is an empty handle; an EXPIRED `Weak` (strong == 0) has a live control block and a
+    // dead pointee, so it must not be interned either — it writes 0, which reads back as expired.
     indent(depth); *_out << "if (" << ctl << (e.kind == "Weak" ? " && " + ctl + "->strong > 0" : "") << ") {\n";
-    indent(depth + 1); *_out << sharedGraphSerC() << " __h; __h.obj = " << obj << "; __h.vtbl = " << vt << "; __h.ctrl = " << ctl << ";\n";
-    indent(depth + 1); *_out << "if (__h.vtbl) { __h.ctrl->strong++; " << t << " = g->vtbl->intern(g->obj, (size_t)(uintptr_t)__h.obj, __h); }\n";
+    indent(depth + 1); *_out << "uint32_t __tid = " << tid << ";\n";
+    // The worklist BORROWS: the caller's root handle keeps the whole graph alive across a read-only write
+    // traversal, so nothing is retained here and nothing has to be released on the way out.
+    indent(depth + 1); *_out << "if (__tid != KAMA_GRAPH_NO_NODE) " << t
+                             << " = kama_ser_graph_intern(g, (uint64_t)(uintptr_t)" << obj << ", __tid);\n";
     indent(depth); *_out << "}\n";
     return t;
 }
@@ -25658,21 +25720,21 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
         const char* cnt = (e.kind == "Weak") ? "weak" : "strong";
         indent(depth); *_out << "{ uint64_t __rid = (uint64_t)(uintptr_t)" << slot << "; " << slot << " = NULL;\n";
         indent(depth + 1); *_out << "if (__rid != 0) {\n";
-        indent(depth + 2); *_out << "if (!g->vtbl->has(g->obj, __rid)) g->vtbl->fail(g->obj, (DeError){ .tag = DeError_UnresolvedReference });\n";
+        indent(depth + 2); *_out << "kama_de_box* __t = kama_de_graph_lookup(g, __rid);\n";
+        indent(depth + 2); *_out << "if (!__t) kama_de_graph_fail(g, DeError_UnresolvedReference);\n";
         indent(depth + 2); *_out << "else {\n";
-        indent(depth + 3); *_out << sharedGraphDeC() << "* __t = g->vtbl->resolve(g->obj, __rid);\n";
         if (e.elemIsContract) {
-            indent(depth + 3); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__graphDeVtbl(__t->vtbl);\n";
-            indent(depth + 3); *_out << "if (!__vt) g->vtbl->fail(g->obj, (DeError){ .tag = DeError_TypeMismatch });\n";
-            indent(depth + 3); *_out << "else { (" << dst << ").obj = __t->obj; (" << dst << ").vtbl = __vt; (" << dst << ").ctrl = __t->ctrl; __t->ctrl->" << cnt << "++; }\n";
+            indent(depth + 3); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__graphImplVtbl(__t->type_id);\n";
+            indent(depth + 3); *_out << "if (!__vt) kama_de_graph_fail(g, DeError_TypeMismatch);\n";
+            indent(depth + 3); *_out << "else { (" << dst << ").obj = __t->ptr; (" << dst << ").vtbl = __vt; (" << dst << ").ctrl = __t->ctrl; __t->ctrl->" << cnt << "++; }\n";
         } else {
-            indent(depth + 3); *_out << "if (__t->vtbl != &" << X << "__as_GraphDeserializable) g->vtbl->fail(g->obj, (DeError){ .tag = DeError_TypeMismatch });\n";
-            indent(depth + 3); *_out << "else { (" << dst << ").p = (" << X << "*)__t->obj; (" << dst << ").c = (void*)__t->ctrl; __t->ctrl->" << cnt << "++; }\n";
+            indent(depth + 3); *_out << "if (__t->type_id != " << _classes[X].graphTypeId << "u) kama_de_graph_fail(g, DeError_TypeMismatch);\n";
+            indent(depth + 3); *_out << "else { (" << dst << ").p = (" << X << "*)__t->ptr; (" << dst << ").c = (void*)__t->ctrl; __t->ctrl->" << cnt << "++; }\n";
         }
         indent(depth + 2); *_out << "}\n";
         indent(depth + 1); *_out << "}\n";
         // A `Shared` is never null: an id of 0 under one is a forged wire. A `Weak` at 0 is simply expired.
-        if (e.kind == "Shared") { indent(depth + 1); *_out << "else g->vtbl->fail(g->obj, (DeError){ .tag = DeError_UnresolvedReference });\n"; }
+        if (e.kind == "Shared") { indent(depth + 1); *_out << "else kama_de_graph_fail(g, DeError_UnresolvedReference);\n"; }
         indent(depth); *_out << "}\n";
         return;
     }
@@ -25689,7 +25751,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
 {
     if (!ci.genDeserialize) return;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
-          << "* self, Deserializer r, GraphDeserializer* g)\n{\n";
+          << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
     // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
     for (auto& f : ci.fields) {
         if (f.serSkip) continue;
@@ -25717,16 +25779,20 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
-void CEmitter::emitGraphAdapterBody(ClassInfo& ci, const std::string& name, MethodInfo& mi)
+void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 {
     const std::string& K = ci.name;
-    *_out << (_emitStaticClass ? "static inline " : "") << graphAdapterSig(ci, name, mi) << "\n{\n";
-    if (name == "typeName") { indent(1); *_out << "return " << kamaStrLit(graphWireName(ci)) << ";\n"; }
-    else if (name == "typeIndex") { indent(1); *_out << "return " << ci.graphTypeId << "u;\n"; }
-    else if (name == "visitEdges") {
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    if (ci.genSerialize) {
+        // PASS 1 — discovery. Interning every reachable pointee before a byte is written is what lets the
+        // object table be an ARRAY: `beginArray(count)` states its length up front, which is the whole
+        // reason a positional backend can carry a graph at all.
+        *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g)\n{\n";
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) emitGraphFieldVisit(fp->type, "self->" + fp->name, 1);
-    }
-    else if (name == "writeNode") {
+        *_out << "}\n\n";
+        // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
+        // the id discovery already assigned it.
+        *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
         std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
         indent(1); *_out << "w->vtbl->beginObject(w->obj, " << wf.size() << ");\n";
         for (const FieldInfo* fp : wf) {
@@ -25735,21 +25801,157 @@ void CEmitter::emitGraphAdapterBody(ClassInfo& ci, const std::string& name, Meth
             emitGraphFieldWrite(fp->type, "self->" + fp->name, 1);
         }
         indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+        *_out << "}\n\n";
     }
-    else if (name == "wireEdges") {
+    if (ci.genDeserialize) {
+        // READ PASS 2 — every id the shell stashed becomes a retained handle.
+        *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g)\n{\n";
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) emitGraphFieldWire(fp->type, "self->" + fp->name, 1);
+        *_out << "}\n\n";
     }
-    else if (name == "readShell") { indent(1); *_out << "return __kama_graph_readShell(which, r, g);\n"; }
-    else {   // takeRoot: the walker's retained fat handle becomes the typed root, or is dropped
-        std::string oc = cType(mi.returnType);
-        std::string sharedK = cType(mi.returnType->genericArgs->at(0));
-        indent(1); *_out << oc << " __out = { .tag = " << oc << "_None };\n";
-        indent(1); *_out << "if (shell.vtbl == &" << K << "__as_GraphDeserializable) {\n";
-        indent(2); *_out << sharedK << " __s = {0}; __s.p = (" << K << "*)shell.obj; __s.c = (void*)shell.ctrl;\n";   // the strong ref MOVES
-        indent(2); *_out << "__out = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = __s } };\n";
-        indent(1); *_out << "} else { " << sharedGraphDeC() << "__dtor(&shell); }\n";
-        indent(1); *_out << "return __out;\n";
+}
+
+// ---- the walker ------------------------------------------------------------------------------------------
+// The driver, emitted as the node type's OWN `serialize`/`deserialize`. There is no root wrapper type: what
+// you hand to a backend IS the root, and a graph comes back as `Shared<T>` because a cycle cannot be
+// returned by value.
+//
+// Every frame below is the ordinary token vocabulary — `{root, objects: [{id, type, value}]}` — so a backend
+// that carries values carries graphs, positional and numbered included. The envelope's own frames have a
+// FIXED shape, so they are read positionally the way the derive reads a tagged enum's `{tag, value}`; only a
+// node's `value` object is keyed.
+void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
+{
+    std::string resC = cType(ci.methods["serialize"].returnType);
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << resC << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
+    indent(1); *_out << "uint64_t __root = kama_ser_graph_intern(&__g, (uint64_t)(uintptr_t)self, "
+                     << ci.graphTypeId << "u);\n";
+    // Discovery. The worklist GROWS under the loop as each node interns its own edges, so `count` is
+    // re-read every iteration rather than hoisted.
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
+    indent(2); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genSerialize) continue;
+        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__visitEdges(("
+                         << K << "*)kama_ser_graph_obj(&__g, __i), &__g); break;\n";
     }
+    indent(2); *_out << "default: break;\n";
+    indent(2); *_out << "}\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "w->vtbl->beginObject(w->obj, 2);\n";
+    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
+    indent(1); *_out << "w->vtbl->writeU64(w->obj, __root);\n";
+    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
+    indent(1); *_out << "w->vtbl->beginArray(w->obj, kama_ser_graph_count(&__g));\n";
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
+    indent(2); *_out << "w->vtbl->beginObject(w->obj, 3);\n";
+    indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("id") << ", 0u);\n";
+    indent(2); *_out << "w->vtbl->writeU64(w->obj, (uint64_t)(__i + 1));\n";
+    indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
+    indent(2); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genSerialize) continue;
+        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
+        // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
+        // backend writes the index, so the choice costs one byte where a name would cost its length.
+        indent(3); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
+                         << _classes[K].graphTypeId << "u);\n";
+        indent(3); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 2u);\n";
+        indent(3); *_out << K << "__writeNode((" << K << "*)kama_ser_graph_obj(&__g, __i), w, &__g);\n";
+        indent(3); *_out << "break;\n";
+        indent(2); *_out << "}\n";
+    }
+    indent(2); *_out << "default: break;\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "w->vtbl->endArray(w->obj);\n";
+    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "kama_ser_graph_free(&__g);\n";
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    *_out << "}\n\n";
+}
+
+void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
+{
+    std::string T = ci.name;
+    SharedIdentifier retNode = ci.methods["deserialize"].returnType;     // Result<Shared<T>, Owned<Error>>
+    std::string resC = cType(retNode);
+    std::string sharedT = cType(retNode->genericArgs->at(0));            // Shared_T — the Ok arm
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << resC << " " << T << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
+    // The envelope is read POSITIONALLY: its shape is fixed, so each key is consumed and discarded and the
+    // order is the contract (`type` before `value`, or the reader cannot dispatch).
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, 2);\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "uint64_t __root = r.vtbl->readU64(r.obj);\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "r.vtbl->beginArray(r.obj);\n";
+    // PASS 1 — one shell per entry: allocated, scalars read, every edge id stashed in its own pointer slot.
+    indent(1); *_out << "while (r.vtbl->moreElems(r.obj)) {\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj, 3);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->readU64(r.obj);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "FieldKey __ty = r.vtbl->variant(r.obj);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
+    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
+    // A table id may appear once, and 0 is never a live id. On refusal the shell just read is dropped.
+    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, DeError_DuplicateId)) {\n";
+    indent(3); *_out << "__kama_graph_dropBox(__b);\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(2); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(2); *_out << "if (r.vtbl->failed(r.obj)) break;\n";   // a malformed entry cannot be stepped over
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    // PASS 2 — ids become handles, in read order.
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) {\n";
+    indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
+    indent(2); *_out << "switch (__b->type_id) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genDeserialize) continue;
+        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__wireEdges(("
+                         << K << "*)__b->ptr, &__g); break;\n";
+    }
+    indent(2); *_out << "default: break;\n";
+    indent(2); *_out << "}\n";
+    indent(1); *_out << "}\n";
+    // ROOT — the walker's construction-strong reference MOVES into the returned handle; a dangling or
+    // wrong-typed root is a forged wire.
+    indent(1); *_out << sharedT << " __ret = {0};\n";
+    indent(1); *_out << "kama_de_box* __rb = kama_de_graph_lookup(&__g, __root);\n";
+    indent(1); *_out << "if (!__rb) kama_de_graph_fail(&__g, DeError_UnresolvedReference);\n";
+    indent(1); *_out << "else if (__rb->type_id != " << ci.graphTypeId << "u) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
+    indent(1); *_out << "else { __ret.p = (" << T << "*)__rb->ptr; __ret.c = (void*)__rb->ctrl; __rb->ctrl->strong++; }\n";
+    // CLEANUP — drop each shell's construction strong. A node no live edge reaches dies here, so a forged
+    // wire cannot leak; one the root reaches survives on the reference just taken.
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
+    indent(1); *_out << "kama_de_graph_free(&__g);\n";
+    // BOUNDARY. The reader's sticky flag and the walker's own are both failures; the walker's carries the
+    // sharper code (DuplicateId, UnresolvedReference, TypeMismatch) where the reader would only say
+    // Malformed, so it is reported first.
+    indent(1); *_out << "if (__g.failed) {\n";
+    indent(2); *_out << sharedT << "__dtor(&__ret);\n";
+    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError){ .tag = (DeError_Tag)__g.code });\n";
+    std::string gbox = emitStickyErrBox(2);
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    indent(2); *_out << sharedT << "__dtor(&__ret);\n";
+    std::string rbox = emitStickyErrBox(2);
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << rbox << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __ret } };\n";
     *_out << "}\n\n";
 }
 
@@ -27666,6 +27868,21 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // context-aware advice (which offers `of`/`zero` only for a transparent value).
         if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))
             return "0";
+        // `deserializeJsonBuffer::<Shared<X>>` for a pointer-free `X`. The handle spelling is how a GRAPH
+        // comes back — the root arrives behind one because a cycle cannot be returned by value — and a
+        // type that reaches no `Shared`/`Weak` is not a graph, so it is read by value with no handle and no
+        // envelope. Say that here: the bound holds (`X` really is `Deserializable`), so the only thing the
+        // author sees otherwise is a missing ctor reported against stdlib source.
+        if (method == "deserialize") {
+            const std::string x = sharedPointeeClass(stci->name);
+            auto e = x.empty() ? _classes.end() : _classes.find(x);
+            if (e != _classes.end())
+                unsupported(("`" + demangleForDisplay(x) + "` reaches no `Shared`/`Weak` field, so it is not "
+                             "a graph — read it by value (`::<" + demangleForDisplay(x) + ">`), not as `Shared<"
+                             + demangleForDisplay(x) + ">`. Only a graph comes back behind a handle").c_str(),
+                            call->line);
+            if (e != _classes.end()) return "0";
+        }
         unsupported(("type `" + disp + "` has no constructor `" + method + "` — define one "
                      "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
         return "0";

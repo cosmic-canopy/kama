@@ -37,7 +37,6 @@
     "serialization": { "visibility": "public",
                        "modules": {
                          "binary": { "visibility": "public" },
-                         "graph":  { "visibility": "public" },
                          "json":   { "visibility": "public" }
                        } },
     "time":          { "visibility": "public" }

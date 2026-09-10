@@ -7,7 +7,6 @@ import {
     std::serialization::binary::deserializeBinaryNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Shared,
-    std::serialization::graph::ObjectGraph,
 };
 
 type contract Shape for resource { fn int32 area(); }
@@ -54,14 +53,14 @@ fn int32 main() {
     Shared<Circle> ci = new Circle.make(r: 2);
     Shared<Shape> sb = ci;
     Shared<Scene> sc = new Scene.make(a: give sa, b: give sb);
-    ObjectGraph<Scene> graph = ObjectGraph.of(root: give sc);
+    Shared<Scene> graph = sc;
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: graph);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<ObjectGraph<Scene>, Owned<Error>> res = deserializeBinaryNamedBuffer::<ObjectGraph<Scene>>(src: clone(src: ref b1));
+    Result<Shared<Scene>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Scene>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: og): {
-            Shared<Scene> sh = og.root();
+            Shared<Scene> sh = og;
             Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: graph);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             if (!bytesEqual(a: ref b1, b: ref b2)) { return 40; }

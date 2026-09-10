@@ -9,7 +9,6 @@ import {
     std::collections::DynamicArray,
     std::memory::Shared,
     std::memory::Weak,
-    std::serialization::graph::ObjectGraph,
 };
 
 type contract Shape for resource { fn int32 area(); }
@@ -63,14 +62,14 @@ fn int32 main() {
     Shared<Node> b = new Node.make(id: 2, shape: give sb);
     b.setBack(w: a.downgrade());
     a.setNext(n: give b);
-    ObjectGraph<Node> graph = ObjectGraph.of(root: a);
+    Shared<Node> graph = a;
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNumberedBuffer(v: graph);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<ObjectGraph<Node>, Owned<Error>> res = deserializeBinaryNumberedBuffer::<ObjectGraph<Node>>(src: clone(src: ref b1));
+    Result<Shared<Node>, Owned<Error>> res = deserializeBinaryNumberedBuffer::<Shared<Node>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: og): {
-            Shared<Node> root = og.root();
+            Shared<Node> root = og;
             Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNumberedBuffer(v: graph);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
             if (!bytesEqual(a: ref b1, b: ref b2)) { return 40; }

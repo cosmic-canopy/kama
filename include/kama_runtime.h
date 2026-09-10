@@ -1661,6 +1661,168 @@ static inline kama_ctrl* kama_ctrl_new(void) {
     return c;
 }
 
+// ---- Serialization graph substrate ------------------------------------------
+// The id table / worklist behind the compiler's object-graph walker (a `@generate` type that transitively
+// reaches a `Shared`/`Weak` — see `reachesPointer`). Pure C on purpose: the compiler's own graph machinery
+// cannot lean on `std::collections`, because a collection is itself serializable and the dependency would
+// be circular. The ENVELOPE is not here — the walker frames `{root, objects: [{id, type, value}]}` in the
+// ordinary `Serializer`/`Deserializer` token vocabulary, so every backend carries a graph. This holds only
+// the two things tokens cannot: identity dedup, and a heterogeneous node list in id order.
+//
+// Nodes are identified by a compile-time `type_id` (its index in the program's closed set of node types),
+// never by a function pointer: both passes dispatch through an emitted switch on it, so there is no jump
+// table to keep in sync and no runtime type registry. Inert unless a program actually serializes a graph.
+
+// An open-addressing uint64->uint64 map (linear probing, power-of-two capacity), used write-side as
+// pointee-address -> id and read-side as id -> slot. Key 0 is the empty sentinel — safe because an interned
+// address is never null and ids start at 1, so 0 is never a live key.
+typedef struct kama_gmap {
+    uint64_t* keys;   // 0 == empty slot
+    uint64_t* vals;
+    size_t    cap;    // power of two, or 0 when unallocated
+    size_t    len;    // live entries
+} kama_gmap;
+
+static inline void kama_gmap_init(kama_gmap* m) { m->keys = NULL; m->vals = NULL; m->cap = 0; m->len = 0; }
+static inline void kama_gmap_free(kama_gmap* m) { kama_free(m->keys); kama_free(m->vals); kama_gmap_init(m); }
+
+// splitmix64 finalizer — the same mix the prelude's integer hash() uses.
+static inline uint64_t kama_gmap_hash(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+static inline void kama_gmap_put(kama_gmap* m, uint64_t k, uint64_t v);   // fwd — rehash reinserts via put
+
+static inline void kama_gmap_grow(kama_gmap* m, size_t newcap) {
+    kama_gmap old = *m;
+    m->keys = (uint64_t*)kama_calloc(newcap, sizeof(uint64_t));
+    m->vals = (uint64_t*)kama_calloc(newcap, sizeof(uint64_t));
+    if (!m->keys || !m->vals) kama_panic(kama_string_lit("out of memory", 13));
+    m->cap = newcap; m->len = 0;
+    for (size_t i = 0; i < old.cap; ++i)
+        if (old.keys[i] != 0) kama_gmap_put(m, old.keys[i], old.vals[i]);
+    kama_free(old.keys); kama_free(old.vals);
+}
+
+// Insert or overwrite. Grows at ~0.7 load. A 0 key is the empty sentinel and is never inserted by the
+// walker (addresses and ids are both nonzero), so no guard is needed.
+static inline void kama_gmap_put(kama_gmap* m, uint64_t k, uint64_t v) {
+    if (m->cap == 0)                             kama_gmap_grow(m, 8);
+    else if ((m->len + 1) * 10 >= m->cap * 7)    kama_gmap_grow(m, m->cap * 2);
+    size_t mask = m->cap - 1;
+    size_t i = (size_t)kama_gmap_hash(k) & mask;
+    while (m->keys[i] != 0) {
+        if (m->keys[i] == k) { m->vals[i] = v; return; }   // overwrite existing
+        i = (i + 1) & mask;
+    }
+    m->keys[i] = k; m->vals[i] = v; m->len++;
+}
+
+// Look up `k`; on hit store its value in *out and return 1, else 0.
+static inline int kama_gmap_get(const kama_gmap* m, uint64_t k, uint64_t* out) {
+    if (m->cap == 0) return 0;
+    size_t mask = m->cap - 1;
+    size_t i = (size_t)kama_gmap_hash(k) & mask;
+    while (m->keys[i] != 0) {
+        if (m->keys[i] == k) { *out = m->vals[i]; return 1; }
+        i = (i + 1) & mask;
+    }
+    return 0;
+}
+
+// WRITE side. Objects are BORROWED — the caller's root handle keeps the live graph alive across a read-only
+// traversal, so this owns nothing but its own arrays. `intern` is called during pass 1 (discovery, which
+// grows the list under the loop) and again during pass 2 (write), where every address is already present.
+typedef struct kama_ser_graph {
+    kama_gmap ids;      // pointee address -> id (1-based)
+    void**    objs;     // node object pointers, in id order
+    uint32_t* types;    // parallel: each node's compile-time type id
+    size_t    len, cap;
+} kama_ser_graph;
+
+static inline void kama_ser_graph_init(kama_ser_graph* g) {
+    kama_gmap_init(&g->ids); g->objs = NULL; g->types = NULL; g->len = 0; g->cap = 0;
+}
+static inline void kama_ser_graph_free(kama_ser_graph* g) {
+    kama_gmap_free(&g->ids); kama_free(g->objs); kama_free(g->types);
+    g->objs = NULL; g->types = NULL; g->len = 0; g->cap = 0;
+}
+// Return the existing id for `addr`, or append a new node and return its fresh 1-based id.
+static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, uint32_t type_id) {
+    uint64_t id;
+    if (kama_gmap_get(&g->ids, addr, &id)) return id;
+    if (g->len == g->cap) {
+        size_t nc = g->cap ? g->cap * 2 : 8;
+        void**    no = (void**)   kama_alloc(nc * sizeof(void*));
+        uint32_t* nt = (uint32_t*)kama_alloc(nc * sizeof(uint32_t));
+        if (!no || !nt) kama_panic(kama_string_lit("out of memory", 13));
+        for (size_t i = 0; i < g->len; ++i) { no[i] = g->objs[i]; nt[i] = g->types[i]; }
+        kama_free(g->objs); kama_free(g->types);
+        g->objs = no; g->types = nt; g->cap = nc;
+    }
+    g->objs[g->len] = (void*)(uintptr_t)addr; g->types[g->len] = type_id; g->len++;
+    id = (uint64_t)g->len;                                  // 1-based: the root is 1
+    kama_gmap_put(&g->ids, addr, id);
+    return id;
+}
+static inline size_t   kama_ser_graph_count(const kama_ser_graph* g)          { return g->len; }
+static inline void*    kama_ser_graph_obj(const kama_ser_graph* g, size_t i)  { return g->objs[i]; }
+static inline uint32_t kama_ser_graph_type(const kama_ser_graph* g, size_t i) { return g->types[i]; }
+
+// READ side. A SHELL is a node allocated and scalar-filled by pass 1, with every edge id stashed in the
+// handle's own pointer slot and a NULL control block (both handle dtors guard on that), then wired in pass
+// 2. The walker holds each shell with one construction-strong reference and drops it on the way out, so a
+// node no live edge reaches is freed with the walker and a forged wire cannot leak.
+typedef struct kama_de_box { void* ptr; kama_ctrl* ctrl; uint32_t type_id; } kama_de_box;
+
+typedef struct kama_de_graph {
+    kama_gmap     byid;    // wire id -> slot+1 into `boxes`
+    kama_de_box** boxes;   // shells in READ order (which is also `order`'s order)
+    uint64_t*     order;   // parallel: each shell's wire id
+    size_t        len, cap;
+    int           failed;  // sticky, walker-side: the reader has its own flag
+    int           code;    // a DeError tag, translated at the boundary by emitted C
+} kama_de_graph;
+
+static inline void kama_de_graph_init(kama_de_graph* g) {
+    kama_gmap_init(&g->byid); g->boxes = NULL; g->order = NULL; g->len = 0; g->cap = 0;
+    g->failed = 0; g->code = 0;
+}
+static inline void kama_de_graph_fail(kama_de_graph* g, int code) { g->failed = 1; g->code = code; }
+
+// A table id may appear once; id 0 and a repeat are both a forged wire. Returns 0 when the shell was NOT
+// taken (the caller drops it), 1 when enrolled.
+static inline int kama_de_graph_enroll(kama_de_graph* g, uint64_t id, kama_de_box* b, int dup_code) {
+    uint64_t slot;
+    if (id == 0 || kama_gmap_get(&g->byid, id, &slot)) { kama_de_graph_fail(g, dup_code); return 0; }
+    if (g->len == g->cap) {
+        size_t nc = g->cap ? g->cap * 2 : 8;
+        kama_de_box** nb = (kama_de_box**)kama_alloc(nc * sizeof(kama_de_box*));
+        uint64_t*     no = (uint64_t*)    kama_alloc(nc * sizeof(uint64_t));
+        if (!nb || !no) kama_panic(kama_string_lit("out of memory", 13));
+        for (size_t i = 0; i < g->len; ++i) { nb[i] = g->boxes[i]; no[i] = g->order[i]; }
+        kama_free(g->boxes); kama_free(g->order);
+        g->boxes = nb; g->order = no; g->cap = nc;
+    }
+    g->boxes[g->len] = b; g->order[g->len] = id; g->len++;
+    kama_gmap_put(&g->byid, id, (uint64_t)g->len);          // slot+1, so 0 stays "absent"
+    return 1;
+}
+static inline kama_de_box* kama_de_graph_lookup(const kama_de_graph* g, uint64_t id) {
+    uint64_t slot;
+    if (!kama_gmap_get(&g->byid, id, &slot)) return NULL;
+    return g->boxes[slot - 1];
+}
+static inline size_t        kama_de_graph_count(const kama_de_graph* g)         { return g->len; }
+static inline kama_de_box*  kama_de_graph_at(const kama_de_graph* g, size_t i)  { return g->boxes[i]; }
+static inline void kama_de_graph_free(kama_de_graph* g) {
+    kama_gmap_free(&g->byid); kama_free(g->boxes); kama_free(g->order);
+    g->boxes = NULL; g->order = NULL; g->len = 0; g->cap = 0;
+}
+
 // --- Fatal diagnostics with source location (panic / assert) -----------------
 // Compose a message + " (file:line)" into a stack buffer, write it to stderr, and terminate — the same
 // clean-abort discipline as kama_panic (no <stdio.h>, no UB, never returns). On embedded there is no

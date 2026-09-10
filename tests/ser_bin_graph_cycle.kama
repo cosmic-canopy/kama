@@ -8,7 +8,6 @@ import {
     std::collections::DynamicArray,
     std::memory::Shared,
     std::memory::Weak,
-    std::serialization::graph::ObjectGraph,
 };
 
 @generate(Serializable, Deserializable)
@@ -39,11 +38,11 @@ fn int32 main() {
     Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
-    ObjectGraph<Node> og = ObjectGraph.of(root: a);
+    Shared<Node> og = a;
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: og);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<ObjectGraph<Node>, Owned<Error>> res = deserializeBinaryNamedBuffer::<ObjectGraph<Node>>(src: clone(src: ref b1));
+    Result<Shared<Node>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Node>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
             Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: sh);

@@ -252,10 +252,6 @@ struct MethodInfo {
     // Compiler-synthesized `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`.
     // `node` is null: emitted via emitEqualsDefinition / emitHashDefinition, keyed on the method name.
     bool                         isSynthCmp = false;
-    // A synthesized graph ADAPTER (the prelude's GraphSerializable / GraphDeserializable / GraphRoot members):
-    // which one, by member name — "" for every other method. Registered eagerly by registerGraphAdapters,
-    // pruned late by computeGraphNodeTypes, emitted by emitGraphAdapterBody.
-    std::string                  synthGraph;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -432,14 +428,17 @@ struct ClassInfo {
     // emit time (zero runtime branch) by the kama_ctrl.h seam — the CollectionInfo sibling carries it too.
     bool                              useAtomicRefcount = false;
     // A node in a serializable object graph: a `@generate` type that reaches a Shared/Weak field, OR a
-    // pointee reached via some node's Shared/Weak field, OR the `T` of an `ObjectGraph<T>`. Populated by
-    // computeGraphNodeTypes() (a closure over the edge fields). Such a type keeps the graph ADAPTERS
-    // registerGraphAdapters declared (every other `@generate` type has them pruned there), and one that
-    // reaches a pointer loses its by-value `Serializable`/`Deserializable` — a graph is never a value.
+    // pointee reached via some node's Shared/Weak field. Populated by computeGraphNodeTypes() (a closure
+    // over the edge fields). Such a type keeps exactly the `serialize`/`deserialize` pair a by-value type
+    // has — the walk is emitted as INTERNAL C helpers (`K__visitEdges`/`K__writeNode`/`K__wireEdges`/
+    // `K____readInto`), so a node carries no extra public surface.
     bool                              isGraphNode = false;
     // Stable per-graph-node index (into `_graphNodeOrder`), assigned by computeGraphNodeTypes(): the node's
-    // wire `typeIndex`, what an index backend writes where a named one writes `typeName`. -1 = not a node.
+    // wire type tag — what an index backend writes where a named one writes the type's name. -1 = not a node.
     int                               graphTypeId = -1;
+    // This node's synthesized `deserialize` returns `Result<Shared<This>, Owned<Error>>` rather than
+    // `Result<This, …>`: a graph comes back as a HANDLE, since a cycle cannot be returned by value.
+    bool                              graphDeserialize = false;
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
     // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
     // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
@@ -2090,6 +2089,7 @@ private:
     bool isSmartPtrClass(const std::string& cls) const;  // Owned_T or Shared_T
     bool isBindableClass(const std::string& cls) const;  // BindableFunctionPtr_Sig
     CollKind smartKind(const std::string& cls) const;    // Owned/Shared (precond: isSmartPtrClass)
+    std::string sharedPointeeClass(const std::string& cls);   // pointee C class of a `Shared<X>`, "" otherwise
     bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
     bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
     // A NAMED value you can hand off (variable / field / element / base member),
@@ -2349,21 +2349,19 @@ private:
                          const std::string& resultCType, const std::string& cleanup);
     std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type
     bool isScalarDeType(SharedIdentifier ty);      // scalar/string field: bare sticky read (vs a fallible composite)
-    // Object-graph ADAPTERS — what `@generate` synthesizes for a graph node so the library walker
-    // (std::serialization::graph) can drive it through the prelude's Graph* contracts.
-    void registerGraphAdapters(ClassInfo& ci, SharedIdentifier selfNode);   // eager: the conformances + MethodInfos
-    void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode; prunes
-    void regateGenericInstances();                  // after the prune: re-judge every instance's `when` gates
-    std::string graphAdapterSig(const ClassInfo& ci, const std::string& name, const MethodInfo& mi);  // C prototype text
-    void emitGraphReadIntoProto(ClassInfo& ci);     // `K____readInto` (pass-1 field read into a shell) prototype
-    void emitGraphReadInto(ClassInfo& ci);          // …its body
-    void emitGraphAdapterBody(ClassInfo& ci, const std::string& name, MethodInfo& mi);   // one adapter member's body
+    // Object-graph WALKER — the algorithm lives in the compiler and drives the ordinary token protocol.
+    // A node's per-type helpers are internal C functions over the kama_runtime.h substrate, never members.
+    void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode + graphTypeId
+    void regateGenericInstances();                  // re-judge every generic instance's `when` gates
+    void emitGraphNodeHelperProtos(ClassInfo& ci);  // visitEdges / writeNode / wireEdges / __readInto prototypes
+    void emitGraphNodeHelpers(ClassInfo& ci);       // …their bodies
+    void emitGraphReadInto(ClassInfo& ci);          // `K____readInto`: pass-1 field read into a shell
+    void emitGraphSerializeDefinition(ClassInfo& ci);     // the write driver, as the node's own `serialize`
+    void emitGraphDeserializeDefinition(ClassInfo& ci);   // the read driver — returns `Shared<T>`
     void emitGraphFieldWrite(SharedIdentifier ty, const std::string& access, int depth);   // writeNode: one field
     void emitGraphFieldVisit(SharedIdentifier ty, const std::string& access, int depth);   // visitEdges: one field
     void emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, int depth);       // readInto: one field
     void emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, int depth);       // wireEdges: one field
-    std::string sharedGraphSerC();     // C type of the fat `Shared<GraphSerializable>`
-    std::string sharedGraphDeC();      // C type of the fat `Shared<GraphDeserializable>`
     bool typeHasGraphAdapters(const std::string& cls) const;   // a nested by-value / Owned pointee that is itself a node
     // One field's graph-edge classification (empty kind => not an edge: scalar/string/nested/collection/
     // Owned, which flow through the by-value helpers). kind: Shared/Weak. elemIsContract => the pointee is a
@@ -2387,7 +2385,6 @@ private:
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
     std::vector<std::string> _graphNodeOrder;       // graph node types in a stable order (typeIndex; the shell reader chain)
-    std::string _objectGraphTmpl;                   // the library `ObjectGraph<T>` template key (its `T` is a graph root)
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.
     std::set<std::string> _polyContracts;
     // Poly-DISPATCH contracts (Model C, base `Error`): a contract that must support DYNAMIC dispatch +

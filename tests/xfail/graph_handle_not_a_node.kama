@@ -1,0 +1,13 @@
+// `Shared<T>` is how a GRAPH comes back — the root arrives behind a handle because a cycle cannot be
+// returned by value. A type that reaches no `Shared`/`Weak` field is not a graph, so it is read by value
+// with no handle and no envelope; asking for the handle names a `deserialize` that does not exist, and
+// the diagnostic has to say which half is wrong rather than report a missing ctor in stdlib source.
+import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+
+@generate(Serializable, Deserializable)
+type value Pt { @field int32 x; public ctor make(int32 x) { this.x = x; } }
+
+fn int32 main() {
+    Result<Shared<Pt>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Pt>>(src: "{\"x\":1}");
+    return match (give back) { case Ok(value: p): 0; case Err(error: e): 1; };
+}

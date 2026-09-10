@@ -7,7 +7,6 @@ import {
     std::serialization::binary::deserializeBinaryNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Shared,
-    std::serialization::graph::ObjectGraph,
 };
 
 @generate(Serializable, Deserializable)
@@ -37,11 +36,11 @@ fn int32 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Shared<Pair> p = new Pair.make(a: give leaf, b: give l2);
-    ObjectGraph<Pair> og = ObjectGraph.of(root: give p);
+    Shared<Pair> og = p;
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: og);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<ObjectGraph<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<ObjectGraph<Pair>>(src: clone(src: ref b1));
+    Result<Shared<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
             Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: sh);

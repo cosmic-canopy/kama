@@ -3,7 +3,7 @@
 // pointee, shared across the nesting. (The old emitter wrote a whole nested envelope inside the entry, with
 // colliding ids, and the round trip still reported Ok — measured 2026-09-09.) Re-encode is exact.
 import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
-         std::memory::Shared, std::memory::Owned, std::serialization::graph::ObjectGraph };
+         std::memory::Shared, std::memory::Owned };
 
 @generate(Serializable, Deserializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
@@ -22,14 +22,14 @@ fn int32 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;
     Shared<Pair> p = new Pair.make(x: Inner.make(l: give leaf), y: new Inner.make(l: give l2));
-    ObjectGraph<Pair> graph = ObjectGraph.of(root: give p);
+    Shared<Pair> graph = p;
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: graph);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // ONE table: the Pair (its nested parts inline) and the one Leaf both parts share.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"x\":{\"l\":2},\"y\":{\"l\":2}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":42}}]}") {
         return cast<int32>(j.length());
     }
-    Result<ObjectGraph<Pair>, Owned<Error>> back = deserializeJsonBuffer::<ObjectGraph<Pair>>(src: copy j);
+    Result<Shared<Pair>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Pair>>(src: copy j);
     match (back) {
         case Ok(value: og): {
             Result<string, Owned<Error>> j2r = serializeJsonBuffer(v: graph);

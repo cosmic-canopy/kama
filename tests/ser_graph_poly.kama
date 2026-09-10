@@ -5,7 +5,7 @@
 // handle — proven by a re-encode reproducing the exact wire AND by dynamic dispatch (`area()`) surviving the
 // trip. ASan proves each concrete frees exactly once. (v1 rule: a contract graph edge's implementors are
 // `@generate(Serializable, Deserializable)`.)
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::memory::Shared, std::serialization::graph::ObjectGraph };
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
@@ -38,17 +38,17 @@ fn int32 main() {
     Shared<Circle> ci = new Circle.make(r: 2);
     Shared<Shape> sb = ci;
     Shared<Scene> sc = new Scene.make(a: give sa, b: give sb);
-    ObjectGraph<Scene> graph = ObjectGraph.of(root: give sc);
+    Shared<Scene> graph = sc;
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: graph);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     // root Scene=1; a -> Sq=2, b -> Circle=3; each entry carries its concrete `type`.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{\"a\":2,\"b\":3}},{\"id\":2,\"type\":\"Sq\",\"value\":{\"side\":4}},{\"id\":3,\"type\":\"Circle\",\"value\":{\"r\":2}}]}") {
         return cast<int32>(j.length());
     }
-    Result<ObjectGraph<Scene>, Owned<Error>> res = deserializeJsonBuffer::<ObjectGraph<Scene>>(src: copy j);
+    Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: copy j);
     match (res) {
         case Ok(value: og): {
-            Shared<Scene> sh = og.root();
+            Shared<Scene> sh = og;
             Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: graph);
             string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
             if (j2 != j) { return 1; }
