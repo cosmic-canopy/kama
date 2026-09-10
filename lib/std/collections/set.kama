@@ -52,11 +52,10 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
     // Serializable as a JSON array of the members. Serializable needs a `Copyable` key (the key iterator yields
     // copies); deserialize just `add`s each key (no copy). A yielded `k` is a nameable local, so `k.serialize`
     // resolves for a primitive key directly.
-    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, K: Copyable<K>] {
         w.beginArray(count: cast<usize>(this.m.length()));
         foreach (K k in this.m) {
-            Result<Unit, Owned<Error>> __sr = this.serElem(k: k, w: w);
+            Result<Unit, Owned<Error>> __sr = k.serialize(w: w);
             match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         }
         w.endArray();

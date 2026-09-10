@@ -1,1 +1,1 @@
-may not name a smart pointer
+a collection OF nodes is not walked yet

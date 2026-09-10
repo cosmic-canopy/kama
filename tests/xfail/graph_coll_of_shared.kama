@@ -1,14 +1,9 @@
-// A collection whose ELEMENT is a graph node. Reach now sees it — a generic instance's type arguments are
-// walked, so the owner IS a graph node and the field is correctly identified — but two things stop it, and
-// the LANGUAGE one fires first: the container writes its elements through a `const ref T` helper (a raw
-// buffer element is not a nameable receiver, so `this[i].serialize(w)` does not resolve), and a `ref`
-// parameter may not name a smart pointer. That one rule gates every container-of-pointer shape, `Owned`
-// (`ser_coll_of_owned`) and `Shared` alike.
-//
-// Behind it sits the serde half: a container's `serialize` receives a `Serializer` and nothing else, so an
-// element write has nowhere to get the walker's id table from and cannot intern its pointee. When the
-// language rule is relaxed, THIS fixture is what surfaces that — its message will change, and that change
-// is the signal. Refused rather than written wrong either way.
+// A collection whose ELEMENT is a graph node. Reach sees it — a generic instance's type arguments are
+// walked, so the owner IS a graph node and the field is named correctly — and the language gate that used
+// to fire first is gone: a container now writes elements through `this[i].serialize(w)`, so no `const ref T`
+// names a smart pointer. What remains is the serde half, which is the real question: a container's
+// `serialize` receives a `Serializer` and nothing else, so an element write has nowhere to get the walker's
+// id table from and cannot intern its pointee. Refused rather than written wrong.
 import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::collections::DynamicArray };
 
 @generate(Serializable, Deserializable)

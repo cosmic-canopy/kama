@@ -253,16 +253,12 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     }
 
     // --- Serialization (present only when the element is Serializable/Deserializable) ---
-    // The element method must be called through a NAMEABLE `ref T` (like `indexOf`'s `equals`), so a
-    // primitive element's intrinsic `serialize`/`deserialize` resolves — a raw buffer element `this[i]`
-    // isn't a nameable receiver. Hence the `serElem` helper.
-    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serializable] { return e.serialize(w: w); }
     // A JSON array: each element serialized in order — a bad element write propagates its boxed error.
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
         while (i < this.len) {
-            Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
+            Result<Unit, Owned<Error>> __sr = this[i].serialize(w: w);
             match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             i = i + 1;
         }

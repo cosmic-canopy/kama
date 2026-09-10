@@ -1,1 +1,1 @@
-may not name a smart pointer
+has no constructor `deserialize`

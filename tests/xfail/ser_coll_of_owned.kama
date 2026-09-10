@@ -1,9 +1,9 @@
-// A collection of `Owned<X>` is a plain by-value tree — no graph, no ids — and the bound now holds, because
-// `Owned<X>` is `Serializable` exactly when its pointee is. What stops it is a LANGUAGE rule, not serde: the
-// container writes its elements through a `const ref T` helper (a raw buffer element is not a nameable
-// receiver, so `this[i].serialize(w)` does not resolve), and a `ref` parameter may not name a smart pointer.
-// Recorded here so the limitation is a stated claim rather than a latent one; it fires from stdlib source,
-// which is its own defect.
+// A collection of `Owned<X>` is a plain by-value tree — no graph, no ids — and the WRITE half now works:
+// `Owned<X>` is `Serializable` exactly when its pointee is, and a container writes elements through
+// `this[i].serialize(w)` directly, so nothing hops through a `const ref T` any more. What is left is the
+// READ half: `T.deserialize(r)` has nothing to call, because `Owned<X>` carries no `deserialize` — and it
+// must not, since a method on a handle shadows the pointee's through auto-deref. The mechanism that fills
+// that gap without putting a member on the triad is what this fixture is waiting for.
 import { std::serialization::json::serializeJsonBuffer, std::memory::Owned, std::collections::DynamicArray };
 
 @generate(Serializable, Deserializable)

@@ -28043,7 +28043,14 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
         }
         if (cc == "kama_string") return "uint8_t";                        // a string byte index
         if (!cc.empty() && _collections.count(cc)) return _collections[cc].elemCType;
-        return "";
+        // ...and a LIBRARY container, whose element type is its `operator[]`'s `ref T` with the instance's
+        // type args bound. `indexElemTypeRaw` already answers that for a CLASS element (it is what makes
+        // `xs[0].m()` work); the scalar half was missing, so `xs[i]` was not a nameable receiver when the
+        // element was a primitive. That is why every container hops through a `const ref T` helper to call
+        // an element's method — and why the hop then collides with the rule that a `ref` parameter may not
+        // name a smart pointer, gating serde for `DynamicArray<Owned<X>>`/`<Shared<X>>`.
+        std::string et = indexElemTypeRaw(e);
+        return isClass(et) ? std::string() : et;   // a class element is exprClass's job, not this one
     }
     return "";
 }

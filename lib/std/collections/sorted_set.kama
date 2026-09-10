@@ -42,13 +42,12 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
 
     // Serializable as a JSON array of the members in ascending order (Serializable needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
-    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, K: Copyable<K>] {
         DynamicArray<K> es = this.m.keys();
         w.beginArray(count: cast<usize>(es.length()));
         isize i = 0;
         while (i < es.length()) {
-            Result<Unit, Owned<Error>> __sr = this.serElem(k: es[i], w: w);
+            Result<Unit, Owned<Error>> __sr = es[i].serialize(w: w);
             match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             i = i + 1;
         }

@@ -442,8 +442,6 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
     // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
-    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
-    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serializable] { return v.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
@@ -453,10 +451,10 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
             }
             w.beginObject(count: 2);
             w.field(name: "key", id: 0ui32);
-            Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
+            Result<Unit, Owned<Error>> __sk = this.keys[i].serialize(w: w);
             match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             w.field(name: "value", id: 1ui32);
-            Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
+            Result<Unit, Owned<Error>> __sv = this.vals[i].serialize(w: w);
             match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             w.endObject();
             i = i + 1;
