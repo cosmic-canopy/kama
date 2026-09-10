@@ -1354,6 +1354,47 @@ drop emitted. See SPEC § *Uninitialized storage*.)*
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
+### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
+
+The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on
+an architecture decision. That decision is now made and executed. The four verdicts, and the evidence:
+
+| commit | what it did | verdict |
+|---|---|---|
+| `43dd3dd` **mechanism** | `Owned<T> implements Serializable` in the triad's own file | **REVERTED.** Handles auto-deref, so a domain method on one shadows the pointee's — and it was already biting: `this.o.serialize(w)` bound `Owned_T__serialize` while `this.s.serialize(w)` bound `T__serialize(Shared_T__deref(…))`. The outputs agreed only because `Owned`'s serialize happened to write the pointee inline |
+| `43dd3dd` **outcome** | an `Owned` subtree written inline; reach walks *through* `Owned` | **KEPT**, re-implemented as recognition by identity (`ownedPointeeOf`). Bonus the maintainer named: `Owned<T>` and bare `T` produce identical bytes, so a field may change between them and still read the other's data |
+| `fab2c89` **decision A** | the envelope became ordinary tokens | **KEPT** — and it *is* the maintainer's original design: references map into an ARRAY of entries with first-come-first-serve ids. The pre-`fab2c89` code framed that table as an id-KEYED OBJECT, which is the implementation detail that diverged, and exactly why a positional backend could never carry a graph (`beginObject`'s count is compile-time shape and never rides the wire; `beginArray`'s length does) |
+| `fab2c89` **decision B** | the algorithm moved to the library | **REVERTED.** It alone produced `ObjectGraph<T>`, 5 prelude contracts and 7 public synthesized members per node type. It also made the COMPILER bigger: `fab2c89` was +503/−317 in `kama.cemit.cpp` |
+
+**What a node type is now:** the same two members a by-value type has. No wrapper — what you hand a backend
+IS the root — and only the READ changes shape, giving back `Shared<T>`, because a cycle cannot be returned
+by value. The walk is four internal C functions plus a pure-C id table in `kama_runtime.h`; that substrate
+is load-bearing rather than incidental (identity dedup and a heterogeneous node list are the two things
+tokens cannot express, and it cannot be a kama type because a collection is itself serializable).
+
+**The spelling for "T is Serializable OR a pointer" already existed: `T: Serializable`.** All three handles
+satisfy the serde bounds through a DERIVED arm in `satisfiesBound`/`classSatisfiesBound`, beside
+`Immutable`, `Sendable` and `Copyable` — the same shape, a property the compiler knows by nature with no
+declaration site, made nameable in a bound. It stays derived rather than a method on the handle for the
+reason the triad is method-free at all; a bound has no shadowing hazard, because nothing calls it by name.
+
+⚠️ **A bound cannot answer a graph question.** Measured twice: bounds are judged while a generic instance is
+registered, DURING collection, and every graph fact (`reachesPointer`, `graphDeserialize`) is a
+whole-program result settled afterwards. Requiring one at the bound made every real graph fixture fail.
+This is why two refusals land at the lowering and report against stdlib source — see the attribution row.
+
+**Three `kama check`-green / clang-red holes surfaced, two closed:** a node reached only inline kept a
+by-value `deserialize` whose `Shared<Leaf>` field called a symbol nothing defines; `deserializeJsonBuffer::<Node>`
+for a graph node type-checked and mismatched in C (this restores, in new terms, the guard
+`graph_root_unwrapped` used to give). The third — boxing a `string` into a contract — has its own row.
+
+**The container seam is NOT what the review predicted.** §4 said "no language ruling gates the walk" on the
+strength of `xs[0].m()` compiling. That is true concretely and false where it matters: `this[i].serialize(w)`
+does not resolve for a GENERIC element, which is why `dynamic_array.kama` hops through a `const ref T`
+helper — verified by deleting the helper and watching it fail. And a `ref` parameter may not name a smart
+pointer. One language rule therefore gates every container-of-pointer shape, `Owned` and `Shared` alike.
+
+
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
 
@@ -1486,6 +1527,11 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     today (the conformance check that refuses a non-`public` implementer); the contract declaration itself
     accepts `private` without recording it. That is the same defect class as `friend`-on-contract before
     `0.9.266`, and it wants an `xfail` regardless of whether the feature lands.
+  - ⚠️ **SUPERSEDED — the container seam needs no contract.** Restricted-private contract members were
+    proposed as the mechanism for a checked read/build seam. Building the architecture out showed the seam
+    is not there: a container reads itself through its own `deserialize`, which already knows how to build
+    one, so nothing needs a private member. Row 8 keeps its place on expressiveness alone. The bullet below
+    is kept for provenance.
   - **Direction: restricted-private contract members.** The forced-`public` rule exists only because a public
     member with a private implementer is "reachable through the interface but not by name: a leak"; a
     **private** contract member is self-consistent, so **mixed contracts are fine — public members stay fair
