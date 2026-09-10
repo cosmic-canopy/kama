@@ -8371,6 +8371,10 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
     // `Shared<X>` IS how a graph comes back — the root arrives behind a handle because a cycle cannot be
     // returned by value — but only when `X` is a node. Name the half that is missing rather than the
     // spelling, which is already right.
+    if (bound == "Deserializable" && it->second.graphDeserialize)
+        return " — `" + demangleForDisplay(cty) + "` reaches a `Shared`/`Weak` field, so it is a graph and "
+               "cannot be read by value: a cycle has nowhere to point if the root is a stack value. Read it "
+               "as `Shared<" + demangleForDisplay(cty) + ">`";
     if (bound == "Serializable" || bound == "Deserializable") {
         auto g = _genericTypeInstOf.find(cty);
         bool shared = (g != _genericTypeInstOf.end() && g->second == _sharedTmpl)
@@ -17386,7 +17390,8 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
         // run — requiring `reachesPointer` here made every real graph fixture fail its bound. The cost is
         // that `Shared<PointerFreeType>` satisfies this and is refused later, at the ctor lookup, which
         // carries its own diagnostic naming both halves.
-        if (e != _classes.end() && classSatisfiesBound(&e->second, pinnedInstanceName("Deserializable", x)))
+        if (e != _classes.end() && (e->second.graphDeserialize
+                                    || classSatisfiesBound(&e->second, pinnedInstanceName("Deserializable", x))))
             return true;
     }
     return implementsContractTemplate(ci, contract);
@@ -27928,6 +27933,22 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
                      + dotOnTypeAdvice(mi->isStatic ? DotMemberKind::Static : DotMemberKind::Method, disp, typeName, method)).c_str(),
                     call->line);
+        return "0";
+    }
+    // A GRAPH NODE cannot be read BY VALUE: its `deserialize` returns `Result<Shared<This>, …>`, because a
+    // cycle has nowhere to point if the root is a stack value. `deserializeJsonBuffer::<Node>` therefore
+    // assigns that into a `Result<Node, …>`, and until this arm existed the mismatch reached CLANG — the
+    // bound holds (`Node` really does implement `Deserializable`) and `kama check` passed clean.
+    //
+    // ⚠️ It cannot be answered at the BOUND, which is where it belongs: bounds are judged while a generic
+    // instance is registered, during collection, and `graphDeserialize` is a whole-program fact settled
+    // afterwards. So it lands here, at the lowering, which is the first point that knows. The same is true
+    // of its mirror image (a handle over a pointer-free type — see the `deserialize` arm above).
+    if (method == "deserialize" && stci->graphDeserialize && !_typeSubst.empty()) {
+        const std::string n = demangleForDisplay(stci->name);
+        unsupported(("`" + n + "` reaches a `Shared`/`Weak` field, so it is a graph and cannot be read by "
+                     "value — a cycle has nowhere to point if the root is a stack value. Read it as "
+                     "`Shared<" + n + ">`").c_str(), call->line);
         return "0";
     }
     // One-way construction (M8 Phase E): the enclosing type's args ride the TYPE (`Type::<A>.make(...)`),

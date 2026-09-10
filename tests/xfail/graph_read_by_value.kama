@@ -1,0 +1,18 @@
+// A graph node cannot be read BY VALUE: its `deserialize` gives back `Shared<This>`, because a cycle has
+// nowhere to point if the root is a stack value. The bound holds — `Node` really does implement
+// `Deserializable` — so nothing catches this until the lowering, and before that arm existed `kama check`
+// passed clean and clang reported a struct-assignment mismatch inside stdlib source. The mirror image
+// (a handle over a pointer-free type) is `graph_handle_not_a_node`.
+import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+
+@generate(Serializable, Deserializable)
+type resource Node {
+    @field int32 id;
+    @field Optional<Shared<Node>> next;
+    public ctor make(int32 id) { this.id = id; this.next = Optional::None; }
+}
+
+fn int32 main() {
+    Result<Node, Owned<Error>> back = deserializeJsonBuffer::<Node>(src: "{}");
+    return match (give back) { case Ok(value: n): 0; case Err(error: e): 1; };
+}
