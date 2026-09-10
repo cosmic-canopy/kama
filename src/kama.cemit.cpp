@@ -14146,6 +14146,18 @@ CollKind CEmitter::smartKind(const std::string& cls) const
 // args) or the interface-erased intrinsic (whose element is recorded on the ClassInfo). "" for anything
 // else. Both shapes exist and only one of them carries `collElemClass`, which is why asking the ClassInfo
 // alone answered "" for every concrete `Shared<Node>`.
+// The pointee's C class for an `Owned<X>` — a library generic instance over a concrete pointee, "" for
+// anything else. An `Owned` is a unique subtree, so on the wire it IS its pointee; this is what lets a
+// CONTAINER of them satisfy its own `when [T: Serializable]` gate with no library change.
+std::string CEmitter::ownedPointeeClass(const std::string& cls)
+{
+    auto g = _genericTypeInstOf.find(cls);
+    if (g == _genericTypeInstOf.end() || g->second != _ownedTmpl) return "";
+    auto gi = _genericTypeInsts.find(cls);
+    if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) return cType(gi->second.typeArgs[0]);
+    return "";
+}
+
 std::string CEmitter::sharedPointeeClass(const std::string& cls)
 {
     auto g = _genericTypeInstOf.find(cls);
@@ -14532,11 +14544,15 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // unchanged — and as then, naming `Shared<X>` for a pointer-free `X` is a type error later, when the
     // handle turns out to have no `deserialize` to forward to.
     if (bound_ == "Serializable") {
-        const std::string x = const_cast<CEmitter*>(this)->sharedPointeeClass(t);
+        CEmitter* me = const_cast<CEmitter*>(this);
+        std::string x = me->sharedPointeeClass(t);
+        if (x.empty()) x = me->ownedPointeeClass(t);
         if (!x.empty() && satisfiesBound(x, "Serializable")) return true;
     }
     if (bound_ == "Deserializable" || (!bound.empty() && bound.compare(0, 15, "Deserializable_") == 0)) {
-        const std::string x = const_cast<CEmitter*>(this)->sharedPointeeClass(t);
+        CEmitter* me = const_cast<CEmitter*>(this);
+        std::string x = me->sharedPointeeClass(t);
+        if (x.empty()) x = me->ownedPointeeClass(t);
         if (!x.empty() && satisfiesBound(x, "Deserializable")) return true;
     }
     // A `type intrinsic <t> implements <bound>` block also satisfies it — including a PRIMITIVE target
@@ -17378,12 +17394,14 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     // gate with no library change at all. Same reasoning as the read half below, same reason it is derived
     // rather than a method on the handle.
     if (contract == "Serializable") {
-        const std::string x = sharedPointeeClass(ci->name);
+        std::string x = sharedPointeeClass(ci->name);
+        if (x.empty()) x = ownedPointeeClass(ci->name);      // an `Owned` subtree is written inline
         auto e = x.empty() ? _classes.end() : _classes.find(x);
         if (e != _classes.end() && classSatisfiesBound(&e->second, "Serializable")) return true;
     }
     if (contract.compare(0, 14, "Deserializable") == 0) {
-        const std::string x = sharedPointeeClass(ci->name);
+        std::string x = sharedPointeeClass(ci->name);
+        if (x.empty()) x = ownedPointeeClass(ci->name);
         auto e = x.empty() ? _classes.end() : _classes.find(x);
         // ⚠️ Asked off the pointee's own bound, NOT off `reachesPointer`/`graphDeserialize`: bounds are
         // judged while a generic instance is registered, during collection, and the graph passes have not

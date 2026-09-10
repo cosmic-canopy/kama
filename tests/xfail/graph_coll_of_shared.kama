@@ -1,0 +1,30 @@
+// A collection whose ELEMENT is a graph node. Reach now sees it — a generic instance's type arguments are
+// walked, so the owner IS a graph node and the field is correctly identified — but two things stop it, and
+// the LANGUAGE one fires first: the container writes its elements through a `const ref T` helper (a raw
+// buffer element is not a nameable receiver, so `this[i].serialize(w)` does not resolve), and a `ref`
+// parameter may not name a smart pointer. That one rule gates every container-of-pointer shape, `Owned`
+// (`ser_coll_of_owned`) and `Shared` alike.
+//
+// Behind it sits the serde half: a container's `serialize` receives a `Serializer` and nothing else, so an
+// element write has nowhere to get the walker's id table from and cannot intern its pointee. When the
+// language rule is relaxed, THIS fixture is what surfaces that — its message will change, and that change
+// is the signal. Refused rather than written wrong either way.
+import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field DynamicArray<Shared<Leaf>> kids;
+    public ctor make(DynamicArray<Shared<Leaf>> kids) { this.kids = give kids; }
+}
+
+fn int32 main() {
+    Shared<Leaf> a = new Leaf.make(v: 1);
+    DynamicArray<Shared<Leaf>> xs = DynamicArray.empty();
+    xs.add(item: a);
+    Shared<Bag> b = new Bag.make(kids: give xs);
+    Result<string, Owned<Error>> j = serializeJsonBuffer(v: b);
+    return match (give j) { case Ok(value: x): 0; case Err(error: e): 1; };
+}

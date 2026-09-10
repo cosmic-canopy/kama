@@ -1,0 +1,24 @@
+// A collection of `Owned<X>` is a plain by-value tree — no graph, no ids — and the bound now holds, because
+// `Owned<X>` is `Serializable` exactly when its pointee is. What stops it is a LANGUAGE rule, not serde: the
+// container writes its elements through a `const ref T` helper (a raw buffer element is not a nameable
+// receiver, so `this[i].serialize(w)` does not resolve), and a `ref` parameter may not name a smart pointer.
+// Recorded here so the limitation is a stated claim rather than a latent one; it fires from stdlib source,
+// which is its own defect.
+import { std::serialization::json::serializeJsonBuffer, std::memory::Owned, std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field DynamicArray<Owned<Leaf>> kids;
+    public ctor make(DynamicArray<Owned<Leaf>> kids) { this.kids = give kids; }
+}
+
+fn int32 main() {
+    DynamicArray<Owned<Leaf>> xs = DynamicArray.empty();
+    xs.add(item: new Leaf.make(v: 7));
+    Bag b = Bag.make(kids: give xs);
+    Result<string, Owned<Error>> j = serializeJsonBuffer(v: b);
+    return match (give j) { case Ok(value: x): 0; case Err(error: e): 1; };
+}

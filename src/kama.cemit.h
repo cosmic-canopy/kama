@@ -2090,6 +2090,7 @@ private:
     bool isBindableClass(const std::string& cls) const;  // BindableFunctionPtr_Sig
     CollKind smartKind(const std::string& cls) const;    // Owned/Shared (precond: isSmartPtrClass)
     std::string sharedPointeeClass(const std::string& cls);   // pointee C class of a `Shared<X>`, "" otherwise
+    std::string ownedPointeeClass(const std::string& cls);    // pointee C class of an `Owned<X>`, "" otherwise
     bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
     bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
     // A NAMED value you can hand off (variable / field / element / base member),

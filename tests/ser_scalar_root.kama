@@ -1,0 +1,44 @@
+// A ROOT need not be a composite. Every scalar width, `bool` and `string` is a serde participant in its own
+// right, so a bare value round-trips with no object framing at all — this is the "stops early" end of the
+// one algorithm: the reach gate says the type holds no pointer, so there is no envelope, no table and no
+// handle. Reads come back BY VALUE, on the stack.
+//
+// ⚠️ `serializeJsonBuffer(v: aString)` is deliberately absent: boxing a `string` into a contract emits an
+// undefined `kama_string__as_Serializable` (`kama check` passes; clang catches it). Every other primitive
+// boxes fine, which is why nothing noticed. Add the line here when that row lands.
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+
+fn int32 main() {
+    int32 iv = 42;
+    Result<string, Owned<Error>> a = serializeJsonBuffer(v: iv);
+    string aj = match (give a) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
+    if (aj != "42") { return 1; }
+    Result<int32, Owned<Error>> b = deserializeJsonBuffer::<int32>(src: copy aj);
+    int32 bv = match (give b) { case Ok(value: v): v; case Err(error: e): { return 249; } };
+    if (bv != 42) { return 2; }
+
+    bool tv = true;
+    Result<string, Owned<Error>> c = serializeJsonBuffer(v: tv);
+    string cj = match (give c) { case Ok(value: s): give s; case Err(error: e): { return 248; } };
+    if (cj != "true") { return 3; }
+
+    float64 fv = 2.5;
+    Result<string, Owned<Error>> f = serializeJsonBuffer(v: fv);
+    string fj = match (give f) { case Ok(value: s): give s; case Err(error: e): { return 247; } };
+    if (fj != "2.5") { return 4; }
+    Result<float64, Owned<Error>> g = deserializeJsonBuffer::<float64>(src: copy fj);
+    float64 gv = match (give g) { case Ok(value: v): v; case Err(error: e): { return 246; } };
+    if (gv != 2.5) { return 5; }
+
+    // A string reads back by value — the static factory, no boxing involved.
+    Result<string, Owned<Error>> e2 = deserializeJsonBuffer::<string>(src: "\"hi\"");
+    string ev = match (give e2) { case Ok(value: v): give v; case Err(error: e): { return 245; } };
+    if (ev != "hi") { return 6; }
+
+    // 64-bit past the exact-double range, proving integers are not routed through a float.
+    Result<int64, Owned<Error>> h = deserializeJsonBuffer::<int64>(src: "-9007199254740993");
+    int64 hv = match (give h) { case Ok(value: v): v; case Err(error: e): { return 244; } };
+    if (hv != 0 - 9007199254740993i64) { return 7; }
+
+    return 0;
+}
