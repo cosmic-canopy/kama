@@ -1443,6 +1443,58 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     limit; recorded, not scheduled.
   - **A fat→concrete downcast** (`cast<Shared<T>>(fat)`) — a language question the design surfaced; not
     needed (root recovery is the synthesized `takeRoot`).
+- **⛔ ARCHITECTURE REVIEW — 2026-09-09, and it blocks the graph-gaps row.** Work on a collection of edges
+  stopped when the maintainer judged the shipped layering over-engineered. Everything below was **measured**
+  against `0.9.269`; nothing was built. **It wants its own row — the maintainer should place it above the
+  graph-gaps row.**
+  - **The docs are wrong about reach.** `DynamicArray<Shared<Leaf>>` fails on the **by-value** path — *"field
+    `kids` has type `DynamicArray`, which cannot be serialized … `DynamicArray` has none. Give it
+    `@generate(Serializable)`"* — advice that cannot be followed, blaming the container when the ELEMENT is
+    the cause. `computeReachesPointer` does not walk a LIBRARY collection's type arguments, so the owner is
+    never a graph node. [SPEC.md](SPEC.md) § *Serialization* and the `computeReachesPointer` header comment
+    both claim it does. Both are wrong, and the comment has claimed it since Phase A.
+  - **The "collection OF nodes is not walked yet" message has nothing to do with collections.** It fires only
+    for `Owned<Shared<X>>`, reporting the subject as `std::memory::Shared<Leaf>` — it calls a smart pointer a
+    collection. `InlineArray<Shared<X>>` is refused earlier (an element must be a `value`), so no intrinsic
+    collection of edges can exist at all.
+  - **The adapters POLLUTE the user's type.** `head.typeName()` and `head.typeIndex()` compile from user code
+    on a user's own `@generate` node type: 7 synthesized public members + 3 conformances, because a contract
+    member must be `public`. Nothing in `tests/ examples/ bench/ lib/ prelude/ seed/` calls them outside
+    `graph.kama`, so removing them is **not** a source break.
+  - **`43dd3dd`'s outcome is right; its mechanism is not.** An `Owned` subtree IS a subtree rather than a
+    table entry — keep that. But `Owned.serialize` is the first **domain** method ever put on the triad
+    (`Owned`'s whole surface at `6dac7f0` was ctors + `deref`/`derefMut` + `release`), and the emitted C shows
+    it **shadows** the pointee through the deref fallback — harmless today only because both write the pointee
+    inline byte-for-byte. [SPEC.md](SPEC.md) bans shadowing at every binder; the deref fallback is not covered
+    by that check. The compiler can walk through an `Owned` inline on its own (`graphNestOf` already answers
+    `{"owned", X}`), so the conformance is unnecessary.
+  - **`fab2c89` bundled two separable decisions.** **A** — the envelope became ordinary tokens, which is what
+    bought positional/numbered graphs and simpler backends. **B** — the algorithm moved to the library, which
+    alone produced the 5 contracts, the 7 public members and the `ObjectGraph<T>` ceremony. **A does not
+    require B**, and the benefit that justified B — a library author writing a different driver — was measured
+    at ONE consumer, a fixture deliberately forging a corrupt wire.
+  - **The container seam is small.** `foreach` is lowered structurally (`iterator()`/`iterMut()` by name,
+    direct monomorphized calls, no vtable) and `iterMut()` is ungated on `DynamicArray`/`Deque`/`FixedArray`/
+    `View`, so the write and wire passes need **no contract**. Only read/**build** does — you cannot iterate a
+    container into existence. Element receivers are proven: `xs[0].m()` and `foreach (ref T e in xs)` both
+    compile, so **no language ruling gates the walk**.
+  - **Direction: restricted-private contract members.** The forced-`public` rule exists only because a public
+    member with a private implementer is "reachable through the interface but not by name: a leak"; a
+    **private** contract member is self-consistent, so **mixed contracts are fine — public members stay fair
+    game**. `private` with **no grant** is "only the compiler may call it", with no new concept: the emitter
+    writes C directly, and users may still IMPLEMENT it, which keeps third-party containers extensible. One
+    rule changes: an implementing method matches the member's declared visibility. ⚠️ This **reverses** the
+    `0.9.266` removal of `friend` on a contract — that removal was right (it was accepted and INERT), so
+    `tests/xfail/friend_on_contract` and its doc claim change in the same commit and the new rule must fail
+    closed on both holes. `friend X[members]` already grants fields, methods and ctors alike (measured).
+  - **A fourth visibility (`internal`/`compiler`) — genuinely OPTIONAL, not scheduled.** `internal` is already
+    taken at module level (package scope). The only gap it closes over `private`-with-no-grant is stopping the
+    declaring type from calling its OWN member, and kama polices that nowhere. Revisit only if protocol misuse
+    actually bites.
+  - **Still open before anything is built:** is `ObjectGraph<T>` load-bearing after `43dd3dd`; can a
+    compiler-owned driver emit the token envelope with no `Serializer` graph members (decision A must
+    survive); does `Map` expose a mutable VALUE iterator; does the wire walk compose for nested containers;
+    can a synthesized conformance attach to the intrinsic fat `Shared<Contract>`.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `serializeJsonBuffer`/`deserializeJsonBuffer`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
