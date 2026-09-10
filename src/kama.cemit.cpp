@@ -24209,6 +24209,27 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
     return true;
 }
 
+// An `Owned<T, A>` on the wire IS a `T`: nothing else can point at a unique pointee, so writing it as an
+// id into the object table bought nothing and forced every hierarchy that merely OWNED its children into
+// graph mode. It is written inline, byte-identical to a by-value `T` field — which also means a field may
+// change between `Owned<T>` and bare `T` and still read data written by the other.
+//
+// ⚠️ Recognised BY IDENTITY here, and deliberately NOT by a `serialize`/`deserialize` on `Owned` itself
+// (which is where it lived at 0.9.268). The triad AUTO-DEREFS, so any domain method on it shadows the
+// pointee's: `this.o.serialize(w)` bound `Owned_T__serialize` while `this.s.serialize(w)` bound
+// `T__serialize(Shared_T__deref(&self->s))` — two spellings of one line meaning different things, and the
+// outputs agreed only by accident. The triad stays method-free; the compiler knows these three types.
+//
+// The erased `Owned<Contract>` (an intrinsic `{obj, vtbl}`, not a library instance) is deliberately NOT
+// covered — the conformance this replaces did not cover it either, so the scope is unchanged.
+SharedIdentifier CEmitter::ownedPointeeOf(SharedIdentifier ty)
+{
+    if (!ty || !ty->genericArg) return nullptr;
+    auto g = _genericTypeInstOf.find(cType(ty));
+    if (g == _genericTypeInstOf.end() || g->second != _ownedTmpl) return nullptr;
+    return ty->genericArg;
+}
+
 void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                                  const std::string& resultCType)
 {
@@ -24241,6 +24262,12 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
     const char* suf = serScalarSuffix(ty ? ty->builtInVal : 0);
     if (*suf) {
         indent(depth); *_out << "w->vtbl->write" << suf << "(w->obj, " << access << ");\n";
+        return;
+    }
+    // `Owned<T>` — walk THROUGH the handle and write the pointee inline. See ownedPointeeOf.
+    if (SharedIdentifier pointee = ownedPointeeOf(ty)) {
+        emitSerFieldWrite(pointee, "(*" + derefFnName(cType(ty), /*wantMut=*/true) + "(&(" + access + ")))",
+                          depth, resultCType);
         return;
     }
     if (serdeRejectsPrimitive(ty, access, /*writing=*/true, ty ? ty->line : 0)) return;
@@ -24597,6 +24624,36 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     }
     // Scalar/string: bare sticky read (the enclosing `failed()` check wraps a failure into `Err`).
     if (isScalarDeType(ty)) { indent(depth); *_out << dst << " = " << deReadExpr(ty) << ";\n"; return; }
+    // `Owned<T>` — the write arm's mirror: read a `T` BY VALUE, then heap-move it into a fresh block and
+    // adopt. Reading into a stack temp first (rather than straight into the block) is what keeps a failed
+    // read from leaving a half-built pointee on the heap: the `cleanup` path below has nothing to free.
+    // malloc pairs with the box's dtor, which deallocates through `GlobalAllocator` — libc `free`; that is
+    // the same pairing the bare-`new` path emits.
+    if (SharedIdentifier pointee = ownedPointeeOf(ty)) {
+        const std::string oc = cType(ty);
+        ClassInfo* ao = nullptr;
+        MethodInfo* adoptM = _classes.count(oc) ? findMethod(&_classes[oc], "adopt", &ao) : nullptr;
+        // `adopt` exists only `when [A: default]`, so a stateful-allocator box has none — and the wire
+        // carries no allocator handle to rebuild one from. Say that, rather than letting the composite arm
+        // below report a missing `deserialize` and advise `@generate` on a stdlib type.
+        if (!adoptM) {
+            unsupported(("field of type `" + demangleForDisplay(oc) + "` cannot be deserialized — an "
+                         "`Owned<T, A>` with a custom allocator has no `adopt`, and the wire carries no "
+                         "allocator handle to rebuild the box from. Use the default allocator, or leave the "
+                         "field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+            return;
+        }
+        const std::string pc = cType(pointee);
+        std::string v = "__ov" + std::to_string(_tempCounter++);
+        std::string b = "__ob" + std::to_string(_tempCounter++);
+        indent(depth); *_out << pc << " " << v << ";\n";
+        emitDeFieldRead(pointee, v, depth, resultCType, cleanup);
+        indent(depth); *_out << pc << "* " << b << " = (" << pc << "*)malloc(sizeof(" << pc << "));\n";
+        indent(depth); *_out << "if (!" << b << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        indent(depth); *_out << "*" << b << " = " << v << ";\n";
+        indent(depth); *_out << dst << " = " << adoptM->cName << "(" << b << ");\n";
+        return;
+    }
     if (serdeRejectsPrimitive(ty, dst, /*writing=*/false, ty ? ty->line : 0)) return;
     if (serdeRejectsField(ty, dst, /*writing=*/false)) return;
     // Composite (user type / collection): fallible read via its `deserialize`.

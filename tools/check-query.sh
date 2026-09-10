@@ -725,7 +725,7 @@ FIXTURE="$ROOT/tests/query/complete.kama"
 echo "check-query: go-to-definition reaches the prelude"
 expect --def 102:4  -- "prelude/global.kama:15:10"    # `Optional` -> its declaration, not `no definition`
 expect --def 102:27 -- "prelude/global.kama:15:10"    # ...and from the `Optional::` qualifier too
-expect --def 118:4  -- "std/memory/owned.kama:21:14" # `Owned` -> the embedded built-in MODULE's own file
+expect --def 118:4  -- "std/memory/owned.kama:22:14" # `Owned` -> the embedded built-in MODULE's own file
 # The prelude stays READ-ONLY, and that is the point of `DefSite::file` being a second field rather than
 # a `unit`. Not owning a declaration is a reason to refuse to REWRITE it; it was never a reason to refuse
 # to OPEN it, and conflating the two is what sent this navigation nowhere.

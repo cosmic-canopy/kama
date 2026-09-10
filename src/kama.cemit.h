@@ -2339,6 +2339,10 @@ private:
     bool serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line);
     // Its composite sibling: a field whose type has no `serialize`/`deserialize` symbol to call.
     bool serdeRejectsField(SharedIdentifier ty, const std::string& access, bool writing);
+    // The pointee type node of a library `Owned<T, A>` field, else null. An `Owned` is a unique subtree,
+    // so on the wire it IS a `T` — the serde field walk recognises it HERE, by identity, rather than
+    // through a `serialize` on the handle. See the definition for why a method would be wrong.
+    SharedIdentifier ownedPointeeOf(SharedIdentifier ty);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                            const std::string& resultCType);   // resultCType empty => graph-node/void context (sticky only)
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,
