@@ -14527,6 +14527,10 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // the same question the old `Shared<T> … when [T: Deserializable<T>]` clause asked, so the reach is
     // unchanged — and as then, naming `Shared<X>` for a pointer-free `X` is a type error later, when the
     // handle turns out to have no `deserialize` to forward to.
+    if (bound_ == "Serializable") {
+        const std::string x = const_cast<CEmitter*>(this)->sharedPointeeClass(t);
+        if (!x.empty() && satisfiesBound(x, "Serializable")) return true;
+    }
     if (bound_ == "Deserializable" || (!bound.empty() && bound.compare(0, 15, "Deserializable_") == 0)) {
         const std::string x = const_cast<CEmitter*>(this)->sharedPointeeClass(t);
         if (!x.empty() && satisfiesBound(x, "Deserializable")) return true;
@@ -15733,13 +15737,20 @@ void CEmitter::computeReachesPointer()
                         }
                 }
             }
-            // The library `Owned<X>` (a generic instance over a concrete pointee) likewise reaches iff `X` does:
-            // its own fields are an `UnsafePtr<X>` and an allocator, neither a walkable class.
+            // A LIBRARY generic instance reaches iff one of its TYPE ARGUMENTS does. Its own fields are an
+            // `UnsafePtr<T>` and bookkeeping — never a walkable class — so the field loop above sees
+            // nothing, which is why this has to be asked separately.
+            //
+            // ⚠️ This used to ask only about `Owned<X>`, so a LIBRARY COLLECTION's element was never
+            // walked: an owner holding `DynamicArray<Shared<X>>` did not reach a pointer, was never a graph
+            // node, and the failure surfaced as "`DynamicArray` … has none. Give it `@generate(Serializable)`"
+            // — advice that cannot be followed, blaming the container for what the element caused.
+            // SPEC.md claimed the walk covered collection elements; it did not.
             if (!r && inst) {
                 const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-                if (gi.templateKey == _ownedTmpl && !gi.typeArgs.empty()) {
-                    auto e = _classes.find(cType(gi.typeArgs[0]));
-                    if (e != _classes.end() && e->second.reachesPointer) r = true;
+                for (auto& a : gi.typeArgs) {
+                    auto e = _classes.find(cType(a));
+                    if (e != _classes.end() && e->second.reachesPointer) { r = true; break; }
                 }
             }
             if (inst) _typeSubst.clear();
@@ -17358,6 +17369,15 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     // Derived from the pointee rather than declared as a `deserialize` on `Shared`, which would shadow the
     // pointee's through auto-deref — the hazard that keeps the triad method-free. `satisfiesBound` carries
     // the same arm, so the two halves of a bound check cannot disagree about it.
+    // The WRITE half of the same rule: a `Shared`/`Weak` on the wire is an id into the object table, so a
+    // container of edges (`DynamicArray<Shared<Node>>`) satisfies its own `Serializable when [T: Serializable]`
+    // gate with no library change at all. Same reasoning as the read half below, same reason it is derived
+    // rather than a method on the handle.
+    if (contract == "Serializable") {
+        const std::string x = sharedPointeeClass(ci->name);
+        auto e = x.empty() ? _classes.end() : _classes.find(x);
+        if (e != _classes.end() && classSatisfiesBound(&e->second, "Serializable")) return true;
+    }
     if (contract.compare(0, 14, "Deserializable") == 0) {
         const std::string x = sharedPointeeClass(ci->name);
         auto e = x.empty() ? _classes.end() : _classes.find(x);
@@ -25552,6 +25572,17 @@ void CEmitter::emitPolyContractResolvers()
 }
 
 // ---- one field, per pass ---------------------------------------------------------------------------------
+// The FIELD name out of an emitted access path (`self->kids`, `(self->o).u.Some.value`) — what the two
+// serde rejections already compute inline, so a graph rejection can name the same thing.
+static std::string fieldOfAccess(const std::string& access)
+{
+    std::string f = access;
+    size_t dot = f.find_last_of(".>");
+    if (dot != std::string::npos) f = f.substr(dot + 1);
+    while (!f.empty() && (f.back() == ')' || f.back() == ' ')) f.pop_back();
+    return f;
+}
+
 static bool graphOptional(SharedIdentifier ty) { return ty && ty->value && *ty->value == "Optional" && ty->genericArg; }
 
 // A field that is walked INLINE: "node" (a by-value field whose type is a node with edges) or "owned" (an
@@ -25636,9 +25667,10 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
         if (!typeHasGraphAdapters(nest.second)) {
             auto nc = _classes.find(nest.second);
             bool coll = nc != _classes.end() && (nc->second.isIntrinsicColl || (nc->second.isGenericInst && !nc->second.genSerialize && !nc->second.genDeserialize));
-            if (coll) unsupported(("`" + demangleForDisplay(nest.second) + "` holds graph nodes (its element reaches a `Shared`/`Weak` field), and a "
-                                   "collection OF nodes is not walked yet — hold them in a node type, or leave the field out of the wire form "
-                                   "with `@skip`").c_str(), ty ? ty->line : 0);
+            if (coll) unsupported(("field `" + fieldOfAccess(access) + "` is a collection whose ELEMENT reaches a `Shared`/`Weak` "
+                                   "field, so the element is a graph node — and a collection OF nodes is not walked yet. Hold the "
+                                   "nodes in a node type (a `@generate` type with the `Shared` fields on it), or leave the field out "
+                                   "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it is not "
                               "`@generate(Serializable)`, so its edges cannot be written; mark it `@generate`, or leave the field out "
                               "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
@@ -25680,9 +25712,10 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
         if (!typeHasGraphAdapters(nest.second)) {
             auto nc = _classes.find(nest.second);
             bool coll = nc != _classes.end() && (nc->second.isIntrinsicColl || (nc->second.isGenericInst && !nc->second.genSerialize && !nc->second.genDeserialize));
-            if (coll) unsupported(("`" + demangleForDisplay(nest.second) + "` holds graph nodes (its element reaches a `Shared`/`Weak` field), and a "
-                                   "collection OF nodes is not walked yet — hold them in a node type, or leave the field out of the wire form "
-                                   "with `@skip`").c_str(), ty ? ty->line : 0);
+            if (coll) unsupported(("field `" + fieldOfAccess(dst) + "` is a collection whose ELEMENT reaches a `Shared`/`Weak` "
+                                   "field, so the element is a graph node — and a collection OF nodes is not walked yet. Hold the "
+                                   "nodes in a node type (a `@generate` type with the `Shared` fields on it), or leave the field out "
+                                   "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it is not "
                               "`@generate(Deserializable)`, so its edges cannot be read; mark it `@generate`, or leave the field out "
                               "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);

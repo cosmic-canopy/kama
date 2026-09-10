@@ -4799,7 +4799,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 
 **Two modes, gated by whether `T` reaches a `Shared`/`Weak` field** — a precomputed per-type flag (the
 tighter sibling of the `destructible` transitive-ownership walk): true iff `T` transitively reaches a
-`Shared`/`Weak` field, recursing through by-value fields, collection elements **and `Owned` pointees**
+`Shared`/`Weak` field, recursing through by-value fields, **a generic instance's type arguments** —
+collection elements and `Owned`/`Optional` payloads alike — and enum variant payloads
 (strings/scalars/enums add nothing). You get back exactly what you name:
 
 | You name | reaches `Shared`/`Weak` | Result |
