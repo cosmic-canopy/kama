@@ -1478,6 +1478,14 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     `View`, so the write and wire passes need **no contract**. Only read/**build** does — you cannot iterate a
     container into existence. Element receivers are proven: `xs[0].m()` and `foreach (ref T e in xs)` both
     compile, so **no language ruling gates the walk**.
+  - ⚠️ **`private` on a contract member is a THIRD accepted-and-inert surface — measured 2026-09-09.** It
+    parses, and the marker is silently dropped: with the member declared `private` on the contract and the
+    implementer `public`, a call through a contract-typed value (`ref Tok t; t.hidden();`) compiles clean.
+    So the forced-`public` rule is load-bearing **only because the other half was never built** — nothing
+    checks a contract member's declared visibility at the call site. There is exactly ONE enforcement site
+    today (the conformance check that refuses a non-`public` implementer); the contract declaration itself
+    accepts `private` without recording it. That is the same defect class as `friend`-on-contract before
+    `0.9.266`, and it wants an `xfail` regardless of whether the feature lands.
   - **Direction: restricted-private contract members.** The forced-`public` rule exists only because a public
     member with a private implementer is "reachable through the interface but not by name: a leak"; a
     **private** contract member is self-consistent, so **mixed contracts are fine — public members stay fair
@@ -1506,7 +1514,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
-- **Serde naming pass (rows 8–9's sibling)** — the TYPE names now say `{Addressing}{Medium}Serializer`
+- **Serde naming pass (rows 9–10's sibling)** — the TYPE names now say `{Addressing}{Medium}Serializer`
   (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
   binary module's entry points each name their addressing, so none owns a bare `serializeJsonBuffer`. `…Writer`/`…Reader`
   went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used
