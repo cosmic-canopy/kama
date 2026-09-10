@@ -676,7 +676,6 @@ sendable_undeclared_channel	sendable_undeclared_channel.kama:7
 sendable_undeclared_field	sendable_undeclared_field.kama:6
 sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10
 ser_bits_unknown	ser_bits_unknown.kama:6
-ser_coll_of_owned	-
 ser_deprecated_alone	ser_deprecated_alone.kama:4
 ser_deprecated_and_skip	ser_deprecated_and_skip.kama:4
 ser_dup_field_id	ser_dup_field_id.kama:4

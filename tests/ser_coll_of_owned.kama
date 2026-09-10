@@ -1,0 +1,79 @@
+// A COLLECTION of `Owned<X>` — a plain by-value tree, no graph and no id table, exactly as an `Owned`
+// FIELD is (`ser_owned_tree`). The write half needed nothing: emitSerFieldWrite walks THROUGH the handle,
+// so each element is written inline and `DynamicArray<Owned<Leaf>>` already satisfied its own
+// `when [T: Serializable]` gate. The READ half had nowhere to land — a container's `deserialize` calls
+// `T.deserialize(r)`, and `Owned<X>` carried no `deserialize` because the triad is METHOD-FREE and must
+// stay so: a domain method on a handle shadows the pointee's through the deref fallback.
+//
+// What closed it: `deserialize` is a STATIC ctor, reached only dot-on-type, so it has no instance receiver
+// to shadow — unlike `serialize`, whose instance form is exactly what `43dd3dd` had to revert. The compiler
+// registers one on each `Owned<X>` box whose pointee has a by-value read, and it reads the pointee by value
+// then adopts the block (registerOwnedDeserialize). A box whose pointee is a graph NODE is pruned back out:
+// there the `Owned` is walked inline by the graph passes instead. ASan proves each element frees once.
+// Elements are heterogeneous in value only — 7 + 11 + 24 = 42.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::collections::DynamicArray,
+    std::memory::Owned,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field DynamicArray<Owned<Leaf>> kids;
+    public ctor make(DynamicArray<Owned<Leaf>> kids) { this.kids = give kids; }
+    public const fn int32 sum() {
+        int32 s = 0;
+        foreach (ref Owned<Leaf> k in this.kids) { s = s + k.get(); }
+        return s;
+    }
+}
+
+fn int32 main() {
+    DynamicArray<Owned<Leaf>> xs = DynamicArray.empty();
+    xs.add(item: new Leaf.make(v: 7));
+    xs.add(item: new Leaf.make(v: 11));
+    xs.add(item: new Leaf.make(v: 24));
+    Bag b = Bag.make(kids: give xs);
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: b);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // Each element is a nested object — byte-identical to a `DynamicArray<Leaf>` of the same values.
+    if (j != "{\"kids\":[{\"v\":7},{\"v\":11},{\"v\":24}]}") { return cast<int32>(j.length()); }
+
+    Result<Bag, Owned<Error>> back = deserializeJsonBuffer::<Bag>(src: copy j);
+    Bag b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (b2.sum() != 42) { return 252; }
+    // Re-encode: the rebuilt boxes reproduce the exact wire, so the read really is the write's inverse.
+    Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: b2);
+    string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 253; } };
+    if (j2 != j) { return 254; }
+
+    // The same bag positionally: no names, array length on the wire, still a tree.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: b2);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
+    Result<Bag, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Bag>(src: give bytes);
+    Bag b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 249; } };
+    if (b3.sum() != 42) { return 248; }
+
+    // The same box read at the ROOT, which falls out of the element one and is asserted so it cannot
+    // regress silently: an `Owned<Leaf>` writes byte-identically to a by-value `Leaf` and reads back as
+    // an `Owned<Leaf>`. This is the read side of "a field may change between `Owned<X>` and bare `X` and
+    // still read the other's data" — now true at the root too.
+    Owned<Leaf> one = new Leaf.make(v: 42);
+    Result<string, Owned<Error>> orr = serializeJsonBuffer(v: one);
+    string oj = match (give orr) { case Ok(value: x): give x; case Err(error: e): { return 247; } };
+    if (oj != "{\"v\":42}") { return cast<int32>(oj.length()); }
+    Result<Owned<Leaf>, Owned<Error>> oback = deserializeJsonBuffer::<Owned<Leaf>>(src: give oj);
+    Owned<Leaf> one2 = match (give oback) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
+    return one2.get();
+}

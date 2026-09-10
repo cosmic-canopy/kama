@@ -24775,6 +24775,36 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     indent(depth); *_out << dst << " = " << t << ".u.Ok.value;\n";
 }
 
+// `Owned<X>.deserialize` — the box read. The mirror of the `Owned` arm in emitDeFieldRead: read the pointee
+// BY VALUE into a stack temp, then heap-move it and adopt. Reading into the temp first is what keeps a
+// failed read from leaving a half-built pointee on the heap — the Err path below has nothing to free. The
+// `malloc` pairs with the box's dtor, which deallocates through `GlobalAllocator` (libc `free`), the same
+// pairing bare `new` emits.
+void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
+{
+    const std::string pc = ownedPointeeClass(ci.name);
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&ci, "adopt", &ao);   // registerOwnedDeserialize proved it exists
+    const std::string resC = cType(ci.methods["deserialize"].returnType);
+    // ⚠️ Build the inner `Result<X, Owned<Error>>` from the BOX's own type argument, not by re-`cType`ing the
+    // pointee's `deserialize` return node: that node resolves `This` in the POINTEE's scope, and re-resolving
+    // it here mangles a file-private pointee to the wrong name (`Result_Leaf_…` for a type whose C name is
+    // `_F<unit>__Leaf`). The type argument is the same node `ownedPointeeClass` reads, so it mangles right.
+    auto gi = _genericTypeInsts.find(ci.name);
+    const std::string innC = cType(resultOwnedErrorTypeNode(gi->second.typeArgs[0]));
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
+          << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << innC << " __or = " << pc << "__deserialize(r);\n";
+    indent(1); *_out << "if (__or.tag == " << innC << "_Err) return (" << resC << "){ .tag = " << resC
+                     << "_Err, .u.Err = { .error = __or.u.Err.error } };\n";
+    indent(1); *_out << pc << "* __ob = (" << pc << "*)malloc(sizeof(" << pc << "));\n";
+    indent(1); *_out << "if (!__ob) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+    indent(1); *_out << "*__ob = __or.u.Ok.value;\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = "
+                     << adoptM->cName << "(__ob) } };\n";
+    *_out << "}\n\n";
+}
+
 void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<This, Owned<Error>> This__deserialize(...)`. Bypass assembly (zero-init +
@@ -25131,8 +25161,12 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
     // `deserialize` reads it back as a handle. Everything else is the by-value derive.
     if (mi.isSynthSer) { ci.isVariant ? emitEnumSerializeDefinition(ci)
                        : (ci.reachesPointer ? emitGraphSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
-    if (mi.isSynthDe)  { ci.isVariant ? emitEnumDeserializeDefinition(ci)
-                       : (ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
+    if (mi.isSynthDe)  {
+        // An `Owned<X>` box read is neither: it has no fields of its own, it reads its POINTEE by value and
+        // adopts the block. See registerOwnedDeserialize.
+        if (ci.ownedBoxDe) { emitOwnedDeserializeDefinition(ci); return; }
+        ci.isVariant ? emitEnumDeserializeDefinition(ci)
+                     : (ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
     if (mi.isSynthFormat) { ci.isVariant ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
     if (mi.isSynthCmp) {                                              // keyed by the method name
         if (name == "equals") ci.isVariant ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
@@ -25240,6 +25274,23 @@ SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
     node->genericArgs = std::make_shared<IdentifierList>();
     node->genericArgs->push_back(elem);
     return node;
+}
+
+// Synthesize an `Owned<elem>` type node — the return of a box read (`Owned<X>.deserialize`). Fully
+// qualified for the same reason ownedErrorTypeNode is: a bare `Owned` does not resolve from every context,
+// and it must mangle to the SAME canonical instance a user-written `Owned<X>` does, or the `Result`
+// monomorph diverges from the one the caller declared.
+SharedIdentifier CEmitter::ownedTypeNode(SharedIdentifier elem)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto qual = std::make_shared<StringList>();
+    qual->push_back(std::make_shared<std::string>("std"));
+    qual->push_back(std::make_shared<std::string>("memory"));
+    auto owned = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Owned"), qual, elem);
+    owned->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
+    owned->genericArgs = std::make_shared<IdentifierList>();
+    owned->genericArgs->push_back(elem);
+    return owned;
 }
 
 // Synthesize an `Owned<Error>` type node — the uniform boxed-error payload of a fallible serde Result.
@@ -25439,6 +25490,74 @@ void CEmitter::computeGraphNodeTypes()
             }
         }
         _nsCtx = saved;
+    }
+}
+
+// The READ half of "an `Owned` subtree IS its pointee". The write half needs nothing: emitSerFieldWrite
+// walks THROUGH the handle (ownedPointeeOf) and writes the pointee inline, so a container of `Owned<X>`
+// already satisfies its own `when [T: Serializable]` gate and writes correct bytes. The read half has
+// nowhere to land: a container's `deserialize` calls `T.deserialize(r)`, and with `T = Owned<X>` there is
+// nothing to call, because the triad is METHOD-FREE and must stay so — a domain method on a handle shadows
+// the pointee's through the deref fallback.
+//
+// `deserialize` is the one member that can be added without reopening that: it is a STATIC ctor, reached
+// only dot-on-TYPE (`emitDotOnTypeCtorCall`), so it has no instance receiver to shadow — unlike `serialize`,
+// whose instance form is exactly what `43dd3dd` had to revert.
+//
+// ⚠️ Registered EAGERLY, before the destructibility fixpoint, and pruned by pruneOwnedDeserialize once the
+// node set is known — the same shape the graph adapters use, and for a measured reason: the `Result<Owned<X>,
+// Owned<Error>>` this mints must exist BEFORE computeDestructible, or the fixpoint never marks it move-only
+// and the container's own `match (give __er)` is refused as "a plain value, copied on assignment". So the
+// graph pointee cannot be excluded here (`graphDeserialize` is settled later); it is pruned instead.
+void CEmitter::registerOwnedDeserialize()
+{
+    std::vector<std::string> boxes;                                     // collect first: the loop below writes _classes
+    for (auto& kv : _classes) if (!ownedPointeeClass(kv.first).empty()) boxes.push_back(kv.first);
+    for (const std::string& oc : boxes) {
+        ClassInfo& bc = _classes[oc];
+        if (bc.methods.count("deserialize")) continue;                  // hand-written or already registered
+        auto p = _classes.find(ownedPointeeClass(oc));
+        if (p == _classes.end()) continue;
+        if (!p->second.methods.count("deserialize")) continue;          // nothing to box
+        // `adopt` is what takes the raw block. It exists only `when [A: default]`, so a stateful-allocator
+        // box has none — and the wire carries no allocator handle to rebuild one from. Registering nothing
+        // leaves the ordinary "has no constructor `deserialize`" refusal, which is the honest answer.
+        ClassInfo* ao = nullptr;
+        if (!findMethod(&bc, "adopt", &ao)) continue;
+        auto gi = _genericTypeInsts.find(oc);
+        if (gi == _genericTypeInsts.end() || gi->second.typeArgs.empty()) continue;
+        MethodInfo mi;
+        mi.cName = oc + "__deserialize";
+        mi.visibility = Visibility::Public;
+        mi.isStatic = true; mi.isCtor = true; mi.isSynthDe = true;
+        mi.returnType = resultOwnedErrorTypeNode(ownedTypeNode(gi->second.typeArgs[0]));
+        scanTypeForCollections(mi.returnType);                          // monomorphize Result<Owned<X>, Owned<Error>>
+        ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer";
+        mi.params.push_back(r);
+        bc.methods["deserialize"] = mi;
+        bc.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+        bc.ownedBoxDe = true;   // …and the mark the body fork and the prune below read
+    }
+}
+
+// The late half of the pair above: re-judge the registration against the PRUNED world and take back every
+// box the graph pass invalidated. Two ways it can: the pointee became a graph node, whose `deserialize`
+// hands back `Result<Shared<X>, …>` and is not an `Owned<X>` at all (such an `Owned` is walked INLINE by the
+// graph passes instead — graphNestOf answers {"owned", X}); or the pointee LOST its by-value pair outright,
+// which computeGraphNodeTypes does to every node that reaches a pointer. ⚠️ The second is not a corollary of
+// the first — measured on `ser_graph_nested_reach`, where a serialize-only node leaves `graphDeserialize`
+// false and still has no `deserialize` to call, so a box read emitted a call to a symbol nothing defines.
+void CEmitter::pruneOwnedDeserialize()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& bc = kv.second;
+        if (!bc.ownedBoxDe) continue;
+        auto p = _classes.find(ownedPointeeClass(kv.first));
+        if (p != _classes.end() && p->second.methods.count("deserialize") && !p->second.graphDeserialize)
+            continue;                    // still a by-value pointee: the box read stands
+        bc.methods.erase("deserialize");
+        bc.ctors.erase("deserialize");   // both maps, for the reason regateGenericInstances erases both
+        bc.ownedBoxDe = false;
     }
 }
 
@@ -29118,6 +29237,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
+    registerOwnedDeserialize();   // the `Owned<X>` box read — BEFORE the fixpoint, which must see the
+                                  // `Result<Owned<X>, Owned<Error>>` it mints to mark it move-only
     bakeFieldCTypes();     // ...and resolve every field's type in its OWN class's scope, before any body
                            // walk can resolve it in a reader's. computeDestructible installs the same
                            // context immediately below; this is that answer, kept.
@@ -29140,6 +29261,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     computeDeeplyImmutable();     // M6.2: mark deeply-immutable types (feeds the sendability seed below)
     computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` over a deeply-immutable T takes the atomic flavor
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
+    pruneOwnedDeserialize();   // …now that a boxed VALUE can be told from a boxed graph NODE
 
     // Contract kind-gate enforcement: a type may `implements` a contract only if its kind is named by
     // that contract's `for` clause. Covers the kinds that own a `_classes` entry.

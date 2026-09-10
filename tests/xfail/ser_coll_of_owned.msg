@@ -1,1 +1,0 @@
-has no constructor `deserialize`

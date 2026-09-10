@@ -439,6 +439,9 @@ struct ClassInfo {
     // This node's synthesized `deserialize` returns `Result<Shared<This>, Owned<Error>>` rather than
     // `Result<This, …>`: a graph comes back as a HANDLE, since a cycle cannot be returned by value.
     bool                              graphDeserialize = false;
+    // This is an `Owned<X>` box carrying a compiler-registered `deserialize` that reads the POINTEE by value
+    // and adopts the block — see registerOwnedDeserialize / pruneOwnedDeserialize. Nothing else on the triad.
+    bool                              ownedBoxDe = false;
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
     // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
     // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
@@ -2353,6 +2356,9 @@ private:
     // Object-graph WALKER — the algorithm lives in the compiler and drives the ordinary token protocol.
     // A node's per-type helpers are internal C functions over the kama_runtime.h substrate, never members.
     void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode + graphTypeId
+    void registerOwnedDeserialize();                // `Owned<X>.deserialize` for a by-value pointee (the box read)
+    void pruneOwnedDeserialize();                   // …and take it back off a box whose pointee is a graph node
+    void emitOwnedDeserializeDefinition(ClassInfo& ci);   // …its body: read the pointee, heap it, `adopt`
     void regateGenericInstances();                  // re-judge every generic instance's `when` gates
     void emitGraphNodeHelperProtos(ClassInfo& ci);  // visitEdges / writeNode / wireEdges / __readInto prototypes
     void emitGraphNodeHelpers(ClassInfo& ci);       // …their bodies
@@ -2376,6 +2382,7 @@ private:
     std::string graphWireName(const ClassInfo& ci);   // source type name for the wire `type` tag
     void emitPolyContractResolvers();   // per graph-edge contract: C vtbl <-> Graph* vtbl resolvers + the shell reader chain
     SharedIdentifier sharedTypeNode(SharedIdentifier elem);   // synth a `Shared<elem>` type node (for return types)
+    SharedIdentifier ownedTypeNode(SharedIdentifier elem);    // synth an `Owned<elem>` type node (the box read's return)
     SharedIdentifier optionalTypeNode(SharedIdentifier elem); // synth an `Optional<elem>` node (the `.as<T>()` result)
     SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)
     SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
