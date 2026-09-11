@@ -7585,6 +7585,71 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
     return qualify(name);   // scope-prefixed (main -> kama_main); _nsCtx set per file
 }
 
+// A `ParamSig::className` is mangled when the signature is REGISTERED, which is during unit collection —
+// and a `comptime` module constant declared in a file collected LATER is not folded yet, so
+// `InlineArray<isize>#(MAX_CREW)` mangles to `InlineArray_isize_MAX_CREW`, the constant's NAME. The
+// function's own prototype is fine, because `paramListC` re-`cType`s the AST node at EMIT time, by which
+// point the constant is known — so one instantiation ends up spelled two ways, and the CALL SITE's cast
+// (which reads `className`) names a type nothing declares. Reported by a consumer as KB-22, against a
+// tree where the constant's file sorted after the callee's; it reproduces only in that order, which is why
+// four hand-built probes missed it.
+//
+// The refresh is deliberately SELF-CHECKING: a stale name resolves to nothing, so it only ever replaces a
+// className that names no known type with one that does. Re-mangling in a context that cannot see the
+// constant produces another unknown name and changes nothing.
+void CEmitter::refreshStaleParamTypes()
+{
+    auto stale = [&](const std::string& c) {
+        return !c.empty() && !_classes.count(c) && !_collections.count(c);
+    };
+    // ONLY a type carrying `#(…)` comptime VALUE arguments can be stale this way, and restricting to that
+    // shape is what keeps the re-resolution safe: a parameter type may be spelled with something only its
+    // own declaration site can resolve (`Base`, inside a type that `extends`), and re-`cType`ing one of
+    // those from a whole-program pass is an error rather than a better answer. `nTypeArgs` is how many
+    // leading args came from `<…>`; anything past that came from `#(…)`.
+    auto hasComptimeArgs = [](const SharedIdentifier& ty) {
+        return ty && ty->genericArgs && ty->nTypeArgs >= 0
+            && (int)ty->genericArgs->size() > ty->nTypeArgs;
+    };
+    auto refresh = [&](std::vector<ParamSig>& sigs, SharedParameterList decl, const std::string& declFile,
+                       const ClassInfo* owner) {
+        if (!decl) return;
+        size_t i = 0;
+        for (auto& p : *decl) {
+            if (i >= sigs.size()) break;
+            if (p && p->type && hasComptimeArgs(p->type) && stale(sigs[i].className)) {
+                NsCtx saved = _nsCtx;
+                // The DECLARING file's whole context, not a rebuilt one: the type spells the constant the
+                // way that file imports it (bare, after `import { m::MAX_CREW }`), so the usings and
+                // aliases are what make it resolve. `_unitCtx` carries each file's, keyed by its path.
+                bool found = false;
+                for (auto& uk : _unitCtx)
+                    if (uk.second.unitPath == declFile) { _nsCtx = uk.second; found = true; break; }
+                if (!found && owner) {
+                    _nsCtx = NsCtx{};
+                    _nsCtx.scope = owner->scope; _nsCtx.usings = owner->usings;
+                    _nsCtx.symbolAliases = owner->symbolAliases;
+                    restoreFileRung(_nsCtx, declFile);
+                }
+                const std::string fresh = (found || owner) ? cType(p->type) : std::string();
+                _nsCtx = saved;
+                if (!fresh.empty() && !stale(fresh)) sigs[i].className = fresh;
+            }
+            ++i;
+        }
+    };
+    for (auto& kv : _funcs)
+        if (kv.second.node) refresh(kv.second.params, kv.second.node->parameters, kv.second.declFile, nullptr);
+    for (auto& ck : _classes) {
+        ClassInfo& ci = ck.second;
+        for (auto& mk : ci.methods)
+            if (mk.second.node) refresh(mk.second.params, mk.second.node->params, ci.declFile, &ci);
+        for (auto& ctk : ci.ctors)
+            if (ctk.second.node && ctk.second.node->declarator)
+                refresh(ctk.second.params, ctk.second.node->declarator->params, ci.declFile, &ci);
+    }
+}
+
 std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
 {
     std::vector<ParamSig> out;
@@ -29946,6 +30011,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
+    refreshStaleParamTypes();  // a const-generic param mangled before its comptime constant was known
     registerOwnedDeserialize();   // the `Owned<X>` box read — BEFORE the fixpoint, which must see the
                                   // `Result<Owned<X>, Owned<Error>>` it mints to mark it move-only
     registerEdgeElementResults();  // …and the `Result<Shared<X>, …>` a container's element read binds

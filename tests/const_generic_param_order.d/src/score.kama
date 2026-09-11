@@ -1,0 +1,11 @@
+// The CALLEE, in a file that sorts BEFORE the one declaring the constant — which is the whole trigger.
+import { cgpo::MAX_CREW };
+export { tallyVote };
+
+fn isize tallyVote(const ref InlineArray<isize>#(MAX_CREW) ballots, isize crewTotal)
+{
+    isize s = 0;
+    isize i = 0;
+    while (i < crewTotal) { s = s + ballots[i]; i = i + 1; }
+    return s;
+}

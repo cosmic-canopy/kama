@@ -1,0 +1,4 @@
+// ⚠️ Named to sort LAST. See main.kama — the defect only reproduces when the constant's file is
+// collected after the callee's.
+export { MAX_CREW };
+comptime isize MAX_CREW = 8;

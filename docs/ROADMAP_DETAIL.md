@@ -245,6 +245,41 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### `copy` on a raw-pointer index silently drops the marker (found 2026-09-10)
+
+**The reproduction**, measured, not reasoned. `Map.get` reads
+
+```kama
+return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // `vals` is an `UnsafePtr<V>`
+```
+
+Inline that helper — `Optional::Some(value: copy this.vals[i])` — and the emitted C is
+
+```c
+__ret_1 = (Optional_…){ .tag = …_Some, .u.Some = { .value = (self->vals)[i] } };   // no __copy
+```
+
+a bitwise ALIAS of a buffer the map still owns; the caller's dtor then frees it out from under the map.
+The SAME expression as a direct call argument does emit a real `__copy` (`Map__copy` at the sibling site
+proves it), so it is the **variant-payload construction** that loses the marker, and nothing reports it.
+
+**Why it is load-bearing.** `map.kama` and `sorted_map.kama` route every such read through
+`cloneVal`/`cloneKey(const ref V)` helpers purely to give the element a typed borrow — the same shape as the
+seven `serElem`/`serKey`/`serVal` helpers `0.9.275` deleted. ⚠️ But these are NOT that leftover: deleting
+them was measured to break at RUNTIME (the stdlib as-is returns 2, the inlined version traps at 133), so the
+marker must be fixed first and the helpers follow.
+
+**What it blocks.** A `const ref` parameter may not name a smart pointer, so those helper signatures cannot
+be instantiated for `V = Shared<X>`: **`Map<K, Shared<V>>` does not compile at all** — with no serde in
+sight. That is the only remaining hole in the serde graph work (§4): a `Map`/`SortedMap` whose VALUES are
+graph edges. `Set`/`SortedSet` of edges is refused BY BOUND (`K: Hashable + Equatable`, which the triad does
+not implement) and is a non-issue.
+
+**Where to look.** `indexElemTypeRaw` already falls back to `ptrElemType` for a raw `UnsafePtr<T>` index, and
+its comment says that is exactly so a `drop`/`copy` of the element knows what it is — so the resolver
+answers; something on the variant-payload path is not asking it. Start by diffing the two emission paths for
+the same expression (direct call argument vs. enum payload), since one of them is already correct.
+
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
   CORDIC and polynomial-approximation work, a numerical-methods project rather than a library chore. It is

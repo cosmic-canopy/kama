@@ -1,0 +1,29 @@
+// A `comptime` constant used as a const-generic argument in a parameter type, where the file DECLARING
+// the constant is collected AFTER the file declaring the callee. A `ParamSig`'s C type is mangled when
+// the signature is REGISTERED — during collection — so the constant was not folded yet and the parameter
+// mangled to `InlineArray_isize_MAX_CREW`, the constant's NAME. The callee's own prototype was fine,
+// because `paramListC` re-resolves the AST node at EMIT time; only the CALL SITE's cast read the stale
+// string. One instantiation, spelled two ways, and clang caught what kama did not:
+//
+//     error: use of undeclared identifier 'InlineArray_isize_MAX_CREW'
+//
+// ⚠️ FILE ORDER IS LOAD-BEARING HERE. `score.kama` sorts before `main.kama`, and moving the constant into
+// a file that sorts FIRST makes this build clean — which is why four hand-built probes missed it when it
+// was reported (consumer KB-22). Do not "tidy" these file names.
+import { cgpo::MAX_CREW, cgpo::tallyVote };
+
+type resource World {
+    isize n;
+    public ctor make(isize n) { this.n = n; }
+    // A method FORWARDING the const-generic parameter to the free function above: this call's cast is
+    // the site that was wrong.
+    public const fn isize voteTally(const ref InlineArray<isize>#(MAX_CREW) ballots) {
+        return tallyVote(ballots: ballots, crewTotal: this.n);
+    }
+}
+
+fn int32 main() {
+    InlineArray<isize>#(MAX_CREW) b = [0, 1, 2, 3, 4, 5, 6, 7];
+    World w = World.make(n: 4);
+    return cast<int32>(w.voteTally(ballots: b));   // 0+1+2+3 = 6
+}

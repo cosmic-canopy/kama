@@ -2460,6 +2460,7 @@ private:
     // disjoint-borrow rule (several isolates may `ref`-borrow the SAME atomic cell — the sanctioned case).
     std::string _atomicTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
+    void refreshStaleParamTypes();   // re-mangle a className computed before a comptime const was folded
     // The same list for a generic function INSTANTIATION — the template's parameters with its type
     // arguments bound, so a call site sees `ConstView_int32`, not the symbolic `ConstView_T` the template's
     // own FuncSig carries. Cached per mangled name.
