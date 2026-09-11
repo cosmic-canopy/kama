@@ -26058,15 +26058,20 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
     auto nest = graphNestOf(ty);
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
-            auto nc = _classes.find(nest.second);
-            bool coll = nc != _classes.end() && (nc->second.isIntrinsicColl || (nc->second.isGenericInst && !nc->second.genSerialize && !nc->second.genDeserialize));
-            if (coll) unsupported(("field `" + fieldOfAccess(access) + "` is a collection whose ELEMENT reaches a `Shared`/`Weak` "
-                                   "field, so the element is a graph node — and a collection OF nodes is not walked yet. Hold the "
-                                   "nodes in a node type (a `@generate` type with the `Shared` fields on it), or leave the field out "
-                                   "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
-            else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it is not "
-                              "`@generate(Serializable)`, so its edges cannot be written; mark it `@generate`, or leave the field out "
-                              "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+            // ⚠️ A smart pointer is NOT a collection, and this used to call one that: the test below
+            // matched any generic instance without a derive, which `Shared<X>` is. The shape that actually
+            // lands here is an `Owned` whose POINTEE is itself an edge — a box holding a handle — since a
+            // real collection of edges is walked through its own body before this point.
+            const bool boxedEdge = isSharedOrWeakClass(nest.second);
+            if (boxedEdge)
+                unsupported(("field `" + fieldOfAccess(access) + "` is an `Owned` whose POINTEE is itself a graph edge "
+                             "(`Owned<Shared<X>>`), and a box around a handle has no wire form — the box owns "
+                             "uniquely and the handle shares, so the two cannot both be true of one pointee. "
+                             "Hold the `Shared<X>` directly, or box the NODE (`Owned<X>`), or leave the field "
+                             "out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+            else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it has no "
+                              "`Serializable` half, so its edges cannot be written; give it one with `@generate(Serializable)` or by hand, "
+                              "or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             return;
         }
         indent(depth); *_out << nest.second << "__writeNode(" << (nest.first == "owned" ? "(" + access + ").p" : "&(" + access + ")") << ", w, g);\n";
@@ -26118,15 +26123,20 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
     auto nest = graphNestOf(ty);
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
-            auto nc = _classes.find(nest.second);
-            bool coll = nc != _classes.end() && (nc->second.isIntrinsicColl || (nc->second.isGenericInst && !nc->second.genSerialize && !nc->second.genDeserialize));
-            if (coll) unsupported(("field `" + fieldOfAccess(dst) + "` is a collection whose ELEMENT reaches a `Shared`/`Weak` "
-                                   "field, so the element is a graph node — and READING one back is not supported yet. Writing it "
-                                   "works: hold the nodes in a node type (a `@generate` type with the `Shared` fields on it) to "
-                                   "read them, or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
-            else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it is not "
-                              "`@generate(Deserializable)`, so its edges cannot be read; mark it `@generate`, or leave the field out "
-                              "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+            // ⚠️ A smart pointer is NOT a collection, and this used to call one that: the test below
+            // matched any generic instance without a derive, which `Shared<X>` is. The shape that actually
+            // lands here is an `Owned` whose POINTEE is itself an edge — a box holding a handle — since a
+            // real collection of edges is walked through its own body before this point.
+            const bool boxedEdge = isSharedOrWeakClass(nest.second);
+            if (boxedEdge)
+                unsupported(("field `" + fieldOfAccess(dst) + "` is an `Owned` whose POINTEE is itself a graph edge "
+                             "(`Owned<Shared<X>>`), and a box around a handle has no wire form — the box owns "
+                             "uniquely and the handle shares, so the two cannot both be true of one pointee. "
+                             "Hold the `Shared<X>` directly, or box the NODE (`Owned<X>`), or leave the field "
+                             "out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+            else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it has no "
+                              "`Deserializable` half, so its edges cannot be read; give it one with `@generate(Deserializable)` or by hand, "
+                              "or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             return;
         }
         if (nest.first == "owned") {

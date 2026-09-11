@@ -1,0 +1,20 @@
+// An `Owned` whose POINTEE is itself a graph edge. The box owns uniquely and the handle shares, so the
+// two cannot both be true of one pointee — there is no wire form for the combination, and it is refused.
+//
+// ⚠️ This entry exists because the message used to be WRONG IN TWO WAYS, and the second way was
+// self-inflicted. It called a smart pointer "a collection" (the test matched any generic instance with no
+// derive, which `Shared<X>` is), and it said "a collection OF nodes is not walked yet" — true when it was
+// written, false once collections of edges started being walked. A refusal that describes a world that no
+// longer exists sends the reader somewhere there is nothing to find.
+import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::memory::Owned };
+
+@generate(Serializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable)
+type resource Bag {
+    @field Owned<Shared<Leaf>> k;
+    public ctor make(Owned<Shared<Leaf>> k) { this.k = give k; }
+}
+
+fn int32 main() { return 0; }

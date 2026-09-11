@@ -1,0 +1,1 @@
+a box around a handle has no wire form
