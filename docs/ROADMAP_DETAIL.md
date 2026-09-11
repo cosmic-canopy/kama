@@ -1394,6 +1394,76 @@ does not resolve for a GENERIC element, which is why `dynamic_array.kama` hops t
 helper — verified by deleting the helper and watching it fail. And a `ref` parameter may not name a smart
 pointer. One language rule therefore gates every container-of-pointer shape, `Owned` and `Shared` alike.
 
+### The graph channel — SHIPPED `0.9.276`–`0.9.278`
+
+The maintainer ruled the container row GENERAL on 2026-09-10: **one rule for every `Serializable`** (any type
+reaching a `Shared`/`Weak` takes part, hand-written or derived alike — no second-class `Serializable`), and
+**any serde type may be a root** ("the reader must know what they are trying to read regardless"). What
+`@generate` buys is a FIELD WALK, nothing else; the walker existing only as a synthesized body was the
+accident, not the design.
+
+⚠️ **This was not a missing feature, it was a live correctness bug.** Measured at `0.9.275`: a hand-written
+`serialize` over a type holding two `Shared<Leaf>` handles to ONE leaf compiled clean and wrote
+`{"a":{"v":9},"b":{"v":9}}` — the pointee inline, twice, identity gone with no diagnostic — and the same
+body over a cycle was a **SIGSEGV**. It now writes `{"root":{"a":1,"b":1},"objects":[{"id":1,…}]}`, and a
+hand-written cycle is a compile error naming the pointee that must be `@generate`.
+
+**The mechanism is a PARAMETER, not ambient state.** A `KAMA_ISOLATE_LOCAL` "current graph" was proposed and
+rejected: the graph is ALREADY a per-invocation stack local in the driver, and every call below it is a
+direct monomorphized call whose signature the emitter owns. A participant's body is emitted once under a
+second name that carries it (`X__serializeInto(self, w, g)` / `X__deserializeFrom(r, g)`), with
+`X__serialize` / `X__deserialize` synthesized as root drivers over it.
+
+⚠️ **Never widen `X__serialize`.** The `Serializable` vtbl slot is filled by CASTING `&X__serialize` to the
+slot's function-pointer type, so a changed arity compiles silently and then reads an argument nobody pushed
+— the one failure mode here that clang cannot catch. The twin is a separate symbol for exactly that reason.
+(`Deserializable.deserialize` is declared `ctor` and the vtbl builder skips ctors, so there is no read slot
+anywhere and the read side is always statically resolved.)
+
+**Identity decides the `root` slot**, and that is the whole of the root ruling: a node can be pointed at, so
+the root carries an **id** and reads back as `Shared<T>`; a collection or a hand-written holder cannot be
+pointed at, so the root carries its **value** inline and reads back **by value** — there is no cycle through
+it to close. Existing node wires are unchanged.
+
+Things the build corrected, each measured rather than reasoned:
+- The edge retarget must fire BEFORE the auto-deref fallback. The triad is method-free, so `serialize` is
+  not on the handle, and resolving it on the pointee is exactly the inline write this removes.
+- The node closure walks edge FIELDS; a container's edges are type ARGUMENTS. Without recursing through
+  them the owner was a node, its field was walked, and every element was still written inline.
+- A participant reached as a ROOT is reached from nowhere, so its edges are seeded by a pass of their own —
+  **without** marking it `isGraphNode`, which would make `typeHasGraphAdapters` answer true for a container.
+- Pass 2 must walk a participant's FIELDS as well as iterate its ELEMENTS. Doing only the latter left a
+  hand-written holder's own edges unwired: correct write, stashed ids in the fields, SIGSEGV on first deref.
+- "Hand-written" is exactly "has an AST body" — not the synth flags. The `Shared<X>.deserialize` forward
+  `computeGraphNodeTypes` installs is neither, so asking the flags gave the TRIAD a twin.
+- ⚠️ `DynamicArray<Shared<X>>` had never had a read half for ANY `X`, graph or not: the
+  `Result<Shared<X>, Owned<Error>>` its element read binds is minted only by `computeGraphNodeTypes`, which
+  runs AFTER the destructibility fixpoint, so the monomorph existed unjudged and the container's own
+  `match (give __er)` was refused as "a plain value, copied on assignment". The `Owned` box read hit the
+  identical trap at `0.9.276`. Both are minted pre-fixpoint now.
+
+**Discovery runs the body against an emitted discard sink.** A derive's edges can be walked field by field
+and a hand-written body's cannot, so it is RUN, with every token thrown away; the edges intern on the way
+through, which is what keeps the table's length exact before `beginArray` — the positional and numbered
+backends have nothing else to bound a read with. One body therefore serves both passes with no mode flag.
+
+**Reading back needs mutable iteration**, because a container's elements are not fields: `IterableMut<T>`,
+the protocol `foreach (ref T x in c)` already requires, so a third-party container gets this by implementing
+what it would implement anyway. ⚠️ Pass 2 must NOT instead record each element's address during pass 1 —
+`DynamicArray.deserialize` grows via `add`, so the buffer reallocs mid-build and every recorded address
+dangles; the stash survives because it rides IN the element and moves with it.
+
+Fixtures: `ser_coll_of_owned` (the `Owned` element and root), `ser_graph_coll_write` (both write shapes,
+byte-for-byte), `ser_graph_coll` (round trip on json AND positional — **the check is the re-encode**:
+`kids` is `[2,3,2]`, and a read that rebuilt two copies instead of sharing one node would come back
+`[2,3,4]`), `ser_graph_handwritten` (the hand-written holder, round trip).
+
+**What is left** is two rows: a hand-written type as a graph NODE rather than only a participant (row 9,
+where the read side has a real return-type conflict to settle), and the `copy`-marker defect that makes
+`Map<K, Shared<V>>` uncompilable (row 10). `Set`/`SortedSet` of edges is refused BY BOUND — the triad is
+not `Hashable`/`Equatable` — so edges only ever arise in the sequence containers and `Map`/`SortedMap`
+values.
+
 
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
@@ -1461,12 +1531,14 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   - **A tagged-enum payload holding `Shared`/`Weak`** — *scheduled*: extend the enum derive with the adapter
     form (`writeNode`/`readInto`/`wireEdges` over the live variant's payload); mechanical now that the node
     adapters exist. Today refused with "`Shared` has none" (probed 2026-09-09).
-  - **A collection OF graph nodes / edges** (`DynamicArray<Shared<X>>`, `DynamicArray<Node>`) — *scheduled*:
-    needs an edge protocol on the collection's conformance (a `GraphSerializable when [T: …]` on the
-    collections, walking elements inline). Refused with a message that says so; hold nodes in a node type.
-  - **A collection OF `Owned<X>`** (`DynamicArray<Owned<X>>`) — *scheduled*, and it is a language question:
-    the element helper takes `const ref T`, and "a `const ref` may not name a smart pointer" fires even when
-    `T` is a type parameter. Decide whether a generic `const ref T` admits a smart-pointer `T`.
+  - **A collection OF graph nodes / edges** (`DynamicArray<Shared<X>>`) — ✅ **SHIPPED `0.9.277`/`0.9.278`**,
+    and NOT the way this bullet predicted: it needs no edge protocol and no conformance on the collections
+    at all. See *The graph channel* above. (`DynamicArray<Node>`, a collection of nodes BY VALUE, is a
+    different thing and remains out — a node has identity, so it belongs in the table, not inline.)
+  - **A collection OF `Owned<X>`** (`DynamicArray<Owned<X>>`) — ✅ **SHIPPED `0.9.276`**, and the language
+    question this bullet posed was answered by `0.9.275` instead: nothing hops through a `const ref T` any
+    more, so nothing asks whether one may name a smart pointer. What was actually missing was a
+    `deserialize` for `Owned<X>` that is not a method on the triad.
   - **A fat `Owned<Contract>` field** — *scheduled*: the tagged inline form (`{tag: variant, value}` through a
     per-contract closed-world resolver over `@generate` implementors), the `Owned<X>` rule applied to a
     polymorphic pointee. Refused today with "`Owned` has none" (it was a graph edge before this row).
@@ -1574,7 +1646,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
-- **Serde naming pass (rows 9–10's sibling)** — the TYPE names now say `{Addressing}{Medium}Serializer`
+- **Serde naming pass (row 11)** — the TYPE names now say `{Addressing}{Medium}Serializer`
   (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
   binary module's entry points each name their addressing, so none owns a bare `serializeJsonBuffer`. `…Writer`/`…Reader`
   went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used

@@ -4810,6 +4810,8 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
 | graph type (`Node` reaches a pointer) | true | heap graph — written from that root, read back as `Shared<Node>` |
 | `Shared<T>` where `T` reaches nothing | false | by value: the handle is walked through, byte-identical to a bare `T` |
 | `deserializeJsonBuffer::<Shared<T>>` where `T` reaches nothing | false | **compile error** → "reaches no `Shared`/`Weak` field, so it is not a graph" <!-- xfail: graph_handle_not_a_node --> |
+| a collection of edges (`DynamicArray<Shared<Node>>`), as a field or on its own | true | heap graph; the collection itself has no identity, so it is written **inline** and read back **by value** <!-- test: ser_graph_coll --> |
+| a hand-written `Serializable`/`Deserializable` holding edges | true | the same — no `@generate` required <!-- test: ser_graph_handwritten --> |
 
 - **By-value (tree):** a `value` type (owns nothing) or a `resource` reaching no `Shared`/`Weak` (strings,
   collections, nested owned data — a tree, no aliasing) serializes to a bare object/array and
@@ -4829,6 +4831,19 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   array, an entry a fixed `{id, type, value}` object with the type as a `variant`, a node's fields its own
   object), which is why the positional and numbered backends carry a graph too. A live pointer field in a
   `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource --> <!-- test: ser_graph_shared -->
+- **An edge does not have to be a field, and a body does not have to be derived.** A `@generate` type's
+  edges are found by walking its fields, which is the only thing `@generate` buys: any `Serializable` that
+  reaches a `Shared`/`Weak` takes part in the graph on the same terms. A **collection** of edges works
+  (`DynamicArray<Shared<Node>>`, as a field or handed to a backend on its own) — its edges are its
+  ELEMENTS, so they are not fields at all <!-- test: ser_graph_coll --> — and so does a **hand-written**
+  `serialize`/`deserialize` that holds handles directly <!-- test: ser_graph_handwritten -->. The compiler
+  emits such a body a second time carrying the graph, and an edge inside it interns its pointee and writes
+  its **id**; reading back, ids are resolved by walking the type's fields and then iterating its elements,
+  which is why a collection of edges must be mutably iterable (`IterableMut<T>` — the protocol
+  `foreach (ref T x in c)` already requires). **Identity is the thing that decides the `root` slot:** a node
+  can be pointed at, so the root carries its **id** and reads back as `Shared<T>`; a collection or a
+  hand-written holder cannot be pointed at, so the root carries its **value** inline and reads back **by
+  value** — there is no cycle through it to close. A pointee still must be `@generate`. <!-- xfail: poly_edge_nongenerate -->
 
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
