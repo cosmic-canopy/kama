@@ -278,11 +278,19 @@ while its own two siblings in the triad, `allocate`/`deallocate`, "stay uninvoca
 4. ⚠️ **Migration is mechanical, and both shapes were verified to compile**: the handle destructors become
    `drop(ptr: this.p)`, and a container's element drop becomes `drop(ptr: addr(of: this.data[i]))`.
 
-⚠️ **ACCEPTANCE CRITERION, set by the maintainer: the pointer triad must stay RAII-safe.** `Owned`, `Shared`
-and `Weak` each hold private `UnsafePtr` fields (`Shared`/`Weak` hold two — pointee and control block), and
-their destructors are what make a handle safe to use from safe code. The change rewrites exactly those
-destructors, so it is not done until each still frees its pointee exactly once, a `Shared` cycle still
-releases correctly, and the sanitizer leg is clean on the existing handle fixtures.
+**What this does and does NOT touch in the triad.** It does not change `Owned`/`Shared`/`Weak`'s fields,
+ownership model, public API or RAII behaviour. It changes TWO CALL SITES inside their destructors, because
+`drop(value: this.derefMut())` passes a `ref T` and would stop type-checking — and the rewrite is a
+SIMPLIFICATION, not a redesign: `this.p` is already the `UnsafePtr<T>`, so the current code takes a round
+trip through `derefMut()` to turn it back into a place. `drop(ptr: this.p)` is shorter and more direct.
+
+⚠️ **ACCEPTANCE CRITERION, set by the maintainer: the pointer triad must be RAII-safe, and it is CHECKABLE
+TODAY rather than a promise.** ~60 triad fixtures already exist — `shared_dtor`, `weak_dtor`, `weak_cycle`,
+`weak_expired`, `weak_upgrade`, `shared_arena_cycle`, plus a dozen asserting refcounts or live-object counts
+directly — and the san leg runs all of them under `-fsanitize=address,undefined` in a LINUX container, where
+LeakSanitizer is active (that is why the leg is container-only: macOS has no LSan). So both a double free and
+a LEAK are caught mechanically. "Done" means `./dev matrix` green with that leg, not an argument that the
+destructors look right.
 
 **Open sub-decision:** is `drop(ptr: null)` a no-op or refused? `Owned`'s destructor already guards with
 `if (cast<usize>(this.p) != 0)`; a no-op would let that guard go.
