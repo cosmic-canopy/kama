@@ -17645,8 +17645,19 @@ bool CEmitter::isGenericDotCtorCall(ASTNode* r)
 }
 
 // If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `UnsafePtr<T>`, return the element's
-// concrete C-type (resolving `T` under the current instance subst); else "". This is a raw pointer
-// slot (unsafe manual memory) — a container's own buffer — distinct from a collection / user operator[].
+// concrete C-type; else "". This is a raw pointer slot (unsafe manual memory) — a container's own buffer —
+// distinct from a collection / user operator[].
+// ⚠️ The element resolves under the FIELD'S OWNER instance, never under whatever `_typeSubst` is ambient.
+// It used to read `cType(f.type->genericArg)`, which answers only when the element's type-param name
+// happens to be bound right now — and the caller that matters most, `emitVariantConstruction`, has the
+// ENUM's params installed. So `Map<K,V>`'s `UnsafePtr<V>` came back "" (only `Optional`'s `T` was bound),
+// `exprClass` said "not a class", and `Optional::Some(value: copy this.vals[i])` silently dropped the copy
+// and emitted a bitwise ALIAS of a buffer the map still owns. It survived only when the container spelled
+// its parameter `T` — the same letter `Optional<T>` uses — which is why `DynamicArray`/`Deque`/`FixedArray`/
+// `ConstView` were correct and `Map`/`SlotMap` needed `cloneVal`/`cloneKey(const ref V)` workarounds.
+// This is the M10b fix applied to the branch M10b missed: `indexElemTypeRaw`'s user-`operator[]` arm binds
+// the owner instance for exactly this reason, and then falls through to here, which did not.
+// See `tests/generic_index_optional_return.kama` (the sibling's regression) and `tests/copy_elem_nonT_param`.
 std::string CEmitter::ptrElemType(SharedExpression e)
 {
     auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
@@ -17660,7 +17671,7 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     for (auto& f : owner->fields)
         if (f.name == *ma->identifier->value && f.type && f.type->value
             && isRawPtrName(*f.type->value) && f.type->genericArg)
-            return cType(f.type->genericArg);
+            return cTypeInInstance(owner->name, f.type->genericArg);
     return "";
 }
 

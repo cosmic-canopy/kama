@@ -1,0 +1,55 @@
+// Regression: a raw `UnsafePtr<E>` element's class must resolve under the FIELD'S OWNER instance, never
+// under whatever `_typeSubst` happens to be ambient. `ptrElemType` used to read `cType(f.type->genericArg)`,
+// which answers only when the element's type-param name is bound right now — and inside
+// `emitVariantConstruction` the ENUM's params are installed instead. So `Optional::Some(value: copy this.vals[i])`
+// saw "not a class", silently dropped the `copy`, and emitted a bitwise ALIAS of a buffer the owner still
+// held (a double free once both dropped).
+//
+// ⚠️ THE POINT OF THIS FIXTURE IS THE LETTER `E`. The bug was invisible for as long as it was, because
+// every raw-buffer container in the stdlib spelled its element `T` — the same letter `Optional<T>` uses —
+// so the wrong binding happened to hold the right answer. `Map`/`SlotMap` spell theirs `K`/`V` and had to
+// work around it with `cloneVal`/`cloneKey(const ref V)` helpers. Rename this `E` to `T` and the fixture
+// passes against the unfixed compiler, proving nothing. It is the sibling of
+// `generic_index_optional_return.kama`, which pins the same root cause on the user-`operator[]` arm.
+import { std::collections::DynamicArray };
+
+// An owning element: a deep copy has its own buffer, an alias shares the owner's.
+type resource Item implements Copyable<This>(bare: give) {
+    DynamicArray<int32> xs;
+    ~Item() { }
+    public ctor make(int32 seed) { this.xs = DynamicArray.empty(); this.xs.add(item: seed); }
+    public ctor copy(ref Item source) { return Item.make(seed: source.xs[0]); }
+    public fn void push(int32 v) { this.xs.add(item: v); }
+    public const fn isize count() { return this.xs.length(); }
+    public const fn int32 first() { return this.xs[0]; }
+}
+
+type value Bag<E: Copyable<E>> {
+    UnsafePtr<E> vals; isize len;
+    public unsafe ctor over(UnsafePtr<E> vals, isize len) { this.vals = vals; this.len = len; }
+    // The defect shape: `copy` of a raw-pointer element inside a variant payload.
+    public unsafe fn Optional<E> at(isize i) {
+        if (i < 0 || i >= this.len) { return Optional::None; }
+        return Optional::Some(value: copy this.vals[i]);
+    }
+}
+
+unsafe fn int32 run() {
+    DynamicArray<Item> store = DynamicArray.empty();
+    store.add(item: Item.make(seed: 7));
+    Bag<Item> b = Bag.over(vals: store.dataPtrMut(), len: 1);
+
+    Optional<Item> got = b.at(i: 0);
+    match (give got) {
+        case Some(value: c): {
+            Item cc = give c;
+            cc.push(v: 99);                    // mutate the COPY; the store must not see it
+            if (cc.count() != 2) { return 91; }
+        }                                      // cc drops here — an alias would free the store's buffer
+        case None: { return 90; }
+    };
+    if (store[0].count() != 1) { return 92; }  // 2 = the payload aliased the store's own element
+    return store[0].first();                   // 7
+}
+
+fn int32 main() { return run(); }
