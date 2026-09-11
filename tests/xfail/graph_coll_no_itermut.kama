@@ -1,0 +1,59 @@
+// A container that holds graph edges as ELEMENTS but hands out no MUTABLE iterator. Reading a graph back
+// is two passes, and pass 2 has to revisit every edge to turn the id it stashed into a live handle. A
+// type's FIELDS can always be walked; its ELEMENTS cannot — they are type arguments, not fields — so the
+// only way to reach them is to iterate. `IterableMut<T>` is the protocol `foreach (ref T x in c)` already
+// requires, so a container that can be written in a `foreach (ref …)` needs nothing extra; this one cannot.
+//
+// Refused rather than silently written wrong: without pass 2 the elements keep the wire ids stashed in
+// their pointer slots, and the first deref is a wild pointer. (The WRITE half needs no iteration at all —
+// the container's own `serialize` visits its elements — so this is a read-side requirement only.)
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+         std::memory::Shared, std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+// A two-slot container over T. No `iterMut()`, so no `IterableMut<T>`.
+type resource Pair2<T> implements Serializable when [T: Serializable],
+                                  Deserializable<This> when [T: Deserializable<T>] {
+    T a; T b;
+    public ctor make(T a, T b) { this.a = give a; this.b = give b; }
+
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        w.beginArray(count: cast<usize>(2));
+        Result<Unit, Owned<Error>> r1 = this.a.serialize(w: w);
+        match (give r1) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        Result<Unit, Owned<Error>> r2 = this.b.serialize(w: w);
+        match (give r2) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.endArray();
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Pair2<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
+        r.beginArray();
+        r.moreElems();
+        Result<T, Owned<Error>> ra = T.deserialize(r: r);
+        T a = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: give e); } };
+        r.moreElems();
+        Result<T, Owned<Error>> rb = T.deserialize(r: r);
+        T b = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: give e); } };
+        r.moreElems();
+        this.a = give a; this.b = give b;
+        return Result::Ok(value: give this);
+    }
+}
+
+@generate(Serializable, Deserializable)
+type resource Owner {
+    @field Pair2<Shared<Leaf>> pair;
+    public ctor make(Pair2<Shared<Leaf>> pair) { this.pair = give pair; }
+}
+
+fn int32 main() {
+    Shared<Leaf> x = new Leaf.make(v: 3);
+    Shared<Leaf> y = x;
+    Pair2<Shared<Leaf>> p = Pair2::<Shared<Leaf>>.make(a: give x, b: give y);
+    Shared<Owner> o = new Owner.make(pair: give p);
+    Result<string, Owned<Error>> j = serializeJsonBuffer(v: o);
+    return match (give j) { case Ok(value: s): 0; case Err(error: e): 1; };
+}

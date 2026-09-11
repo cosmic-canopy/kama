@@ -350,6 +350,7 @@ give_inline_ctor_arg	give_inline_ctor_arg.kama:7
 give_ptr_local_reuse	give_ptr_local_reuse.kama:13 give_ptr_local_reuse.kama:16
 global_absolute_path	global_absolute_path.kama:10
 graph_alloc_iface	graph_alloc_iface.kama:23
+graph_coll_no_itermut	graph_coll_no_itermut.kama:17
 graph_handle_not_a_node	-
 graph_read_by_value	-
 handoff_fresh	handoff_fresh.kama:4

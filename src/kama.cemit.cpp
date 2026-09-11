@@ -173,12 +173,26 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
                        && sameType(demangleForDisplay(*args[n - 1]->value, depth + 1),
                                    demangleForDisplay(*df->second[n - 1]->value, depth + 1)))
                     --n;
+            // ⚠️ A type ARGUMENT may itself be a generic instance, and a type NODE carries its arguments in
+            // `genericArgs` rather than in `value` — so rendering `value` alone printed `Shared` for what
+            // the source calls `Shared<Leaf>`, and a diagnostic naming `Pair2<Shared<Leaf>>` read
+            // `Pair2<std::memory::Shared>`. Render the node, not just its head.
+            std::function<std::string(const SharedIdentifier&, int)> renderArg =
+                [&](const SharedIdentifier& a, int d) -> std::string {
+                    if (!a || !a->value) return "?";
+                    std::string r = demangleForDisplay(*a->value, d);
+                    if (d < 4 && a->genericArgs && !a->genericArgs->empty()) {
+                        r += "<";
+                        for (size_t k = 0; k < a->genericArgs->size(); ++k)
+                            r += (k ? ", " : "") + renderArg(a->genericArgs->at(k), d + 1);
+                        r += ">";
+                    }
+                    return r;
+                };
             std::string s = demangleForDisplay(gi->second.templateKey, depth + 1);
             if (n) {
                 s += "<";
-                for (size_t a = 0; a < n; ++a)
-                    s += (a ? ", " : "") + (args[a] && args[a]->value
-                                            ? demangleForDisplay(*args[a]->value, depth + 1) : std::string("?"));
+                for (size_t a = 0; a < n; ++a) s += (a ? ", " : "") + renderArg(args[a], depth + 1);
                 s += ">";
             }
             out += s;
