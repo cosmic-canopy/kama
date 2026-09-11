@@ -1,0 +1,29 @@
+// A missing import must NOT be reported as a compiler bug.
+//
+// `0.9.287` added a backstop: a MARKED `give`/`copy` whose SOURCE class did not resolve, into a
+// destination that OWNS something, is refused as a compiler bug — because after `0.9.283`/`0.9.284` every
+// named-lvalue shape has a resolver, so reaching that branch means the compiler failed, not the author.
+//
+// ⚠️ It MISFIRED the first time it met a real mistake. One absent `import { std::collections::DynamicArray }`
+// leaves `bytes` with no class while the callee's parameter type resolves fine — known destination,
+// unresolved source, which is exactly the backstop's shape — so it blamed the compiler and buried the real
+// message under a "please report it" the reader cannot act on. It now stays quiet once anything has been
+// diagnosed.
+//
+// ⚠️ WHAT PINS THIS IS THE POSITION LIST IN `DIAGNOSTIC_LINES`, NOT THE MESSAGE. Both diagnostics below are
+// the author's and both are correct; the regression would be a THIRD one appearing on the `give` line, and
+// an extra position is what fails this fixture. A `.msg` on the first error alone would not have noticed.
+import { std::serialization::binary::deserializeBinaryPositionalBuffer, std::memory::Shared };
+
+@generate(Serializable, Deserializable)
+type resource Node {
+    @field int32 v;
+    @field Optional<Shared<Node>> next;
+    public ctor make(int32 v) { this.v = v; this.next = Optional::None; }
+}
+
+fn int32 main() {
+    DynamicArray<uint8> bytes = DynamicArray.empty();     // `DynamicArray` deliberately NOT imported
+    Result<Shared<Node>, Owned<Error>> r = deserializeBinaryPositionalBuffer::<Shared<Node>>(src: give bytes);
+    return 0;
+}
