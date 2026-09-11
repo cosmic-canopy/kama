@@ -245,40 +245,40 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### `copy` on a raw-pointer index silently drops the marker (found 2026-09-10)
+### A graph whose edges are a KEYED container's values (found 2026-09-11, measuring the row above)
 
-**The reproduction**, measured, not reasoned. `Map.get` reads
+Row 9 claimed the `copy`-marker drop blocked "the `Map`/`SortedMap` case of the serde graph work". Measured
+once the marker was fixed: **it does not**. `Map<K, Shared<V>>` now compiles and round-trips as a container
+(`tests/map_shared_value`), and the graph case is blocked by a second, independent thing.
 
-```kama
-return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // `vals` is an `UnsafePtr<V>`
-```
+The read half's pass 2 has to revisit every edge element to turn the stashed wire id into a live handle, and
+it reaches elements through **`IterableMut<T>`** (`fn IteratorMut<T> iterMut()`, prelude) — the protocol
+`foreach (ref T x in c)` already requires, so a sequence container gets it for free. A **keyed** container
+cannot coherently implement it: `Map`'s `Iterable` yields **keys**, while its edges live in **values**. It
+offers `ValuesIterableMut<I>` (`fn I valuesMut()`, `std::collections::iteration`) instead. So the refusal
+fires from `sorted_map.kama:471` — correct, and it names the protocol — and there is no spelling of
+`IterableMut` a `Map` could add without making `foreach (ref V v in map)` disagree with
+`foreach (K k in map)`.
 
-Inline that helper — `Optional::Some(value: copy this.vals[i])` — and the emitted C is
+**The decision this needs**, which is a surface question and deliberately not taken while fixing the marker:
 
-```c
-__ret_1 = (Optional_…){ .tag = …_Some, .u.Some = { .value = (self->vals)[i] } };   // no __copy
-```
+- **Prefer `ValuesIterableMut` when present.** Smallest change, and right for the stdlib — but it hard-codes
+  one library contract into the walker, and a third-party keyed container that spells its mutable-values
+  accessor differently is back to being unserializable for no reason it can act on.
+- **Let the container say which iterator the walker should use** — an attribute (or a contract) marking the
+  accessor that yields edge-bearing elements mutably. More machinery, but it is the answer that does not
+  privilege `std::collections`, and it generalizes to a container whose edges are in neither position.
 
-a bitwise ALIAS of a buffer the map still owns; the caller's dtor then frees it out from under the map.
-The SAME expression as a direct call argument does emit a real `__copy` (`Map__copy` at the sibling site
-proves it), so it is the **variant-payload construction** that loses the marker, and nothing reports it.
+Either way a rule falls out that should be written down with it: a keyed container's edges may live in its
+**values only**. A key cannot be revisited in place — rewriting one mid-read is a rehash — so `Map<Shared<K>, V>`
+is not "not yet", it is a non-goal.
 
-**Why it is load-bearing.** `map.kama` and `sorted_map.kama` route every such read through
-`cloneVal`/`cloneKey(const ref V)` helpers purely to give the element a typed borrow — the same shape as the
-seven `serElem`/`serKey`/`serVal` helpers `0.9.275` deleted. ⚠️ But these are NOT that leftover: deleting
-them was measured to break at RUNTIME (the stdlib as-is returns 2, the inlined version traps at 133), so the
-marker must be fixed first and the helpers follow.
+⚠️ `Set`/`SortedSet` of edges stays a non-issue for a different reason, already measured: refused BY BOUND
+(`K: Hashable + Equatable`, which the serde triad does not implement).
 
-**What it blocks.** A `const ref` parameter may not name a smart pointer, so those helper signatures cannot
-be instantiated for `V = Shared<X>`: **`Map<K, Shared<V>>` does not compile at all** — with no serde in
-sight. That is the only remaining hole in the serde graph work (§4): a `Map`/`SortedMap` whose VALUES are
-graph edges. `Set`/`SortedSet` of edges is refused BY BOUND (`K: Hashable + Equatable`, which the triad does
-not implement) and is a non-issue.
-
-**Where to look.** `indexElemTypeRaw` already falls back to `ptrElemType` for a raw `UnsafePtr<T>` index, and
-its comment says that is exactly so a `drop`/`copy` of the element knows what it is — so the resolver
-answers; something on the variant-payload path is not asking it. Start by diffing the two emission paths for
-the same expression (direct call argument vs. enum payload), since one of them is already correct.
+Today's refusal is pinned generically by `tests/xfail/graph_coll_no_itermut` (a container with no mutable
+iterator at all). Nothing pins the keyed-container shape specifically, because which way it resolves decides
+whether that fixture is an `xfail` or a test.
 
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
