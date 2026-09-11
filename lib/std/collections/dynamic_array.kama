@@ -237,9 +237,9 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     }
 
     // Drop every element and reset to empty (keeps the allocated buffer for reuse).
-    public fn void clear() {
+    public unsafe fn void clear() {   // `unsafe`: it drops each element through the raw buffer
         isize i = 0;
-        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        while (i < this.len) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
         this.len = 0;
         this.mods = this.mods + 1;
     }
@@ -285,7 +285,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     unsafe ~DynamicArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
         isize i = 0;
-        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        while (i < this.len) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }

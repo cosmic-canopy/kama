@@ -142,7 +142,7 @@ const_ref_addr_widen	const_ref_addr_widen.kama:6
 const_ref_as_mut_return	const_ref_as_mut_return.kama:13
 const_ref_compound	const_ref_compound.kama:10
 const_ref_contract_mismatch	const_ref_contract_mismatch.kama:13
-const_ref_drop	const_ref_drop.kama:11
+const_ref_drop	const_ref_drop.kama:18
 const_ref_give	const_ref_give.kama:16
 const_ref_index_write	const_ref_index_write.kama:18
 const_ref_nonconst_call	const_ref_nonconst_call.kama:17
@@ -237,6 +237,7 @@ dot_on_type_static_generic	dot_on_type_static_generic.kama:8
 dot_on_type_static_read	dot_on_type_static_read.kama:7
 dot_on_type_unknown_ctor	dot_on_type_unknown_ctor.kama:7
 double_retired	double_retired.kama:11
+drop_value_form	drop_value_form.kama:19
 dtor_on_value	dtor_on_value.kama:2
 dup_field	dup_field.kama:7
 dup_fn	dup_fn.kama:5
@@ -760,7 +761,6 @@ unsafe_on_type	unsafe_on_type.kama:4
 unsafe_ptr_addr_of_outside	unsafe_ptr_addr_of_outside.kama:8
 unsafe_ptr_call_result	unsafe_ptr_call_result.kama:8
 unsafe_ptr_cast_outside	unsafe_ptr_cast_outside.kama:4
-unsafe_ptr_elem_drop	unsafe_ptr_elem_drop.kama:15
 unsafe_ptr_field_outside	unsafe_ptr_field_outside.kama:8
 unsafe_ptr_local_outside	unsafe_ptr_local_outside.kama:7
 unsafe_ptr_match_binding	unsafe_ptr_match_binding.kama:13

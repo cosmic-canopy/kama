@@ -1,0 +1,21 @@
+// `drop` takes an `UnsafePtr<T>` and destroys the pointee. The old `drop(value: place)` form accepted a
+// place RAII already owned — a local, a by-value parameter — and the scope destructor then ran on the same
+// object again: two destructor calls, a double free, no diagnostic. It shipped that way in six
+// `sorted_map.kama` sites and crashed `SortedMap.put` on any owning value (`0.9.290`).
+//
+// ⚠️ This is a REMOVAL, not a check. A local is not a pointer, so the shape cannot be written at all —
+// which is the point of taking the pointer rather than adding a rule. To end a local's life early, give it
+// a scope: `{ T x = …; }`.
+import { std::collections::DynamicArray };
+
+type resource R {
+    DynamicArray<int32> xs;
+    ~R() { }
+    public ctor make() { this.xs = DynamicArray.empty(); }
+}
+
+fn int32 main() {
+    R local = R.make();
+    drop(value: local);        // the old place form — gone
+    return 0;
+}

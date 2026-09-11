@@ -126,6 +126,6 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 - **Text rendering (`std::fmt` core):** the `Formattable` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
-  `alignof(T)`, `bitcast<T>(x)`, `drop(value:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc
+  `alignof(T)`, `bitcast<T>(x)`, `drop(ptr:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc
   adapter). The smart-pointer triad (`Owned`/`Shared`/`Weak`, in module `std::memory` but always in scope)
   is a built-in module, not bare floor.

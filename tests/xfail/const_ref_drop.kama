@@ -1,17 +1,26 @@
-// `drop(value: place)` runs a destructor, which MUTATES the place (it leaves a dropped value behind) — so a
-// read-only place is refused: here `deref()` on a handle, which is the `const ref T` half of auto-deref.
-// A destructor drops through `derefMut()`, the writable half (see `Owned`'s own `~Owned`).
-import { std::memory::Owned };
+// A destructor MUTATES what it runs on — it leaves a dropped value behind — so `drop` is refused through
+// an `UnsafeConstPtr<T>`, the read-only half of the pointer pair. Drop through the writable one.
+//
+// This used to be spelled `drop(value: o.deref())`, refusing the `const ref T` half of auto-deref. `drop`
+// takes an `UnsafePtr<T>` now, so the read-only case is a CONST POINTER rather than a const place — and it
+// is still named specifically rather than falling into the generic "takes an `UnsafePtr<T>`" message,
+// because the author asked for something kama has with the wrong half of a pair.
+import { std::collections::DynamicArray };
+
 type resource Noisy {
     int32 n;
     public ctor make() { this.n = 1; }
     ~Noisy() { }
 }
-unsafe fn void dropEarly(Owned<Noisy> o) {
-    drop(value: o.deref());   // -> REJECT
+
+unsafe fn void dropEarly(ref DynamicArray<Noisy> xs) {
+    UnsafeConstPtr<Noisy> ro = xs.dataPtr();   // the read-only half — `dataPtrMut()` is the writable one
+    drop(ptr: ro);                             // -> REJECT
 }
+
 fn int32 main() {
-    Owned<Noisy> o = new Noisy.make();
-    dropEarly(o: give o);
+    DynamicArray<Noisy> xs = DynamicArray.empty();
+    xs.add(item: Noisy.make());
+    dropEarly(xs: xs);
     return 0;
 }

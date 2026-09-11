@@ -22,9 +22,12 @@ type value Box implements Sendable {
 fn int32 main() {
     Channel<Owned<Box>> ch = Channel.bounded(capacity: 2);
     Sender<Owned<Box>>   tx = ch.sender();
-    Receiver<Owned<Box>> rx = ch.receiver();
 
-    drop(value: rx);   // receiver gone → any send now fails (nothing is enqueued)
+    // The receiver's life is a SCOPE. This used to be `drop(value: rx)` on a local, which ran the
+    // destructor here AND again at scope exit — harmless only because `Receiver`'s tolerates it. A scope
+    // is how a local's life ends early; `drop` reaches places a scope cannot (a heap pointee, an element
+    // in a hand-managed buffer) and now takes an `UnsafePtr<T>` accordingly.
+    { Receiver<Owned<Box>> rx = ch.receiver(); }   // receiver gone → any send now fails
 
     Owned<Box> b = new Box.make(v: 42);
     SendResult<Owned<Box>> res = tx.send(item: give b);

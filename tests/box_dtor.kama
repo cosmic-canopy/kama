@@ -1,4 +1,4 @@
-// Box<T> owning a DESTRUCTIBLE pointee: `drop(value: this.derefMut())` runs the pointee's `~dtor` before `free`.
+// Box<T> owning a DESTRUCTIBLE pointee: `drop(ptr: this.p)` runs the pointee's `~dtor` before `free`.
 // Noisy owns a heap buffer freed only in its `~dtor`, so if `drop` didn't run it, LeakSanitizer would
 // catch the leak. ASan-clean == the pointee's destructor ran through the library Box.
 extern "<stdlib.h>";
@@ -17,7 +17,7 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public unsafe const fn const ref T deref() { return this.p[0]; }
     public unsafe fn ref T derefMut() { return this.p[0]; }
-    unsafe ~Box() { drop(value: this.derefMut()); free(p: cast<UnsafePtr>(this.p)); }
+    unsafe ~Box() { drop(ptr: this.p); free(p: cast<UnsafePtr>(this.p)); }
 }
 
 fn int32 main() {

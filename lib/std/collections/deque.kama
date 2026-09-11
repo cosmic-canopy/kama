@@ -165,9 +165,9 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     public fn void reserve(isize n) { if (n > this.cap) { this.growTo(nc: n); } }
 
     // Drop every live element and reset to empty (keeps the allocated buffer for reuse).
-    public fn void clear() {
+    public unsafe fn void clear() {   // `unsafe`: it drops each element through the raw buffer
         isize i = 0;
-        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        while (i < this.len) { drop(ptr: addr(of: this[i])); i = i + 1; }
         this.len = 0; this.head = 0; this.mods = this.mods + 1;
     }
 
@@ -208,7 +208,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     unsafe ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator
         isize i = 0;
-        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        while (i < this.len) { drop(ptr: addr(of: this[i])); i = i + 1; }
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }

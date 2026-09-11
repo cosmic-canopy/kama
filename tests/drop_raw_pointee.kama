@@ -1,0 +1,48 @@
+// `drop(ptr: p)` destroys the pointee of a raw pointer — the manual-memory case `drop` exists for.
+//
+// This file used to be `tests/xfail/unsafe_ptr_elem_drop`, and its premise is gone. It refused
+// `drop(value: p[0])` because a raw element was "untyped to ownership", so the call compiled to a literal
+// `(void)0` — a drop that dropped nothing, silently. Taking the POINTER instead answers that directly:
+// `drop(ptr: p)` names the thing being destroyed, so a refusal became a capability.
+//
+// The full triad is exercised here, which is what `drop` is one leg of: `allocate` hands out raw bytes,
+// a value is placed in them, `drop` destroys the value, `deallocate` returns the bytes. Without the middle
+// step you could free the BYTES but never destroy what lived in them — the `DynamicArray` inside `Big`
+// would leak on every element. ASan proves it does not.
+import { std::collections::DynamicArray, std::ptr::nonNull };
+
+static int32 gLive = 0;
+
+type resource Big {
+    DynamicArray<int32> xs;
+    ~Big() { gLive = gLive - 1; }
+    public ctor sized(int32 n) { this.xs = DynamicArray.empty(); this.xs.add(item: n); gLive = gLive + 1; }
+    public const fn int32 first() { return this.xs[0]; }
+}
+
+unsafe fn int32 run() {
+    GlobalAllocator ga = GlobalAllocator.make();
+
+    // allocate -> place -> read -> drop -> deallocate
+    UnsafePtr<Big> p = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big))));
+    p[0] = Big.sized(n: 14);
+    if (gLive != 1) { return 80; }
+    if (p[0].first() != 14) { return 81; }
+
+    drop(ptr: p);                        // destroys the Big — including its own heap buffer
+    if (gLive != 0) { return 82; }       // the destructor really ran
+
+    ga.deallocate(pointer: cast<UnsafePtr>(p), bytes: sizeof(Big));
+
+    // A second block, dropped through a pointer bound in a LOCAL rather than used inline.
+    UnsafePtr<Big> q = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big))));
+    q[0] = Big.sized(n: 28);
+    if (gLive != 1) { return 83; }
+    drop(ptr: q);
+    ga.deallocate(pointer: cast<UnsafePtr>(q), bytes: sizeof(Big));
+    if (gLive != 0) { return 84; }
+
+    return 14;
+}
+
+fn int32 main() { return run(); }

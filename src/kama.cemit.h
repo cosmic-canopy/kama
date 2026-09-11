@@ -2689,6 +2689,7 @@ private:
     // target, so the two assignment paths share this one predicate. See the definition.
     bool isGenericDotCtorCall(ASTNode* r);
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
+    std::string rawPointeeCType(SharedExpression e);  // pointee class of an `UnsafePtr<T>` expression (drop(ptr:)'s gate), "" otherwise
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     std::string handoffSourceClass(SharedExpression e, int handoff);  // exprClass, widened for a MARKED bare-local `buf[i]`

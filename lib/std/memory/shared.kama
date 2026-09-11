@@ -84,7 +84,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
             // reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
             // fetch_subs with a release store + acquire fence. A non-last release already decremented.
             if (kama_ctrl_release_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                drop(value: this.derefMut());                     // run the pointee's dtor once
+                drop(ptr: this.p);                                // run the pointee's dtor once
                 this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T));
                 if (kama_ctrl_finish_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
                     this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));

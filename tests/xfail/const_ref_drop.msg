@@ -1,1 +1,1 @@
-cannot `drop` a read-only place
+cannot `drop` through an `UnsafeConstPtr<T>`

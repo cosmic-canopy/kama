@@ -5,7 +5,7 @@ type resource Cell<T> implements Copyable<This>(bare: give) when [T: Copyable<T>
     T value;
     public ctor make(T v) { this.value = give v; }
     public ctor copy(ref Cell<T> source) { return Cell.make(v: copy source.value); }
-    ~Cell() { drop(value: this.value); }
+    ~Cell() { }   // the FIELD is auto-dropped by the owner's dtor — an explicit drop would be a SECOND one
 }
 type resource MoveOnly { int32 n; public ctor make(int32 n){this.n=n;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
 fn int32 main() {

@@ -30,7 +30,7 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
     unsafe ~Rc() {
         this.c[0].strong = this.c[0].strong - 1;
         if (this.c[0].strong == 0) {
-            drop(value: this.derefMut());           // run the pointee's dtor (no-op for a value)
+            drop(ptr: this.p);           // run the pointee's dtor (no-op for a value)
             free(p: cast<UnsafePtr>(this.p));
             if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
         }

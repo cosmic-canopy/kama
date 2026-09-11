@@ -41,5 +41,5 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Dere
     public unsafe fn UnsafePtr<T> release() { UnsafePtr<T> raw = this.p; this.p = null; return raw; }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
     // zero-initialized/moved-from handle).
-    unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(value: this.derefMut()); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
+    unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(ptr: this.p); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
 }

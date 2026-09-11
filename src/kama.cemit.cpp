@@ -17676,6 +17676,37 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     return "";
 }
 
+// The POINTEE C type of an expression whose own type is a raw `UnsafePtr<T>` — "" if it is not one.
+// `drop(ptr:)`'s whole gate. Two shapes reach it: a pointer NAME (a field like `Owned`'s `p`, a local, a
+// parameter), answered by `lvalueCType`; and `addr(of: place)`, whose pointee is the place's own type —
+// that one is how a container drops an element sitting in its hand-managed buffer.
+// ⚠️ `UnsafeConstPtr<T>` lowers east-const to `T const*`, and a destructor MUTATES what it runs on, so a
+// const pointer is deliberately NOT accepted here; the caller is told to use the writable form.
+// ⚠️ `addr(of: someLocal)` DOES launder a local back into a pointer, and that is accepted on purpose:
+// `addr(of: …)` itself requires an `unsafe fn`, so reaching it means the author has taken responsibility.
+// What the pointer form buys is that SAFE code cannot express the double drop at all — not that unsafe
+// code is prevented from doing deliberate things.
+std::string CEmitter::rawPointeeCType(SharedExpression e)
+{
+    if (!e) return "";
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
+        if (inv->identifier && inv->identifier->value && *inv->identifier->value == "addr"
+            && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+            && inv->args && inv->args->size() == 1) {
+            SharedExpression of = (*inv->args)[0]->expression;
+            std::string pc = exprClass(of);
+            if (pc.empty()) pc = indexElemTypeRaw(of);   // unfiltered: a primitive element answers too
+            return pc;                                    // the caller decides whether it is destructible
+        }
+    std::string ct = lvalueCType(e);
+    if (ct.size() < 2 || ct.back() != '*' || ct == "void*") return "";
+    ct = ct.substr(0, ct.size() - 1);
+    while (!ct.empty() && ct.back() == ' ') ct.pop_back();
+    const std::string csuf = " const";
+    if (ct.size() > csuf.size() && ct.compare(ct.size() - csuf.size(), csuf.size(), csuf) == 0) return "";
+    return ct;
+}
+
 // A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used in the assignment store path for an explicit `give`/`copy` raw-slot move into a
 // local pointer, and (0.9.228) to type the RECEIVER of a method call on such an element, which borrows it
@@ -22317,41 +22348,57 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
     // resolved via exprClass (so `drop(this.deref())` reaches the pointee `T` through a `ref T` return).
     if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
-        SharedExpression a = (*call->args)[0]->expression;
-        std::string cls = exprClass(a);
-        // Running a destructor MUTATES the place (it leaves a dropped value behind), so a read-only one —
-        // a const root, or a `const ref` place such as `deref()` on a handle that implements only `Deref` —
-        // is refused here, before the C compiler sees a `T const*` handed to a dtor.
-        if (rootIsConst(rootBinding(a)) || chainThroughConstPlace(a))
-            unsupported("cannot `drop` a read-only place — a destructor mutates what it runs on. Drop "
-                        "through the writable form (`derefMut()`, a `ref` parameter) or let the owner go "
-                        "out of scope", call->line);
-        // `drop(value: p[0])` through a LOCAL raw `UnsafePtr<T>` element whose `T` is a destructible class:
-        // the element is untyped to ownership (see the method-call site for why that is deliberate), so
-        // exprClass answers "" and this used to emit a literal `(void)0;` — a drop that dropped nothing,
-        // silently. Refused with the two spellings instead. Exactly that shape and no wider: a FIELD
-        // element (`this.keys[i]`) resolves through ptrElemType when its element is a class, and when it
-        // is a primitive the no-op below is the correct answer the collections rely on (a `drop` of an
-        // `int32` slot); a local element of a non-destructible type is the same legitimate no-op.
-        if (cls.empty()) {
-            std::string et = ptrLocalElemType(a);
-            if (!et.empty() && _classes.count(et) && _classes[et].destructible) {
-                const std::string place = unparseExpr(a);
-                unsupported(("`drop` cannot run through a raw pointer element — `" + place + "` is untyped to "
-                             "ownership, so nothing would be dropped; drop the value through a `ref " + et
-                             + "` parameter, or own it in an `Owned<" + et + ">` and let that go out of scope").c_str(),
-                            call->line);
+        ArgumentNode* a0 = (*call->args)[0].get();
+        SharedExpression a = a0->expression;
+        const std::string label = (a0 && a0->name && a0->name->value) ? *a0->name->value : "";
+        // `drop(ptr: p)` — destroy the POINTEE of a raw pointer. This is what `drop` is FOR: one leg of the
+        // manual-memory triad (`allocate` hands out bytes -> a value is placed in them -> `drop` destroys
+        // the value -> `deallocate` returns the bytes), reaching a place RAII cannot. Taking the pointer
+        // rather than a place is what makes the marker free: an `UnsafePtr` expression already requires an
+        // `unsafe fn`, so no separate rule is owed — and a LOCAL is not a pointer, so `drop(local)`, which
+        // used to emit a second destructor call on top of the scope's, becomes unspellable.
+        if (label == "ptr") {
+            std::string pc = rawPointeeCType(a);
+            if (pc.empty()) {
+                // A destructor MUTATES what it runs on, so an `UnsafeConstPtr<T>` is refused — and named,
+                // rather than swept into the generic message, because the author asked for something kama
+                // HAS with the wrong half of a pair. (`UnsafeConstPtr<T>` lowers east-const to `T const*`.)
+                const std::string ct = lvalueCType(a);
+                if (ct.size() > 7 && ct.compare(ct.size() - 7, 7, " const*") == 0)
+                    unsupported("cannot `drop` through an `UnsafeConstPtr<T>` — a destructor mutates what it "
+                                "runs on. Drop through the writable pointer (`derefMut()`'s owner, "
+                                "`addr(of: …)` on a mutable root, or `dataPtrMut()`)", call->line);
+                else
+                    unsupported("`drop(ptr:)` takes an `UnsafePtr<T>` — it destroys the POINTEE. To end a "
+                                "local's life early, give it a scope (`{ T x = …; }`); a local is already "
+                                "owned and dropping it again would run its destructor twice", call->line);
                 return "(void)0";
             }
+            if (_classes.count(pc)) {
+                // Polymorphic drops through the vtable: a base pointer owning a derived must run the
+                // derived's dtor. The pointer is already a pointer, so no `&(…)` here — that address-of is
+                // exactly the round trip the place form had to make.
+                if (_classes[pc].hasVtable)   return pc + "__vdrop(" + emitExpression(a) + ")";
+                if (_classes[pc].destructible) return pc + "__dtor(" + emitExpression(a) + ")";
+            }
+            return "(void)0";            // a primitive / non-destructible pointee: nothing to run
         }
-        if (!cls.empty() && _classes.count(cls)) {
-            // A polymorphic type drops through its vtable (`__vdrop`): a base handle owning a
-            // derived must run the derived's dtor, and a derived can own resources even when the
-            // base doesn't — so the runtime vtable, not the static type, decides.
-            if (_classes[cls].hasVtable) return cls + "__vdrop(&(" + emitExpression(a) + "))";
-            if (_classes[cls].destructible) return cls + "__dtor(&(" + emitExpression(a) + "))";
-        }
-        return "(void)0";   // nothing to drop (a value / non-destructible type)
+        // Any other label — `drop(value: place)`, the old form — is refused. It accepted a place RAII
+        // already owned (a local, a by-value parameter), and the scope destructor then ran on the SAME
+        // object: two destructor calls, a double free, no diagnostic. It shipped that way in six stdlib
+        // sites (`0.9.290`) and crashed `SortedMap.put` on any owning value. The pointer form cannot
+        // express it — a local is not a pointer — which is why this is a REMOVAL rather than a check.
+        const std::string shown = unparseExpr(a);
+        if (label == "value")
+            unsupported(("`drop(value:)` is gone — it took a place, and a place RAII already owns got its "
+                         "destructor run twice. `drop(ptr:)` takes an `UnsafePtr<T>` and destroys the "
+                         "POINTEE: write `drop(ptr: " + shown + ")` if `" + shown + "` is a raw pointer, or "
+                         "`drop(ptr: addr(of: " + shown + "))` for an element in a buffer you manage. To end "
+                         "a LOCAL's life early, give it a scope: `{ T x = …; }`").c_str(), call->line);
+        else
+            unsupported(("`drop` takes `ptr:` — `drop(ptr: " + shown + ")`, an `UnsafePtr<T>` whose pointee "
+                         "is destroyed").c_str(), call->line);
+        return "(void)0";
     }
     // M6.2: `__kama_ctrl_atomic()` — a per-instance COMPILE-TIME constant (0/1) that the prelude
     // `Shared`/`Weak` refcount ops pass to the kama_ctrl.h seam. 1 iff the Shared/Weak instance being

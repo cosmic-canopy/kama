@@ -26,7 +26,7 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
     public unsafe fn ref T derefMut() { return this.p[0]; }
     public unsafe ctor copy(ref Rc<T> source) { source.c[0].strong = source.c[0].strong + 1; return Rc.make(p: source.p, c: source.c); }
     public unsafe fn RcWeak<T> downgrade() { this.c[0].weak = this.c[0].weak + 1; return RcWeak.make(p: this.p, c: this.c); }
-    unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.derefMut()); free(p: cast<UnsafePtr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); } } }
+    unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(ptr: this.p); free(p: cast<UnsafePtr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); } } }
 }
 
 fn RcWeak<Shape> makeExpired() {

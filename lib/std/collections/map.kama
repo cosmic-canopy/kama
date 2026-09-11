@@ -283,7 +283,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             if (chosen < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
         }
         if (overwrite) {                                                     // replace the stored (equal) key + value
-            drop(value: this.keys[chosen]); drop(value: this.vals[chosen]);
+            drop(ptr: addr(of: this.keys[chosen])); drop(ptr: addr(of: this.vals[chosen]));
             this.keys[chosen] = give key; this.vals[chosen] = give value;
             this.mods = this.mods + 1;
         } else {
@@ -300,7 +300,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public unsafe fn Optional<V> remove(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
-        drop(value: this.keys[i]);         // key dropped (lookup `key` is a borrow, not stored)
+        drop(ptr: addr(of: this.keys[i]));   // key dropped (lookup `key` is a borrow, not stored)
         V v = this.takeVal(at: i);                  // value relocated OUT (the slot is now stale)
         this.state[i] = 2ui8;              // tombstone so the stale slot is never dropped again
         this.len = this.len - 1; this.tombs = this.tombs + 1; this.mods = this.mods + 1;
@@ -320,7 +320,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public unsafe fn void clear() {
         isize i = 0;
         while (i < this.cap) {
-            if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
+            if (this.state[i] == 1ui8) { drop(ptr: addr(of: this.keys[i])); drop(ptr: addr(of: this.vals[i])); }
             this.state[i] = 0ui8;
             i = i + 1;
         }
@@ -422,7 +422,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     unsafe ~Map() {   // drop each live key + value, then free the three buffers
         isize i = 0;
         while (i < this.cap) {
-            if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
+            if (this.state[i] == 1ui8) { drop(ptr: addr(of: this.keys[i])); drop(ptr: addr(of: this.vals[i])); }
             i = i + 1;
         }
         if (this.cap > 0) {

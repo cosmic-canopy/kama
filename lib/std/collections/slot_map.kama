@@ -186,7 +186,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     public unsafe fn void clear() {
         isize i = 0; this.freeLen = 0;
         while (i < this.slotCount) {
-            if ((this.gens[i] & 1ui32) == 1ui32) { drop(value: this.values[i]); this.gens[i] = this.gens[i] + 1ui32; }
+            if ((this.gens[i] & 1ui32) == 1ui32) { drop(ptr: addr(of: this.values[i])); this.gens[i] = this.gens[i] + 1ui32; }
             this.freeList[this.freeLen] = i; this.freeLen = this.freeLen + 1;
             i = i + 1;
         }
@@ -219,7 +219,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     unsafe ~SlotMap() {   // drop each live (occupied) value, then release the three buffers via the allocator
         isize i = 0;
         while (i < this.slotCount) {
-            if ((this.gens[i] & 1ui32) == 1ui32) { drop(value: this.values[i]); }
+            if ((this.gens[i] & 1ui32) == 1ui32) { drop(ptr: addr(of: this.values[i])); }
             i = i + 1;
         }
         if (this.cap > 0) {

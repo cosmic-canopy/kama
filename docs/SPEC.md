@@ -1991,8 +1991,10 @@ and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
 through a field one (until `0.9.232` the local form was refused, the field form never was). What stays
-refused is **`drop(value: p[0])`**, which would otherwise drop nothing, silently. To take the value out or <!-- xfail: unsafe_ptr_elem_drop -->
-release it: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
+resolves is a **`drop`**: it takes the POINTER, not the element — `drop(ptr: p)` destroys `*p` and <!-- test: drop_raw_pointee -->
+`drop(ptr: addr(of: p[i]))` destroys one element — so the thing being destroyed is named rather than
+inferred from an untyped slot. To take the value out or
+release it instead: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or
 **own it** — keep it in an `Owned<T>`, and `release()` it to a foreign API's userdata slot when it must
 outlive a frame (see *Smart pointers*). A raw pointer is the foreign boundary, never general-purpose escape
 (GOALS §3a/§3e). And `addr(of:)` takes the address of a **place**, never of a temporary: an element or
@@ -2333,11 +2335,19 @@ be written **in the language** rather than baked into the compiler. Three builti
   The one exception is a declared **`@onPanic` region**, which recovers *before* the hook and never reaches
   it — see *Recoverable regions*.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
-- **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
-  library owner over `UnsafePtr<T>` drop its heap pointee before `free` — through `derefMut()`'s `ref T`
-  (a destructor mutates, so a read-only place — `deref()`'s `const ref T`, a const root — is refused), <!-- xfail: const_ref_drop -->
-  never through a bare raw element (`drop(value: p[0])` is refused: the element is untyped to ownership, <!-- xfail: unsafe_ptr_elem_drop -->
-  so it would drop nothing).
+- **`drop(ptr: p)`** — destroy the POINTEE of an `UnsafePtr<T>` (a no-op for a non-destructible `T`). It is <!-- test: drop_raw_pointee -->
+  one leg of the **manual-memory triad**: `Allocator.allocate` hands out raw bytes → a value is placed in
+  them → **`drop` destroys the value** → `deallocate` returns the bytes. Without it you could free the
+  *bytes* but never destroy what lived in them. So it reaches exactly the places RAII cannot: a heap pointee
+  behind a raw pointer (`drop(ptr: this.p)` — what `Owned`/`Shared` destructors do) and an element in a
+  hand-managed buffer (`drop(ptr: addr(of: this.data[i]))` — what the containers do).
+  **It needs no rule of its own to stay inside `unsafe`**: an `UnsafePtr` expression already requires an
+  `unsafe fn`, so `drop` sits behind the same gate as its two siblings, which is where it belongs.
+  A destructor mutates what it runs on, so an `UnsafeConstPtr<T>` is refused. <!-- xfail: const_ref_drop -->
+  ⚠️ **To end a LOCAL's life early, give it a scope** — `{ T x = …; }`. A local is already owned, so running
+  its destructor explicitly would run it *again* at scope exit. That is why `drop` takes a pointer and not a
+  place: the double drop is **unspellable** rather than diagnosed. The old `drop(value: place)` form allowed <!-- xfail: drop_value_form -->
+  it, and shipped that double free in six stdlib sites until `0.9.290`.
 - **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`, or as an
   `UnsafeConstPtr<T>` when the place roots in a `const` binding (a const local or parameter, `this` inside
   a `const fn`). Taking an address is safe (either pointer is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
