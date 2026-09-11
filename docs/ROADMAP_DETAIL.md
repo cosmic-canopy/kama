@@ -245,40 +245,66 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### A graph whose edges are a KEYED container's values (found 2026-09-11, measuring the row above)
+### Two defects found building the graph-edge marking (2026-09-11)
 
-Row 9 claimed the `copy`-marker drop blocked "the `Map`/`SortedMap` case of the serde graph work". Measured
-once the marker was fixed: **it does not**. `Map<K, Shared<V>>` now compiles and round-trips as a container
-(`tests/map_shared_value`), and the graph case is blocked by a second, independent thing.
+**1. An inline generic-instance ctor as the RHS of an element store bypasses `__set`.**
+`this.xs[2] = Frame::<P>.at(e: …)` where the field is an `InlineArray<Frame<P>>#(N)` emits
+`InlineArray__…__get(…) = …`, which is not assignable C. Reduced to 11 lines, and the discriminator is
+narrow: `InlineArray<P>` works and `InlineArray<Frame<P>>` does not — the ELEMENT being a generic instance
+is what does it, and no generics on the holder are needed. Binding the RHS to a local first works, and so
+does an inline ctor whose element is a plain class. It fails LOUDLY at the C compiler, which is why it was
+rowed rather than fixed mid-campaign; `sorted_map.kama` has two sites using the local form with a comment
+pointing here.
 
-The read half's pass 2 has to revisit every edge element to turn the stashed wire id into a live handle, and
-it reaches elements through **`IterableMut<T>`** (`fn IteratorMut<T> iterMut()`, prelude) — the protocol
-`foreach (ref T x in c)` already requires, so a sequence container gets it for free. A **keyed** container
-cannot coherently implement it: `Map`'s `Iterable` yields **keys**, while its edges live in **values**. It
-offers `ValuesIterableMut<I>` (`fn I valuesMut()`, `std::collections::iteration`) instead. So the refusal
-fires from `sorted_map.kama:471` — correct, and it names the protocol — and there is no spelling of
-`IterableMut` a `Map` could add without making `foreach (ref V v in map)` disagree with
-`foreach (K k in map)`.
+**2. Consumer KB-23 — an `InlineArray<Struct>#(N)` degrades to a RAW POINTER when `N` is a local
+`comptime` aliasing an IMPORTED one.** Every method indexing the field then says *"raw pointer access
+requires an `unsafe fn`"*, and the constructor is told the field *"is never assigned"* — in a constructor
+that assigns every element of it in a loop. ⚠️ **Neither diagnostic names the declaration that is wrong**,
+and the second actively misleads: it sends the reader to rewrite correct code.
 
-**The decision this needs**, which is a surface question and deliberately not taken while fixing the marker:
+⚠️ **MEASURED, and NOT in the consumer's report: FILE ORDER is the trigger — the same mechanism as KB-22.**
+Renaming the exporting file so it sorts FIRST makes the identical source build clean. Their six-probe
+truth table found the *shape* (a struct element AND a local comptime aliasing an imported one) but not the
+*cause*, which is why four neighbouring cells build: each avoids reading the constant before the file
+declaring it is collected.
 
-- **Prefer `ValuesIterableMut` when present.** Smallest change, and right for the stdlib — but it hard-codes
-  one library contract into the walker, and a third-party keyed container that spells its mutable-values
-  accessor differently is back to being unserializable for no reason it can act on.
-- **Let the container say which iterator the walker should use** — an attribute (or a contract) marking the
-  accessor that yields edge-bearing elements mutably. More machinery, but it is the answer that does not
-  privilege `std::collections`, and it generalizes to a container whose edges are in neither position.
+⚠️ **`refreshStaleParamTypes` (the `0.9.281` fix for the same family on a PARAMETER) does not extend to it
+— attempted and measured.** A field pass modelled on it changes nothing, because the staleness is not in
+the field's type: `bakeFieldCTypes()` already runs after that pass. The fold of `DERIVED` itself is what
+happens too early — the bare-files form of the repro says so outright, *"comptime evaluation: unknown
+identifier `PROBE_N`"* — so the fix belongs at the constant level (re-fold module `comptime` constants once
+every file is collected), not at the type level. That is a bigger and more principled change than the
+parameter one, and is why this is a row rather than a commit.
 
-Either way a rule falls out that should be written down with it: a keyed container's edges may live in its
-**values only**. A key cannot be revisited in place — rewriting one mid-read is a rehash — so `Map<Shared<K>, V>`
-is not "not yet", it is a non-goal.
+### Graph edges in a keyed container — what shipped, and the two containers still short of it
 
-⚠️ `Set`/`SortedSet` of edges stays a non-issue for a different reason, already measured: refused BY BOUND
-(`K: Hashable + Equatable`, which the serde triad does not implement).
+**Shipped `0.9.289`.** A container now MARKS the accessor its graph edges are rewired through —
+`@serializedGraphEdges` on a nullary method handing out an `IteratorMut<T>`. `Map<K, Shared<V>>`
+round-trips as a graph on both backends (`tests/ser_graph_map`).
 
-Today's refusal is pinned generically by `tests/xfail/graph_coll_no_itermut` (a container with no mutable
-iterator at all). Nothing pins the keyed-container shape specifically, because which way it resolves decides
-whether that fixture is an `xfail` or a test.
+The design record, so it is not re-derived: the walker used to find the accessor BY NAME (`iterMut`) and
+require `implements IterableMut<T>`, which a KEYED container cannot satisfy — `Map`'s `Iterable` yields
+KEYS while its edges live in VALUES. A new contract was tried first and rejected: every container already
+declares a conformance handing out the right iterator (`IterableMut` for a sequence, `ValuesIterableMut`
+for a keyed one), so a second one would be a public member existing only to tell the compiler something —
+pollution until restricted-private contract members ship. The attribute adds no member, costs no grammar
+change (`attribute_list plain_class_member` already parses), and FREES THE NAME, so a third-party
+container may call its accessor anything. Marking is MANDATORY, which is not a new stance: SPEC already
+requires per-field marks on a `@generate`d product, where an unmarked field is a compile error.
+
+⚠️ **A keyed container's edges may live in its VALUES only.** A key cannot be rewired in place — that
+would move it in the ordering or the hash — so `Map<Shared<K>, V>` is a **non-goal**, not a "not yet".
+(C++ encodes the same rule independently: `std::map`'s iterators yield `pair<const Key, T>`.)
+`Set`/`SortedSet` of edges stays refused BY BOUND (`K: Hashable + Equatable`, which the serde triad does
+not implement) — a separate, already-measured non-issue.
+
+**What remains, neither of it about the marking:**
+
+- **`SortedMap`.** Its element write happens inside `BTreeNode`, a nested helper the graph discovery never
+  reaches, so the leaves are written INLINE and duplicated and the read then fails with *"unresolved
+  reference"*. `Map` writes its elements in its own body and works, which is what isolated it. The fix is
+  in discovery — reaching a participant's nested helper type — not in the accessor.
+- **`SlotMap`.** No `Serializable` half at all; it cannot carry a graph regardless. Pre-existing.
 
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
