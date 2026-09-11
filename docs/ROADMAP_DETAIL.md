@@ -1758,18 +1758,31 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
-- **Serde naming pass (row 10)** — the TYPE names now say `{Addressing}{Medium}Serializer`
-  (`KbinNamedSerializer`, `KbinNumberedSerializer`, `KbinPositionalSerializer`, `JsonSerializer`) and the
-  binary module's entry points each name their addressing, so none owns a bare `serializeJsonBuffer`. `…Writer`/`…Reader`
-  went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used
-  "Writer" for two unrelated things in one declaration. What is LEFT is the MODULE names, which still mix axes:
-  `json` names a format, `binary` a medium. Renaming a module is a source break, so it lands before the tag or
-  waits for 2.0.
-- **`@deprecated` on a declaration (language, adjacent)** — the field-level meaning SHIPPED with field
-  addressing (read when present, never written; its name and id stay reserved). What is left is the general
-  declaration marker emitting a use-site warning. ⚠️ It must EXTEND the field meaning, not redefine it — which
-  is also why `@deprecated` is deliberately absent from the member-attribute misplacement validator, whose
-  message would otherwise claim the attribute is field-only just before a row makes it general.
+- **Serde naming — SHIPPED `0.9.292`.** Every level is one axis now and every leaf is a format:
+  `std::serialization::text::json` and `std::serialization::binary::kbin`, with
+  `KbinNamedSerializer`/`KbinNumberedSerializer`/`KbinPositionalSerializer` beside `JsonSerializer`.
+  Addressing qualifies a name only where there IS a choice — `kbin` has three, JSON's is inherently named.
+  ⚠️ The rule it establishes, for whoever adds the next back end: **a module names a FORMAT; the medium is
+  the level above it.** `binary` was squatting on the medium name because kama's binary format had none,
+  which is also why the type names mixed axes. `…Writer`/`…Reader` had gone earlier for colliding with the
+  `std::io::Writer` sink the type owns.
+  **Successors the maintainer has in view:** `text::yaml` (addressing inherently named, so `YamlSerializer`
+  with no qualifier, exactly like Json) and `text::csv` — ⚠️ **csv is not shaped like the others and needs a
+  decision before it is built, not during**: it is flat and tabular, so a `Serializable` with a composite
+  field has no CSV representation at all. The maintainer's steer is to *limit it to the shape it is* — a
+  backend typed to a row shape it takes and returns, rather than a general `Serializable` backend that
+  refuses most types. It also has an addressing axis of its own (header row = named, none = positional), so
+  it would take the `{Addressing}{Format}` form `kbin` uses rather than the bare one.
+- **`@deprecated` as a general declaration marker — NON-GOAL** (maintainer, 2026-09-11). The FIELD meaning
+  is shipped and is the whole of what was wanted: read when present, never written, name and id still
+  reserved for duplicate detection (verified — an old stream's field reads back, a new write omits it).
+  A general marker on a method or type was the other half, and it is refused on two counts. The
+  maintainer's: *"that is what comments or the delete key is for."* And a structural one — it was specified
+  as a **use-site warning**, and kama deliberately has no stderr warning channel: a soft `warning()` was
+  REMOVED, with `run_tests.sh` failing any fixture whose stderr matches /warning/i, "because a warning is
+  the compiler saying it does not believe its own output". Building it as specified would trip the harness
+  by design. (`DiagSeverity::Warning` survives for LSP-only diagnostics, so an editor-only deprecation hint
+  remains possible if it is ever wanted — but it is not this row.)
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
