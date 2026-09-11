@@ -271,12 +271,27 @@ the explicit drop does NOTHING, with no diagnostic. That asymmetry is what makes
 the spelling that works is the one that quietly does nothing, and the spelling SPEC documents is the one
 that crashes.
 
-**The decision it needs**, which is why this is a row and not a patch:
-- **Refuse `drop()` on an RAII-owned local.** Simplest and coherent: a local is already owned, and dropping
-  it early is what scope exit is for. Costs nothing real — no in-tree caller does this.
-- **Or suppress the scope dtor when an explicit drop is seen.** kama already has the machinery (`markMoved`
-  suppresses a moved-from local's dtor), but it is flow-sensitive: a `drop()` inside an `if` must not
-  suppress the dtor on the path that skipped it.
+**What `drop` is for, since that decides the fix.** It is a floor BUILTIN (emitter-handled, no declaration
+in any module), and every stdlib caller is manual-memory internals: `Owned`'s dtor drops the pointee before
+`deallocate`, `Shared`'s runs the pointee's dtor once at the last strong release, and
+`Map`/`SortedMap`/`Deque`/`DynamicArray`/`FixedArray`/`SlotMap` drop an element sitting in a raw slot before
+reusing or freeing the buffer. None of those places is RAII-owned, so nothing collides. The hole is that it
+is also callable on an ordinary local, where RAII already owns the value.
+
+**The decision it needs — and the corpus already answers it.**
+
+⚠️ **`tests/channel_send_after_recv_gone.kama:27` calls `drop()` on an RAII-owned local TODAY**, emits two
+dtor calls on `rx`, and PASSES — only because `Receiver`'s dtor tolerates being run twice. So the defect is
+LATENT ACROSS THE CORPUS rather than theoretical (it bites whenever the dtor frees), and there is a
+legitimate use of early-drop-for-observable-effect: *"receiver gone → any send now fails"*, which wants the
+drop to happen BEFORE the sends.
+
+- ~~Refuse `drop()` on an RAII-owned local.~~ **Ruled out by that fixture** — it would break a real and
+  sensible use. (An earlier draft of this row claimed "no in-tree caller does this"; that was wrong, and
+  finding the caller is what settled the direction.)
+- **Suppress the scope dtor when an explicit `drop` is seen.** kama already has the machinery: `markMoved`
+  suppresses a moved-from local's dtor, which is the same shape. Flow-sensitive — a `drop()` inside an `if`
+  must not suppress the dtor on the path that skipped it — but that is solved for moves already.
 
 Whichever way, `drop(value: give x)` should stop being a silent no-op — it either means the same thing or
 it is refused.
