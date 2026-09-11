@@ -245,56 +245,59 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### `drop(value: x)` on an RAII-owned local DOUBLE-FREES (found 2026-09-11)
+### `drop` takes a place; it should take an `UnsafePtr<T>` (decided 2026-09-11)
 
-**Measured, and the emitted C settles it.** `drop(value: d)` on a local `DynamicArray<Shared<Node>>` emits
+**Stage 1 shipped at `0.9.290`** — the six `sorted_map.kama` sites that dropped a LOCAL or a by-value
+PARAMETER are deleted; `SortedMap.put` replacing an existing key no longer crashes. What follows is the
+language half.
 
-```c
-…__dtor(&(d));     // the explicit drop
-…__dtor(&d);       // …and the scope-exit dtor, on the same object
-```
+**What `drop` is, since it decides the shape.** It is a floor BUILTIN (emitter-handled, declared in no
+module) and it is one leg of the manual-memory triad: `Allocator.allocate` hands out raw bytes → a value is
+placed in them → **`drop` destroys the value** → `deallocate` returns the bytes. Without it you could
+allocate and free *bytes* but never destroy what lives in them. Every legitimate caller is a container or a
+smart pointer reaching a place RAII cannot: a heap pointee behind a raw pointer, or an element in a
+hand-managed buffer.
 
-and the program SIGSEGVs. It is **not** collection-specific: a plain `resource` local, an `Owned<T>` box and
-a `Shared<T>` handle all get two dtor calls (`Shared` underflows its refcount rather than double-freeing
-directly, which is worse — it frees a pointee other handles still hold).
+**The defect.** `drop(value: place)` also accepts a place RAII DOES own — a local, a by-value parameter —
+and then the scope destructor runs on the same object again. MEASURED: a plain `resource` local, an
+`Owned<T>` and a `Shared<T>` all get two destructor calls, and `Shared` is the worst of the three because it
+underflows a refcount rather than double-freeing directly, freeing a pointee other handles still hold.
+⚠️ And it is reachable from ORDINARY SAFE CODE — `drop(value: local)` inside a plain `fn` compiles clean —
+while its own two siblings in the triad, `allocate`/`deallocate`, "stay uninvocable outside an `unsafe fn`"
+(SPEC). `drop` is the one leg that escaped that.
 
-⚠️ **This is SPEC's own documented spelling.** *"**`drop(value: place)`** — run a place's destructor now"*.
-What SPEC describes is the raw-pointer case, where there is no RAII to collide with: *"lets a library owner
-over `UnsafePtr<T>` drop its heap pointee before `free` — through `derefMut()`'s `ref T`"*. On an
-RAII-owned LOCAL there is nothing suppressing the scope dtor, so the second call always follows.
+**The decision: `drop(ptr: UnsafePtr<T>)`** — "run the destructor on this pointee". Chosen over the weaker
+"keep the place form but require `unsafe`", for four reasons, two of them measured:
 
-⚠️ **PRE-EXISTING, not from the `0.9.283`–`0.9.289` work** — the same probe traps at `0.9.282`. (The crash
-mode differs, 133 there and 139 now, which is worth knowing when re-probing: both are crashes.)
+1. ⚠️ **The `unsafe` requirement comes FREE.** An `UnsafePtr` parameter already forces `unsafe fn`
+   (measured: *"takes a raw pointer, so it must be declared `unsafe` — the marker belongs at the
+   declaration, where it is greppable"*). No new rule to write, test or document.
+2. **It closes the class rather than diagnosing it.** A local is not a pointer, so `drop(value: local)`
+   becomes UNSPELLABLE — the double-free shape cannot be written.
+3. **It matches the triad.** `allocate` and `deallocate` both speak `UnsafePtr`; `drop` was the odd leg.
+4. ⚠️ **Migration is mechanical, and both shapes were verified to compile**: the handle destructors become
+   `drop(ptr: this.p)`, and a container's element drop becomes `drop(ptr: addr(of: this.data[i]))`.
 
-⚠️ **`drop(value: give d)` is the silent sibling**: it emits `(void)0` and RAII cleans up, so it is SAFE but
-the explicit drop does NOTHING, with no diagnostic. That asymmetry is what makes this hard to notice —
-the spelling that works is the one that quietly does nothing, and the spelling SPEC documents is the one
-that crashes.
+⚠️ **ACCEPTANCE CRITERION, set by the maintainer: the pointer triad must stay RAII-safe.** `Owned`, `Shared`
+and `Weak` each hold private `UnsafePtr` fields (`Shared`/`Weak` hold two — pointee and control block), and
+their destructors are what make a handle safe to use from safe code. The change rewrites exactly those
+destructors, so it is not done until each still frees its pointee exactly once, a `Shared` cycle still
+releases correctly, and the sanitizer leg is clean on the existing handle fixtures.
 
-**What `drop` is for, since that decides the fix.** It is a floor BUILTIN (emitter-handled, no declaration
-in any module), and every stdlib caller is manual-memory internals: `Owned`'s dtor drops the pointee before
-`deallocate`, `Shared`'s runs the pointee's dtor once at the last strong release, and
-`Map`/`SortedMap`/`Deque`/`DynamicArray`/`FixedArray`/`SlotMap` drop an element sitting in a raw slot before
-reusing or freeing the buffer. None of those places is RAII-owned, so nothing collides. The hole is that it
-is also callable on an ordinary local, where RAII already owns the value.
+**Open sub-decision:** is `drop(ptr: null)` a no-op or refused? `Owned`'s destructor already guards with
+`if (cast<usize>(this.p) != 0)`; a no-op would let that guard go.
 
-**The decision it needs — and the corpus already answers it.**
+**Stage 3 — the one fixture that has to move.** `tests/channel_send_after_recv_gone.kama:27` drops a LOCAL
+to make later sends fail. It becomes a scope — `{ Receiver rx = ch.receiver(); }` — which is the "one way to
+do a thing" answer: a scope ends a local's lifetime (measured), `drop` reaches what a scope cannot.
 
-⚠️ **`tests/channel_send_after_recv_gone.kama:27` calls `drop()` on an RAII-owned local TODAY**, emits two
-dtor calls on `rx`, and PASSES — only because `Receiver`'s dtor tolerates being run twice. So the defect is
-LATENT ACROSS THE CORPUS rather than theoretical (it bites whenever the dtor frees), and there is a
-legitimate use of early-drop-for-observable-effect: *"receiver gone → any send now fails"*, which wants the
-drop to happen BEFORE the sends.
+**Stage 4 — docs.** SPEC's `drop` entry documents the place form; `FLOOR.md` lists it in the floor.
 
-- ~~Refuse `drop()` on an RAII-owned local.~~ **Ruled out by that fixture** — it would break a real and
-  sensible use. (An earlier draft of this row claimed "no in-tree caller does this"; that was wrong, and
-  finding the caller is what settled the direction.)
-- **Suppress the scope dtor when an explicit `drop` is seen.** kama already has the machinery: `markMoved`
-  suppresses a moved-from local's dtor, which is the same shape. Flow-sensitive — a `drop()` inside an `if`
-  must not suppress the dtor on the path that skipped it — but that is solved for moves already.
-
-Whichever way, `drop(value: give x)` should stop being a silent no-op — it either means the same thing or
-it is refused.
+**Parked, deliberately not folded in:** a safe type's containment of a raw pointer is invisible at its
+declaration — you must read the fields to know `Owned` holds one. SPEC's decision table explicitly blesses
+the field (*"legal — every container and every `type extern value` depends on it"*), and every member
+touching it is `unsafe`, so this is the sanctioned pattern rather than a loophole. Making the containment
+visible would touch every container, not just the three handles, so it is its own question.
 
 ### Two defects found building the graph-edge marking (2026-09-11)
 
