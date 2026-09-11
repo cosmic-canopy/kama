@@ -1,0 +1,70 @@
+// A keyed collection whose VALUES are smart pointers. This did not compile at all before `0.9.285` —
+// serde nowhere in sight. `Map`/`SortedMap`/`SlotMap` routed every element read through a
+// `cloneVal(const ref V)` helper, purely to give a raw-buffer element a nameable typed receiver so its
+// `copy` marker would survive; a `ref` parameter may not name a smart pointer, so instantiating any of
+// them at `V = Shared<X>` was refused inside the stdlib, at a line the author never wrote.
+//
+// `0.9.283` made the marker survive on the raw buffer directly, the helpers went, and the refusal with
+// them. What this pins is the OUTCOME, and the sharpest form of it: each `takeFrom*` builds a container,
+// reads a handle out, and lets the CONTAINER DIE — so the returned handle is the only thing left holding
+// the node. A dropped `copy` marker hands the handle over without the refcount bump, and the node dies
+// with the container; `gLive` catches that, and ASan catches the read that follows.
+//
+// ⚠️ Measure liveness ACROSS a function boundary, never mid-scope: `drop(value: give coll)` on a local
+// collection emits `(void)0` and the RAII dtor still runs at scope exit, so a count taken right after it
+// is one too high and says nothing.
+import { std::collections::Map, std::collections::SortedMap, std::collections::SlotMap,
+         std::collections::Handle, std::memory::Shared };
+
+static int32 gLive = 0;
+
+type resource Node {
+    int32 v;
+    ~Node() { gLive = gLive - 1; }
+    public ctor make(int32 v) { this.v = v; gLive = gLive + 1; }
+    public const fn int32 val() { return this.v; }
+}
+
+fn Optional<Shared<Node>> takeFromMap() {
+    Map<int32, Shared<Node>> m = Map.empty();
+    m.put(key: 1, value: new Node.make(v: 5));
+    return m.get(key: 1);            // m dies here — the handle must keep the node alive
+}
+
+fn Optional<Shared<Node>> takeFromSortedMap() {
+    SortedMap<int32, Shared<Node>> sm = SortedMap.empty();
+    sm.put(key: 2, value: new Node.make(v: 9));
+    return sm.get(key: 2);
+}
+
+fn Optional<Shared<Node>> takeFromSlotMap() {
+    SlotMap<Shared<Node>> sl = SlotMap.empty();
+    Handle h = sl.insert(value: new Node.make(v: 4));
+    return sl.get(handle: h);
+}
+
+fn int32 run() {
+    if (gLive != 0) { return 70; }
+
+    Optional<Shared<Node>> a = takeFromMap();
+    if (gLive != 1) { return 71; }                   // the map died; the node did not
+    int32 av = match (give a) { case Some(value: s): s.val(); case None: -1; };
+    if (gLive != 0) { return 72; }                   // and it is freed exactly once
+    if (av != 5) { return 73; }
+
+    Optional<Shared<Node>> b = takeFromSortedMap();
+    if (gLive != 1) { return 74; }
+    int32 bv = match (give b) { case Some(value: s): s.val(); case None: -1; };
+    if (gLive != 0) { return 75; }
+    if (bv != 9) { return 76; }
+
+    Optional<Shared<Node>> c = takeFromSlotMap();
+    if (gLive != 1) { return 77; }
+    int32 cv = match (give c) { case Some(value: s): s.val(); case None: -1; };
+    if (gLive != 0) { return 78; }
+    if (cv != 4) { return 79; }
+
+    return av + bv + cv;   // 18
+}
+
+fn int32 main() { return run(); }

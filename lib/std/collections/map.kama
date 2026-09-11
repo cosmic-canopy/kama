@@ -20,15 +20,12 @@ type view MapKeyIter<K: Copyable<K>> implements Iterator<K> {
     unsafe ctor make(UnsafePtr<K> keys, UnsafePtr<uint8> state, isize cap, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
-    // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
-    // (its element class is unknown, so the `copy` marker is dropped and it aliases). Same trick as `get`.
-    fn K cloneKey(const ref K k) { return copy k; }
     public unsafe fn Optional<K> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];
-            if (s == 1ui8) { return Optional::Some(value: this.cloneKey(k: this.keys[p])); }
+            if (s == 1ui8) { return Optional::Some(value: copy this.keys[p]); }
         }
         return Optional::None;
     }
@@ -42,14 +39,12 @@ type view MapValueIter<V: Copyable<V>> implements Iterator<V> {
     unsafe ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, isize cap, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
-    // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
-    const fn V cloneVal(const ref V v) { return copy v; }
     public unsafe fn Optional<V> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];
-            if (s == 1ui8) { return Optional::Some(value: this.cloneVal(v: this.vals[p])); }
+            if (s == 1ui8) { return Optional::Some(value: copy this.vals[p]); }
         }
         return Optional::None;
     }
@@ -103,18 +98,14 @@ type view MapEntryIter<K: Copyable<K>, V: Copyable<V>> implements Iterator<Entry
         this.keys = keys; this.vals = vals; this.state = state; this.cap = cap; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
-    // Deep-copy key/value through typed `ref` borrows — a raw-buffer `copy this.keys[p]` drops the `copy`
-    // marker and aliases (unknown element class), so route through `ref K`/`ref V` (see `Map.cloneVal`).
-    fn K cloneKey(const ref K k) { return copy k; }
-    const fn V cloneVal(const ref V v) { return copy v; }
     public unsafe fn Optional<Entry<K,V>> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];
             if (s == 1ui8) {
-                return Optional::Some(value: Entry.make(key: this.cloneKey(k: this.keys[p]),
-                                                        value: this.cloneVal(v: this.vals[p])));
+                return Optional::Some(value: Entry.make(key: copy this.keys[p],
+                                                        value: copy this.vals[p]));
             }
         }
         return Optional::None;
@@ -210,13 +201,6 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     public const fn bool contains(const ref K key) { return this.slotOf(key: key) >= 0; }
 
-    // Deep-copy a stored value through a typed `ref V` borrow. `copy this.vals[i]` directly can't deep-copy
-    // an owning element: `this.vals` is a raw `UnsafePtr<V>`, whose index has no known element class, so the `copy`
-    // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
-    // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
-    const fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
-    const fn K cloneKey(const ref K k) when [K: Copyable<K>] { return copy k; }   // same trick for an owning key
-
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
     public unsafe ctor copy(ref Map<K,V,H,A> source) when [K: Copyable<K>, V: Copyable<V>] {
@@ -225,7 +209,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         while (i < source.cap) {
             uint8 s = source.state[i];
             if (s == 1ui8) {
-                this.put(key: source.cloneKey(k: source.keys[i]), value: source.cloneVal(v: source.vals[i]));
+                this.put(key: copy source.keys[i], value: copy source.vals[i]);
             }
             i = i + 1;
         }
@@ -235,7 +219,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public unsafe const fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
         isize i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
-        return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // hand back a copy; map keeps its own
+        return Optional::Some(value: copy this.vals[i]);   // hand back a copy; map keeps its own
     }
 
     // Borrow the stored value for `key` IN PLACE (any V, no Copyable bound) — the read/mutate accessor that
@@ -389,8 +373,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // --- Serialization (present only when BOTH key and value are Serializable/Deserializable) ---
     // A generic `Map<K,V>` can't emit a JSON object (a field key needs a `string`, `K` is generic), so it
-    // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
-    // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
+    // serializes as an ARRAY of `{"key":k,"value":v}` objects. (This used to describe a `ref K`/`ref V`
+    // hop "like `cloneKey`/`cloneVal`" — both workarounds are gone: the serde one at `0.9.275`, the copy
+    // one at `0.9.283`, each once its missing resolution was supplied.)
     public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
