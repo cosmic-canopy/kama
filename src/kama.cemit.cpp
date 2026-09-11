@@ -21793,16 +21793,17 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
     for (auto& v : ci.variants) if (v.name == variant) { vc = &v; break; }
     if (!vc) { unsupported(("'" + ci.name + "' has no variant '" + variant + "'").c_str(), srcLine); return "0"; }
 
-    // a specialized generic union (Optional_int32) stores payloads in the template's `T`; bind the
-    // instance's type args so each payload field's C type resolves concretely (in the caller's scope).
-    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-    bool instSubst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
-    if (instSubst) {
-        _typeSubst.clear();
-        const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-        for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-    }
+    // ⚠️ NO ambient type-substitution here. This used to install the enum instance's args
+    // (`Optional_int32` -> `{T: int32}`) across the whole payload emission, so that the payload FIELD's C
+    // type resolved concretely. That one consumer is gone: the field type is read with
+    // `fieldCType(ci.name, f)` below, which takes the baked type or `cTypeInInstance` — both scoped to the
+    // owner, neither reading ambient state. What the binding still did was CORRUPT the other four
+    // resolutions in this loop, every one of which is about the ARGUMENT and belongs to the CALLER's scope:
+    // `rejectValueKindMismatch`, `tryHoistInlineValue`'s `cType` for a `new T(…)` payload, `emitExpression`,
+    // and `exprClass`. The last of those is how a raw-buffer element's class went missing (`0.9.283`).
+    // `emitMatchSwitch` carries the post-mortem for the identical pattern — one binding held open across a
+    // whole construct — and the fix there was the same: delete it, and let each resolution that needs the
+    // instance ask for it by name.
 
     std::map<std::string, ArgumentNode*> byName;
     if (args) for (auto& a : *args) if (a->name && a->name->value) byName[*a->name->value] = a.get();
@@ -21957,7 +21958,6 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
         }
         s += " }";
     }
-    if (instSubst) _typeSubst = savedSubst;
     return s + " }";
 }
 
