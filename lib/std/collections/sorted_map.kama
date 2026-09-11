@@ -160,9 +160,13 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     fn void pushKid(Owned<BTreeNode<K,V,A>, A> c) { this.kids.add(item: give c); }
     fn void insertKidAt(isize i, Owned<BTreeNode<K,V,A>, A> c) { this.kids.insertAt(index: i, item: give c); }
     fn Owned<BTreeNode<K,V,A>, A> takeKidAt(isize i) { return this.kids.remove(index: i); }
-    // Overwrite the value at `i` in place: move the old value out (drop it), install the new one.
+    // Overwrite the value at `i` in place: move the old value out, install the new one.
+    // ⚠️ `old` is dropped by SCOPE EXIT, and must not also be dropped explicitly. `drop(value: old)` here
+    // emitted the destructor TWICE on the same object — once for the drop, once for the scope — and
+    // `SortedMap.put` replacing an existing key crashed on any owning value. `drop()` is for a place RAII
+    // does not reach (a heap pointee, a raw-buffer element); a local is not one. See `tests/sorted_map_overwrite_owning`.
     fn void overwriteVal(isize i, V value) {
-        V old = this.vals.remove(index: i); drop(value: old);
+        V old = this.vals.remove(index: i);
         this.vals.insertAt(index: i, item: give value);
     }
 
@@ -287,7 +291,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
             Ordering o2 = this.cmpKeys(a: this.keys[i], b: key);
             over = match (o2) { case Equal: true; case Less: false; case Greater: false; };
         }
-        if (over) { this.overwriteVal(i: i, value: give value); drop(value: key); return false; }
+        if (over) { this.overwriteVal(i: i, value: give value); return false; }   // `key` drops at scope exit
 
         if (this.leaf) { this.insertKeyVal(i: i, key: give key, value: give value); return true; }
 
@@ -296,7 +300,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
             this.splitChild(i: i);
             Ordering o3 = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o3) { case Less: 1; case Greater: 0; case Equal: 2; };
-            if (d == 2) { this.overwriteVal(i: i, value: give value); drop(value: key); return false; }
+            if (d == 2) { this.overwriteVal(i: i, value: give value); return false; }   // `key` drops at scope exit
             if (d == 1) { i = i + 1; }
         }
         return this.kids[i].insertNonFull(key: give key, value: give value);
@@ -478,18 +482,18 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
         if (found) {
             if (this.leaf) {                                     // CASE 1: leaf — remove in place
-                K k = this.keys.remove(index: i); drop(value: k);
+                K k = this.keys.remove(index: i);                 // drops at scope exit
                 V v = this.vals.remove(index: i);
                 return Optional::Some(value: give v);
             }
             if (this.kids[i].keyCount() >= 6) {                  // CASE 2a: predecessor from left child
-                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
+                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i);   // `oldk` drops at scope exit
                 slot K pk; V pv = this.kids[i].takeMaxPair(outKey: out pk);
                 this.insertKeyVal(i: i, key: give pk, value: give pv);
                 return Optional::Some(value: give removed);
             }
             if (this.kids[i + 1].keyCount() >= 6) {              // CASE 2b: successor from right child
-                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
+                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i);   // `oldk` drops at scope exit
                 slot K sk; V sv = this.kids[i + 1].takeMinPair(outKey: out sk);
                 this.insertKeyVal(i: i, key: give sk, value: give sv);
                 return Optional::Some(value: give removed);

@@ -1,0 +1,64 @@
+// `SortedMap` operations that REPLACE or REMOVE an existing entry, with owning keys and owning values.
+//
+// These crashed. `BTreeNode` reached for `drop(value: x)` on values it held in ORDINARY LOCALS and in a
+// by-value PARAMETER — but those are RAII-owned, so the scope destructor ran on the same object again and
+// the emitted C called the destructor twice:
+//
+//     old = …__remove(&self->vals, i);
+//     DAi32__dtor(&(old));      // the explicit drop(value: old)
+//     …__insertAt(&self->vals, i, value);
+//     DAi32__dtor(&old);        // …and the scope-exit dtor, SAME object
+//
+// `drop()` is for a place RAII does NOT reach — a heap pointee behind a raw pointer, or an element sitting
+// in a hand-managed buffer — which is every other use of it in this stdlib. On a local or a by-value
+// parameter the scope already owns the value, so the explicit drop is not just redundant, it is a double
+// free. Four sites in `sorted_map.kama` had it; all four now let the scope do the work.
+//
+// ⚠️ Nothing covered this before, because the existing ownership fixtures never REPLACE an existing key or
+// remove one — they insert distinct keys and drop the map. Two lines of ordinary user code reach it.
+// ⚠️ The compiler-side defect is separate and still open: `drop(value: x)` on an RAII-owned local should
+// not be able to emit a second destructor call at all. See the ROADMAP row.
+import { std::collections::SortedMap, std::collections::DynamicArray };
+
+fn int32 main() {
+    // (a) OWNING VALUE, replaced — `overwriteVal`'s local `old`.
+    SortedMap<int32, DynamicArray<int32>> a = SortedMap.empty();
+    DynamicArray<int32> v1 = DynamicArray.empty(); v1.add(item: 1);
+    DynamicArray<int32> v2 = DynamicArray.empty(); v2.add(item: 2); v2.add(item: 3);
+    a.put(key: 7, value: give v1);
+    a.put(key: 7, value: give v2);                       // replaces — the old value must drop exactly once
+    if (a.length() != 1) { return 90; }
+    int32 n = match (a.get(key: 7)) { case Some(value: d): cast<int32>(d.length()); case None: -1; };
+    if (n != 2) { return 91; }                           // the REPLACEMENT is what is stored
+
+    // (b) OWNING KEY, replaced — `insertNonFull`'s by-value `key` parameter.
+    SortedMap<string, int32> b = SortedMap.empty();
+    b.put(key: "alpha", value: 1);
+    b.put(key: "alpha", value: 2);                       // replaces
+    if (b.length() != 1) { return 92; }
+    int32 bv = match (b.get(key: "alpha")) { case Some(value: x): x; case None: -1; };
+    if (bv != 2) { return 93; }
+
+    // (c) OWNING KEY AND VALUE, removed — `removeKey`'s locals `k` / `oldk`.
+    SortedMap<string, DynamicArray<int32>> c = SortedMap.empty();
+    DynamicArray<int32> c1 = DynamicArray.empty(); c1.add(item: 9);
+    DynamicArray<int32> c2 = DynamicArray.empty(); c2.add(item: 8);
+    c.put(key: "one", value: give c1);
+    c.put(key: "two", value: give c2);
+    Optional<DynamicArray<int32>> gone = c.remove(key: "one");
+    int32 g = match (give gone) { case Some(value: d): cast<int32>(d.length()); case None: -1; };
+    if (g != 1) { return 94; }
+    if (c.length() != 1) { return 95; }
+
+    // (d) enough entries to force interior nodes, then replace across them.
+    SortedMap<int32, DynamicArray<int32>> d = SortedMap.empty();
+    int32 i = 0;
+    while (i < 60) { DynamicArray<int32> e = DynamicArray.empty(); e.add(item: i); d.put(key: i, value: give e); i = i + 1; }
+    i = 0;
+    while (i < 60) { DynamicArray<int32> e2 = DynamicArray.empty(); e2.add(item: i); e2.add(item: i); d.put(key: i, value: give e2); i = i + 1; }
+    if (d.length() != 60) { return 96; }
+    int32 last = match (d.get(key: 59)) { case Some(value: x): cast<int32>(x.length()); case None: -1; };
+    if (last != 2) { return 97; }
+
+    return 42;
+}
