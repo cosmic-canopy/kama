@@ -245,6 +245,42 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### `drop(value: x)` on an RAII-owned local DOUBLE-FREES (found 2026-09-11)
+
+**Measured, and the emitted C settles it.** `drop(value: d)` on a local `DynamicArray<Shared<Node>>` emits
+
+```c
+…__dtor(&(d));     // the explicit drop
+…__dtor(&d);       // …and the scope-exit dtor, on the same object
+```
+
+and the program SIGSEGVs. It is **not** collection-specific: a plain `resource` local, an `Owned<T>` box and
+a `Shared<T>` handle all get two dtor calls (`Shared` underflows its refcount rather than double-freeing
+directly, which is worse — it frees a pointee other handles still hold).
+
+⚠️ **This is SPEC's own documented spelling.** *"**`drop(value: place)`** — run a place's destructor now"*.
+What SPEC describes is the raw-pointer case, where there is no RAII to collide with: *"lets a library owner
+over `UnsafePtr<T>` drop its heap pointee before `free` — through `derefMut()`'s `ref T`"*. On an
+RAII-owned LOCAL there is nothing suppressing the scope dtor, so the second call always follows.
+
+⚠️ **PRE-EXISTING, not from the `0.9.283`–`0.9.289` work** — the same probe traps at `0.9.282`. (The crash
+mode differs, 133 there and 139 now, which is worth knowing when re-probing: both are crashes.)
+
+⚠️ **`drop(value: give d)` is the silent sibling**: it emits `(void)0` and RAII cleans up, so it is SAFE but
+the explicit drop does NOTHING, with no diagnostic. That asymmetry is what makes this hard to notice —
+the spelling that works is the one that quietly does nothing, and the spelling SPEC documents is the one
+that crashes.
+
+**The decision it needs**, which is why this is a row and not a patch:
+- **Refuse `drop()` on an RAII-owned local.** Simplest and coherent: a local is already owned, and dropping
+  it early is what scope exit is for. Costs nothing real — no in-tree caller does this.
+- **Or suppress the scope dtor when an explicit drop is seen.** kama already has the machinery (`markMoved`
+  suppresses a moved-from local's dtor), but it is flow-sensitive: a `drop()` inside an `if` must not
+  suppress the dtor on the path that skipped it.
+
+Whichever way, `drop(value: give x)` should stop being a silent no-op — it either means the same thing or
+it is refused.
+
 ### Two defects found building the graph-edge marking (2026-09-11)
 
 **1. An inline generic-instance ctor as the RHS of an element store bypasses `__set`.**
@@ -304,7 +340,15 @@ not implement) — a separate, already-measured non-issue.
   reaches, so the leaves are written INLINE and duplicated and the read then fails with *"unresolved
   reference"*. `Map` writes its elements in its own body and works, which is what isolated it. The fix is
   in discovery — reaching a participant's nested helper type — not in the accessor.
-- **`SlotMap`.** No `Serializable` half at all; it cannot carry a graph regardless. Pre-existing.
+- **`SlotMap`.** No `Serializable` half at all; it cannot carry a graph regardless. Pre-existing, and it
+  carries a DESIGN QUESTION that should be answered before it is built rather than discovered in the
+  middle: **does a `Handle` survive a round-trip?** A handle is an index plus a generation, and the
+  generation is what makes a stale handle detectable. If handles must still resolve after a read, the wire
+  form has to preserve slot INDICES and generations — i.e. write the slot array including its holes, not
+  just the live values — which costs wire size proportional to the high-water slot count rather than to
+  the live count. If they need not, the compact form is fine and every handle a caller stored is silently
+  invalidated by the round-trip. Both are defensible; only one can be the contract, and it should be
+  written down with the code.
 
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
