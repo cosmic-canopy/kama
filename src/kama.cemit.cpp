@@ -17742,6 +17742,27 @@ std::string CEmitter::handoffSourceClass(SharedExpression e, int handoff)
     return isClass(et) ? et : "";
 }
 
+// ⚠️ The backstop for the failure mode row 9 cost a session to find: a `give`/`copy` that the author WROTE,
+// whose source class did not resolve, handed into a destination that OWNS something. Every branch of every
+// hand-off site keys on the source class, so an unresolved one falls through to "plain value" — where a
+// marker on a primitive is a documented no-op — and the transfer silently becomes a bitwise copy. For an
+// owning destination that is an alias, and the owner and the copy then both free it.
+//
+// Since `0.9.283`/`0.9.284` every named-lvalue shape has a resolver — local, field, element, a raw-pointer
+// element through a field OR a bare local, a place-returning call — so reaching here is a COMPILER bug, not
+// a program error, and it says so. A primitive or `value` payload is untouched: its destination owns
+// nothing, so it never gets this far.
+void CEmitter::rejectUnresolvedHandoff(const std::string& srcCls, const std::string& dstCType,
+                                       SharedExpression e, int handoff, const char* what, int line)
+{
+    if (!handoff || !srcCls.empty() || !e || !isNamedValue(e.get())) return;
+    if (!ownsByValue(dstCType) && !isSmartPtrClass(dstCType)) return;
+    unsupported((std::string(handoff == 1 ? "`give`" : "`copy`") + " of " + what + " cannot be lowered: the "
+                 "source's type did not resolve, so the hand-off would silently become a bitwise copy of a `"
+                 + dstCType + "` — an alias the owner still frees. This is a COMPILER bug, not a mistake in "
+                 "this file; please report it with the snippet").c_str(), line);
+}
+
 // Is `base` reachable by walking `derived`'s single-inheritance chain (inclusive)? Used to admit a
 // `Derived -> ref Base` upcast while rejecting an unrelated `ref` (e.g. borrowing through a `Weak`).
 #if KAMA_INHERITANCE
@@ -18596,6 +18617,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
             // statement, materialized as a HOISTED temp (pure ISO C).
             std::string argCls = handoffSourceClass(argExpr, handoff);
+            rejectUnresolvedHandoff(argCls, p.className, argExpr, handoff, ("argument `" + p.name + "`").c_str(), srcLine);
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 CollKind k = smartKind(argCls);
                 // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
@@ -20900,6 +20922,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     this->line(line);
     indent(depth); *_out << dst << " = " << rv << ";\n";
     std::string rc = handoffSourceClass(v, handoff);
+    rejectUnresolvedHandoff(rc, dstCType, v, handoff, what, line);
     // Smart pointer: give (or a bare dying local) MOVES out (invalidate the source); copy RETAINS.
     if (isSmartPtrClass(rc) && isNamedValue(v.get())) {
         CollKind k = smartKind(rc);
@@ -21850,6 +21873,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             if (ctorThisAsValue(argExpr, fcls)) val = "(*" + val + ")";
             _matchTargetCType = pmt; _variantTargetType = pvt;
             std::string argCls = handoffSourceClass(argExpr, handoff);
+            rejectUnresolvedHandoff(argCls, fcls, argExpr, handoff, ("payload field `" + f.name + "`").c_str(), srcLine);
             std::string field;
             // Model C (P2): an enum value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
             // `Result::Err(error: IoError::NotFound)`) is BOXED + upcast — heap-copy the enum, attach its
