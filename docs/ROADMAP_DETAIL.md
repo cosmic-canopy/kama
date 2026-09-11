@@ -301,36 +301,18 @@ transitively, since a descriptor can nest — at the crossing. Doing it at the c
 field ASSIGNMENT is what catches every construction route: the repro never assigns a field at all, it
 aggregate-initializes (`ffd_desc(callback: myCallback, …)`), which an assignment-site check would miss.
 
-### Two defects found building the graph-edge marking (2026-09-11)
+### The element-store lowering misses an inline generic-instance ctor (2026-09-11)
 
-**1. An inline generic-instance ctor as the RHS of an element store bypasses `__set`.**
 `this.xs[2] = Frame::<P>.at(e: …)` where the field is an `InlineArray<Frame<P>>#(N)` emits
 `InlineArray__…__get(…) = …`, which is not assignable C. Reduced to 11 lines, and the discriminator is
 narrow: `InlineArray<P>` works and `InlineArray<Frame<P>>` does not — the ELEMENT being a generic instance
-is what does it, and no generics on the holder are needed. Binding the RHS to a local first works, and so
-does an inline ctor whose element is a plain class. It fails LOUDLY at the C compiler, which is why it was
-rowed rather than fixed mid-campaign; `sorted_map.kama` has two sites using the local form with a comment
-pointing here.
+is what does it, and no generics on the holder are needed. Binding the RHS to a local works, and so does an
+inline ctor whose element is a plain class. It fails LOUDLY at the C compiler.
 
-**2. Consumer KB-23 — an `InlineArray<Struct>#(N)` degrades to a RAW POINTER when `N` is a local
-`comptime` aliasing an IMPORTED one.** Every method indexing the field then says *"raw pointer access
-requires an `unsafe fn`"*, and the constructor is told the field *"is never assigned"* — in a constructor
-that assigns every element of it in a loop. ⚠️ **Neither diagnostic names the declaration that is wrong**,
-and the second actively misleads: it sends the reader to rewrite correct code.
-
-⚠️ **MEASURED, and NOT in the consumer's report: FILE ORDER is the trigger — the same mechanism as KB-22.**
-Renaming the exporting file so it sorts FIRST makes the identical source build clean. Their six-probe
-truth table found the *shape* (a struct element AND a local comptime aliasing an imported one) but not the
-*cause*, which is why four neighbouring cells build: each avoids reading the constant before the file
-declaring it is collected.
-
-⚠️ **`refreshStaleParamTypes` (the `0.9.281` fix for the same family on a PARAMETER) does not extend to it
-— attempted and measured.** A field pass modelled on it changes nothing, because the staleness is not in
-the field's type: `bakeFieldCTypes()` already runs after that pass. The fold of `DERIVED` itself is what
-happens too early — the bare-files form of the repro says so outright, *"comptime evaluation: unknown
-identifier `PROBE_N`"* — so the fix belongs at the constant level (re-fold module `comptime` constants once
-every file is collected), not at the type level. That is a bigger and more principled change than the
-parameter one, and is why this is a row rather than a commit.
+**Where to look:** the expression path picks `__set` via `collectionElemAccess`
+([kama.cemit.cpp](../src/kama.cemit.cpp)); `emitPlace` succeeds on the identical expression in RETURN
+position, so an earlier branch claims the assignment before `__set` is reached. `sorted_map.kama` has two
+sites using the local-binding workaround with a comment pointing here.
 
 ### Graph edges in a keyed container — what shipped, and the two containers still short of it
 
