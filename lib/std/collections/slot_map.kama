@@ -171,6 +171,10 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         return SlotMapValueIter::<V>.make(values: this.values, gens: this.gens, slotCount: this.slotCount,
                                           modsp: addr(of: this.mods), modsAt: this.mods);
     }
+    // Serde's graph read half rewires this container's edge elements through here. A KEYED container
+    // holds its edges in its VALUES — a key cannot be rewired in place, since that would move it in the
+    // ordering/hash — so the marked accessor is `valuesMut()`, not a key or entry one.
+    @serializedGraphEdges
     public unsafe fn SlotMapValueIterMut<V> valuesMut() {
         return SlotMapValueIterMut::<V>.make(values: this.values, gens: this.gens, slotCount: this.slotCount,
                                              modsp: addr(of: this.mods), modsAt: this.mods);

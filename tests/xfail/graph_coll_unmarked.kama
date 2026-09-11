@@ -1,0 +1,45 @@
+// A container that holds graph edges as ELEMENTS and hands out a perfectly good mutable iterator — but
+// never marks it. Serde walks what you MARK, never what it guesses: the same rule `@field` already applies
+// to a `@generate`d product's fields, where an unmarked field is a compile error rather than a silent
+// omission. Marking is what frees the accessor's NAME, so a container may implement as many iterators as
+// it likes and say which one carries its edges.
+//
+// The old rule looked up the name `iterMut` and would have accepted this silently.
+import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+         std::memory::Shared, std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+type view PairIterMut<T> implements IteratorMut<T> {
+    UnsafePtr<T> data; isize pos; isize len;
+    unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
+    public unsafe fn bool hasNext() { return this.pos < this.len; }
+    public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+}
+
+// It IS mutably iterable — it just never says this is the accessor serde should rewire through.
+type resource Pair2<T> implements IterableMut<T>,
+                                  Serializable when [T: Serializable],
+                                  Deserializable<This> when [T: Deserializable<T>] {
+    DynamicArray<T> xs;
+    public ctor make(T a, T b) { this.xs = DynamicArray.empty(); this.xs.add(item: give a); this.xs.add(item: give b); }
+    public unsafe fn PairIterMut<T> iterMut() { return PairIterMut::<T>.make(data: this.xs.dataPtrMut(), len: 2); }
+
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        return this.xs.serialize(w: w);
+    }
+    public ctor Result<Pair2<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
+        Result<DynamicArray<T>, Owned<Error>> e = DynamicArray::<T>.deserialize(r: r);
+        match (give e) {
+            case Ok(value: v): { this.xs = give v; return Result::Ok(value: give this); }
+            case Err(error: er): { return Result::Err(error: give er); }
+        };
+    }
+}
+
+fn int32 main() {
+    Pair2<Shared<Leaf>> p = Pair2::<Shared<Leaf>>.make(a: new Leaf.make(v: 1), b: new Leaf.make(v: 2));
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: p);
+    return match (give jr) { case Ok(value: x): 0; case Err(error: e): 1; };
+}

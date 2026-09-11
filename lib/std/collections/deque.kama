@@ -143,6 +143,10 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         return DequeIter::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                    modsp: addr(of: this.mods), modsAt: this.mods);
     }
+    // Serde's graph read half rewires this container's edge ELEMENTS through here (opt-in and
+    // mandatory, like `@field` on a serialized field). Its elements ARE its edges, so the `foreach
+    // (ref T x in c)` accessor is the one.
+    @serializedGraphEdges
     public unsafe fn DequeIterMut<T> iterMut() {
         return DequeIterMut::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                       modsp: addr(of: this.mods), modsAt: this.mods);

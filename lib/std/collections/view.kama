@@ -109,6 +109,10 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>], 
     // The by-value `foreach (T x in view)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in view)`.)
     public unsafe const fn ViewIter<T>    iterator() when [T: Copyable<T>] { return ViewIter::<T>.make(data: this.data, len: this.len); }
+    // Serde's graph read half rewires this container's edge ELEMENTS through here (opt-in and
+    // mandatory, like `@field` on a serialized field). Its elements ARE its edges, so the `foreach
+    // (ref T x in c)` accessor is the one.
+    @serializedGraphEdges
     public unsafe fn ViewIterMut<T> iterMut() { return ViewIterMut::<T>.make(data: this.data, len: this.len); }
 
     // Exchange the elements at `i` and `j` IN PLACE (O(1), no copy, no drop) — the primitive every

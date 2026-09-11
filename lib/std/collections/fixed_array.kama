@@ -90,6 +90,10 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
     public unsafe const fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
+    // Serde's graph read half rewires this container's edge ELEMENTS through here (opt-in and
+    // mandatory, like `@field` on a serialized field). Its elements ARE its edges, so the `foreach
+    // (ref T x in c)` accessor is the one.
+    @serializedGraphEdges
     public unsafe fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`

@@ -1,0 +1,89 @@
+// A graph whose edges are a KEYED container's VALUES — the peer of `ser_graph_coll`, which holds its edges
+// as a sequence's elements.
+//
+// Pass 2 has to revisit every edge to turn the stashed wire id back into a live handle, and a container's
+// elements are not fields, so it iterates. WHICH accessor it iterates through is MARKED, never guessed:
+// `Map` carries `@serializedGraphEdges` on `valuesMut()`. A keyed container cannot answer this the way a
+// sequence does — its `Iterable` yields KEYS while its edges live in VALUES — which is exactly why the mark
+// exists instead of a name lookup, and why a container may implement as many other iterators as it likes
+// without any of them being mistaken for this one.
+//
+// THE CHECK IS SHARING, ASSERTED BEHAVIOURALLY. Keys 1 and 3 hold the SAME leaf. A read that rebuilt two
+// separate copies would still sum to 25 and still round-trip cleanly, so the sum proves nothing on its own:
+// the test bumps the leaf through key 1 and reads it back through key 3. Deliberately NOT a byte-equality
+// re-encode like `ser_graph_coll`'s — a hash map's iteration order depends on its internal layout, and the
+// rebuilt map is filled in wire order rather than the original insertion order, so equal bytes would be a
+// coincidence to rely on. ASan proves the rebuilt graph frees exactly once.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::memory::Shared,
+    std::collections::Map,
+    std::collections::DynamicArray,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+    public fn void bump() { this.v = this.v + 1; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field Map<int32, Shared<Leaf>> kids;
+    public ctor make(Map<int32, Shared<Leaf>> kids) { this.kids = give kids; }
+    public fn int32 sum() {
+        int32 s = 0;
+        foreach (ref Shared<Leaf> k in this.kids.valuesMut()) { s = s + k.get(); }
+        return s;
+    }
+    // Bump through one key, read through another. Equal only if both keys name ONE node.
+    public fn bool sharedAcross(int32 a, int32 b) {
+        Optional<Shared<Leaf>> ha = this.kids.get(key: a);
+        Optional<Shared<Leaf>> hb = this.kids.get(key: b);
+        match (give ha) { case Some(value: x): { x.bump(); } case None: { return false; } };
+        int32 after = match (give hb) { case Some(value: y): y.get(); case None: -1; };
+        return after == 8;      // 7, bumped once through the OTHER key
+    }
+}
+
+fn Map<int32, Shared<Leaf>> build() {
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;                     // the SAME leaf, under two different keys
+    Map<int32, Shared<Leaf>> m = Map.empty();
+    m.put(key: 1, value: give dup2);
+    m.put(key: 2, value: new Leaf.make(v: 11));
+    m.put(key: 3, value: give dup);
+    return give m;
+}
+
+fn int32 main() {
+    Shared<Bag> bag = new Bag.make(kids: build());
+    if (bag.sum() != 25) { return 240; }                 // 7 + 11 + 7 — the shared leaf counts under BOTH keys
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j);
+    Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (b2.sum() != 25) { return 252; }
+
+    // The rebuilt graph still shares ONE leaf across the two keys. This is the check that matters: a read
+    // which rebuilt two equal copies would also sum to 25 and also round-trip cleanly.
+    if (!b2.sharedAcross(a: 1, b: 3)) { return 253; }    // bumps b2's shared leaf: 7 -> 8
+    if (b2.sum() != 27) { return 254; }                  // 8 + 11 + 8 — one bump seen through both keys
+    if (bag.sum() != 25) { return 255; }                 // …and the ORIGINAL graph was not touched by it
+
+    // …and the same graph on the positional backend, which has no names and no delimiters: its reader is
+    // bounded only by the counts, so it is the one that proves discovery sized the table before writing.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: bag);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
+    Result<Shared<Bag>, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Shared<Bag>>(src: give bytes);
+    Shared<Bag> b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
+    if (b3.sum() != 25) { return 244; }
+    if (!b3.sharedAcross(a: 1, b: 3)) { return 247; }
+    return b3.sum() - 2;                                 // 27 - 2 = 25, the same total as the sequence twin
+}

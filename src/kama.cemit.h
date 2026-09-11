@@ -219,6 +219,12 @@ struct MethodInfo {
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in kama_runtime.h, not AST
     bool                         isConst = false;     // `const fn …` — non-mutating
+    // `@serializedGraphEdges` — this nullary accessor hands out the mutable iterator over the elements
+    // that carry this container's graph EDGES, so the serde read half rewires them through it. Opt-in and
+    // mandatory, the same rule `@field` already applies to a `@generate`d product's fields: serde walks
+    // what you MARK, never what it guesses. Marking the method rather than adding a contract keeps the
+    // accessor's NAME free — a container may call it `valuesMut`, `cellsMut`, anything.
+    bool                         serdeGraphEdges = false;
     bool                         noHeap = false;      // `@noheap …` — see InterfaceMethod::noHeap. On a
                                                       // VIRTUAL method it is the same promise across the
                                                       // same kind of blind slot, so an override inherits
@@ -2388,6 +2394,7 @@ private:
     struct MutIter { std::string iterC; MethodInfo* iter = nullptr; MethodInfo* hasNext = nullptr;
                      MethodInfo* next = nullptr; ClassInfo* ic = nullptr; };
     MutIter mutIterOf(ClassInfo& ci);
+    std::string graphEdgeElemType(ClassInfo& ci);   // the element type the marked accessor hands out, "" if unmarked
     bool graphWireElementsNeeded(ClassInfo& ci);
     bool graphPartIsEdge(SharedIdentifier ty);      // is this field/element something pass 2 must revisit?
     void emitGraphWireElements(ClassInfo& ci);      // `X__wireParts`: stashed ids -> live handles

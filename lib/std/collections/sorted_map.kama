@@ -647,6 +647,10 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // `foreach (ref V v in sm.valuesMut())` — an in-order MUTABLE walk of the live values, for ANY value
     // type (no `Copyable` bound: it hands out places, it copies nothing). The lazy twin of `values()`
     // above, and the reason it can exist at all is that it walks node ADDRESSES rather than materializing.
+    // Serde's graph read half rewires this container's edge elements through here. A KEYED container
+    // holds its edges in its VALUES — a key cannot be rewired in place, since that would move it in the
+    // ordering/hash — so the marked accessor is `valuesMut()`, not a key or entry one.
+    @serializedGraphEdges
     public unsafe fn SortedMapValueIterMut<K,V,A> valuesMut() {
         return SortedMapValueIterMut::<K,V,A>.make(root: addr(of: this.root.derefMut()),
                                                    modsp: addr(of: this.mods), modsAt: this.mods);

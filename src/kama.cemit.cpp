@@ -9041,6 +9041,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.isConstPlace  = md->isConstRef;   // `fn const ref T …` — a read-only place (T const*)
                         mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
+                        mi.serdeGraphEdges = hasAttr(md->attributes, "serializedGraphEdges");
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // A `view`'s CONSTRUCTOR is always private — the mint rule. A view is a
                         // bidirectional relationship: it does not exist without a type to view, so it may
@@ -17757,6 +17758,12 @@ void CEmitter::rejectUnresolvedHandoff(const std::string& srcCls, const std::str
 {
     if (!handoff || !srcCls.empty() || !e || !isNamedValue(e.get())) return;
     if (!ownsByValue(dstCType) && !isSmartPtrClass(dstCType)) return;
+    // ⚠️ Only when nothing has been reported yet. A type that did not resolve because the author has an
+    // error ALREADY DIAGNOSED — a missing import is the common one — leaves every downstream class empty,
+    // and blaming the compiler for that is worse than saying nothing: it buries the real message under a
+    // "please report it" the reader cannot act on. Caught the first time this guard met a real mistake,
+    // where one absent `import { std::collections::DynamicArray }` produced both.
+    if (!_diagnostics.empty()) return;
     unsupported((std::string(handoff == 1 ? "`give`" : "`copy`") + " of " + what + " cannot be lowered: the "
                  "source's type did not resolve, so the hand-off would silently become a bitwise copy of a `"
                  + dstCType + "` — an alias the owner still frees. This is a COMPILER bug, not a mistake in "
@@ -22634,6 +22641,15 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                                 : !fn    ? "a `static` is not a function"
                                          : "an ordinary `fn` has none — its C name is kama's to choose; `expose` it "
                                            "to fix the symbol")).c_str(), line);
+        } else if (an == "serializedGraphEdges") {
+            // Serde metadata on an ACCESSOR: "these are the elements carrying my graph edges; rewire them
+            // through here". Read off `MethodInfo::serdeGraphEdges`, checked by `mutIterOf`. Contributes NO
+            // `__attribute__` — a marker, like `@noheap` below. Member-only: `@field` is the peer that marks
+            // a FIELD serde walks, and this marks the accessor for the elements, which are not fields.
+            if (!onMember)
+                unsupported("`@serializedGraphEdges` marks the METHOD that hands out a container's graph-edge "
+                            "elements, not a whole declaration — put it on that accessor", line);
+            // no parts.push_back — emits nothing
         } else if (an == "noheap") {
             // `@noheap` (MCU step 5): a CHECKER flag, not codegen — the body rejects every emitter-visible
             // heap allocation (activated per-body in emitFunction via `_noHeapActive`). Contributes NO
@@ -22746,7 +22762,7 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          "destructor or operator").c_str(), line);
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected "
-                         + (onMember ? "`@noheap`, `@foreignEntry` or `@section(\"...\")`"
+                         + (onMember ? "`@noheap`, `@foreignEntry`, `@serializedGraphEdges` or `@section(\"...\")`"
                                      : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@foreignEntry`, "
                                        "or `@callerThread`")).c_str(), line);
         }
@@ -26486,17 +26502,55 @@ void CEmitter::emitNullSerializer()
 CEmitter::MutIter CEmitter::mutIterOf(ClassInfo& ci)
 {
     MutIter m;
-    MethodInfo* iterMi = findMethod(&ci, "iterMut", nullptr);
-    if (!iterMi || !iterMi->params.empty() || !implementsContractTemplate(&ci, "IterableMut")) return m;
+    // The accessor is the one MARKED `@serializedGraphEdges`, never one found by name. Marking is what
+    // frees the name: `DynamicArray` marks `iterMut()`, `Map` marks `valuesMut()`, and a third-party
+    // container may call its own whatever it likes and implement as many other iterators as it wants
+    // without any of them being mistaken for this one. It is also MANDATORY — the same rule `@field`
+    // already applies to a `@generate`d product's fields: serde walks what you mark, never what it guesses.
+    MethodInfo* iterMi = nullptr;
+    std::string iterName;
+    for (auto& kv : ci.methods)                       // `methods` is keyed by kama method name
+        if (kv.second.serdeGraphEdges) {
+            if (iterMi) {
+                unsupported(("`" + demangleForDisplay(ci.name) + "` marks more than one method "
+                             "`@serializedGraphEdges` — a container has one set of graph-edge elements, so "
+                             "exactly one accessor hands them out").c_str(), ci.declLine());
+                return m;
+            }
+            iterMi = &kv.second; iterName = kv.first;
+        }
+    if (!iterMi) return m;
+    // A marked accessor that cannot serve the protocol is an error, not a silent miss: the author said
+    // "rewire through here", so failing to is worth a diagnostic naming what is wrong.
+    if (!iterMi->params.empty()) {
+        unsupported(("`" + iterName + "` is marked `@serializedGraphEdges`, so it is called with no "
+                     "arguments to start the rewiring walk — it must take none").c_str(), ci.declLine());
+        return m;
+    }
     const std::string iterC = cTypeInInstance(ci.name, iterMi->returnType);
     auto it = _classes.find(iterC);
-    if (it == _classes.end()) return m;
-    MethodInfo* hasNextMi = findMethod(&it->second, "hasNext", nullptr);
-    MethodInfo* nextMi    = findMethod(&it->second, "next", nullptr);
-    if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) return m;
-    if (!implementsContractTemplate(&it->second, "IteratorMut")) return m;
+    MethodInfo* hasNextMi = it == _classes.end() ? nullptr : findMethod(&it->second, "hasNext", nullptr);
+    MethodInfo* nextMi    = it == _classes.end() ? nullptr : findMethod(&it->second, "next", nullptr);
+    if (it == _classes.end() || !hasNextMi || !nextMi || !nextMi->isPlaceReturn
+        || !implementsContractTemplate(&it->second, "IteratorMut")) {
+        unsupported(("`" + iterName + "` is marked `@serializedGraphEdges`, so it must hand out a "
+                     "MUTABLE iterator — one that `implements IteratorMut<T>` (a `bool hasNext()` and a "
+                     "place-returning `ref T next()`). Pass 2 writes the live handle back THROUGH that "
+                     "place, so a by-value `Iterator<T>` cannot do it").c_str(), ci.declLine());
+        return m;
+    }
     m.iterC = iterC; m.iter = iterMi; m.hasNext = hasNextMi; m.next = nextMi; m.ic = &it->second;
     return m;
+}
+
+// The ELEMENT type a marked accessor hands out — the `T` of the `IteratorMut<T>` its iterator implements,
+// as a concrete C type. "" when there is no marked accessor. This is what makes the coverage question
+// answerable: a container may carry edges in more than one type argument, and an accessor covers ONE.
+std::string CEmitter::graphEdgeElemType(ClassInfo& ci)
+{
+    MutIter m = mutIterOf(ci);
+    if (!m.ic || !m.next) return "";
+    return cTypeInInstance(m.iterC, m.next->returnType);
 }
 
 // Is this type's parts (`__wireParts`) — does a participant hold anything pass 2 must revisit? A
@@ -26563,9 +26617,12 @@ void CEmitter::emitGraphWireElements(ClassInfo& ci)
     if (!m.ic) {   // no mutable iteration: say so where the author can act on it
         indent(1); *_out << "(void)self; (void)g;\n}\n\n";
         unsupported(("`" + demangleForDisplay(ci.name) + "` holds graph edges as ELEMENTS, so reading it back "
-                     "needs to revisit them — which means iterating it mutably. Give it "
-                     "`implements IterableMut<T>` (a nullary `iterMut()` handing out a place-returning "
-                     "`ref T next()`), the same protocol `foreach (ref T x in c)` requires").c_str(),
+                     "needs to revisit them — which means iterating it mutably, and saying WHICH iterator "
+                     "does it. Mark the accessor `@serializedGraphEdges`: a nullary method handing out an "
+                     "`IteratorMut<T>` (a `bool hasNext()` and a place-returning `ref T next()`). A sequence "
+                     "marks its `iterMut()`; a KEYED container marks `valuesMut()`, since its edges live in "
+                     "its values and a key cannot be rewired in place. Marking is required even when the type "
+                     "has exactly one such iterator — serde walks what you mark, the same way `@field` does").c_str(),
                     ci.declLine());
         return;
     }

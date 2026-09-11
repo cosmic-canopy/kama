@@ -247,6 +247,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return MapValueIter::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
+    // Serde's graph read half rewires this container's edge elements through here. A KEYED container
+    // holds its edges in its VALUES — a key cannot be rewired in place, since that would move it in the
+    // ordering/hash — so the marked accessor is `valuesMut()`, not a key or entry one.
+    @serializedGraphEdges
     public unsafe fn MapValueIterMut<V> valuesMut() {
         return MapValueIterMut::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                          modsp: addr(of: this.mods), modsAt: this.mods);
