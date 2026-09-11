@@ -1,0 +1,72 @@
+// `foreach (ref V v in sm.valuesMut())` — the in-order MUTABLE walk of a SortedMap's values.
+//
+// SortedMap was the one container in the stdlib with no mutable iteration at all: `values()` returns a
+// `DynamicArray<V>` COPY, and you cannot write back through a copy. The absence was a recorded verdict
+// (`collectKeys`' comment: a lazy cursor needs raw node pointers, which the `Owned` boxes hide, so the
+// eager copy was the accepted trade) — correct about BY-VALUE iteration, which is all it examined, and
+// silent about mutation. `Map`, `SlotMap`, `DynamicArray`, `Deque`, `FixedArray` and `View` all had theirs.
+//
+// It is also the only NON-FLAT cursor in the stdlib: every other iterator walks a raw buffer with a
+// pointer and an index, while this one keeps an explicit path stack and does the interleaved B-tree walk
+// kids[0], key 0, kids[1], key 1, … kids[n]. So what this fixture has to prove is the walk itself —
+// ASCENDING order, every entry exactly once, across a tree deep enough to pop frames repeatedly.
+import { std::collections::SortedMap, std::collections::DynamicArray };
+
+// A move-only value: no `Copyable`, so it can ONLY be reached by borrow. `values()` cannot return these
+// at all — this half of the test is unreachable without a mutable iterator.
+type resource Counter {
+    int32 n;
+    ~Counter() { }
+    public ctor of(int32 n) { this.n = n; }
+    public fn void bump() { this.n = this.n + 1; }
+    public const fn int32 get() { return this.n; }
+}
+
+fn int32 main() {
+    // 300 keys inserted in a scrambled order: stride 7 mod 300 hits every residue exactly once, since
+    // gcd(7, 300) = 1. (301 would NOT work — 301 = 7 x 43 — and the first draft of this fixture used it
+    // and inserted only the multiples of 7.) Built by real splits rather than in ascending order, and
+    // deep enough that the path stack pops more than once.
+    SortedMap<int32, int32> m = SortedMap.empty();
+    int32 i = 0;
+    while (i < 300) { int32 k = (i * 7) % 300; m.put(key: k, value: k * 2); i = i + 1; }
+    if (m.length() != 300) { return 90; }
+
+    // Ascending order + every entry exactly once: the n-th value handed out must be n*2.
+    int32 seen = 0;
+    foreach (ref int32 v in m.valuesMut()) {
+        if (v != seen * 2) { return 91; }        // out of order, or a skipped/repeated entry
+        v = v + 1;                               // and the place is writable
+        seen = seen + 1;
+    }
+    if (seen != 300) { return 92; }
+
+    // The writes landed in the tree, not in a copy.
+    DynamicArray<int32> after = m.values();
+    int32 j = 0;
+    while (j < 300) { if (after[j] != j * 2 + 1) { return 93; } j = j + 1; }
+
+    // An empty map iterates zero times (the cursor settles to depth 0 immediately).
+    SortedMap<int32, int32> e = SortedMap.empty();
+    int32 none = 0;
+    foreach (ref int32 v2 in e.valuesMut()) { none = none + 1; }
+    if (none != 0) { return 94; }
+
+    // A single entry — the other end of the depth range (a leaf root, no frames to pop).
+    SortedMap<int32, int32> one = SortedMap.empty();
+    one.put(key: 5, value: 50);
+    int32 got = 0;
+    foreach (ref int32 v3 in one.valuesMut()) { got = got + v3; }
+    if (got != 50) { return 95; }
+
+    // A MOVE-ONLY value, which `values()` cannot hand out at all.
+    SortedMap<int32, Counter> cs = SortedMap.empty();
+    int32 c = 0;
+    while (c < 50) { cs.put(key: c, value: Counter.of(n: c)); c = c + 1; }
+    foreach (ref Counter ctr in cs.valuesMut()) { ctr.bump(); }
+    int32 total = 0;
+    foreach (ref Counter ctr2 in cs.valuesMut()) { total = total + ctr2.get(); }
+    if (total != 1225 + 50) { return 96; }       // sum(0..49) = 1225, plus one bump each
+
+    return 42;
+}
