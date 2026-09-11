@@ -2374,6 +2374,8 @@ private:
     // `serialize`/`deserialize` is HAND-WRITTEN (a library container, a user's own impl) rather than the
     // derive's. A `@generate` node is not one: it has the walker's four helpers instead.
     bool graphTwinNeeded(const ClassInfo& ci, bool write) const;
+    bool graphNodeWrites(const ClassInfo& ci) const;   // a node's write half: the derive's, or its twin
+    bool graphNodeReads (const ClassInfo& ci) const;   // …and its read half
     void emitGraphTwinProtos(ClassInfo& ci);        // `X__serializeInto` / `X__deserializeFrom` prototypes
     void emitNullSerializer();                      // the discard sink discovery runs a body against
     void emitGraphEdgeHelpers();                    // per edge type: `Shared_X__serializeEdge` (an expression)
@@ -2399,6 +2401,10 @@ private:
     void emitGraphReadInto(ClassInfo& ci);          // `K____readInto`: pass-1 field read into a shell
     void emitGraphSerializeDefinition(ClassInfo& ci);     // the write driver, as the node's own `serialize`
     void emitGraphDeserializeDefinition(ClassInfo& ci);   // the read driver — returns `Shared<T>`
+    std::string graphHandleRootType(ClassInfo& ci);       // `Result<Shared<K>, Owned<Error>>`, or ""
+    void emitGraphHandleRootReader(ClassInfo& ci);        // …a hand-written node's `Shared<K>` root entry
+    void emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
+                               const std::string& resC, const std::string& sharedT);
     void emitGraphFieldWrite(SharedIdentifier ty, const std::string& access, int depth);   // writeNode: one field
     void emitGraphFieldVisit(SharedIdentifier ty, const std::string& access, int depth);   // visitEdges: one field
     void emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, int depth);       // readInto: one field

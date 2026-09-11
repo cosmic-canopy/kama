@@ -1,0 +1,106 @@
+// A HAND-WRITTEN type as a graph NODE — a thing an edge points AT, not merely a holder of edges. This is
+// the last piece of "one rule for every `Serializable`": what `@generate` buys is a FIELD WALK, and a
+// hand-written body finds its own edges, so its four walk helpers are simply its graph-carrying twin —
+// discovery runs it against the discard sink, its `value` object IS its body (it does its own framing),
+// and pass 2 is `__wireParts`.
+//
+// THE CASE THIS EXISTS FOR IS THE CYCLE. At `0.9.275` a hand-written body wrote each pointee INLINE through
+// the deref fallback, so a cycle was a SIGSEGV; at `0.9.278` it was a clean compile error ("`Node` is the
+// pointee of a serialized graph edge but is not `@generate`"). Now it round-trips — the same shape
+// `ser_graph_cycle` proves for a derive, written by hand: a `Shared` forward edge and a `Weak` back-edge,
+// which is what keeps an ownership cycle leak-free. ASan is the check that it still is.
+//
+// ⚠️ The one thing that could not be done the derive's way: a node's root spelling is `Shared<T>` and its
+// `deserialize` must hand back `Result<Shared<This>, …>`. `computeGraphNodeTypes` REWRITES that for a
+// derive — but there is no rewriting a body whose `return` constructs a `This`, and that by-value body is
+// exactly what fills a SHELL (`K____readInto`). So the author's signature is left alone and the handle root
+// is a synthesized second entry point (`K__deserializeRoot`) over the same walker.
+//
+// The re-encode is the check: identical bytes mean the cycle came back a cycle, not unrolled.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::memory::Shared,
+    std::memory::Weak,
+};
+
+type resource Node implements Serializable, Deserializable<This> {
+    int32 v;
+    Optional<Shared<Node>> next;   // owns (forward edge)
+    Optional<Weak<Node>> back;     // weak (back edge) — what breaks the ownership cycle
+    public ctor make(int32 v) { this.v = v; this.next = Optional::None; this.back = Optional::None; }
+    public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
+    public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
+    public const fn int32 val() { return this.v; }
+
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        w.beginObject(count: 3);
+        w.field(name: "v", id: 0);
+        w.writeI32(v: this.v);
+        w.field(name: "next", id: 1);
+        match (this.next) {
+            case Some(value: n): {
+                w.writeSome();
+                Result<Unit, Owned<Error>> r = n.serialize(w: w);
+                match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            }
+            case None: { w.writeNull(); }
+        };
+        w.field(name: "back", id: 2);
+        match (this.back) {
+            case Some(value: k): {
+                w.writeSome();
+                Result<Unit, Owned<Error>> r = k.serialize(w: w);
+                match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            }
+            case None: { w.writeNull(); }
+        };
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Node, Owned<Error>> deserialize(Deserializer r) {
+        r.beginObject(count: 3);
+        r.moreFields(); { FieldKey k0 = r.field(); }
+        int32 v = r.readI32();
+        Node nd = Node.make(v: v);
+        r.moreFields(); { FieldKey k1 = r.field(); }
+        if (!r.readNull()) {
+            Result<Shared<Node>, Owned<Error>> rn = Shared::<Node>.deserialize(r: r);
+            match (give rn) {
+                case Ok(value: n): { nd.setNext(n: give n); }
+                case Err(error: e): { return Result::Err(error: give e); }
+            };
+        }
+        r.moreFields(); { FieldKey k2 = r.field(); }
+        if (!r.readNull()) {
+            Result<Weak<Node>, Owned<Error>> rw = Weak::<Node>.deserialize(r: r);
+            match (give rw) {
+                case Ok(value: k): { nd.setBack(w: give k); }
+                case Err(error: e): { return Result::Err(error: give e); }
+            };
+        }
+        r.moreFields();
+        r.endObject();
+        return Result::Ok(value: give nd);
+    }
+}
+
+fn int32 main() {
+    Shared<Node> a = new Node.make(v: 1);
+    Shared<Node> b = new Node.make(v: 2);
+    a.setNext(n: b);                               // a owns b
+    b.setBack(w: a.downgrade());                   // b points weakly back at a — the cycle, unowned
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: a);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // Both nodes in the table; the back-edge writes a's id, so the walk terminates.
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Node\",\"value\":{\"v\":1,\"next\":2,\"back\":null}},{\"id\":2,\"type\":\"Node\",\"value\":{\"v\":2,\"next\":null,\"back\":1}}]}") {
+        return cast<int32>(j.length());
+    }
+    Result<Shared<Node>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
+    Shared<Node> a2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: a2);
+    string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 252; } };
+    if (j2 != j) { return 253; }                   // identical: the cycle came back a cycle
+    return a2.val();                               // 1
+}

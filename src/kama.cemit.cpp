@@ -23823,6 +23823,9 @@ void CEmitter::emitGraphTwinProtos(ClassInfo& ci)
         if (graphWireElementsNeeded(ci))
             *_out << stat << "void " << ci.name << "__wireParts(" << ci.name
                   << "* self, struct kama_de_graph* g);\n";
+        const std::string rootC = graphHandleRootType(ci);
+        if (!rootC.empty())
+            *_out << stat << rootC << " " << ci.name << "__deserializeRoot(Deserializer r);\n";
     }
 }
 
@@ -24227,8 +24230,18 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
-    if (graphTwinNeeded(ci, /*write=*/true)) emitGraphRootDriver(ci);
-    if (graphTwinNeeded(ci, /*write=*/false)) { emitGraphWireElements(ci); emitGraphReadRootDriver(ci); }
+    // The root driver over the twin. WHICH driver is decided by identity: a NODE can be pointed at, so it
+    // belongs in the table and its `root` slot is an id (and a cycle through it closes); a participant
+    // cannot, so its root carries its value inline. Same fork on the way back in.
+    if (graphTwinNeeded(ci, /*write=*/true)) {
+        if (ci.isGraphNode) emitGraphSerializeDefinition(ci); else emitGraphRootDriver(ci);
+    }
+    if (graphTwinNeeded(ci, /*write=*/false)) {
+        emitGraphWireElements(ci);
+        // A hand-written NODE's own `deserialize` keeps the author's by-value signature — it is what fills
+        // a shell — so the handle root is a SEPARATE synthesized entry point rather than a retarget of it.
+        if (ci.isGraphNode) emitGraphHandleRootReader(ci); else emitGraphReadRootDriver(ci);
+    }
     if (ci.destructible)
         emitDtorDefinition(ci);
     if (ci.isGraphNode) {
@@ -25483,7 +25496,8 @@ void CEmitter::computeGraphNodeTypes()
                     bool impl  = std::find(c2.interfaces.begin(),      c2.interfaces.end(),      e.elemC) != c2.interfaces.end();
                     bool staticOnly = std::find(c2.staticOnlyInterfaces.begin(), c2.staticOnlyInterfaces.end(), e.elemC) != c2.staticOnlyInterfaces.end();
                     if (!impl || staticOnly) continue;
-                    if (!c2.isVariant && (c2.genSerialize || c2.genDeserialize)) seed(kv2.first);
+                    if (!c2.isVariant && (c2.genSerialize || c2.genDeserialize
+                                          || graphTwinNeeded(c2, true) || graphTwinNeeded(c2, false))) seed(kv2.first);
                     // A non-@generate implementor has no adapters — at runtime it would flow through the edge
                     // and be SILENTLY dropped from the wire. Reject at the edge field.
                     else unsupported(("`" + kv2.first + "` implements the serialized graph-edge contract `" + e.elemC +
@@ -25495,7 +25509,12 @@ void CEmitter::computeGraphNodeTypes()
             }
             auto it = _classes.find(e.elemC);
             if (it == _classes.end()) return;
-            if (!it->second.isVariant && (it->second.genSerialize || it->second.genDeserialize)) seed(e.elemC);
+            // A pointee is a node if it has a serde half AT ALL — derived or hand-written. `@generate` buys
+            // a field walk, which a node needs only if the compiler is the one finding its edges; a
+            // hand-written body finds its own, and its four walk helpers are its twin.
+            if (!it->second.isVariant && (it->second.genSerialize || it->second.genDeserialize
+                                          || graphTwinNeeded(it->second, true) || graphTwinNeeded(it->second, false)))
+                seed(e.elemC);
             else unsupported(("`" + demangleForDisplay(e.elemC) + "` is the pointee of a serialized graph edge (field `" + f.name
                               + "`) but is not `@generate(Serializable/Deserializable)` — a node is written through its own "
                                 "adapters; mark it `@generate`, or leave the field out of the wire form with `@skip`").c_str(),
@@ -25527,8 +25546,16 @@ void CEmitter::computeGraphNodeTypes()
         // type and no ceremony. Only the READ's result changes: a graph comes back as a HANDLE, because a
         // cycle cannot be returned by value. `serialize` needs no retarget — writing borrows.
         auto it = ci.methods.find("deserialize");
-        if (it == ci.methods.end() || !it->second.isSynthDe || !it->second.returnType
+        if (it == ci.methods.end() || !it->second.returnType
             || !it->second.returnType->genericArgs || it->second.returnType->genericArgs->empty()) continue;
+        // A node's read half is the derive's OR a hand-written body's. The two are retargeted differently
+        // and that difference is forced, not chosen: a derive's `Result<This, …>` is rewritten in place to
+        // `Result<Shared<This>, …>`, and there is no rewriting a body whose `return` constructs a `This`.
+        // So a hand-written node keeps its signature — which is what `K____readInto` fills a shell with —
+        // and the `Shared<K>` root gets a synthesized entry point of its own.
+        const bool synthDe = it->second.isSynthDe;
+        const bool handDe  = graphTwinNeeded(ci, /*write=*/false);
+        if (!synthDe && !handDe) continue;
         SharedIdentifier inner = it->second.returnType->genericArgs->at(0);   // This — the Result's Ok arm
         SharedIdentifier sh = sharedTypeNode(inner);                          // Shared<This>
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
@@ -25541,6 +25568,10 @@ void CEmitter::computeGraphNodeTypes()
         // `Shared_Leaf__deserialize`, which nothing defines (`ser_graph_nested_reach`, measured). Minting
         // the monomorph here instead is too late — the instance would have no bodies emitted.
         if (!_classes.count(cType(sh))) {
+            // ⚠️ Only a SYNTHESIZED pair may be taken away — it is the compiler's. A hand-written
+            // `deserialize` is the author's code; an inline-only hand-written node simply gets no root
+            // entry point, which is exactly right because nothing can spell one.
+            if (handDe) { _nsCtx = saved; continue; }
             ci.methods.erase("deserialize");
             ci.ctors.erase("deserialize");
             const std::string d = pinnedInstanceName("Deserializable", ci.name);
@@ -25549,8 +25580,9 @@ void CEmitter::computeGraphNodeTypes()
             continue;
         }
         {
-            it->second.returnType = resultOwnedErrorTypeNode(sh);   // Result<Shared<This>, Owned<Error>>
-            scanTypeForCollections(it->second.returnType);
+            SharedIdentifier handleRet = resultOwnedErrorTypeNode(sh);   // Result<Shared<This>, Owned<Error>>
+            if (synthDe) it->second.returnType = handleRet;              // the derive's, rewritten in place
+            scanTypeForCollections(handleRet);
             ci.graphDeserialize = true;
             // `deserializeJsonBuffer::<Shared<Node>>(…)` calls `T.deserialize(r)` on `T = Shared<Node>`, and
             // the function that actually reads a graph is the NODE's. Point `Shared<Node>`'s `deserialize`
@@ -25560,10 +25592,10 @@ void CEmitter::computeGraphNodeTypes()
             ClassInfo& sc = _classes[cType(sh)];
             if (!sc.methods.count("deserialize")) {
                 MethodInfo fwd;
-                fwd.cName = ci.name + "__deserialize";
+                fwd.cName = ci.name + (synthDe ? "__deserialize" : "__deserializeRoot");
                 fwd.visibility = Visibility::Public;
                 fwd.isStatic = true; fwd.isCtor = true; fwd.isAbstract = true;
-                fwd.returnType = it->second.returnType;
+                fwd.returnType = handleRet;
                 ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer";
                 fwd.params.push_back(r);
                 sc.methods["deserialize"] = fwd;
@@ -25730,11 +25762,11 @@ void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
 {
     const char* stat = _emitStaticClass ? "static inline " : "";
     const std::string& K = ci.name;
-    if (ci.genSerialize) {
+    if (graphNodeWrites(ci)) {
         *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g);\n";
         *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g);\n";
     }
-    if (ci.genDeserialize) {
+    if (graphNodeReads(ci)) {
         *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g);\n";
         *_out << stat << "void " << K << "____readInto(" << K << "* self, Deserializer r, struct kama_de_graph* g);\n";
     }
@@ -25762,21 +25794,21 @@ void CEmitter::emitPolyContractResolvers()
             if (impl && !staticOnly) impls.push_back(K);
         }
         *_out << "static inline uint32_t " << C << "__graphTypeId(const struct " << C << "_vtbl* __vt)\n{\n";
-        for (auto& K : impls) if (_classes[K].genSerialize) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return " << _classes[K].graphTypeId << "u;\n"; }
+        for (auto& K : impls) if (graphNodeWrites(_classes[K])) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return " << _classes[K].graphTypeId << "u;\n"; }
         indent(1); *_out << "return KAMA_GRAPH_NO_NODE;\n}\n";
         *_out << "static inline const struct " << C << "_vtbl* " << C << "__graphImplVtbl(uint32_t __tid)\n{\n";
-        for (auto& K : impls) if (_classes[K].genDeserialize) { indent(1); *_out << "if (__tid == " << _classes[K].graphTypeId << "u) return &" << K << "__as_" << C << ";\n"; }
+        for (auto& K : impls) if (graphNodeReads(_classes[K])) { indent(1); *_out << "if (__tid == " << _classes[K].graphTypeId << "u) return &" << K << "__as_" << C << ";\n"; }
         indent(1); *_out << "return 0;\n}\n\n";
     }
     bool anyReader = false;
-    for (auto& K : _graphNodeOrder) if (_classes[K].genDeserialize) { anyReader = true; break; }
+    for (auto& K : _graphNodeOrder) if (graphNodeReads(_classes[K])) { anyReader = true; break; }
     if (!anyReader) return;
     *_out << "static inline kama_de_box* __kama_graph_readShell(FieldKey which, Deserializer r, struct kama_de_graph* g)\n{\n";
     indent(1); *_out << "int32_t __slot = -1;\n";
     indent(1); *_out << "if (which.tag == FieldKey_Name) {\n";
     bool first = true;
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genDeserialize) continue;
+        if (!graphNodeReads(_classes[K])) continue;
         indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&which.u.Name.name, "
                          << kamaStrLit(graphWireName(_classes[K])) << ")) __slot = " << _classes[K].graphTypeId << ";\n";
         first = false;
@@ -25787,7 +25819,7 @@ void CEmitter::emitPolyContractResolvers()
     indent(1); *_out << "kama_de_box* __b = 0;\n";
     indent(1); *_out << "switch (__slot) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genDeserialize) continue;
+        if (!graphNodeReads(_classes[K])) continue;
         indent(1); *_out << "case " << _classes[K].graphTypeId << ": {\n";
         indent(2); *_out << K << "* __obj = (" << K << "*)kama_calloc(1, sizeof(" << K << "));\n";
         indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
@@ -25811,7 +25843,7 @@ void CEmitter::emitPolyContractResolvers()
     indent(2); *_out << "if (__b->ptr) {\n";
     indent(3); *_out << "switch (__b->type_id) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genDeserialize || !_classes[K].destructible) continue;
+        if (!graphNodeReads(_classes[K]) || !_classes[K].destructible) continue;
         indent(3); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__dtor((" << K << "*)__b->ptr); break;\n";
     }
     indent(3); *_out << "default: break;\n";
@@ -26088,6 +26120,21 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
 // a fresh calloc'd block) and by an owner walking a nested node or `Owned` pointee inline.
 void CEmitter::emitGraphReadInto(ClassInfo& ci)
 {
+    // A hand-written node fills its shell from its own twin: the body reads the `value` object it wrote and
+    // hands back a `This` BY VALUE, which is exactly what a freshly calloc'd shell wants assigned into it.
+    // The author's declared `Result<This, …>` is therefore usable as-is here — it is only the ROOT spelling
+    // that needs a handle, and that gets its own entry point.
+    if (graphTwinNeeded(ci, /*write=*/false)) {
+        const std::string resC = cType(ci.methods["deserialize"].returnType);
+        *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
+              << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
+        indent(1); *_out << resC << " __t = " << ci.name << "__deserializeFrom(r, g);\n";
+        indent(1); *_out << "if (__t.tag == " << resC << "_Ok) *self = __t.u.Ok.value;\n";
+        indent(1); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&__t.u.Err.error); "
+                            "kama_de_graph_fail(g, DeError_Malformed); }\n";
+        *_out << "}\n\n";
+        return;
+    }
     if (!ci.genDeserialize) return;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
@@ -26122,6 +26169,30 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 {
     const std::string& K = ci.name;
     const char* stat = _emitStaticClass ? "static inline " : "";
+    // A HAND-WRITTEN node has no fields to walk — its edges may be anywhere its body puts them — so its
+    // four helpers ARE the twin: discovery runs the body against the discard sink, the node's `value`
+    // object is the body itself (it does its own framing), and pass 2 is `__wireParts`. Same machinery as
+    // a participant; the only difference is that this one is a table entry, because something points at it.
+    if (graphTwinNeeded(ci, /*write=*/true)) {
+        const std::string resC = cType(ci.methods["serialize"].returnType);
+        *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g)\n{\n";
+        indent(1); *_out << "Serializer __s = __kama_null_serializer();\n";
+        indent(1); *_out << resC << " __d = " << K << "__serializeInto(self, &__s, g);\n";
+        indent(1); *_out << "if (__d.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
+                         << "__dtor(&__d.u.Err.error); }\n";
+        *_out << "}\n\n";
+        *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
+        indent(1); *_out << resC << " __r = " << K << "__serializeInto(self, w, g);\n";
+        indent(1); *_out << "if (__r.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
+                         << "__dtor(&__r.u.Err.error); }\n";
+        *_out << "}\n\n";
+    }
+    if (graphTwinNeeded(ci, /*write=*/false)) {
+        *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g)\n{\n";
+        if (graphWireElementsNeeded(ci)) { indent(1); *_out << K << "__wireParts(self, g);\n"; }
+        else                             { indent(1); *_out << "(void)self; (void)g;\n"; }
+        *_out << "}\n\n";
+    }
     if (ci.genSerialize) {
         // PASS 1 — discovery. Interning every reachable pointee before a byte is written is what lets the
         // object table be an ARRAY: `beginArray(count)` states its length up front, which is the whole
@@ -26174,6 +26245,13 @@ bool CEmitter::graphTwinNeeded(const ClassInfo& ci, bool write) const
     // both: the triad must never get a twin, and it was getting one until this said so.
     return it->second.node != nullptr && !it->second.isAbstract;
 }
+
+// Does a NODE have a write half / a read half? A derive's is the synthesized field walk; a hand-written
+// node's is its twin. Every gate on the node helpers asks one of these two questions, and they used to ask
+// `genSerialize`/`genDeserialize` directly — which is the same thing only while `@generate` is the only way
+// to be a node. Once a hand-written type can be one, it is not.
+bool CEmitter::graphNodeWrites(const ClassInfo& ci) const { return ci.genSerialize   || graphTwinNeeded(ci, true); }
+bool CEmitter::graphNodeReads (const ClassInfo& ci) const { return ci.genDeserialize || graphTwinNeeded(ci, false); }
 
 // Which types need a twin, and which edge handles need a `__serializeEdge`. Runs once, after the node set
 // is final — `isGraphNode` is what decides whether a `Shared<X>` is an edge or just a handle to a value.
@@ -26278,6 +26356,11 @@ CEmitter::MutIter CEmitter::mutIterOf(ClassInfo& ci)
 // nothing ever turned them back into handles, so the first deref was a wild pointer.
 bool CEmitter::graphPartIsEdge(SharedIdentifier ty)
 {
+    // An absent edge is spelled `Optional<Shared<X>>`, and emitGraphFieldWire unwraps it — so this has to
+    // ask the same question about the same thing. It did not, and a hand-written node's `next` field went
+    // unwired: the write put the cycle in the table correctly and the read handed back one node with a
+    // dangling 0. This predicate must stay the mirror of what that emitter acts on.
+    if (graphOptional(ty)) return ty->genericArg && graphPartIsEdge(ty->genericArg);
     const std::string c = cType(ty);
     if (_graphEdgeHelperFor.count(c)) return true;
     auto it = _classes.find(c);
@@ -26429,7 +26512,7 @@ void CEmitter::emitGraphWorklistLoop(int depth)
     indent(depth); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
     indent(depth + 1); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genSerialize) continue;
+        if (!graphNodeWrites(_classes[K])) continue;
         indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__visitEdges(("
                                  << K << "*)kama_ser_graph_obj(&__g, __i), &__g); break;\n";
     }
@@ -26449,7 +26532,7 @@ void CEmitter::emitGraphObjectTable(int depth)
     indent(depth + 1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
     indent(depth + 1); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genSerialize) continue;
+        if (!graphNodeWrites(_classes[K])) continue;
         indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
         // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
         // backend writes the index, so the choice costs one byte where a name would cost its length.
@@ -26529,12 +26612,40 @@ void CEmitter::emitGraphRootDriver(ClassInfo& ci)
 
 void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
 {
-    std::string T = ci.name;
     SharedIdentifier retNode = ci.methods["deserialize"].returnType;     // Result<Shared<T>, Owned<Error>>
-    std::string resC = cType(retNode);
-    std::string sharedT = cType(retNode->genericArgs->at(0));            // Shared_T — the Ok arm
+    emitGraphNodeReadBody(ci, ci.name + "__deserialize", cType(retNode),
+                          cType(retNode->genericArgs->at(0)));           // Shared_T — the Ok arm
+}
+
+// A hand-written NODE's handle root. Its own `deserialize` keeps the by-value signature the author wrote —
+// that is the one a SHELL wants, and `K____readInto` uses it — so the `Shared<K>` spelling cannot be a
+// retarget of it the way a derive's is (computeGraphNodeTypes rewrites a derive's return type; there is no
+// rewriting a body whose `return` constructs a `This`). It gets its own entry point over the same walker.
+std::string CEmitter::graphHandleRootType(ClassInfo& ci)
+{
+    if (!ci.isGraphNode || !graphTwinNeeded(ci, /*write=*/false)) return "";
+    SharedIdentifier ret = ci.methods.count("deserialize") ? ci.methods["deserialize"].returnType : nullptr;
+    if (!ret || !ret->genericArgs || ret->genericArgs->empty()) return "";
+    const std::string resC = cType(resultOwnedErrorTypeNode(sharedTypeNode(ret->genericArgs->at(0))));
+    return _classes.count(resC) ? resC : "";   // nothing in the program spells `Shared<K>` as a root
+}
+
+void CEmitter::emitGraphHandleRootReader(ClassInfo& ci)
+{
+    // The author's `Result<This, …>` carries a usable `This` node in its Ok arm — the same one
+    // computeGraphNodeTypes reads to build a derive's `Shared<This>`.
+    const std::string resC = graphHandleRootType(ci);
+    if (resC.empty()) return;
+    emitGraphNodeReadBody(ci, ci.name + "__deserializeRoot", resC,
+                          cType(sharedTypeNode(ci.methods["deserialize"].returnType->genericArgs->at(0))));
+}
+
+void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
+                                     const std::string& resC, const std::string& sharedT)
+{
+    std::string T = ci.name;
     const char* stat = _emitStaticClass ? "static inline " : "";
-    *_out << stat << resC << " " << T << "__deserialize(Deserializer r)\n{\n";
+    *_out << stat << resC << " " << fname << "(Deserializer r)\n{\n";
     indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
     // The envelope is read POSITIONALLY: its shape is fixed, so each key is consumed and discarded and the
     // order is the contract (`type` before `value`, or the reader cannot dispatch).
@@ -26568,7 +26679,7 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
     indent(2); *_out << "switch (__b->type_id) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genDeserialize) continue;
+        if (!graphNodeReads(_classes[K])) continue;
         indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__wireEdges(("
                          << K << "*)__b->ptr, &__g); break;\n";
     }
@@ -26652,7 +26763,7 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
     indent(2); *_out << "switch (__b->type_id) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genDeserialize) continue;
+        if (!graphNodeReads(_classes[K])) continue;
         indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__wireEdges(("
                          << K << "*)__b->ptr, &__g); break;\n";
     }
