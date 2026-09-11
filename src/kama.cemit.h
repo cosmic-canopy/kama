@@ -2684,6 +2684,7 @@ private:
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    std::string handoffSourceClass(SharedExpression e, int handoff);  // exprClass, widened for a MARKED bare-local `buf[i]`
     std::string receiverScalarCType(SharedExpression e); // C scalar type of a primitive receiver place (`p.x`, `arr[i]`), "" if none
     // The exact KAMA type node behind a place expression (local/param/foreach binding, or a field through an
     // instance) — the only channel that keeps `char` apart from `uint32`, which share the C type `uint32_t`.

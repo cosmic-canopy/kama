@@ -17716,6 +17716,32 @@ std::string CEmitter::ptrLocalElemType(SharedExpression e)
     return "";
 }
 
+// The class of a hand-off SOURCE — `exprClass`, widened for a bare-local `buf[i]` when the author wrote
+// an explicit `give`/`copy`.
+//
+// `ptrLocalElemType` is deliberately kept out of `exprClass` (see its comment) so an UNMARKED raw store —
+// `nd[i] = od[j]`, the relocate idiom the untracked collections rely on — keeps its plain-C-store
+// semantics. That reasoning covers the unmarked store and nothing else: a MARKED `copy p[i]` is the
+// author naming an element and asking for a deep copy, so the element's class must be known or the marker
+// is dropped in silence. It was: measured on a fully CONCRETE element, with no generics anywhere,
+// `copy p[0]` on a local/param `UnsafePtr<Box>` aliased in variant-payload, call-argument AND return
+// position (a local's initializer was the one form that worked, because it keys on the declared type).
+//
+// One helper for all three hand-off sites, not three copies — `copyCall`'s own comment records what
+// happened when this kind of fact lived at twelve.
+std::string CEmitter::handoffSourceClass(SharedExpression e, int handoff)
+{
+    std::string c = exprClass(e);
+    if (!c.empty() || !handoff || !e) return c;
+    // `UnsafeConstPtr<T>` lowers east-const (`T const*`), so the stripped element carries a ` const`
+    // suffix that is not part of the class name — copying OUT of a read-only buffer is still a copy.
+    std::string et = ptrLocalElemType(e);
+    const std::string csuf = " const";
+    if (et.size() > csuf.size() && et.compare(et.size() - csuf.size(), csuf.size(), csuf) == 0)
+        et = et.substr(0, et.size() - csuf.size());
+    return isClass(et) ? et : "";
+}
+
 // Is `base` reachable by walking `derived`'s single-inheritance chain (inclusive)? Used to admit a
 // `Derived -> ref Base` upcast while rejecting an unrelated `ref` (e.g. borrowing through a `Weak`).
 #if KAMA_INHERITANCE
@@ -18569,7 +18595,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // By value. A *named* smart pointer TRANSFERS into the param, which the
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
             // statement, materialized as a HOISTED temp (pure ISO C).
-            std::string argCls = exprClass(argExpr);
+            std::string argCls = handoffSourceClass(argExpr, handoff);
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 CollKind k = smartKind(argCls);
                 // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
@@ -20873,7 +20899,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     // reported one line low. `this->` because the parameter shadows the stamper.
     this->line(line);
     indent(depth); *_out << dst << " = " << rv << ";\n";
-    std::string rc = exprClass(v);
+    std::string rc = handoffSourceClass(v, handoff);
     // Smart pointer: give (or a bare dying local) MOVES out (invalidate the source); copy RETAINS.
     if (isSmartPtrClass(rc) && isNamedValue(v.get())) {
         CollKind k = smartKind(rc);
@@ -21822,7 +21848,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // `return Result::Ok(value: this);` — a fallible ctor handing back the value it built.
             if (ctorThisAsValue(argExpr, fcls)) val = "(*" + val + ")";
             _matchTargetCType = pmt; _variantTargetType = pvt;
-            std::string argCls = exprClass(argExpr);
+            std::string argCls = handoffSourceClass(argExpr, handoff);
             std::string field;
             // Model C (P2): an enum value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
             // `Result::Err(error: IoError::NotFound)`) is BOXED + upcast — heap-copy the enum, attach its

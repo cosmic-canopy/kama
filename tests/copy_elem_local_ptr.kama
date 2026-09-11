@@ -1,0 +1,58 @@
+// Regression: an explicitly MARKED `copy p[i]` on a bare LOCAL/param `UnsafePtr<T>` must deep-copy.
+// It silently aliased — in variant-payload, call-argument and return position — with no generics anywhere
+// and a fully concrete element. Only a local's *initializer* worked, because that path keys on the
+// declared type rather than on the source expression's class.
+//
+// Cause: `exprClass` deliberately does not see a bare-local `buf[i]` — `ptrLocalElemType` is kept out of
+// it so an UNMARKED raw store (`nd[i] = od[j]`, the relocate idiom the untracked collections rely on)
+// keeps plain-C-store semantics. That reasoning covers the unmarked store and nothing else; a marked
+// `copy` is the author naming an element, so `handoffSourceClass` widens for it and only for it.
+// Sibling of `copy_elem_nonT_param`, which pins the same drop on a raw pointer reached through a FIELD.
+import { std::collections::DynamicArray };
+
+type resource Item implements Copyable<This>(bare: give) {
+    DynamicArray<int32> xs;
+    ~Item() { }
+    public ctor make(int32 seed) { this.xs = DynamicArray.empty(); this.xs.add(item: seed); }
+    public ctor copy(ref Item source) { return Item.make(seed: source.xs[0]); }
+    public fn void push(int32 v) { this.xs.add(item: v); }
+    public const fn isize count() { return this.xs.length(); }
+}
+
+// Each takes the buffer as a PARAM — the shape `exprClass` could not see.
+unsafe fn Optional<Item> viaPayload(UnsafePtr<Item> p) { return Optional::Some(value: copy p[0]); }
+unsafe fn isize        countOf(Item it)               { return it.count(); }
+unsafe fn isize        viaCallArg(UnsafePtr<Item> p)  { return countOf(it: copy p[0]); }
+unsafe fn Item         viaReturn(UnsafePtr<Item> p)   { return copy p[0]; }
+
+// An UNMARKED raw relocate must keep its plain-C-store semantics — the reason `ptrLocalElemType` is
+// kept out of `exprClass` in the first place. Nothing below may make this a deep copy.
+unsafe fn void relocate(UnsafePtr<Item> dst, UnsafePtr<Item> src) { dst[0] = src[0]; }
+
+unsafe fn int32 run() {
+    DynamicArray<Item> store = DynamicArray.empty();
+    store.add(item: Item.make(seed: 4));
+    UnsafePtr<Item> p = store.dataPtrMut();
+
+    // (a) variant payload
+    Optional<Item> got = viaPayload(p: p);
+    match (give got) {
+        case Some(value: c): { Item cc = give c; cc.push(v: 1); if (cc.count() != 2) { return 91; } }
+        case None: { return 90; }
+    };
+    if (store[0].count() != 1) { return 92; }   // 2 = the payload aliased the store's element
+
+    // (b) call argument — the callee drops what it was handed
+    if (viaCallArg(p: p) != 1) { return 93; }
+    if (store[0].count() != 1) { return 94; }
+
+    // (c) return position
+    Item r = viaReturn(p: p);
+    r.push(v: 2); r.push(v: 3);
+    if (r.count() != 3) { return 95; }
+    if (store[0].count() != 1) { return 96; }   // an alias would have grown the store's element
+
+    return cast<int32>(store[0].count()) + 6;   // 7
+}
+
+fn int32 main() { return run(); }
