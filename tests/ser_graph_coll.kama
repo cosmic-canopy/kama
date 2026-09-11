@@ -1,0 +1,91 @@
+// The READ half of a graph whose edges are ELEMENTS — the twin of `ser_graph_coll_write`.
+//
+// Pass 1 builds the container through its own `deserialize` (it already knows how to construct one), and
+// each element takes its id and STASHES it in the handle's own pointer slot with a null control block.
+// Pass 2 then has to revisit those elements, and a container's elements are not fields — so it ITERATES,
+// through `IterableMut<T>`: the same protocol `foreach (ref T x in c)` already requires, so a third-party
+// container gets this by implementing what it would implement anyway.
+//
+// ⚠️ Pass 2 must not instead record each element's ADDRESS during pass 1. `DynamicArray.deserialize` grows
+// via `add`, so the buffer reallocs while the elements are being read and every recorded address dangles.
+// The stash survives precisely because it rides IN the element and moves with it.
+//
+// THE CHECK IS THE RE-ENCODE. `kids` is `[2,3,2]` — slot 0 and slot 2 are one aliased leaf — and a read
+// that rebuilt two separate copies would re-encode as `[2,3,4]`. Byte equality is what proves sharing
+// survived the wire. ASan proves the rebuilt graph frees exactly once. Returns 7 + 11 + 7 = 25.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::binary::serializeBinaryPositionalBuffer,
+    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::memory::Shared,
+    std::collections::DynamicArray,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field DynamicArray<Shared<Leaf>> kids;
+    public ctor make(DynamicArray<Shared<Leaf>> kids) { this.kids = give kids; }
+    public const fn int32 sum() {
+        int32 s = 0;
+        foreach (ref Shared<Leaf> k in this.kids) { s = s + k.get(); }
+        return s;
+    }
+}
+
+fn DynamicArray<Shared<Leaf>> build() {
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;                     // the SAME leaf, twice in the collection
+    DynamicArray<Shared<Leaf>> xs = DynamicArray.empty();
+    xs.add(item: give dup2);
+    xs.add(item: new Leaf.make(v: 11));
+    xs.add(item: give dup);
+    return give xs;
+}
+
+fn int32 main() {
+    Shared<Bag> bag = new Bag.make(kids: build());
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":[2,3,2]}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
+        return cast<int32>(j.length());
+    }
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: copy j);
+    Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (b2.sum() != 25) { return 252; }
+    Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: b2);
+    string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 253; } };
+    if (j2 != j) { return 254; }   // `[2,3,2]` again: the two slots are still ONE node
+
+    // A BARE COLLECTION as the root. A collection has no identity, so nothing can point at it and it gets
+    // no table entry — its `root` slot carries the value inline, where a node's carries an id. It reads
+    // back BY VALUE for the same reason: there is no cycle through it to close.
+    DynamicArray<Shared<Leaf>> xs = build();
+    Result<string, Owned<Error>> rr = serializeJsonBuffer(v: xs);
+    string rj = match (give rr) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
+    if (rj != "{\"root\":[1,2,1],\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
+        return cast<int32>(rj.length());
+    }
+    Result<DynamicArray<Shared<Leaf>>, Owned<Error>> rback =
+        deserializeJsonBuffer::<DynamicArray<Shared<Leaf>>>(src: copy rj);
+    DynamicArray<Shared<Leaf>> xs2 = match (give rback) { case Ok(value: x): give x; case Err(error: e): { return 249; } };
+    Result<string, Owned<Error>> rr2 = serializeJsonBuffer(v: xs2);
+    string rj2 = match (give rr2) { case Ok(value: x): give x; case Err(error: e): { return 248; } };
+    if (rj2 != rj) { return 247; }
+
+    // …and the same graph on the positional backend, which has no names and no delimiters: its reader is
+    // bounded only by the counts, so it is the one that proves discovery made the table's length exact
+    // before `beginArray`.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: bag);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
+    Result<Shared<Bag>, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Shared<Bag>>(src: give bytes);
+    Shared<Bag> b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
+    return b3.sum();
+}

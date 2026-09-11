@@ -1,0 +1,76 @@
+// A HAND-WRITTEN `Serializable`/`Deserializable` that holds graph edges directly — no `@generate`, no
+// derive, no field walk. It works for the same reason a container does: the body is emitted a second time
+// under a name that carries the graph, and an edge receiver inside it interns its pointee and writes an id.
+//
+// This closes a shipped correctness hole rather than adding a feature. MEASURED before: the write put each
+// pointee INLINE through the deref fallback, so two handles to one object produced two copies and identity
+// was silently lost (a cycle overflowed the stack); the read, once it existed, stashed ids into the fields
+// and nothing ever turned them back into handles, so the first deref was a wild pointer.
+//
+// Note what the wire says: the participant has no identity, so nothing can point AT it and it gets no
+// table entry — its `root` slot carries its VALUE, where a `@generate` node's carries an id. It reads back
+// BY VALUE for the same reason: there is no cycle through it to close. Both handles resolve to the one
+// leaf, so the sum is 9 + 9 = 18. ASan proves the rebuilt graph frees exactly once.
+import {
+    std::serialization::json::serializeJsonBuffer,
+    std::serialization::json::deserializeJsonBuffer,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+}
+
+type resource Hand implements Serializable, Deserializable<This> {
+    Shared<Leaf> a;
+    Shared<Leaf> b;
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
+    public const fn int32 sum() { return this.a.get() + this.b.get(); }
+
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        w.beginObject(count: 2);
+        w.field(name: "a", id: 0);
+        Result<Unit, Owned<Error>> r1 = this.a.serialize(w: w);
+        match (give r1) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.field(name: "b", id: 1);
+        Result<Unit, Owned<Error>> r2 = this.b.serialize(w: w);
+        match (give r2) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Hand, Owned<Error>> deserialize(Deserializer r) {
+        r.beginObject(count: 2);
+        r.moreFields(); { FieldKey k1 = r.field(); }
+        Result<Shared<Leaf>, Owned<Error>> ra = Shared::<Leaf>.deserialize(r: r);
+        Shared<Leaf> a = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: give e); } };
+        r.moreFields(); { FieldKey k2 = r.field(); }
+        Result<Shared<Leaf>, Owned<Error>> rb = Shared::<Leaf>.deserialize(r: r);
+        Shared<Leaf> b = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: give e); } };
+        r.moreFields();
+        r.endObject();
+        return Result::Ok(value: Hand.make(a: give a, b: give b));
+    }
+}
+
+fn int32 main() {
+    Shared<Leaf> one = new Leaf.make(v: 9);
+    Shared<Leaf> same = one;                     // the SAME leaf behind both fields
+    Hand h = Hand.make(a: give one, b: give same);
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: h);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // ONE table entry, both fields carrying its id — not two inline copies.
+    if (j != "{\"root\":{\"a\":1,\"b\":1},\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":9}}]}") {
+        return cast<int32>(j.length());
+    }
+    Result<Hand, Owned<Error>> back = deserializeJsonBuffer::<Hand>(src: copy j);
+    Hand h2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    // Re-encode: identical bytes, so the two fields still resolve to ONE node after the round trip.
+    Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: h2);
+    string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 252; } };
+    if (j2 != j) { return 253; }
+    return h2.sum();
+}

@@ -2369,6 +2369,7 @@ private:
     void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode + graphTypeId
     void registerOwnedDeserialize();                // `Owned<X>.deserialize` for a by-value pointee (the box read)
     void pruneOwnedDeserialize();                   // …and take it back off a box whose pointee is a graph node
+    void registerEdgeElementResults();              // `Result<Shared<X>, Owned<Error>>` — what an element read binds
     // A type that must carry the graph through its OWN serde body — it reaches a `Shared`/`Weak` and its
     // `serialize`/`deserialize` is HAND-WRITTEN (a library container, a user's own impl) rather than the
     // derive's. A `@generate` node is not one: it has the walker's four helpers instead.
@@ -2381,6 +2382,15 @@ private:
     void emitGraphDriverTail(const std::string& resC);   // free the worklist, sticky flag -> fallible Result
     void emitGraphRootDriver(ClassInfo& ci);        // a participant's `X__serialize`: open the graph, frame it
     bool emitGraphParticipantCall(SharedIdentifier ty, const std::string& access, int depth, bool sink);
+    // The `foreach (ref …)` protocol, resolved for a participant so pass 2 can revisit its elements.
+    struct MutIter { std::string iterC; MethodInfo* iter = nullptr; MethodInfo* hasNext = nullptr;
+                     MethodInfo* next = nullptr; ClassInfo* ic = nullptr; };
+    MutIter mutIterOf(ClassInfo& ci);
+    bool graphWireElementsNeeded(ClassInfo& ci);
+    bool graphPartIsEdge(SharedIdentifier ty);      // is this field/element something pass 2 must revisit?
+    void emitGraphWireElements(ClassInfo& ci);      // `X__wireParts`: stashed ids -> live handles
+    std::set<std::string> _wirePartsInProgress;     // recursion guard for a self-referential instance
+    void emitGraphReadRootDriver(ClassInfo& ci);    // a participant's `X__deserialize`: read the envelope
     bool _anyGraphTwin = false;                     // a null sink / edge helpers are emitted only if one exists
     void emitOwnedDeserializeDefinition(ClassInfo& ci);   // …its body: read the pointee, heap it, `adopt`
     void regateGenericInstances();                  // re-judge every generic instance's `when` gates
@@ -2410,6 +2420,7 @@ private:
     std::string graphWireName(const ClassInfo& ci);   // source type name for the wire `type` tag
     void emitPolyContractResolvers();   // per graph-edge contract: C vtbl <-> Graph* vtbl resolvers + the shell reader chain
     SharedIdentifier sharedTypeNode(SharedIdentifier elem);   // synth a `Shared<elem>` type node (for return types)
+    SharedIdentifier triadTypeNode(const char* kind, SharedIdentifier elem);  // …`Shared` or `Weak`, for an edge element
     SharedIdentifier ownedTypeNode(SharedIdentifier elem);    // synth an `Owned<elem>` type node (the box read's return)
     SharedIdentifier optionalTypeNode(SharedIdentifier elem); // synth an `Optional<elem>` node (the `.as<T>()` result)
     SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)

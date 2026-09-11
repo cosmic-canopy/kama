@@ -23813,10 +23813,17 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
 // the loop above, because the `Serializable` vtbl slot casts to that exact shape.
 void CEmitter::emitGraphTwinProtos(ClassInfo& ci)
 {
-    if (!graphTwinNeeded(ci, /*write=*/true)) return;
     const char* stat = _emitStaticClass ? "static inline " : "";
-    *_out << stat << cType(ci.methods["serialize"].returnType) << " " << ci.name << "__serializeInto("
-          << ci.name << "* self, Serializer* w, struct kama_ser_graph* g);\n";
+    if (graphTwinNeeded(ci, /*write=*/true))
+        *_out << stat << cType(ci.methods["serialize"].returnType) << " " << ci.name << "__serializeInto("
+              << ci.name << "* self, Serializer* w, struct kama_ser_graph* g);\n";
+    if (graphTwinNeeded(ci, /*write=*/false)) {
+        *_out << stat << cType(ci.methods["deserialize"].returnType) << " " << ci.name << "__deserializeFrom("
+              << "Deserializer r, struct kama_de_graph* g);\n";
+        if (graphWireElementsNeeded(ci))
+            *_out << stat << "void " << ci.name << "__wireParts(" << ci.name
+                  << "* self, struct kama_de_graph* g);\n";
+    }
 }
 
 // void Name__dtor(Name* self): user body first, then destructible fields in
@@ -24209,15 +24216,19 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // name that carries the graph — and `X__serialize` is then synthesized as the root driver below.
         // Emitting it under its own name as well would leave a second, callable, WRONG symbol: the same
         // body with no graph writes each pointee inline, losing identity and looping on a cycle.
-        const bool twin = (kv.first == "serialize" && graphTwinNeeded(ci, /*write=*/true));
-        ScopedStr _gp(_serGraphArg, twin ? "g" : "");
-        emitMethodOrCtorBody(twin ? ci.name + "__serializeInto" : mi.cName,
+        const bool wtwin = (kv.first == "serialize"   && graphTwinNeeded(ci, /*write=*/true));
+        const bool rtwin = (kv.first == "deserialize" && graphTwinNeeded(ci, /*write=*/false));
+        ScopedStr _gp(_serGraphArg, wtwin ? "g" : "");
+        ScopedStr _gq(_deGraphArg,  rtwin ? "g" : "");
+        emitMethodOrCtorBody(wtwin ? ci.name + "__serializeInto"
+                                   : rtwin ? ci.name + "__deserializeFrom" : mi.cName,
                              ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
                              mi.isUnsafe, kv.first.c_str(), mi.node->attributes);
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
     if (graphTwinNeeded(ci, /*write=*/true)) emitGraphRootDriver(ci);
+    if (graphTwinNeeded(ci, /*write=*/false)) { emitGraphWireElements(ci); emitGraphReadRootDriver(ci); }
     if (ci.destructible)
         emitDtorDefinition(ci);
     if (ci.isGraphNode) {
@@ -25294,10 +25305,14 @@ std::string CEmitter::graphWireName(const ClassInfo& ci)
 // Synthesize a `Shared<elem>` type node (the graph deserialize return type: `decode::<Shared<T>>` hands back
 // the owning root handle). Resolves like the user-written `Shared<Leaf>` field types (empty qualifier + the
 // implicit `using std::memory`), so cType mangles it to `Shared_<elem>`.
-SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
+SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem) { return triadTypeNode("Shared", elem); }
+
+// …and the same for either shared handle: an edge ELEMENT may be a `Weak<X>` as readily as a `Shared<X>`,
+// and its read helper has to answer the handle it actually is.
+SharedIdentifier CEmitter::triadTypeNode(const char* kind, SharedIdentifier elem)
 {
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-    auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Shared"),
+    auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(kind),
                                                  std::make_shared<StringList>(), elem);
     node->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     node->genericArgs = std::make_shared<IdentifierList>();
@@ -25604,6 +25619,36 @@ void CEmitter::registerOwnedDeserialize()
         bc.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
         bc.ownedBoxDe = true;   // …and the mark the body fork and the prune below read
     }
+}
+
+// The `Result<Shared<X>, Owned<Error>>` a container's element read BINDS — `Result<T, Owned<Error>> __er =
+// T.deserialize(r: r)` in every container's own `deserialize`. Nothing mints it during collection: the
+// member walk registers signatures, not body locals, and the only other site is computeGraphNodeTypes,
+// which runs after the destructibility fixpoint. So the monomorph existed unjudged, `ownsByValue` answered
+// false for it, and the container's own `match (give __er)` was refused as "a plain value, copied on
+// assignment" — which is why `DynamicArray<Shared<X>>` has never had a read half for ANY `X`, graph or not.
+// Minted here, beside the `Owned` box read, for the same reason: before the fixpoint, so it is judged.
+void CEmitter::registerEdgeElementResults()
+{
+    NsCtx saved = _nsCtx;
+    std::vector<std::string> insts;
+    for (auto& kv : _classes)
+        if (kv.second.isGenericInst && kv.second.methods.count("deserialize")) insts.push_back(kv.first);
+    for (const std::string& cls : insts) {
+        auto gi = _genericTypeInsts.find(cls);
+        if (gi == _genericTypeInsts.end()) continue;
+        ClassInfo& ci = _classes[cls];
+        _nsCtx = _genericTypeInstCtx.count(cls) ? _genericTypeInstCtx[cls]
+                                                : _genericTypeCtx[gi->second.templateKey];
+        (void)ci;
+        for (auto& a : gi->second.typeArgs) {
+            auto t = _genericTypeInstOf.find(cType(a));
+            if (t == _genericTypeInstOf.end()) continue;
+            if (t->second != _sharedTmpl && t->second != _weakTmpl) continue;   // `Owned` has its own pass
+            scanTypeForCollections(resultOwnedErrorTypeNode(a));
+        }
+    }
+    _nsCtx = saved;
 }
 
 // The late half of the pair above: re-judge the registration against the PRUNED world and take back every
@@ -25944,6 +25989,21 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
         else                  *_out << "(" << dst << ").p = (" << e.elemC << "*)(uintptr_t)__rid; (" << dst << ").c = NULL; }\n";
         return;
     }
+    // A PARTICIPANT field, read through its own body with the graph threaded — the mirror of the write.
+    {
+        const std::string fc = cType(ty);
+        auto it = _classes.find(fc);
+        if (it != _classes.end() && graphTwinNeeded(it->second, /*write=*/false)) {
+            const std::string innerRes = cType(resultOwnedErrorTypeNode(ty));
+            const std::string t = "__gr" + std::to_string(_tempCounter++);
+            indent(depth); *_out << innerRes << " " << t << " = " << fc << "__deserializeFrom(r, g);\n";
+            indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Ok) " << dst << " = " << t
+                                 << ".u.Ok.value;\n";
+            indent(depth); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&" << t
+                                 << ".u.Err.error); kama_de_graph_fail(g, DeError_Malformed); }\n";
+            return;
+        }
+    }
     auto nest = graphNestOf(ty);
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
@@ -26007,6 +26067,15 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
         if (e.kind == "Shared") { indent(depth + 1); *_out << "else kama_de_graph_fail(g, DeError_UnresolvedReference);\n"; }
         indent(depth); *_out << "}\n";
         return;
+    }
+    // A PARTICIPANT field: its elements are not fields, so pass 2 iterates them. See emitGraphWireElements.
+    {
+        const std::string fc = cType(ty);
+        auto it = _classes.find(fc);
+        if (it != _classes.end() && graphWireElementsNeeded(it->second)) {
+            indent(depth); *_out << fc << "__wireParts(&(" << dst << "), g);\n";
+            return;
+        }
     }
     auto nest = graphNestOf(ty);
     if (nest.first.empty() || !typeHasGraphAdapters(nest.second)) return;   // reported by readInto
@@ -26096,10 +26165,14 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 // walker's four helpers instead and needs none of this.
 bool CEmitter::graphTwinNeeded(const ClassInfo& ci, bool write) const
 {
-    if (!ci.reachesPointer || ci.isIntrinsicColl) return false;
+    if (!ci.reachesPointer || ci.isIntrinsicColl || isSmartPtrClass(ci.name)) return false;
     auto it = ci.methods.find(write ? "serialize" : "deserialize");
     if (it == ci.methods.end()) return false;
-    return !(write ? it->second.isSynthSer : it->second.isSynthDe);
+    // "Hand-written" is exactly "has an AST body". A derive's has none (isSynthSer/isSynthDe), and neither
+    // does a compiler-registered FORWARD — the `Shared<X>.deserialize` computeGraphNodeTypes installs is
+    // abstract and points at the node's own driver. Asking for the node rather than the synth flags catches
+    // both: the triad must never get a twin, and it was getting one until this said so.
+    return it->second.node != nullptr && !it->second.isAbstract;
 }
 
 // Which types need a twin, and which edge handles need a `__serializeEdge`. Runs once, after the node set
@@ -26178,6 +26251,116 @@ void CEmitter::emitNullSerializer()
                      "s.vtbl = &__kama_null_ser_vtbl; return s; }\n\n";
 }
 
+// Pass 2 has to revisit a participant's ELEMENTS, and they are not fields — so it iterates. `IterableMut<T>`
+// is the contract `foreach (ref T x in c)` already requires, which is why this needs no new protocol and a
+// third-party container gets it by implementing what it would implement anyway. Answers the iterator's
+// class, plus the two protocol methods, or nullptr when the type cannot be iterated mutably.
+CEmitter::MutIter CEmitter::mutIterOf(ClassInfo& ci)
+{
+    MutIter m;
+    MethodInfo* iterMi = findMethod(&ci, "iterMut", nullptr);
+    if (!iterMi || !iterMi->params.empty() || !implementsContractTemplate(&ci, "IterableMut")) return m;
+    const std::string iterC = cTypeInInstance(ci.name, iterMi->returnType);
+    auto it = _classes.find(iterC);
+    if (it == _classes.end()) return m;
+    MethodInfo* hasNextMi = findMethod(&it->second, "hasNext", nullptr);
+    MethodInfo* nextMi    = findMethod(&it->second, "next", nullptr);
+    if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) return m;
+    if (!implementsContractTemplate(&it->second, "IteratorMut")) return m;
+    m.iterC = iterC; m.iter = iterMi; m.hasNext = hasNextMi; m.next = nextMi; m.ic = &it->second;
+    return m;
+}
+
+// Is this type's parts (`__wireParts`) — does a participant hold anything pass 2 must revisit? A
+// participant's edges arrive two ways and BOTH have to be answered: as its own FIELDS (a hand-written type
+// holding handles) and as its ELEMENTS (a container, whose elements are type arguments). Answering only the
+// second shipped a SIGSEGV in a probe — the write was correct, the read stashed ids into the fields and
+// nothing ever turned them back into handles, so the first deref was a wild pointer.
+bool CEmitter::graphPartIsEdge(SharedIdentifier ty)
+{
+    const std::string c = cType(ty);
+    if (_graphEdgeHelperFor.count(c)) return true;
+    auto it = _classes.find(c);
+    if (it != _classes.end() && graphWireElementsNeeded(it->second)) return true;
+    auto nest = graphNestOf(ty);
+    return !nest.first.empty() && typeHasGraphAdapters(nest.second);
+}
+
+bool CEmitter::graphWireElementsNeeded(ClassInfo& ci)
+{
+    if (!graphTwinNeeded(ci, /*write=*/false)) return false;
+    if (_wirePartsInProgress.count(ci.name)) return false;   // a self-referential instance: stop the recursion
+    _wirePartsInProgress.insert(ci.name);
+    bool need = false;
+    for (auto& f : ci.fields)
+        if (!f.serSkip && graphPartIsEdge(f.type)) { need = true; break; }
+    if (!need) {
+        auto gi = _genericTypeInsts.find(ci.name);
+        if (gi != _genericTypeInsts.end())
+            for (auto& a : gi->second.typeArgs)
+                if (graphPartIsEdge(a)) { need = true; break; }
+    }
+    _wirePartsInProgress.erase(ci.name);
+    return need;
+}
+
+// `X__wireParts` — pass 2 over a participant's FIELDS and then its ELEMENTS. Each stashed id becomes a live handle, with a
+// nested participant recursing. ⚠️ This iterates rather than resolving addresses recorded during pass 1,
+// and that is not a style choice: `DynamicArray.deserialize` grows via `add`, so the buffer reallocs while
+// the elements are being read and any address recorded then dangles. The stash rides IN the element and
+// therefore moves with it.
+void CEmitter::emitGraphWireElements(ClassInfo& ci)
+{
+    if (!graphWireElementsNeeded(ci)) return;
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << "void " << ci.name << "__wireParts(" << ci.name
+          << "* self, struct kama_de_graph* g)\n{\n";
+    // FIELDS first — the same walk `K__wireEdges` does for a node. A container's own fields are an
+    // `UnsafePtr<T>` and bookkeeping, so this is a no-op for one; a hand-written participant's edges are
+    // here and nowhere else.
+    for (auto& f : ci.fields)
+        if (!f.serSkip) emitGraphFieldWire(f.type, "self->" + f.name, 1);
+    // …then ELEMENTS, which are not fields and so have to be iterated.
+    bool wantElems = false;
+    auto gi = _genericTypeInsts.find(ci.name);
+    if (gi != _genericTypeInsts.end())
+        for (auto& a : gi->second.typeArgs) if (graphPartIsEdge(a)) { wantElems = true; break; }
+    if (!wantElems) { indent(1); *_out << "(void)self; (void)g;\n}\n\n"; return; }
+    MutIter m = mutIterOf(ci);
+    if (!m.ic) {   // no mutable iteration: say so where the author can act on it
+        indent(1); *_out << "(void)self; (void)g;\n}\n\n";
+        unsupported(("`" + demangleForDisplay(ci.name) + "` holds graph edges as ELEMENTS, so reading it back "
+                     "needs to revisit them — which means iterating it mutably. Give it "
+                     "`implements IterableMut<T>` (a nullary `iterMut()` handing out a place-returning "
+                     "`ref T next()`), the same protocol `foreach (ref T x in c)` requires").c_str(),
+                    ci.declLine());
+        return;
+    }
+    indent(1); *_out << m.iterC << " __it = " << m.iter->cName << "(self);\n";
+    indent(1); *_out << "while (" << m.hasNext->cName << "(&__it)) {\n";
+    // `next()` is place-returning, so it hands back a pointer INTO the container — writing through it is
+    // what wires the element in place.
+    indent(2); *_out << cTypeInInstance(m.iterC, m.next->returnType) << "* __e = " << m.next->cName << "(&__it);\n";
+    {
+        // Resolve the element type in the ITERATOR's instance, the same binding `foreach` uses.
+        NsCtx savedCtx = _nsCtx;
+        std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        auto gi = _genericTypeInsts.find(m.iterC);
+        if (gi != _genericTypeInsts.end()) {
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
+            for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
+                _typeSubst[ps[i]] = gi->second.typeArgs[i];
+            _nsCtx = _genericTypeInstCtx.count(m.iterC) ? _genericTypeInstCtx[m.iterC]
+                                                        : _genericTypeCtx[gi->second.templateKey];
+        }
+        emitGraphFieldWire(m.next->returnType, "(*__e)", 2);
+        _typeSubst = savedSubst; _nsCtx = savedCtx;
+    }
+    indent(1); *_out << "}\n";
+    *_out << "}\n\n";
+}
+
 // One per edge type: interning an edge is a STATEMENT sequence (a temp, a null guard, a type id), but the
 // place it has to happen is an EXPRESSION — `this[i].serialize(w: w)` in a container's own body, whose
 // value is the fallible `Result`. So the sequence is wrapped in a function and the call site is a call.
@@ -26208,6 +26391,32 @@ void CEmitter::emitGraphEdgeHelpers()
         indent(1); *_out << "}\n";
         indent(1); *_out << "w->vtbl->writeU64(w->obj, __id);\n";
         indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+        *_out << "}\n\n";
+
+        // The read twin. Pass 1 takes the id and STASHES it in the handle's own pointer slot with a NULL
+        // control block — which is what every graph edge field already does, and what lets the value move
+        // with its element when the container reallocs mid-build. `X__wireParts` turns it into a live
+        // handle in pass 2. Both handle dtors guard on the null block, so an id never freed as a pointer.
+        auto ecIt = _classes.find(e.elemC);
+        if (ecIt == _classes.end() || !ecIt->second.methods.count("deserialize")) continue;
+        const std::string edgeRes = cType(resultOwnedErrorTypeNode(
+            triadTypeNode(e.kind.c_str(), _genericTypeInsts[cls].typeArgs[0])));
+        // Only when that `Result` is a real monomorph. It exists exactly when some container of these
+        // elements declared it, which is exactly when this helper is called — a program with a
+        // `Shared<X>` FIELD and no container of them instantiates the field's edge type but no Result
+        // over it, and emitting the helper anyway names a type nothing defines.
+        if (!_classes.count(edgeRes)) continue;
+        *_out << stat << edgeRes << " " << cls << "__deserializeEdge(Deserializer r, struct kama_de_graph* g)\n{\n";
+        indent(1); *_out << "(void)g;\n";
+        indent(1); *_out << cls << " __h;\n";
+        indent(1); *_out << "uint64_t __rid = r.vtbl->readU64(r.obj);\n";
+        if (e.elemIsContract) {
+            indent(1); *_out << "__h.obj = (void*)(uintptr_t)__rid; __h.vtbl = NULL; __h.ctrl = NULL;\n";
+        } else {
+            indent(1); *_out << "__h.p = (" << e.elemC << "*)(uintptr_t)__rid; __h.c = NULL;\n";
+        }
+        indent(1); *_out << "return (" << edgeRes << "){ .tag = " << edgeRes
+                         << "_Ok, .u.Ok = { .value = __h } };\n";
         *_out << "}\n\n";
     }
 }
@@ -26392,6 +26601,79 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << rbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __ret } };\n";
+    *_out << "}\n\n";
+}
+
+// The read twin of emitGraphRootDriver: the same envelope, read back into a PARTICIPANT. It differs from
+// the node reader in exactly the way the writer did — the `root` slot holds the value itself, not an id —
+// and in what it hands back: BY VALUE. A node comes back as `Shared<T>` because a cycle has nowhere to
+// point if the root is a stack value; a participant has no identity, nothing in the graph can point AT it,
+// so there is no cycle to close and no reason to box it.
+//
+// Order matters and is the reverse of the write: the `objects` table is read FIRST so every shell exists,
+// then the root, whose elements can then resolve. The wire is unchanged — `root` is written first — so the
+// reader reads root into a temp region... no: the root's elements stash ids exactly as a node's fields do,
+// and `X__wireParts` resolves them after the table is enrolled. Same two passes, same order as written.
+void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
+{
+    const std::string T = ci.name;
+    SharedIdentifier retNode = ci.methods["deserialize"].returnType;
+    const std::string resC = cType(retNode);
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << resC << " " << T << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
+    indent(1); *_out << "r.vtbl->beginObject(r.obj, 2);\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    // PASS 1a — the root's own value, with each edge element stashing its id.
+    indent(1); *_out << resC << " __rv = " << T << "__deserializeFrom(r, &__g);\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "r.vtbl->beginArray(r.obj);\n";
+    // PASS 1b — the table, exactly as the node reader builds it.
+    indent(1); *_out << "while (r.vtbl->moreElems(r.obj)) {\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj, 3);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->readU64(r.obj);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "FieldKey __ty = r.vtbl->variant(r.obj);\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
+    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
+    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, DeError_DuplicateId)) {\n";
+    indent(3); *_out << "__kama_graph_dropBox(__b);\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(2); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(2); *_out << "if (r.vtbl->failed(r.obj)) break;\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    // PASS 2 — the shells first, then the root's own elements.
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) {\n";
+    indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
+    indent(2); *_out << "switch (__b->type_id) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genDeserialize) continue;
+        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__wireEdges(("
+                         << K << "*)__b->ptr, &__g); break;\n";
+    }
+    indent(2); *_out << "default: break;\n";
+    indent(2); *_out << "}\n";
+    indent(1); *_out << "}\n";
+    if (graphWireElementsNeeded(ci)) {
+        indent(1); *_out << "if (__rv.tag == " << resC << "_Ok) " << T
+                         << "__wireParts(&__rv.u.Ok.value, &__g);\n";
+    }
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
+    indent(1); *_out << "kama_de_graph_free(&__g);\n";
+    indent(1); *_out << "if (__g.failed) {\n";
+    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError){ .tag = (DeError_Tag)__g.code });\n";
+    std::string gbox = emitStickyErrBox(2);
+    indent(2); *_out << "if (__rv.tag == " << resC << "_Ok) " << cType(retNode->genericArgs->at(0))
+                     << "__dtor(&__rv.u.Ok.value);\n";
+    indent(2); *_out << "else " << cType(ownedErrorTypeNode()) << "__dtor(&__rv.u.Err.error);\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return __rv;\n";
     *_out << "}\n\n";
 }
 
@@ -28277,6 +28559,23 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
         return "0";
     }
+    // OBJECT-GRAPH READ RETARGET, the mirror of the write side in emitDispatch. Inside a read twin,
+    // `T.deserialize(r)` for an EDGE element takes the id and stashes it (the registered `Shared<X>`
+    // forward points at the node's whole-envelope driver, which is emphatically not what an element wants),
+    // and a nested PARTICIPANT reads through its own graph-carrying body.
+    if (!_deGraphArg.empty() && method == "deserialize") {
+        if (_graphEdgeHelperFor.count(tn)) {
+            std::vector<ParamSig> ps;
+            ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; ps.push_back(r);
+            return emitReorderedCall(tn + "__deserializeEdge", "", ps, call->args, call->line, _deGraphArg);
+        }
+        auto pc = _classes.find(tn);
+        if (pc != _classes.end() && graphTwinNeeded(pc->second, /*write=*/false)) {
+            std::vector<ParamSig> ps;
+            ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; ps.push_back(r);
+            return emitReorderedCall(tn + "__deserializeFrom", "", ps, call->args, call->line, _deGraphArg);
+        }
+    }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
     // `T.default()` names the ELECTION, not a ctor name: the author marked one zero-arg ctor `default`
@@ -29524,6 +29823,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                            // size whose ELEMENT type no other InlineArray in the program already used.
     registerOwnedDeserialize();   // the `Owned<X>` box read — BEFORE the fixpoint, which must see the
                                   // `Result<Owned<X>, Owned<Error>>` it mints to mark it move-only
+    registerEdgeElementResults();  // …and the `Result<Shared<X>, …>` a container's element read binds
     bakeFieldCTypes();     // ...and resolve every field's type in its OWN class's scope, before any body
                            // walk can resolve it in a reader's. computeDestructible installs the same
                            // context immediately below; this is that answer, kept.
