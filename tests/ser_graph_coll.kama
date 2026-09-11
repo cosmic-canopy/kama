@@ -14,10 +14,10 @@
 // that rebuilt two separate copies would re-encode as `[2,3,4]`. Byte equality is what proves sharing
 // survived the wire. ASan proves the rebuilt graph frees exactly once. Returns 7 + 11 + 7 = 25.
 import {
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonBuffer,
-    std::serialization::binary::serializeBinaryPositionalBuffer,
-    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
     std::memory::Shared,
     std::collections::DynamicArray,
 };
@@ -83,9 +83,9 @@ fn int32 main() {
     // …and the same graph on the positional backend, which has no names and no delimiters: its reader is
     // bounded only by the counts, so it is the one that proves discovery made the table's length exact
     // before `beginArray`.
-    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: bag);
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: bag);
     DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
-    Result<Shared<Bag>, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Shared<Bag>>(src: give bytes);
+    Result<Shared<Bag>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Shared<Bag>>(src: give bytes);
     Shared<Bag> b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
     return b3.sum();
 }

@@ -1,5 +1,5 @@
 // Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `deserializeJsonBuffer` one-liner.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type value Vec {
     @field int32 x;

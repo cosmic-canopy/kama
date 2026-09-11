@@ -1,6 +1,6 @@
 // @generate on an enum: externally-tagged {"tag":"V"[,"value":{fields}]}, here as a nested field.
 // Exercises a payload field named `w` (which must not shadow the Serializer parameter).
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
 @generate(Serializable, Deserializable)

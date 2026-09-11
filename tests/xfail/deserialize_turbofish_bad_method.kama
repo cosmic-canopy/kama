@@ -4,7 +4,7 @@
 // `r.deserialize::<T>()` used to be the single exception, lowered through a `__kamaDeserialize<T>`
 // trampoline. It was pure sugar for `T.deserialize(r: r)` — the spelling the stdlib's own `deserializeJsonBuffer<T>`
 // already uses — so the exception, the trampoline, and the prelude name all went together.
-import { std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Bad {

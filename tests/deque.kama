@@ -4,8 +4,8 @@
 import {
     std::collections::Deque,
     std::collections::DynamicArray,
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
 };
 
 fn int32 unwrap(Optional<int32> o) { return match (o) { case Some(value: x): x; case None: 0 - 1; }; }

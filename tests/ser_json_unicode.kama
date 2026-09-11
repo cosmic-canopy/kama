@@ -10,7 +10,7 @@
 //   2. `writeChar` emitted `\uXXXX` from the low 16 bits, silently corrupting any astral char
 //      (U+1F600 -> `\uF600`, a different character);
 //   3. `readChar` returned `s[0]`, the UTF-8 LEAD BYTE, so any non-ASCII char decoded to a mangled scalar.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type resource Msg {

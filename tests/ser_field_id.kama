@@ -6,7 +6,7 @@
 //
 // Also pins `@deprecated`: read when present, never written. Its name and id stay reserved (it still takes
 // part in duplicate detection), so a stream written by an older version still decodes.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Rec {

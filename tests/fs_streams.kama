@@ -9,8 +9,8 @@ import {
     std::io::Reader,
     std::io::Writer,
     std::io::IoError,
-    std::serialization::json::JsonSerializer,
-    std::serialization::json::deserializeJsonStream,
+    std::serialization::text::json::JsonSerializer,
+    std::serialization::text::json::deserializeJsonStream,
 };
 
 @generate(Serializable, Deserializable)

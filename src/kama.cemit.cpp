@@ -12087,7 +12087,7 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
         // up: `f(to: StringWriter.make())` reported "not a literal or a locally-typed value" and demanded
         // `StringWriter w = StringWriter.make(); f(to: give w);` — a named local for a value used once.
         // Construction is the ONLY way a type is made in kama, so this is the shape a generic sink
-        // parameter meets constantly (`serializeBinaryPositionalStream<W: Writer>(v:, to:)`).
+        // parameter meets constantly (`serializeKbinPositionalStream<W: Writer>(v:, to:)`).
         if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
             std::string dt;
             if (ma->identifier && ma->identifier->value && isTypeReceiver(ma, dt) && _classes.count(dt)) {
@@ -21227,7 +21227,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).
                 // ⚠️ `isSmartPtrClass` as well as `ownsByValue`, and the omission was a latent double free
                 // that only the subject temp's missing drop was hiding. `match (give r) { case Err(error:
-                // e): return Result::Err(error: give e); }` — `std::serialization::json::encode`'s own
+                // e): return Result::Err(error: give e); }` — `std::serialization::text::json::encode`'s own
                 // shape — binds an `Owned<Error>` fat handle, which is not `ownsByValue`, so it took
                 // NEITHER branch: not defused (the subject kept owning the box) and not marked borrowed
                 // (that arm is for a borrowing match), so `give e` moved an alias out from under a live

@@ -1,11 +1,11 @@
-// KBIN graph decode surfaces a DANGLING reference. We hand-drive a NamedBinarySerializer to craft a graph whose only
+// KBIN graph decode surfaces a DANGLING reference. We hand-drive a KbinNamedSerializer to craft a graph whose only
 // entry (id 1, a Pair) references id 2 for both fields, but id 2 is never defined — so the two-pass wire can't
 // resolve it and `deserializeJsonBuffer` returns `DeError::UnresolvedReference` (the specific code, via failWith), not a crash
 // or the generic Malformed. This is the binary analog of the JSON string-edit dangling test. Returns 0.
 import {
-    std::serialization::binary::serializeBinaryNamedBuffer,
-    std::serialization::binary::deserializeBinaryNamedBuffer,
-    std::serialization::binary::NamedBinarySerializer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::KbinNamedSerializer,
     std::collections::DynamicArray,
     std::io::StringWriter,
     std::memory::Shared,
@@ -24,7 +24,7 @@ type resource Pair {
 fn int32 main() {
     // Craft {root:1, objects:[{id:1, type:Pair, value:{a:2, b:2}}]} through the ordinary token protocol —
     // the envelope IS ordinary tokens now — with id 2 (the Leaf) MISSING from the table.
-    NamedBinarySerializer<StringWriter> w = NamedBinarySerializer::<StringWriter>.make(sink: StringWriter.make());
+    KbinNamedSerializer<StringWriter> w = KbinNamedSerializer::<StringWriter>.make(sink: StringWriter.make());
     w.beginObject(count: 2);
     w.field(name: "root", id: 0ui32); w.writeU64(v: cast<uint64>(1));
     w.field(name: "objects", id: 1ui32);
@@ -42,7 +42,7 @@ fn int32 main() {
     w.endObject();
     DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();
 
-    Result<Shared<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Pair>>(src: give bytes);
+    Result<Shared<Pair>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Pair>>(src: give bytes);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {

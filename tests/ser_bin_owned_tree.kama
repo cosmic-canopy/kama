@@ -3,8 +3,8 @@
 // `Shared` root — decode hands back the `Parent` itself. Proven by a byte-identical re-encode; ASan
 // proves each child frees exactly once. Returns 55.
 import {
-    std::serialization::binary::serializeBinaryNamedBuffer,
-    std::serialization::binary::deserializeBinaryNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Owned,
 };
@@ -41,14 +41,14 @@ fn int32 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
     p.adopt(c: new Child.make(v: 3));
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: p);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeKbinNamedBuffer(v: p);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 250; } };
 
-    Result<Parent, Owned<Error>> res = deserializeBinaryNamedBuffer::<Parent>(src: clone(src: ref b1));
+    Result<Parent, Owned<Error>> res = deserializeKbinNamedBuffer::<Parent>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: back): {
             if (back.total() != 10) { return 30; }
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: back);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeKbinNamedBuffer(v: back);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: x): give x; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

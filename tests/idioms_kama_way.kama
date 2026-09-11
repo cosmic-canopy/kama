@@ -1,7 +1,7 @@
 // Every "do it this way" example from docs/coming-from-other-languages.md, compiled.
 // That page is written for readers (and LLMs) arriving from C#/Rust/Python, whose instincts kama
 // deliberately rejects. If an example there stops being true, this fixture fails and says so.
-import { std::serialization::json::serializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer };
 
 type contract Shown for value { fn int32 show(); }
 

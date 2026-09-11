@@ -14,7 +14,7 @@
 //     entry — its `root` slot carries its VALUE inline, where a node's carries an id.
 //
 // ⚠️ The READ half is a separate fixture (`tests/xfail/graph_coll_of_shared` until it lands).
-import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::collections::DynamicArray };
+import { std::serialization::text::json::serializeJsonBuffer, std::memory::Shared, std::collections::DynamicArray };
 
 @generate(Serializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

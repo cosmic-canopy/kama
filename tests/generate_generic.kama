@@ -8,7 +8,7 @@
 // Rust's `impl<T: PartialEq> PartialEq for Box<T>`, Haskell's `instance Eq a => Eq (Box a)`. The author
 // does not write that condition because it is not a choice: it is a consequence of the fields.
 // tests/xfail/generate_generic_unmet covers the instance that does not qualify.
-import { std::collections::Map, std::serialization::json::serializeJsonBuffer };
+import { std::collections::Map, std::serialization::text::json::serializeJsonBuffer };
 
 @generate(Serializable, Formattable, Equatable, Hashable, of, zero)
 type value Box<T> {

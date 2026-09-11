@@ -1,5 +1,5 @@
 // A DynamicArray field serializes to a JSON array — both a primitive element list and a nested-object element list.
-import { std::serialization::json::serializeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::text::json::serializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable)
 type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
 @generate(Serializable)

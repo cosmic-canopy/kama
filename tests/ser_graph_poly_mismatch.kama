@@ -3,7 +3,7 @@
 // its `__type`, finds no `Shape` conformance for it, and `deserializeJsonBuffer` returns `DeError::TypeMismatch` (not the
 // generic `Malformed`). `Tag` is a real graph node (a concrete `Shared<Tag>` pointee) with no pointer fields,
 // so only the mismatching edge fails — mirroring `ser_graph_dangling.kama`'s specific-error assertion.
-import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+import { std::serialization::text::json::deserializeJsonBuffer, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 

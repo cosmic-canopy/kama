@@ -1,14 +1,14 @@
 // KBIN round-trip of a bare collection (a DynamicArray is a first-class Serializable/Deserializable value). Returns 60.
 import {
-    std::serialization::binary::serializeBinaryNamedBuffer,
-    std::serialization::binary::deserializeBinaryNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
     std::collections::DynamicArray,
 };
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
-    Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeBinaryNamedBuffer(v: xs);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeKbinNamedBuffer(v: xs);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<int32>, Owned<Error>> res = deserializeBinaryNamedBuffer::<DynamicArray<int32>>(src: give bytes);
+    Result<DynamicArray<int32>, Owned<Error>> res = deserializeKbinNamedBuffer::<DynamicArray<int32>>(src: give bytes);
     return match (res) { case Ok(value: b): b[0] + b[1] + b[2]; case Err(error: e): 0 - 1; };   // 60
 }

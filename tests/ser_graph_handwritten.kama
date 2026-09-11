@@ -12,8 +12,8 @@
 // BY VALUE for the same reason: there is no cycle through it to close. Both handles resolve to the one
 // leaf, so the sum is 9 + 9 = 18. ASan proves the rebuilt graph frees exactly once.
 import {
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
     std::memory::Shared,
 };
 

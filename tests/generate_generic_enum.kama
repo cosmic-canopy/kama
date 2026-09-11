@@ -9,7 +9,7 @@
 // in `fields` — so an instance routed to the class-side emitters would have produced `return true` for
 // equals and a seed-only hash: valid C, no diagnostic, and every `Msg<int32>` equal to every other. The
 // two `Put`s carrying DIFFERENT payloads are what catch that, and nothing else here would.
-import { std::collections::Map, std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::collections::Map, std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Msg<T> { Put(T v), Nop }

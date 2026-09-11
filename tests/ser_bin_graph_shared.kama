@@ -3,8 +3,8 @@
 // decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
 // refcounts balance. Returns 55.
 import {
-    std::serialization::binary::serializeBinaryNamedBuffer,
-    std::serialization::binary::deserializeBinaryNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
     std::collections::DynamicArray,
     std::memory::Shared,
 };
@@ -37,13 +37,13 @@ fn int32 main() {
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Shared<Pair> p = new Pair.make(a: give leaf, b: give l2);
     Shared<Pair> og = p;
-    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeBinaryNamedBuffer(v: og);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeKbinNamedBuffer(v: og);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Pair>, Owned<Error>> res = deserializeBinaryNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
+    Result<Shared<Pair>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
     match (res) {
         case Ok(value: sh): {
-            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeBinaryNamedBuffer(v: sh);
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeKbinNamedBuffer(v: sh);
             DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }

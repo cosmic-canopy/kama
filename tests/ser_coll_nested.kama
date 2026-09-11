@@ -1,5 +1,5 @@
 // Composition: a DynamicArray of a @generate type, and a DynamicArray of Lists — everything chains .serialize()/deserialize().
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable, Deserializable, of)
 type value Point { @field public int32 x; @field public int32 y; }
 fn int32 main() {

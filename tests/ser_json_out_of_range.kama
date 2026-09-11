@@ -4,7 +4,7 @@
 // a malformed request. Nothing in the corpus covered this, which is how it stayed invisible.
 //
 // Both directions are checked, because "rejects everything" would also pass the second half alone.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Small {

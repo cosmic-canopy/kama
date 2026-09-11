@@ -6,7 +6,7 @@
 // derive, which `Shared<X>` is), and it said "a collection OF nodes is not walked yet" — true when it was
 // written, false once collections of edges started being walked. A refusal that describes a world that no
 // longer exists sends the reader somewhere there is nothing to find.
-import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::memory::Owned };
+import { std::serialization::text::json::serializeJsonBuffer, std::memory::Shared, std::memory::Owned };
 
 @generate(Serializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

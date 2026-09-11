@@ -1,7 +1,7 @@
 // Graph deserialize surfaces a DANGLING reference: the objects table references id 2 (the shared leaf) but
 // never defines it, so the two-pass wire can't resolve it and `deserializeJsonBuffer` returns `DeError::UnresolvedReference`
 // (not the generic `Malformed`) — the reader records the specific error via `failWith`.
-import { std::serialization::json::deserializeJsonBuffer, std::memory::Shared };
+import { std::serialization::text::json::deserializeJsonBuffer, std::memory::Shared };
 
 @generate(Serializable, Deserializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

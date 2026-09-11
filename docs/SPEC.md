@@ -4761,7 +4761,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   per-backend graph code. What only the compiler can do (reflect over a node's fields, and dedup by object
   identity) stays with it; everything above that is the ordinary vocabulary.
   **Four back ends ship, and the three binary ones differ by ADDRESSING, not by medium** — so they live in one
-  module, `std::serialization::binary`, and each entry point names its addressing (none owns a bare `serializeJsonBuffer`,
+  module, `std::serialization::binary::kbin`, and each entry point names its addressing (none owns a bare `serializeJsonBuffer`,
   because none is the default). Every binary form is byte-oriented: `serializeJsonBuffer` yields a `DynamicArray<uint8>` and
   `deserializeJsonBuffer` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
   `Writer`/`Reader` substrate, so any of them flows to a file or socket.
@@ -4776,10 +4776,10 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 
   | back end | addressing | buffer | stream | what it is for |
   |---|---|---|---|---|
-  | `std::serialization::json` | named | `serializeJsonBuffer` / `deserializeJsonBuffer` | `serializeJsonStream` / `deserializeJsonStream` | text, human-readable, UTF-8 in and out |
-  | `binary` — **KBIN** | named | `serializeBinaryNamedBuffer` / `deserializeBinaryNamedBuffer` | `serializeBinaryNamedStream` / `deserializeBinaryNamedStream` | self-describing save/load: order-independent, unknown fields skip |
-  | `binary` — **KNUM** | numbered | `serializeBinaryNumberedBuffer` / `deserializeBinaryNumberedBuffer` | `serializeBinaryNumberedStream` / `deserializeBinaryNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
-  | `binary` — **POS** | positional | `serializeBinaryPositionalBuffer` / `deserializeBinaryPositionalBuffer` | `serializeBinaryPositionalStream` / `deserializeBinaryPositionalStream` | smallest: only values on the wire, shape agreed in advance |
+  | `std::serialization::text::json` | named | `serializeJsonBuffer` / `deserializeJsonBuffer` | `serializeJsonStream` / `deserializeJsonStream` | text, human-readable, UTF-8 in and out |
+  | `binary` — **KBIN** | named | `serializeKbinNamedBuffer` / `deserializeKbinNamedBuffer` | `serializeKbinNamedStream` / `deserializeKbinNamedStream` | self-describing save/load: order-independent, unknown fields skip |
+  | `binary` — **KNUM** | numbered | `serializeKbinNumberedBuffer` / `deserializeKbinNumberedBuffer` | `serializeKbinNumberedStream` / `deserializeKbinNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
+  | `binary` — **POS** | positional | `serializeKbinPositionalBuffer` / `deserializeKbinPositionalBuffer` | `serializeKbinPositionalStream` / `deserializeKbinPositionalStream` | smallest: only values on the wire, shape agreed in advance |
 
   A `…Stream` encoder CONSUMES its sink (kama refuses a move out of a field, so it cannot hand it back); to
   keep writing to the same sink, construct the serializer yourself and call `encodeValue` on it. A
@@ -4910,7 +4910,7 @@ The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no
 core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 
 ```kama
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,   // wire backend (library)
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,   // wire backend (library)
          std::memory::Shared };                                                                             // a graph root comes back as a handle
 
 // by-value (tree): a resource reaching no Shared/Weak round-trips on the stack — an Owned child included

@@ -5,7 +5,7 @@
 // it likes and say which one carries its edges.
 //
 // The old rule looked up the name `iterMut` and would have accepted this silently.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
          std::memory::Shared, std::collections::DynamicArray };
 
 @generate(Serializable, Deserializable)

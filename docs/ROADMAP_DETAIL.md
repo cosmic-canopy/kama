@@ -1759,7 +1759,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
 - **Serde naming pass (row 10)** — the TYPE names now say `{Addressing}{Medium}Serializer`
-  (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
+  (`KbinNamedSerializer`, `KbinNumberedSerializer`, `KbinPositionalSerializer`, `JsonSerializer`) and the
   binary module's entry points each name their addressing, so none owns a bare `serializeJsonBuffer`. `…Writer`/`…Reader`
   went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used
   "Writer" for two unrelated things in one declaration. What is LEFT is the MODULE names, which still mix axes:

@@ -6,9 +6,9 @@
 //   (c) `deserializeJsonStream` over a SliceReader round-trips through readAll + pump + JsonDeserializer.
 // A free fn takes a `Serializable` as a second-class borrow, so `r` stays usable across calls. Returns 0.
 import {
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonStream,
-    std::serialization::json::JsonSerializer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonStream,
+    std::serialization::text::json::JsonSerializer,
     std::io::Writer,
     std::io::Reader,
     std::io::StringWriter,

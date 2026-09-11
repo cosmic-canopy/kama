@@ -1,5 +1,5 @@
 // Round-trip a resource with a string field, a @field(name:) rename, and a @skip field (ctor-initialized).
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 @generate(Serializable, Deserializable)
 type resource User {
     @field(name: "user_name") string name;

@@ -1,7 +1,7 @@
 // Landing D: `serialize` is FALLIBLE (the write mirror of the fallible `deserialize` ctor). JSON can't
 // represent a non-finite float, so encoding one surfaces `Err(SerError::NotRepresentable)` — never a
 // half-written string — recovered via `err.as<SerError>()`. A finite value encodes to `Ok`.
-import { std::serialization::json::serializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer };
 @generate(Serializable)
 type value Measure {
     @field float64 v;

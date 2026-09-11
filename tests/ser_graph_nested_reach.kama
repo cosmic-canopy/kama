@@ -2,7 +2,7 @@
 // `Owned<X>` pointee that does, contribute their edges to the OWNER's table entry — one table, one id per
 // pointee, shared across the nesting. (The old emitter wrote a whole nested envelope inside the entry, with
 // colliding ids, and the round trip still reported Ok — measured 2026-09-09.) Re-encode is exact.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
          std::memory::Shared, std::memory::Owned };
 
 @generate(Serializable, Deserializable)

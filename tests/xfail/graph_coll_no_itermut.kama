@@ -7,7 +7,7 @@
 // Refused rather than silently written wrong: without pass 2 the elements keep the wire ids stashed in
 // their pointer slots, and the first deref is a wild pointer. (The WRITE half needs no iteration at all —
 // the container's own `serialize` visits its elements — so this is a read-side requirement only.)
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
          std::memory::Shared, std::collections::DynamicArray };
 
 @generate(Serializable, Deserializable)

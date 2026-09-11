@@ -1,7 +1,7 @@
 // Nested @generate(Deserializable) — the bypass-ctor payoff: a nested resource field, an Optional<nested>, and a
 // DynamicArray<nested> all reconstruct via direct in-place field-set (`result.child = Child::deserialize(r)`), no ctor
 // and no move-out-of-holder — which the old all-args-ctor model couldn't express for a nested resource.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::DynamicArray };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
 
 @generate(Serializable, Deserializable)
 type resource Child {

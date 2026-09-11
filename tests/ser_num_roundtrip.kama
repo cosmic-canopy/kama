@@ -4,8 +4,8 @@
 // collection as GROUP_START/GROUP_END subtrees, both `Optional` arms, and a tagged enum.
 import {
     std::collections::DynamicArray,
-    std::serialization::binary::serializeBinaryNumberedBuffer,
-    std::serialization::binary::deserializeBinaryNumberedBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
 };
 
 @generate(Serializable, Deserializable)
@@ -66,9 +66,9 @@ type resource Rec {
 }
 
 fn int32 main() {
-    Result<DynamicArray<uint8>, Owned<Error>> b = serializeBinaryNumberedBuffer(v: Rec.make());
+    Result<DynamicArray<uint8>, Owned<Error>> b = serializeKbinNumberedBuffer(v: Rec.make());
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
-    Result<Rec, Owned<Error>> d = deserializeBinaryNumberedBuffer::<Rec>(src: give bytes);
+    Result<Rec, Owned<Error>> d = deserializeKbinNumberedBuffer::<Rec>(src: give bytes);
     Rec r = match (give d) { case Ok(value: v): give v; case Err(error: e): { return 251; } };
 
     int32 bad = r.verify();

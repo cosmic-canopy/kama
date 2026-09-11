@@ -1,5 +1,5 @@
 // Map<K,V> serializes as an array of {"key","value"} pairs (a generic Map can't emit a JSON object).
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer, std::collections::Map };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer, std::collections::Map };
 fn int32 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);

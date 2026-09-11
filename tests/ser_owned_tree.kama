@@ -8,10 +8,10 @@
 // composite arm, which is why it works on every backend: json here and positional (no names, no
 // framing, still a tree) below. ASan proves each node frees exactly once. Returns the tree's sum, 42.
 import {
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonBuffer,
-    std::serialization::binary::serializeBinaryPositionalBuffer,
-    std::serialization::binary::deserializeBinaryPositionalBuffer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
     std::collections::DynamicArray,
     std::memory::Owned,
 };
@@ -53,9 +53,9 @@ fn int32 main() {
     if (t2.sum() != 42) { return 252; }
 
     // The same tree, positionally: values only, presence as one byte per Optional — and still a tree.
-    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeBinaryPositionalBuffer(v: t2);
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: t2);
     DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 253; } };
-    Result<Tree, Owned<Error>> pb = deserializeBinaryPositionalBuffer::<Tree>(src: give bytes);
+    Result<Tree, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Tree>(src: give bytes);
     Tree t3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 254; } };
     return t3.sum();
 }

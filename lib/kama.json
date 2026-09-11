@@ -2,43 +2,108 @@
   "name": "std",
   "kind": "library",
   "source": "std",
-
   "modules": {
-    ".":             { "visibility": "public" },
-    "app":           { "visibility": "public" },
-    "ascii":         { "visibility": "public" },
-    "collections":   { "visibility": "public" },
-    "concurrent":    { "visibility": "public" },
-    "digest":        { "visibility": "public",
-                       "modules": {
-                         "sha1":   { "visibility": "public" },
-                         "sha256": { "visibility": "public" }
-                       } },
-    "encoding":      { "visibility": "public",
-                       "modules": {
-                         "base64": { "visibility": "public" },
-                         "hex":    { "visibility": "public" }
-                       } },
-    "fmt":           { "visibility": "public" },
-    "fs":            { "visibility": "public" },
-    "io":            { "visibility": "public" },
-    "log":           { "visibility": "public" },
-    "math":          { "visibility": "public" },
-    "memory":        { "visibility": "public" },
-    "net":           { "visibility": "public",
-                       "modules": {
-                         "web":    { "visibility": "public" }
-                       } },
-    "num":           { "visibility": "public" },
-    "path":          { "visibility": "public" },
-    "process":       { "visibility": "public" },
-    "ptr":           { "visibility": "public" },
-    "random":        { "visibility": "public" },
-    "serialization": { "visibility": "public",
-                       "modules": {
-                         "binary": { "visibility": "public" },
-                         "json":   { "visibility": "public" }
-                       } },
-    "time":          { "visibility": "public" }
+    ".": {
+      "visibility": "public"
+    },
+    "app": {
+      "visibility": "public"
+    },
+    "ascii": {
+      "visibility": "public"
+    },
+    "collections": {
+      "visibility": "public"
+    },
+    "concurrent": {
+      "visibility": "public"
+    },
+    "digest": {
+      "visibility": "public",
+      "modules": {
+        "sha1": {
+          "visibility": "public"
+        },
+        "sha256": {
+          "visibility": "public"
+        }
+      }
+    },
+    "encoding": {
+      "visibility": "public",
+      "modules": {
+        "base64": {
+          "visibility": "public"
+        },
+        "hex": {
+          "visibility": "public"
+        }
+      }
+    },
+    "fmt": {
+      "visibility": "public"
+    },
+    "fs": {
+      "visibility": "public"
+    },
+    "io": {
+      "visibility": "public"
+    },
+    "log": {
+      "visibility": "public"
+    },
+    "math": {
+      "visibility": "public"
+    },
+    "memory": {
+      "visibility": "public"
+    },
+    "net": {
+      "visibility": "public",
+      "modules": {
+        "web": {
+          "visibility": "public"
+        }
+      }
+    },
+    "num": {
+      "visibility": "public"
+    },
+    "path": {
+      "visibility": "public"
+    },
+    "process": {
+      "visibility": "public"
+    },
+    "ptr": {
+      "visibility": "public"
+    },
+    "random": {
+      "visibility": "public"
+    },
+    "serialization": {
+      "visibility": "public",
+      "modules": {
+        "binary": {
+          "visibility": "public",
+          "modules": {
+            "kbin": {
+              "visibility": "public"
+            }
+          }
+        },
+        "text": {
+          "visibility": "public",
+          "modules": {
+            "json": {
+              "visibility": "public"
+            }
+          }
+        }
+      }
+    },
+    "time": {
+      "visibility": "public"
+    }
   }
 }

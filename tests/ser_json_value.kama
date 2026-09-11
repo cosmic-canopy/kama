@@ -1,5 +1,5 @@
 // @generate(Serializable) on a value type -> exact JSON for scalar fields (ints, float, bool).
-import { std::serialization::json::serializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer };
 @generate(Serializable)
 type value Vitals {
     @field int32 hp;

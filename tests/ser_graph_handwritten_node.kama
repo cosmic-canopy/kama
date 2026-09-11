@@ -18,8 +18,8 @@
 //
 // The re-encode is the check: identical bytes mean the cycle came back a cycle, not unrolled.
 import {
-    std::serialization::json::serializeJsonBuffer,
-    std::serialization::json::deserializeJsonBuffer,
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
     std::memory::Shared,
     std::memory::Weak,
 };

@@ -6,7 +6,7 @@
 // ⚠️ `serializeJsonBuffer(v: aString)` is deliberately absent: boxing a `string` into a contract emits an
 // undefined `kama_string__as_Serializable` (`kama check` passes; clang catches it). Every other primitive
 // boxes fine, which is why nothing noticed. Add the line here when that row lands.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 fn int32 main() {
     int32 iv = 42;

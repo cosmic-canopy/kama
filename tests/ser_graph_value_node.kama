@@ -2,8 +2,8 @@
 // so nothing can declare `Pt` a one-node graph: `serializeJsonBuffer(v: sharedPt)` derefs the handle and
 // writes `{"x":…,"y":…}` — the same bytes a bare `Pt` writes, through every backend. Reading one back as
 // `Shared<Pt>` is refused (`graph_handle_not_a_node`); it is read by value.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer,
-         std::serialization::binary::serializeBinaryNamedBuffer, std::serialization::binary::deserializeBinaryNamedBuffer,
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
          std::collections::DynamicArray, std::memory::Shared };
 
 @generate(Serializable, Deserializable)
@@ -25,9 +25,9 @@ fn int32 main() {
 
     // …and the same through the named binary backend, from a handle out and a value back in.
     Shared<Pt> q = new Pt.make(x: 10, y: 20);
-    Result<DynamicArray<uint8>, Owned<Error>> br = serializeBinaryNamedBuffer(v: q);
+    Result<DynamicArray<uint8>, Owned<Error>> br = serializeKbinNamedBuffer(v: q);
     DynamicArray<uint8> bytes = match (give br) { case Ok(value: b): give b; case Err(error: e): { return 246; } };
-    Result<Pt, Owned<Error>> bback = deserializeBinaryNamedBuffer::<Pt>(src: give bytes);
+    Result<Pt, Owned<Error>> bback = deserializeKbinNamedBuffer::<Pt>(src: give bytes);
     int32 b = match (give bback) { case Ok(value: v): v.sum(); case Err(error: e): { return 245; } };
     return a + b;   // 3 + 30
 }

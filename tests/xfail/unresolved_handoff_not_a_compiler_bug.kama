@@ -13,7 +13,7 @@
 // ⚠️ WHAT PINS THIS IS THE POSITION LIST IN `DIAGNOSTIC_LINES`, NOT THE MESSAGE. Both diagnostics below are
 // the author's and both are correct; the regression would be a THIRD one appearing on the `give` line, and
 // an extra position is what fails this fixture. A `.msg` on the first error alone would not have noticed.
-import { std::serialization::binary::deserializeBinaryPositionalBuffer, std::memory::Shared };
+import { std::serialization::binary::kbin::deserializeKbinPositionalBuffer, std::memory::Shared };
 
 @generate(Serializable, Deserializable)
 type resource Node {
@@ -24,6 +24,6 @@ type resource Node {
 
 fn int32 main() {
     DynamicArray<uint8> bytes = DynamicArray.empty();     // `DynamicArray` deliberately NOT imported
-    Result<Shared<Node>, Owned<Error>> r = deserializeBinaryPositionalBuffer::<Shared<Node>>(src: give bytes);
+    Result<Shared<Node>, Owned<Error>> r = deserializeKbinPositionalBuffer::<Shared<Node>>(src: give bytes);
     return 0;
 }

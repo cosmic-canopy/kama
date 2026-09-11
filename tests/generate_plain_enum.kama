@@ -9,7 +9,7 @@
 // Closes the second half of consumer bug KB-19: `Deserializable` on an enum used to register only for
 // the MIXED shape — some variants with payloads, some without. All-payload was the `hasUnit` gate
 // (tests/generate_enum_derives); all-unit was this refusal.
-import { std::collections::Map, std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::collections::Map, std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Color { Red, Green = 5, Blue }

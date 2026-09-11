@@ -3,7 +3,7 @@
 // `match (give …)` — Ok binds the value,
 // Err propagates its boxed `Owned<Error>`. Proves: the override wins over the synth, a nested composite
 // reads through the same spelling, and a malformed field surfaces as `Err(nothing)` via `.as<DeError>()`.
-import { std::serialization::json::serializeJsonBuffer, std::serialization::json::deserializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type value Point {
