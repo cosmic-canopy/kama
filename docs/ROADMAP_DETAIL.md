@@ -245,67 +245,38 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### `drop` takes a place; it should take an `UnsafePtr<T>` (decided 2026-09-11)
+### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
-**Stage 1 shipped at `0.9.290`** — the six `sorted_map.kama` sites that dropped a LOCAL or a by-value
-PARAMETER are deleted; `SortedMap.put` replacing an existing key no longer crashes. What follows is the
-language half.
+`drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
 
-**What `drop` is, since it decides the shape.** It is a floor BUILTIN (emitter-handled, declared in no
-module) and it is one leg of the manual-memory triad: `Allocator.allocate` hands out raw bytes → a value is
-placed in them → **`drop` destroys the value** → `deallocate` returns the bytes. Without it you could
-allocate and free *bytes* but never destroy what lives in them. Every legitimate caller is a container or a
-smart pointer reaching a place RAII cannot: a heap pointee behind a raw pointer, or an element in a
-hand-managed buffer.
+**RAII covers a named local or by-value parameter in a lexical scope, and a bare block ends one** (measured).
+`drop` exists for the places a scope structurally cannot reach — a heap pointee behind a raw pointer, and an
+element in a hand-managed buffer — which is every legitimate use of it in the stdlib. It is one leg of the
+manual-memory triad (`allocate` → place a value → **`drop`** → `deallocate`); without it you could free the
+BYTES but never destroy what lived in them.
 
-**The defect.** `drop(value: place)` also accepts a place RAII DOES own — a local, a by-value parameter —
-and then the scope destructor runs on the same object again. MEASURED: a plain `resource` local, an
-`Owned<T>` and a `Shared<T>` all get two destructor calls, and `Shared` is the worst of the three because it
-underflows a refcount rather than double-freeing directly, freeing a pointee other handles still hold.
-⚠️ And it is reachable from ORDINARY SAFE CODE — `drop(value: local)` inside a plain `fn` compiles clean —
-while its own two siblings in the triad, `allocate`/`deallocate`, "stay uninvocable outside an `unsafe fn`"
-(SPEC). `drop` is the one leg that escaped that.
+**Why the pointer form rather than "keep the place form, require `unsafe`":** the `unsafe` requirement comes
+FREE (an `UnsafePtr` expression already requires an `unsafe fn`, so `drop` sits behind the same gate as its
+two siblings), and a local is not a pointer — so the double drop is **unspellable** rather than diagnosed.
 
-**The decision: `drop(ptr: UnsafePtr<T>)`** — "run the destructor on this pointee". Chosen over the weaker
-"keep the place form but require `unsafe`", for four reasons, two of them measured:
+⚠️ **The evidence that the marker was the right gate, worth keeping because it generalizes:** of the 16
+`drop()` sites in `lib/std` before the change, the **10 inside an `unsafe fn` were all correct**, and **6 of
+the 7 in SAFE fns were the bugs** — a live crash in `SortedMap.put` replacing any owning key. Requiring the
+marker then forced `DynamicArray.clear()` and `Deque.clear()` to be marked, which were the two remaining
+legitimate sites hiding in safe functions, and surfaced two more latent double drops (`~Cell() { drop(value:
+this.value); }` dropped a FIELD the owner's destructor already drops).
 
-1. ⚠️ **The `unsafe` requirement comes FREE.** An `UnsafePtr` parameter already forces `unsafe fn`
-   (measured: *"takes a raw pointer, so it must be declared `unsafe` — the marker belongs at the
-   declaration, where it is greppable"*). No new rule to write, test or document.
-2. **It closes the class rather than diagnosing it.** A local is not a pointer, so `drop(value: local)`
-   becomes UNSPELLABLE — the double-free shape cannot be written.
-3. **It matches the triad.** `allocate` and `deallocate` both speak `UnsafePtr`; `drop` was the odd leg.
-4. ⚠️ **Migration is mechanical, and both shapes were verified to compile**: the handle destructors become
-   `drop(ptr: this.p)`, and a container's element drop becomes `drop(ptr: addr(of: this.data[i]))`.
-
-**What this does and does NOT touch in the triad.** It does not change `Owned`/`Shared`/`Weak`'s fields,
-ownership model, public API or RAII behaviour. It changes TWO CALL SITES inside their destructors, because
-`drop(value: this.derefMut())` passes a `ref T` and would stop type-checking — and the rewrite is a
-SIMPLIFICATION, not a redesign: `this.p` is already the `UnsafePtr<T>`, so the current code takes a round
-trip through `derefMut()` to turn it back into a place. `drop(ptr: this.p)` is shorter and more direct.
-
-⚠️ **ACCEPTANCE CRITERION, set by the maintainer: the pointer triad must be RAII-safe, and it is CHECKABLE
-TODAY rather than a promise.** ~60 triad fixtures already exist — `shared_dtor`, `weak_dtor`, `weak_cycle`,
-`weak_expired`, `weak_upgrade`, `shared_arena_cycle`, plus a dozen asserting refcounts or live-object counts
-directly — and the san leg runs all of them under `-fsanitize=address,undefined` in a LINUX container, where
-LeakSanitizer is active (that is why the leg is container-only: macOS has no LSan). So both a double free and
-a LEAK are caught mechanically. "Done" means `./dev matrix` green with that leg, not an argument that the
-destructors look right.
-
-**Open sub-decision:** is `drop(ptr: null)` a no-op or refused? `Owned`'s destructor already guards with
-`if (cast<usize>(this.p) != 0)`; a no-op would let that guard go.
-
-**Stage 3 — the one fixture that has to move.** `tests/channel_send_after_recv_gone.kama:27` drops a LOCAL
-to make later sends fail. It becomes a scope — `{ Receiver rx = ch.receiver(); }` — which is the "one way to
-do a thing" answer: a scope ends a local's lifetime (measured), `drop` reaches what a scope cannot.
-
-**Stage 4 — docs.** SPEC's `drop` entry documents the place form; `FLOOR.md` lists it in the floor.
+⚠️ **A field is auto-dropped by its owner's destructor** (measured) — so an explicit drop of `this.field` was
+always a second one. ⚠️ **`addr(of: someLocal)` still launders a local into a pointer**, and that is accepted
+on purpose: `addr(of: …)` requires an `unsafe fn`, so reaching it means the author took responsibility. What
+the pointer form buys is that SAFE code cannot express the double drop at all.
 
 **Parked, deliberately not folded in:** a safe type's containment of a raw pointer is invisible at its
-declaration — you must read the fields to know `Owned` holds one. SPEC's decision table explicitly blesses
-the field (*"legal — every container and every `type extern value` depends on it"*), and every member
-touching it is `unsafe`, so this is the sanctioned pattern rather than a loophole. Making the containment
-visible would touch every container, not just the three handles, so it is its own question.
+declaration — `Owned`/`Shared`/`Weak` each hold private `UnsafePtr` fields (`Shared`/`Weak` two apiece:
+pointee and control block). SPEC's decision table explicitly blesses the field (*"legal — every container and
+every `type extern value` depends on it"*) and every member touching it is `unsafe`, so this is the sanctioned
+pattern rather than a loophole. Making the containment visible would touch every container, not just the three
+handles, so it is its own question.
 
 ### Two defects found building the graph-edge marking (2026-09-11)
 
