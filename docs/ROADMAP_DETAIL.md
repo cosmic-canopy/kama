@@ -1456,11 +1456,21 @@ dangles; the stash survives because it rides IN the element and moves with it.
 Fixtures: `ser_coll_of_owned` (the `Owned` element and root), `ser_graph_coll_write` (both write shapes,
 byte-for-byte), `ser_graph_coll` (round trip on json AND positional — **the check is the re-encode**:
 `kids` is `[2,3,2]`, and a read that rebuilt two copies instead of sharing one node would come back
-`[2,3,4]`), `ser_graph_handwritten` (the hand-written holder, round trip).
+`[2,3,4]`), `ser_graph_handwritten` (the hand-written holder, round trip), `ser_graph_handwritten_node` (a
+hand-written NODE with a `Weak` back-edge — a cycle, round-tripped and leak-free).
 
-**What is left** is two rows: a hand-written type as a graph NODE rather than only a participant (row 9,
-where the read side has a real return-type conflict to settle), and the `copy`-marker defect that makes
-`Map<K, Shared<V>>` uncompilable (row 10). `Set`/`SortedSet` of edges is refused BY BOUND — the triad is
+**A hand-written type as a NODE shipped too (`0.9.279`)**, which is what makes the rule general rather than
+nearly-general: its four walk helpers are its twin, and the one thing that could NOT follow the derive is
+the root spelling — a node's `deserialize` must hand back `Result<Shared<This>, …>`, which
+`computeGraphNodeTypes` rewrites in place for a derive, and there is no rewriting a body whose `return`
+constructs a `This` (that by-value body is exactly what fills a SHELL). So the author's signature is left
+alone and the handle root is a synthesized second entry point. ⚠️ A predicate that decides whether to emit a
+walk must stay the MIRROR of what that walk acts on: `graphPartIsEdge` did not unwrap `Optional` while
+`emitGraphFieldWire` does, and an `Optional<Shared<X>>` field went unwired. ⚠️ And the SANITIZER caught what
+the compiler could not: a cycle of two STRONG handles leaks by construction, so the fixture wants the `Weak`
+back-edge — the leak was the fixture's, not the emitter's.
+
+**What is left** is one row: the `copy`-marker defect that makes `Map<K, Shared<V>>` uncompilable (row 9). `Set`/`SortedSet` of edges is refused BY BOUND — the triad is
 not `Hashable`/`Equatable` — so edges only ever arise in the sequence containers and `Map`/`SortedMap`
 values.
 
@@ -1646,7 +1656,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
   measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
-- **Serde naming pass (row 11)** — the TYPE names now say `{Addressing}{Medium}Serializer`
+- **Serde naming pass (row 10)** — the TYPE names now say `{Addressing}{Medium}Serializer`
   (`NamedBinarySerializer`, `NumberedBinarySerializer`, `PositionalBinarySerializer`, `JsonSerializer`) and the
   binary module's entry points each name their addressing, so none owns a bare `serializeJsonBuffer`. `…Writer`/`…Reader`
   went because they collided with the `std::io::Writer` sink the type owns — `BinaryWriter<W: Writer>` used

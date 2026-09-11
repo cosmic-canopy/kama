@@ -4843,7 +4843,11 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   `foreach (ref T x in c)` already requires). **Identity is the thing that decides the `root` slot:** a node
   can be pointed at, so the root carries its **id** and reads back as `Shared<T>`; a collection or a
   hand-written holder cannot be pointed at, so the root carries its **value** inline and reads back **by
-  value** — there is no cycle through it to close. A pointee still must be `@generate`. <!-- xfail: poly_edge_nongenerate -->
+  value** — there is no cycle through it to close. A hand-written type can be a graph **node** too, not
+  only a holder of edges: a cycle through one round-trips, with the `Weak` back-edge that keeps an
+  ownership cycle leak-free. <!-- test: ser_graph_handwritten_node --> What a pointee must have is a serde
+  half at all — derived or hand-written; one with neither would be silently dropped from the wire, and is a
+  compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
