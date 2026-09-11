@@ -1232,6 +1232,17 @@ private:
     std::string                        _thisType;                // C name `This` resolves to (the class being emitted, or the contract type inside its vtbl slot)
     bool                               _basesLinked = false;     // linkBases() has run, so an empty ClassInfo::baseName means "no base" rather than "not resolved yet"
     bool                               _inBaseInstall = false;   // emitting the RHS of `this.base = …`: the one place an `abstract` type's ctor may be CALLED
+    // OBJECT-GRAPH THREADING. Non-empty while emitting the graph-carrying TWIN of a serde body
+    // (`X__serializeInto` / `X__deserializeFrom`) — it holds the C name of that body's graph parameter,
+    // which every nested serde call inside it appends as a trailing argument. Empty everywhere else, so an
+    // ordinary by-value serialize is emitted exactly as before and pays nothing.
+    //
+    // ⚠️ It is a SEPARATE symbol rather than a widened `X__serialize` on purpose. The `Serializable` vtbl
+    // slot is filled by CASTING `&X__serialize` to the slot's function-pointer type, so changing that
+    // function's arity would compile silently and then read an argument nobody pushed. The 2-arg spelling
+    // is the contract's, and it stays exactly that shape.
+    std::string                        _serGraphArg;             // e.g. "g" inside `X__serializeInto`
+    std::string                        _deGraphArg;              // e.g. "g" inside `X__deserializeFrom`
 
     // Virtual dispatch: per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
@@ -2358,6 +2369,19 @@ private:
     void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode + graphTypeId
     void registerOwnedDeserialize();                // `Owned<X>.deserialize` for a by-value pointee (the box read)
     void pruneOwnedDeserialize();                   // …and take it back off a box whose pointee is a graph node
+    // A type that must carry the graph through its OWN serde body — it reaches a `Shared`/`Weak` and its
+    // `serialize`/`deserialize` is HAND-WRITTEN (a library container, a user's own impl) rather than the
+    // derive's. A `@generate` node is not one: it has the walker's four helpers instead.
+    bool graphTwinNeeded(const ClassInfo& ci, bool write) const;
+    void emitGraphTwinProtos(ClassInfo& ci);        // `X__serializeInto` / `X__deserializeFrom` prototypes
+    void emitNullSerializer();                      // the discard sink discovery runs a body against
+    void emitGraphEdgeHelpers();                    // per edge type: `Shared_X__serializeEdge` (an expression)
+    void emitGraphWorklistLoop(int depth);          // the discovery switch over the growing worklist
+    void emitGraphObjectTable(int depth);           // `objects: [{id, type, value}]`
+    void emitGraphDriverTail(const std::string& resC);   // free the worklist, sticky flag -> fallible Result
+    void emitGraphRootDriver(ClassInfo& ci);        // a participant's `X__serialize`: open the graph, frame it
+    bool emitGraphParticipantCall(SharedIdentifier ty, const std::string& access, int depth, bool sink);
+    bool _anyGraphTwin = false;                     // a null sink / edge helpers are emitted only if one exists
     void emitOwnedDeserializeDefinition(ClassInfo& ci);   // …its body: read the pointee, heap it, `adopt`
     void regateGenericInstances();                  // re-judge every generic instance's `when` gates
     void emitGraphNodeHelperProtos(ClassInfo& ci);  // visitEdges / writeNode / wireEdges / __readInto prototypes
@@ -2375,6 +2399,10 @@ private:
     // contract (fat {obj,vtbl,ctrl} edge, resolved to a concrete conformance vtable at both endpoints).
     struct GraphEdge { std::string kind; std::string elemC; bool optional = false; bool elemIsContract = false; };
     GraphEdge graphEdgeOf(SharedIdentifier ty);
+    // Edge-handle class (`Shared_Leaf`) -> its edge, for every one that needs a `__serializeEdge` helper.
+    // Populated by planGraphTwins once the node set is final; empty when nothing needs a twin.
+    std::map<std::string, GraphEdge> _graphEdgeHelperFor;
+    void planGraphTwins();   // decide who needs a twin + which edge helpers to emit
     std::string graphInternExpr(const GraphEdge& e, const std::string& val, int depth);    // intern one edge -> the id temp
     // A field walked INLINE by every graph pass: {"node", cls} for a by-value field whose type is a node with
     // edges, {"owned", cls} for an `Owned<cls>` whose pointee is; {"", ""} for an ordinary value field.
@@ -3006,8 +3034,13 @@ private:
     std::string emitBindableInvoke(const std::string& recv, const std::string& cls,
                                    SharedArgumentList args, int line);
     // Emit `cName(leadArg, <args reordered to params>)`. leadArg "" omits self.
+    // `trailingArg` is a RAW C argument appended after the declared ones — the mirror of `leadArg`, which
+    // has always carried `self` the same way. It exists for the serde graph parameter, which is a C fact
+    // with no kama parameter to match: a synthetic ParamSig cannot work, because every declared param is
+    // looked up BY NAME in the argument list and a missing one is "missing argument in call".
     std::string emitReorderedCall(const std::string& cName, const std::string& leadArg,
-                                  const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine);
+                                  const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine,
+                                  const std::string& trailingArg = "");
     // Field-wise init of an extern (C-POD) struct from NAMED args (`nm.f = e; …`). The struct is
     // already `= {0}`, so only provided fields are set; unknown field / positional arg = clean error.
     std::string externAggregateInit(const std::string& nm, ClassInfo& ci,

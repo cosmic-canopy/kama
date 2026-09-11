@@ -1,0 +1,73 @@
+// The WRITE half of a graph whose edges are not fields. Two shapes, one mechanism.
+//
+// (1) A node type holding a COLLECTION of edges. A container's edges are its ELEMENTS, which are type
+//     arguments rather than fields, so nothing about it can be walked field by field. Instead the
+//     container's own `serialize` is emitted a second time as a graph-carrying twin
+//     (`X__serializeInto(self, w, g)`) and the element write becomes an intern + a `writeU64` of the id.
+//     Discovery runs that same body against a discard sink, which is what makes the table's length exact
+//     before `beginArray` — the positional and numbered backends have nothing else to bound a read with.
+//
+// (2) A HAND-WRITTEN `Serializable` holding edges directly. Same machinery, and it closes a silent
+//     correctness hole: before this, such a body wrote each pointee INLINE through the deref fallback, so
+//     two handles to one object produced two copies and identity was lost on the wire (a cycle overflowed
+//     the stack). A participant has no identity of its own, so nothing points at it and it gets no table
+//     entry — its `root` slot carries its VALUE inline, where a node's carries an id.
+//
+// ⚠️ The READ half is a separate fixture (`tests/xfail/graph_coll_of_shared` until it lands).
+import { std::serialization::json::serializeJsonBuffer, std::memory::Shared, std::collections::DynamicArray };
+
+@generate(Serializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable)
+type resource Bag {
+    @field DynamicArray<Shared<Leaf>> kids;
+    public ctor make(DynamicArray<Shared<Leaf>> kids) { this.kids = give kids; }
+}
+
+// A hand-written conformance — no `@generate`, so no derive and no field walk.
+type resource Hand implements Serializable {
+    Shared<Leaf> a;
+    Shared<Leaf> b;
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        w.beginObject(count: 2);
+        w.field(name: "a", id: 0);
+        Result<Unit, Owned<Error>> r1 = this.a.serialize(w: w);
+        match (give r1) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.field(name: "b", id: 1);
+        Result<Unit, Owned<Error>> r2 = this.b.serialize(w: w);
+        match (give r2) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+fn int32 main() {
+    // (1) `dup` appears twice in the collection and must be written ONCE, both slots carrying its id.
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;
+    Shared<Leaf> other = new Leaf.make(v: 11);
+    DynamicArray<Shared<Leaf>> xs = DynamicArray.empty();
+    xs.add(item: give dup2);
+    xs.add(item: give other);
+    xs.add(item: dup);
+    Shared<Bag> bag = new Bag.make(kids: give xs);
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // Bag is id 1 (the root node); the two distinct leaves are 2 and 3; slot 0 and slot 2 share id 2.
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":[2,3,2]}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
+        return cast<int32>(j.length());
+    }
+
+    // (2) The hand-written participant as a ROOT: written inline, its two handles to ONE leaf both id 1.
+    Shared<Leaf> one = new Leaf.make(v: 9);
+    Shared<Leaf> same = one;
+    Hand h = Hand.make(a: give one, b: give same);
+    Result<string, Owned<Error>> hr = serializeJsonBuffer(v: h);
+    string hj = match (give hr) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (hj != "{\"root\":{\"a\":1,\"b\":1},\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":9}}]}") {
+        return cast<int32>(hj.length());
+    }
+    return 42;
+}

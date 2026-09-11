@@ -17984,7 +17984,8 @@ static std::string ctorDisp(const InvocationNode* iv, const std::string& fallbac
 
 std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
-                                        SharedArgumentList args, int srcLine)
+                                        SharedArgumentList args, int srcLine,
+                                        const std::string& trailingArg)
 {
     // THE call-graph hook. Every resolved call in the language funnels through this one function, which
     // is why the edge is recorded here rather than at the fifteen sites that reach it — the same argument
@@ -18564,6 +18565,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             }
         }
     }
+    // The graph parameter rides here, after every declared argument — see the header note. `s` ends in
+    // `(` only when nothing at all was emitted, which is the one case that must not get a comma.
+    if (!trailingArg.empty()) { if (s.back() != '(') s += ", "; s += trailingArg; }
     return s + ")";
 }
 
@@ -23801,6 +23805,18 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     }
     if (ci.isGraphNode)
         emitGraphNodeHelperProtos(ci);   // the node's internal walk helpers (Phase D)
+    emitGraphTwinProtos(ci);             // …and a participant's graph-carrying twin
+}
+
+// `X__serializeInto` — the graph-carrying twin of a hand-written `serialize`. Declared beside the ordinary
+// prototypes so cross-referencing participants link; the 2-arg `X__serialize` keeps its own prototype from
+// the loop above, because the `Serializable` vtbl slot casts to that exact shape.
+void CEmitter::emitGraphTwinProtos(ClassInfo& ci)
+{
+    if (!graphTwinNeeded(ci, /*write=*/true)) return;
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << cType(ci.methods["serialize"].returnType) << " " << ci.name << "__serializeInto("
+          << ci.name << "* self, Serializer* w, struct kama_ser_graph* g);\n";
 }
 
 // void Name__dtor(Name* self): user body first, then destructible fields in
@@ -24047,9 +24063,14 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         }
     }
 
+    // The graph parameter, when this is a serde TWIN — see _serGraphArg. It is appended rather than
+    // declared because it has no kama parameter to correspond to: the kama signature is the contract's.
+    std::string gp;
+    if (!_serGraphArg.empty()) gp = ", struct kama_ser_graph* " + _serGraphArg;
+    else if (!_deGraphArg.empty()) gp = ", struct kama_de_graph* " + _deGraphArg;
     *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
           << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
-                               owner.isScalarRecv) << ")\n{\n";   // static: no self
+                               owner.isScalarRecv) << gp << ")\n{\n";   // static: no self
     emitOnPanicPrologue(1);   // a `@onPanic` method arms itself first thing (no-op otherwise)
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
@@ -24184,11 +24205,19 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // `self->__vptr` store). But it DOES construct — its bare local of the return type is the object
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
         _inNamedCtorBody = mi.isCtor;
-        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
+        // A participant's hand-written `serialize` becomes the TWIN — the body is emitted once, under the
+        // name that carries the graph — and `X__serialize` is then synthesized as the root driver below.
+        // Emitting it under its own name as well would leave a second, callable, WRONG symbol: the same
+        // body with no graph writes each pointee inline, losing identity and looping on a cycle.
+        const bool twin = (kv.first == "serialize" && graphTwinNeeded(ci, /*write=*/true));
+        ScopedStr _gp(_serGraphArg, twin ? "g" : "");
+        emitMethodOrCtorBody(twin ? ci.name + "__serializeInto" : mi.cName,
+                             ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
                              mi.isUnsafe, kv.first.c_str(), mi.node->attributes);
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
+    if (graphTwinNeeded(ci, /*write=*/true)) emitGraphRootDriver(ci);
     if (ci.destructible)
         emitDtorDefinition(ci);
     if (ci.isGraphNode) {
@@ -25392,18 +25421,43 @@ void CEmitter::computeGraphNodeTypes()
         ClassInfo& ci = kv.second;
         if (!ci.isVariant && ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) seed(kv.first);
     }
-    while (!work.empty()) {
-        std::string cur = work.back(); work.pop_back();
+    // A PARTICIPANT is not a node — it has no identity, so nothing points at it and it gets no table entry
+    // — but its edges are real and their pointees must be nodes. A participant reached as a FIELD is
+    // covered by the recursion below; one reached as a ROOT (a bare collection handed to a backend, a
+    // hand-written type holding handles) is reached from nowhere, so it is walked here. ⚠️ It is walked
+    // WITHOUT being seeded: marking a container `isGraphNode` would make typeHasGraphAdapters answer true
+    // for it and the nesting passes would try to walk it as a node.
+    std::vector<std::string> roots;
+    for (auto& kv : _classes)
+        if (graphTwinNeeded(kv.second, true) || graphTwinNeeded(kv.second, false)) roots.push_back(kv.first);
+
+    while (!work.empty() || !roots.empty()) {
+        const bool isRoot = work.empty();
+        std::string cur = isRoot ? roots.back() : work.back();
+        (isRoot ? roots : work).pop_back();
         ClassInfo& ci = _classes[cur];
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         // Both rejections below are about a FIELD of `ci` and carry that field's line, so they belong to the
         // file that declared `ci`. Whole-program pass — without this they named no file at all. See diagFile().
         ScopedStr _cu(_collectingUnitPath, ci.declFile);
         _typeSubst.clear();
-        for (auto& f : ci.fields) {
-            if (f.serSkip) continue;
-            GraphEdge e = graphEdgeOf(f.type);
-            if (e.kind.empty() || e.elemC.empty()) continue;
+        // The edges of one field. A field is an edge itself (`Shared<Leaf>`), or it CONTAINS them: a
+        // participant's edges are its ELEMENTS, which are type arguments rather than fields, so the walk
+        // recurses through them. Without that a `DynamicArray<Shared<Leaf>>` field left `Leaf` outside the
+        // node set — the owner was a node, the field was walked, and every element was then written inline
+        // through the deref because its pointee was not a node.
+        std::function<void(SharedIdentifier, const FieldInfo&)> seedField =
+            [&](SharedIdentifier ty, const FieldInfo& f) {
+            GraphEdge e = graphEdgeOf(ty);
+            if (e.kind.empty() || e.elemC.empty()) {
+                const std::string fc = cType(ty);
+                auto fcit = _classes.find(fc);
+                if (fcit == _classes.end() || !fcit->second.reachesPointer) return;
+                auto gi = _genericTypeInsts.find(fc);
+                if (gi == _genericTypeInsts.end()) return;
+                for (auto& a : gi->second.typeArgs) seedField(a, f);
+                return;
+            }
             if (e.elemIsContract) {   // a `Shared<Contract>` edge: every @generate implementor is a node
                 _polyContracts.insert(e.elemC);
                 for (auto& kv2 : _classes) {
@@ -25422,15 +25476,27 @@ void CEmitter::computeGraphNodeTypes()
                                       "from the wire; mark it `@generate` or don't route it through a serialized graph "
                                       "edge").c_str(), f.type ? f.type->line : 0);
                 }
-                continue;
+                return;
             }
             auto it = _classes.find(e.elemC);
-            if (it == _classes.end()) continue;
+            if (it == _classes.end()) return;
             if (!it->second.isVariant && (it->second.genSerialize || it->second.genDeserialize)) seed(e.elemC);
             else unsupported(("`" + demangleForDisplay(e.elemC) + "` is the pointee of a serialized graph edge (field `" + f.name
                               + "`) but is not `@generate(Serializable/Deserializable)` — a node is written through its own "
                                 "adapters; mark it `@generate`, or leave the field out of the wire form with `@skip`").c_str(),
                              f.type ? f.type->line : 0);
+        };
+        for (auto& f : ci.fields) {
+            if (f.serSkip) continue;
+            seedField(f.type, f);
+        }
+        // A participant's own ELEMENTS — its type arguments. A collection's fields are an `UnsafePtr<T>`
+        // and bookkeeping, never the element, which is why this has to be asked separately (the same
+        // reason computeReachesPointer asks it separately).
+        if (isRoot && !ci.fields.empty()) {
+            auto gi = _genericTypeInsts.find(cur);
+            if (gi != _genericTypeInsts.end())
+                for (auto& a : gi->second.typeArgs) seedField(a, ci.fields.front());
         }
     }
     _nsCtx = saved; _typeSubst.clear();
@@ -25754,10 +25820,36 @@ void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& acces
     }
     GraphEdge e = graphEdgeOf(ty);
     if (!e.kind.empty()) { graphInternExpr(e, access, depth); return; }
+    // A PARTICIPANT field — a container of edges, or a hand-written type holding them. Its edges are not
+    // fields, so there is nothing to walk: run its own body against the discard sink and let the edges
+    // intern on the way through. Any error is dropped here; the real write reports it.
+    if (emitGraphParticipantCall(ty, access, depth, /*sink=*/true)) return;
     auto nest = graphNestOf(ty);
     if (nest.first.empty()) return;
     if (!typeHasGraphAdapters(nest.second)) return;   // reported once, by writeNode
     indent(depth); *_out << nest.second << "__visitEdges(" << (nest.first == "owned" ? "(" + access + ").p" : "&(" + access + ")") << ", g);\n";
+}
+
+// A field whose type carries the graph through its own body: emit that call, against either the discard
+// sink (discovery) or the caller's writer (the real write). Answers false when the field is not a
+// participant, so both callers fall through to the by-value handling they had. Errors are dropped rather
+// than propagated — every caller is a `void` walker helper, and the sink's sticky flag carries a real
+// failure out to the driver, which is where the fallible boundary is.
+bool CEmitter::emitGraphParticipantCall(SharedIdentifier ty, const std::string& access, int depth, bool sink)
+{
+    const std::string fc = cType(ty);
+    auto it = _classes.find(fc);
+    if (it == _classes.end() || !graphTwinNeeded(it->second, /*write=*/true)) return false;
+    const std::string resC = cType(resultUnitOwnedErrorTypeNode());
+    const std::string t = "__gp" + std::to_string(_tempCounter++);
+    indent(depth); *_out << "{\n";
+    if (sink) { indent(depth + 1); *_out << "Serializer " << t << "s = __kama_null_serializer();\n"; }
+    indent(depth + 1); *_out << resC << " " << t << " = " << fc << "__serializeInto(&(" << access << "), "
+                             << (sink ? "&" + t + "s" : "w") << ", g);\n";
+    indent(depth + 1); *_out << "if (" << t << ".tag == " << resC << "_Err) { "
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
+    indent(depth); *_out << "}\n";
+    return true;
 }
 
 // Intern one edge value (a `Shared`/`Weak` struct expression) and answer the temp holding its id — 0 for an
@@ -25804,6 +25896,9 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
         indent(depth); *_out << "w->vtbl->writeU64(w->obj, " << t << ");\n";
         return;
     }
+    // …and the real write of that same participant: its own body, this time against the caller's sink,
+    // with every edge element writing the id it interned during discovery.
+    if (emitGraphParticipantCall(ty, access, depth, /*sink=*/false)) return;
     auto nest = graphNestOf(ty);
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
@@ -25855,9 +25950,9 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             auto nc = _classes.find(nest.second);
             bool coll = nc != _classes.end() && (nc->second.isIntrinsicColl || (nc->second.isGenericInst && !nc->second.genSerialize && !nc->second.genDeserialize));
             if (coll) unsupported(("field `" + fieldOfAccess(dst) + "` is a collection whose ELEMENT reaches a `Shared`/`Weak` "
-                                   "field, so the element is a graph node — and a collection OF nodes is not walked yet. Hold the "
-                                   "nodes in a node type (a `@generate` type with the `Shared` fields on it), or leave the field out "
-                                   "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
+                                   "field, so the element is a graph node — and READING one back is not supported yet. Writing it "
+                                   "works: hold the nodes in a node type (a `@generate` type with the `Shared` fields on it) to "
+                                   "read them, or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             else unsupported(("`" + demangleForDisplay(nest.second) + "` reaches a `Shared`/`Weak` field, so it is a graph node — but it is not "
                               "`@generate(Deserializable)`, so its edges cannot be read; mark it `@generate`, or leave the field out "
                               "of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
@@ -25995,6 +26090,186 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 // that carries values carries graphs, positional and numbered included. The envelope's own frames have a
 // FIXED shape, so they are read positionally the way the derive reads a tagged enum's `{tag, value}`; only a
 // node's `value` object is keyed.
+// A type that must carry the graph through its OWN serde body. Two conditions, and the second is what
+// separates this from a `@generate` node: the body is HAND-WRITTEN, so the compiler cannot walk its fields
+// to find the edges (a container's edges are its ELEMENTS, which are not fields at all). A node has the
+// walker's four helpers instead and needs none of this.
+bool CEmitter::graphTwinNeeded(const ClassInfo& ci, bool write) const
+{
+    if (!ci.reachesPointer || ci.isIntrinsicColl) return false;
+    auto it = ci.methods.find(write ? "serialize" : "deserialize");
+    if (it == ci.methods.end()) return false;
+    return !(write ? it->second.isSynthSer : it->second.isSynthDe);
+}
+
+// Which types need a twin, and which edge handles need a `__serializeEdge`. Runs once, after the node set
+// is final — `isGraphNode` is what decides whether a `Shared<X>` is an edge or just a handle to a value.
+void CEmitter::planGraphTwins()
+{
+    for (auto& kv : _classes)
+        if (graphTwinNeeded(kv.second, true) || graphTwinNeeded(kv.second, false)) { _anyGraphTwin = true; break; }
+    if (!_anyGraphTwin) return;
+    for (auto& kv : _classes) {
+        const std::string& cls = kv.first;
+        // The triad arm of graphEdgeOf, by class rather than by type node — the same two template
+        // comparisons, because here the spelling is a monomorph name and there is no field type to ask.
+        auto g = _genericTypeInstOf.find(cls);
+        if (g == _genericTypeInstOf.end()) continue;
+        GraphEdge e;
+        if      (g->second == _sharedTmpl) e.kind = "Shared";
+        else if (g->second == _weakTmpl)   e.kind = "Weak";
+        else continue;
+        auto gi = _genericTypeInsts.find(cls);
+        if (gi == _genericTypeInsts.end() || gi->second.typeArgs.empty()) continue;
+        e.elemC = cType(gi->second.typeArgs[0]);
+        e.elemIsContract = isInterface(e.elemC);
+        // Only a handle to a NODE is an edge. A `Shared<Config>` over a pointer-free type is an ordinary
+        // handle, written by value through the deref, and must keep that behaviour.
+        auto ec = _classes.find(e.elemC);
+        if (!e.elemIsContract && (ec == _classes.end() || !ec->second.isGraphNode)) continue;
+        _graphEdgeHelperFor[cls] = e;
+    }
+}
+
+// The discard sink. Discovery has to RUN a hand-written body to find its edges (its fields are not the
+// edges — a container's elements are), and running it produces tokens nobody wants: the object table is
+// not framed yet, and the same body runs again for real. So it writes into this, whose every member is a
+// no-op. `failed()` answers false so the body does not bail early, and `errorCode()` is never consulted.
+// Emitted once, and only when some type actually needs a twin — a program with no container of edges gets
+// none of it.
+void CEmitter::emitNullSerializer()
+{
+    if (!_anyGraphTwin) return;
+    // ALWAYS `static inline`: these are DEFINITIONS in the shared header, which every translation unit
+    // includes — the resolvers beside them are spelled the same way for the same reason.
+    const char* stat = "static inline ";
+    *_out << stat << "void __kama_ns_void(void* o) { (void)o; }\n";
+    *_out << stat << "void __kama_ns_usize(void* o, size_t n) { (void)o; (void)n; }\n";
+    *_out << stat << "void __kama_ns_str(void* o, kama_string* v) { (void)o; (void)v; }\n";
+    *_out << stat << "void __kama_ns_field(void* o, kama_string n, uint32_t i) { (void)o; kama_string__dtor(&n); (void)i; }\n";
+    *_out << stat << "void __kama_ns_variant(void* o, kama_string n, uint32_t i) { (void)o; kama_string__dtor(&n); (void)i; }\n";
+    static const char* kScalars[] = { "I8","int8_t", "I16","int16_t", "I32","int32_t", "I64","int64_t",
+                                      "U8","uint8_t", "U16","uint16_t", "U32","uint32_t", "U64","uint64_t",
+                                      "F32","float", "F64","double", "Bool","bool", "Char","uint32_t" };
+    for (size_t i = 0; i < sizeof(kScalars) / sizeof(*kScalars); i += 2)
+        *_out << stat << "void __kama_ns_write" << kScalars[i] << "(void* o, " << kScalars[i + 1]
+              << " v) { (void)o; (void)v; }\n";
+    *_out << stat << "bool __kama_ns_failed(void* o) { (void)o; return false; }\n";
+    // `failed()` is always false, so this is unreachable — but a contract slot must be filled with
+    // something of the right type, and `SerError` has a TAGGED repr (a payload-less enum that declares a
+    // method), so the tag is not itself a value.
+    *_out << stat << "SerError __kama_ns_errorCode(void* o) { (void)o; return (SerError){ .tag = SerError_IoError }; }\n";
+    *_out << "static const Serializer_vtbl __kama_null_ser_vtbl = {\n";   // a table, not a function: no `inline`
+    indent(1); *_out << ".beginObject = __kama_ns_usize, .endObject = __kama_ns_void,\n";
+    indent(1); *_out << ".field = __kama_ns_field, .variant = __kama_ns_variant,\n";
+    indent(1); *_out << ".beginArray = __kama_ns_usize, .endArray = __kama_ns_void,\n";
+    indent(1); *_out << ".writeI8 = __kama_ns_writeI8, .writeI16 = __kama_ns_writeI16, "
+                        ".writeI32 = __kama_ns_writeI32, .writeI64 = __kama_ns_writeI64,\n";
+    indent(1); *_out << ".writeU8 = __kama_ns_writeU8, .writeU16 = __kama_ns_writeU16, "
+                        ".writeU32 = __kama_ns_writeU32, .writeU64 = __kama_ns_writeU64,\n";
+    indent(1); *_out << ".writeF32 = __kama_ns_writeF32, .writeF64 = __kama_ns_writeF64,\n";
+    indent(1); *_out << ".writeBool = __kama_ns_writeBool, .writeChar = __kama_ns_writeChar, "
+                        ".writeString = __kama_ns_str,\n";
+    indent(1); *_out << ".writeSome = __kama_ns_void, .writeNull = __kama_ns_void,\n";
+    indent(1); *_out << ".failed = __kama_ns_failed, .fail = __kama_ns_void, "
+                        ".failWith = NULL, .errorCode = __kama_ns_errorCode,\n";
+    *_out << "};\n";
+    *_out << stat << "Serializer __kama_null_serializer(void) { Serializer s; s.obj = NULL; "
+                     "s.vtbl = &__kama_null_ser_vtbl; return s; }\n\n";
+}
+
+// One per edge type: interning an edge is a STATEMENT sequence (a temp, a null guard, a type id), but the
+// place it has to happen is an EXPRESSION — `this[i].serialize(w: w)` in a container's own body, whose
+// value is the fallible `Result`. So the sequence is wrapped in a function and the call site is a call.
+// The write is `writeU64(id)`; against the discard sink during discovery it goes nowhere, which is what
+// makes one body serve both passes with no mode flag.
+void CEmitter::emitGraphEdgeHelpers()
+{
+    if (!_anyGraphTwin) return;
+    const char* stat = "static inline ";   // header-resident definition, as above
+    const std::string resC = cType(resultUnitOwnedErrorTypeNode());
+    for (auto& kv : _classes) {
+        const std::string& cls = kv.first;
+        if (!_graphEdgeHelperFor.count(cls)) continue;
+        const GraphEdge& e = _graphEdgeHelperFor[cls];
+        *_out << stat << resC << " " << cls << "__serializeEdge(" << cls
+              << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
+        indent(1); *_out << "uint64_t __id = 0;\n";
+        std::string obj = e.elemIsContract ? "self->obj" : "(void*)self->p";
+        std::string ctl = e.elemIsContract ? "self->ctrl" : "(kama_ctrl*)self->c";
+        std::string tid = e.elemIsContract ? (e.elemC + "__graphTypeId(self->vtbl)")
+                                           : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
+        // A null control block is an empty handle; an EXPIRED `Weak` has a live block and a dead pointee,
+        // so it must not be interned either — it writes 0, which reads back as expired.
+        indent(1); *_out << "if (" << ctl << (e.kind == "Weak" ? " && " + ctl + "->strong > 0" : "") << ") {\n";
+        indent(2); *_out << "uint32_t __tid = " << tid << ";\n";
+        indent(2); *_out << "if (__tid != KAMA_GRAPH_NO_NODE) __id = kama_ser_graph_intern(g, "
+                            "(uint64_t)(uintptr_t)" << obj << ", __tid);\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "w->vtbl->writeU64(w->obj, __id);\n";
+        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+        *_out << "}\n\n";
+    }
+}
+
+// Discovery. The worklist GROWS under the loop as each node interns its own edges, so `count` is re-read
+// every iteration rather than hoisted. Shared by both drivers — a node root seeds it by interning itself,
+// a participant root seeds it by running its own body against the discard sink.
+void CEmitter::emitGraphWorklistLoop(int depth)
+{
+    indent(depth); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
+    indent(depth + 1); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genSerialize) continue;
+        indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__visitEdges(("
+                                 << K << "*)kama_ser_graph_obj(&__g, __i), &__g); break;\n";
+    }
+    indent(depth + 1); *_out << "default: break;\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "}\n";
+}
+
+// `objects: [{id, type, value}]` — the table, in id order. Shared by both drivers.
+void CEmitter::emitGraphObjectTable(int depth)
+{
+    indent(depth); *_out << "w->vtbl->beginArray(w->obj, kama_ser_graph_count(&__g));\n";
+    indent(depth); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
+    indent(depth + 1); *_out << "w->vtbl->beginObject(w->obj, 3);\n";
+    indent(depth + 1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("id") << ", 0u);\n";
+    indent(depth + 1); *_out << "w->vtbl->writeU64(w->obj, (uint64_t)(__i + 1));\n";
+    indent(depth + 1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
+    indent(depth + 1); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
+    for (auto& K : _graphNodeOrder) {
+        if (!_classes[K].genSerialize) continue;
+        indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
+        // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
+        // backend writes the index, so the choice costs one byte where a name would cost its length.
+        indent(depth + 2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
+                                 << _classes[K].graphTypeId << "u);\n";
+        indent(depth + 2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 2u);\n";
+        indent(depth + 2); *_out << K << "__writeNode((" << K << "*)kama_ser_graph_obj(&__g, __i), w, &__g);\n";
+        indent(depth + 2); *_out << "break;\n";
+        indent(depth + 1); *_out << "}\n";
+    }
+    indent(depth + 1); *_out << "default: break;\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth + 1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(depth); *_out << "}\n";
+    indent(depth); *_out << "w->vtbl->endArray(w->obj);\n";
+}
+
+// The tail both drivers share: free the worklist and turn the sink's sticky flag into the fallible Result.
+void CEmitter::emitGraphDriverTail(const std::string& resC)
+{
+    indent(1); *_out << "kama_ser_graph_free(&__g);\n";
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    *_out << "}\n\n";
+}
+
 void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
 {
     std::string resC = cType(ci.methods["serialize"].returnType);
@@ -26003,54 +26278,44 @@ void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
     indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
     indent(1); *_out << "uint64_t __root = kama_ser_graph_intern(&__g, (uint64_t)(uintptr_t)self, "
                      << ci.graphTypeId << "u);\n";
-    // Discovery. The worklist GROWS under the loop as each node interns its own edges, so `count` is
-    // re-read every iteration rather than hoisted.
-    indent(1); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
-    indent(2); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
-    for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genSerialize) continue;
-        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__visitEdges(("
-                         << K << "*)kama_ser_graph_obj(&__g, __i), &__g); break;\n";
-    }
-    indent(2); *_out << "default: break;\n";
-    indent(2); *_out << "}\n";
-    indent(1); *_out << "}\n";
+    emitGraphWorklistLoop(1);
     indent(1); *_out << "w->vtbl->beginObject(w->obj, 2);\n";
     indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
     indent(1); *_out << "w->vtbl->writeU64(w->obj, __root);\n";
     indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
-    indent(1); *_out << "w->vtbl->beginArray(w->obj, kama_ser_graph_count(&__g));\n";
-    indent(1); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
-    indent(2); *_out << "w->vtbl->beginObject(w->obj, 3);\n";
-    indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("id") << ", 0u);\n";
-    indent(2); *_out << "w->vtbl->writeU64(w->obj, (uint64_t)(__i + 1));\n";
-    indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
-    indent(2); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
-    for (auto& K : _graphNodeOrder) {
-        if (!_classes[K].genSerialize) continue;
-        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
-        // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
-        // backend writes the index, so the choice costs one byte where a name would cost its length.
-        indent(3); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
-                         << _classes[K].graphTypeId << "u);\n";
-        indent(3); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 2u);\n";
-        indent(3); *_out << K << "__writeNode((" << K << "*)kama_ser_graph_obj(&__g, __i), w, &__g);\n";
-        indent(3); *_out << "break;\n";
-        indent(2); *_out << "}\n";
-    }
-    indent(2); *_out << "default: break;\n";
-    indent(2); *_out << "}\n";
-    indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
-    indent(1); *_out << "}\n";
-    indent(1); *_out << "w->vtbl->endArray(w->obj);\n";
+    emitGraphObjectTable(1);
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
-    indent(1); *_out << "kama_ser_graph_free(&__g);\n";
-    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
-    indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
-    *_out << "}\n\n";
+    emitGraphDriverTail(resC);
+}
+
+// The same envelope for a participant that is NOT a node — a container of edges, or a hand-written type
+// holding them. It has no identity of its own, so there is nothing to intern and the `root` slot carries
+// its VALUE inline rather than an id; its elements are ids, and the reader knows which it is reading
+// because it knows the type. Existing node wires are untouched.
+//
+// Discovery is the one place this differs in kind: a derive's edges can be walked field by field, and a
+// hand-written body's cannot — so the body is RUN, against a sink that discards every token. The edges
+// intern on the way through, which is exactly what the worklist needs, and the count is therefore exact
+// before `beginArray` — which the positional and numbered backends have nothing else to bound a read with.
+void CEmitter::emitGraphRootDriver(ClassInfo& ci)
+{
+    const std::string resC = cType(ci.methods["serialize"].returnType);
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << resC << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
+    indent(1); *_out << "Serializer __sink = __kama_null_serializer();\n";
+    indent(1); *_out << "{ " << resC << " __d = " << ci.name << "__serializeInto(self, &__sink, &__g);\n";
+    indent(1); *_out << "  if (__d.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
+                     << "__dtor(&__d.u.Err.error); } }\n";
+    emitGraphWorklistLoop(1);
+    indent(1); *_out << "w->vtbl->beginObject(w->obj, 2);\n";
+    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
+    indent(1); *_out << "{ " << resC << " __r = " << ci.name << "__serializeInto(self, w, &__g);\n";
+    indent(1); *_out << "  if (__r.tag == " << resC << "_Err) { kama_ser_graph_free(&__g); return __r; } }\n";
+    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
+    emitGraphObjectTable(1);
+    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    emitGraphDriverTail(resC);
 }
 
 void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
@@ -26976,6 +27241,17 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                                    const IdentifierNode* site, SharedExpression recvExpr)
 {
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
+    // OBJECT-GRAPH EDGE. Inside a serde twin, `elem.serialize(w)` on a `Shared`/`Weak` to a node writes an
+    // ID, not the pointee. It must be decided HERE, before anything else: the triad is method-free, so
+    // `serialize` is not on the handle and the auto-deref fallback below would otherwise resolve it on the
+    // POINTEE and write the object inline — losing identity, and not terminating on a cycle. That is
+    // exactly the silent-wrong write a hand-rolled body produced before this existed.
+    if (!_serGraphArg.empty() && method == "serialize" && _graphEdgeHelperFor.count(clsName)) {
+        std::vector<ParamSig> ps;
+        ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; ps.push_back(w);
+        return emitReorderedCall(clsName + "__serializeEdge", "(" + clsName + "*)" + recvPtr,
+                                 ps, args, srcLine, _serGraphArg);
+    }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
     // `Atomic<bool>` has no arithmetic: `fetchAdd`/`fetchSub` add the cell's raw bytes, and `true + 1` is
@@ -27143,6 +27419,15 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
 #endif
     // Static call; upcast self to the declaring class (offset-0 valid). Also the devirtualized path.
     std::string self = "(" + owner->name + "*)" + recvPtr;
+    // A NESTED PARTICIPANT — a container of containers of edges, a node's participant field reached from a
+    // twin — needs the same graph its owner is walking. (The EDGE case is answered at the top of this
+    // function, before auto-deref can reach the pointee.)
+    if (!_serGraphArg.empty() && method == "serialize") {
+        auto pc = _classes.find(clsName);
+        if (pc != _classes.end() && graphTwinNeeded(pc->second, /*write=*/true))
+            return emitReorderedCall(clsName + "__serializeInto", "(" + clsName + "*)" + recvPtr,
+                                     mi->params, args, srcLine, _serGraphArg);
+    }
     return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
 }
 
@@ -29262,6 +29547,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` over a deeply-immutable T takes the atomic flavor
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
     pruneOwnedDeserialize();   // …now that a boxed VALUE can be told from a boxed graph NODE
+    planGraphTwins();          // …and who carries the graph through a hand-written serde body
 
     // Contract kind-gate enforcement: a type may `implements` a contract only if its kind is named by
     // that contract's `for` clause. Covers the kinds that own a `_classes` entry.
@@ -29638,6 +29924,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (_collections.count(cName) && isIfaceAllocColl(_collections[cName]))
             emitIfaceAllocFuncs(_collections[cName]);
     emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)
+    // The discard sink and the per-edge helpers, in the shared header beside the resolvers: a twin's body
+    // may live in any unit and both are called from it, so they must be visible everywhere the twin is.
+    emitNullSerializer();
+    emitGraphEdgeHelpers();
     // `type intrinsic` impl methods for a COLLECTION/primitive target (`string` → `kama_string`):
     // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE
     // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling
