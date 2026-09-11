@@ -278,6 +278,29 @@ every `type extern value` depends on it"*) and every member touching it is `unsa
 pattern rather than a loophole. Making the containment visible would touch every container, not just the three
 handles, so it is its own question.
 
+### Consumer KB-24 — the `fnptr` threading contract skips a descriptor-struct field (2026-09-11)
+
+**Reproduced at `0.9.292`, 24 lines, and the contrast IS the report.** One unannotated `fnptr void Cb(int32)`,
+two ways to hand it to C:
+
+- `ffd_register(f: myCallback)` — the PARAMETER path — is refused: *"function `myCallback` is handed to the C
+  function … with no `fnptr` type to carry its threading contract"*.
+- `ffd_desc d = ffd_desc(callback: myCallback, spare: 0); ffd_register_desc(d: d)` — the DESCRIPTOR-FIELD
+  path — builds, links, runs, prints. No diagnostic at any level.
+
+⚠️ **The descriptor struct is the shape real C APIs use**, which is why this is not a corner: WebGPU,
+CoreAudio and miniaudio all take their callback inside a config struct, and that is precisely the family
+where a callback runs on a thread kama did not create. The consumer found it the expensive way — SPEC
+claimed the compiler checked their three WebGPU callbacks, their tree carries ZERO `@callerThread`/
+`@foreignEntry` annotations, and it builds clean.
+
+**Where to look.** `checkForeignCrossing(calleeCName, p, argExpr)` runs per-ARGUMENT at an `extern fn` call
+and keys on the PARAMETER's own type (`isSigType(p.className)`, falling back to `exprClass(arg)`). An extern
+struct is not an `fnptr` type, so nothing fires. The fix is to walk an extern struct parameter's fields —
+transitively, since a descriptor can nest — at the crossing. Doing it at the crossing rather than at the
+field ASSIGNMENT is what catches every construction route: the repro never assigns a field at all, it
+aggregate-initializes (`ffd_desc(callback: myCallback, …)`), which an assignment-site check would miss.
+
 ### Two defects found building the graph-edge marking (2026-09-11)
 
 **1. An inline generic-instance ctor as the RHS of an element store bypasses `__set`.**
