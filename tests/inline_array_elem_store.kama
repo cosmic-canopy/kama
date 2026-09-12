@@ -21,11 +21,12 @@
 // the RHS to a local first, which `sorted_map.kama` did at two sites; this fixture is what let those be
 // deleted.
 //
-// ⚠️ A `DynamicArray` element store is the third control and is deliberately NOT here: a kama-side
-// container declares `ref T operator[]` and so takes the place path, which was never broken — but an
-// `InlineArray` over a generic-instance element cannot currently share a program with `DynamicArray` at
-// all (a prelude `relocate(into:)` inference fails, measured pre-existing at 0.9.293 and rowed). The
-// control was verified standalone instead.
+// A `DynamicArray` element store is the third control: a kama-side container declares `ref T operator[]` and
+// so takes the place path, which was never broken. It was left out of this file until `0.9.306`, because an
+// `InlineArray` over a generic-instance element could not share a program with `DynamicArray` at all
+// (KR-11, tests/inline_array_user_elem_view).
+
+import { std::collections::DynamicArray };
 
 type value Frame<P> { public P e; public ctor at(P e) { this.e = e; } }
 type value Plain    { public int32 e; public ctor at(int32 e) { this.e = e; } }
@@ -67,6 +68,11 @@ fn int32 main() {
     // holder, so this is the other half of the reach.
     Holder h2 = Holder.make(o: Optional::None);
     if (h2.ns[2] != 1) { return 246; }                   // the None arm, through the element store
+
+    DynamicArray<Frame<int32>> d = DynamicArray.empty();
+    d.add(item: Frame::<int32>.at(e: 0));
+    d[0] = Frame::<int32>.at(e: 9);                      // control: the place path, beside an InlineArray
+    if (d[0].e != 9) { return 247; }
 
     return h.gs[2].e + h.ns[2] + h.rows[1][1];           // 7 + 13 + 5
 }

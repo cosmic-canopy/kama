@@ -10751,7 +10751,12 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // race: `FixedArray` pulls View in transitively through its own module, a prelude builtin pulls in
     // nothing, so `a.view()` resolved or not according to the user's unrelated imports.
     _classes[cName] = ci;
-    _collections[cName].elem = elem;   // for registerFixedViews, below
+    // For registerFixedViews, below — resolved HERE, under the declaring file's context. That pass runs once
+    // every unit is collected, under whatever context the LAST unit left (a stdlib module), where a user
+    // file's private `Point` resolves to nothing: the view it minted was over a bare, unregistered `Point`,
+    // so `a.viewMut()` did not return a view at all, and an element that is itself a generic instance
+    // (`Frame<int32>`) walked `View.swap` with a `T` no inference could bind. KR-11.
+    _collections[cName].elem = absolutizeType(elem);
 }
 
 // Register a `Simd<T>#(N)` instance — the LANE BATCH. Structurally a sibling of registerFixed above and

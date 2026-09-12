@@ -1,0 +1,43 @@
+// An `InlineArray` over a USER element type mints its `View`/`ConstView` like any other container. It did
+// not, in two faces of one cause (KR-11): the element was stored unresolved and the views were minted after
+// every unit was collected, under the context the LAST unit left — a stdlib module, where this file's
+// private `Point` resolves to nothing.
+//
+//   InlineArray<Point>#(2)          `a.viewMut()` "does not return a `type view`" — a view over a bare,
+//                                   unregistered `Point`, whatever the program imported
+//   InlineArray<Frame<int32>>#(2)   beside anything that brings `View` in (DynamicArray does), the program
+//                                   failed at `view.kama:132`: `relocate(into:)` could not infer `T`
+//
+// ⚠️ `sorted_map.kama` does the second shape and always worked, which is what hid it: its element mentions
+// the map's own parameters, so no concrete instance exists at the first mint, and `BTreeFrame` lives in
+// `std::collections` — the one namespace the late pass happened to see.
+import { std::collections::DynamicArray, std::collections::sortUnstable };
+
+type value Point { public int32 x; public ctor at(int32 x) { this.x = x; } }
+type value Frame<P> { public P e; public ctor at(P e) { this.e = e; } }
+
+type value Holder {
+    public InlineArray<Frame<int32>>#(4) gs;             // a FIELD over a generic instance (the filed repro)
+    public ctor make() { this.gs[2] = Frame::<int32>.at(e: 7); }
+}
+
+fn int32 main() {
+    InlineArray<Point>#(2) ps = [Point.at(x: 3), Point.at(x: 9)];
+    borrow ps.viewMut() as v { v[0] = v[1]; }            // face 1: a plain user element
+    borrow ps.view() as c { if (c.length() != 2 || c[0].x != 9) { return 240; } }
+
+    InlineArray<Frame<int32>>#(2) fs = [Frame::<int32>.at(e: 3), Frame::<int32>.at(e: 5)];
+    borrow fs.viewMut() as w { w[1] = w[0]; }            // face 2: a generic-instance element
+    if (fs[1].e != 3) { return 241; }
+
+    Holder h = Holder.make();
+    if (h.gs[2].e != 7) { return 242; }
+
+    InlineArray<int32>#(3) ns = [3, 1, 2];               // control: a primitive element always worked
+    borrow ns.viewMut() as nv { sortUnstable(items: nv); }
+    if (ns[0] != 1) { return 243; }
+
+    DynamicArray<Point> d = DynamicArray.empty();        // the import that brought `View` in
+    d.add(item: Point.at(x: 1));
+    return ps[0].x + fs[1].e + d[0].x;                   // 9 + 3 + 1
+}
