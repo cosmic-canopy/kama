@@ -868,10 +868,10 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     registry opt-in kama does not ask for, and the second is cosmetic (`kama: built .`). The first is an
     install directory past 260, which is the same registry-gated cwd story for whoever launches it.
     If it ever matters, it is one `GetModuleFileNameW` sizing loop in `src/kama.winpath.cpp`.
-  * **The package store and dependency tree under a long path — ⚠️ MEASURED 2026-09-11, and the
-    verdict here was WRONG.** This entry said they "get the `\\?\` spelling for free (`osp()` wraps
-    them like everything else) but no guard witnesses it", i.e. believed-working and merely untested.
-    Probed with a real path dependency, it **fails**:
+  * **The package store and dependency tree under a long path — ⚠️ the verdict here was WRONG; FIXED
+    `0.9.294`.** This entry said they "get the `\\?\` spelling for free (`osp()` wraps them like
+    everything else) but no guard witnesses it", i.e. believed-working and merely untested. Probed
+    2026-09-11 with a real path dependency, it **failed**:
 
     ```
     $ kama pkg install <265-char-project>/app/kama.json
@@ -890,14 +890,27 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     used rather than a directory symlink because the latter needs `SeCreateSymbolicLinkPrivilege`
     (windows.md), so "just use a symlink" is not the answer.
 
-    Now a real row rather than a test-coverage gap: **fix the link step for a long path, then guard it.**
-    Options not yet weighed — `CreateJunction` via `DeviceIoControl` (no cmd, takes a `\\?\` path), or
-    the 8.3-alias trick `toolPath()` already uses for `ld`/`ar`. ⚠️ The guard work described here before
-    still applies once it works (a `KAMA_STORE` under `check-compiler-path.sh`'s deep tree, which that
-    guard already owns), and it must NOT `cd` into the deep directory: Windows refuses to start a
-    native process with a >260 cwd at all (*"Can't start native Windows application from here"*,
-    measured) — which is the `CreateProcessW` non-goal above showing up in the tooling. `kama pkg
-    install` takes a manifest PATH, so the guard passes the path instead of changing directory.
+    **FIXED `0.9.294`**: the junction is now made with `FSCTL_SET_REPARSE_POINT`
+    (`kama_win_make_junction`, `kama.winpath.cpp`), which takes the verbatim spelling and spawns no
+    process at all. Verified end-to-end at 265 characters — installs, builds *through* the junction,
+    and the program runs; the short-path control still passes, and `check-packages.sh` is green
+    (its Windows-junction case included). Repro kept at `.scratch/pkg-longpath/repro.sh`.
+
+    ⚠️ **Two alternatives rejected, with reasons, so they are not re-proposed.** A directory *symlink*
+    needs `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary `pkg
+    install` cannot require — that is why a junction was chosen originally. And the **8.3 alias**
+    (`kama_win_shortpath`, the trick `toolPath()` uses for `ld`/`ar`) is wrong *here* specifically: a
+    junction STORES its target, so the reparse point would permanently hold `C:\MSYS64~1\…` and every
+    later "which package owns this path?" comparison would see the alias; and 8dot3 creation can be
+    disabled per volume, where that helper returns its input unchanged and the fix would silently not
+    apply. `DeviceIoControl` has neither problem.
+
+    ⏳ **Left: the guard.** A long-path dependency case belongs in `check-compiler-path.sh`, which
+    already owns a deep tree; `.scratch/pkg-longpath/repro.sh` is the runnable shape to lift, control
+    included. ⚠️ It must NOT `cd` into the deep directory: Windows refuses to start a native process
+    with a >260 cwd at all (*"Can't start native Windows application from here"*, measured) — the
+    `CreateProcessW` non-goal above showing up in the tooling. `kama pkg install` takes a manifest
+    PATH, so the guard passes the path instead of changing directory.
   * **`longPathAware` in the manifest** — verdict **non-goal**: it does nothing unless the machine's
     `LongPathsEnabled` registry flag is set, which the `\\?\` prefix makes unnecessary; a behaviour that
     switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.

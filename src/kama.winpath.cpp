@@ -128,6 +128,89 @@ std::string kama_win_shortpath(const std::string& p)
     }
 }
 
+// A directory JUNCTION, made with the filesystem call rather than `cmd /c mklink /J`.
+//
+// ⚠️ WHY NOT mklink. The installer shelled out to cmd, and cmd is MAX_PATH-bound: a path dependency
+// under a 265-character project failed with `The system cannot find the path specified.` / `kama
+// install: cannot link dependency`, while the byte-identical project at a short path linked fine
+// (measured 2026-09-11). `osp()`'s `\\?\` prefix reaches the CRT/Win32 FILE-CALL edge and can do
+// nothing for a command line handed to a shell, so the long-path work never covered this call.
+//
+// A junction — not a directory symlink — because a symlink needs SeCreateSymbolicLinkPrivilege
+// (Developer Mode or elevation), which an ordinary `kama pkg install` cannot require. That is a
+// pre-existing decision this keeps; see docs/platforms/windows.md.
+//
+// ⚠️ Not the 8.3 alias either, which is how `ld`/`ar` are fed (kama_win_shortpath). Two reasons it is
+// wrong here: a junction STORES its target, so the reparse point would permanently contain
+// `C:\MSYS64~1\…` and every later "which package owns this path?" comparison would see the alias; and
+// 8dot3 creation can be disabled per volume, where the helper returns its input unchanged and the fix
+// would silently not apply. DeviceIoControl has neither problem, and spawns no process at all.
+//
+// The substitute name is an NT-namespace path (`\??\C:\…`), which is what the reparse point wants;
+// the print name is the display form Explorer and `dir` show.
+bool kama_win_make_junction(const std::string& target, const std::string& linkPath)
+{
+    // mingw-w64 declares neither the struct nor (reliably) the control code, so spell both here. The
+    // layout is the documented MOUNT_POINT form of REPARSE_DATA_BUFFER.
+    struct MountPointReparse {
+        DWORD ReparseTag;
+        WORD  ReparseDataLength;
+        WORD  Reserved;
+        WORD  SubstituteNameOffset;
+        WORD  SubstituteNameLength;
+        WORD  PrintNameOffset;
+        WORD  PrintNameLength;
+        WCHAR PathBuffer[1];
+    };
+    const DWORD kTagMountPoint = 0xA0000003;
+    const DWORD kFsctlSetReparsePoint = 0x000900A4;
+    const size_t kHeader = 16;                       // everything before PathBuffer
+
+    // The target must be absolute with a drive, in `\`-separated form and free of `\\?\` — the NT
+    // prefix we add is `\??\`, a different namespace, and doubling them names nothing.
+    std::wstring wt = fullW(wide(target));
+    if (wt.empty()) return false;
+    if (wt.size() >= 4 && wt[0] == L'\\' && wt[1] == L'\\' && wt[2] == L'?' && wt[3] == L'\\') wt = wt.substr(4);
+    while (!wt.empty() && wt[wt.size() - 1] == L'\\') wt.resize(wt.size() - 1);   // no trailing sep
+    if (wt.empty()) return false;
+
+    const std::wstring subst = L"\\??\\" + wt;
+    const std::wstring print = wt;
+
+    // Replace whatever is there. RemoveDirectoryW on a junction removes the LINK, never the target's
+    // contents; on a real non-empty directory it fails, which is the outcome we want.
+    const std::wstring wlink = wide(kama_win_ospath(linkPath));
+    if (wlink.empty()) return false;
+    RemoveDirectoryW(wlink.c_str());
+
+    // A junction is an empty directory carrying a reparse point, so the directory comes first.
+    if (!CreateDirectoryW(wlink.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+
+    HANDLE h = CreateFileW(wlink.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { RemoveDirectoryW(wlink.c_str()); return false; }
+
+    const size_t names = (subst.size() + 1 + print.size() + 1) * sizeof(WCHAR);
+    std::vector<char> buf(kHeader + names, 0);
+    MountPointReparse* r = reinterpret_cast<MountPointReparse*>(&buf[0]);
+    r->ReparseTag = kTagMountPoint;
+    r->Reserved = 0;
+    r->ReparseDataLength = (WORD)(8 + names);        // counts from SubstituteNameOffset onward
+    r->SubstituteNameOffset = 0;
+    r->SubstituteNameLength = (WORD)(subst.size() * sizeof(WCHAR));
+    r->PrintNameOffset = (WORD)((subst.size() + 1) * sizeof(WCHAR));
+    r->PrintNameLength = (WORD)(print.size() * sizeof(WCHAR));
+    memcpy(r->PathBuffer, subst.c_str(), (subst.size() + 1) * sizeof(WCHAR));
+    memcpy((char*)r->PathBuffer + r->PrintNameOffset, print.c_str(), (print.size() + 1) * sizeof(WCHAR));
+
+    DWORD ret = 0;
+    const BOOL ok = DeviceIoControl(h, kFsctlSetReparsePoint, &buf[0], (DWORD)buf.size(),
+                                    nullptr, 0, &ret, nullptr);
+    CloseHandle(h);
+    if (!ok) { RemoveDirectoryW(wlink.c_str()); return false; }   // leave no empty dir behind
+    return true;
+}
+
 intptr_t kama_win_spawn_shell(const std::string& line)
 {
     std::wstring w = wide(line);

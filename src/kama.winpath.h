@@ -51,6 +51,13 @@ bool kama_win_listdir(const std::string& dir, std::vector<std::string>& names);
 // than differently.
 std::string kama_win_shortpath(const std::string& p);
 
+// Create (replacing any existing link) a directory JUNCTION at `linkPath` pointing at `target`, both
+// absolute. False on failure, leaving nothing behind. Uses the filesystem call (FSCTL_SET_REPARSE_POINT),
+// so it honours `\\?\` and works past MAX_PATH — unlike the `cmd /c mklink /J` it replaced, which could
+// not link a dependency under a 265-character project at all. See the comment on the definition for why
+// neither a directory symlink nor an 8.3 alias is the answer here.
+bool kama_win_make_junction(const std::string& target, const std::string& linkPath);
+
 // Start `line` as a child process via CreateProcessW with the command line passed VERBATIM — no argv
 // re-quoting layer — and return its process handle (for kama_win_wait), or -1. This is what the `-j`
 // pool uses in place of a generated .bat: cmd.exe parses a batch FILE in the console code page (437 by

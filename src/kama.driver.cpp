@@ -5201,8 +5201,14 @@ static bool linkDir(const std::string& target, const std::string& linkPath)
 {
 #ifdef _WIN32
     // A junction stores an absolute path by definition, so there is nothing to relativize here.
-    runCmd("cmd /c rmdir \"" + linkPath + "\" 2>nul");
-    return runCmd("cmd /c mklink /J \"" + linkPath + "\" \"" + target + "\"") == 0;
+    //
+    // ⚠️ This was two `cmd /c` shell-outs (`rmdir`, then `mklink /J`) until 0.9.294, and cmd is
+    // MAX_PATH-bound: a path dependency under a 265-character project failed with `The system cannot
+    // find the path specified.` / `kama install: cannot link dependency`, while the byte-identical
+    // project at a short path linked fine. `osp()` could not help — its `\\?\` prefix applies at the
+    // Win32 file-call edge and means nothing on a command line handed to a shell. The junction is now
+    // made with FSCTL_SET_REPARSE_POINT, which takes the verbatim spelling and spawns no process.
+    return kama_win_make_junction(target, linkPath);
 #else
     std::string linkTarget = target;
     const std::string store = storeDir();
