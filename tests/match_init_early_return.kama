@@ -1,0 +1,71 @@
+// A local initialized by a `match` whose arm RETURNS. The local is not live on that path — its
+// initializer never completed — so it must not be dropped there.
+//
+// This is the idiom every fallible read in the language uses:
+//
+//     Holder h = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+//
+// The declaration emits `Holder h;` and the assignment lands only AFTER the lifted switch, so an arm's
+// early `return` used to run the full scope-drop list over a local that had never been assigned —
+// `Holder__dtor(&h)` on uninitialized stack. It aborted or segfaulted INSIDE the destructor, which is
+// the worst place to be told, because the reader goes hunting in the callee that produced the `Err`.
+//
+// ⚠️ WHY IT SURVIVED SO LONG, and why this fixture exercises the Err arm on purpose: every `deserialize`
+// fixture in the corpus writes this exact shape and none of them ever FIRES the Err arm — a passing test
+// deserializes something valid. It was found by an `Err` arm firing for an unrelated reason while building
+// `SlotMap`'s serde half. ⚠️ It can also present as a clean WRONG EXIT CODE rather than a crash when the
+// stack happens to be zeroed (a handle-owning type then sees `cap == 0` and frees nothing), so a green
+// sanitizer leg is not evidence against it either.
+//
+// Both arms are checked here. The Err arm must not drop an unassigned local; the Ok arm must still drop a
+// live one exactly once, which is what stops the fix from becoming a leak — `LIVE` counts destructor runs
+// through a module static, and the fixture asserts the count rather than merely surviving.
+type enum Bad implements Error {
+    Nope;
+
+    public const fn string message() { return "nope"; }
+}
+
+static int32 LIVE = 0;
+
+type resource Holder {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; LIVE = LIVE + 1; }
+    public const fn int32 get() { return this.n; }
+    ~Holder() { LIVE = LIVE - 1; }
+}
+
+fn Result<Holder, Owned<Error>> make(bool ok, int32 n) {
+    if (!ok) { return Result::Err(error: Bad::Nope); }
+    return Result::Ok(value: Holder.of(n: n));
+}
+
+// The Err arm returns. `taken` is never assigned on that path and must not be dropped.
+fn int32 viaErr() {
+    Result<Holder, Owned<Error>> r = make(ok: false, n: 5);
+    Holder taken = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+    return taken.get();
+}
+
+// The Ok arm assigns. `taken` IS live and must be dropped exactly once at scope exit.
+fn int32 viaOk() {
+    Result<Holder, Owned<Error>> r = make(ok: true, n: 11);
+    Holder taken = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 0 - 1; } };
+    return taken.get();
+}
+
+fn int32 main() {
+    if (viaErr() != 7) { return 240; }
+    if (LIVE != 0) { return 241; }          // the Err path constructed nothing, so nothing to drop
+    if (viaOk() != 11) { return 242; }
+    if (LIVE != 0) { return 243; }          // …and the Ok path's live local WAS dropped, exactly once
+
+    // Again, interleaved, so a stale drop on the Err path would corrupt the next frame's local rather
+    // than merely the one it belongs to.
+    if (viaErr() != 7) { return 244; }
+    if (viaOk() != 11) { return 245; }
+    if (viaErr() != 7) { return 246; }
+    if (LIVE != 0) { return 247; }
+
+    return viaOk() + viaErr() + 7;          // 11 + 7 + 7
+}

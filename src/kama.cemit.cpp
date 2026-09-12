@@ -6549,7 +6549,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     bool ph = _hoistOK; _hoistOK = true;               // inline-ctor hoisting
                     std::string pvt = _variantTargetType; _variantTargetType = ty;   // `Optional<int32> o = Optional::Some(…)`
                     std::string pmt = _matchTargetCType; _matchTargetCType = ty;      // `string s = match(…)` / `List l = match(…)`
+                    // A LOCAL IS NOT LIVE UNTIL ITS INITIALIZER COMPLETES — and a value-producing `match`
+                    // is the one initializer that can leave without completing, because an arm may
+                    // `return`. The declaration above emits `T x;` and the assignment lands only AFTER the
+                    // lifted switch, so an arm's early return ran the full scope-drop list over a local
+                    // that had never been assigned: `T__dtor(&x)` on uninitialized stack. It is the idiom
+                    // every fallible read uses (`T x = match (give r) { … case Err: { return 251; } }`),
+                    // latent only because an Err arm rarely fires in a passing test, and it presents as a
+                    // crash inside a destructor — which sends the reader hunting in the callee.
+                    //
+                    // The machinery already existed: `slot` marks a hole `Moved` to mean "owns nothing
+                    // right now", and scope cleanup skips a `Moved` local. A local mid-initializer is in
+                    // exactly that state, so it is spelled exactly that way. (The comment three screens up
+                    // says the RAII registration "assumes init-at-decl" — this is the case where that
+                    // assumption is false.)
+                    const bool lateInit = needsTargetType(init.get());
+                    if (lateInit) _moveState[nm] = MoveState::Moved;
                     std::string iv = narrowViewValue(ty, init, emitExpression(init), n->line);   // `ConstView<T> cv = v;`
+                    if (lateInit) _moveState[nm] = MoveState::NotMoved;   // the assignment below makes it live
                     _matchTargetCType = pmt;
                     _variantTargetType = pvt;
                     _hoistOK = ph;

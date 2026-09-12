@@ -330,14 +330,16 @@ Each was confirmed against a binary built before that session's first commit (`0
 is a regression from the graph-delegate, element-store or `--no-heap` work. ⚠️ **Running repros and the full
 diagnosis are kept at `.scratch/found-2026-09-11/`** (gitignored) — do not re-derive them.
 
-**1. An early `return` from a `match` arm destructs the local that `match` is initializing.** The severe
-one, and the one to take first. `T x = match (give r) { case Ok(value: v): give v; case Err(error: e): {
-return 251; } };` emits `T__dtor(&x)` inside the Err arm — over a local that has never been assigned on that
-path. It is the idiom *every* fallible read in the corpus uses, latent only because the Err arm rarely fires
-in a passing test. ⚠️ **A green sanitizer leg is not evidence against it**: under ASan it can present as a
-clean wrong exit code rather than a crash, because the stack happens to be zeroed and the guard on `cap`
-frees nothing. It cost an hour of diagnosis aimed at innocent new code. The fix is a definite-assignment
-question, not a destructor one — the local is registered as destructible before its initializer is emitted.
+**1. An early `return` from a `match` arm destructing the local that `match` is initializing — FIXED
+`0.9.297`.** Kept for the rule: **a local is not live until its initializer completes**, and a
+value-producing `match` is the one initializer that can leave without completing. The machinery already
+existed — `slot` marks a hole `Moved` to mean "owns nothing right now" and scope cleanup skips a `Moved`
+local — so the fix spells a mid-initializer local exactly that way. ⚠️ **Two things about how it hid**, both
+general: every `deserialize` fixture in the corpus writes this shape and none ever FIRES the Err arm, since
+a passing test deserializes something valid; and it can present as a clean WRONG EXIT CODE rather than a
+crash when the stack happens to be zeroed, so **a green sanitizer leg was not evidence against it**.
+`tests/match_init_early_return` exercises both arms and counts destructor runs through a static, which is
+what makes it catch the defect (rc 241 against the pre-fix compiler) rather than merely survive it.
 
 **2. `friend` grants do not cross generics.** Two faces: a grant NAMING a generic accessor is refused
 outright, and a grant ON a generic owner is accepted and **silently inert** (recorded on the template, lost
