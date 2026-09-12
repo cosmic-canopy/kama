@@ -1,0 +1,95 @@
+// A graph whose edges are a `SlotMap`'s values, with the HANDLES to them stored beside it — which is the
+// shape the whole slot-map serde contract exists for, and the third keyed container to carry a graph after
+// `Map` and `SortedMap`.
+//
+// It is an entity registry in miniature: one table of shared things, plus stored handles that point into
+// it from elsewhere in the same document. Both halves have to survive together, and each is useless
+// without the other — handles that resolve to a table whose sharing was flattened point at the wrong
+// objects, and a correctly shared table whose handles dangle cannot be reached.
+//
+// ⚠️ `SlotMap` needs no delegate mark: it writes its values in its OWN body (a while loop over the slots),
+// the way `Map` does, so the object table reaches the element write with nothing threaded through a
+// helper. `SortedMap` is the container that needed one, because a B-tree's write recurses through nodes.
+// The mark it DOES carry is on `valuesMut()`, for the read pass that rewires the edges.
+//
+// THE CHECK IS SHARING, ASSERTED BEHAVIOURALLY. Handles `a` and `b` name the SAME leaf, so a read that
+// rebuilt two separate copies would still sum to 25 and still round-trip cleanly: the test bumps through
+// `a` and reads back through `b`. ASan proves the rebuilt graph frees exactly once.
+import { std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::memory::Shared, std::collections::SlotMap, std::collections::Handle,
+         std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+    public fn void bump() { this.v = this.v + 1; }
+}
+
+@generate(Serializable, Deserializable)
+type resource World {
+    @field SlotMap<Shared<Leaf>> items;
+    @field Handle a;                       // two stored handles into the table above…
+    @field Handle b;                       // …naming ONE leaf
+    public ctor make(SlotMap<Shared<Leaf>> items, Handle a, Handle b) {
+        this.items = give items; this.a = a; this.b = b;
+    }
+    // Bump through one handle, read through the other. Equal only if both name a single node — and
+    // reaching either at all requires the handles to have survived the wire.
+    public fn bool sharedAcross() {
+        this.items.getRefMut(handle: this.a).bump();
+        return this.items.getRef(handle: this.b).get() == 8;   // 7, bumped once through the OTHER handle
+    }
+    public fn int32 sum() {
+        int32 s = 0;
+        foreach (ref Shared<Leaf> k in this.items.valuesMut()) { s = s + k.get(); }
+        return s;
+    }
+}
+
+fn Shared<World> build() {
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;                          // the SAME leaf, under two handles
+    SlotMap<Shared<Leaf>> sm = SlotMap.empty();
+    Handle ka = sm.insert(value: give dup);
+    Handle kb = sm.insert(value: give dup2);
+    Handle kc = sm.insert(value: new Leaf.make(v: 11));
+    return new World.make(items: give sm, a: ka, b: kb);
+}
+
+fn int32 main() {
+    Shared<World> w = build();
+    if (w.sum() != 25) { return 240; }                // 7 + 7 + 11 — the shared leaf counts under BOTH
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: w);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // THE BYTES: slots 0 and 1 both hold edge id 2, the shared `Leaf` sits in the objects table ONCE, and
+    // the two stored handles are beside it. A slot map writes in ascending slot order, so this is
+    // deterministic.
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"World\",\"value\":{"
+             + "\"items\":{\"slots\":[1,1,1],\"values\":[2,2,3]},"
+             + "\"a\":{\"index\":0,\"generation\":1},\"b\":{\"index\":1,\"generation\":1}}},"
+             + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
+             + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }
+
+    Result<Shared<World>, Owned<Error>> back = deserializeJsonBuffer::<Shared<World>>(src: give j);
+    Shared<World> w2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (w2.sum() != 25) { return 252; }
+    if (!w2.sharedAcross()) { return 253; }           // bumps the shared leaf: 7 -> 8, seen through `b`
+    if (w2.sum() != 27) { return 254; }               // 8 + 8 + 11
+    if (w.sum() != 25) { return 255; }                // …and the ORIGINAL graph was untouched
+
+    // The same graph on the positional backend, whose reader is bounded only by the counts.
+    Shared<World> w3src = build();
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: w3src);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
+    Result<Shared<World>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Shared<World>>(src: give bytes);
+    Shared<World> w3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
+    if (w3.sum() != 25) { return 244; }
+    if (!w3.sharedAcross()) { return 247; }
+    return w3.sum() - 2;                              // 27 - 2 = 25, the same total as the other containers
+}

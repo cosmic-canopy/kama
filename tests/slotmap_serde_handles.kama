@@ -1,0 +1,90 @@
+// A `SlotMap` round trip, and the CONTRACT that decides its wire format: **a handle survives it.**
+//
+// That is the whole reason a slot map exists rather than a `DynamicArray` plus indices — a `Handle` is an
+// index PLUS the slot's generation stamp, so a handle to a removed slot is rejected instead of silently
+// aliasing whatever occupies that slot now. If a round trip invalidated handles, serializing an entity or
+// asset registry would be pointless: the handles a caller stored in a scene, a component table, or another
+// slot map would all dangle. Rust's `slotmap` makes the same promise for the same reason.
+//
+// So the wire form preserves the slot LAYOUT, not just the live values: the per-slot generation array
+// INCLUDING vacant slots, then the live values in ascending slot order.
+//
+//     {"slots":[1,2,1],"values":[10,30]}      <- slot 1 was removed: generation 2 (even = vacant), no payload
+//
+// ⚠️ THE ALTERNATIVE WAS REJECTED FOR FAILING SILENTLY, which is what this fixture pins. Writing only the
+// live values and rebuilding dense from slot 0 is smaller, and then a stale handle can COINCIDENTALLY match
+// a rebuilt slot's index and generation and resolve to the wrong value — the exact accident the generation
+// check exists to prevent. Every assertion below is about handle identity rather than about the values:
+// a dense rebuild would pass a length check and a sum check and fail here.
+//
+// `freeLen` and `len` are derived on read and never go on the wire (the odd count, and the even slots), so
+// the last block checks the derived free list too: a fresh insert must take the lowest vacant slot and mint
+// a generation the stale handle for that slot does not match.
+import { std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::collections::SlotMap, std::collections::Handle, std::collections::DynamicArray };
+
+fn int32 main() {
+    SlotMap<int32> sm = SlotMap.empty();
+    Handle a = sm.insert(value: 10);
+    Handle b = sm.insert(value: 20);
+    Handle c = sm.insert(value: 30);
+    Optional<int32> gone = sm.remove(handle: b);          // slot 1 vacated — a HOLE in the middle
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: sm);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 240; } };
+    // The layout is on the wire, holes and all. This is the assertion the compact form would fail.
+    if (j != "{\"slots\":[1,2,1],\"values\":[10,30]}") { return 241; }
+
+    Result<SlotMap<int32>, Owned<Error>> br = deserializeJsonBuffer::<SlotMap<int32>>(src: give j);
+    SlotMap<int32> back = match (give br) { case Ok(value: x): give x; case Err(error: e): { return 242; } };
+    if (back.length() != 2) { return 243; }
+
+    // THE GUARANTEE: handles minted BEFORE the write still resolve after the read, to the same values.
+    int32 va = match (back.get(handle: a)) { case Some(value: v): v; case None: 0 - 1; };
+    int32 vc = match (back.get(handle: c)) { case Some(value: v): v; case None: 0 - 1; };
+    if (va != 10) { return 244; }
+    if (vc != 30) { return 245; }
+    // …and the REMOVED one is still invalid. A dense rebuild would have made `b` (index 1, generation 1)
+    // resolve to whatever landed in slot 1 — here, `30`.
+    if (back.contains(handle: b)) { return 246; }
+
+    // The derived free list: the lowest vacant slot is reused, and the stale handle to it STAYS stale
+    // because the generation moves on.
+    Handle d = back.insert(value: 40);
+    if (d.index != 1) { return 247; }
+    if (back.contains(handle: b)) { return 248; }
+    int32 vd = match (back.get(handle: d)) { case Some(value: v): v; case None: 0 - 1; };
+    if (vd != 40) { return 249; }
+
+    // The same layout on the POSITIONAL backend, which has no names and no delimiters — its reader is
+    // bounded only by the counts, so it is what proves two parallel arrays were the right shape (a
+    // per-slot record that varies present/absent has no unambiguous positional reading).
+    SlotMap<int32> p = SlotMap.empty();
+    Handle h0 = p.insert(value: 1);
+    Handle h1 = p.insert(value: 2);
+    Handle h2 = p.insert(value: 3);
+    Optional<int32> g2 = p.remove(handle: h1);
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: p);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    Result<SlotMap<int32>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<SlotMap<int32>>(src: give bytes);
+    SlotMap<int32> pback = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (pback.length() != 2) { return 252; }
+    if (!pback.contains(handle: h2)) { return 253; }
+    if (pback.contains(handle: h1)) { return 254; }
+
+    // A `Handle` is Serializable in its own right — without that the guarantee is unusable, since the
+    // handles a caller stored have to travel beside the map. ⚠️ Hand-written, because `index` is an
+    // `isize` and `isize` has no wire format; the wire carries a fixed-width `int64`.
+    Result<string, Owned<Error>> hr = serializeJsonBuffer(v: c);
+    string hj = match (give hr) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
+    if (hj != "{\"index\":2,\"generation\":1}") { return 236; }
+    Result<Handle, Owned<Error>> hb = deserializeJsonBuffer::<Handle>(src: give hj);
+    Handle c2 = match (give hb) { case Ok(value: x): x; case Err(error: e): { return 237; } };
+    int32 vc2 = match (back.get(handle: c2)) { case Some(value: v): v; case None: 0 - 1; };
+    if (vc2 != 30) { return 238; }                        // a handle that went through the wire resolves
+
+    return va + vc + vd - 55;                             // 10 + 30 + 40 - 55
+}

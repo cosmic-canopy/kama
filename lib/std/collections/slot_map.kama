@@ -5,10 +5,34 @@ export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 // occupancy stamp captured at insert time. A get/remove succeeds only if the slot STILL carries that same
 // generation — so a handle to a slot that was removed (and possibly reused for a different value) is rejected
 // rather than silently aliasing the new occupant. A plain Copyable value: keep it, copy it, pass it around.
+// ⚠️ Serializable so the guarantee is USABLE: `SlotMap`'s serde promises a handle still resolves after a
+// round trip, and that promise is worth nothing unless the handles a caller stored — in a scene, a
+// component table, another slot map — can go on the wire beside it. The two halves ship together.
+//
+// ⚠️ HAND-WRITTEN rather than `@generate`d, and the compiler is right to insist: `index` is an `isize`,
+// which has no wire format at all (`ptrdiff_t` is 8 bytes natively and 4 on wasm32), so a derived body
+// would have had to invent one. It stays an `isize` in memory — that is what indexes the buffers — and the
+// wire carries a fixed-width `int64`, casting at the boundary. That is the diagnostic's own advice, and it
+// is the reason a handle written on one target reads back on another.
 @generate(of)
-type value Handle implements Sendable {
+type value Handle implements Sendable, Serializable, Deserializable<This> {
     public isize index;
     public uint32 generation;
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        w.beginObject(count: 2ui64);
+        w.field(name: "index", id: 0ui32);      w.writeI64(v: cast<int64>(this.index));
+        w.field(name: "generation", id: 1ui32); w.writeU32(v: this.generation);
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+    public ctor Result<Handle, Owned<Error>> deserialize(Deserializer r) {
+        r.beginObject(count: 2ui64);
+        bool __f1 = r.moreFields(); FieldKey __n1 = r.field(); int64  ix = r.readI64();
+        bool __f2 = r.moreFields(); FieldKey __n2 = r.field(); uint32 gn = r.readU32();
+        bool __f3 = r.moreFields();
+        r.endObject();
+        return Result::Ok(value: Handle.of(index: cast<isize>(ix), generation: gn));
+    }
 }
 
 // A by-value iterator over a slot map's live VALUES (`foreach (V v in sm.values())`), present only for a
@@ -67,7 +91,9 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
 type resource SlotMap<V, A: Allocator = GlobalAllocator>
         implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
-                   ValuesIterableMut<SlotMapValueIterMut<V>>, Sendable when [V: Sendable, A: Sendable] {
+                   ValuesIterableMut<SlotMapValueIterMut<V>>, Sendable when [V: Sendable, A: Sendable],
+                   Serializable when [V: Serializable],
+                   Deserializable<This> when [V: Deserializable<V>] {
     UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
     isize slotCount = 0; isize freeLen = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -191,6 +217,107 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
             i = i + 1;
         }
         this.len = 0; this.mods = this.mods + 1;
+    }
+
+    // --- Serialization (present only when the value is Serializable/Deserializable) ---
+    //
+    // ⚠️ THE CONTRACT, and it is the whole design: **A HANDLE SURVIVES A ROUND TRIP.** Save a slot map,
+    // load it, and every `Handle` a caller stored elsewhere still resolves to the same value — which is the
+    // only reason to have handles rather than indices in the first place, and what makes a slot map the
+    // thing you serialize an entity/asset registry with. Rust's `slotmap` makes the same promise for the
+    // same reason ("a key remains valid for a slot map even after one or both have been serialized and
+    // deserialized"). The alternative — write only the live values, rebuild dense from slot 0 — is smaller
+    // on the wire and fails SILENTLY: a stale handle can then coincidentally match a rebuilt slot's index
+    // and generation and alias the WRONG value, which is the exact accident the generation check exists to
+    // prevent. Silence disqualified it.
+    //
+    // So the wire form preserves the slot LAYOUT: the per-slot generation array including vacant slots,
+    // then the live values in ascending slot order.
+    //
+    //     {"slots":[1,0,3,5], "values":[…,…,…]}
+    //
+    // Two parallel arrays rather than one array of per-slot optional records, because a POSITIONAL backend
+    // has no names and no delimiters — its reader is bounded only by the counts — so a per-slot shape that
+    // varies (present / absent) has no unambiguous positional reading, while two fixed-length arrays do.
+    // A hole costs 4 bytes of generation and no payload, so the cost is proportional to the high-water slot
+    // count rather than to the live count; that is the honest price of the guarantee.
+    //
+    // `freeList` and `len` are DERIVED on read (`len` = the odd count, the free list = the even slots) —
+    // neither goes on the wire. The free list's ORDER decides which slot the next insert reuses, which is
+    // not observable through any accessor, so rebuilding it descending (lowest slot reused first) is a
+    // deterministic choice rather than a lost one.
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [V: Serializable] {
+        w.beginObject(count: 2ui64);
+        w.field(name: "slots", id: 0ui32);
+        w.beginArray(count: cast<usize>(this.slotCount));
+        isize i = 0;
+        while (i < this.slotCount) { w.writeU32(v: this.gens[i]); i = i + 1; }
+        w.endArray();
+        w.field(name: "values", id: 1ui32);
+        w.beginArray(count: cast<usize>(this.len));
+        i = 0;
+        while (i < this.slotCount) {
+            if ((this.gens[i] & 1ui32) == 1ui32) {           // occupied — ascending slot order
+                Result<Unit, Owned<Error>> __sv = this.values[i].serialize(w: w);
+                match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            }
+            i = i + 1;
+        }
+        w.endArray();
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Rebuild the slot layout, then fill the occupied slots in the same ascending order the write used.
+    // GlobalAllocator-only (the wire carries no allocator handle) — the same convention the other
+    // collections' A-ignoring deserialize follows.
+    public unsafe ctor Result<SlotMap<V>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>] {
+        SlotMap<V> result = SlotMap.empty();
+        r.beginObject(count: 2ui64);
+        bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
+        r.beginArray();
+        isize n = 0;
+        while (r.moreElems()) {                       // the generations, holes included — this IS the layout
+            uint32 g = r.readU32();
+            if (n == result.cap) { result.reserve(n: result.cap == 0 ? 8 : result.cap * 2); }   // amortized
+            result.gens[n] = g;
+            n = n + 1;
+            // ⚠️ Kept in step DELIBERATELY, not set once at the end: `growTo` relocates exactly
+            // `slotCount` entries, so leaving it at 0 while filling `gens` made every grow silently
+            // discard every generation read so far. The layout is the thing being rebuilt, so it has to
+            // be true at each step, not only after the loop.
+            result.slotCount = n;
+        }
+        bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
+        r.beginArray();
+        isize i = 0;
+        // A short or malformed values array surfaces as the element read's own boxed error — the same way
+        // it does for every other container's `deserialize`, which is why there is no sticky check here.
+        // ⚠️ `moreElems()` is called BEFORE each element, not to bound the loop (the slot layout bounds it)
+        // but because that is what steps a self-describing backend past the separator — JSON eats the `,`
+        // there. Reading the elements without it left the reader parked on the comma and the whole object
+        // came back `Err`.
+        while (i < n) {
+            if ((result.gens[i] & 1ui32) == 1ui32) {
+                bool __more = r.moreElems();
+                Result<V, Owned<Error>> __ev = V.deserialize(r: r);
+                match (give __ev) {
+                    case Err(error: e): { return Result::Err(error: give e); }
+                    case Ok(value: v):  { result.values[i] = give v; result.len = result.len + 1; }
+                };
+            }
+            i = i + 1;
+        }
+        bool __f3 = r.moreElems();                    // close the values array
+        bool __f4 = r.moreFields();
+        r.endObject();
+        // The free list, descending so the LOWEST vacant slot is reused first — derived, never on the wire.
+        result.freeLen = 0;
+        i = n;
+        while (i > 0) {
+            i = i - 1;
+            if ((result.gens[i] & 1ui32) == 0ui32) { result.freeList[result.freeLen] = i; result.freeLen = result.freeLen + 1; }
+        }
+        return Result::Ok(value: give result);
     }
 
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
