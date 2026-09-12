@@ -495,6 +495,18 @@ returning `None` (or panicking on `getRef`) instead of aliasing the new occupant
 counter (odd while occupied, bumped on every insert/remove), so a handle can safely outlive the value it names
 and a dangling handle is caught, not a use-after-free. `contains(handle:)`, `length`/`isEmpty`, `clear`, and
 `values()`/`valuesMut()` (iterate the live values, copy or borrow) round it out.
+**A `Handle` survives a serde round trip** — save a slot map, load it, and every handle a caller stored
+elsewhere still resolves to the same value, which is the only reason to hold handles rather than indices.
+That is what the wire format is for: it preserves the slot LAYOUT — the per-slot generation array
+*including vacant slots*, then the live values in ascending slot order (`{"slots":[1,2,1],"values":[10,30]}`)
+— so a hole costs a generation and no payload, and the size is proportional to the high-water slot count
+rather than to the live count. `len` and the free list are derived on read and never go on the wire.
+The compact alternative (write only the live values, rebuild dense) was rejected for failing **silently**: a
+stale handle could then coincidentally match a rebuilt slot and alias the wrong value, which is the exact
+accident the generation check exists to prevent. `Handle` is itself `Serializable`, so the handles a caller
+stored travel beside the map; its `index` is an `isize`, which has no wire format, so the wire carries a
+fixed-width `int64` and a handle written on one target reads back on another.
+<!-- test: slotmap_serde_handles --> <!-- test: ser_graph_slotmap -->
 
 **`SortedMap<K: Comparable<K>, V>` / `SortedSet<K: Comparable<K>>`** are the **ordered** map/set — a **B-tree**
 (min-degree 6; peer: Rust `BTreeMap`, C++ `std::map`) keyed by `Comparable.compareTo`, not a hash. They mirror
@@ -4848,9 +4860,9 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   ELEMENTS, so they are not fields at all <!-- test: ser_graph_coll --> — and so does a **hand-written**
   `serialize`/`deserialize` that holds handles directly <!-- test: ser_graph_handwritten -->. The compiler
   emits such a body a second time carrying the graph, and an edge inside it interns its pointee and writes
-  its **id**; reading back, ids are resolved by walking the type's fields and then iterating its elements,
-  which is why a collection of edges must be mutably iterable (`IterableMut<T>` — the protocol
-  `foreach (ref T x in c)` already requires). **Identity is the thing that decides the `root` slot:** a node
+  its **id**; reading back, ids are resolved by walking the type's fields and then iterating its elements.
+  **A container says which members the graph routes through — it is never guessed** (see
+  *`@serializedGraphEdges`* below). **Identity is the thing that decides the `root` slot:** a node
   can be pointed at, so the root carries its **id** and reads back as `Shared<T>`; a collection or a
   hand-written holder cannot be pointed at, so the root carries its **value** inline and reads back **by
   value** — there is no cycle through it to close. A hand-written type can be a graph **node** too, not
@@ -4858,6 +4870,30 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   ownership cycle leak-free. <!-- test: ser_graph_handwritten_node --> What a pointee must have is a serde
   half at all — derived or hand-written; one with neither would be silently dropped from the wire, and is a
   compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
+- **`@serializedGraphEdges` — a container MARKS the members the graph routes through.** Serde walks what
+  you mark, never what it guesses, which is the rule `@field` already applies to a `@generate`d product's
+  fields. The attribute goes on a **method**, and the **signature it sits on says which of two roles it
+  plays**:
+  - **an accessor** — nullary, returning an `IteratorMut<T>`: *these are the elements carrying my edges;
+    rewire them through here* on the read pass. A KEYED container cannot answer this structurally — `Map`'s
+    `Iterable` yields KEYS while its edges live in VALUES — which is why it is marked rather than looked up
+    by name, and marking is also what FREES the name: a container may call its accessor anything and
+    implement as many other iterators as it likes. <!-- test: ser_graph_map --> <!-- xfail: graph_coll_unmarked -->
+  - **a delegate** — a method taking a `ref Serializer`/`Deserializer`: *the element write is handed to me*.
+    A container that writes its elements in its own body (`Map`, `SlotMap`) needs no delegate; one whose
+    write recurses through a helper does. `SortedMap` is a B-tree, so its entries are spread over a tree of
+    nodes and the element write lives in `BTreeNode`. <!-- test: ser_graph_sortedmap --> <!-- xfail: graph_delegate_unmarked -->
+
+  **The rule that bounds both: the graph's object table travels with the serializer, and nowhere else.** A
+  method can carry it only if it is the contract `serialize`/`deserialize` or is a marked delegate; a call
+  threads it only when it passes the caller's **own** serializer (build a fresh one and you are writing a
+  different document, which gets no table); and handing your own serializer to an unmarked, eligible method
+  is a **compile error** — never a silent inline write. <!-- xfail: graph_delegate_unmarked --> That last one matters because the failure it
+  prevents is invisible at the site: every pointee below such a call is written inline and duplicated, and
+  it surfaces far away as *"unresolved reference"* from the READER.
+- **A keyed container's edges live in its VALUES only.** A key cannot be rewired in place — that would move
+  it in the ordering or the hash — so `Map<Shared<K>, V>` is a **non-goal**, not a "not yet". (C++ encodes
+  the same rule independently: `std::map`'s iterators yield `pair<const Key, T>`.)
 
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,

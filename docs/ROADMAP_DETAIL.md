@@ -14,6 +14,13 @@ permanent doc (see the table below) and its section is deleted from here.
 > **When an item ships, DELETE it from both files.** A roadmap that also logs completions stops being
 > readable as a plan, and the single-file version drifted that way twice.
 >
+> ⚠️ **Deleting a row does NOT renumber anything.** `KR-<n>` is a permanent id — assigned once, never
+> reused, never renumbered — so a shipped row's id simply retires and leaves a gap, and every `KR-` written
+> anywhere (here, in a commit message, in someone's notes) keeps meaning what it meant. A new row takes one
+> more than the highest id present. This replaced position numbering, which silently re-pointed every
+> `row N` in prose each time a row was deleted; `tools/check-roadmap.sh` now checks that ids are unique and
+> that every `KR-` citation resolves, which is a check position numbering could not support.
+>
 > Before deleting, confirm the record lives where it belongs, and **migrate it there if it does not**:
 >
 > | What shipped | Where its record goes |
@@ -37,6 +44,22 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 
 **The language surface is feature-complete.** Anything that would *break* source has to land before the
 tag or wait for 2.0.
+
+### UUIDv7 (2026-09-11)
+
+RFC 9562 (IETF, May 2024). Freely implementable — an IETF standards-track RFC carries no licensing
+constraint on implementations. A v7 is a 48-bit big-endian Unix-millisecond prefix followed by randomness
+with the version/variant bits pinned, so ids generated over time sort by creation order; that is the whole
+reason to want it over v4, since a time-ordered key is dramatically kinder to a B-tree index or an LSM store
+than a uniformly random one.
+
+Both halves already ship — `std::random` for the CSPRNG and `std::time` for the millisecond clock — so this
+is a library row, not a subsystem. What has to be decided rather than discovered: whether the type is a
+`type value Uuid` (128 bits, `Formattable`/`Parseable`/`Hashable`/`Comparable`, and `Comparable` is what
+makes the sort order a usable property) or a `string` convention; whether v4 ships beside it for the cases
+where time-ordering leaks information; and the canonical hyphenated text form on both the parse and format
+sides. Monotonicity within a single millisecond is the one genuinely subtle part — the RFC offers several
+counter methods, and picking one is a decision to write down rather than to leave to the implementation.
 
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
@@ -301,56 +324,94 @@ transitively, since a descriptor can nest — at the crossing. Doing it at the c
 field ASSIGNMENT is what catches every construction route: the repro never assigns a field at all, it
 aggregate-initializes (`ffd_desc(callback: myCallback, …)`), which an assignment-site check would miss.
 
-### The element-store lowering misses an inline generic-instance ctor (2026-09-11)
+### Three defects found while closing rows 9 and 10 (2026-09-11) — all PRE-EXISTING
 
-`this.xs[2] = Frame::<P>.at(e: …)` where the field is an `InlineArray<Frame<P>>#(N)` emits
-`InlineArray__…__get(…) = …`, which is not assignable C. Reduced to 11 lines, and the discriminator is
-narrow: `InlineArray<P>` works and `InlineArray<Frame<P>>` does not — the ELEMENT being a generic instance
-is what does it, and no generics on the holder are needed. Binding the RHS to a local works, and so does an
-inline ctor whose element is a plain class. It fails LOUDLY at the C compiler.
+Each was confirmed against a binary built before that session's first commit (`0.9.292+gfb4f9378`), so none
+is a regression from the graph-delegate, element-store or `--no-heap` work. ⚠️ **Running repros and the full
+diagnosis are kept at `.scratch/found-2026-09-11/`** (gitignored) — do not re-derive them.
 
-**Where to look:** the expression path picks `__set` via `collectionElemAccess`
-([kama.cemit.cpp](../src/kama.cemit.cpp)); `emitPlace` succeeds on the identical expression in RETURN
-position, so an earlier branch claims the assignment before `__set` is reached. `sorted_map.kama` has two
-sites using the local-binding workaround with a comment pointing here.
+**1. An early `return` from a `match` arm destructs the local that `match` is initializing.** The severe
+one, and the one to take first. `T x = match (give r) { case Ok(value: v): give v; case Err(error: e): {
+return 251; } };` emits `T__dtor(&x)` inside the Err arm — over a local that has never been assigned on that
+path. It is the idiom *every* fallible read in the corpus uses, latent only because the Err arm rarely fires
+in a passing test. ⚠️ **A green sanitizer leg is not evidence against it**: under ASan it can present as a
+clean wrong exit code rather than a crash, because the stack happens to be zeroed and the guard on `cap`
+frees nothing. It cost an hour of diagnosis aimed at innocent new code. The fix is a definite-assignment
+question, not a destructor one — the local is registered as destructible before its initializer is emitted.
 
-### Graph edges in a keyed container — what shipped, and the two containers still short of it
+**2. `friend` grants do not cross generics.** Two faces: a grant NAMING a generic accessor is refused
+outright, and a grant ON a generic owner is accepted and **silently inert** (recorded on the template, lost
+on the instance). It fails closed, so there is no unsoundness — a false refusal, never a false permit — but
+a grant that reads correct and grants nothing is the class this repo exists to catch. ⚠️ **No friend fixture
+involves a generic type at all**, which is why this survived: 8 fixtures, zero generics. It has a named
+in-tree consumer — `BTreeNode.serializeInto` is `public` only because visibility is per-TYPE and `SortedMap`
+is a sibling type; with this fixed it becomes `private` plus `friend SortedMap[serializeInto];`.
 
-**Shipped `0.9.289`.** A container now MARKS the accessor its graph edges are rewired through —
-`@serializedGraphEdges` on a nullary method handing out an `IteratorMut<T>`. `Map<K, Shared<V>>`
-round-trips as a graph on both backends (`tests/ser_graph_map`).
+**3. An `InlineArray` over a generic-instance element cannot share a program with `DynamicArray`.** The
+prelude's `relocate(into:)` then fails to infer. The discriminator table is in the repro's README; the clue
+worth starting from is that `sorted_map.kama` does exactly this and works, so the real trigger is narrower
+than the table proves.
 
-The design record, so it is not re-derived: the walker used to find the accessor BY NAME (`iterMut`) and
-require `implements IterableMut<T>`, which a KEYED container cannot satisfy — `Map`'s `Iterable` yields
-KEYS while its edges live in VALUES. A new contract was tried first and rejected: every container already
-declares a conformance handing out the right iterator (`IterableMut` for a sequence, `ValuesIterableMut`
-for a keyed one), so a second one would be a public member existing only to tell the compiler something —
-pollution until restricted-private contract members ship. The attribute adds no member, costs no grammar
-change (`attribute_list plain_class_member` already parses), and FREES THE NAME, so a third-party
-container may call its accessor anything. Marking is MANDATORY, which is not a new stance: SPEC already
-requires per-field marks on a `@generate`d product, where an unmarked field is a compile error.
+### Rows 9 and 10 CLOSED (`0.9.293`–`0.9.296`) — kept only for the rules they established
 
-⚠️ **A keyed container's edges may live in its VALUES only.** A key cannot be rewired in place — that
-would move it in the ordering or the hash — so `Map<Shared<K>, V>` is a **non-goal**, not a "not yet".
-(C++ encodes the same rule independently: `std::map`'s iterators yield `pair<const Key, T>`.)
-`Set`/`SortedSet` of edges stays refused BY BOUND (`K: Hashable + Equatable`, which the serde triad does
-not implement) — a separate, already-measured non-issue.
+**`SortedMap` carries its graph (`0.9.293`).** ⚠️ **Row 9's recorded cause was WRONG, in this file and in
+ROADMAP.md and in the campaign memory alike**, so the correction is the first thing worth keeping: it was
+NOT that "graph discovery never reaches a nested helper". Discovery was fine — `seedField` already chained
+`Owned<BTreeNode>` → type arguments → `Shared<V>`, so `V` was in the node set all along. The gap was that
+the twin predicate keyed on the method **name** (`ci.methods.find("serialize")`), so `BTreeNode.serializeInto`
+— a differently-named private helper, which is where a B-tree's element write actually lives — got no
+graph-carrying copy and the object table died at the call.
 
-**What remains, neither of it about the marking:**
+**THE RULE: the graph's object table travels with the serializer, and nowhere else.** Three checks, and
+the point of all three is that the closure cannot run away:
 
-- **`SortedMap`.** Its element write happens inside `BTreeNode`, a nested helper the graph discovery never
-  reaches, so the leaves are written INLINE and duplicated and the read then fails with *"unresolved
-  reference"*. `Map` writes its elements in its own body and works, which is what isolated it. The fix is
-  in discovery — reaching a participant's nested helper type — not in the accessor.
-- **`SlotMap`.** No `Serializable` half at all; it cannot carry a graph regardless. Pre-existing, and it
-  carries a DESIGN QUESTION that should be answered before it is built rather than discovered in the
-  middle: **does a `Handle` survive a round-trip?** A handle is an index plus a generation, and the
-  generation is what makes a stale handle detectable. If handles must still resolve after a read, the wire
-  form has to preserve slot INDICES and generations — i.e. write the slot array including its holes, not
-  just the live values — which costs wire size proportional to the high-water slot count rather than to
-  the live count. If they need not, the compact form is fine and every handle a caller stored is silently
-  invalidated by the round-trip. Both are defensible; only one can be the contract, and it should be
-  written down with the code.
+1. **Declaration gate** — a method carries the table only if it is the contract `serialize`/`deserialize`
+   or is marked `@serializedGraphEdges` AND takes a `ref Serializer`/`Deserializer`. Taking the sink is
+   already what makes a method a serialization method, so it is also what bounds this. ⚠️ **Measured blast
+   radius:** all of `lib/std` outside the serde module has 8 `ref Serializer`-taking methods; 7 are the
+   contract `serialize` and already carried the table, so the rule added exactly ONE.
+2. **Call gate** — the table is threaded only when the call passes the enclosing copy's OWN sink. A body
+   that builds a fresh `Serializer` is writing a different document, and stamping our ids onto it would be
+   wrong. Enforced where the call is already emitted, so **no call-graph pre-pass exists**.
+3. **Boundary refusal** — our sink handed to an unmarked, eligible method is a compile error naming both
+   methods and the two fixes, because the failure it prevents is invisible at the site.
+
+**One attribute, two roles**, told apart by the signature it sits on — no new language surface and no
+grammar artifacts. A new attribute was considered and rejected: both roles answer one question ("the graph
+routes through this member") and there is nothing for the author to choose between. See
+[SPEC.md](SPEC.md) *Serialization* for the user-facing statement.
+
+⚠️ **A delegate's body is emitted TWICE** — plain under its own C name (what a non-graph program calls) and
+again under a `__graphTwin` suffix. `serialize` is the case that does NOT double up, because its plain name
+is taken over by the synthesized root driver. The suffix is needed because the twin of a method named
+`serializeInto` would otherwise BE that method's own C name.
+
+**`SlotMap` (`0.9.296`) — the design question is answered: A HANDLE SURVIVES A ROUND TRIP.** A slot map
+exists rather than an array plus indices precisely so a handle can outlive the value it names, so if a round
+trip invalidated handles, serializing an entity or asset registry would be pointless. The compact
+alternative was rejected for failing **silently**: a stale handle could coincidentally match a rebuilt slot
+and alias the wrong value, which is the exact accident the generation check exists to prevent. The wire
+preserves the slot layout; the format and its reasoning are in [SPEC.md](SPEC.md) with the code.
+
+**Row 10 (`0.9.294`) — an assignment target and a `match` subject are PLACES.** The branch that claims a
+statement on the RHS KIND spelled the LHS with `emitExpression`, which for an intrinsic-collection element
+is the by-value `__get(…)`. ⚠️ **The row knew about ONE of four shapes**: a generic-instance ctor, a
+qualified variant construction and an array literal all emitted unassignable C, while a `match` into a
+PRIMITIVE element failed earlier and differently ("needs a typed assignment target") because `exprClass` of
+an element access answers "" for a primitive element. ⚠️ **A second site was found by writing the fixture
+rather than by reading the code**: a `match` borrows its subject by pointer and the emitter already
+CLASSIFIED an element access as an lvalue, then took the address of the `__get(…)` rvalue — the same
+classify-one-way/spell-the-other shape. ⚠️ **Blast radius was smaller than implied**: `InlineArray` is the
+only type whose element store goes through `__set`; every kama-side container declares `ref T operator[]`
+and took the place path all along.
+
+⚠️ **`--no-heap` was relaxed to match its own sibling (`0.9.295`)**, because `Handle`'s hand-written serde
+half exposed the difference: an attribute says "prove THIS body", but a **flag says "prove the PROGRAM",
+and a program is what `main` reaches**. Rejecting an unprovable dispatch where it was EMITTED made the flag
+mean "no body anywhere in the import closure may dispatch", so `import { std::collections::SlotMap };`
+alone failed a `--no-heap` build. ⚠️ **Two sites were coupled**: the walk SKIPS a root holding its own
+site, on the premise that the immediate gate reported it — so relaxing the gate alone left nobody
+reporting, and the guard silently stopped firing until that skip was relaxed for indirect sites too.
 
 - **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
@@ -1577,9 +1638,10 @@ walk must stay the MIRROR of what that walk acts on: `graphPartIsEdge` did not u
 the compiler could not: a cycle of two STRONG handles leaks by construction, so the fixture wants the `Weak`
 back-edge — the leak was the fixture's, not the emitter's.
 
-**What is left** is one row: the `copy`-marker defect that makes `Map<K, Shared<V>>` uncompilable (row 9). `Set`/`SortedSet` of edges is refused BY BOUND — the triad is
-not `Hashable`/`Equatable` — so edges only ever arise in the sequence containers and `Map`/`SortedMap`
-values.
+**Nothing is left of this arc.** The `copy`-marker defect that made `Map<K, Shared<V>>` uncompilable shipped
+in `0.9.283`–`0.9.285`, and the two containers still short of a graph closed in `0.9.293`/`0.9.296`.
+`Set`/`SortedSet` of edges is refused BY BOUND — the triad is not `Hashable`/`Equatable` — so edges only
+ever arise in the sequence containers and `Map`/`SortedMap`/`SlotMap` values.
 
 
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)

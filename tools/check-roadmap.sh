@@ -67,36 +67,52 @@ done
     exit 1
 }
 
-# ---- 4. a `row N` cross-reference still means what it meant ------------------------------------
+# ---- 4. every row id is well-formed and UNIQUE -------------------------------------------------
 #
-# Rows are numbered by POSITION, so deleting a shipped row renumbers every row below it — which silently
-# re-points every `row N` written in prose. It has already happened: the LSP auto-import row said "it cannot
-# be written before ROW 1's rule exists" while itself sitting at row 1, because the module-system row it
-# meant had been row 1 and was deleted when that campaign closed. A row citing ITSELF is the tell, and it is
-# the one form of this drift a machine can recognise with certainty. An out-of-range number is the other.
+# `KR-<n>` is a PERMANENT id: assigned once, never reused, never renumbered, so a row keeps it wherever it
+# moves and a shipped row's id retires with it, leaving a gap. Gaps are therefore CORRECT and are not
+# checked — what would be a defect is two rows answering to the same name, because every citation of that
+# id then means two things at once. A new row takes one more than the highest id present, which is safe
+# precisely because none is ever reused.
 #
-# This does not — and cannot — catch a reference that now points at a real but WRONG row. That is why the
-# repo's rule is to find a row by its TEXT and to prefer naming the work over numbering it.
-rows=$(LC_ALL=C grep -cE '^\| [0-9]+ \|' "$RM")
-bad=$(LC_ALL=C awk -v max_rows="$rows" '
-    match($0, /^\| [0-9]+ \|/) {
-        self = substr($0, 3, RLENGTH - 4) + 0
-        rest = $0
-        while (match(rest, /row [0-9]+/)) {
-            ref = substr(rest, RSTART + 4, RLENGTH - 4) + 0
-            if (ref == self)          print "    row " self " cites ITSELF — a renumber stole its referent"
-            else if (ref > max_rows)  print "    row " self " cites row " ref ", which does not exist"
-            rest = substr(rest, RSTART + RLENGTH)
-        }
-    }
-' "$RM")
+# This replaced position numbering, where deleting a shipped row renumbered every row below it and silently
+# re-pointed every `row N` written in prose — in this file, in the detail, in a commit message, in someone's
+# notes. It had already happened twice; closing two rows in one sitting broke two more. The old guard could
+# only catch a row citing ITSELF or an out-of-range number, and explicitly could not catch a reference that
+# had come to point at a real but WRONG row. With permanent ids that whole failure mode is gone, so the
+# check below is the stronger one it could not be before: a citation either resolves or it does not.
+ids=$(LC_ALL=C grep -oE '^\| KR-[0-9]+ \|' "$RM" | tr -d '| ' )
+rows=$(printf '%s\n' "$ids" | grep -c . )
+dupes=$(printf '%s\n' "$ids" | sort | uniq -d)
+if [ -n "$dupes" ]; then
+    echo "check-roadmap: FAIL — a row id is used twice:" >&2
+    printf '    %s\n' $dupes >&2
+    echo "  A \`KR-\` id names one row forever. Give the newer row the next unused id; never reuse one," >&2
+    echo "  and never renumber to close a gap — a gap is a shipped row, which is a good thing to see." >&2
+    exit 1
+fi
+# A stray `| 12 |`-style row is the old scheme creeping back (or a hand-edited table).
+legacy=$(LC_ALL=C grep -nE '^\| [0-9]+ \|' "$RM" || true)
+if [ -n "$legacy" ]; then
+    echo "check-roadmap: FAIL — a row is numbered by position instead of carrying a \`KR-\` id:" >&2
+    printf '%s\n' "$legacy" >&2
+    exit 1
+fi
+
+# ---- 5. every `KR-<n>` citation names a row that exists ----------------------------------------
+#
+# Checked across BOTH files: the detail cites rows too, and so does prose above the tables.
+bad=$(LC_ALL=C grep -ohE 'KR-[0-9]+' "$RM" "$RD" | sort -u | while read -r ref; do
+    printf '%s\n' "$ids" | grep -qx "$ref" || echo "    $ref is cited but no row has that id"
+done)
 if [ -n "$bad" ]; then
-    echo "check-roadmap: FAIL — a \`row N\` reference no longer means what it meant:" >&2
+    echo "check-roadmap: FAIL — a \`KR-\` citation names no row:" >&2
     printf '%s\n' "$bad" >&2
-    echo "  Rows renumber whenever one is deleted. Name the work instead of its number." >&2
+    echo "  Either the row shipped (cite the SPEC/docs record instead, or say it shipped) or the id is a" >&2
+    echo "  typo. An id is never reused, so a citation of a retired row can only ever be stale." >&2
     exit 1
 fi
 
 n=$(printf '%s\n' "$want" | grep -c . )
-echo "check-roadmap: OK (ROADMAP.md $lines/$MAX_LINES lines; $n detail sections, all linked, none orphaned;"
-echo "                   no \`row N\` reference cites itself or a row that does not exist)"
+echo "check-roadmap: OK (ROADMAP.md $lines/$MAX_LINES lines; $rows rows, ids unique; $n detail sections,"
+echo "                   all linked, none orphaned; every \`KR-\` citation resolves)"

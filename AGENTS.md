@@ -127,5 +127,12 @@ section). Delete a shipped item from **both** files once its record lands in the
 (`docs/SPEC.md` for language surface, `docs/packages.md` / `docs/editors.md` / `docs/targets.md` for
 workflow, the git log for *why*).
 
+**Cite a row by its `KR-<n>` id.** The id is permanent — assigned once, never reused, never renumbered —
+so it is safe to write in a commit message, a note or another doc, and deleting a shipped row leaves a
+gap rather than shifting anything. A new row takes one more than the highest id present. (Rows used to be
+numbered by position, which silently re-pointed every `row N` in prose each time one was deleted, and made
+"find the row by its TEXT, never its number" a standing instruction to every reader. That instruction is
+retired: the id is now the reliable handle.)
+
 `agents/AGENTS.md` is **not** this file: it is the snippet kama *ships* to user projects, and it
 must stay free of this repo's own working preferences. `docs/agents.md` documents that surface.
