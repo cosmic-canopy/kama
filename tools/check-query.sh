@@ -35,7 +35,16 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # Keyed on fixture + flags; the cksum keeps the filename short and the sanitized prefix keeps it legible.
 # Failures are cached too, deliberately: the output IS the result, exit status was already discarded.
 qcache=$(mktemp -d); trap 'rm -rf "$tmp" "$qcache"' EXIT
-qkey() { printf '%s|%s' "$1" "$2" | cksum | tr -cd '0-9'; }
+# ⚠️ Sets `_qk` instead of echoing, and that is about cost, not style: both callers wrapped this in `$(…)`,
+# so naming a cache file cost a subshell + `cksum` + `tr` — three processes — on each of 236 assertions
+# and ~131 preload writes, INCLUDING every cache hit. Setting a variable removes the subshell; `set --`
+# removes the `tr`. `cksum` prints "<checksum> <bytes>", and the old `tr -cd '0-9'` concatenated both
+# numbers, so "$1$2" is byte-for-byte the same key. `set --` inside a function rebinds only that
+# function's positionals, so the caller's "$1" is untouched. (KR-18.)
+qkey_into() {
+    set -- $(printf '%s|%s' "$1" "$2" | cksum)
+    _qk="$1$2"
+}
 
 # The SCOPE operand for a fixture, replacing the deleted `--project` flag. `kama query` is
 # target-addressed: a manifest operand says which scope to search and the .kama file stays the thing
@@ -45,18 +54,32 @@ qkey() { printf '%s|%s' "$1" "$2" | cksum | tr -cd '0-9'; }
 #
 # `--project` survives below only as this guard's own shorthand for "ask at project scope"; it is
 # translated here and never reaches the compiler.
+# ⚠️ `dirname` is pure string manipulation, and this walks to the root, so `$(dirname)` INSIDE THE LOOP
+# cost ~10 forks per call across 49 `--project` assertions. msys2 emulates `fork`: measured idle on this
+# box a `$(dirname …)` is ~49.6 ms against ~0.5 ms for `${p%/*}`. (KR-18.)
+#
+# ⚠️ `${_d%/*}` is NOT dirname, and substituting it naively hangs this loop: on a path with no slash it
+# returns the input UNCHANGED, so the `!= "."` condition never trips and it spins forever; on "/a" it
+# returns "" rather than "/". Both cases are handled here, which is the whole reason this is a function
+# rather than an inline expansion.
+_dirname_into_d() {
+    case $1 in
+        */*) _d=${1%/*}; [ -n "$_d" ] || _d=/ ;;
+        *)   _d=. ;;
+    esac
+}
 scope_for() {
-    _d=$(dirname "$1"); _s=""
+    _dirname_into_d "$1"; _s=""
     while [ "$_d" != "/" ] && [ "$_d" != "." ]; do
         if [ -f "$_d/kama_workspace.json" ]; then echo "$_d/kama_workspace.json"; return; fi
         if [ -z "$_s" ] && [ -f "$_d/kama.json" ]; then _s="$_d/kama.json"; fi
-        _d=$(dirname "$_d")
+        _dirname_into_d "$_d"
     done
     echo "$_s"
 }
 
 runq() {
-    _f="$qcache/$(qkey "$FIXTURE" "$1")"
+    qkey_into "$FIXTURE" "$1"; _f="$qcache/$_qk"
     _a="$1"; _scope=""
     # Position-independent: `expect` accumulates args with a leading space, so a prefix match misses.
     case " $_a " in
@@ -159,9 +182,9 @@ preload() {
 
         i=0
         tail -n +2 "$g" | cut -f1 | while IFS= read -r ka; do
-            i=$((i + 1))
+            i=$((i + 1)); qkey_into "$pf" "$ka"
             { [ -f "$tmp/plpre" ] && cat "$tmp/plpre"; [ -f "$tmp/plc_$i" ] && cat "$tmp/plc_$i"; } \
-                >"$qcache/$(qkey "$pf" "$ka")" 2>/dev/null || true
+                >"$qcache/$_qk" 2>/dev/null || true
         done
     done
 }
@@ -181,13 +204,20 @@ expect() {
         if [ "$seen_sep" = 1 ]; then want="$a"; else args="$args $a"; fi
     done
     out=$(runq "$args")
-    if printf '%s\n' "$out" | grep -qF -- "$want"; then
-        echo "  ok: query$args ~ '$want'"
-    else
-        echo "  FAIL: query$args expected '$want', got:" >&2
-        printf '%s\n' "$out" | sed 's/^/      /' >&2
-        fail=1
-    fi
+    # ⚠️ `case`, not `printf | grep -qF`: two processes per assertion across 236 assertions, for a literal
+    # substring test the shell does itself. QUOTING "$want" INSIDE THE PATTERN is what keeps `[`, `*` and
+    # `?` literal — unquoted it becomes a glob and the guard starts asserting something else. Equivalent
+    # to the grep it replaces because `$want` never contains a newline: a match spanning a line boundary
+    # would have to contain one. The failure arm keeps its pipeline — it runs only when already failing.
+    # (KR-18.)
+    case $out in
+        *"$want"*)
+            echo "  ok: query$args ~ '$want'" ;;
+        *)
+            echo "  FAIL: query$args expected '$want', got:" >&2
+            printf '%s\n' "$out" | sed 's/^/      /' >&2
+            fail=1 ;;
+    esac
 }
 
 # reject <flags...> -- <substring>: assert the output does NOT contain <substring> (prelude leakage guard).
@@ -198,13 +228,16 @@ reject() {
         if [ "$seen_sep" = 1 ]; then want="$a"; else args="$args $a"; fi
     done
     out=$(runq "$args")
-    if printf '%s\n' "$out" | grep -qF -- "$want"; then
-        echo "  FAIL: query$args must NOT contain '$want', got:" >&2
-        printf '%s\n' "$out" | sed 's/^/      /' >&2
-        fail=1
-    else
-        echo "  ok: query$args !~ '$want'"
-    fi
+    # The quoted-pattern rule from `expect` above applies here too — and it matters more on this side:
+    # an unquoted glob that failed to match would report a LEAK as clean.
+    case $out in
+        *"$want"*)
+            echo "  FAIL: query$args must NOT contain '$want', got:" >&2
+            printf '%s\n' "$out" | sed 's/^/      /' >&2
+            fail=1 ;;
+        *)
+            echo "  ok: query$args !~ '$want'" ;;
+    esac
 }
 
 echo "check-query: documentSymbols (outline + kinds + accurate name positions)"
