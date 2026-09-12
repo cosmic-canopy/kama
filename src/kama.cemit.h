@@ -1249,6 +1249,12 @@ private:
     // is the contract's, and it stays exactly that shape.
     std::string                        _serGraphArg;             // e.g. "g" inside `X__serializeInto`
     std::string                        _deGraphArg;              // e.g. "g" inside `X__deserializeFrom`
+    // THE CALL GATE. The name of the enclosing graph copy's OWN serializer/deserializer parameter — the
+    // table travels with that sink and with no other. A body that builds a fresh `Serializer` and hands it
+    // to a delegate is writing a DIFFERENT document, so threading our object table into it would stamp our
+    // ids onto someone else's stream; such a call routes to the delegate's plain body instead.
+    std::string                        _serGraphSink;
+    std::string                        _deGraphSink;
 
     // Virtual dispatch: per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
@@ -2382,6 +2388,18 @@ private:
     bool graphTwinNeeded(const ClassInfo& ci, bool write) const;
     bool graphNodeWrites(const ClassInfo& ci) const;   // a node's write half: the derive's, or its twin
     bool graphNodeReads (const ClassInfo& ci) const;   // …and its read half
+    // WHICH ROLE a `@serializedGraphEdges` mark plays, read off the SIGNATURE it sits on. One attribute
+    // covers both because both answer one question — "the graph routes through this member" — and the
+    // shape says which way it routes. A container that writes its elements in its OWN body needs only the
+    // accessor; one that hands the write to a helper (a B-tree recursing over nodes) marks the helper too.
+    enum class GraphMark { None, EdgeAccessor, WriteDelegate, ReadDelegate };
+    GraphMark graphMarkRole(const MethodInfo& mi) const;
+    // A marked DELEGATE: the graph table is threaded into it, so it gets a second body beside its own.
+    bool graphDelegateNeeded(const ClassInfo& ci, const MethodInfo& mi, bool write) const;
+    bool graphSinkIsOurs(const MethodInfo& callee, SharedArgumentList args, bool write) const;
+    // The delegate's graph-carrying C name. A distinct suffix on purpose: the twin of a method named
+    // `serializeInto` would otherwise BE `X__serializeInto`, which is that method's own C name.
+    static std::string graphDelegateTwinName(const MethodInfo& mi) { return mi.cName + "__graphTwin"; }
     void emitGraphTwinProtos(ClassInfo& ci);        // `X__serializeInto` / `X__deserializeFrom` prototypes
     void emitNullSerializer();                      // the discard sink discovery runs a body against
     void emitGraphEdgeHelpers();                    // per edge type: `Shared_X__serializeEdge` (an expression)

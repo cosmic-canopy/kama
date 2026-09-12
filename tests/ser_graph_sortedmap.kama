@@ -1,0 +1,98 @@
+// A graph whose edges are a keyed container's VALUES, where the container DELEGATES its element write —
+// the twin of `ser_graph_map`, and the case that write half could not do.
+//
+// `SortedMap.serialize` does not write its entries: a B-tree's entries are spread over a tree of nodes, so
+// an in-order write is a recursion over nodes, and the real `this.vals[i].serialize(w: w)` lives inside
+// `BTreeNode.serializeInto`. A graph write has to carry its object table INTO that recursion. Before
+// `BTreeNode.serializeInto` was marked `@serializedGraphEdges` it did not: the table stopped at the call,
+// every `Shared` value was written INLINE and the shared leaf appeared twice, and the read then failed with
+// "unresolved reference" — measured, three entries, exit 251. `Map` needs no such mark because it writes
+// its one flat `vals` array in its own body; that difference is what isolated this.
+//
+// THE CHECK IS SHARING, ASSERTED THREE WAYS. Keys 1 and 3 hold the SAME leaf, and a read that rebuilt two
+// separate copies would still sum to 25 and still round-trip cleanly — so the sum proves nothing on its
+// own. (1) the exact JSON bytes, which a SortedMap can assert where a hash map cannot: its order is
+// ASCENDING by key, not hash-arbitrary, so the objects table is deterministic. (2) behaviourally — bump the
+// leaf through key 1, read it back through key 3. (3) the positional backend, which has no names and no
+// delimiters, so its reader is bounded only by the counts and it is the one that proves discovery sized the
+// table before writing. ASan proves the rebuilt graph frees exactly once.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::memory::Shared,
+    std::collections::SortedMap,
+    std::collections::DynamicArray,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+    public fn void bump() { this.v = this.v + 1; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Bag {
+    @field SortedMap<int32, Shared<Leaf>> kids;
+    public ctor make(SortedMap<int32, Shared<Leaf>> kids) { this.kids = give kids; }
+    public fn int32 sum() {
+        int32 s = 0;
+        foreach (ref Shared<Leaf> k in this.kids.valuesMut()) { s = s + k.get(); }
+        return s;
+    }
+    // Bump through one key, read through another. Equal only if both keys name ONE node.
+    public fn bool sharedAcross(int32 a, int32 b) {
+        Optional<Shared<Leaf>> ha = this.kids.get(key: a);
+        Optional<Shared<Leaf>> hb = this.kids.get(key: b);
+        match (give ha) { case Some(value: x): { x.bump(); } case None: { return false; } };
+        int32 after = match (give hb) { case Some(value: y): y.get(); case None: -1; };
+        return after == 8;      // 7, bumped once through the OTHER key
+    }
+}
+
+fn SortedMap<int32, Shared<Leaf>> build() {
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;                     // the SAME leaf, under two different keys
+    SortedMap<int32, Shared<Leaf>> m = SortedMap.empty();
+    m.put(key: 1, value: give dup2);
+    m.put(key: 2, value: new Leaf.make(v: 11));
+    m.put(key: 3, value: give dup);
+    return give m;
+}
+
+fn int32 main() {
+    Shared<Bag> bag = new Bag.make(kids: build());
+    if (bag.sum() != 25) { return 240; }                 // 7 + 11 + 7 — the shared leaf counts under BOTH keys
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
+    // THE BYTES. Keys 1 and 3 both name id 2, and the shared `Leaf` sits in the objects table ONCE. Without
+    // the delegate's mark this read `"value":{"v":7}` twice with an empty table — the failure is visible
+    // right here, before any round trip. Assertable because a SortedMap writes in ascending key order.
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":["
+             + "{\"key\":1,\"value\":2},{\"key\":2,\"value\":3},{\"key\":3,\"value\":2}]}},"
+             + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
+             + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j);
+    Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
+    if (b2.sum() != 25) { return 252; }
+
+    // The rebuilt graph still shares ONE leaf across the two keys. This is the check that matters: a read
+    // which rebuilt two equal copies would also sum to 25 and also round-trip cleanly.
+    if (!b2.sharedAcross(a: 1, b: 3)) { return 253; }    // bumps b2's shared leaf: 7 -> 8
+    if (b2.sum() != 27) { return 254; }                  // 8 + 11 + 8 — one bump seen through both keys
+    if (bag.sum() != 25) { return 255; }                 // …and the ORIGINAL graph was not touched by it
+
+    // …and the same graph on the positional backend, which has no names and no delimiters: its reader is
+    // bounded only by the counts, so it is the one that proves discovery sized the table before writing.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: bag);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
+    Result<Shared<Bag>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Shared<Bag>>(src: give bytes);
+    Shared<Bag> b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
+    if (b3.sum() != 25) { return 244; }
+    if (!b3.sharedAcross(a: 1, b: 3)) { return 247; }
+    return b3.sum() - 2;                                 // 27 - 2 = 25, the same total as the sequence twin
+}

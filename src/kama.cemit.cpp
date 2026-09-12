@@ -22689,13 +22689,17 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                                          : "an ordinary `fn` has none — its C name is kama's to choose; `expose` it "
                                            "to fix the symbol")).c_str(), line);
         } else if (an == "serializedGraphEdges") {
-            // Serde metadata on an ACCESSOR: "these are the elements carrying my graph edges; rewire them
-            // through here". Read off `MethodInfo::serdeGraphEdges`, checked by `mutIterOf`. Contributes NO
+            // Serde metadata on a MEMBER, in one of two roles told apart by the signature it sits on: an
+            // ACCESSOR ("these are the elements carrying my graph edges; rewire them through here", checked
+            // by `mutIterOf`) or a DELEGATE ("the element write is handed to me", checked by
+            // `graphDelegateNeeded`). Read off `MethodInfo::serdeGraphEdges`. Contributes NO
             // `__attribute__` — a marker, like `@noheap` below. Member-only: `@field` is the peer that marks
-            // a FIELD serde walks, and this marks the accessor for the elements, which are not fields.
+            // a FIELD serde walks, and this marks the members the elements are reached through, which are
+            // not fields.
             if (!onMember)
-                unsupported("`@serializedGraphEdges` marks the METHOD that hands out a container's graph-edge "
-                            "elements, not a whole declaration — put it on that accessor", line);
+                unsupported("`@serializedGraphEdges` marks a METHOD the serde graph routes through — the "
+                            "accessor handing out a container's graph-edge elements, or the helper its "
+                            "element write is delegated to — not a whole declaration", line);
             // no parts.push_back — emits nothing
         } else if (an == "noheap") {
             // `@noheap` (MCU step 5): a CHECKER flag, not codegen — the body rejects every emitter-visible
@@ -24011,6 +24015,16 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     emitGraphTwinProtos(ci);             // …and a participant's graph-carrying twin
 }
 
+// The name of a serde method's own sink parameter — `w` in `serialize(ref Serializer w)`. The call gate
+// (`graphSinkIsOurs`) compares against this: a delegate handed THIS sink continues our document, one handed
+// any other sink is writing a different one and must not be given our object table.
+static std::string serdeSinkParamName(const MethodInfo& mi, bool write)
+{
+    for (auto& p : mi.params)
+        if (p.className == (write ? "Serializer" : "Deserializer")) return p.name;
+    return "";
+}
+
 // `X__serializeInto` — the graph-carrying twin of a hand-written `serialize`. Declared beside the ordinary
 // prototypes so cross-referencing participants link; the 2-arg `X__serialize` keeps its own prototype from
 // the loop above, because the `Serializable` vtbl slot casts to that exact shape.
@@ -24029,6 +24043,19 @@ void CEmitter::emitGraphTwinProtos(ClassInfo& ci)
         const std::string rootC = graphHandleRootType(ci);
         if (!rootC.empty())
             *_out << stat << rootC << " " << ci.name << "__deserializeRoot(Deserializer r);\n";
+    }
+    // …and a marked DELEGATE's twin. Unlike `serialize`, whose plain name is taken over by the synthesized
+    // root driver, a delegate keeps its OWN 2-arg symbol (a non-graph program calls it) and gains a third
+    // parameter in the twin. Declared here so a sibling participant's body can call across.
+    for (auto& kv : ci.methods) {
+        MethodInfo& mi = kv.second;
+        const bool wd = graphDelegateNeeded(ci, mi, /*write=*/true);
+        if (!wd && !graphDelegateNeeded(ci, mi, /*write=*/false)) continue;
+        *_out << stat << cType(mi.returnType) + placeRetSuffix(mi.isPlaceReturn, mi.isConstPlace) << " "
+              << graphDelegateTwinName(mi) << "("
+              << paramListC(mi.node->params, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
+                            ci.isScalarRecv)
+              << (wd ? ", struct kama_ser_graph* g" : ", struct kama_de_graph* g") << ");\n";
     }
 }
 
@@ -24424,12 +24451,33 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // body with no graph writes each pointee inline, losing identity and looping on a cycle.
         const bool wtwin = (kv.first == "serialize"   && graphTwinNeeded(ci, /*write=*/true));
         const bool rtwin = (kv.first == "deserialize" && graphTwinNeeded(ci, /*write=*/false));
-        ScopedStr _gp(_serGraphArg, wtwin ? "g" : "");
-        ScopedStr _gq(_deGraphArg,  rtwin ? "g" : "");
-        emitMethodOrCtorBody(wtwin ? ci.name + "__serializeInto"
-                                   : rtwin ? ci.name + "__deserializeFrom" : mi.cName,
-                             ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
-                             mi.isUnsafe, kv.first.c_str(), mi.node->attributes);
+        {
+            ScopedStr _gp(_serGraphArg, wtwin ? "g" : "");
+            ScopedStr _gq(_deGraphArg,  rtwin ? "g" : "");
+            ScopedStr _gs(_serGraphSink, wtwin ? serdeSinkParamName(mi, true)  : "");
+            ScopedStr _gt(_deGraphSink,  rtwin ? serdeSinkParamName(mi, false) : "");
+            emitMethodOrCtorBody(wtwin ? ci.name + "__serializeInto"
+                                       : rtwin ? ci.name + "__deserializeFrom" : mi.cName,
+                                 ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
+                                 mi.isUnsafe, kv.first.c_str(), mi.node->attributes);
+        }
+        // A marked DELEGATE gets a SECOND body, under the twin name, with the table live. Both are needed
+        // and neither is dead: the plain one is what a non-graph program calls (the same container
+        // serialized with no `Shared` in sight), the twin is what a graph copy routes to. `serialize` above
+        // is the case that does NOT double up — its plain name is taken over by the synthesized root
+        // driver, so emitting the author's body under it too would leave a second, callable, WRONG symbol.
+        const bool wdel = graphDelegateNeeded(ci, mi, /*write=*/true);
+        const bool rdel = graphDelegateNeeded(ci, mi, /*write=*/false);
+        if (wdel || rdel) {
+            line(mi.node->line);
+            ScopedStr _gp(_serGraphArg, wdel ? "g" : "");
+            ScopedStr _gq(_deGraphArg,  rdel ? "g" : "");
+            ScopedStr _gs(_serGraphSink, wdel ? serdeSinkParamName(mi, true)  : "");
+            ScopedStr _gt(_deGraphSink,  rdel ? serdeSinkParamName(mi, false) : "");
+            emitMethodOrCtorBody(graphDelegateTwinName(mi), ret.c_str(), mi.node->params, mi.node->body, ci,
+                                 mi.isConst, mi.isStatic, mi.isUnsafe, kv.first.c_str(),
+                                 mi.node->attributes);
+        }
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
@@ -26466,6 +26514,52 @@ bool CEmitter::graphTwinNeeded(const ClassInfo& ci, bool write) const
 bool CEmitter::graphNodeWrites(const ClassInfo& ci) const { return ci.genSerialize   || graphTwinNeeded(ci, true); }
 bool CEmitter::graphNodeReads (const ClassInfo& ci) const { return ci.genDeserialize || graphTwinNeeded(ci, false); }
 
+// THE ROLE OF A MARK, off the signature it sits on. Taking the serializer is what makes a method a
+// serialization method, so it is also what tells the two roles apart — an edge accessor is nullary and
+// hands out an iterator, a delegate is handed the sink. No new attribute: both are "the graph routes
+// through this member", and there is nothing for the author to choose between.
+CEmitter::GraphMark CEmitter::graphMarkRole(const MethodInfo& mi) const
+{
+    if (!mi.serdeGraphEdges) return GraphMark::None;
+    for (auto& p : mi.params) {
+        if (p.className == "Serializer")   return GraphMark::WriteDelegate;
+        if (p.className == "Deserializer") return GraphMark::ReadDelegate;
+    }
+    return GraphMark::EdgeAccessor;   // the nullary-accessor shape; `mutIterOf` validates the rest of it
+}
+
+// A DELEGATE the graph table must be threaded into. The gate is deliberately narrow, because the worry it
+// answers is run-away: a method qualifies only if it (1) is marked, (2) TAKES the serializer, and (3) sits
+// on a type that reaches a `Shared`/`Weak` at all. The stdlib has 8 `ref Serializer`-taking methods outside
+// the serde module; 7 are the contract `serialize` and already carry the graph, so this rule adds exactly
+// one — `BTreeNode.serializeInto`, which is where a SortedMap's element write actually happens.
+bool CEmitter::graphDelegateNeeded(const ClassInfo& ci, const MethodInfo& mi, bool write) const
+{
+    if (!ci.reachesPointer || ci.isIntrinsicColl || isSmartPtrClass(ci.name)) return false;
+    if (graphMarkRole(mi) != (write ? GraphMark::WriteDelegate : GraphMark::ReadDelegate)) return false;
+    // Same "hand-written is exactly has an AST body" test graphTwinNeeded uses: there is no body to emit a
+    // second copy of otherwise.
+    return mi.node != nullptr && !mi.isAbstract;
+}
+
+// THE CALL GATE (rule 2 of "the graph table travels with the serializer"). True when the argument bound to
+// the callee's sink parameter is exactly the enclosing graph copy's OWN sink, named plainly. Anything else
+// — a freshly built `Serializer`, a field, a sink handed in from elsewhere — is a different document, so
+// the call routes to the delegate's plain body and writes inline, which is correct for that document.
+bool CEmitter::graphSinkIsOurs(const MethodInfo& callee, SharedArgumentList args, bool write) const
+{
+    const std::string& sink = write ? _serGraphSink : _deGraphSink;
+    if (sink.empty() || !args) return false;
+    const std::string pname = serdeSinkParamName(callee, write);
+    if (pname.empty()) return false;
+    for (auto& a : *args) {
+        if (!a || !a->name || !a->name->value || *a->name->value != pname) continue;
+        auto* id = dynamic_cast<IdentifierNode*>(a->expression.get());
+        return id && id->value && *id->value == sink;
+    }
+    return false;   // not passed by name at all — kama's convention is named, so this is not our sink
+}
+
 // Which types need a twin, and which edge handles need a `__serializeEdge`. Runs once, after the node set
 // is final — `isGraphNode` is what decides whether a `Shared<X>` is an edge or just a handle to a value.
 void CEmitter::planGraphTwins()
@@ -26556,8 +26650,11 @@ CEmitter::MutIter CEmitter::mutIterOf(ClassInfo& ci)
     // already applies to a `@generate`d product's fields: serde walks what you mark, never what it guesses.
     MethodInfo* iterMi = nullptr;
     std::string iterName;
+    // …and only in its ACCESSOR role. The same attribute also marks a write/read DELEGATE (a helper the
+    // element write is handed to), which is a different member with a different signature — so "more than
+    // one mark" is an error per ROLE, not per class.
     for (auto& kv : ci.methods)                       // `methods` is keyed by kama method name
-        if (kv.second.serdeGraphEdges) {
+        if (graphMarkRole(kv.second) == GraphMark::EdgeAccessor) {
             if (iterMi) {
                 unsupported(("`" + demangleForDisplay(ci.name) + "` marks more than one method "
                              "`@serializedGraphEdges` — a container has one set of graph-edge elements, so "
@@ -28074,6 +28171,36 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         if (pc != _classes.end() && graphTwinNeeded(pc->second, /*write=*/true))
             return emitReorderedCall(clsName + "__serializeInto", "(" + clsName + "*)" + recvPtr,
                                      mi->params, args, srcLine, _serGraphArg);
+    }
+    // A marked DELEGATE — a helper the element write is handed to, so the table has to go with it. This is
+    // the call that used to end the graph: `SortedMap.serialize` hands its writer to `BTreeNode`, whose
+    // body holds the real `this.vals[i].serialize(w: w)`, and with no table there every leaf was written
+    // INLINE and duplicated. Rule 1 is `graphDelegateNeeded` (marked + takes the sink); rule 2 is
+    // `graphSinkIsOurs` (it is OUR sink); rule 3 — an unmarked callee handed our sink — is refused below.
+    const bool inWriteCopy = !_serGraphArg.empty(), inReadCopy = !_deGraphArg.empty();
+    if (inWriteCopy || inReadCopy) {
+        const bool write = inWriteCopy;
+        if (graphDelegateNeeded(*owner, *mi, write) && graphSinkIsOurs(*mi, args, write))
+            return emitReorderedCall(graphDelegateTwinName(*mi), self, mi->params, args, srcLine,
+                                     write ? _serGraphArg : _deGraphArg);
+        // Rule 3: handed our own sink, but nothing carries the table onward. Left alone this is the silent
+        // wrong write — inline, duplicated pointees, and a read that fails with "unresolved reference"
+        // somewhere else entirely.
+        if (graphMarkRole(*mi) == GraphMark::None && graphSinkIsOurs(*mi, args, write)
+            && owner->reachesPointer && !owner->isIntrinsicColl && !isSmartPtrClass(owner->name)
+            && mi->node != nullptr && !mi->isAbstract)
+            unsupported(("`" + demangleForDisplay(clsName) + "." + method + "` is handed this "
+                         + std::string(write ? "serializer" : "deserializer") + " from inside a graph "
+                         "write, but is not marked `@serializedGraphEdges` — the elements it "
+                         + std::string(write ? "writes" : "reads") + " would be "
+                         + std::string(write ? "duplicated inline instead of interned as ids"
+                                             : "read as values instead of as ids")
+                         + ", and the "
+                         + std::string(write ? "read would then fail with \"unresolved reference\""
+                                             : "graph would come back unshared")
+                         + ". Mark it `@serializedGraphEdges`, or "
+                         + std::string(write ? "write" : "read")
+                         + " the elements in the container's own body the way `Map` does").c_str(), srcLine);
     }
     return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
 }

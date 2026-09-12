@@ -543,6 +543,17 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
     // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
+    //
+    // ⚠️ MARKED because the element write lives HERE, not in `SortedMap.serialize`. A B-tree's entries are
+    // spread over a tree of nodes, so an in-order write is a recursion over nodes — and a graph write has
+    // to carry its object table into that recursion or every `Shared` value is written inline and
+    // duplicated (measured: three entries, the shared leaf written twice, and a read that then failed with
+    // "unresolved reference"). `Map` needs no mark on anything but its accessor because it writes its one
+    // flat `vals` array in its own body. ⚠️ `public` only so `SortedMap` can call it — visibility is
+    // per-TYPE, and `BTreeNode` is not exported (see this file's `export` list), so this is module-internal
+    // either way. It becomes `private` with a `friend SortedMap[serializeInto];` grant once `friend` works
+    // across generics — see ROADMAP_DETAIL §2.
+    @serializedGraphEdges
     public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {

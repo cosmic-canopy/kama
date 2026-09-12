@@ -1,0 +1,59 @@
+// A container that hands its element write to a HELPER and never marks the helper. The write half of
+// `graph_coll_unmarked`, which is the read-half twin of the same rule: serde routes through what you MARK,
+// never through what it guesses.
+//
+// This shape used to compile and write the WRONG bytes, silently. The object table is a parameter threaded
+// through the graph-carrying copy of a body, so it stops dead at a call into anything that does not carry
+// it: every pointee below the call is then written INLINE — duplicated once per reference, with no table
+// entry — and the failure surfaces far away, as an "unresolved reference" from the READER. That is the
+// silent-wrong write the whole marking rule exists to make impossible, so the refusal has to fire at the
+// call, naming the method that is not carrying the table.
+//
+// `Chunk.writeInto` takes the serializer, so it IS a serialization method and eligible; it is simply
+// unmarked. Add `@serializedGraphEdges` to it and this same source compiles and round-trips — that is what
+// separates this from a shape the compiler cannot support.
+import { std::serialization::text::json::serializeJsonBuffer,
+         std::memory::Shared, std::memory::Owned, std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+// The nested helper: it holds the elements and it writes them.
+type resource Chunk<T> {
+    DynamicArray<T> xs;
+    public ctor make() { }
+    public fn void add(T x) { this.xs.add(item: give x); }
+    // Takes the sink, writes the elements — and carries no mark. <!-- the refusal is about THIS -->
+    public const fn Result<Unit, Owned<Error>> writeInto(ref Serializer w) when [T: Serializable] {
+        isize i = 0;
+        while (i < this.xs.length()) {
+            Result<Unit, Owned<Error>> __e = this.xs[i].serialize(w: w);
+            match (give __e) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            i = i + 1;
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+type resource Holder<T> implements Serializable when [T: Serializable] {
+    Owned<Chunk<T>> c;
+    public ctor make() { Owned<Chunk<T>> k = new Chunk::<T>.make(); this.c = give k; }
+    public fn void add(T x) { this.c.add(x: give x); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        w.beginArray(count: 1ui64);
+        Result<Unit, Owned<Error>> __r = this.c.writeInto(w: w);   // hands our sink to an unmarked method
+        match (give __r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.endArray();
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+fn int32 main() {
+    Shared<Leaf> dup = new Leaf.make(v: 7);
+    Shared<Leaf> dup2 = dup;
+    Shared<Holder<Shared<Leaf>>> h = new Holder::<Shared<Leaf>>.make();
+    h.add(x: give dup);
+    h.add(x: give dup2);                        // the SAME leaf twice — this is the graph
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: h);
+    return match (give jr) { case Ok(value: s): 0; case Err(error: e): 1; };
+}

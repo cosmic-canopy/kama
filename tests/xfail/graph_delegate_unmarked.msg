@@ -1,0 +1,1 @@
+handed this serializer from inside a graph write
