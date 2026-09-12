@@ -10334,8 +10334,15 @@ int main(int argc, char** argv)
         // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP_DETAIL §10).
         if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
         if (stopsAtObject) cmd << "-c ";                                                // no link step
-        cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
-        if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
+        // ⚠️ QUOTED, like every other -I below. These three were bare until 0.9.293, so a space
+        // anywhere in them tore the command line and the tail became a bare input operand —
+        // `clang: error: no such file or directory: 'project'` for a project under `…/my project/`.
+        // Worse, it also hit runtimeDir, which is the INSTALL PREFIX: with kama installed to
+        // `~/.kama` (the documented path) a Windows account named `John Smith` got
+        // `no such file or directory: 'Smith/.kama/include'` and could not build hello-world at all.
+        // Not Windows-only — `sh -c` word-splits identically. Measured: ROADMAP_DETAIL §2.
+        cmd << "-I\"" << runtimeDir << "\" -I\"" << dirName(absolutePath(input)) << "\" -I. ";
+        if (!headerDir.empty()) cmd << "-I\"" << headerDir << "\" ";   // the shared generated header
         // Each `csources` entry's own directory, so a header BESIDE the .c is findable — from the .c
         // itself, and from the kama file that `extern "shim.h";`s it. Deduped, and AFTER the project's
         // own dirs above so a first-party header still shadows a dependency's.

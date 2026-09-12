@@ -8,7 +8,9 @@
 // reap if the child already exited, else park the pid for the runtime's reaper to sweep on a later drop —
 // the destructor NEVER blocks (avoids the classic blocking-dtor-vs-undrained-pipe deadlock) and never
 // leaves a growing pile of zombies either. Explicit `wait()` is the blocking reap that returns the exit
-// code. POSIX only (M1); Windows (CreateProcess) is a later milestone; wasm has no fork/exec.
+// code. POSIX and Windows both ship — the Windows seam is `CreateProcessW`, UTF-16 at the edge
+// (0.9.217), and `tests/proc_*` run there; its one residual is the ≤260 cwd/executable limit noted on
+// `cwd()` below. wasm has no fork/exec.
 
 import { std::io::IoError, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
@@ -174,6 +176,9 @@ type resource Command {
         isize i = 0;
         while (i < list.length()) { this.args.add(item: copy list[i]); i = i + 1; }
     }
+    // ⚠️ On Windows a child's cwd (and its executable path) must stay under 260 characters: that is a
+    // CreateProcessW limit, not a kama one, and the `\\?\` prefix does NOT lift it. Hand the child
+    // absolute paths rather than a deep cwd() plus relative ones.
     public fn void cwd(string dir) { this.cwd = give dir; }
     public fn void env(string key, string val) { this.envKeys.add(item: give key); this.envVals.add(item: give val); }
     public fn void envClear() { this.envClear = true; }

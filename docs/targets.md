@@ -550,6 +550,17 @@ beside the source. `out/` is a project's concept, and one file is not a project.
 kama will not guess a toolchain that cannot work. Pick a route from *Getting a cross toolchain* above,
 or `kama transpile` and build the C elsewhere.
 
+**On Windows the link fails with `ld: cannot find …\???\<name>-xxxxxx.o`, and every path I passed is ASCII.**
+Your `%TEMP%` contains non-ASCII characters — which is what a Windows account name like `Björn` or
+`日本語` gives you. It is the toolchain, not kama: on a single-invocation build clang compiles to a
+temporary object under `%TEMP%` and hands *that* to GNU `ld`, which is a narrow program and cannot open
+a non-ASCII path in either direction. Nothing on the command line has to be non-ASCII for this to fire.
+Three ways out, any one of which is enough: add `-fuse-ld=lld` (LLVM's linker reads UTF-16 and has
+neither limit), point `TEMP`/`TMP` at an ASCII directory, or let kama's per-translation-unit path do
+the link — `-j 2` or higher never asks clang for a temporary, so only a one-TU build (or `-j 1`) is
+exposed. The same narrowness in `ld`/`ar` is why kama hands them 8.3 aliases for its own paths; see
+[platforms/windows.md](platforms/windows.md) for the measurements.
+
 **My Windows `.exe` dies immediately with `0xC0000135` / "the code execution cannot proceed".**
 That is `STATUS_DLL_NOT_FOUND` at process start — a DLL the binary imports is not on the machine.
 `objdump -p app.exe | grep 'DLL Name'` names it. If it is `libwinpthread-1.dll`, you built with

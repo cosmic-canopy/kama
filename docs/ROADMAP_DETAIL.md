@@ -238,6 +238,59 @@ near-native and toolchain-free, but **not** as fast as native kama today (LLVM's
 keep `C→emcc -O3` ahead on heavy numeric loops), so the **release tier remains the max-performance path for both
 native and web**. Don't conflate "can emit WASM directly" with "the fast web path."
 
+- **Windows suite speed — the dominant cost was SPAWNS IN A GUARD'S SHELL LOOP, not compiling.**
+  Diagnosed and largely fixed 2026-09-11 (`0.9.292`); the full record, method and remaining sweep are
+  kept at `.scratch/row16/FINDINGS.md` (gitignored) and summarized here.
+
+  ⚠️ **First, a framing correction, because it had blocked the row.** [windows.md](platforms/windows.md)
+  rightly warns that this box is a QEMU-virtualized ARM64 VM running emulated x86_64, so its absolute
+  seconds are not Windows facts. That had been over-read into *"this row cannot be worked on here"*. It
+  can: **structural** costs — how many processes a phase spawns, and what bounds its critical path —
+  are the same on any Windows host, and only the multiplier differs. Work the structure; quote seconds
+  as this-box-only.
+
+  **Where the time went.** Guards 533 s (3612 s summed CPU, ~6.8× parallel on 12 cores), fixtures
+  ~1409 s for 1712 fixtures. The fixture phase is inherent — one `kama` + one `clang` each — and
+  `run_tests.sh:50-56` already argues correctly for `KAMA_BUILD_JOBS=1` under a saturating fan-out.
+  The guard phase was not inherent at all: no guard is `check-heavy`, so all 66 ran in parallel, and
+  the slowest was **`check-doc-claims` at 495.82 s of the 533 s phase** — twelve cores idling beneath
+  one guard. Parallelism could not have helped; only that number mattered.
+
+  ⚠️ **And it compiles nothing.** It is a text/link check over six markdown files. Its Half-A loop took
+  each marker apart with five `printf | cut` / `printf | sed` / `printf | tr` pipelines — ten processes
+  per marker, across 334 markers (297 in SPEC alone, 93 naming several fixtures) — for string splitting
+  the shell does with `${m%%:*}`. msys2 has no real `fork` and emulates it; measured here, a
+  `printf | cut` pair costs ~748 ms against ~3.8 ms for a parameter expansion, ~200×. On Linux the same
+  loop is a few seconds, which is precisely why it survived: cheap on the platform it was written on,
+  pathological on the one nobody profiles.
+
+  **Fixed** by making the loop process-free, with semantics preserved deliberately — including the
+  existing (non-)glob behaviour, since no marker uses a trailing `*` today and that part of the
+  guard's own header is unexercised. Proven byte-identical on **both** paths, which is the half that
+  matters for a guard: the happy path (`146 claims, 334 markers`) and an injected-failure path (a bogus
+  marker plus a two-name marker whose *second* name is bogus, to exercise the comma split) produced
+  identical output, line numbers and exit codes. Result: `check-doc-claims` left the slowest-8
+  entirely and guards summed CPU fell 3612 s → 3125 s, a 487 s drop matching its whole former cost.
+
+  ⚠️ **No phase-wall win is claimed yet.** That run's guard sets differed (66 vs 67) and measurements
+  were running concurrently, so the wall number is contaminated. Expected once clean: the phase becomes
+  bounded by `check-query` (~345 s) rather than ~496 s. **Scheduled: one idle-machine back-to-back
+  `./dev check` A/B**, then the same read-through of `check-query` / `check-packages` / `check-lsp` /
+  `check-manifest` — now the top four — for `$(printf … | sed)` inside a loop. Nobody has looked at
+  them; this one was found by reading a single guard.
+
+  Two things found alongside, each wanting its own row rather than folding in here:
+  * **`xfail/borrow_frozen_spawn` is flaky under load** — failed once in the 12-way suite ("rejected,
+    but error missing") and passes 3/3 in isolation on both a clean-HEAD and a patched build, so it is
+    **not** from the row-14 change (verified by stashing everything and rebuilding). Mechanism
+    unestablished; a per-fixture timeout truncating output under load would fit, which would make it
+    another symptom of the suite being slow rather than a borrow-checker fact.
+  * **Live progress output has nothing to do with row 7** (`std::process` streaming reads). The harness
+    is shell and never touches `std::process`. Output is withheld *by design*:
+    `tools/run-checks.sh:141-184` collects each guard's output to a file in parallel and replays the
+    logs in order once all finish, and `run_tests.sh:47` states the same intent for fixtures. A
+    ~10-line change could emit a per-job completion line while keeping the ordered replay.
+
 - **`std::time` calendar — scheduled, unsized.** `time.kama` says "deliberately no calendar … a half-calendar is
   worse than none", which means WHOLE, not never: a general-purpose stdlib needs civil dates. Scope: civil-from-days
   (Hinnant's algorithms), ISO-8601 format/parse of a `SystemTime`, leap-year and weekday arithmetic; no zone
@@ -798,15 +851,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   here rather than folded into the walk-parity work. ⚠️ **`tools/check-scan-parity.sh` cannot see this
   one** — it holds the two walks at parity on AST *node kinds*, and this is an asymmetry in which
   *declarations* get walked at all, which is the same for both.
-- **Paths with spaces — UNPROBED.** Two of the C compiler's `-I` entries are written **unquoted** —
-  `kama.driver.cpp` builds `-I<runtimeDir> -I<dirName(absolutePath(input))> -I.` and `-I<headerDir>` as
-  bare text while every other `-I`, `--sysroot`, input and `-o` on the same line is quoted. A project
-  under `C:\Users\John Smith\` or `/home/x/my project/` therefore hands clang a torn include path, on
-  every platform (`sh -c` splits the same way cmd does). Found 2026-09-07 while reading the command
-  builder for the Windows path work, and **not measured**: the probe is a `mktemp -d` with a space in it,
-  one fixture, `kama build`. If it fails, the fix is the two quotes plus a guard shaped like
-  `check-clean-tree.sh` (a private temp root, five build shapes); if it passes, write down why here and
-  delete the row. Sized `?` until the probe has run.
 - **Windows path residuals after `0.9.223`.** The compiler-side seam shipped
   ([platforms/windows.md](platforms/windows.md) § *Where the remaining work is* has the record and the
   measurements). What it left, with a verdict each, so nothing here is "out of scope" by silence:
@@ -814,7 +858,11 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     or not, a Win32 limit and not a seam limit (measured 2026-09-06). Verdict **non-goal**: nothing kama
     does can lift it, and `std::process` already says what answers the need — hand a child absolute
     paths rather than a deep `cwd()` (`tests/support/compilerpath_probe.kama` lives by that rule).
-    Scheduled part: say so in `lib/std/process`'s doc comment on `cwd`, one sentence.
+    Scheduled part: say so in `lib/std/process`'s doc comment on `cwd`, one sentence. ✅ **DONE
+    2026-09-11.** ⚠️ Written with it: that file's HEADER still said *"POSIX only (M1); Windows
+    (CreateProcess) is a later milestone"* long after `0.9.217` shipped the `CreateProcessW` seam and
+    `tests/proc_*` (including `proc_cwd`, which exercises exactly this) went green here — corrected in
+    the same edit, and a reminder that a stale doc outlives the milestone that dated it.
   * **`selfExePath` and `relativizeToCwd` keep 260-byte buffers** (`_get_pgmptr` / `getcwd` into
     `PATH_MAX`). Verdict **genuinely optional**: a process cannot *have* a cwd past 260 without the
     registry opt-in kama does not ask for, and the second is cosmetic (`kama: built .`). The first is an
@@ -839,7 +887,10 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     A user whose account name is non-ASCII has that `%TEMP%`. Verdict **non-goal for the compiler as
     such**: it is the toolchain's, `-fuse-ld=lld` or an ASCII `TEMP` fixes it outside kama, and kama's
     per-TU path (`-j` ≥ 2) never asks clang for a temporary. What IS scheduled: say so in
-    [platforms/windows.md](platforms/windows.md) (done) and in `targets.md`'s Windows notes (not yet).
+    [platforms/windows.md](platforms/windows.md) (done) and in `targets.md`'s Windows notes
+    ✅ **DONE 2026-09-11** — a Troubleshooting entry keyed on the symptom the user actually sees
+    (`ld: cannot find …\???\<name>-xxxxxx.o` with every path on the command line ASCII), naming all
+    three ways out.
 - **Capturing closures — sized, not scheduled (audit verdict, 2026-09-07).** The shape a UI event table wants
   today is a generic functor: `type contract Handler<E> { fn void call(E e); }`, one `type resource` per handler
   carrying its captures as fields, stored as `Owned<Handler<E>>` in the table — the comparator twin

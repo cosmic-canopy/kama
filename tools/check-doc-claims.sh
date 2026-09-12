@@ -123,13 +123,35 @@ for rel in $DOCS; do
         | sed "s|^|$rel:|" || true
 done > "$tmp/markers"
 
+# ⚠️ SPLIT WITH PARAMETER EXPANSION, NOT SUBPROCESSES. Each marker used to be taken apart by four
+# `printf | cut` / `printf | sed` pipelines plus a `printf | tr` per name — about ten processes per
+# marker across 334 markers (93 of which name several fixtures), for pure string splitting the shell
+# does itself for free. On Linux that is a handful of seconds and nobody noticed. On msys2 `fork` is
+# emulated and a spawn costs orders of magnitude more, which made this the SLOWEST GUARD IN THE SUITE
+# — 495s of a 533s phase — while compiling absolutely nothing. Since no guard is `check-heavy`, that
+# one number WAS the phase: twelve cores sat idle underneath it. Keep this loop process-free.
+# (ROADMAP row 16.)
+saved_ifs=$IFS
 while IFS= read -r m; do
     [ -z "$m" ] && continue
-    loc=$(printf '%s' "$m" | cut -d: -f1-2)
-    body=$(printf '%s' "$m" | sed 's/^[^:]*:[0-9]*://')
-    kind=$(printf '%s' "$body" | sed 's/<!-- *\([a-z]*\):.*/\1/')
-    names=$(printf '%s' "$body" | sed 's/<!-- *[a-z]*: *//; s/ *-->.*//')
-    for n in $(printf '%s' "$names" | tr ',' ' '); do
+    # `$m` is `<rel>:<lineno>:<!-- kind: a, b -->` — $rel comes from DOCS above and never has a colon.
+    rel_m="${m%%:*}"                         # docs/SPEC.md
+    rest="${m#*:}"                           # 123:<!-- xfail: a, b -->
+    loc="$rel_m:${rest%%:*}"                 # docs/SPEC.md:123
+    body="${rest#*:}"                        # <!-- xfail: a, b -->
+
+    kind="${body#*<!--}"                     # " xfail: a, b -->"
+    kind="${kind%%:*}"                       # " xfail"
+    while :; do case $kind in ' '*) kind="${kind# }" ;; *) break ;; esac; done
+
+    names="${body#*:}"                       # " a, b -->"
+    names="${names%%-->*}"                   # " a, b "
+    # Comma AND space in IFS, so `a, b` splits the same way `tr ',' ' '` + default splitting did.
+    # Left unquoted deliberately: that preserves the previous pathname-expansion behaviour exactly
+    # (no marker uses a glob today — see the trailing-`*` note above, which nothing exercises).
+    IFS=', '
+    for n in $names; do
+        IFS=$saved_ifs
         [ -z "$n" ] && continue
         if [ "$kind" = xfail ]; then dir="$ROOT/tests/xfail"; else dir="$ROOT/tests"; fi
         # Each candidate tested on its own: `ls a b c` exits non-zero when ANY one is absent, which would
@@ -141,7 +163,9 @@ while IFS= read -r m; do
             note "$loc names \`$n\`, which is not a fixture (looked for $n.kama / $n.d under ${dir#"$ROOT"/})"
         fi
     done
+    IFS=$saved_ifs
 done < "$tmp/markers"
+IFS=$saved_ifs
 
 [ "$fail" = 0 ] || {
     echo "" >&2
