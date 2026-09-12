@@ -1,0 +1,64 @@
+// A `friend` grant across generics, in all three shapes — it used to work in none of them, and the
+// stdlib's own `BTreeNode.serializeInto` was `public` with a comment parked on it waiting for this.
+//
+// A grant names a TYPE. When both sides are generic it is between CORRESPONDING instances:
+// `Tree<A,B>` may reach `Node<A,B>`, and a sibling instance may not (tests/xfail/friend_generic_sibling)
+// — which is the rule plain `private` already follows between siblings, and a grant must not be broader
+// than the rule it relaxes. When only ONE side is generic there is nothing to correspond to, so the
+// grant holds for every instance of that side: `Cell<T>` below befriends a plain type, and a plain type
+// below is befriended by every `Lens<T>`.
+//
+// Arity has to be able to correspond at all, so a mismatch is refused where the grant is written
+// (tests/xfail/friend_generic_arity), rather than becoming a grant that reads correct and never fires.
+
+// ---- both sides generic: corresponding instances ----------------------------------------------------
+type value Node<K, V> {
+    K k; V v;
+    friend Tree[peek];
+    public ctor make(K k, V v) { this.k = k; this.v = v; }
+    const fn int32 peek() { return 7; }               // private: only `Tree<K,V>` may call it
+}
+
+type value Tree<K, V> {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+    public const fn int32 reach(const ref Node<K, V> o) { return o.peek(); }
+}
+
+// ---- generic owner, plain accessor: every instance of the owner is opened to it ----------------------
+type value Cell<T> {
+    T t;
+    friend Probe[raw];
+    public ctor make(T t) { this.t = t; }
+    const fn int32 raw() { return 11; }
+}
+
+type value Probe {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+    public const fn int32 look(const ref Cell<int64> c) { return c.raw(); }
+}
+
+// ---- plain owner, generic accessor: every instance of the accessor is a friend -----------------------
+type value Flat {
+    int32 x;
+    friend Lens[hidden];
+    public ctor make() { this.x = 0; }
+    const fn int32 hidden() { return 23; }
+}
+
+type value Lens<T> {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+    public const fn int32 read(const ref Flat f) { return f.hidden(); }
+}
+
+fn int32 main() {
+    Node<int32, int32> n = Node::<int32,int32>.make(k: 1, v: 2);
+    Tree<int32, int32> t = Tree::<int32,int32>.make();
+    Cell<int64> c = Cell::<int64>.make(t: 9i64);
+    Probe p = Probe.make();
+    Flat f = Flat.make();
+    Lens<int32> l = Lens::<int32>.make();
+    return t.reach(o: n) + p.look(c: c) + l.read(f: f);   // 7 + 11 + 23 = 41
+}

@@ -1,0 +1,25 @@
+// A grant between two generic types is between CORRESPONDING instances. `Tree<int32>` reaching into
+// `Node<int64>` is a sibling, not a correspondent, and stays refused — because that is what plain
+// `private` already does between sibling instances (a method of `Node<int32>` cannot read
+// `Node<int64>`'s private field either), and a `friend` grant must not be broader than the rule it
+// relaxes. It is also what C++ gives for `friend struct Tree<K,V>;`. The accepting side, including the
+// corresponding instance and both one-sided shapes, is tests/friend_generic.
+type value Node<K> {
+    K k; int32 secret;
+    friend Tree[peek];
+    public ctor make(K k) { this.k = k; this.secret = 5; }
+    const fn int32 peek() { return this.secret; }
+}
+
+type value Tree<K> {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+    public const fn int32 corresponding(const ref Node<K> o)     { return o.peek(); }      // OK
+    public const fn int32 sibling(const ref Node<int64> o)       { return o.peek(); }      // ERROR
+}
+
+fn int32 main() {
+    Node<int64> b = Node::<int64>.make(k: 2i64);
+    Tree<int32> t = Tree::<int32>.make();
+    return t.sibling(o: b);
+}

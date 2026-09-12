@@ -1,0 +1,22 @@
+// The honesty checks reach a GENERIC owner now. A grant naming a member that does not exist is a
+// mistake, and it was silently accepted on a generic type for the same reason the grant itself did
+// nothing there: this pass only ever visited `_classes`, and a generic template lives in
+// `_genericTypes`. So the grant was captured, never resolved, and never audited either — the typo, and
+// a grant on an already-public member, both passed without a word. Their non-generic twins are
+// tests/xfail/friend_typo and tests/xfail/friend_public.
+type value Node<K> {
+    K k; int32 secret;
+    friend Tree[secrte];             // ERROR: typo — there is no member `secrte`
+    public ctor make(K k) { this.k = k; this.secret = 5; }
+    const fn int32 peek() { return this.secret; }
+}
+
+type value Tree<K> {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+}
+
+fn int32 main() {
+    Tree<int32> t = Tree::<int32>.make();
+    return t.n;
+}

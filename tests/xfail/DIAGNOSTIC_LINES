@@ -317,6 +317,9 @@ foreign_entry_static_read	foreign_entry_static_read.kama:10
 foreign_entry_static_transitive	foreign_entry_static_transitive.kama:7
 foreign_entry_via_extern_agg	foreign_entry_via_extern_agg.kama:14
 foreign_entry_via_fnptr_bind	foreign_entry_via_fnptr_bind.kama:7
+friend_generic_arity	friend_generic_arity.kama:9
+friend_generic_member_typo	friend_generic_member_typo.kama:9
+friend_generic_sibling	friend_generic_sibling.kama:18
 friend_nongranted	friend_nongranted.kama:8
 friend_on_contract	friend_on_contract.kama:8
 friend_present_module_typo	key.kama:6

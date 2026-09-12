@@ -20529,10 +20529,41 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
         if (_currentClass == owner) return true;
         // an owner-granted `friend` may touch the named members. The accessing
         // context is the current class (any of its methods) or the current function/method.
+        // A grant naming a GENERIC type reaches the CORRESPONDING instance, and only that one: inside
+        // `Tree<int32>` the accessing context is `Tree_int32`, which can never equal the template key
+        // `Tree` the grant recorded. The correspondence is computed rather than compared — the owner
+        // instance's own argument suffix, appended to the accessor's template key — so `Tree<A,B>` may
+        // touch `Node<A,B>` while a sibling instance may not. That is the rule plain `private` already
+        // follows between sibling instances (`Node<int32>` reading `Node<int64>`'s private field is
+        // refused today), and a grant must not be broader than the rule it relaxes. It is also what C++
+        // gives for `friend struct Tree<K,V>;`, and kama's bare spelling is the one C++ refuses as
+        // ambiguous, so kama reads it as the STRICTER of the two meanings — which keeps an explicit
+        // `friend Tree<K,A>[m];` additive if it is ever wanted, rather than a source break.
+        std::string ownerArgs;   // "_int32_int32" — "" when the owner is not a generic instance
+        if (owner->isGenericInst) {
+            auto of = _genericTypeInstOf.find(owner->name);
+            if (of != _genericTypeInstOf.end() && owner->name.size() > of->second.size())
+                ownerArgs = owner->name.substr(of->second.size());
+        }
         for (auto& g : owner->friendGrants) {
             if (!g.members.empty() && !g.members.count(member)) continue;   // empty => all privates
-            if (g.accessorIsClass) { if (_currentClass && _currentClass->name == g.accessor) return true; }
-            else                   { if (!_currentFunc.empty() && _currentFunc == g.accessor) return true; }
+            // The corresponding instance of a generic accessor. With a non-generic owner there is nothing
+            // to correspond to, so every instance of the accessor is a friend — ownerArgs is empty, and
+            // the current context's own template key is what answers.
+            std::string acc = g.accessor;
+            if (g.accessorIsTemplate) {
+                if (ownerArgs.empty()) {
+                    if (!_currentClass) continue;
+                    auto cf = _genericTypeInstOf.find(_currentClass->name);
+                    if (cf == _genericTypeInstOf.end() || cf->second != g.accessor) continue;
+                    acc = _currentClass->name;
+                } else {
+                    acc += ownerArgs;
+                }
+                if (!g.accessorMethod.empty()) acc += "__" + g.accessorMethod;   // `Type::method` form
+            }
+            if (g.accessorIsClass) { if (_currentClass && _currentClass->name == acc) return true; }
+            else                   { if (!_currentFunc.empty() && _currentFunc == acc) return true; }
         }
     }
     const char* vs = (vis == Visibility::Private) ? "private" : "protected";
@@ -20593,8 +20624,46 @@ void CEmitter::resolveFriends()
     // diagnostic context, every grant error printed `:6:0:` with no file name at all — which is exactly
     // how the first external package's report quoted them. The same rung ScopedContractNs installs.
     const std::string savedDiag = _emitDeclFile;
-    for (auto& kv : _classes) {
-        ClassInfo& ci = kv.second;
+    // Both tables, because a generic TEMPLATE is never in `_classes` (it lives in `_genericTypes`, see
+    // the member's comment) and this pass used to iterate only the first. That one omission was two of
+    // the three faces of "`friend` does not work across generics": the grant on a generic owner was
+    // captured at collection and then never resolved, so `friendGrants` stayed permanently empty and
+    // canAccess fell straight through to "'m' is private in 'Node<int32>'" — a grant that reads correct
+    // and grants nothing; and the honesty checks below (a typo'd member, a redundant grant on a public
+    // one) never ran for such an owner either, so a mistake in one was silently accepted.
+    //
+    // Resolving the TEMPLATE is all it takes for every instance to have it: instances are minted later,
+    // by collectCollections, and registerGenericTypeInst copies the whole ClassInfo from the template —
+    // `friendGrants` included. So there is no second pass to run and nothing in regateGenericInstances
+    // to touch. The ORDER is what makes that true (resolveFriends before collectCollections), and it is
+    // the order that was already there.
+    // The accessor side of the same gap, and the third face: `resolveUserName` DOES answer for a generic
+    // type, but every arm below then gated on `_classes.count()`, which a template never satisfies — so
+    // `friend Tree[m];` was refused outright as an unknown accessor. Both arms record the template key
+    // and say so, and canAccess turns it into the corresponding instance.
+    auto asType = [&](const std::string& key, FriendGrant& g) {
+        if (_classes.count(key))      { g.accessor = key; g.accessorIsClass = true; return true; }
+        if (_genericTypes.count(key)) { g.accessor = key; g.accessorIsClass = true; g.accessorIsTemplate = true; return true; }
+        return false;
+    };
+    auto asMethod = [&](const std::string& ownerKey, const std::string& m, FriendGrant& g) {
+        auto cit = _classes.find(ownerKey);
+        if (cit != _classes.end() && cit->second.methods.count(m)) {
+            g.accessor = cit->second.methods[m].cName; return true;             // a concrete method's C name
+        }
+        auto git = _genericTypes.find(ownerKey);
+        if (git != _genericTypes.end() && git->second.methods.count(m)) {
+            // The template's `cName` is not the instance's (registerGenericTypeInst re-mints every method
+            // as `Inst__m`), so keep the pieces and let canAccess compose the corresponding one.
+            g.accessor = ownerKey; g.accessorIsTemplate = true; g.accessorMethod = m; return true;
+        }
+        return false;
+    };
+    std::vector<ClassInfo*> owners;
+    for (auto& kv : _classes)      owners.push_back(&kv.second);
+    for (auto& kv : _genericTypes) owners.push_back(&kv.second);
+    for (ClassInfo* cip : owners) {
+        ClassInfo& ci = *cip;
         if (ci.friendGrantsRaw.empty()) continue;
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
         if (!ci.declFile.empty()) _emitDeclFile = ci.declFile;
@@ -20615,16 +20684,13 @@ void CEmitter::resolveFriends()
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
                 // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.230.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
-                if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
+                if (asType(clsName, g)) resolved = true;
                 if (!resolved) {                                           // `mod::Type::method`
                     auto head = std::make_shared<StringList>();
                     for (size_t i = 0; i + 1 < qual->size(); ++i) head->push_back((*qual)[i]);
                     std::string owner = head->empty() ? resolveUserName(*qual->back(), nullptr)
                                                       : resolveUserName(*qual->back(), head);
-                    auto cit = _classes.find(owner);
-                    if (cit != _classes.end() && cit->second.methods.count(val)) {
-                        g.accessor = cit->second.methods[val].cName; g.accessorIsClass = false; resolved = true;
-                    }
+                    if (asMethod(owner, val, g)) resolved = true;
                 }
                 if (!resolved) {                                           // `mod::func`
                     std::string fk = resolveFunc(val, qual);
@@ -20640,13 +20706,30 @@ void CEmitter::resolveFriends()
                 if (!resolved && !friendModulePresent(qual)) continue;
             } else {
                 std::string clsName = resolveUserName(val, nullptr);   // a class
-                if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
+                if (asType(clsName, g)) resolved = true;
                 if (!resolved) {                                       // a free function
                     std::string fk = resolveFunc(val, nullptr);
                     if (_funcs.count(fk)) { g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true; }
                 }
             }
             if (!resolved) { unsupported(("unknown `friend` accessor '" + val + "' in '" + ci.name + "'").c_str(), rg.line); continue; }
+
+            // Both sides generic: the grant is between CORRESPONDING instances, so the two argument lists
+            // have to be able to correspond at all. Differing arity never can, and the grant would then be
+            // one that reads correct and silently never fires — the very class this row existed to end —
+            // so it is refused where it is written rather than at some call site it fails to permit.
+            if (g.accessorIsTemplate && _genericTypes.count(ci.name)) {
+                const size_t np = _genericTypeParams[ci.name].size();
+                const size_t na = _genericTypeParams[g.accessor].size();
+                if (np != na) {
+                    unsupported(("`friend` grant in '" + ci.name + "' names the generic type '" + val
+                                 + "', and a grant between generic types is between CORRESPONDING "
+                                   "instances — '" + val + "' takes " + std::to_string(na)
+                                 + " type parameter(s) where '" + ci.name + "' takes " + std::to_string(np)
+                                 + ", so no instance of '" + val + "' could ever correspond").c_str(), rg.line);
+                    continue;
+                }
+            }
 
             // Granted members must exist and be private (a grant on a public member, or a
             // typo'd name, is a mistake — keep grants honest and greppable).

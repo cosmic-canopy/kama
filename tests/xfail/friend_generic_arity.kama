@@ -1,0 +1,22 @@
+// Both sides generic, so the grant is between corresponding instances — and `Tree` takes one type
+// parameter where `Node` takes two, so no instance of `Tree` could ever correspond to one of `Node`.
+// Refused where the grant is WRITTEN, not at some call site it silently fails to permit: a grant that
+// reads correct and grants nothing is the defect this rule exists to end. The spelling that would say
+// which arguments to use (`friend Tree<K>[peek];`) does not parse — the accessor is a plain name — so
+// the mismatch has nowhere to be resolved and is a mistake rather than a shape.
+type value Node<K, V> {
+    K k; V v; int32 secret;
+    friend Tree[peek];               // ERROR: `Tree` takes 1 where `Node` takes 2
+    public ctor make(K k, V v) { this.k = k; this.v = v; this.secret = 5; }
+    const fn int32 peek() { return this.secret; }
+}
+
+type value Tree<K> {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+}
+
+fn int32 main() {
+    Tree<int32> t = Tree::<int32>.make();
+    return t.n;
+}

@@ -4085,7 +4085,14 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   greppable and explicit. **Member visibility is per TYPE, by design**: a non-`public` ctor or method is
   reachable only inside its type, not by a free function in the same file — a type's invariants are
   enforced by the type, never by file layout — and a grant is how the type names the exceptions, which is
-  more granular than C++'s `friend` since it names members. A grant reaches across files and modules by
+  more granular than C++'s `friend` since it names members. **A grant crosses generics, to the
+  CORRESPONDING instance**: `friend Tree[m];` in `Node<K,V>` lets `Tree<A,B>` reach `Node<A,B>`, and a <!-- test: friend_generic -->
+  sibling instance is refused — which is what `private` already does between siblings, a method of <!-- xfail: friend_generic_sibling -->
+  `Node<int32>` having no reach into `Node<int64>`'s private field either, so a grant is never broader
+  than the rule it relaxes. With only one side generic there is nothing to correspond to, and the grant holds for
+  every instance of that side. The two argument lists must be able to correspond, so differing arity is
+  refused **where the grant is written** rather than becoming a grant that never fires. <!-- xfail: friend_generic_arity -->
+  A grant reaches across files and modules by
   **qualified path** for every accessor kind (`friend other::mod::Holder::build[key];`), with no `import` <!-- test: friend_cross_module -->
   needed to name the friend; and a grant whose path names a module that is **not part of this program** is
   **inert** — the code it names is not being compiled, so it grants nothing — which is what lets a root

@@ -326,6 +326,14 @@ struct FriendGrant {
     std::string            accessor;
     bool                   accessorIsClass = false;
     std::set<std::string>  members;
+    // The accessor named a GENERIC type, so `accessor` is a template key and no instance will ever equal
+    // it. The grant then reaches the CORRESPONDING instance — `Tree<A,B>` may touch `Node<A,B>`, a
+    // sibling instance may not — which is the rule plain `private` already follows between siblings
+    // (`Node<int32>` cannot read `Node<int64>`'s private field), and a grant must not be broader than the
+    // rule it relaxes. `accessorMethod` is the member's kama name for the `Type::method` form, since the
+    // template's `cName` is not the instance's. See canAccess.
+    bool                   accessorIsTemplate = false;
+    std::string            accessorMethod;
 };
 // Pre-resolution form captured at collection (accessor spelling + member names).
 struct RawFriendGrant {
@@ -1026,7 +1034,12 @@ private:
     // long dead by index time, and rebuilding it is not needed: see collectBindings).
     struct QueryCtx { const CompilationUnit* unit = nullptr;   // the file the cursor is in
                       std::string typeKey;                 // enclosing type's _classes/_genericTypes key ("" at file scope)
-                      std::string funcName;                // enclosing callable's kama name (friend-grant checks)
+                      std::string funcName;                // enclosing callable's kama name
+                      // ...and its C name, which is the key a `friend` grant on a function or a
+                      // `Type::method` is recorded under (resolveFriends keeps `cName`, and the emitter's
+                      // `_currentFunc` holds the same). The kama name used to stand in for this and
+                      // matched none of them, so every non-class grant read as invisible here.
+                      std::string funcKey;
                       SharedParameterList params;
                       SharedBlock body;
                       // `<T: Drawable>` in scope here. A receiver typed by a bare type-param has no concrete

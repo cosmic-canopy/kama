@@ -1533,7 +1533,21 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
     auto holds = [&](const ASTNode* n) { return n && rangeOfNode(n).contains(line, col); };
     auto take = [&](SharedParameterList ps, SharedBlock body, const SharedIdentifier& nm) {
         qc.params = ps; qc.body = body;
-        if (nm && nm->value) qc.funcName = *nm->value;
+        if (!nm || !nm->value) return;
+        qc.funcName = *nm->value;
+        // ...and the key a `friend` grant is recorded under, which is the C name. A member's comes from
+        // its own type (`qc.typeKey` is filled before the member walk reaches here, and a generic type's
+        // methods live on the template); a free function's from the function table.
+        if (!qc.typeKey.empty()) {
+            const std::map<std::string, MethodInfo>* ms = nullptr;
+            auto c = _classes.find(qc.typeKey);
+            if (c != _classes.end()) ms = &c->second.methods;
+            else { auto t = _genericTypes.find(qc.typeKey); if (t != _genericTypes.end()) ms = &t->second.methods; }
+            if (ms) { auto mi = ms->find(qc.funcName); if (mi != ms->end()) qc.funcKey = mi->second.cName; }
+        } else {
+            auto f = _funcs.find(resolveFunc(qc.funcName, nm->qualifier));
+            if (f != _funcs.end()) qc.funcKey = f->second.cName;
+        }
     };
     auto takeBounds = [&](const SharedStringList& ps, const SharedBoundsList& bs) {
         if (!ps || !bs) return;
@@ -2008,16 +2022,45 @@ bool CEmitter::visibleFrom(const ClassInfo* owner, Visibility vis, const std::st
 {
     if (vis == Visibility::Public || !owner) return true;
     const ClassInfo* from = nullptr;
-    { auto f = _classes.find(qc.typeKey); if (f != _classes.end()) from = &f->second; }
+    // BOTH tables, as `QueryCtx::typeKey` says it may name either: a cursor inside a generic type's body
+    // has the TEMPLATE key, which `_classes` never holds, so `from` came back null and a private member
+    // was invisible in completion inside its own type — the answer the compiler gives one line away being
+    // "yes, it is the owner". The twin of the friend gap below, and the same table omission.
+    { auto f = _classes.find(qc.typeKey); if (f != _classes.end()) from = &f->second;
+      else { auto t = _genericTypes.find(qc.typeKey); if (t != _genericTypes.end()) from = &t->second; } }
     if (vis == Visibility::Protected) {
         for (const ClassInfo* c = from; c; c = c->base) if (c == owner) return true;
         return false;
     }
     if (from == owner) return true;
+    // This is the non-throwing twin of canAccess, and row 9 was a twin predicate that had drifted, so the
+    // two answers have to agree. They do here, with one deliberate difference about generics stated below.
     for (auto& g : owner->friendGrants) {                       // an owner-granted `friend`
         if (!g.members.empty() && !g.members.count(member)) continue;
+        if (g.accessorIsTemplate) {
+            // The accessor is a generic type, and the emitter matches only the CORRESPONDING instance.
+            // Here the cursor is inside a DECLARATION, so `from` is the template itself and no instance
+            // is in play — correspondence cannot be judged from here, and does not need to be: the
+            // author is writing the body of the instance where the grant DOES hold, and the compiler
+            // judges each instance. Being permissive is also the safe direction for completion, which
+            // advises rather than decides.
+            if (!from) continue;
+            std::string fromTmpl = from->name;
+            auto cf = _genericTypeInstOf.find(from->name);
+            if (cf != _genericTypeInstOf.end()) fromTmpl = cf->second;
+            if (fromTmpl != g.accessor) continue;
+            if (g.accessorMethod.empty()) return true;          // `friend Tree[m]` — any of its bodies
+            auto mi = from->methods.find(g.accessorMethod);     // `friend Tree::m[x]` — only that one
+            if (mi != from->methods.end() && !qc.funcKey.empty() && qc.funcKey == mi->second.cName) return true;
+            continue;
+        }
         if (g.accessorIsClass) { if (from && from->name == g.accessor) return true; }
-        else                   { if (!qc.funcName.empty() && qc.funcName == g.accessor) return true; }
+        // A function or method accessor is recorded as a C NAME (resolveFriends keeps `FuncSig::cName` /
+        // `MethodInfo::cName`, which is what `_currentFunc` holds on the emitter's side). Comparing the
+        // KAMA name here answered no for every one of them: measured on tests/friend_grant, where the
+        // class-form grant offered `balance` in completion and both the free-function and `Type::method`
+        // forms offered nothing at all, while the compiler accepts all three.
+        else if (!qc.funcKey.empty() && qc.funcKey == g.accessor) return true;
     }
     return false;
 }
