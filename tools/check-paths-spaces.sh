@@ -3,7 +3,7 @@
 #
 # Why this guard exists. Three of the C compiler's `-I` entries were written UNQUOTED while every
 # other `-I`, `--sysroot`, input and `-o` on the same line was quoted (`kama.driver.cpp`, fixed
-# 0.9.293). A space anywhere in them tore the command line and the tail became a bare input operand:
+# 0.9.302). A space anywhere in them tore the command line and the tail became a bare input operand:
 #
 #     $ cd "…/my project" && kama build app.kama -o "$PWD/app.exe"
 #     clang: error: no such file or directory: 'project'

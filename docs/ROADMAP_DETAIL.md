@@ -275,17 +275,36 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
   ⚠️ **No phase-wall win is claimed yet.** That run's guard sets differed (66 vs 67) and measurements
   were running concurrently, so the wall number is contaminated. Expected once clean: the phase becomes
   bounded by `check-query` (~345 s) rather than ~496 s. **Scheduled: one idle-machine back-to-back
-  `./dev check` A/B**, then the same read-through of `check-query` / `check-packages` / `check-lsp` /
-  `check-manifest` — now the top four — for `$(printf … | sed)` inside a loop. Nobody has looked at
-  them; this one was found by reading a single guard.
+  `./dev check` A/B**, then the sweep below.
+
+  **The sweep is triaged — ⚠️ READ OFF THE SOURCE, NOT MEASURED**, so the spawn counts are structural
+  estimates and the seconds are the contaminated baseline. Two of the top four are this class and two
+  are not, which is worth knowing before a session goes at the wrong pair. It also corrects a note left
+  in a handoff that the remaining sweep is "not a big lever" — for half of it, it is:
+  * **`check-query` (~345 s) — the biggest one left.** ~3,000 text-processing spawns against ~45 real
+    compiler runs; the compiler side is *already* optimized hard (`runq` memoizes, `preload()` collapses
+    131 analyses into ~15 batched ones), so nearly all of that time is shell. Two hot spots: `scope_for`
+    walks to the root with `$(dirname …)` **inside a `while` loop** — ~24 spawns × 49 `--project`
+    assertions — and `qkey`'s `printf | cksum | tr` runs on every one of 236 assertions *before* the
+    cache check, so a cache HIT still pays for it. `${var%/*}` and `${#var}` answer both.
+  * **`check-lsp` (~225 s) — the best effort-to-payoff ratio.** ~800 spawns against **14** real
+    processes (10 `kama lsp` sessions plus a few). `frame()` computes a string length with
+    `printf | wc -c | tr` — four processes — and is called 116 times; `${#body}` replaces it. ⚠️ **42 of
+    its `expect` substrings contain `[` or `]`**, so a `case` rewrite must quote the variable inside the
+    pattern (`case "$out" in *"$1"*)`) or those 42 silently become globs.
+  * **`check-packages` (~285 s) and `check-manifest` (~197 s) — NOT this class; skip them.** 103 real
+    `kama` invocations and 67 full build+link+run respectively, at ~2.8-2.9 s each; six text-processing
+    spawns in 1,185 lines, and ~67 in 789. Their lever is *fewer compiler invocations per guard* —
+    sharing one published registry, `kama check` where no artifact is asserted — which is real-work
+    optimization and a different row from this one.
 
   Two things found alongside, each wanting its own row rather than folding in here:
   * **`xfail/borrow_frozen_spawn` is flaky under load** — failed once in the 12-way suite ("rejected,
     but error missing") and passes 3/3 in isolation on both a clean-HEAD and a patched build, so it is
-    **not** from the row-14 change (verified by stashing everything and rebuilding). Mechanism
+    **not** from the long-path junction change (the closed Windows-path-residuals row; verified by stashing everything and rebuilding). Mechanism
     unestablished; a per-fixture timeout truncating output under load would fit, which would make it
     another symptom of the suite being slow rather than a borrow-checker fact.
-  * **Live progress output has nothing to do with row 7** (`std::process` streaming reads). The harness
+  * **Live progress output has nothing to do with KR-7** (`std::process` streaming reads). The harness
     is shell and never touches `std::process`. Output is withheld *by design*:
     `tools/run-checks.sh:141-184` collects each guard's output to a file in parallel and replays the
     logs in order once all finish, and `run_tests.sh:47` states the same intent for fixtures. A
@@ -851,85 +870,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   here rather than folded into the walk-parity work. ⚠️ **`tools/check-scan-parity.sh` cannot see this
   one** — it holds the two walks at parity on AST *node kinds*, and this is an asymmetry in which
   *declarations* get walked at all, which is the same for both.
-- **Windows path residuals after `0.9.223`.** The compiler-side seam shipped
-  ([platforms/windows.md](platforms/windows.md) § *Where the remaining work is* has the record and the
-  measurements). What it left, with a verdict each, so nothing here is "out of scope" by silence:
-  * **`CreateProcessW`'s cwd and executable stay ≤ 260 characters** — `ERROR_DIRECTORY_INVALID` prefixed
-    or not, a Win32 limit and not a seam limit (measured 2026-09-06). Verdict **non-goal**: nothing kama
-    does can lift it, and `std::process` already says what answers the need — hand a child absolute
-    paths rather than a deep `cwd()` (`tests/support/compilerpath_probe.kama` lives by that rule).
-    Scheduled part: say so in `lib/std/process`'s doc comment on `cwd`, one sentence. ✅ **DONE
-    2026-09-11.** ⚠️ Written with it: that file's HEADER still said *"POSIX only (M1); Windows
-    (CreateProcess) is a later milestone"* long after `0.9.217` shipped the `CreateProcessW` seam and
-    `tests/proc_*` (including `proc_cwd`, which exercises exactly this) went green here — corrected in
-    the same edit, and a reminder that a stale doc outlives the milestone that dated it.
-  * **`selfExePath` and `relativizeToCwd` keep 260-byte buffers** (`_get_pgmptr` / `getcwd` into
-    `PATH_MAX`). Verdict **genuinely optional**: a process cannot *have* a cwd past 260 without the
-    registry opt-in kama does not ask for, and the second is cosmetic (`kama: built .`). The first is an
-    install directory past 260, which is the same registry-gated cwd story for whoever launches it.
-    If it ever matters, it is one `GetModuleFileNameW` sizing loop in `src/kama.winpath.cpp`.
-  * **The package store and dependency tree under a long path — ⚠️ the verdict here was WRONG; FIXED
-    `0.9.294`.** This entry said they "get the `\\?\` spelling for free (`osp()` wraps them like
-    everything else) but no guard witnesses it", i.e. believed-working and merely untested. Probed
-    2026-09-11 with a real path dependency, it **failed**:
-
-    ```
-    $ kama pkg install <265-char-project>/app/kama.json
-    The system cannot find the path specified.
-    kama install: cannot link dependency 'helper'
-    ```
-
-    **Control**: the byte-identical project at a short path installs fine — `Junction created … <<===>>
-    …`, `kama: installed 1 package(s)`. So it is the LENGTH, not the project.
-
-    **Mechanism, pinned**: [`kama.driver.cpp:5205`](../src/kama.driver.cpp#L5205) materializes
-    `.kama/deps/<name>` with `runCmd("cmd /c mklink /J …")`. `osp()` applies the `\\?\` prefix at the
-    CRT/Win32 **file-call** edge — it never touches a **cmd.exe command line**, and cmd is MAX_PATH-bound
-    (this page's own § *Things that are true on Windows* records the sibling fact for cmd's
-    redirections). So the one path that had been reasoned safe is the one that is not. A junction is
-    used rather than a directory symlink because the latter needs `SeCreateSymbolicLinkPrivilege`
-    (windows.md), so "just use a symlink" is not the answer.
-
-    **FIXED `0.9.294`**: the junction is now made with `FSCTL_SET_REPARSE_POINT`
-    (`kama_win_make_junction`, `kama.winpath.cpp`), which takes the verbatim spelling and spawns no
-    process at all. Verified end-to-end at 265 characters — installs, builds *through* the junction,
-    and the program runs; the short-path control still passes, and `check-packages.sh` is green
-    (its Windows-junction case included). Repro kept at `.scratch/pkg-longpath/repro.sh`.
-
-    ⚠️ **Two alternatives rejected, with reasons, so they are not re-proposed.** A directory *symlink*
-    needs `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary `pkg
-    install` cannot require — that is why a junction was chosen originally. And the **8.3 alias**
-    (`kama_win_shortpath`, the trick `toolPath()` uses for `ld`/`ar`) is wrong *here* specifically: a
-    junction STORES its target, so the reparse point would permanently hold `C:\MSYS64~1\…` and every
-    later "which package owns this path?" comparison would see the alias; and 8dot3 creation can be
-    disabled per volume, where that helper returns its input unchanged and the fix would silently not
-    apply. `DeviceIoControl` has neither problem.
-
-    ⏳ **Left: the guard.** A long-path dependency case belongs in `check-compiler-path.sh`, which
-    already owns a deep tree; `.scratch/pkg-longpath/repro.sh` is the runnable shape to lift, control
-    included. ⚠️ It must NOT `cd` into the deep directory: Windows refuses to start a native process
-    with a >260 cwd at all (*"Can't start native Windows application from here"*, measured) — the
-    `CreateProcessW` non-goal above showing up in the tooling. `kama pkg install` takes a manifest
-    PATH, so the guard passes the path instead of changing directory.
-  * **`longPathAware` in the manifest** — verdict **non-goal**: it does nothing unless the machine's
-    `LongPathsEnabled` registry flag is set, which the `\\?\` prefix makes unnecessary; a behaviour that
-    switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.
-  * **A volume with 8dot3 names disabled.** The linker fix rests on an 8.3 alias because GNU `ld`/`ar` are
-    narrow (windows.md has the measurements); a non-ASCII or 248+ path on a volume that keeps no aliases
-    fails at the link exactly as it did before `0.9.223` — honestly, with ld's own message. The system
-    volume has them on by default, and that is where a user profile is. Verdict **genuinely optional**
-    until someone reports it: the two answers are `-fuse-ld=lld` when `ld.lld` is on PATH (lld is LLVM
-    and reads UTF-16 argv; the CI clang package does not install it) or staging the link in an ASCII
-    directory — and the second cannot work when `%TEMP%` is the non-ASCII part, which is the next item.
-  * **A non-ASCII `%TEMP%` breaks clang's own single-invocation link** — its temporary object lands under
-    `%TEMP%` and GNU ld cannot read it, with every path on the command line ASCII (measured; windows.md).
-    A user whose account name is non-ASCII has that `%TEMP%`. Verdict **non-goal for the compiler as
-    such**: it is the toolchain's, `-fuse-ld=lld` or an ASCII `TEMP` fixes it outside kama, and kama's
-    per-TU path (`-j` ≥ 2) never asks clang for a temporary. What IS scheduled: say so in
-    [platforms/windows.md](platforms/windows.md) (done) and in `targets.md`'s Windows notes
-    ✅ **DONE 2026-09-11** — a Troubleshooting entry keyed on the symptom the user actually sees
-    (`ld: cannot find …\???\<name>-xxxxxx.o` with every path on the command line ASCII), naming all
-    three ways out.
 - **Capturing closures — sized, not scheduled (audit verdict, 2026-09-07).** The shape a UI event table wants
   today is a generic functor: `type contract Handler<E> { fn void call(E e); }`, one `type resource` per handler
   carrying its captures as fields, stored as `Owned<Handler<E>>` in the table — the comparator twin

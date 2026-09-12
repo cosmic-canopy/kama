@@ -25,7 +25,7 @@
 // listed the wrong directory and compiled the wrong modules cannot pass that, even if it "built".
 //
 // The last two cases add a PATH DEPENDENCY, which is a different route to the filesystem: `kama pkg
-// install` materializes `.kama/deps/<name>`, and on Windows that is a junction. Until 0.9.294 it was made
+// install` materializes `.kama/deps/<name>`, and on Windows that is a junction. Until 0.9.303 it was made
 // by `cmd /c mklink /J`, and cmd.exe is MAX_PATH-bound however the path is spelled — `osp()`'s `\\?\`
 // applies at the Win32 file-call edge and means nothing on a shell command line — so the link could not be
 // made past 260 while every other long-path route here was already clean. It failed LOUDLY; what was
@@ -263,7 +263,7 @@ fn int32 main() {
     int32 r4 = runDepCase(kama: kama, dir: depShort, outName: outName, caseId: 60,
                           runFrom: join(path: work, with: "run4"));
     if (r4 != 0) { return r4; }
-    // (v) the same pair at the bottom of the deep tree — `.kama/deps/helper` past 260. RED before 0.9.294:
+    // (v) the same pair at the bottom of the deep tree — `.kama/deps/helper` past 260. RED before 0.9.303:
     // `kama install: cannot link dependency 'helper'`, and with the link absent nothing builds through it.
     int32 r5 = runDepCase(kama: kama, dir: depDeep, outName: outName, caseId: 70,
                           runFrom: join(path: work, with: "run5"));

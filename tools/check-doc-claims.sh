@@ -130,7 +130,8 @@ done > "$tmp/markers"
 # emulated and a spawn costs orders of magnitude more, which made this the SLOWEST GUARD IN THE SUITE
 # — 495s of a 533s phase — while compiling absolutely nothing. Since no guard is `check-heavy`, that
 # one number WAS the phase: twelve cores sat idle underneath it. Keep this loop process-free.
-# (ROADMAP row 16.)
+# (KR-18 — the ROADMAP now carries stable ids, so this citation cannot drift the way the old positional
+# "row 16" did: that number was already pointing one row off by the time anyone read it.)
 saved_ifs=$IFS
 while IFS= read -r m; do
     [ -z "$m" ] && continue

@@ -395,7 +395,7 @@ entries here. One has shipped:
     arrived as `//?/C:/msys64/tmp/…`; `cliPath()` strips it at the operand). The kernel recognizes neither
     with forward slashes inside, and a lexical join collapses the second to `/?/`, which names nothing.
   * ⚠️ **The DEPENDENCY LINK is made with `FSCTL_SET_REPARSE_POINT`, not `cmd /c mklink /J`** — fixed
-    `0.9.294`, and the one place the reasoning above was applied and turned out not to hold. `kama pkg
+    `0.9.303`, and the one place the reasoning above was applied and turned out not to hold. `kama pkg
     install` materializes `.kama/deps/<name>`, a junction on Windows, and this call had been reasoned safe
     on the grounds that `osp()` wraps it "like everything else". It does not: **`osp()` applies at the
     Win32 file-call edge and can do nothing for a command line handed to a shell**, and cmd.exe is

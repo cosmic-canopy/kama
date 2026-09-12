@@ -28,7 +28,7 @@
 # CreateProcess with the line instead); and the link, where GNU ld and ar ANSI-decode their argv and
 # cmd.exe's redirections stop at MAX_PATH (an 8.3 alias for every path on those lines); and the DEPENDENCY
 # LINK, `.kama/deps/<name>`, which is a junction on Windows and was made by `cmd /c mklink /J` until
-# 0.9.294 — cmd is MAX_PATH-bound however the path is spelled, so `osp()`'s `\\?\` (a Win32 file-call edge)
+# 0.9.303 — cmd is MAX_PATH-bound however the path is spelled, so `osp()`'s `\\?\` (a Win32 file-call edge)
 # could not reach it and a path dependency past 260 could not be linked. That failed LOUDLY (`kama install:
 # cannot link dependency`, nonzero) — what was silent is that nothing in the tree noticed, which is the
 # gap this case closes: the fixture suite covers a path dependency at a SHORT path, and the cases above
@@ -107,7 +107,7 @@ if [ "$rc" -ne 0 ]; then
         6[0-9]) echo "  case: a path DEPENDENCY at a SHORT path — the control. A path dependency is broken" >&2
                 echo "        outright here, not by length; the >260 case below cannot be read until this passes" >&2 ;;
         7[0-9]) echo "  case: a path DEPENDENCY under the >260-character tree — \`.kama/deps/<name>\`, which is" >&2
-                echo "        a junction on Windows (FSCTL_SET_REPARSE_POINT since 0.9.294; \`cmd /c mklink /J\`" >&2
+                echo "        a junction on Windows (FSCTL_SET_REPARSE_POINT since 0.9.303; \`cmd /c mklink /J\`" >&2
                 echo "        before it, and cmd.exe is MAX_PATH-bound however the path is spelled)" >&2 ;;
         *)  echo "  unrecognized probe exit code" >&2 ;;
     esac
@@ -121,7 +121,7 @@ if [ "$rc" -ne 0 ]; then
         ?6) echo "  step: the built program could not be spawned" >&2 ;;
         ?7) echo "  step: the built program ran but did not return 42 — the WRONG modules were compiled" >&2 ;;
         ?8) echo "  step: \`kama pkg install <app>/kama.json\` could not be spawned, or exited nonzero." >&2
-            echo "        This is what the pre-0.9.294 junction bug looked like: \`The system cannot find the" >&2
+            echo "        This is what the pre-0.9.303 junction bug looked like: \`The system cannot find the" >&2
             echo "        path specified.\` / \`kama install: cannot link dependency 'helper'\`" >&2 ;;
         ?9) echo "  step: install reported SUCCESS but .kama/deps/helper is not there — a silent half-install," >&2
             echo "        which the loud ?8 above is not. (A link that exists but does not RESOLVE is ?4" >&2

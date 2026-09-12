@@ -5202,7 +5202,7 @@ static bool linkDir(const std::string& target, const std::string& linkPath)
 #ifdef _WIN32
     // A junction stores an absolute path by definition, so there is nothing to relativize here.
     //
-    // ⚠️ This was two `cmd /c` shell-outs (`rmdir`, then `mklink /J`) until 0.9.294, and cmd is
+    // ⚠️ This was two `cmd /c` shell-outs (`rmdir`, then `mklink /J`) until 0.9.303, and cmd is
     // MAX_PATH-bound: a path dependency under a 265-character project failed with `The system cannot
     // find the path specified.` / `kama install: cannot link dependency`, while the byte-identical
     // project at a short path linked fine. `osp()` could not help — its `\\?\` prefix applies at the
@@ -10340,7 +10340,7 @@ int main(int argc, char** argv)
         // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP_DETAIL §10).
         if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
         if (stopsAtObject) cmd << "-c ";                                                // no link step
-        // ⚠️ QUOTED, like every other -I below. These three were bare until 0.9.293, so a space
+        // ⚠️ QUOTED, like every other -I below. These three were bare until 0.9.302, so a space
         // anywhere in them tore the command line and the tail became a bare input operand —
         // `clang: error: no such file or directory: 'project'` for a project under `…/my project/`.
         // Worse, it also hit runtimeDir, which is the INSTALL PREFIX: with kama installed to
