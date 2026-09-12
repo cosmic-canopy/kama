@@ -113,6 +113,11 @@ type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAlloca
 // normal in-place field mutation); a child is mutated via `this.kids[c].method()` (auto-deref through the
 // `Owned` box) and whole subtrees move via `this.kids.remove(...)` / `insertAt(...)`.
 type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements Sendable when [K: Sendable, V: Sendable, A: Sendable] {
+    // `serializeInto` below is this type's alone to expose, and `SortedMap` is the one caller: the map's
+    // `serialize` hands the in-order element write down to its root node. Corresponding instances, which is
+    // what a grant between two generic types means — `SortedMap<K,V,A>` reaches `BTreeNode<K,V,A>` and no
+    // sibling instance does.
+    friend SortedMap[serializeInto];
     DynamicArray<K, A> keys;
     DynamicArray<V, A> vals;                            // parallel to keys (vals[i] belongs to keys[i])
     DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids;   // empty for a leaf; length == keys.length()+1 internal
@@ -544,12 +549,11 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // to carry its object table into that recursion or every `Shared` value is written inline and
     // duplicated (measured: three entries, the shared leaf written twice, and a read that then failed with
     // "unresolved reference"). `Map` needs no mark on anything but its accessor because it writes its one
-    // flat `vals` array in its own body. ⚠️ `public` only so `SortedMap` can call it — visibility is
-    // per-TYPE, and `BTreeNode` is not exported (see this file's `export` list), so this is module-internal
-    // either way. It becomes `private` with a `friend SortedMap[serializeInto];` grant once `friend` works
-    // across generics — see ROADMAP_DETAIL §2.
+    // flat `vals` array in its own body. ⚠️ Reached only by `SortedMap`, which the grant above says: member
+    // visibility is per TYPE, so a sibling type needs naming even inside one file, and the grant is what
+    // its `@serializedGraphEdges` mark already implied.
     @serializedGraphEdges
-    public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
+    private const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) {
