@@ -148,14 +148,48 @@ fi
 # assertions, because either alone can lie: the vector opcodes must be present AND no libm call for the
 # three may remain. A build without `-fno-math-errno` keeps `bl _sqrtf` per lane (measured), which is
 # exactly the regression this section exists to catch if the driver flag is ever dropped.
-math=$(grep -cE "$MATH" "$tmp/o3.s" || true)
-libm=$(grep -cE '(bl|call)[[:space:]]+_?(sqrtf|floorf|ceilf)([^a-z]|$)' "$tmp/o3.s" || true)
+#
+# ⚠️ THE CALL MNEMONIC IS ARCH-SPECIFIC, and getting it wrong made one of the two halves INOPERATIVE.
+# This pattern read `(bl|call)[[:space:]]`, which matches ARM's `bl` and nothing x86-64 emits: AT&T
+# syntax writes the size suffix onto the mnemonic, so the instruction is `callq floorf`. Measured on
+# this tree: eight `callq floorf`/`callq ceilf` in the asm, and the old pattern counted ZERO. The
+# "no libm call may remain" half therefore could not fail on x86-64 at all — precisely the "either
+# alone can lie" hole the paragraph above warns about, sitting inside the guard that warns about it.
+LIBM_CALL='(bl|call[a-z]?)[[:space:]]+_?(sqrtf|floorf|ceilf)([^a-z]|$)'
+
+# ⚠️ AND THE BASELINE ISA DECIDES WHETHER FOLDING IS EVEN POSSIBLE. `floor`/`ceil` on a float lane batch
+# need `roundps`, which is **SSE4.1**, while kama deliberately targets the architecture's generic
+# baseline — it passes no -march/-mcpu/-mtune anywhere (docs/targets.md). At baseline x86-64 (SSE2)
+# there is no `roundps`, so clang legitimately emits four `sqrtss` plus eight libm calls, and demanding
+# otherwise asserts a property no user's release build can have. arm64 does not have this problem:
+# `fsqrt`/`frintm`/`frintp` are all baseline NEON, which is why this section was green on the platform
+# this repo is developed on and red on the one nobody profiles.
+#
+# So on x86-64 the honest assertion is about the EMITTED C being vectorizable, not about the baseline
+# ISA: give clang SSE4.1 and the trio must fold completely. Measured here — baseline: 0 packed ops,
+# 8 libm calls; with -msse4.1: 2 `roundps` + 1 `sqrtps`, 0 libm calls. That still catches a dropped
+# `-fno-math-errno` or a KAMA_SIMD_MATH rewrite, which is what the section is for.
+math_src="$tmp/o3.s"; math_note=""
+case "$(uname -m)" in
+    x86_64|amd64)
+        if clang -std=c11 -O3 -DNDEBUG -fno-math-errno -msse4.1 -I "$ROOT/include" \
+                 -S "$tmp/p.c" -o "$tmp/o3_sse41.s" 2>"$tmp/cc41.err"; then
+            math_src="$tmp/o3_sse41.s"
+            math_note=" (under -msse4.1: roundps is SSE4.1 and kama targets the generic baseline)"
+        else
+            echo "check-simd-type: FAIL — clang could not compile the probe with -msse4.1" >&2
+            sed 's/^/  /' "$tmp/cc41.err" >&2; exit 1
+        fi ;;
+esac
+
+math=$(grep -cE "$MATH" "$math_src" || true)
+libm=$(grep -cE "$LIBM_CALL" "$math_src" || true)
 if [ "$math" -eq 0 ] || [ "$libm" -ne 0 ]; then
     echo "check-simd-type: FAIL — the lane-batch libm trio did not fold: $math vector op(s) matching" >&2
     echo "                  '$MATH', $libm libm call(s) left. kama_math.h's KAMA_SIMD_MATH loops must" >&2
     echo "                  become vector instructions; \`sqrt\` needs -fno-math-errno (kama.driver.cpp)" >&2
-    echo "                  to do so. Inspect: $tmp/o3.s" >&2
+    echo "                  to do so. Inspect: $math_src" >&2
     exit 1
 fi
 
-echo "check-simd-type: PASS (Simd<float32>#(4) -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s), libm trio folded ($math); scalar control 0 — the control holds)"
+echo "check-simd-type: PASS (Simd<float32>#(4) -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s), libm trio folded ($math)$math_note; scalar control 0 — the control holds)"
