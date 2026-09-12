@@ -7425,6 +7425,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         lname = *lid->value;
                         if (lhsCType.empty() && _localCTypes.count(lname)) lhsCType = _localCTypes[lname];   // primitive/Fixed LHS
                     }
+                // …and an ELEMENT LHS learns its type from the collection, which is the only place it is
+                // written down: `exprClass` of an element access answers "" for a primitive element, and the
+                // `_localCTypes` fallback above only fires for a bare local, so `xs[2] = match (…) {…}` on an
+                // `InlineArray<int32>` used to be refused as "needs a typed assignment target" — with a
+                // plain local as the only way to spell it. The owning-element store one branch up already
+                // reads the element type off `_collections` exactly this way.
+                if (lhsCType.empty())
+                    if (auto* lea = dynamic_cast<ElementAccessNode*>(as->unaryExpression.get())) {
+                        SharedExpression recv = lea->expression
+                                                    ? lea->expression
+                                                    : std::static_pointer_cast<ExpressionNode>(lea->identifier);
+                        const std::string rc = recv ? exprClass(recv) : std::string();
+                        if (!rc.empty() && _classes.count(rc) && _classes[rc].isIntrinsicColl
+                            && _collections.count(rc))
+                            lhsCType = _collections[rc].elemCType;
+                    }
                 if (lhsCType.empty()) {
                     unsupported("a value-producing `match` / variant construction here needs a typed "
                                 "assignment target — assign to a plain local", n->line);
@@ -7434,7 +7450,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 std::string mkey = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
                 bool destructible = _classes.count(lhsCType) && _classes[lhsCType].destructible;
                 bool bMoved = (!mkey.empty() && _moveState.count(mkey) && _moveState[mkey] == MoveState::Moved);
-                std::string lhs = emitExpression(as->unaryExpression);
+                // A PLACE, not an expression. An assignment target is an lvalue by definition, and for an
+                // intrinsic-collection element the two spellings differ: `emitExpression` gives the by-value
+                // `Coll__get(…)` and `emitExpression(lhs) = rhs` is then not assignable C — it failed at the
+                // C compiler for a generic-instance ctor, a qualified variant construction, an array literal
+                // and a value-producing `match` alike. `emitPlace` gives `(*Coll__at(…))`, and it falls
+                // through to `emitExpression` for every other LHS shape, so this is exactly equivalent
+                // elsewhere. (It is used twice below — the RAII dtor takes `&lhs` — and `&(*__at(…))` folds
+                // back to the same `T*`.)
+                std::string lhs = emitPlace(as->unaryExpression);
                 line(n->line);
                 bool ph = _hoistOK; _hoistOK = true;
                 std::string pm = _matchTargetCType, pv = _variantTargetType;
@@ -21112,7 +21136,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // clang objected — "cannot take the address of an rvalue" — while `Optional<T> o = f(s: "lit");` one
     // line up compiled. A check/build divergence, and the kind a fixture only finds by being written.
     _hoistOK = true;
-    std::string subjExpr = emitExpression(m->subject);
+    // A PLACE, for the same reason the assignment target one file over is one: `subjLvalue` below already
+    // CLAIMS an element access is an lvalue and then takes its address, and `emitExpression` of an
+    // intrinsic-collection element is the by-value `Coll__get(…)` — so `match (os[0])` emitted
+    // `&(InlineArray…__get(…))` and only clang objected ("cannot take the address of an rvalue"). Same
+    // classify-one-way/spell-the-other shape as the element store. `emitPlace` falls through to
+    // `emitExpression` for every other subject, so a value-producing subject is untouched.
+    std::string subjExpr = emitPlace(m->subject);
     _variantTargetType = pvt; _matchTargetCType = pmt; _hoistOK = ph;
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {

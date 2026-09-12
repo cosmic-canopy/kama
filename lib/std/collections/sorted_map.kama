@@ -69,11 +69,7 @@ type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAlloca
     unsafe fn void descend(UnsafePtr<BTreeNode<K,V,A>> n) {
         UnsafePtr<BTreeNode<K,V,A>> walk = n;
         while (this.depth < 32) {
-            // ⚠️ Bound to a local first, deliberately: an INLINE generic-instance ctor as the RHS of an
-            // element store bypasses the `__set` lowering and emits `__get(…) = …`, which is not
-            // assignable C (it fails loudly at the C compiler). Tracked in ROADMAP_DETAIL §2.
-            BTreeFrame<K,V,A> fr = BTreeFrame::<K,V,A>.at(node: walk, i: 0);
-            this.path[this.depth] = fr;
+            this.path[this.depth] = BTreeFrame::<K,V,A>.at(node: walk, i: 0);
             this.depth = this.depth + 1;
             if (walk[0].isLeaf()) { return; }
             walk = walk[0].childPtr(at: 0);
@@ -105,8 +101,7 @@ type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAlloca
         UnsafePtr<BTreeNode<K,V,A>> n = this.path[d].node;
         isize i = this.path[d].i;
         this.cur = n; this.curI = i;                    // the place to hand out, before the cursor moves
-        BTreeFrame<K,V,A> adv = BTreeFrame::<K,V,A>.at(node: n, i: i + 1);
-        this.path[d] = adv;
+        this.path[d] = BTreeFrame::<K,V,A>.at(node: n, i: i + 1);
         // In-order: the subtree BETWEEN this key and the next comes before the next key.
         if (!n[0].isLeaf()) { this.descend(n: n[0].childPtr(at: i + 1)); } else { this.settle(); }
         return this.cur[0].valAt(at: this.curI);
