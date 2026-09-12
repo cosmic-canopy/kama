@@ -318,13 +318,22 @@ crash when the stack happens to be zeroed, so **a green sanitizer leg was not ev
 `tests/match_init_early_return` exercises both arms and counts destructor runs through a static, which is
 what makes it catch the defect (rc 241 against the pre-fix compiler) rather than merely survive it.
 
-**2. `friend` grants do not cross generics.** Two faces: a grant NAMING a generic accessor is refused
-outright, and a grant ON a generic owner is accepted and **silently inert** (recorded on the template, lost
-on the instance). It fails closed, so there is no unsoundness — a false refusal, never a false permit — but
-a grant that reads correct and grants nothing is the class this repo exists to catch. ⚠️ **No friend fixture
-involves a generic type at all**, which is why this survived: 8 fixtures, zero generics. It has a named
-in-tree consumer — `BTreeNode.serializeInto` is `public` only because visibility is per-TYPE and `SortedMap`
-is a sibling type; with this fixed it becomes `private` plus `friend SortedMap[serializeInto];`.
+**2. ~~`friend` grants do not cross generics~~ — CLOSED `0.9.300`/`0.9.301`.** Kept for the rule and for
+one correction. ⚠️ **The recorded diagnosis was wrong on a point, and the way it was wrong is the lesson:**
+with BOTH sides generic the `unknown 'friend' accessor` refusal never appears at all. It cannot — a generic
+owner's grant is never VISITED, because `resolveFriends` iterated `_classes` and a template lives in
+`_genericTypes`, so the loud face and the silent face were never two bugs. That single omission also meant
+the honesty checks (a typo'd member, a grant on an already-public one) never ran for a generic owner, which
+was a third face nobody had noticed. **THE RULE: a grant crosses to the CORRESPONDING instance** —
+`Tree<A,B>` reaches `Node<A,B>`, a sibling instance does not — because that is what plain `private` already
+does between siblings (measured: `Node<int32>` reading `Node<int64>.secret` is refused), and a grant must
+never be broader than the rule it relaxes. C++ agrees and makes it explicit (`friend struct Tree<K,V>;`
+grants only the matching specialization; the bare spelling kama uses is a hard error there), so kama reads
+its one spelling as the stricter meaning, leaving an explicit `friend Tree<K,A>[m];` additive if it is ever
+wanted. ⚠️ **The `kama query` twin had drifted exactly as row 9's had** — a function or `Type::method`
+accessor is recorded as a C name and the twin compared the KAMA name, so every non-class grant read as
+invisible in completion while the compiler accepted it. Fixed together; the record is
+[SPEC.md](SPEC.md#access-control-) and `tests/friend_generic`.
 
 **3. An `InlineArray` over a generic-instance element cannot share a program with `DynamicArray`.** The
 prelude's `relocate(into:)` then fails to infer. The discriminator table is in the repro's README; the clue
