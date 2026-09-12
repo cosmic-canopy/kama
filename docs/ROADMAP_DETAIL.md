@@ -272,31 +272,55 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
   identical output, line numbers and exit codes. Result: `check-doc-claims` left the slowest-8
   entirely and guards summed CPU fell 3612 s → 3125 s, a 487 s drop matching its whole former cost.
 
-  ⚠️ **No phase-wall win is claimed yet.** That run's guard sets differed (66 vs 67) and measurements
-  were running concurrently, so the wall number is contaminated. Expected once clean: the phase becomes
-  bounded by `check-query` (~345 s) rather than ~496 s. **Scheduled: one idle-machine back-to-back
-  `./dev check` A/B**, then the sweep below.
+  ⚠️ **THE PHASE-WALL A/B WAS RUN, AND IT IS INCONCLUSIVE — that is a result, not a gap.** Idle box,
+  `./dev check`, 68 guards, 0 failed every time:
 
-  **The sweep is triaged — ⚠️ READ OFF THE SOURCE, NOT MEASURED**, so the spawn counts are structural
-  estimates and the seconds are the contaminated baseline. Two of the top four are this class and two
-  are not, which is worth knowing before a session goes at the wrong pair. It also corrects a note left
-  in a handoff that the remaining sweep is "not a big lever" — for half of it, it is:
-  * **`check-query` (~345 s) — the biggest one left.** ~3,000 text-processing spawns against ~45 real
-    compiler runs; the compiler side is *already* optimized hard (`runq` memoizes, `preload()` collapses
-    131 analyses into ~15 batched ones), so nearly all of that time is shell. Two hot spots: `scope_for`
-    walks to the root with `$(dirname …)` **inside a `while` loop** — ~24 spawns × 49 `--project`
-    assertions — and `qkey`'s `printf | cksum | tr` runs on every one of 236 assertions *before* the
-    cache check, so a cache HIT still pays for it. `${var%/*}` and `${#var}` answer both.
-  * **`check-lsp` (~225 s) — the best effort-to-payoff ratio.** ~800 spawns against **14** real
-    processes (10 `kama lsp` sessions plus a few). `frame()` computes a string length with
-    `printf | wc -c | tr` — four processes — and is called 116 times; `${#body}` replaces it. ⚠️ **42 of
-    its `expect` substrings contain `[` or `]`**, so a `case` rewrite must quote the variable inside the
-    pattern (`case "$out" in *"$1"*)`) or those 42 silently become globs.
-  * **`check-packages` (~285 s) and `check-manifest` (~197 s) — NOT this class; skip them.** 103 real
-    `kama` invocations and 67 full build+link+run respectively, at ~2.8-2.9 s each; six text-processing
-    spawns in 1,185 lines, and ~67 in 789. Their lever is *fewer compiler invocations per guard* —
-    sharing one published registry, `kama check` where no artifact is asserted — which is real-work
-    optimization and a different row from this one.
+  | run | config | wall | summed CPU |
+  |---|---|---|---|
+  | A  | before | 408 s | 2350 s |
+  | B  | after  | 346 s | 2199 s |
+  | B2 | **after, identical to B** | **268 s** | 1964 s |
+
+  Two runs of the SAME configuration differ by 78 s, which is larger than the 62 s A→B difference. So no
+  wall-clock claim survives at N=1 per arm, and the honest reading is that this box cannot resolve a
+  ~60 s effect on a ~350 s phase without interleaved A/B/A/B over several runs. **What DOES reproduce is
+  per-guard**: `check-query` in-phase 239.4 s → 168.2 s → 166.7 s (the two post-change runs 1% apart),
+  and `check-lsp` left the slowest-8 entirely from 161.5 s. Those are the numbers to quote.
+
+  ⚠️ Note also that `check-packages` "improved" 194.5 s → ~175 s across the same runs **without being
+  touched** — contention relief plus noise, and a standing warning against reading any single guard's
+  delta as causal.
+
+  **The sweep is DONE for the two guards that were this class** (`check-query`, `check-lsp` — both
+  `0.9.309`, byte-identical on happy and failure paths). Alone and idle: `check-lsp` 46 s → 12 s,
+  `check-query` 147 s → 89 s. ⚠️ **Three traps found by measuring, each of which the obvious reading of
+  this row would have walked into:**
+  * **`${#body}` is NOT a drop-in for `printf | wc -c`** — this row prescribed it. `Content-Length` is a
+    BYTE count and `${#}` is locale-aware in bash; instrumenting the real session showed **6 of 116
+    frames carry non-ASCII**, where the naive expansion is 5 short and desyncs the stream. The fix
+    toggles `LC_ALL=C` around that one expansion (bash re-runs `setlocale` on an `LC_*` assignment).
+  * **`${p%/*}` is NOT a drop-in for `dirname`** — substituted naively into `scope_for` it HANGS, because
+    a path with no slash comes back unchanged and the loop's `!= "."` guard never trips (and `/a` yields
+    `""`, not `/`). Verified the replacement against real `dirname` over 14 paths.
+  * **A cache-key change fails SILENTLY** — `qkey` names the file that memoizes an answer, so a
+    disagreeing key serves a WRONG cached result rather than erroring. Ruled out two ways: the preload
+    line is unchanged, and the run got FASTER (a key mismatch would miss the cache 236 times and re-run
+    `kama query`).
+
+  ⚠️ **This row's own recorded numbers were contaminated**, all taken while `check-doc-claims` at 496 s
+  saturated 12 cores. Re-measured idle: the guards are ~2.5-3× cheaper than recorded (`check-query` 136 s
+  alone, not 345 s; `check-lsp` 46 s, not 225 s), while the microbenchmark was wrong in BOTH directions —
+  a spawn costs **~155 ms** idle, not ~748 ms, but the ratio against a parameter expansion is **~336×**,
+  HIGHER than the ~200× on record (`$(dirname)` ~49.6 ms vs ~0.5 ms for `${p%/*}`). A guard also costs far
+  more INSIDE the parallel phase than alone (`check-lsp` 46 s → 161.5 s), because process creation is what
+  contends — which is why removing spawns helps more than the isolated number predicts.
+
+  ⏳ **What is left is a different kind of cost, and may deserve its own row.** `check-packages` (~175 s,
+  now the top guard) and `check-manifest` (~120 s) are **not** this class: 103 real `kama` invocations and
+  67 full build+link+run respectively, at ~2.8-2.9 s each, with six text-processing spawns in 1,185 lines
+  and ~67 in 789. Shell hygiene buys nothing there. Their lever is **fewer compiler invocations per
+  guard** — sharing one published registry across scenarios, `kama check` where no artifact is asserted —
+  which nobody has scoped.
 
   Two things found alongside, each wanting its own row rather than folding in here:
   * **`xfail/borrow_frozen_spawn` is flaky under load** — failed once in the 12-way suite ("rejected,
