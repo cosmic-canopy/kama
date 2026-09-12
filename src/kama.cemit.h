@@ -2399,6 +2399,9 @@ private:
     bool serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line);
     // Its composite sibling: a field whose type has no `serialize`/`deserialize` symbol to call.
     bool serdeRejectsField(SharedIdentifier ty, const std::string& access, bool writing);
+    // The kama name of the field a serde walk is emitting, for its diagnostics — set by each per-field loop.
+    std::string _serdeField;
+    std::string serdeFieldName(const std::string& access);
     // The pointee type node of a library `Owned<T, A>` field, else null. An `Owned` is a unique subtree,
     // so on the wire it IS a `T` — the serde field walk recognises it HERE, by identity, rather than
     // through a `serialize` on the handle. See the definition for why a method would be wrong.

@@ -1,0 +1,6 @@
+// A refusal names the kama FIELD. An enum payload is read into a `__p_` local, and the read side named that
+// local — ``field `__p_w` `` beside the write side's `` `w` `` (KR-15).
+type value Plain { int32 x; public ctor of(int32 x) { this.x = x; } }
+@generate(Deserializable)
+type enum Holder { Has(Plain w), Nothing }
+fn int32 main() { return 0; }

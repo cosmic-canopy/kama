@@ -1,0 +1,9 @@
+// A refusal names the kama FIELD. An `Owned` field is written through a deref call, and the refusal named
+// the tail of that C expression — ``field `boxed)))` `` (KR-15).
+type value Plain { int32 x; public ctor of(int32 x) { this.x = x; } }
+@generate(Serializable)
+type resource Holder {
+    @field Owned<Plain> boxed;
+    public ctor of(Owned<Plain> boxed) { this.boxed = give boxed; }
+}
+fn int32 main() { return 0; }

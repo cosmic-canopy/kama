@@ -1,0 +1,9 @@
+// A refusal names the kama FIELD. An `Optional` field is read through a temp, which the refusal named —
+// ``field `__ov0` `` (KR-15).
+type value Plain { int32 x; public ctor of(int32 x) { this.x = x; } }
+@generate(Deserializable)
+type value Holder {
+    @field Optional<Plain> maybe;
+    public ctor of() { this.maybe = Optional::None; }
+}
+fn int32 main() { return 0; }

@@ -708,6 +708,9 @@ ser_dup_field_id_default	ser_dup_field_id_default.kama:4
 ser_dup_field_name	ser_dup_field_name.kama:4
 ser_field_id_multi_declarator	ser_field_id_multi_declarator.kama:4
 ser_field_id_not_literal	ser_field_id_not_literal.kama:4
+ser_field_name_enum_payload	ser_field_name_enum_payload.kama:5
+ser_field_name_optional	ser_field_name_optional.kama:6
+ser_field_name_owned	ser_field_name_owned.kama:6
 ser_field_no_conformance	ser_field_no_conformance.kama:15
 ser_field_no_generate	ser_field_no_generate.kama:2
 ser_unmarked_field	ser_unmarked_field.kama:5

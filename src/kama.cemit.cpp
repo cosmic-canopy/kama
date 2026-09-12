@@ -24976,6 +24976,21 @@ static const char* serScalarSuffix(int builtInVal)
 // `isize`/`usize` and C's `long`/`unsigned long` (`clong`/`culong`, 0.9.232) are the only primitives this
 // fires for, and deliberately so — see the note above the `Serializable` block in prelude/global.kama. A
 // platform-varying width has no wire format, whichever axis it varies on.
+// The FIELD a serde diagnostic is about: the one the per-field loop is emitting (`_serdeField`). It used to
+// be recovered from the emitted access path, which names a field only in the simplest shape — an `Optional`
+// or `Owned` field is read through a temp and written through `.u.Some.value` / a deref call, and an enum
+// payload is read into a `__p_` local, so the refusals said `__ov0`, `value`, `boxed)))` and `__p_w` (KR-15).
+// The path stays as the fallback for a walk that is not over a field (a container's elements).
+std::string CEmitter::serdeFieldName(const std::string& access)
+{
+    if (!_serdeField.empty()) return _serdeField;
+    std::string f = access;
+    size_t dot = f.find_last_of(".>");
+    if (dot != std::string::npos) f = f.substr(dot + 1);
+    while (!f.empty() && (f.back() == ')' || f.back() == ' ')) f.pop_back();
+    return f;
+}
+
 bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line)
 {
     if (!ty || ty->genericArg) return false;              // a generic instance is composite — not ours
@@ -24983,11 +24998,7 @@ bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& acc
     if (ty->builtInVal == IDENTIFIER_STRING_VAL) return false; // handled directly by the caller
     if (*serScalarSuffix(ty->builtInVal)) return false;        // has a wire form
 
-    // `self->n` / `self->u.Some.n` / a local dst — report the trailing name, which is the field.
-    std::string field = access;
-    size_t dot = field.find_last_of(".>");
-    if (dot != std::string::npos) field = field.substr(dot + 1);
-
+    const std::string field = serdeFieldName(access);
     const std::string kt = primKey(ty);
     unsupported(("field `" + field + "` is an `" + kt + "`, which cannot be "
                  + (writing ? "serialized" : "deserialized")
@@ -25019,9 +25030,7 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
     // would report a defect at a type that is never instantiated. Same silence as the cast rules.
     if (opaqueScalarUnknown(ct)) return false;
 
-    std::string field = access;                       // `self->n` / `self->u.Some.n` / a local dst
-    size_t dot = field.find_last_of(".>");
-    if (dot != std::string::npos) field = field.substr(dot + 1);
+    const std::string field = serdeFieldName(access);
     const std::string disp = (ty && ty->value) ? *ty->value : demangleForDisplay(ct);
     const char* contract = writing ? "Serializable" : "Deserializable";
     unsupported(("field `" + field + "` has type `" + disp + "`, which cannot be "
@@ -25227,6 +25236,7 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", "
                          << serWireId(ci, f) << "u);\n";
+        ScopedStr _sf(_serdeField, f.name);
         emitSerFieldWrite(f.type, "self->" + f.name, 1, resC);
     }
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
@@ -25561,7 +25571,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
-        emitDeFieldRead(rf[i]->type, "result." + rf[i]->name, 4, resC, cleanup);
+        { ScopedStr _sf(_serdeField, rf[i]->name); emitDeFieldRead(rf[i]->type, "result." + rf[i]->name, 4, resC, cleanup); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -25645,6 +25655,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
                 // A payload field carries no attributes (the grammar gives a variant payload no slot for
                 // one), so its id is positional by construction and can never be reordered.
                 indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(f.name) << ", " << pi << "u);\n";
+                ScopedStr _sf(_serdeField, f.name);
                 emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2, resC);
             }
             indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
@@ -25728,7 +25739,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
                 indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
                 indent(2); *_out << "FieldKey __pk" << idx << " = r.vtbl->field(r.obj); FieldKey__dtor(&__pk" << idx << ");\n";
                 indent(2); *_out << cType(f.type) << " __p_" << f.name << ";\n";
-                emitDeFieldRead(f.type, "__p_" + f.name, 2, resC, cleanup);
+                { ScopedStr _sf(_serdeField, f.name); emitDeFieldRead(f.type, "__p_" + f.name, 2, resC, cleanup); }
                 if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
                     cleanup += cType(f.type) + "__dtor(&__p_" + f.name + "); ";
             }
@@ -26527,16 +26538,6 @@ void CEmitter::emitPolyContractResolvers()
 }
 
 // ---- one field, per pass ---------------------------------------------------------------------------------
-// The FIELD name out of an emitted access path (`self->kids`, `(self->o).u.Some.value`) — what the two
-// serde rejections already compute inline, so a graph rejection can name the same thing.
-static std::string fieldOfAccess(const std::string& access)
-{
-    std::string f = access;
-    size_t dot = f.find_last_of(".>");
-    if (dot != std::string::npos) f = f.substr(dot + 1);
-    while (!f.empty() && (f.back() == ')' || f.back() == ' ')) f.pop_back();
-    return f;
-}
 
 static bool graphOptional(SharedIdentifier ty) { return ty && ty->value && *ty->value == "Optional" && ty->genericArg; }
 
@@ -26655,7 +26656,7 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
             // real collection of edges is walked through its own body before this point.
             const bool boxedEdge = isSharedOrWeakClass(nest.second);
             if (boxedEdge)
-                unsupported(("field `" + fieldOfAccess(access) + "` is an `Owned` whose POINTEE is itself a graph edge "
+                unsupported(("field `" + serdeFieldName(access) + "` is an `Owned` whose POINTEE is itself a graph edge "
                              "(`Owned<Shared<X>>`), and a box around a handle has no wire form — the box owns "
                              "uniquely and the handle shares, so the two cannot both be true of one pointee. "
                              "Hold the `Shared<X>` directly, or box the NODE (`Owned<X>`), or leave the field "
@@ -26720,7 +26721,7 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             // real collection of edges is walked through its own body before this point.
             const bool boxedEdge = isSharedOrWeakClass(nest.second);
             if (boxedEdge)
-                unsupported(("field `" + fieldOfAccess(dst) + "` is an `Owned` whose POINTEE is itself a graph edge "
+                unsupported(("field `" + serdeFieldName(dst) + "` is an `Owned` whose POINTEE is itself a graph edge "
                              "(`Owned<Shared<X>>`), and a box around a handle has no wire form — the box owns "
                              "uniquely and the handle shares, so the two cannot both be true of one pointee. "
                              "Hold the `Shared<X>` directly, or box the NODE (`Owned<X>`), or leave the field "
@@ -26833,7 +26834,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
-        emitGraphFieldRead(rf[i]->type, "self->" + rf[i]->name, 4);
+        { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + rf[i]->name, 4); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -26878,7 +26879,10 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         // object table be an ARRAY: `beginArray(count)` states its length up front, which is the whole
         // reason a positional backend can carry a graph at all.
         *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g)\n{\n";
-        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) emitGraphFieldVisit(fp->type, "self->" + fp->name, 1);
+        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
+            ScopedStr _sf(_serdeField, fp->name);
+            emitGraphFieldVisit(fp->type, "self->" + fp->name, 1);
+        }
         *_out << "}\n\n";
         // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
         // the id discovery already assigned it.
@@ -26888,6 +26892,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         for (const FieldInfo* fp : wf) {
             const std::string& wire = fp->serName.empty() ? fp->name : fp->serName;
             indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", " << serWireId(ci, *fp) << "u);\n";
+            ScopedStr _sf(_serdeField, fp->name);
             emitGraphFieldWrite(fp->type, "self->" + fp->name, 1);
         }
         indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
@@ -26896,7 +26901,10 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
     if (ci.genDeserialize) {
         // READ PASS 2 — every id the shell stashed becomes a retained handle.
         *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g)\n{\n";
-        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) emitGraphFieldWire(fp->type, "self->" + fp->name, 1);
+        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) {
+            ScopedStr _sf(_serdeField, fp->name);
+            emitGraphFieldWire(fp->type, "self->" + fp->name, 1);
+        }
         *_out << "}\n\n";
     }
 }
@@ -27169,7 +27177,7 @@ void CEmitter::emitGraphWireElements(ClassInfo& ci)
     // `UnsafePtr<T>` and bookkeeping, so this is a no-op for one; a hand-written participant's edges are
     // here and nowhere else.
     for (auto& f : ci.fields)
-        if (!f.serSkip) emitGraphFieldWire(f.type, "self->" + f.name, 1);
+        if (!f.serSkip) { ScopedStr _sf(_serdeField, f.name); emitGraphFieldWire(f.type, "self->" + f.name, 1); }
     // …then ELEMENTS, which are not fields and so have to be iterated.
     bool wantElems = false;
     auto gi = _genericTypeInsts.find(ci.name);
