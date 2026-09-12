@@ -301,6 +301,30 @@ every `type extern value` depends on it"*) and every member touching it is `unsa
 pattern rather than a loophole. Making the containment visible would touch every container, not just the three
 handles, so it is its own question.
 
+### `KR-41` — a `type extern value` accepts member functions it never emits (2026-09-12)
+
+**Measured at `0.9.301`, two shapes and one cause.** A named `ctor` or a method declared on a C-layout type is
+accepted by `kama check`, the CALL is emitted, and no definition is emitted anywhere:
+
+    type extern value div_t { int32 quot; int32 rem; public const fn int32 sum() { … } }
+    →  div_t d = {0};  __ret_0 = div_t__sum((div_t*)&(d));      // and no `div_t__sum` exists
+    →  clang: call to undeclared function 'div_t__sum'
+
+⚠️ **A rejection that arrives from clang is the class this repo hunts, and `kama check` passing is the worse
+half** — the suite's analysis-agreement phase compares `check` against `build` and would catch this the moment
+any fixture did it, and none does. Found writing the descriptor-struct fixtures, where a `ctor make(...)` on an
+extern struct looked like the natural spelling and produced `call to undeclared function 'Desc__make'`.
+
+**The verdict is already written down elsewhere in the compiler, and it is to REFUSE:** extern structs are POD
+— `externAggregateInit`'s own comment says *no ctor/dtor* — the layout belongs to the C header, and behavior
+belongs in a free function or a kama wrapper type. So this wants a diagnostic, not emission. `~dtor` is
+already refused correctly (*a `value` owns nothing — a `~dtor` makes it a `resource`*) and is the model for the
+wording; aggregate init stays the one construction route.
+
+⚠️ **Sibling, same row:** a CLASS-NAMED ctor (`ctor div_t(int32 q)`) IS refused, but as *unknown field 'q' in
+extern struct 'div_t' initializer* — the call is read as aggregate init and the ctor the author declared is
+never mentioned, so the message sends them to the fields rather than to the declaration at fault.
+
 ### Three defects found while closing rows 9 and 10 (2026-09-11) — all PRE-EXISTING
 
 Each was confirmed against a binary built before that session's first commit (`0.9.292+gfb4f9378`), so none
