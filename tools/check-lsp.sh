@@ -23,7 +23,18 @@ session="$tmp/session"; : > "$session"
 # exactly what Content-Length must count and what the server's JSON parser decodes back to newlines.
 frame() {
     body="$1"
-    len=$(printf '%s' "$body" | wc -c | tr -d ' ')
+    # ⚠️ BYTES, NOT CHARACTERS, and the difference is not theoretical: `Content-Length` is a byte count,
+    # `${#body}` is locale-aware in bash, and MEASURED on this session 6 of the 116 frames carry non-ASCII
+    # — the naive expansion reports 5 short and desyncs the stream. LC_ALL=C makes the expansion
+    # byte-exact (bash re-runs setlocale on an LC_* assignment) and is toggled around this ONE expansion
+    # rather than set for the script, so nothing else's collation or matching changes.
+    #
+    # This was `printf '%s' "$body" | wc -c | tr -d ' '` — four processes per call, 116 calls — for a
+    # length the shell knows. msys2 emulates `fork`: measured idle on this box, that pipeline costs
+    # ~155 ms against ~0.5 ms for a parameter expansion, and the cost is worse still in the parallel guard
+    # phase, where process creation contends. Keep this fork-free. (KR-18.)
+    _lc=${LC_ALL-__lc_unset__}; LC_ALL=C; len=${#body}
+    if [ "$_lc" = __lc_unset__ ]; then unset LC_ALL; else LC_ALL=$_lc; fi
     printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body" >> "$session"
 }
 
@@ -533,13 +544,19 @@ out=$("$KAMA" lsp < "$session" 2>/dev/null || true)
 
 fail=0
 # expect <substring> <description>: assert the server's framed stdout contains <substring>.
+# ⚠️ `case`, not `printf | grep -qF`: two processes per assertion across ~160 assertions, for a literal
+# substring test the shell does itself. QUOTING "$1" INSIDE THE PATTERN IS LOAD-BEARING — it is what keeps
+# `[`, `]`, `*` and `?` literal, and 42 of the substrings below carry brackets
+# (`'"diagnostics":[]'`, `'"triggerCharacters":[".",":"]'`). Unquoted, those 42 silently become globs and
+# the guard starts asserting something else. Same rule in cfgexpect/cfgreject. (KR-18.)
 expect() {
-    if printf '%s' "$out" | grep -qF -- "$1"; then
-        echo "  ok: $2"
-    else
-        echo "  FAIL: $2 — expected substring: $1" >&2
-        fail=1
-    fi
+    case "$out" in
+        *"$1"*)
+            echo "  ok: $2" ;;
+        *)
+            echo "  FAIL: $2 — expected substring: $1" >&2
+            fail=1 ;;
+    esac
 }
 
 echo "check-lsp: lifecycle + live diagnostics over stdio"
@@ -962,13 +979,18 @@ cfgsession() {
 }
 
 # cfgexpect <output> <substring> <description> / cfgreject: assert on one session's stdout.
+# The quoted-pattern rule from `expect` above applies here too.
 cfgexpect() {
-    if printf '%s' "$1" | grep -qF -- "$2"; then echo "  ok: $3"
-    else echo "  FAIL: $3 — expected substring: $2" >&2; fail=1; fi
+    case "$1" in
+        *"$2"*) echo "  ok: $3" ;;
+        *)      echo "  FAIL: $3 — expected substring: $2" >&2; fail=1 ;;
+    esac
 }
 cfgreject() {
-    if printf '%s' "$1" | grep -qF -- "$2"; then echo "  FAIL: $3 — must NOT contain: $2" >&2; fail=1
-    else echo "  ok: $3"; fi
+    case "$1" in
+        *"$2"*) echo "  FAIL: $3 — must NOT contain: $2" >&2; fail=1 ;;
+        *)      echo "  ok: $3" ;;
+    esac
 }
 
 # A. The committed project. Its kama.json declares FEATURE_A `"default": true`, so a plain build keeps
