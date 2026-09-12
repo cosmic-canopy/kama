@@ -376,8 +376,7 @@ handles, so it is its own question.
 ### Three defects found while closing rows 9 and 10 (2026-09-11) — all PRE-EXISTING
 
 Each was confirmed against a binary built before that session's first commit (`0.9.292+gfb4f9378`), so none
-is a regression from the graph-delegate, element-store or `--no-heap` work. ⚠️ **Running repros and the full
-diagnosis are kept at `.scratch/found-2026-09-11/`** (gitignored) — do not re-derive them.
+is a regression from the graph-delegate, element-store or `--no-heap` work.
 
 **1. An early `return` from a `match` arm destructing the local that `match` is initializing — FIXED
 `0.9.297`.** Kept for the rule: **a local is not live until its initializer completes**, and a
@@ -407,10 +406,15 @@ accessor is recorded as a C name and the twin compared the KAMA name, so every n
 invisible in completion while the compiler accepted it. Fixed together; the record is
 [SPEC.md](SPEC.md#access-control-) and `tests/friend_generic`.
 
-**3. An `InlineArray` over a generic-instance element cannot share a program with `DynamicArray`.** The
-prelude's `relocate(into:)` then fails to infer. The discriminator table is in the repro's README; the clue
-worth starting from is that `sorted_map.kama` does exactly this and works, so the real trigger is narrower
-than the table proves.
+**3. ~~An `InlineArray` over a generic-instance element cannot share a program with `DynamicArray`~~ —
+CLOSED `0.9.306`.** Kept for the rule: **a name is resolved where it was WRITTEN, never where a late
+pass happens to be standing.** `registerFixed` stored the element unresolved, and `registerFixedViews` runs
+once every unit is collected — under the context the LAST unit left, a stdlib module, where a user file's
+private type resolves to nothing. ⚠️ **The row was narrower than the defect:** the filed shape
+(`relocate(into:)` failing to infer) was the loud face, and probing found the plain one — `InlineArray<Point>`
+for ANY user `Point` could not `viewMut()` at all, imports or no. `sorted_map.kama` escaped because its element
+mentions the map's own parameters (no concrete instance at the first mint) and `BTreeFrame` lives in the one
+namespace the late pass saw. The record is `tests/inline_array_user_elem_view`.
 
 ### Rows 9 and 10 CLOSED (`0.9.293`–`0.9.296`) — kept only for the rules they established
 
