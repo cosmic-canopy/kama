@@ -1,0 +1,10 @@
+// An `InlineArray` field sized by a runtime `static` is refused AT THE FIELD, naming the size. It used to
+// register no collection and leave a raw pointer behind, so the only diagnostics were "'s' is never
+// assigned" of a ctor that assigns it and "raw pointer access requires an `unsafe fn`" (consumer KB-23).
+static isize N = 4;
+type value Leaf { public isize a; public ctor none() { this.a = 0; } }
+type value Board {
+    public InlineArray<Leaf>#(N) s;
+    public ctor e() { this.s[0] = Leaf.none(); }
+}
+fn int32 main() { Board b = Board.e(); return cast<int32>(b.s[0].a); }

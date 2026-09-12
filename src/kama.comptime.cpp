@@ -172,6 +172,16 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
 {
     if (!id || !id->value) return false;
     auto asInt = [&](int64_t val) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = val; };
+    // A module constant only the interpreter folds, and not evaluated yet: evaluate it NOW, so a constant may
+    // read one declared later — in the same file or another. One already mid-evaluation is a cycle.
+    auto forceDeferred = [&](const std::string& key) -> bool {
+        auto st = _ctDeferredState.find(key);
+        if (st == _ctDeferredState.end() || st->second == CTConstState::Done) return true;
+        if (st->second == CTConstState::Evaluating)
+            return ctFail(("`" + *id->value + "` is defined in terms of itself").c_str(), id->line);
+        if (!evalDeferredConst(key)) { _ctFailed = true; return false; }   // it already said why
+        return true;
+    };
 
     // Type-associated `Type::NAME`.
     if (id->qualifier && !id->qualifier->empty()) {
@@ -201,6 +211,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         // name — so the type reading is tried first and this is the fallback, not a competing arm.
         const std::string qk = resolveModuleVar(*id->value, id->qualifier);
         if (!qk.empty()) {
+            if (!forceDeferred(qk)) return false;
             auto qv = _comptimeConstVals.find(qk);
             if (qv != _comptimeConstVals.end()) { out = qv->second; return true; }
             auto qm = _moduleConsts.find(qk);
@@ -212,6 +223,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     // Bare name. Through `resolveModuleVar` so a per-symbol `import { m::cfg::CAP }` resolves to the
     // DECLARING module's key rather than this file's scope, where nothing of that name exists.
     const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+    if (!forceDeferred(mk.empty() ? qualify(*id->value) : mk)) return false;
     auto cv = _comptimeConstVals.find(mk.empty() ? qualify(*id->value) : mk);
     if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
     if (!mk.empty()) {
@@ -680,15 +692,34 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
     return true;
 }
 
-// Evaluate the module `comptime` constants whose fold needed the interpreter (a `comptime fn` call), in
-// declaration order, BEFORE registerInstColls so a comptime-fn-derived scalar can drive a const-generic
-// array size. Scalar results are mirrored into _moduleConsts (int sizing) and _comptimeConstVals (emit).
+// Evaluate the module `comptime` constants whose fold needed the interpreter (a `comptime fn` call), BEFORE
+// collectCollections so a comptime-fn-derived scalar can size an array. Each is evaluated ON DEMAND — a
+// constant that reads one not evaluated yet evaluates that one first (ctResolveConst) — so declaration order
+// and file order do not matter, and a cycle is caught as one. Scalar results are mirrored into _moduleConsts
+// (int sizing) and _comptimeConstVals (emit).
 void CEmitter::evalComptimeConsts()
 {
+    for (auto& dc : _ctDeferredConsts) _ctDeferredState[dc.cName] = CTConstState::Pending;
+    for (auto& dc : _ctDeferredConsts) evalDeferredConst(dc.cName);
+}
+
+bool CEmitter::evalDeferredConst(const std::string& cName)
+{
+    auto st = _ctDeferredState.find(cName);
+    if (st == _ctDeferredState.end()) return true;                  // not a deferred constant
+    if (st->second == CTConstState::Done) return !_ctErroredConsts.count(cName);
+    CTDeferredConst* found = nullptr;
+    for (auto& d : _ctDeferredConsts) if (d.cName == cName) { found = &d; break; }
+    if (!found) return true;
+    CTDeferredConst& dc = *found;
+    st->second = CTConstState::Evaluating;
+    // Its own evaluation, with its own budget and file; the reader that forced it resumes where it was.
     NsCtx saved = _nsCtx;
-    for (auto& dc : _ctDeferredConsts) {
-        _nsCtx = dc.ctx;
-        _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+    long savedSteps = _ctSteps; int savedDepth = _ctDepth; bool savedFailed = _ctFailed;
+    std::string savedOwner = _ctCurrentOwner;
+    _nsCtx = dc.ctx;
+    _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+    bool good = [&]() -> bool {
         CTEnv env; CTValue v;
         // An ARRAY-typed constant may be initialized by an array literal (`[1, 2, 3]`, `[v; N]`) as well as
         // by a `comptime fn` call: the literal goes through `ctBuildArrayInit`, the same arm a comptime
@@ -710,7 +741,7 @@ void CEmitter::evalComptimeConsts()
                 ctFail(("a `comptime` initializer must be a compile-time constant (a literal, an array literal, "
                         "`sizeof`, const arithmetic, or a `comptime fn` call) — `" + dc.cName + "`").c_str(), dc.line);
             _ctErroredConsts.insert(dc.cName);   // a precise error was emitted; suppress the emit-time duplicate
-            continue;
+            return false;
         }
         // Coerce/validate against the constant's declared type, then bake.
         if (isArrayConst) {
@@ -718,19 +749,24 @@ void CEmitter::evalComptimeConsts()
                 ctFail(("a `comptime` array constant's initializer must return an `InlineArray` of the "
                         "declared size — `" + dc.cName + "`").c_str(), dc.line);
                 _ctErroredConsts.insert(dc.cName);
-                continue;
+                return false;
             }
             v.elemCType = aelem;   // bake with the constant's declared element C type
             _comptimeConstVals[dc.cName] = v;
-            continue;
+            return true;
         }
         CTValue proto;
         if (ctTypeInfo(dc.type, proto)) ctCoerce(proto, v);
         _comptimeConstVals[dc.cName] = v;
         if (v.kind == CTValue::Int || v.kind == CTValue::Bool)
             _moduleConsts[dc.cName] = v.i;   // mirror for const-generic array sizing
-    }
+        return true;
+    }();
     _nsCtx = saved;
+    _ctSteps = savedSteps; _ctDepth = savedDepth; _ctFailed = savedFailed;
+    _ctCurrentOwner = savedOwner;
+    _ctDeferredState[cName] = CTConstState::Done;
+    return good;
 }
 
 // ---------------------------------------------------------------------------
@@ -766,7 +802,11 @@ bool CEmitter::enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out)
         // enum's fold must still resolve its names where it was written, and blame its own file.
         NsCtx savedCtx = _nsCtx;
         std::string savedFile = _collectingUnitPath;
-        _nsCtx = NsCtx{}; _nsCtx.scope = ei.scope; _nsCtx.usings = ei.usings;
+        // The whole context a class body gets, not scope + usings alone: without the per-symbol imports and
+        // the file rung, a module constant — even one declared in the SAME file of a module — was an
+        // "unknown identifier" here, so an enum in any project could not read one.
+        _nsCtx = NsCtx{}; _nsCtx.scope = ei.scope; _nsCtx.usings = ei.usings; _nsCtx.symbolAliases = ei.symbolAliases;
+        restoreFileRung(_nsCtx, ei.declFile);
         _collectingUnitPath = ei.declFile;
 
         // A sibling is spelled `K::A`, as a variant is everywhere else. Said here, with the hint the

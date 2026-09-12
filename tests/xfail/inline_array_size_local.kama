@@ -1,0 +1,7 @@
+// A local `InlineArray` sized by a runtime value is refused at the declaration, naming the size — not as "an
+// array literal … its type must be known from context" plus a raw-pointer error at the read.
+fn int32 main() {
+    isize n = 3;
+    InlineArray<isize>#(n) a = [1, 2, 3];
+    return cast<int32>(a[0]);
+}

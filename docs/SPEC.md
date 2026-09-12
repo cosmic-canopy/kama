@@ -3665,8 +3665,10 @@ fn void demo() {
   constant's initializer (`CAP2 = CAP + 1`) or a comptime size is **baked to a literal** in the emitted
   C. That sidesteps C's "initializer element is not constant" rule and, more importantly, means **there is no
   static-initialization-order dependency** — Kama has no dynamic global init to order (the C++ init-order
-  fiasco cannot occur here). Constant references resolve in **declaration order**; a forward or cyclic
-  reference is a clean compile error, not undefined behavior.
+  fiasco cannot occur here). Constants are **order-free**, like types and functions: one may read a constant <!-- test: comptime_const_file_order -->
+  declared after it, in the same file or another, whatever order the files sort in. The one reference that
+  cannot resolve is a **cycle**, and it is a compile error naming the constant, not undefined behavior. <!-- xfail: comptime_const_cycle -->
+  An `InlineArray` whose size does not fold is refused at its declaration, naming the size. <!-- xfail: inline_array_size_runtime_static, inline_array_size_unknown, inline_array_size_local, comptime_fn_size_failed -->
 ### Compile-time functions — `comptime fn` ✅
 
 A **`comptime fn`** is a function the compiler RUNS at compile time to bake its result into a `static const`

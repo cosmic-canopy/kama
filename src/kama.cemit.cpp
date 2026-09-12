@@ -6020,6 +6020,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 && !allTypeParamsDefaulted(resolveUserName(*declType->value, declType->qualifier)))
                 unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
                              + *declType->value + "<int32>`").c_str(), n->line);
+            // Not in the template probe: there `N` is a comptime PARAMETER with no binding, which is not a fault.
+            SharedExpression init0 = lvd && lvd->variables && !lvd->variables->empty() ? (*lvd->variables)[0]->initializer
+                                   : cvd && cvd->variables && !cvd->variables->empty() ? (*cvd->variables)[0]->initializer
+                                   : SharedExpression();
+            auto* lit0 = dynamic_cast<ArrayLiteralNode*>(init0.get());
+            int64_t litN = lit0 && lit0->elements && !lit0->elements->empty() ? (int64_t)lit0->elements->size() : 1;
+            if (!_probingTemplate)
+                if (SharedIdentifier ph = unsizedFixedPlaceholder(declType, "a local's `InlineArray`", n->line, litN)) {
+                    declType = ph;   // this walk only — the AST node stays: the query index holds raw pointers into it
+                }
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
             if (_typeSubst.empty()) rejectBareCChar(declType, "a local", n->line);   // not during a poisoned instance's re-walk
@@ -7627,13 +7637,15 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 }
 
 // A `ParamSig::className` is mangled when the signature is REGISTERED, which is during unit collection —
-// and a `comptime` module constant declared in a file collected LATER is not folded yet, so
+// and a `comptime` module constant only the INTERPRETER can fold (a `comptime fn` call) is not folded yet, so
 // `InlineArray<isize>#(MAX_CREW)` mangles to `InlineArray_isize_MAX_CREW`, the constant's NAME. The
 // function's own prototype is fine, because `paramListC` re-`cType`s the AST node at EMIT time, by which
 // point the constant is known — so one instantiation ends up spelled two ways, and the CALL SITE's cast
 // (which reads `className`) names a type nothing declares. Reported by a consumer as KB-22, against a
 // tree where the constant's file sorted after the callee's; it reproduces only in that order, which is why
-// four hand-built probes missed it.
+// four hand-built probes missed it. ⚠️ Since collectModuleVars/foldModuleConsts, a constant the plain folder
+// can reach is known before ANY signature registers, in any file order (KB-23); what is left for this pass
+// is the interpreter-folded constant, and removing it breaks exactly that (measured).
 //
 // The refresh is deliberately SELF-CHECKING: a stale name resolves to nothing, so it only ever replaces a
 // className that names no known type with one that does. Re-mangling in a context that cannot see the
@@ -7736,14 +7748,16 @@ const std::vector<ParamSig>& CEmitter::instParamSigs(const GenericInst& gi)
     return _instParamSigs[gi.mangledName] = sigs;
 }
 
-// Build the function signature table so call sites can reorder named arguments
-// into C's positional order.
-void CEmitter::collectSignatures(SharedCompilationUnit unit)
+// Module-level `static T name …` (MCU step 1) and `comptime NAME = …`: register each name's qualified C symbol
+// so references in any body of this module resolve to it. Legality is checked at emission. Its own pass, run
+// over EVERY unit before any other collection, so no reader of a constant depends on FILE ORDER: a
+// `comptime isize DERIVED = PROBE_N;` aliasing a constant from a file that sorts later used to fold after
+// `collectCollections` had already asked for it, and an `InlineArray<Leaf>#(DERIVED)` field degraded to a raw
+// pointer with no diagnostic naming the declaration (consumer KB-23). foldModuleConsts finishes the job.
+void CEmitter::collectModuleVars(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
-        // Module-level `static T name …` (MCU step 1): register each name's qualified C symbol so
-        // references in any body of this module resolve to it. Legality is checked at emission.
         if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             if (mv->variables)
                 for (auto& d : *mv->variables)
@@ -7762,14 +7776,47 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                         if (mv->isComptime && d->initializer) {
                             int64_t cv;
                             if (constValue(d->initializer, cv)) _moduleConsts[qualify(*d->name->value)] = cv;
-                            // 6b-3: a fold miss (a `comptime fn` call, or a ref chain the folder can't do)
-                            // is deferred to the interpreter pass (evalComptimeConsts), which runs after all
-                            // comptime fns are registered and before const-generic sizes register.
+                            // A fold miss is deferred: to foldModuleConsts when it names a constant from a
+                            // unit not yet seen, and past that to the interpreter pass (evalComptimeConsts)
+                            // for a `comptime fn` call, a `Type::NAME`, or anything else the folder can't do.
                             else _ctDeferredConsts.push_back({ qualify(*d->name->value), mv->type, d->initializer, _nsCtx, mv->line });
                         }
                     }
-            continue;
         }
+    }
+}
+
+// Fold every deferred module constant the plain folder can now reach, to a fixpoint — every unit's constants
+// are registered, so an alias chain of any depth across files resolves regardless of which file sorts first.
+// What still misses (a `comptime fn` call, a `Type::NAME` before collectClasses) stays deferred for
+// evalComptimeConsts, exactly as before.
+void CEmitter::foldModuleConsts()
+{
+    NsCtx saved = _nsCtx;
+    for (bool progress = true; progress; ) {
+        progress = false;
+        for (auto it = _ctDeferredConsts.begin(); it != _ctDeferredConsts.end(); ) {
+            _nsCtx = it->ctx;
+            int64_t cv;
+            if (constValue(it->init, cv)) {
+                _moduleConsts[it->cName] = cv;
+                it = _ctDeferredConsts.erase(it);
+                progress = true;
+            } else {
+                ++it;
+            }
+        }
+    }
+    _nsCtx = saved;
+}
+
+// Build the function signature table so call sites can reorder named arguments
+// into C's positional order.
+void CEmitter::collectSignatures(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) continue;   // collectModuleVars, every unit first
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
         rejectPinOutsideContract(fn->typePins, fn->typeParams, "a function", fn->line);
@@ -8364,6 +8411,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         ei.name  = name;
         ei.scope = _nsCtx.scope;
         ei.usings = _nsCtx.usings;
+        ei.symbolAliases = _nsCtx.symbolAliases;
         ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // `: IntType`
         if (ed->body)
             for (auto& m : *ed->body)
@@ -15635,6 +15683,45 @@ void CEmitter::buildVtables()
 void CEmitter::buildVtables() {}
 #endif
 
+// An `InlineArray<T>#(N)` whose size never folded registers no collection, so the declaration silently became a
+// raw pointer and every diagnostic after it was about something else — "`s` is never assigned" of a ctor that
+// assigns it, "raw pointer access requires an `unsafe fn`", "an array literal … its type must be known"
+// (consumer KB-23). Called once every module constant, enum member and type constant is settled, so a size
+// that still does not fold is the author's to fix: say so at the declaration, naming the size. Returns a
+// placeholder for the caller to install (sized to agree with an array-literal initializer, if any), so nothing after this reports the raw pointer instead —
+// the build is already refused, so it never reaches C. Null when the type is not an unfolded InlineArray.
+SharedIdentifier CEmitter::unsizedFixedPlaceholder(const SharedIdentifier& t, const std::string& what, int line,
+                                                   int64_t placeholderSize)
+{
+    if (!t || !t->value || *t->value != "InlineArray" || !t->genericArgs || t->genericArgs->size() != 2)
+        return nullptr;
+    SharedIdentifier nArg = (*t->genericArgs)[1];
+    int64_t n;
+    if (!nArg || constArgN(nArg, n)) return nullptr;
+    std::string why = "it must be an integer literal or a `comptime` constant";
+    bool reported = false;   // the constant's own initializer already failed, and said why
+    if (nArg->value && !nArg->constArgValue) {
+        const std::string mk = resolveModuleVar(*nArg->value, nArg->qualifier);
+        if (_ctErroredConsts.count(mk)) reported = true;
+        else if (!mk.empty() && !_constStatics.count(mk))
+            why = "`" + *nArg->value + "` is a runtime `static` — declare it `comptime`";
+        else if (mk.empty())
+            why = "`" + *nArg->value + "` names no `comptime` constant";
+    }
+    if (!reported)
+        unsupported(("the size of " + what + " does not fold to a compile-time integer — " + why).c_str(),
+                    line ? line : t->line);
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto one = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
+    one->synthesized   = true;
+    one->constArgValue = std::make_shared<Int64Node>(*_synthCtx, placeholderSize);
+    auto placeholder = synthClone(*t);
+    placeholder->genericArgs = std::make_shared<IdentifierList>(*t->genericArgs);
+    (*placeholder->genericArgs)[1] = one;
+    registerFixed(placeholder);
+    return placeholder;
+}
+
 // Resolve every field's declared type in ITS OWN class's scope, once, and remember the answer.
 //
 // A member's declared type used to be re-resolved wherever it was READ, which put the DECLARING file's
@@ -15694,6 +15781,13 @@ void CEmitter::bakeFieldCTypes()
         }
         bake(ci.fields);
         for (auto& v : ci.variants) bake(v.payload);
+        if (!inst && !ci.isIntrinsicColl)
+            for (auto& f : ci.fields)
+                if (SharedIdentifier ph = unsizedFixedPlaceholder(f.type, "field `" + f.name + "`",
+                                                                  f.nameId ? f.nameId->line : 0)) {
+                    f.type = ph;
+                    f.cTypeBaked = cType(ph);
+                }
         if (inst) _typeSubst.clear();
     }
     _nsCtx = savedNs;
@@ -30540,6 +30634,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
+        collectModuleVars(u);
+    }
+    foldModuleConsts();
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
         // Every diagnostic these four raise is ABOUT a declaration in `u`, and in a multi-file build
         // `_sourcePath` is still "" here — so without this they report no file at all. See diagFile().
         ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
@@ -30579,6 +30680,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
         }
     }
+    // Every module constant, then every enum member, BEFORE the first reader of a const-generic size below.
+    // Both used to run after collectCollections and generic discovery, so a `comptime fn`-derived constant
+    // could size nothing those passes registered: `InlineArray<isize>#(MAX_CREW)` with `MAX_CREW = crew()`
+    // degraded to a raw pointer in ANY build. Enum members after the constants, which an initializer may read.
+    // What both need is settled by here: every comptime fn, type constant, class and enum is collected.
+    evalComptimeConsts();
+    foldEnumMembers();
     // register collections BEFORE the destructibility fixpoint, so a class whose only
     // owning member is a collection field (`List<T>` etc., no explicit `~dtor`) is correctly seen
     // as a resource (destructible + move-only). computeDestructible then re-derives each
@@ -30611,9 +30719,6 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
-    foldEnumMembers();     // every plain enum's member values — after the consts, which an initializer may read
-    evalComptimeConsts();  // const-eval 6b-3: run `comptime fn`-initialized module constants now that all
-                           // comptime fns are registered — before const-generic sizes so a baked scalar can size an array.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
     registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips

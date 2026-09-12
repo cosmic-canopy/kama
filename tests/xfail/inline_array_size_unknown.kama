@@ -1,0 +1,8 @@
+// A field size naming nothing is refused at the field, and ONLY there — no cascade about the field being
+// unassigned or a raw pointer, which is what the author used to see instead.
+type value Leaf { public isize a; public ctor none() { this.a = 0; } }
+type value Board {
+    public InlineArray<Leaf>#(NOPE) s;
+    public ctor e() { this.s[0] = Leaf.none(); }
+}
+fn int32 main() { Board b = Board.e(); return cast<int32>(b.s[0].a); }

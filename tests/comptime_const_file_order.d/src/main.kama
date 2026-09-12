@@ -1,0 +1,47 @@
+// Module `comptime` constants are known to every reader in ANY file order (consumer KB-23). A constant
+// aliasing one from a file that sorts LATER was folded only after `collectCollections` had asked for it, so
+// `InlineArray<Leaf>#(DERIVED)` registered no collection and the field became a raw pointer — reported as
+// "'s' is never assigned" of a ctor that assigns it, with nothing naming the declaration. The same early
+// read broke every other reader below; each line was measured failing against 0.9.306.
+//
+// ⚠️ FILE ORDER IS LOAD-BEARING. main.kama and lib.kama sort before zz_consts.kama; renaming the constants'
+// file to sort first took the unfixed compiler from 13 errors to 4 — only the two faces marked "ANY" below
+// remain, which is how they were told apart. Do not "tidy" the file names.
+import { cto::PROBE_N, cto::BASE, cto::CREW, cto::sumAll, cto::Box, cto::tally };
+comptime isize DERIVED = PROBE_N;             // an alias of a constant from a later file
+comptime isize TWICE = DERIVED + DERIVED;     // a two-hop chain
+comptime int32 OFFSET = BASE + 1;
+// Constants are ORDER-FREE, like types and functions: a forward reference in the SAME file resolves too, for
+// the plain folder and for the interpreter alike (a cycle is refused by name — tests/xfail/comptime_const_cycle).
+comptime isize SLOTS = TEAM * 2;              // TEAM is declared below
+comptime isize TEAM = 3;
+comptime isize SEATS = HALF + HALF;           // HALF folds only in the interpreter, and is declared below
+comptime fn isize half() { return 2; }
+comptime isize HALF = half();
+
+// An enum member reading a module constant. ⚠️ This failed in ANY project, file order aside: the member fold
+// rebuilt only scope + usings, so even a same-file constant was an "unknown identifier".
+type enum Code : int32 { A = OFFSET, B = OFFSET + 1 }
+
+type value Leaf { public isize a; public ctor at(isize a) { this.a = a; } }
+type value Board {
+    InlineArray<Leaf>#(DERIVED) s;            // KB-23: a field sized by the alias
+    public ctor e() {
+        isize i = 0;
+        while (i < DERIVED) { this.s[i] = Leaf.at(a: i); i = i + 1; }
+    }
+    public const fn isize total() { isize t = 0; isize i = 0; while (i < DERIVED) { t = t + this.s[i].a; i = i + 1; } return t; }
+}
+
+fn int32 main() {
+    Board bd = Board.e();                                        // 0+1+2+3 = 6
+    InlineArray<isize>#(DERIVED) xs = [1, 2, 3, 4];
+    InlineArray<isize>#(TWICE) t = [1, 1, 1, 1, 1, 1, 1, 1];     // 8
+    // A `comptime fn`-derived size. ⚠️ This failed in ANY build, one file included: the interpreter pass ran
+    // after collection, so no reader of a const-generic size could see its result.
+    InlineArray<isize>#(CREW) c = [2, 0, 0, 0, 0, 3];            // 2+3 = 5
+    Box<isize> bx = Box.of(v: 5);                                // 4
+    return cast<int32>(bd.total()) + cast<int32>(sumAll(xs: xs)) + cast<int32>(t.length())
+         + cast<int32>(Code::B) + cast<int32>(bx.sizeOf()) + cast<int32>(tally(xs: c))    // 6+10+8+12+4+5
+         + cast<int32>(SLOTS + SEATS);                                                     // + 6+4 = 55
+}

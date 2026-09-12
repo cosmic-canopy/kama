@@ -684,6 +684,7 @@ struct EnumInfo   {
     std::vector<EnumMember> members;
     std::string scope;
     std::vector<std::string> usings;
+    std::map<std::string, std::string> symbolAliases;   // per-symbol imports, so a member initializer resolves one
     std::string underlyingCType;                // `enum E : IntType` -> fixed-width int C type; "" = plain `enum`
     std::string declFile;                       // the unit that declared it — the file rung's key (see `checkReach`)
 };
@@ -1789,6 +1790,8 @@ private:
     // downstream pass sees it. Runs at the top of `collectProgram`, before any collect pass.
     void pruneInactiveDecls(SharedCompilationUnit unit);
     bool compileForActive(const SharedAttributeList& attrs, int line);   // eval the gate (true = keep)
+    void collectModuleVars(SharedCompilationUnit unit);
+    void foldModuleConsts();
     void collectSignatures(SharedCompilationUnit unit);
     void collectInterfaces(SharedCompilationUnit unit);
     // `<T is This>` pins a parameter to the IMPLEMENTING type, so it means something only where an
@@ -2220,6 +2223,8 @@ private:
     // Resolve every field's declared type in ITS OWN class's scope, once, before any body is walked.
     // Runs immediately before computeDestructible, whose context install it reuses. See the definition
     // for why a read site must not do this itself.
+    SharedIdentifier unsizedFixedPlaceholder(const SharedIdentifier& t, const std::string& what, int line,
+                                             int64_t placeholderSize = 1);
     void bakeFieldCTypes();
     // A field's C type: the baked answer, else resolve it now (an instance minted after the bake).
     std::string fieldCType(const std::string& ownerCls, const FieldInfo& f);
@@ -3006,6 +3011,10 @@ private:
     std::vector<CTDeferredConst> _ctDeferredConsts;
 
     void evalComptimeConsts();                                                    // the deferred-const evaluation pass
+    // ON DEMAND, so a constant may read one declared after it, in any file order; a cycle is refused by name.
+    enum class CTConstState { Pending, Evaluating, Done };
+    std::map<std::string, CTConstState> _ctDeferredState;   // cName -> state, for every _ctDeferredConsts entry
+    bool evalDeferredConst(const std::string& cName);        // false iff that constant failed
     void foldEnumMembers();                                                       // every plain enum's member values, after the consts
     bool enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out);                 // one member, on demand (memoised, cycle-guarded)
     bool ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out);

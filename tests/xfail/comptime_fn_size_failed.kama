@@ -1,0 +1,9 @@
+// A size whose `comptime fn` fails is reported ONCE, at the failure. The field it sizes adds nothing: the
+// constant's own diagnostic already said why, and the field used to add two more about something else.
+comptime fn isize crew() { return 4 / 0; }
+comptime isize M = crew();
+type value Board {
+    public InlineArray<isize>#(M) s;
+    public ctor e() { this.s[0] = 1; }
+}
+fn int32 main() { Board b = Board.e(); return cast<int32>(b.s[0]); }

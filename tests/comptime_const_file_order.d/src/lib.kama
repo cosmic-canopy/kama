@@ -1,0 +1,14 @@
+// Sorts before zz_consts.kama too: a SECOND early file aliasing the same constant, read by a parameter type,
+// a generic type's field, and a constant only the interpreter folds.
+import { cto::PROBE_N, cto::CREW };
+export { sumAll, Box, tally };
+comptime isize DERIVED2 = PROBE_N;
+fn isize sumAll(const ref InlineArray<isize>#(DERIVED2) xs) {
+    isize s = 0; isize i = 0; while (i < DERIVED2) { s = s + xs[i]; i = i + 1; } return s;
+}
+fn isize tally(const ref InlineArray<isize>#(CREW) xs) { return xs[0] + xs[5]; }
+type value Box<T> {
+    public InlineArray<T>#(DERIVED2) items;
+    public ctor of(T v) { this.items = [v; DERIVED2]; }
+    public const fn isize sizeOf() { return this.items.length(); }
+}

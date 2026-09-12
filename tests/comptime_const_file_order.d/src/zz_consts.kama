@@ -1,0 +1,6 @@
+// ⚠️ Named to sort LAST — see main.kama. Every constant a reader in an earlier file needs lives here.
+export { PROBE_N, BASE, CREW };
+comptime isize PROBE_N = 4;
+comptime int32 BASE = 10;
+comptime fn isize crew() { return 3 + 3; }
+comptime isize CREW = crew();                 // folds only in the INTERPRETER

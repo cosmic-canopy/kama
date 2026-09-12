@@ -1,0 +1,6 @@
+// Module constants are order-free — a constant may read one declared after it — so the one reference that
+// cannot resolve is a CYCLE, and it is refused by name rather than as an "unknown identifier".
+comptime fn isize same(isize x) { return x; }
+comptime isize A = same(x: B) + 1;
+comptime isize B = A;
+fn int32 main() { return cast<int32>(A); }
