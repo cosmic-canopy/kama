@@ -24,6 +24,15 @@
 // Windows pool) are all on the path. Then the built program is RUN and must return 42: a compiler that
 // listed the wrong directory and compiled the wrong modules cannot pass that, even if it "built".
 //
+// The last two cases add a PATH DEPENDENCY, which is a different route to the filesystem: `kama pkg
+// install` materializes `.kama/deps/<name>`, and on Windows that is a junction. Until 0.9.294 it was made
+// by `cmd /c mklink /J`, and cmd.exe is MAX_PATH-bound however the path is spelled — `osp()`'s `\\?\`
+// applies at the Win32 file-call edge and means nothing on a shell command line — so the link could not be
+// made past 260 while every other long-path route here was already clean. It failed LOUDLY; what was
+// silent is that nothing witnessed it, since the fixture suite covers a path dependency at a SHORT path
+// and the cases above cover long paths with NO dependency. The short-path control that runs first is what
+// separates "a path dependency is broken" from "a LONG path breaks it".
+//
 // Measured on Windows before the compiler-side fix landed (0.9.218): exit 14 on the first case — the
 // compiler's own argv is ANSI-decoded, so what it printed was
 //     kama: C:/msys64/tmp/tmp.xxx/w\???-??????\kama.json does not exist
@@ -67,6 +76,34 @@ fn int32 layProject(const ref string dir) {
     if (!put(path: join(path: src, with: "util.kama"), text: util)) { return 2; }
     string mainSrc = "import { cpprobe::answer };\nfn int32 main() { return answer(); }\n";
     if (!put(path: join(path: src, with: "main.kama"), text: mainSrc)) { return 2; }
+    return 0;
+}
+
+// A consumer and the library it depends on BY PATH, siblings under `dir`. Separate from layProject
+// rather than a flag on it: this needs two manifests, and the library's root module must be `public`.
+// ⚠️ That `public` is load-bearing and is not about linking at all — a dependent project cannot import
+// an `internal` root module, so with layProject's spelling the build below would fail for a reason that
+// has nothing to do with the junction this case exists to prove. Same step codes as layProject.
+fn int32 layDepProject(const ref string dir) {
+    string app = join(path: dir, with: "app");
+    string lib = join(path: dir, with: "lib");
+    match (createDirAll(path: join(path: app, with: "src"))) { case Err(error: e): { return 1; } case Ok(value: u): { } };
+    match (createDirAll(path: join(path: lib, with: "src"))) { case Err(error: e): { return 1; } case Ok(value: u): { } };
+
+    string libManifest = "{\n  \"name\": \"helper\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"library\",\n"
+                       + "  \"entry\": \"src/helper.kama\",\n  \"modules\": { \".\": { \"visibility\": \"public\" } }\n}\n";
+    if (!put(path: join(path: lib, with: "kama.json"), text: libManifest)) { return 2; }
+    string helper = "export { bump };\nfn int32 bump(int32 v) { return v + 5; }\n";
+    if (!put(path: join(path: join(path: lib, with: "src"), with: "helper.kama"), text: helper)) { return 2; }
+
+    string appManifest = "{\n  \"name\": \"cpdep\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"executable\",\n"
+                       + "  \"entry\": \"src/main.kama\",\n  \"modules\": { \".\": { \"visibility\": \"internal\" } },\n"
+                       + "  \"dependencies\": { \"helper\": { \"path\": \"../lib\" } }\n}\n";
+    if (!put(path: join(path: app, with: "kama.json"), text: appManifest)) { return 2; }
+    // 37 + 5 = 42, the same answer every other case here asserts — so one `arc != 42` check covers both
+    // shapes, and a dependency that resolved to nothing cannot produce it.
+    string mainSrc = "import { helper::bump };\nfn int32 main() { return bump(v: 37); }\n";
+    if (!put(path: join(path: join(path: app, with: "src"), with: "main.kama"), text: mainSrc)) { return 2; }
     return 0;
 }
 
@@ -133,6 +170,52 @@ fn int32 runCase(const ref string kama, const ref string dir, const ref string o
     return 0;
 }
 
+// `kama pkg install <app>/kama.json`. 8 = it could not be spawned, or it exited nonzero.
+// ⚠️ The MANIFEST PATH, never a cwd. `pkg install` accepts one, which is the only reason this case can
+// exist: Windows refuses to start a native process with a >260 working directory at all, prefixed or not
+// ("Can't start native Windows application from here" — the CreateProcessW limit this file opens with).
+fn int32 installAt(const ref string kama, const ref string manifest) {
+    Command inst = Command.make(program: copy kama);
+    inst.arg(a: "pkg"); inst.arg(a: "install");
+    inst.arg(a: copy manifest);
+    int32 irc = runWait(c: inst);
+    if (irc != 0) { return 8; }
+    return 0;
+}
+
+// One path-dependency case: lay the consumer+library pair at `dir`, install (which materializes the
+// link), then build the consumer THROUGH that link and run it. 0 or `caseId` + a step code; 8 and 9 are
+// this case's own, the rest are shared with runCase.
+//
+// Unlike runCase, `runFrom` is always required rather than optional-for-short-paths. The deep case cannot
+// be run in place (CreateProcessW again), and the short control gains nothing from a second code path.
+fn int32 runDepCase(const ref string kama, const ref string dir, const ref string outName, int32 caseId,
+                    const ref string runFrom) {
+    int32 laid = layDepProject(dir: dir);
+    if (laid != 0) { return caseId + laid; }
+
+    string app = join(path: dir, with: "app");
+    int32 inst = installAt(kama: kama, manifest: join(path: app, with: "kama.json"));
+    if (inst != 0) { return caseId + inst; }
+
+    // A PINPOINT, not the assertion. The failure mode that hid here was an install reporting success with
+    // nothing linked, so this separates that from a link that exists but does not resolve — and it is the
+    // BUILD below, which reads the dependency's modules through this path, that proves the link is usable.
+    string link = join(path: join(path: join(path: app, with: ".kama"), with: "deps"), with: "helper");
+    if (!exists(path: link)) { return caseId + 9; }
+
+    match (createDirAll(path: runFrom)) { case Err(error: e): { return caseId + 1; } case Ok(value: u): { } };
+    string exe = join(path: runFrom, with: outName);
+    int32 built = buildAt(kama: kama, dir: app, exe: exe);
+    if (built != 0) { return caseId + built; }
+
+    Command prog = Command.make(program: copy exe);
+    int32 arc = runWait(c: prog);
+    if (arc < 0)   { return caseId + 6; }
+    if (arc != 42) { return caseId + 7; }
+    return 0;
+}
+
 fn int32 main() {
     string kama   = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
     string work   = match (args().get(at: 1)) { case Some(value: v): copy v; case None: ""; };
@@ -149,10 +232,18 @@ fn int32 main() {
     while (i < 7) { deep = join(path: deep, with: comp(i: i)); i = i + 1; }
     // (iii) both: the non-ASCII name at the bottom of the deep tree.
     string both = join(path: deep, with: cjk());
+    // (iv) a path dependency at a SHORT path — the control for (v), which is the same pair down the tree.
+    string depShort = join(path: work, with: "pdshort");
+    string depDeep  = join(path: deep, with: "pd");
+    string depApp   = join(path: depDeep, with: "app");
 
-    // The vacuity line: the deepest project directory. The script refuses to pass if this is <= 260.
+    // The vacuity lines: the deepest project directory, and the deepest CONSUMER directory. The script
+    // refuses to pass if either is <= 260 — the dependency case needs its own, since it lives one level
+    // further down and could in principle be the only one that stayed short.
     isize dlen = both.length();
     print(s: "len=${dlen}\n");
+    isize plen = depApp.length();
+    print(s: "deplen=${plen}\n");
 
     // (i) runs in place — a program in a non-ASCII directory is an everyday thing to start.
     int32 r1 = runCase(kama: kama, dir: uni,  outName: outName, caseId: 10, runFrom: "");
@@ -166,6 +257,17 @@ fn int32 main() {
     if (r2 != 0) { return r2; }
     int32 r3 = runCase(kama: kama, dir: both, outName: outName, caseId: 30, runFrom: join(path: work, with: "run3"));
     if (r3 != 0) { return r3; }
+
+    // (iv) the CONTROL, and it runs FIRST of the pair on purpose: if a path dependency is broken outright
+    // the deep case would fail too, and without this the guard would blame the length for it.
+    int32 r4 = runDepCase(kama: kama, dir: depShort, outName: outName, caseId: 60,
+                          runFrom: join(path: work, with: "run4"));
+    if (r4 != 0) { return r4; }
+    // (v) the same pair at the bottom of the deep tree — `.kama/deps/helper` past 260. RED before 0.9.294:
+    // `kama install: cannot link dependency 'helper'`, and with the link absent nothing builds through it.
+    int32 r5 = runDepCase(kama: kama, dir: depDeep, outName: outName, caseId: 70,
+                          runFrom: join(path: work, with: "run5"));
+    if (r5 != 0) { return r5; }
 
     // No teardown here, on purpose: the script's `rm -rf` trap owns it. A first draft removed the trees
     // itself and failed under load — Windows keeps a just-exited executable's image open a moment past

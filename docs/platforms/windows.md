@@ -355,15 +355,19 @@ entries here. One has shipped:
   `tools/check-path-unicode.sh` hold both halves down; they were landed RED first (exit 2 and exit 12),
   which is the observation that they guard anything.
 
-  ⚠️ One thing this did NOT close, rowed in [ROADMAP.md](../ROADMAP.md) (*Windows path residuals*):
-  **`CreateProcessW`'s cwd and executable stay ≤ 260** — a Win32 limit, not a seam limit (below).
+  ⚠️ One thing this did NOT close, and it is a **non-goal** rather than pending work:
+  **`CreateProcessW`'s cwd and executable stay ≤ 260** — a Win32 limit, not a seam limit (below), so
+  nothing kama does can lift it. `std::process` says what answers the need in `Command.cwd`'s own doc
+  comment: hand a child absolute paths rather than a deep `cwd()`.
 
 - **The compiler itself is UTF-8 and long-path clean — SHIPPED `0.9.219`.** The other side of the same
   boundary: `kama.exe`'s own argv, the manifests and sources it reads, the directories it lists for
   module discovery, the output directory it creates, the C it writes and the compiler command lines it
   runs. Held by `tools/check-compiler-path.sh`, a kama-spawns-kama guard (the shell cannot pass a
   non-ASCII argument — below) that builds and RUNS a two-module project under `日本語-Привет`, under a
-  330-character directory, under both, and with a non-ASCII output name. Landed RED first: exit 14,
+  330-character directory, under both, and with a non-ASCII output name — and, since the junction fix
+  below, installs and builds through a **path dependency** at a 327-character project, with a short-path
+  control beside it. Landed RED first: exit 14,
   `kama: …\???-??????\kama.json does not exist`. Then it went RED four more times before it was green,
   each at the next ceiling — the record below is in that order. **None of it is "go wide"**:
   `<windows.h>` cannot enter the driver's TU (its token enum collides), and measured, it never needed to.
@@ -390,12 +394,39 @@ entries here. One has shipped:
     POSIX argument** and what `cygpath -m` prints for one (measured: `kama build /tmp/<319 chars>/kama.json`
     arrived as `//?/C:/msys64/tmp/…`; `cliPath()` strips it at the operand). The kernel recognizes neither
     with forward slashes inside, and a lexical join collapses the second to `/?/`, which names nothing.
+  * ⚠️ **The DEPENDENCY LINK is made with `FSCTL_SET_REPARSE_POINT`, not `cmd /c mklink /J`** — fixed
+    `0.9.294`, and the one place the reasoning above was applied and turned out not to hold. `kama pkg
+    install` materializes `.kama/deps/<name>`, a junction on Windows, and this call had been reasoned safe
+    on the grounds that `osp()` wraps it "like everything else". It does not: **`osp()` applies at the
+    Win32 file-call edge and can do nothing for a command line handed to a shell**, and cmd.exe is
+    MAX_PATH-bound however the path is spelled. A path dependency under a 265-character project failed
+    with `The system cannot find the path specified.` / `kama install: cannot link dependency`, while the
+    byte-identical project at a short path linked fine. `kama_win_make_junction` (`kama.winpath.cpp`) now
+    does it with `CreateDirectoryW` + `DeviceIoControl`, taking the verbatim spelling and spawning no
+    process; replacement is `RemoveDirectoryW`, which on a junction removes the LINK and never the
+    target's contents, and on a real non-empty directory fails, which is the outcome wanted.
 
-  What is deliberately NOT covered, rowed in [ROADMAP.md](../ROADMAP.md) (*Windows path residuals*):
-  starting an executable past MAX_PATH (`CreateProcessW`, below — the guard runs its deep cases from a
-  second build into a short directory); a volume with 8dot3 names disabled, where the linker fails exactly
-  as it did before; and a non-ASCII `%TEMP%`, which breaks clang's own single-invocation link with no
-  kama path involved at all (below).
+    ⚠️ **Two alternatives rejected, so neither is re-proposed.** A directory **symlink** needs
+    `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary `pkg install` cannot
+    require — that is why a junction was chosen originally, and "just use a symlink" is not the answer.
+    The **8.3 alias** (`kama_win_shortpath`, the trick `toolPath()` uses for `ld`/`ar`) is wrong *here*
+    specifically: a junction STORES its target, so the reparse point would permanently hold
+    `C:\MSYS64~1\…` and every later "which package owns this path?" comparison would see the alias — and
+    8dot3 creation can be disabled per volume, where that helper returns its input unchanged and the fix
+    would silently not apply. `DeviceIoControl` has neither problem.
+
+  What is deliberately NOT covered, each a settled verdict rather than pending work: starting an
+  executable past MAX_PATH (`CreateProcessW`, below — the guard runs its deep cases from a second build
+  into a short directory); a volume with 8dot3 names disabled, where the linker fails exactly as it did
+  before; and a non-ASCII `%TEMP%`, which breaks clang's own single-invocation link with no kama path
+  involved at all (below). Two more are **genuinely optional** rather than non-goals, and each is a small
+  known edit if it is ever reported: `selfExePath` and `relativizeToCwd` keep 260-byte buffers
+  (`_get_pgmptr` / `getcwd` into `PATH_MAX`) — a process cannot *have* a cwd past 260 without the registry
+  opt-in kama does not ask for, and the second is cosmetic (`kama: built .`); the first would be one
+  `GetModuleFileNameW` sizing loop in `src/kama.winpath.cpp`. And `longPathAware` in the manifest is a
+  **non-goal**: it does nothing unless the machine's `LongPathsEnabled` registry flag is set, which the
+  `\\?\` prefix makes unnecessary, and a behaviour that switches on a setting nobody is asked to change is
+  exactly the implicit path [GOALS.md](../GOALS.md) rejects.
 
   **`args()`, `env()` and `programPath()` followed in `0.9.218`** (`include/kama_runtime.h`): the CRT's
   `main` argv, `getenv` and `_get_pgmptr` are the ANSI re-encodings of the process's UTF-16 command line,

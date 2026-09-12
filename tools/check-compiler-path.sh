@@ -26,9 +26,18 @@
 # creates (`\\?\` at the OS edge); module discovery (mingw's opendir lists the WRONG directory on a `\\?\`
 # path — FindFirstFile instead); the `-j` pool (a generated .bat is parsed in the console code page —
 # CreateProcess with the line instead); and the link, where GNU ld and ar ANSI-decode their argv and
-# cmd.exe's redirections stop at MAX_PATH (an 8.3 alias for every path on those lines). What it does NOT
-# cover is starting an executable past MAX_PATH — a CreateProcessW limit — which is why the deep cases
-# are run from a second build into a short directory (the probe says so where it does it).
+# cmd.exe's redirections stop at MAX_PATH (an 8.3 alias for every path on those lines); and the DEPENDENCY
+# LINK, `.kama/deps/<name>`, which is a junction on Windows and was made by `cmd /c mklink /J` until
+# 0.9.294 — cmd is MAX_PATH-bound however the path is spelled, so `osp()`'s `\\?\` (a Win32 file-call edge)
+# could not reach it and a path dependency past 260 could not be linked. That failed LOUDLY (`kama install:
+# cannot link dependency`, nonzero) — what was silent is that nothing in the tree noticed, which is the
+# gap this case closes: the fixture suite covers a path dependency at a SHORT path, and the cases above
+# cover long paths with NO dependency. What it does NOT cover is
+# starting an executable past MAX_PATH — a CreateProcessW limit — which is why the deep cases are run from
+# a second build into a short directory (the probe says so where it does it).
+#
+# The dependency half carries a SHORT-PATH CONTROL and runs it first: a path dependency broken outright
+# would fail the deep case too, and the guard would then blame the length for it.
 #
 # check-legs: native
 #
@@ -66,17 +75,24 @@ rc=0
 "$bin" "$(kama_native_path "$KAMA")" "$work" "$suffix" >"$tmp/run.log" 2>&1 || rc=$?
 
 len=$(sed -n 's/^len=\([0-9][0-9]*\)$/\1/p' "$tmp/run.log" | head -1)
+deplen=$(sed -n 's/^deplen=\([0-9][0-9]*\)$/\1/p' "$tmp/run.log" | head -1)
 
 # VACUITY CONTROL. A guard that cannot fail proves nothing. If the temp root is short enough that the
 # deepest project directory never passes 260, this run could go green on Windows while testing nothing
-# about length — so refuse to report success instead.
-if [ -z "$len" ]; then
-    echo "check-compiler-path: FAIL — the probe printed no len= line; got:" >&2
+# about length — so refuse to report success instead. Two numbers, because the dependency case lives one
+# level further down and could in principle be the only one that stayed short.
+if [ -z "$len" ] || [ -z "$deplen" ]; then
+    echo "check-compiler-path: FAIL — the probe printed no len=/deplen= line; got:" >&2
     sed -n '1,10p' "$tmp/run.log" >&2; exit 1
 fi
 if [ "$len" -le 260 ]; then
     echo "check-compiler-path: FAIL — the deepest project directory is only $len chars, so this run" >&2
     echo "  could not have tested the length axis. The temp root ($work) is too short." >&2
+    exit 1
+fi
+if [ "$deplen" -le 260 ]; then
+    echo "check-compiler-path: FAIL — the deepest DEPENDENT project is only $deplen chars, so this run" >&2
+    echo "  could not have tested \`kama pkg install\` against a long path. The temp root ($work) is too short." >&2
     exit 1
 fi
 
@@ -88,6 +104,11 @@ if [ "$rc" -ne 0 ]; then
         2[0-9]) echo "  case: a >260-character project directory" >&2 ;;
         3[0-9]) echo "  case: a non-ASCII directory at the bottom of the >260-character tree" >&2 ;;
         5[0-9]) echo "  case: the non-ASCII directory again, with a non-ASCII OUTPUT NAME (-o .../<CJK>$suffix)" >&2 ;;
+        6[0-9]) echo "  case: a path DEPENDENCY at a SHORT path — the control. A path dependency is broken" >&2
+                echo "        outright here, not by length; the >260 case below cannot be read until this passes" >&2 ;;
+        7[0-9]) echo "  case: a path DEPENDENCY under the >260-character tree — \`.kama/deps/<name>\`, which is" >&2
+                echo "        a junction on Windows (FSCTL_SET_REPARSE_POINT since 0.9.294; \`cmd /c mklink /J\`" >&2
+                echo "        before it, and cmd.exe is MAX_PATH-bound however the path is spelled)" >&2 ;;
         *)  echo "  unrecognized probe exit code" >&2 ;;
     esac
     case "$rc" in
@@ -99,6 +120,12 @@ if [ "$rc" -ne 0 ]; then
         ?5) echo "  step: the build reported success but the output does not exist" >&2 ;;
         ?6) echo "  step: the built program could not be spawned" >&2 ;;
         ?7) echo "  step: the built program ran but did not return 42 — the WRONG modules were compiled" >&2 ;;
+        ?8) echo "  step: \`kama pkg install <app>/kama.json\` could not be spawned, or exited nonzero." >&2
+            echo "        This is what the pre-0.9.294 junction bug looked like: \`The system cannot find the" >&2
+            echo "        path specified.\` / \`kama install: cannot link dependency 'helper'\`" >&2 ;;
+        ?9) echo "  step: install reported SUCCESS but .kama/deps/helper is not there — a silent half-install," >&2
+            echo "        which the loud ?8 above is not. (A link that exists but does not RESOLVE is ?4" >&2
+            echo "        instead: the build through it fails.)" >&2 ;;
     esac
     echo "  (the codes are enumerated in $FIXTURE; the compiler's own output follows)" >&2
     sed -n '1,20p' "$tmp/run.log" >&2
@@ -106,3 +133,4 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 echo "  ok: kama build handles a non-ASCII and a $len-char project directory (manifest, modules, -j 2, run)"
+echo "  ok: kama pkg install links a path dependency at a $deplen-char project, and the build resolves through it"
