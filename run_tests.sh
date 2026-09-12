@@ -744,6 +744,20 @@ xfail_one() {
     local src="$1" name out res err rc msg_file fsrcs faults got want
     name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
+    # ⚠️ Isolate each build in its own dir, for the SAME reason the positive leg does (see its comment):
+    # the driver writes multi-unit intermediates to dirname(-o), and an imported module's `.c` is named
+    # after the MODULE, so two fixtures importing the same stdlib module collide in a shared dir under
+    # parallelism. This leg was pointing every build at `$TMP` itself, so every xfail fixture in flight
+    # shared one directory. It bit as a FLAKE that looked like a compiler bug:
+    #
+    #   FAIL xfail/borrow_frozen_spawn (rejected, but error missing "is frozen by the enclosing `borrow`")
+    #   kama: error: cannot write 'C:/msys64/tmp/tmp.…/std__ptr__ptr.c'
+    #
+    # The build DID fail, so `rc != 0` read as "rejected", and the message check then failed against an
+    # I/O error instead of the diagnostic — reporting a borrow-checker miss that never happened. An xfail
+    # still emits the stdlib modules' `.c` before its own unit is refused, which is why a leg where
+    # nothing links is not exempt from this.
+    local xwd="$TMP/xw_$name"; mkdir -p "$xwd"
     # One file, or every file of a .d directory. `sort` because the ORDER the operands are written in used
     # to be observable in the output, so a fixture must not depend on whatever order the filesystem hands
     # back. Less of that is true since §2e.26 — a build now sorts its units canonically and derives every
@@ -758,15 +772,15 @@ xfail_one() {
             # build, which by design applies no manifest at all, so a rejection that needs one could never
             # fire: `visibility` would be read by nothing and the fixture would compile clean. This arm was
             # simply never added when 1c gave it to the positive leg.
-            "$KAMA" build "$src/kama.json" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+            "$KAMA" build "$src/kama.json" -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?
         else
             # shellcheck disable=SC2086
-            "$KAMA" build $fsrcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+            "$KAMA" build $fsrcs -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?
         fi
     else
         msg_file="$TESTS_DIR/xfail/$name.msg"
         fsrcs="$src"
-        "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+        "$KAMA" build "$src" -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?
     fi
     if [ "$rc" -eq 0 ]; then
         echo "FAIL xfail/$name (compiled, but must be REJECTED)" >"$out"; echo FAIL >"$res"; return

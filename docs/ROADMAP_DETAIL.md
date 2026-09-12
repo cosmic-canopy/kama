@@ -868,10 +868,36 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     registry opt-in kama does not ask for, and the second is cosmetic (`kama: built .`). The first is an
     install directory past 260, which is the same registry-gated cwd story for whoever launches it.
     If it ever matters, it is one `GetModuleFileNameW` sizing loop in `src/kama.winpath.cpp`.
-  * **The package store, registry and toolchain paths under a long `~/.kama`** get the `\\?\` spelling
-    for free (`osp()` wraps them like everything else) but no guard witnesses it. Scheduled: extend
-    `tools/check-compiler-path.sh` with a `KAMA_STORE` under its deep directory once the probe project
-    grows a path dependency — the guard already owns the deep tree, so it is a few lines there.
+  * **The package store and dependency tree under a long path — ⚠️ MEASURED 2026-09-11, and the
+    verdict here was WRONG.** This entry said they "get the `\\?\` spelling for free (`osp()` wraps
+    them like everything else) but no guard witnesses it", i.e. believed-working and merely untested.
+    Probed with a real path dependency, it **fails**:
+
+    ```
+    $ kama pkg install <265-char-project>/app/kama.json
+    The system cannot find the path specified.
+    kama install: cannot link dependency 'helper'
+    ```
+
+    **Control**: the byte-identical project at a short path installs fine — `Junction created … <<===>>
+    …`, `kama: installed 1 package(s)`. So it is the LENGTH, not the project.
+
+    **Mechanism, pinned**: [`kama.driver.cpp:5205`](../src/kama.driver.cpp#L5205) materializes
+    `.kama/deps/<name>` with `runCmd("cmd /c mklink /J …")`. `osp()` applies the `\\?\` prefix at the
+    CRT/Win32 **file-call** edge — it never touches a **cmd.exe command line**, and cmd is MAX_PATH-bound
+    (this page's own § *Things that are true on Windows* records the sibling fact for cmd's
+    redirections). So the one path that had been reasoned safe is the one that is not. A junction is
+    used rather than a directory symlink because the latter needs `SeCreateSymbolicLinkPrivilege`
+    (windows.md), so "just use a symlink" is not the answer.
+
+    Now a real row rather than a test-coverage gap: **fix the link step for a long path, then guard it.**
+    Options not yet weighed — `CreateJunction` via `DeviceIoControl` (no cmd, takes a `\\?\` path), or
+    the 8.3-alias trick `toolPath()` already uses for `ld`/`ar`. ⚠️ The guard work described here before
+    still applies once it works (a `KAMA_STORE` under `check-compiler-path.sh`'s deep tree, which that
+    guard already owns), and it must NOT `cd` into the deep directory: Windows refuses to start a
+    native process with a >260 cwd at all (*"Can't start native Windows application from here"*,
+    measured) — which is the `CreateProcessW` non-goal above showing up in the tooling. `kama pkg
+    install` takes a manifest PATH, so the guard passes the path instead of changing directory.
   * **`longPathAware` in the manifest** — verdict **non-goal**: it does nothing unless the machine's
     `LongPathsEnabled` registry flag is set, which the `\\?\` prefix makes unnecessary; a behaviour that
     switches on a setting nobody is asked to change is exactly the implicit path GOALS.md rejects.
