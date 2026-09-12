@@ -18739,6 +18739,20 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     if (eit != _classes.end())
                         for (auto& i : eit->second.interfaces) if (i == p.className) { dtImpl = true; break; }
                 }
+                // Both arms below take the argument's ADDRESS, so a call result (`use(g: makeG(k: 4))`) would be
+                // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
+                // the borrow the callee reads, exactly as a `const ref` class rvalue is (the `ref` arm below).
+                if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(argExpr.get())))
+                    && !valHoisted && !isNamedValue(argExpr.get())) {
+                    if (_hoistOK) {
+                        std::string t = "__ifcarg" + std::to_string(_tempCounter++);
+                        _hoisted.push_back(c + " " + t + " = " + val + ";");
+                        if (_classes[c].destructible) recordDestructibleLocal(t, c);
+                        val = t;
+                    } else
+                        unsupported(("a temporary cannot be borrowed as contract parameter '" + p.name
+                                     + "' here — bind it to a local first, then pass that").c_str(), srcLine);
+                }
                 if (dtImpl) {
                     // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
                     // — deref to the pointee (`T*`) and wrap THAT as the fat pointer, not the handle struct.

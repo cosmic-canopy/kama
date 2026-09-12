@@ -1,0 +1,38 @@
+import { std::collections::DynamicArray, std::memory::Shared };
+// KR-15 #2 — a CALL result passed straight to a contract-typed parameter. The contract borrow takes the
+// argument's address, and a call result has none: this emitted `(void*)&(makeG(4))`, which `kama check`
+// passed and clang refused. The temporary is now materialized for the borrow and dropped once at scope end
+// (the resource and `Shared` cases own heap, so the san leg sees a leak or a double free).
+type contract Gettable for value { fn int32 get(); }
+type value G implements Gettable {
+    int32 k;
+    public ctor of(int32 k) { this.k = k; }
+    public fn int32 get() { return this.k; }
+}
+fn G makeG(int32 k) { return G.of(k: k); }
+fn int32 use(Gettable g) { return g.get(); }
+
+type contract Sized for resource { fn int32 size(); }
+type resource Bag implements Sized {
+    DynamicArray<int32> items;
+    public ctor make(int32 n) { for (int32 i = 0; i < n; i++) { this.items.add(item: i); } }
+    public fn int32 size() { return cast<int32>(this.items.length()); }
+}
+fn Bag makeBag(int32 n) { return Bag.make(n: n); }
+fn Shared<Bag> shareBag(int32 n) { return new Bag.make(n: n); }
+fn int32 measure(Sized s) { return s.size(); }
+
+type value Maker {
+    int32 start;
+    public ctor of(int32 start) { this.start = start; }
+    public fn G next() { return G.of(k: this.start + 1); }
+}
+
+fn int32 main() {
+    if (use(g: makeG(k: 4)) != 4) { return 1; }                  // value call result
+    if (measure(s: makeBag(n: 3)) != 3) { return 2; }            // destructible call result
+    if (measure(s: shareBag(n: 5)) != 5) { return 3; }           // a `Shared<T>` call result, deref'd to T
+    Maker m = Maker.of(start: 6);
+    if (use(g: m.next()) != 7) { return 4; }                     // method call result
+    return use(g: makeG(k: use(g: makeG(k: 9))));                // nested: 9
+}
