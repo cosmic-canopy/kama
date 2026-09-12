@@ -757,6 +757,14 @@ xfail_one() {
     # I/O error instead of the diagnostic — reporting a borrow-checker miss that never happened. An xfail
     # still emits the stdlib modules' `.c` before its own unit is refused, which is why a leg where
     # nothing links is not exempt from this.
+    #
+    # ⚠️ HONEST LIMIT ON THE ATTRIBUTION: the race was NOT reproduced on demand. Building 78 xfail
+    # fixtures that all import the same stdlib modules concurrently into one shared dir produced zero
+    # I/O failures and zero missing `.msg` phrases. So the cause is INFERRED, from the failing path
+    # (`$TMP/std__ptr__ptr.c` — a MODULE-named generated file sitting in exactly the directory this leg
+    # shared) plus the structural argument the positive leg already makes, not demonstrated. The
+    # isolation is correct either way and matches the positive leg; if this flake is ever seen again,
+    # that is the evidence it was something else.
     local xwd="$TMP/xw_$name"; mkdir -p "$xwd"
     # One file, or every file of a .d directory. `sort` because the ORDER the operands are written in used
     # to be observable in the output, so a fixture must not depend on whatever order the filesystem hands
