@@ -1,0 +1,17 @@
+// `@onPanic` in a program that also reaches kama's OS seam. The region pulls in `<setjmp.h>`, and the emitted
+// C used to include it ABOVE `kama_runtime.h` — whose first act is setting `_DEFAULT_SOURCE` before glibc's
+// <features.h> latches its feature set. Read first, <setjmp.h> latched the strict `-std=c11` set, and
+// `kama_os.h` then lost `lstat`, `getaddrinfo` and `struct addrinfo` in the same translation unit: eleven
+// clang errors, all naming kama's header, none the user's code. Linux/glibc only — the san and linux legs
+// are what can see it (consumer KB-25).
+import { std::fs::exists };
+
+@noheap @onPanic(recover: 1)
+fn int32 guarded(int32 v) {
+    return cast<int32>(cast<int8>(v));          // 300 does not fit -> recovered as 1
+}
+
+fn int32 main() {
+    bool here = exists(path: "/definitely/not/a/path/kama");
+    return guarded(v: 300) + guarded(v: 5) + (here ? 100 : 36);   // 1 + 5 + 36 = 42
+}

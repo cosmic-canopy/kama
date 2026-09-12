@@ -390,9 +390,12 @@ static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
 //
 // The compiler admits a region only when it is `@noheap` and no frame it reaches owns a destructible
 // local, so the longjmp skips no destructor. `<setjmp.h>` is hosted-only (not in C11's freestanding
-// list), so the emitted C includes it — and defines KAMA_ONPANIC — only for a program that declares a
-// region; every other program keeps this header dependency-light and the recovery path empty.
+// list), so it is included — and KAMA_ONPANIC defined by the emitted C — only for a program that declares a
+// region; every other program keeps this header dependency-light and the recovery path empty. ⚠️ Included
+// HERE, after the feature-test block at the top of this file, never by the emitted C above it: read first, it
+// latched glibc's strict set and hid kama_os.h's POSIX declarations (consumer KB-25).
 #if defined(KAMA_ONPANIC)
+#include <setjmp.h>
 typedef struct kama_recover { jmp_buf jb; struct kama_recover* prev; } kama_recover_t;
 extern KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top;   /* defined in the entry TU */
 static inline void kama_try_recover(void) {

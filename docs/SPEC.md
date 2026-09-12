@@ -755,8 +755,9 @@ fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any d
 - **The process-level panic hook does not run** for a recovered panic: the region's declared recovery *is*
   the handling, and `setPanicHandler`'s hook keeps its contract of running only when the process is about
   to terminate. <!-- test: onpanic_handler_not_run -->
-- The mechanism is `setjmp`/`longjmp`. `<setjmp.h>` is hosted-only, so the emitted C includes it — and the
-  runtime builds its recovery path — only for a program that declares a region; every other program is
+- The mechanism is `setjmp`/`longjmp`. `<setjmp.h>` is hosted-only, so the runtime includes it — after its feature-test <!-- test: onpanic_with_os_seam -->
+  macros, so a region never costs a Linux build the OS seam — and builds its recovery path only for a program
+  that declares a region; every other program is
   untouched. On wasm this rides emscripten's `setjmp` support; on `--target embedded` the toolchain must
   supply the header (newlib does).
 
