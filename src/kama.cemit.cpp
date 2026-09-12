@@ -22933,7 +22933,17 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
     if (_probingTemplate) return;
     if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
         _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/true };
-    if (!_noHeapProgram && !_noHeapActive) return;
+    // ⚠️ `@noheap` REJECTS HERE; `--no-heap` does NOT, and the asymmetry is the point. An attribute says
+    // "prove THIS body", so the body is the unit and an unprovable call in it is an error wherever it sits.
+    // A BUILD FLAG says "prove the PROGRAM", and a program is what `main` reaches — so the flag's answer
+    // comes from the reachability walk above, which reports the same fact with a call chain and reports it
+    // only for code that actually runs. Rejecting here as well made the flag mean "no body ANYWHERE in the
+    // import closure may dispatch", which is a different and much stronger claim than it advertises: it
+    // made `import { std::collections::SlotMap };` alone fail a `--no-heap` build, because `Handle`'s
+    // deserialize body exists — never called, never reached, and never able to allocate.
+    // The direct-allocation sibling already worked this way, which is why `DynamicArray` under `--no-heap`
+    // reports a chain from `main` rather than a bare line inside the stdlib.
+    if (!_noHeapActive) return;
     unsupported((std::string("this code is `@noheap`/`--no-heap`, so it may not call ") + what
                  + " — the compiler cannot see the target, so it cannot prove the call allocates nothing. "
                    "Call a named function instead, or move the dispatch outside the no-heap region").c_str(),
@@ -23067,7 +23077,22 @@ void CEmitter::checkNoHeapTransitive()
         // was emitted — and that one is better, because it names the construct and points at the line.
         // Reporting it again here as a zero-hop chain would be a second rendering of a defect the reader
         // has already been told about, which is the mistake `unsupported`'s own header warns against.
-        if (_allocSites.count(root)) continue;
+        auto own = _allocSites.find(root);
+        if (own != _allocSites.end()) {
+            // …EXCEPT an INDIRECT site under the FLAG, which nobody has reported. `rejectNoHeapIndirect`
+            // records rather than rejects for `--no-heap` on purpose — the flag proves the PROGRAM, so
+            // reachability has to decide, and at emission time the call graph does not exist yet. Being a
+            // seeded root IS the reachability answer (only user bodies are seeded), so this is where it
+            // gets said. No chain: the unprovable call is in this body, not one hop away.
+            if (own->second.indirect && kv.second.fromFlag) {
+                ScopedStr _f(_emitDeclFile, own->second.file.empty() ? kv.second.file : own->second.file);
+                unsupported(("this build is `--no-heap`, but `" + kv.second.display + "` dispatches "
+                             + own->second.what + ", so what it allocates cannot be proven — call a named "
+                             "function instead, or move the dispatch outside the no-heap region").c_str(),
+                            own->second.line);
+            }
+            continue;
+        }
 
         // Breadth-first for the SHORTEST chain. A depth-first walk finds *a* path, and on a call graph
         // that includes the stdlib that path can be absurd — the reader is being asked to follow it, so

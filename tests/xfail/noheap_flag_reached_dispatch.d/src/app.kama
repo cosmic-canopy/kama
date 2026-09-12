@@ -1,0 +1,31 @@
+// The INDIRECT half of tests/xfail/noheap_flag_container.d: under `--no-heap`, a dispatch through a
+// contract slot that `main` actually REACHES is refused, and refused the same way its direct sibling is —
+// with the chain from `main`, anchored on the innermost body the author wrote.
+//
+// ⚠️ This fixture exists because the checker was made LESS eager and a guard made less eager has to be
+// proven still to fire. `--no-heap` used to reject an unprovable dispatch wherever it was emitted, which
+// meant an unreachable stdlib body failed the build (see the positive sibling,
+// tests/noheap_flag_unreached_dispatch.d). It now records the fact and lets the reachability walk report
+// it — so what must not regress is exactly this: a dispatch on a live call path is STILL an error.
+//
+// A contract slot is unprovable by construction: which `Sink` runs is a runtime fact, so the compiler
+// cannot know whether `emit` allocates. That is the whole reason `@noheap` on a contract MEMBER exists.
+import { std::collections::DynamicArray };
+
+type contract Sink for resource { fn void emit(int32 v); }
+
+type resource Counter implements Sink {
+    int32 total = 0;
+    public default ctor make() { }
+    public fn void emit(int32 v) { this.total = this.total + v; }
+}
+
+// The innermost body the author wrote — the frame the diagnostic must anchor on.
+fn void push(Sink s, int32 v) { s.emit(v: v); }
+fn void mid(Sink s, int32 v) { push(s: s, v: v); }
+
+fn int32 main() {
+    Counter c = Counter.make();
+    mid(s: c, v: 7);
+    return 0;
+}
