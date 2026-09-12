@@ -636,6 +636,7 @@ override_label_mismatch	override_label_mismatch.kama:10
 override_nonvirtual	override_nonvirtual.kama:9
 override_param_mismatch	override_param_mismatch.kama:11
 override_return_mismatch	override_return_mismatch.kama:15
+owned_contract_string_bare	owned_contract_string_bare.kama:7
 owned_iface_nonimpl	owned_iface_nonimpl.kama:7
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16

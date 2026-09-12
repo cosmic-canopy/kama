@@ -1624,12 +1624,13 @@ private:
     std::map<std::string, NsCtx>                    _genericContractCtx;    // template name -> home namespace ctx
     std::map<std::string, NsCtx>                    _genericContractInstCtx;// instance -> use-site ctx (its type args, e.g. a user `Point`, resolve here — like _genericTypeInstCtx)
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
-    // A PRIMITIVE widened to a contract value — (conformance key, contract C name), e.g. ("int32","Hashable").
-    // A primitive has no `_classes` entry and its methods take `self` BY VALUE, so a widening needs a vtbl
-    // and a deref thunk per method that no class needs. Collected in the SCAN pass rather than at the use
-    // site because the vtbl must be declared before the C that names it — and emitted only for pairs a
-    // program actually widens, since the alternative is ~100 vtables in every binary for a rare feature.
-    std::set<std::pair<std::string, std::string>>   _primWidenings;
+    // A type-intrinsic target (a primitive, `string`) bound to a contract needs a `<key>__as_<C>` vtbl no class
+    // sweep emits. Demanded at the use site (intrinsicContractVtbl), and only for pairs a program actually
+    // binds — the alternative is ~100 vtables in every binary. The header's are written ahead of its buffered
+    // body region; a module's are queued as file-scope helpers, and the set is cleared per module.
+    std::set<std::string>                           _intrinsicVtblsHeader;
+    std::string                                     _intrinsicVtblsHeaderText;
+    std::set<std::string>                           _intrinsicVtblsModule;
     std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
@@ -2053,13 +2054,11 @@ private:
     // Generic CONTRACTS: discover `Iterator<int32>` uses, build one specialized InterfaceInfo each
     // (registered in _interfaces so the vtable-emit loop picks it up), emit under subst.
     void scanTypeForGenericContracts(SharedIdentifier t);
-    // Record a primitive->contract widening. Recorded OPTIMISTICALLY (the scan runs before `type intrinsic`
-    // blocks are applied, so no primitive has a conformance yet); the emission point filters.
-    void scanPrimWidening(SharedIdentifier declType, SharedExpression init);
-    std::string scanPrimKeyOf(SharedExpression e);
     // The emit-time authority: the conformance key when `e` is a primitive declaring contract `ct`, else "".
     std::string primWidenKey(SharedExpression e, const std::string& ct);
-    void emitPrimWidenVtables();
+    std::string intrinsicContractVtbl(const std::string& key, const std::string& cn);
+    std::string contractVtblOf(const std::string& concrete, const std::string& iface);
+    std::string renderIntrinsicContractVtbl(const std::string& key, const std::string& cn);
     std::string emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,
                                         const std::string& valExpr, int srcLine);
     void registerGenericContractInst(const std::string& tmpl, SharedIdentifierList args);

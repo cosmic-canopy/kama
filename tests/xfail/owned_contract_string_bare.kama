@@ -1,0 +1,9 @@
+// A named `string` boxed into an owning contract handle is an owning hand-off, so it must say `give` or
+// `copy` — a bare one would leave two owners of one buffer (KR-37).
+type contract Show for intrinsic { fn int32 width(); }
+type intrinsic <string> implements Show { public fn int32 width() { return cast<int32>(this.length()); } }
+fn int32 main() {
+    string sv = "abcd";
+    Owned<Show> o = sv;
+    return o.width();
+}

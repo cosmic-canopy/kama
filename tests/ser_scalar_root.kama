@@ -2,10 +2,6 @@
 // right, so a bare value round-trips with no object framing at all — this is the "stops early" end of the
 // one algorithm: the reach gate says the type holds no pointer, so there is no envelope, no table and no
 // handle. Reads come back BY VALUE, on the stack.
-//
-// ⚠️ `serializeJsonBuffer(v: aString)` is deliberately absent: boxing a `string` into a contract emits an
-// undefined `kama_string__as_Serializable` (`kama check` passes; clang catches it). Every other primitive
-// boxes fine, which is why nothing noticed. Add the line here when that row lands.
 import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
 fn int32 main() {
@@ -29,6 +25,11 @@ fn int32 main() {
     Result<float64, Owned<Error>> g = deserializeJsonBuffer::<float64>(src: copy fj);
     float64 gv = match (give g) { case Ok(value: v): v; case Err(error: e): { return 246; } };
     if (gv != 2.5) { return 5; }
+
+    string sv = "hi";
+    Result<string, Owned<Error>> sa = serializeJsonBuffer(v: sv);
+    string sj = match (give sa) { case Ok(value: s): give s; case Err(error: e): { return 243; } };
+    if (sj != "\"hi\"") { return 20; }
 
     // A string reads back by value — the static factory, no boxing involved.
     Result<string, Owned<Error>> e2 = deserializeJsonBuffer::<string>(src: "\"hi\"");

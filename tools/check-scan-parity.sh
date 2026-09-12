@@ -28,9 +28,13 @@ SRC="$ROOT/src/kama.cemit.cpp"
 [ -f "$SRC" ] || { echo "check-scan-parity: FAIL — no $SRC" >&2; exit 1; }
 
 # Node kinds one side may legitimately visit alone. One `pair:kind` per line, with the reason beside it.
-# Empty today: the collections walk registers types and the generics walk registers instantiations, but
-# both must still ENTER every shape that can contain either, so no asymmetry has yet been justified.
-EXEMPT=""
+# The collections walk registers types and the generics walk registers instantiations, but both must still
+# ENTER every shape that can contain either.
+#
+# - IdentifierNode: a LEAF — it contains no shape, so neither walk enters one. The generics walk casts to it
+#   only to read a method call's receiver. The collections walk used to name it for the same kind of peek
+#   (the primitive-widening recorder, deleted with KR-37), which is all that kept the two sets equal.
+EXEMPT="scanExprForCollections:IdentifierNode"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

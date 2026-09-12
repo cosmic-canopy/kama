@@ -6167,7 +6167,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // `this` is ALREADY a pointer to the concrete object; fatPointer's `&(lvalue)` would
                             // wrongly take the address OF the `this` pointer. Bind the pointer directly.
                             *_out << " = (" << ty << "){ (void*)(" << emitExpression(d->initializer)
-                                  << "), &" << c << "__as_" << ty << " }";
+                                  << "), &" << contractVtblOf(c, ty) << " }";
                         else if (!c.empty() && isClass(c))
                             *_out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
                         else if (!c.empty() && isInterface(c))
@@ -6179,7 +6179,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // check still forbids storing the fat pointer.
                             std::string pk = primWidenKey(d->initializer, ty);
                             *_out << " = (" << ty << "){ (void*)&(" << primConformance(pk)->name << "){ "
-                                  << emitExpression(d->initializer) << " }, &" << pk << "__as_" << ty << " }";
+                                  << emitExpression(d->initializer) << " }, &" << intrinsicContractVtbl(pk, ty) << " }";
                         }
                         else
                             unsupported(("cannot bind this to the contract `" + ty + "` — a contract value "
@@ -6548,6 +6548,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     std::string pk = primWidenKey(init, _classes[ty].collElemClass);
                     std::string t = emitPrimBoxIntoContract(ty, pk, emitExpression(init), n->line);
+                    flushHoisted(depth);
+                    indent(depth); *_out << nm << " = " << t << ";\n";
+                } else if (isSmartPtrClass(ty) && isInterface(_classes[ty].collElemClass)
+                           && exprClass(init) == "kama_string"
+                           && classDeclaresContract("kama_string", _classes[ty].collElemClass)) {
+                    // `Owned<Show> o = give s;` — a `string` boxed into an owning contract handle: the same box,
+                    // with the string MOVED (or deep-copied) into the heap cell; the vtbl's `__dtor` frees it.
+                    // A named string needs the marker like any owning hand-off; a fresh one moves in bare.
+                    line(n->line);
+                    std::string v = emitExpression(init);
+                    bool moveOut = false;
+                    if (isNamedValue(init.get())) {
+                        if (handoff == 0)
+                            unsupported("a `string` hand-off must say `give` (move) or `copy` (deep)", n->line);
+                        else if (handoff == 2) v = copyCall("kama_string", v);
+                        else moveOut = true;
+                    }
+                    std::string t = emitPrimBoxIntoContract(ty, "kama_string", v, n->line);
+                    if (moveOut) {
+                        _hoisted.push_back(moveNullStmt("kama_string", v));
+                        std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv);
+                    }
                     flushHoisted(depth);
                     indent(depth); *_out << nm << " = " << t << ";\n";
                 } else if (isBindableClass(ty)) {
@@ -11745,9 +11767,6 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdenti
     _nsCtx = savedCtx;
 }
 
-// The conformance key of an expression the SCAN pass can see: a primitive literal, or an identifier whose
-// declared type this body already recorded. Deliberately partial — the scan runs before any type checking.
-// "" means "not a primitive, or not visible from here".
 // The conformance key of a primitive LITERAL, "" for anything else. Shared by the scan (which sees only
 // literals and recorded locals) and the emit site (where a literal is not a "receiver", so the type-node
 // and scalar-cType routes both answer nothing for it).
@@ -11765,57 +11784,8 @@ static std::string primKeyOfLiteral(ASTNode* n)
     return "";
 }
 
-std::string CEmitter::scanPrimKeyOf(SharedExpression e)
-{
-    if (!e) return "";
-    ASTNode* n = e.get();
-    std::string lit = primKeyOfLiteral(n);
-    if (!lit.empty()) return lit;
-    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (!id->value) return "";
-        auto it = _scanLocalTys.find(*id->value);
-        if (it == _scanLocalTys.end()) {
-            auto cs = _comptimeSubst.find(*id->value);
-            if (cs == _comptimeSubst.end()) return "";
-            std::string ck = primKey(primTypeNode(cs->second.kind));
-            return isScalarPrimKey(ck) ? ck : std::string();
-        }
-        std::string k = primKey(it->second);
-        return isScalarPrimKey(k) ? k : std::string();
-    }
-    return "";
-}
-
-// `Hashable h = 3;` — a PRIMITIVE bound to a contract-typed place. Recorded here so the vtbl and its deref
-// thunks are emitted before the C that names them. Recorded OPTIMISTICALLY: `type intrinsic` blocks are
-// applied after this pass, so asking whether the primitive conforms would always answer no; emission runs
-// when the registry is populated and drops a pair that does not.
-void CEmitter::scanPrimWidening(SharedIdentifier declType, SharedExpression init)
-{
-    if (!declType || !declType->value || !init) return;
-    // Resolve by NAME rather than through `cType`: this pass runs outside any type, so a `This`/`Base`
-    // local (`This c = Point.make(…);` inside a method) would make cType report "only valid inside a
-    // `type`" — a diagnostic from a pass whose whole job is to look, not to judge.
-    std::string ct = resolveUserName(*declType->value, declType->qualifier);
-    // `Owned<Hashable>` / `Shared<Hashable>` — the OWNING form widens to the handle's element, so look
-    // through the handle. Matched on the source spelling because this pass predates the smart-pointer
-    // instance registration that `isSmartPtrClass` consults.
-    if (!isInterface(ct) && declType->genericArg && declType->genericArg->value
-        && (ct == "std::memory::Owned" || ct == "std::memory::Shared"
-            || *declType->value == "Owned" || *declType->value == "Shared"))
-        ct = resolveUserName(*declType->genericArg->value, declType->genericArg->qualifier);
-    // A generic-contract INSTANCE (`Comparable<int32>`, which every pinned contract now is) resolves by
-    // name to its TEMPLATE, which lives in `_genericContracts` and not `_interfaces`. Mangle it to the
-    // instance, the name the vtbl is actually filed under.
-    if (!isInterface(ct) && _genericContracts.count(ct) && declType->genericArgs)
-        ct = genericTypeMangle(ct, declType->genericArgs);
-    if (!isInterface(ct)) return;
-    std::string pk = scanPrimKeyOf(init);
-    if (!pk.empty()) _primWidenings.insert({pk, ct});
-}
-
-// The emit-time counterpart of scanPrimKeyOf, and the authority: here the expression's type is known
-// exactly. "" when `e` is not a primitive that declares `ct`.
+// The conformance key of a primitive bound to contract `ct`, read at the emit site, where the expression's
+// type is known exactly. "" when `e` is not a primitive that declares `ct`.
 std::string CEmitter::primWidenKey(SharedExpression e, const std::string& ct)
 {
     if (!e || !isInterface(ct)) return "";
@@ -11825,6 +11795,9 @@ std::string CEmitter::primWidenKey(SharedExpression e, const std::string& ct)
         k = tn ? primKey(tn) : std::string();
         if (!isScalarPrimKey(k)) k = primKeyOfCType(receiverScalarCType(e));
     }
+    // ...and anything else the emitter can type: a call or method result, a cast, arithmetic, a `bool` or
+    // float literal. Without it each of those was refused as "does not implement it" (KR-37).
+    if (!isScalarPrimKey(k)) k = primKeyOfCType(typeOfExpr(e));
     if (!isScalarPrimKey(k)) return "";
     ClassInfo* pci = primConformance(k);
     if (!pci) return "";
@@ -11832,51 +11805,81 @@ std::string CEmitter::primWidenKey(SharedExpression e, const std::string& ct)
     return "";
 }
 
-// The vtbl + deref thunks for each primitive widened to a contract. A primitive has no `_classes` entry so
-// this cannot ride emitClassInterfaceVtables, and its methods take `self` BY VALUE (`isScalarRecv`) while a
-// vtbl slot passes `void* self` — hence a thunk per slot rather than the cast a class gets. Emitted after
-// the prelude's impl BODIES, which is what the thunks call.
-void CEmitter::emitPrimWidenVtables()
+// The `<key>__as_<C>` vtbl for a type-intrinsic target (a primitive, or `string`) bound to a contract,
+// returned as its symbol and DEFINED AHEAD of the C that names it. A target has no class declaration, so
+// this cannot ride emitClassInterfaceVtables' per-unit sweep.
+//
+// Demand-driven, from the emit site that names the symbol — the one place the value's type is known
+// exactly. It used to be recorded by a pre-pass that could see only a literal or a typed local, so a call
+// result, a field, a cast, a `bool` literal and every `string` all reached clang as an undeclared vtbl, or
+// were refused as "does not implement it" about a primitive that does (KR-37). In a module body the
+// definition is queued as a file-scope helper, flushed before the module's buffered bodies; in the header
+// it is collected and written ahead of the header's buffered body region (emitHeaderContent). Either way
+// it is `static`, so a module's copy and the header's never collide — and a module never repeats one the
+// header already has.
+std::string CEmitter::intrinsicContractVtbl(const std::string& key, const std::string& cn)
 {
-    for (auto& w : _primWidenings) {
-        const std::string& pk = w.first;      // conformance key: `int32`, `char`, `string`
-        const std::string& cn = w.second;     // contract C name
-        ClassInfo* pci = primConformance(pk);
-        auto ii = _interfaces.find(cn);
-        if (!pci || ii == _interfaces.end()) continue;
-        bool declares = false;
-        for (auto& itf : pci->interfaces) if (itf == cn) { declares = true; break; }
-        if (!declares) continue;              // the scan records optimistically; this is the check
-        // Render the slot signatures under the CONTRACT's own scope, with a generic-contract instance's
-        // type args bound — the same treatment emitInterfaceTypes gives them. Every pinned contract is such
-        // an instance, so without this a thunk's parameter comes out as the raw `T`.
+    std::string sym = key + "__as_" + cn;
+    if (_intrinsicVtblsHeader.count(sym)) return sym;
+    if (_inHeaderPass) {
+        _intrinsicVtblsHeader.insert(sym);
+        _intrinsicVtblsHeaderText += renderIntrinsicContractVtbl(key, cn);
+    } else if (_intrinsicVtblsModule.insert(sym).second)
+        _fileScopeHelpers.push_back(renderIntrinsicContractVtbl(key, cn));
+    return sym;
+}
+
+// The definition itself. A PRIMITIVE's methods take `self` BY VALUE (`isScalarRecv`) while a slot passes
+// `void* self` — hence a thunk per slot. A `string`'s take a pointer, exactly as a class's do, so its slots
+// are the class cast and its `__dtor` is the string's own.
+std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const std::string& cn)
+{
+    ClassInfo* pci = implTargetInfo(key);
+    auto ii = _interfaces.find(cn);
+    if (!pci || ii == _interfaces.end()) return "";   // the emit site already judged the conformance
+    std::ostringstream os;
+    std::ostream* saved = _out; _out = &os;
+    // Render the slot signatures under the CONTRACT's own scope, with a generic-contract instance's
+    // type args bound — the same treatment emitInterfaceTypes gives them. Every pinned contract is such
+    // an instance, so without this a thunk's parameter comes out as the raw `T`.
+    {
         ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii->second);
         ContractSubst _cs(*this, ii->second);
-        for (auto& m : ii->second.methods) {
-            if (m.isCtor) continue;           // a contract-required ctor has no slot
-            ClassInfo* owner = nullptr;
-            MethodInfo* mi = findMethod(pci, m.name, &owner);
-            if (!mi) continue;
-            std::string ret = cType(m.returnType);
-            *_out << "static inline " << ret << " " << pk << "__" << m.name << "__thunk"
-                  << ifaceSlotSig(m.params) << " {\n";
-            indent(1);
-            if (ret != "void") *_out << "return ";
-            *_out << mi->cName << "(*(" << pci->name << "*)self";
-            if (m.params) for (auto& p : *m.params) if (p && p->identifier && p->identifier->value)
-                *_out << ", " << *p->identifier->value;
-            *_out << ");\n}\n";
-        }
-        *_out << "static const " << cn << "_vtbl " << pk << "__as_" << cn << " = {\n";
+        if (pci->isScalarRecv)
+            for (auto& m : ii->second.methods) {
+                if (m.isCtor) continue;           // a contract-required ctor has no slot
+                MethodInfo* mi = findMethod(pci, m.name, nullptr);
+                if (!mi) continue;
+                std::string ret = cType(m.returnType);
+                *_out << "static inline " << ret << " " << key << "__" << m.name << "__thunk"
+                      << ifaceSlotSig(m.params) << " {\n";
+                indent(1);
+                if (ret != "void") *_out << "return ";
+                *_out << mi->cName << "(*(" << pci->name << "*)self";
+                if (m.params) for (auto& p : *m.params) if (p && p->identifier && p->identifier->value)
+                    *_out << ", " << *p->identifier->value;
+                *_out << ");\n}\n";
+            }
+        *_out << "static const " << cn << "_vtbl " << key << "__as_" << cn << " = {\n";
         for (auto& m : ii->second.methods) {
             if (m.isCtor) continue;
-            ClassInfo* owner = nullptr;
-            if (!findMethod(pci, m.name, &owner)) continue;
-            indent(1); *_out << "." << m.name << " = &" << pk << "__" << m.name << "__thunk,\n";
+            MethodInfo* mi = findMethod(pci, m.name, nullptr);
+            if (!mi) continue;
+            indent(1);
+            if (pci->isScalarRecv)
+                *_out << "." << m.name << " = &" << key << "__" << m.name << "__thunk,\n";
+            else
+                *_out << "." << m.name << " = (" << cType(m.returnType)
+                      << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << "(*)" << ifaceSlotSig(m.params)
+                      << ")&" << mi->cName << ",\n";
         }
-        indent(1); *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
+        indent(1);
+        if (pci->isScalarRecv) *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
+        else                   *_out << ".__dtor = (void(*)(void*))&" << pci->name << "__dtor,\n";
         *_out << "};\n\n";
     }
+    _out = saved;
+    return os.str();
 }
 
 void CEmitter::scanExprForCollections(SharedExpression e)
@@ -11905,26 +11908,6 @@ void CEmitter::scanExprForCollections(SharedExpression e)
     } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         scanExprForCollections(inv->expression);
         if (inv->args) for (auto& a : *inv->args) if (a) scanExprForCollections(a->expression);
-        // A primitive passed where a CONTRACT parameter is declared needs its vtbl emitted, and the vtbl
-        // has to precede the call in the C. Signatures are collected before this pass, so the callee's
-        // parameter list is readable here — matched by NAME, since kama arguments are named.
-        if (inv->args) {
-            // a free call carries its name on `identifier`; a call through an expression on `expression`
-            IdentifierNode* callee = inv->identifier ? inv->identifier.get()
-                                                     : dynamic_cast<IdentifierNode*>(inv->expression.get());
-            if (callee && callee->value) {
-                auto f = _funcs.find(resolveFunc(*callee->value, callee->qualifier));
-                if (f != _funcs.end())
-                    for (auto& a : *inv->args) {
-                        if (!a || !a->name || !a->name->value) continue;
-                        for (auto& pp : f->second.params)
-                            if (pp.name == *a->name->value && isInterface(pp.className)) {
-                                std::string pk = scanPrimKeyOf(a->expression);
-                                if (!pk.empty()) _primWidenings.insert({pk, pp.className});
-                            }
-                    }
-            }
-        }
     } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         scanExprForCollections(ea->expression);
         if (ea->expressionlist) for (auto& x : *ea->expressionlist) scanExprForCollections(x);
@@ -11979,10 +11962,7 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         if (d->type && d->variables)
             for (auto& v : *d->variables) if (v && v->name && v->name->value)
                 _scanLocalTys[*v->name->value] = d->type;
-        if (d->variables) for (auto& v : *d->variables) if (v) {
-            scanExprForCollections(v->initializer);
-            scanPrimWidening(d->type, v->initializer);
-        }
+        if (d->variables) for (auto& v : *d->variables) if (v) scanExprForCollections(v->initializer);
     } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         scanTypeForCollections(cd->type);
         // 6b-2: gather a foldable integer const so a LATER const-generic size in this body resolves it
@@ -18762,7 +18742,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     // `this` already IS the object pointer (`self`), so wrap it without taking its
                     // address — `&self` would be a `C**` (same reason a by-ref `this` passes `self`).
                     if (dynamic_cast<ThisAccessNode*>(argExpr.get()))
-                        s += "(" + p.className + "){ (void*)(" + val + "), &" + c + "__as_" + p.className + " }";
+                        s += "(" + p.className + "){ (void*)(" + val + "), &" + contractVtblOf(c, p.className) + " }";
                     else
                         s += fatPointer(p.className, c, val);
                 } else if (!primWidenKey(argExpr, p.className).empty()) {
@@ -18772,7 +18752,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     // reads a fat pointer, which the C compiler caught but kama never explained.
                     std::string pk = primWidenKey(argExpr, p.className);
                     s += "(" + p.className + "){ (void*)&(" + primConformance(pk)->name + "){ " + val
-                       + " }, &" + pk + "__as_" + p.className + " }";
+                       + " }, &" + intrinsicContractVtbl(pk, p.className) + " }";
                 } else s += val;
             }
         } else if (p.byRef) {
@@ -24238,7 +24218,16 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 // (I){ (void*)&(lvalue), &C__as_I } — wrap a concrete class lvalue as interface I.
 std::string CEmitter::fatPointer(const std::string& iface, const std::string& concrete, const std::string& lvalue)
 {
-    return "(" + iface + "){ (void*)&(" + lvalue + "), &" + concrete + "__as_" + iface + " }";
+    return "(" + iface + "){ (void*)&(" + lvalue + "), &" + contractVtblOf(concrete, iface) + " }";
+}
+
+// The `C__as_I` symbol for a concrete bound to contract I. A class's is emitted by its own unit's sweep; a
+// type-intrinsic target's (`string`) has no unit, so it is demanded here, where it is named.
+std::string CEmitter::contractVtblOf(const std::string& concrete, const std::string& iface)
+{
+    auto it = _classes.find(concrete);
+    if (it != _classes.end() && it->second.isIntrinsicColl) return intrinsicContractVtbl(concrete, iface);
+    return concrete + "__as_" + iface;
 }
 
 // Does a class REACH a contract — declared on itself or on any base? `ci.interfaces` holds only what a
@@ -29212,19 +29201,19 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
 // emitEnumBoxIntoContract exactly (heap-copy the value in, attach the vtbl, a Shared also gets a ctrl);
 // the one difference is the vtbl symbol, which is keyed by the CONFORMANCE key (`int32`) and not the C
 // type, so `char` and `uint32` do not share one. A primitive owns nothing, so the box's `__dtor` is null
-// and dropping the handle just frees the box.
+// and dropping the handle just frees the box; a `string` (key `kama_string`) has its own `__dtor` there.
 std::string CEmitter::emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,
                                               const std::string& valExpr, int srcLine)
 {
     rejectIfNoHeap("boxing a primitive into an owning contract handle", srcLine);
     const std::string& contract = _classes[ownedCType].collElemClass;
-    ClassInfo* pci = primConformance(primKey_);
+    ClassInfo* pci = implTargetInfo(primKey_);
     std::string t = "__kama_pbox" + std::to_string(_tempCounter++);
     std::string s = ownedCType + " " + t + " = {0}; ";
     s += t + ".obj = malloc(sizeof(" + pci->name + ")); ";
     s += "if (!" + t + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s += "*(" + pci->name + "*)" + t + ".obj = (" + valExpr + "); ";
-    s += t + ".vtbl = &" + primKey_ + "__as_" + contract + ";";
+    s += t + ".vtbl = &" + intrinsicContractVtbl(primKey_, contract) + ";";
     if (smartKind(ownedCType) == CollKind::Shared)
         s += " " + t + ".ctrl = kama_ctrl_new();";
     _hoisted.push_back(s);
@@ -31194,6 +31183,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     };
     emitImplProtos(units, "");                                     // user units (`units` excludes the prelude)
     if (_preludeUnit) emitImplProtos({_preludeUnit}, "static inline ");
+
+    // Everything below can emit a kama BODY, and a body may bind a primitive or a `string` to a contract,
+    // naming a vtbl that is defined only on demand (intrinsicContractVtbl). Buffer the region so those
+    // vtbls are written AHEAD of it — after the impl prototypes just above, which is all their slots need.
+    std::ostringstream headerBodies;
+    std::ostream* headerOut = _out; _out = &headerBodies;
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
@@ -31402,7 +31397,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         }
         _emitStaticClass = false;
     }
-    emitPrimWidenVtables();   // after the bodies above: a thunk calls one of them
+    _out = headerOut;
+    *_out << _intrinsicVtblsHeaderText;
+    *_out << headerBodies.str();
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +
@@ -31566,6 +31563,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // to _out FIRST — a body takes the address of its trampoline, which C requires defined earlier in the TU.
     std::ostringstream moduleBody;
     std::ostream* savedModuleOut = _out; _out = &moduleBody;
+    _intrinsicVtblsModule.clear();   // a module's intrinsic vtbls are its own `static`s (intrinsicContractVtbl)
     // MCU step 1: module-level `static`s into their own buffer — flushed to _out BEFORE bodies, since C
     // requires a file-scope definition to precede its use.
     std::ostringstream moduleStatics;

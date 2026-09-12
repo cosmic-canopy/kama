@@ -1,0 +1,64 @@
+import { std::serialization::text::json::serializeJsonBuffer, std::memory::Shared };
+// KR-37 — a primitive or a `string` bound to a contract, in EVERY expression shape. The vtbl for such a pair
+// was recorded by a pre-pass that saw only a literal or a typed local, so of the shapes below one built: the
+// rest were refused as "`int32` does not implement it" (a call result, a cast, arithmetic, a method result,
+// a float literal), or passed `kama check` and failed in clang on an undeclared `int32__as_Serializable` /
+// `kama_string__as_Serializable` (a field, a `bool` literal, every `string`). The vtbl is now demanded where
+// it is named. The owning boxes hold a heap `string`, so the san leg sees a leak or a double free.
+type contract Show for intrinsic { fn int32 width(); }
+type intrinsic <string> implements Show { public fn int32 width() { return cast<int32>(this.length()); } }
+type intrinsic <int32> implements Show { public fn int32 width() { return this; } }
+
+fn int32 seven() { return 7; }
+fn string hi() { return "hi"; }
+fn int32 len(Serializable v) {
+    Result<string, Owned<Error>> r = serializeJsonBuffer(v: v);
+    string j = match (give r) { case Ok(value: s): give s; case Err(error: e): { return -1; } };
+    return cast<int32>(j.length());
+}
+fn int32 show<T>(T v) { Show s = v; return s.width(); }   // a generic body: its vtbl is demanded in the header
+
+type value Pt { public int32 x; public ctor of(int32 x) { this.x = x; } }
+type value Host {
+    int32 k;
+    public ctor of(int32 k) { this.k = k; }
+    public fn int32 take(Show s) { return s.width() + this.k; }
+}
+type resource Named {
+    string name;
+    public ctor of(string name) { this.name = give name; }
+    public fn int32 nameLen() { return len(v: this.name); }  // a string FIELD
+}
+
+fn int32 main() {
+    int32 iv = 30;
+    string sv = "abcd";
+    Pt p = Pt.of(x: 12345);
+    if (len(v: seven()) != 1) { return 1; }                   // call result
+    if (len(v: iv + 70) != 3) { return 2; }                   // arithmetic
+    if (len(v: cast<int64>(iv)) != 2) { return 3; }           // cast
+    if (len(v: p.x) != 5) { return 4; }                       // scalar field
+    if (len(v: true) != 4) { return 5; }                      // bool literal
+    if (len(v: 2.5) != 3) { return 6; }                       // float literal
+    if (len(v: sv) != 6) { return 7; }                        // string local: "abcd" quoted
+    if (len(v: "hi") != 4) { return 8; }                      // string literal
+    if (len(v: hi()) != 4) { return 9; }                      // string call result
+    Serializable d = seven();
+    if (len(v: d) != 1) { return 10; }                        // local declaration from a call
+    Named nm = Named.of(name: "abc");
+    if (nm.nameLen() != 5) { return 11; }
+    Host h = Host.of(k: 1);
+    if (h.take(s: 41) != 42) { return 12; }                   // method-call argument
+    if (h.take(s: hi()) != 3) { return 13; }
+    if (show::<string>(v: copy sv) != 4) { return 14; }
+    if (show::<int32>(v: 9) != 9) { return 15; }
+    Show a = sv;
+    if (a.width() != 4) { return 16; }                        // a user contract on `string`
+    Owned<Show> o1 = copy sv;
+    Owned<Show> o2 = "xyz";
+    Shared<Show> o3 = give sv;                                // `sv` is moved into the box
+    Shared<Show> o4 = o3;
+    if (o1.width() + o2.width() + o3.width() + o4.width() != 15) { return 17; }
+    Owned<Show> o5 = 20;
+    return o5.width() + 5;                                    // 25
+}
