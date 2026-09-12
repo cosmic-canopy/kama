@@ -72,6 +72,7 @@ borrow_mint_takes_args	borrow_mint_takes_args.kama:12
 borrow_nested_same_place	borrow_nested_same_place.kama:13
 borrow_not_viewable	borrow_not_viewable.kama:18 borrow_not_viewable.kama:19
 borrow_two_bindings_overlap	borrow_two_bindings_overlap.kama:13
+bound_generic_contract_arg_mismatch	bound_generic_contract_arg_mismatch.kama:10
 bound_nominal	bound_nominal.kama:15
 box_iface_nonimpl	box_iface_nonimpl.kama:13
 box_use_after_move	box_use_after_move.kama:14
@@ -830,6 +831,7 @@ virtual_class_empty	virtual_class_empty.kama:2
 virtual_in_plain	virtual_in_plain.kama:2
 virtual_on_value	virtual_on_value.kama:2
 weak_no_deref	weak_no_deref.kama:23
+when_generic_contract_arg_mismatch	when_generic_contract_arg_mismatch.kama:12
 when_multi_off	when_multi_off.kama:14
 widen_local	widen_local.kama:1
 withcapacity_custom_alloc	withcapacity_custom_alloc.kama:12 withcapacity_custom_alloc.kama:7

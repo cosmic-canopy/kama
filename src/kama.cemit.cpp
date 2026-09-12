@@ -8943,6 +8943,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                                 ci.copyableWhenParams.push_back(p && p->value ? *p->value : "");
                                 ci.copyableWhenBounds.push_back(resolveWhenBound(b));
+                                ci.copyableWhenBoundNodes.push_back(b);
                             }
                     }
                 }
@@ -9162,6 +9163,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 auto& b = md->whenBounds ? (*md->whenBounds)[c] : p;
                                 mi.whenParams.push_back(p && p->value ? *p->value : "");
                                 mi.whenBounds.push_back(resolveWhenBound(b));
+                                mi.whenBoundNodes.push_back(b);
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.isConstPlace  = md->isConstRef;   // `fn const ref T …` — a read-only place (T const*)
@@ -11504,10 +11506,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // of map.kama is a comment. The generic FUNCTION path never had the swap and always named the right
     // file, which is what identified this one. Guarded by tools/check-diag-file.sh case 8.
     SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl] : SharedBoundsList();
+    std::map<std::string, SharedIdentifier> boundBind;
+    for (size_t i = 0; i < params.size() && i < concrete.size(); ++i) boundBind[params[i]] = concrete[i];
     bool boundsOk = true;
     if (bounds)
         for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
-            if (!checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl))   // `line` is null-args-safe (bare all-defaulted use)
+            if (!checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl, boundBind))   // `line` is null-args-safe (bare all-defaulted use)
                 boundsOk = false;
     // A `T = cchar` instance is POISONED like a failed bound, silently: the declared-type hooks already report
     // the user's spelling, and every nested instantiation the poisoned body forces would otherwise report
@@ -11553,7 +11557,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // though its element isn't copyable, while `copy list<int32>` still works.
     bool copyableActive = ci.copyable;
     if (!ci.copyableWhenParams.empty()) {
-        copyableActive = whenConditionsHold(ci.copyableWhenParams, ci.copyableWhenBounds, params, concrete);
+        copyableActive = whenConditionsHold(ci.copyableWhenParams, ci.copyableWhenBounds, ci.copyableWhenBoundNodes, params, concrete);
         if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); ci.ctors.erase("copy"); }
     }
     // Conditional METHODS (`fn … when T: Bound`): drop any whose bound fails for this instance, so it's
@@ -11561,7 +11565,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     for (auto it = ci.methods.begin(); it != ci.methods.end(); ) {
         const MethodInfo& mi = it->second;
         bool drop = !mi.whenParams.empty()
-                 && !whenConditionsHold(mi.whenParams, mi.whenBounds, params, concrete);
+                 && !whenConditionsHold(mi.whenParams, mi.whenBounds, mi.whenBoundNodes, params, concrete);
         if (drop) it = ci.methods.erase(it); else ++it;
     }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
@@ -11594,13 +11598,15 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
             // Copyable-only gate; the methods it fronts are dropped by the method gate above).
             if (itf->whenParams && !itf->whenParams->empty()) {
                 std::vector<std::string> wp, wb;
+                std::vector<SharedIdentifier> wn;
                 for (size_t c = 0; c < itf->whenParams->size(); ++c) {
                     auto& p = (*itf->whenParams)[c];
                     auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                     wp.push_back(p && p->value ? *p->value : "");
                     wb.push_back(resolveWhenBound(b));
+                    wn.push_back(b);
                 }
-                if (!whenConditionsHold(wp, wb, params, concrete)) continue;
+                if (!whenConditionsHold(wp, wb, wn, params, concrete)) continue;
             }
             std::string base = resolveUserName(*itf->value, itf->qualifier);
             if (itf->genericArg && _genericContracts.count(base)) {
@@ -12621,7 +12627,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     if (tmpl->typeBounds)
         for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                if (!checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key))
+                if (!checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key, bind))
                     boundsOk = false;
 
     out.templateKey = key;
@@ -12712,10 +12718,13 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
 
     // Bounds are checked against the SUBSTITUTED argument, so the diagnostic names the real type.
     bool boundsOk = true;
+    std::map<std::string, SharedIdentifier> boundBind;
+    for (size_t i = 0; i < np && i < concrete.size(); ++i)
+        if ((*tmpl->typeParams)[i]) boundBind[*(*tmpl->typeParams)[i]] = concrete[i];
     if (tmpl->typeBounds)
         for (size_t i = 0; i < np && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                if (!checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key))
+                if (!checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key, boundBind))
                     boundsOk = false;
     // A user-spelled turbofish (`pick::<cchar>()`) has no declared-type site, so it reports here; the same
     // call reached while a poisoned instance's body is re-walked under substitution (`relocate::<T>` with
@@ -16192,7 +16201,9 @@ std::string CEmitter::unsendableReason(const std::string& cls)
                     auto& p = (*itf->whenParams)[c];
                     auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                     const std::string pn = p && p->value ? *p->value : "";
-                    const std::string bn = resolveWhenBound(b);
+                    std::map<std::string, SharedIdentifier> bind;
+                    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) bind[ps[i]] = gi.typeArgs[i];
+                    const std::string bn = exactBoundName(resolveWhenBound(b), b, bind);
                     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) {
                         if (ps[i] != pn) continue;
                         if (satisfiesBound(primKey(gi.typeArgs[i]), bn)) break;
@@ -17537,11 +17548,51 @@ std::string CEmitter::resolveWhenBound(const SharedIdentifier& b)
     return resolveUserName(*b->value, b->qualifier);
 }
 
+// The contract a bound NAMES, exactly. `Source<int32>` is the instance `Source_int32`, and a conformance
+// list holds instance names — so reading only the template name (as both gates did) made `when [P:
+// Source<int32>]` never hold, and made `<P: Source<string>>` accept a `Source<int32>` (KR-15). The
+// arguments are mangled under `bind`, the instance's own type-parameter bindings, so `Source<T>` names the
+// instance for THIS `T`.
+//
+// The bare name comes back for the two cases where it is already the right answer: a PINNED contract,
+// whose argument is the bounded type itself (`T: Comparable<T>`) and which `pinnedInstanceName` names per
+// type; and an argument still naming an unbound parameter, which cannot be judged until instantiation.
+// A type node as its source spelling, arguments included (`Source<int32>`) — for a diagnostic that must name
+// what was WRITTEN, where the resolved or mangled name would be an instance nothing registered.
+static std::string spellTypeNode(const SharedIdentifier& t)
+{
+    if (!t || !t->value) return "";
+    std::string s = *t->value;
+    if (t->genericArgs && !t->genericArgs->empty()) {
+        s += "<";
+        for (size_t i = 0; i < t->genericArgs->size(); ++i) s += (i ? ", " : "") + spellTypeNode((*t->genericArgs)[i]);
+        s += ">";
+    }
+    return s;
+}
+
+std::string CEmitter::exactBoundName(const std::string& base, const SharedIdentifier& b,
+                                     const std::map<std::string, SharedIdentifier>& bind)
+{
+    if (!b || !b->genericArgs || b->genericArgs->empty() || !_genericContracts.count(base)) return base;
+    if (pinnedInstanceName(base, "_") != base) return base;
+    const std::map<std::string, SharedIdentifier> saved = _typeSubst;
+    for (auto& kv : bind) _typeSubst[kv.first] = kv.second;
+    bool open = false;
+    for (auto& a : *b->genericArgs) if (argCarriesUnboundParam(deepSubstType(a))) open = true;
+    std::string m = open ? base : genericTypeMangle(base, b->genericArgs);
+    _typeSubst = saved;
+    return m;
+}
+
 bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                                   const std::vector<std::string>& whenBounds,
+                                  const std::vector<SharedIdentifier>& whenBoundNodes,
                                   const std::vector<std::string>& params,
                                   const std::vector<SharedIdentifier>& concrete)
 {
+    std::map<std::string, SharedIdentifier> bind;
+    for (size_t i = 0; i < params.size() && i < concrete.size(); ++i) bind[params[i]] = concrete[i];
     for (size_t c = 0; c < whenParams.size() && c < whenBounds.size(); ++c) {
         // Serde gate: a `when [T: Serializable]` / `[T: Deserializable]` conditional (a collection's `serialize`/
         // `deserialize`/`serKey`/… and its `Serializable`/`Deserializable` interface) is treated as UNSATISFIED when
@@ -17558,7 +17609,9 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                 // without a `default` ctor (closes the M8c zero-allocator hole; killing the force-emit too).
                 held = (whenBounds[c] == "default")
                      ? isDefaultFillable(cType(concrete[i]))
-                     : satisfiesBound(primKey(concrete[i]), whenBounds[c]);
+                     : satisfiesBound(primKey(concrete[i]),
+                                      c < whenBoundNodes.size() ? exactBoundName(whenBounds[c], whenBoundNodes[c], bind)
+                                                                : whenBounds[c]);
                 break;
             }
         if (!held) return false;
@@ -18002,7 +18055,8 @@ CEmitter::BoundCtxScope::~BoundCtxScope() { _e->_nsCtx = _saved; }
 // argument that is not concrete yet) is not a refusal and answers true: the per-instantiation re-walk
 // runs this again with the real argument, and poisoning on a deferral would silence the whole template.
 bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
-                           SharedIdentifierList bounds, int line, const std::string& templateKey)
+                           SharedIdentifierList bounds, int line, const std::string& templateKey,
+                           const std::map<std::string, SharedIdentifier>& bind)
 {
     if (!bounds || bounds->empty()) return true;
     // A failed bound is the USE SITE's mistake and carries the use site's line, so it belongs to the file
@@ -18045,6 +18099,10 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // runs during collection (before the methods are injected) still sees it. Matched on the RESOLVED
         // name, which the pre-scan also stores: two same-named contracts in different namespaces are two
         // contracts, and a conformance to one must not satisfy a bound on the other.
+        // ...and the bound's type ARGUMENTS are part of what it names: `Source<int32>` is not `Source<string>`.
+        // `contractMethods` above wanted the template; every conformance test below wants the instance.
+        const std::string tmplName = contract;
+        { BoundCtxScope bc(this, templateKey); contract = exactBoundName(contract, b, bind); }
         bool declared = _intrinsicConformances.count(rkey) && _intrinsicConformances[rkey].count(contract);
         // A boxed polymorphic contract handle satisfies the contract bound: `Owned<C>`/`Shared<C>`/
         // `Weak<C>` (and `Owned<X>` where `X` implements `C`) dynamic-dispatches `C`'s methods, so a
@@ -18072,7 +18130,7 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
                 // derive, for the same reason: the condition is invisible at the use site.
                 const std::string dnote = derivedUnmetNote(cls, *b->value);
                 unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
-                             + "` does not satisfy bound `" + *b->value + "`"
+                             + "` does not satisfy bound `" + (contract != tmplName ? spellTypeNode(b) : *b->value) + "`"
                              + (why.empty() ? "" : " — " + why) + dnote).c_str(), line);
             }
             ok = false;
@@ -26408,7 +26466,7 @@ void CEmitter::regateGenericInstances()
         for (auto& mkv : ti->second.methods) {
             const MethodInfo& tm = mkv.second;
             if (tm.whenParams.empty() || !inst.methods.count(mkv.first)) continue;
-            if (whenConditionsHold(tm.whenParams, tm.whenBounds, params, concrete)) continue;
+            if (whenConditionsHold(tm.whenParams, tm.whenBounds, tm.whenBoundNodes, params, concrete)) continue;
             inst.methods.erase(mkv.first);
             inst.ctors.erase(mkv.first);
         }
@@ -26418,13 +26476,15 @@ void CEmitter::regateGenericInstances()
             for (auto& itf : *ti->second.node->baseTypes->interfaces) {
                 if (!itf || !itf->value || !itf->whenParams || itf->whenParams->empty()) continue;
                 std::vector<std::string> wp, wb;
+                std::vector<SharedIdentifier> wn;
                 for (size_t c = 0; c < itf->whenParams->size(); ++c) {
                     auto& p = (*itf->whenParams)[c];
                     auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                     wp.push_back(p && p->value ? *p->value : "");
                     wb.push_back(resolveWhenBound(b));
+                    wn.push_back(b);
                 }
-                if (whenConditionsHold(wp, wb, params, concrete)) continue;
+                if (whenConditionsHold(wp, wb, wn, params, concrete)) continue;
                 std::string base = resolveUserName(*itf->value, itf->qualifier);
                 if (itf->genericArg && _genericContracts.count(base)) base = genericTypeMangle(base, itf->genericArgs);
                 inst.interfaces.erase(std::remove(inst.interfaces.begin(), inst.interfaces.end(), base), inst.interfaces.end());
@@ -30702,7 +30762,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value) {
                     std::string contract = resolveUserName(*c->value, c->qualifier);
-                    for (auto& tgt : *ii->targets) _intrinsicConformances[primKey(tgt)].insert(contract);
+                    // ...and as the exact INSTANCE too (`Source<int64>`), which is what a bound with
+                    // arguments asks for; the bare template stays for a bound written bare.
+                    std::string exact = exactBoundName(contract, c, {});
+                    for (auto& tgt : *ii->targets) {
+                        _intrinsicConformances[primKey(tgt)].insert(contract);
+                        _intrinsicConformances[primKey(tgt)].insert(exact);
+                    }
                 }
             }
         }

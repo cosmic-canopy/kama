@@ -261,6 +261,7 @@ struct MethodInfo {
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
+    std::vector<SharedIdentifier> whenBoundNodes;   // each bound as WRITTEN — its type arguments (exactBoundName)
     // Operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
     // They are NOT ClassMethodDeclarationNode, so `node` stays null: emit from `opDecl` instead.
     bool                         isOperator = false;
@@ -470,6 +471,7 @@ struct ClassInfo {
     // AND) that make this instance Copyable. Empty = unconditional.
     std::vector<std::string>          copyableWhenParams;
     std::vector<std::string>          copyableWhenBounds;
+    std::vector<SharedIdentifier>     copyableWhenBoundNodes;
 
     // Inheritance + virtual dispatch
     int                               maxDepth = 0;    // `virtual(maxDepth: N)`: levels that may still be added BELOW this type (0 = sealed, i.e. `final`)
@@ -2547,8 +2549,11 @@ private:
     // are the template's type-param names, `concrete` the instance's args (index-aligned).
     // The contract a `when [P: B]` gate names, RESOLVED — a conformance list holds resolved names.
     std::string resolveWhenBound(const SharedIdentifier& b);
+    std::string exactBoundName(const std::string& base, const SharedIdentifier& b,
+                               const std::map<std::string, SharedIdentifier>& bind);
     bool whenConditionsHold(const std::vector<std::string>& whenParams,
                             const std::vector<std::string>& whenBounds,
+                            const std::vector<SharedIdentifier>& whenBoundNodes,
                             const std::vector<std::string>& params,
                             const std::vector<SharedIdentifier>& concrete);
     // Does `ci` NOMINALLY `implements` a contract whose template is `tmpl` (any instantiation)? Checks the
@@ -2558,7 +2563,8 @@ private:
     // False means REFUSED — the caller poisons the instance so the template's body is never walked with
     // an argument the bound rejected. A deferral (a not-yet-concrete arg) answers true, not false.
     bool checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
-                     SharedIdentifierList bounds, int line, const std::string& templateKey);
+                     SharedIdentifierList bounds, int line, const std::string& templateKey,
+                     const std::map<std::string, SharedIdentifier>& bind);
     // Resolve a generic's BOUNDS under the template's home namespace rather than the call site's, so a
     // bound need not be imported by every caller. RAII — restores `_nsCtx` on scope exit.
     struct BoundCtxScope {

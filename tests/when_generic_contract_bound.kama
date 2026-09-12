@@ -1,0 +1,51 @@
+// KR-15 #4 — a bound on a generic contract names an INSTANCE, arguments included. Both gates read only the
+// template name, so `when [P: Source<int32>]` never held (a conformance list holds `Source<int32>`, never
+// bare `Source`), while `<P: Source<string>>` accepted a type implementing `Source<int32>`. The refusal half
+// is tests/xfail/bound_generic_contract_arg_mismatch.kama.
+type contract Source<X> for value { fn X pull(); }
+type value Pt { public int32 x; public ctor of(int32 x) { this.x = x; } }
+
+type value Nums implements Source<int32> {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public fn int32 pull() { return this.n; }
+}
+type value Pts implements Source<Pt> {                      // a USER type as the argument
+    public ctor of() { }
+    public fn Pt pull() { return Pt.of(x: 7); }
+}
+type intrinsic <int32> implements Source<int64> { public fn int64 pull() { return cast<int64>(this) * 2; } }
+
+type value Wrap<P> {
+    P inner;
+    public ctor of(P inner) { this.inner = inner; }
+    public fn int32 pullInt() when [P: Source<int32>] { return this.inner.pull(); }
+    public fn int32 pullPt() when [P: Source<Pt>] { return this.inner.pull().x; }
+}
+// The argument names ANOTHER parameter of the same type: the instance is `Source<T>` for this `T`.
+type value Typed<P, T> {
+    P inner;
+    public ctor of(P inner) { this.inner = inner; }
+    public fn T pull() when [P: Source<T>] { return this.inner.pull(); }
+}
+
+fn int32 takeInt<P: Source<int32>>(P p) { return p.pull(); }
+fn int64 takeWide<P: Source<int64>>(P p) { return p.pull(); }
+type value Holder<P: Source<Pt>> {
+    P inner;
+    public ctor of(P inner) { this.inner = inner; }
+    public fn int32 x() { return this.inner.pull().x; }
+}
+
+fn int32 main() {
+    Wrap<Nums> w = Wrap::<Nums>.of(inner: Nums.of(n: 5));
+    if (w.pullInt() != 5) { return 1; }
+    Wrap<Pts> wp = Wrap::<Pts>.of(inner: Pts.of());
+    if (wp.pullPt() != 7) { return 2; }
+    Typed<Nums, int32> t = Typed::<Nums, int32>.of(inner: Nums.of(n: 9));
+    if (t.pull() != 9) { return 3; }
+    if (takeInt::<Nums>(p: Nums.of(n: 4)) != 4) { return 4; }
+    if (takeWide::<int32>(p: 21) != 42) { return 5; }
+    Holder<Pts> h = Holder::<Pts>.of(inner: Pts.of());
+    return h.x() + 30;                                           // 37
+}

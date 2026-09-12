@@ -1,0 +1,13 @@
+// A `when` gate on a generic contract holds only for the instance it names: `int32` implements
+// `Source<int64>`, so a method gated on `Source<int32>` does not exist on `Wrap<int32>` (KR-15).
+type contract Source<X> for value { fn X pull(); }
+type intrinsic <int32> implements Source<int64> { public fn int64 pull() { return cast<int64>(this); } }
+type value Wrap<P> {
+    P inner;
+    public ctor of(P inner) { this.inner = inner; }
+    public fn int32 pullInt() when [P: Source<int32>] { return 0; }
+}
+fn int32 main() {
+    Wrap<int32> w = Wrap::<int32>.of(inner: 3);
+    return w.pullInt();
+}
