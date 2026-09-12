@@ -1,0 +1,19 @@
+// The crossing a BIND cannot judge. An `fnptr` field on an ordinary kama type is a callback table, C
+// cannot see it, and binding into it declares nothing (tests/foreign_callback_ok's `Table`) — so when
+// that type is itself handed to an `extern fn`, the crossing is the first place the threading contract
+// can be demanded, and the walk finds the callback one field down. Its C-layout sibling is judged
+// earlier and elsewhere: tests/xfail/foreign_callback_in_extern_struct, at the bind.
+fnptr int32 Op(int32 x);
+
+type value Holder { public Op f; public int32 n; public ctor make(Op f) { this.f = f; this.n = 1; } }
+
+extern fn int32 c_submit(Holder h);
+
+fn int32 cb(int32 x) { return x + 1; }
+
+unsafe fn int32 install() {
+    Holder h = Holder.make(f: cb);   // legitimate: `Holder` is kama's own type
+    return c_submit(h: h);           // ERROR: ...until it crosses, carrying `Holder.f`
+}
+
+fn int32 main() { return install(); }

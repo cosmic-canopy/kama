@@ -20800,6 +20800,40 @@ void CEmitter::mapCVisibleSigs()
     }
 }
 
+// Does this type reach a callback that states no thread, and through which chain of fields? The answer
+// `_cVisibleSigs` cannot give, for the two crossings where the type is kama's own rather than a C-layout
+// one: a composite handed to an `extern fn`, and an `expose fn`'s return. There the callback sits one or
+// more fields down and the bind that put it there was legitimate — an `fnptr` field on an ordinary type
+// is a kama callback table and needs no annotation — so it is the CROSSING that has to look.
+//
+// It sees through a raw pointer, which is not a concession: `UnsafeConstPtr<Desc>` NAMES `Desc`, so the
+// pointee is knowable, and a descriptor pointing at sub-descriptors is the shape WebGPU actually uses.
+// Cycle-safe on the class set rather than on depth, since a field cycle can only close through a pointer.
+bool CEmitter::reachesUnannotatedSig(const std::string& cty, std::string& chainOut,
+                                     std::set<std::string>& seen)
+{
+    // Peel the pointer(s): `UnsafePtr<T>` lowers to `T*` and `UnsafeConstPtr<T>` east-const to `T const*`.
+    std::string t = cty;
+    while (!t.empty() && t[t.size() - 1] == '*') {
+        t.erase(t.size() - 1);
+        const std::string cq = " const";
+        if (t.size() > cq.size() && t.compare(t.size() - cq.size(), cq.size(), cq) == 0)
+            t.erase(t.size() - cq.size());
+    }
+    auto sit = _sigs.find(t);
+    if (sit != _sigs.end()) return !sit->second.foreignEntry && !sit->second.callerThread;
+    auto cit = _classes.find(t);
+    if (cit == _classes.end() || !seen.insert(t).second) return false;
+    for (auto& f : cit->second.fields) {
+        std::string sub;
+        if (reachesUnannotatedSig(fieldCType(t, f), sub, seen)) {
+            chainOut = f.name + (sub.empty() ? "" : "." + sub);
+            return true;
+        }
+    }
+    return false;
+}
+
 // A `fnptr`-typed destination in any position OTHER than a local initializer — an assignment, a call
 // argument, a return, a field or module `static` initializer. Reached from `rejectValueKindMismatch`,
 // which is the funnel every one of those already passes through with the destination's C type in hand.
@@ -20845,6 +20879,30 @@ void CEmitter::checkForeignCrossing(const std::string& calleeCName, const ParamS
                        "`@foreignEntry` if it may run on a thread kama did not create (where a module "
                        "`static` assigned elsewhere is a different object)").c_str(), line);
         return;
+    }
+    // A COMPOSITE crossing, carrying the callback one or more fields down. A `type extern value` is
+    // already answered for at every bind (see `_cVisibleSigs`), so what is left here is an ordinary kama
+    // type handed to C — where the bind was legitimate (an `fnptr` field on a kama type is a callback
+    // table) and the crossing is the first place the contract can be demanded. Both ends are asked,
+    // because either can be the one that names the type: the PARAMETER does when the seam is written in
+    // kama, and the ARGUMENT does when the parameter is an opaque `void*` and the kama type is visible
+    // only underneath the cast this function already unwrapped.
+    {
+        std::string chain;
+        for (const std::string& cand : { p.className, exprClass(e) }) {
+            if (cand.empty()) continue;
+            auto cc = _classes.find(cand);
+            if (cc == _classes.end() || cc->second.isExternStruct) continue;
+            std::set<std::string> seen;
+            if (!reachesUnannotatedSig(cand, chain, seen) || chain.empty()) continue;
+            unsupported(("`" + demangleForDisplay(cand) + "` is handed to the C function `" + calleeCName
+                         + "` carrying a callback in `" + demangleForDisplay(cand) + "." + chain + "`, and "
+                         "a callback's threading contract cannot be inferred — mark that `fnptr` type "
+                         "`@callerThread` if the C API calls it on the calling isolate, or `@foreignEntry` "
+                         "if it may run on a thread kama did not create (where a module `static` assigned "
+                         "elsewhere is a different object)").c_str(), line);
+            return;
+        }
     }
     // A bare function name handed straight to C, with no `fnptr` type to carry the contract at all.
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
@@ -23436,6 +23494,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         if (fn->parameters)
             for (auto& p : *fn->parameters)
                 if (p->type && !paramByRef(p.get())) rejectOwned(cType(p->type), "parameter");
+        // The other direction a callback reaches C: HANDED BACK. The host calls this symbol and keeps
+        // what it returns, so a kama function returned — bare, or inside a value — crosses exactly as an
+        // argument does, and `checkForeignCrossing` never sees it because there is no call for it to
+        // watch. The RETURN only: a callback arriving as a PARAMETER is C's own function pointer, and C
+        // owes kama no threading contract for it.
+        const std::string rty = cType(fn->returnType);
+        std::string chain;
+        std::set<std::string> seen;
+        if (reachesUnannotatedSig(rty, chain, seen))
+            unsupported((std::string("`expose`: `") + demangleForDisplay(rty) + "` is handed back to the "
+                         "host" + (chain.empty() ? "" : " carrying a callback in `" + chain + "`") + ", and "
+                         "a callback's threading contract cannot be inferred — mark that `fnptr` type "
+                         "`@callerThread` if the host calls it on the calling isolate, or `@foreignEntry` "
+                         "if it may run on a thread kama did not create (where a module `static` assigned "
+                         "elsewhere is a different object)").c_str(), fn->line);
     }
 
     // Track by-ref params (deref on read) and param classes (for member calls).

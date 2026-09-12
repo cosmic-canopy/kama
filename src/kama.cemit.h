@@ -1555,6 +1555,11 @@ private:
     // at the bind rather than at the extern struct's declaration.
     std::map<std::string, std::string>                       _cVisibleSigs;     // sig cName -> "Struct.field"
     void mapCVisibleSigs();
+    // Does `cty` reach a `fnptr` type that states no threading contract, and through which chain of
+    // fields? The other two crossings — a composite handed to an `extern fn` and an `expose fn`'s return
+    // — carry the callback one or more fields down, where `_cVisibleSigs` cannot answer because the
+    // type is kama's own rather than a C-layout one. Sees through a raw pointer, whose pointee IS named.
+    bool reachesUnannotatedSig(const std::string& cty, std::string& chainOut, std::set<std::string>& seen);
     std::map<std::string, std::map<std::string, StaticRead>> _staticReads;      // fn -> static key -> first read
     std::map<std::string, std::set<std::string>>             _staticWriters;    // static key -> every fn that assigns it
     std::string                                              _staticWriteLhs;   // the static a plain `=` is storing to: its LHS mention is not a read

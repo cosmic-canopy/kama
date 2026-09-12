@@ -25,6 +25,11 @@ type value Table {
 
 extern fn int32 c_submit(Desc d);
 
+// Handed BACK to the host rather than passed in — accepted for the same reason and refused without the
+// annotation (tests/xfail/foreign_callback_expose_return). Its PARAMETERS are not asked: a callback
+// arriving from C is C's own function pointer, and C owes kama no threading contract for it.
+expose fn Op kama_get_cb() { return bump; }
+
 fn int32 bump(int32 x)   { return x + 1; }
 fn int32 render(int32 n) { return n * 10; }
 fn int32 twice(int32 x)  { return x * 2; }

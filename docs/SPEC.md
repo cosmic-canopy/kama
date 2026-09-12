@@ -708,6 +708,12 @@ says which. The threading contract of a C API is knowledge only the seam author 
   the bind rather than at the field's declaration, because a descriptor a program only ever RECEIVES
   from C holds no kama function, and an annotation that drives no check is worth nothing. An `fnptr`
   field on an ORDINARY type is a kama callback table, invisible to C, and declares nothing. <!-- test: foreign_callback_ok -->
+- **Every route into C is asked, not just the argument.** An ordinary kama type carrying a callback is
+  judged where it CROSSES, since the bind into it was legitimate — the walk reaches the callback through <!-- xfail: foreign_callback_in_plain_struct -->
+  fields and through a raw pointer, whose pointee is named. And a callback handed BACK — an `expose fn`
+  returning one, bare or inside a value — crosses as surely as one passed in, with no call site for the <!-- xfail: foreign_callback_expose_return -->
+  argument check to watch, so the `expose` boundary asks. Its PARAMETERS are not asked: a callback
+  arriving from C is C's own function pointer, and C owes kama no contract for it.
 - **`@foreignEntry` names a region, and the region is checked.** Every function bound to a
   `@foreignEntry` signature — at any bind position — and every body that carries the attribute itself is
   a root, and the region is the root plus everything it reaches, over the same call graph the no-heap
