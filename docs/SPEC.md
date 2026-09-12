@@ -1666,8 +1666,10 @@ fn int32 main() {
 
 `type extern value Foo { ... }` is an **external** struct provided by an included header / linked code —
 kama uses its fields (all public, the C layout) but never re-emits it (so no redefinition), and its name is
-the literal C name. It has no ctor; construct it either by binding a struct-returning C fn (`div(...)`
-above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
+the literal C name. It declares **no runtime member**: a method, `ctor`, operator or `static fn` on one is
+rejected at its declaration, since nothing would emit the body. <!-- xfail: extern_value_method, extern_value_named_ctor, extern_value_type_named_ctor, extern_value_operator, extern_value_static_fn -->
+Behavior goes in a free function or a kama `type value` wrapping it. Construct it either by binding a
+struct-returning C fn (`div(...)` above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
 (unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
 `UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).

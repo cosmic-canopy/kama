@@ -1,0 +1,8 @@
+// A ctor named after the type is refused at ITS declaration — not as "unknown field 'q'" at the call,
+// which read the call as aggregate init and sent the author to the fields instead. KR-41.
+extern "<stdlib.h>";
+type extern value div_t {
+    int32 quot; int32 rem;
+    public ctor div_t(int32 q) { this.quot = q; this.rem = 0; }
+}
+fn int32 main() { div_t d = div_t(q: 3); return d.quot; }

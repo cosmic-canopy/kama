@@ -1,0 +1,8 @@
+// A named `ctor` on a `type extern value` would be called and never emitted. Aggregate init is the one
+// construction route. KR-41.
+extern "<stdlib.h>";
+type extern value div_t {
+    int32 quot; int32 rem;
+    public ctor make(int32 q) { this.quot = q; this.rem = 0; }
+}
+fn int32 main() { div_t d = div_t.make(q: 3); return d.quot; }

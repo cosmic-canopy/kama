@@ -8909,6 +8909,16 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
                         "for polymorphism declare a `contract`", cd->line);
 
+        // A `type extern value` is C's struct: its layout comes from a header and it is never emitted, so a
+        // runtime member would be CALLED and never DEFINED (clang: "call to undeclared function"). Refused
+        // at the declaration and still recorded, so a use site resolves instead of cascading into advice to
+        // declare the member just refused; a `comptime fn` is never emitted and stays legal.
+        auto refuseExternMember = [&](const std::string& what, int line) {
+            unsupported(("`" + ci.name + "` is a `type extern value` — C's struct, whose layout comes from a "
+                         "header — so it may not declare " + what + ": nothing would emit its body. Construct "
+                         "it by aggregate init (`" + ci.name + "(field: …)`), and put behavior in a free "
+                         "function or in a kama `type value` that wraps it").c_str(), line);
+        };
         if (cd->members) {
             for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
@@ -9064,6 +9074,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 { md, visibilityOf(md->modifiers, Visibility::Private, md->line), ci.name };
                         continue;
                     }
+                    if (ci.isExternStruct)
+                        refuseExternMember(md->isCtor ? "a constructor" : "a method", md->line);
                     if (md->name && md->name->value) {
                         MethodInfo mi;
                         mi.cName      = ci.name + "__" + *md->name->value;
@@ -9335,6 +9347,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // an operator overload registers as a method under a synthetic name
                     // (`op_add`/`op_neg`/…), disambiguated by arity: 0 params = unary-on-`this`,
                     // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
+                    if (ci.isExternStruct)
+                        refuseExternMember("an operator", od->line);
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                     // The six comparison operators are CONTRACT-driven and may not be declared directly:
@@ -18127,6 +18141,9 @@ std::string CEmitter::externAggregateInit(const std::string& nm, ClassInfo& ci,
                                           SharedArgumentList args, int srcLine)
 {
     std::string out;
+    // `ctor div_t(…)` was refused at its declaration (refuseExternMember); reading this call's arguments
+    // as FIELDS would add "unknown field" about the ctor's parameters, pointing away from the fault.
+    if (ci.ctors.count(ci.name)) return out;
     if (args)
         for (auto& a : *args) {
             if (!a->name || !a->name->value) {

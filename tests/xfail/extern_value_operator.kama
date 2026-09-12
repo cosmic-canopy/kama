@@ -1,0 +1,7 @@
+// An operator on a `type extern value` lowers to a method call that nothing defines — refused. KR-41.
+extern "<stdlib.h>";
+type extern value div_t {
+    int32 quot; int32 rem;
+    public int32 operator+(int32 rhs) { return this.quot + rhs; }
+}
+fn int32 main() { div_t a = div_t(quot: 1, rem: 0); return a + 2; }

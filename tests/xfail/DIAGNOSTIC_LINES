@@ -278,6 +278,11 @@ extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
 extern_disagree	main.kama:4 main.kama:6
 extern_undeclared	main.kama:3 main.kama:4
+extern_value_method	extern_value_method.kama:6
+extern_value_named_ctor	extern_value_named_ctor.kama:6
+extern_value_operator	extern_value_operator.kama:5
+extern_value_static_fn	extern_value_static_fn.kama:5
+extern_value_type_named_ctor	extern_value_type_named_ctor.kama:6
 extern_value_unknown_field	extern_value_unknown_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
