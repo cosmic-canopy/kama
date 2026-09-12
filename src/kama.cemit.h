@@ -1547,6 +1547,14 @@ private:
     struct ForeignEntryFn { std::string display; int line = 0; std::string file; std::string via; };   // `via`: the signature it was bound to, or ""
     struct StaticRead     { std::string name; int line = 0; std::string file; };
     std::map<std::string, ForeignEntryFn>                    _foreignEntryFns;   // C name -> root of the walk
+    // Which `fnptr` types C can SEE, and the field that made them visible ("WGPURequestAdapterCallbackInfo
+    // .callback"). A `type extern value` exists only to match a C header's layout, so a callback field on
+    // one is a slot C calls through — the same crossing `checkForeignCrossing` judges on a parameter, one
+    // indirection further out. Filled by mapCVisibleSigs() and read by checkFnPtrBind, which is where
+    // EVERY bind position funnels; see the block comment there for why the threading contract is demanded
+    // at the bind rather than at the extern struct's declaration.
+    std::map<std::string, std::string>                       _cVisibleSigs;     // sig cName -> "Struct.field"
+    void mapCVisibleSigs();
     std::map<std::string, std::map<std::string, StaticRead>> _staticReads;      // fn -> static key -> first read
     std::map<std::string, std::set<std::string>>             _staticWriters;    // static key -> every fn that assigns it
     std::string                                              _staticWriteLhs;   // the static a plain `=` is storing to: its LHS mention is not a read

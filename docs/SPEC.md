@@ -700,6 +700,14 @@ says which. The threading contract of a C API is knowledge only the seam author 
   refused, so is a bare function name handed over with no `fnptr` type to carry the contract at all, <!-- xfail: foreign_crossing_bare_name -->
   and a signature claiming both is a contradiction. <!-- xfail: foreign_crossing_both --> `@callerThread` on an
   ordinary body describes no crossing and is refused; it belongs on a `fnptr` type or an `expose fn`. <!-- xfail: callerthread_on_body -->
+- **A callback FIELD of a `type extern value` is a crossing too**, and it is judged at the **bind** —
+  wherever the kama function lands in the field, through an aggregate initializer or by field name — <!-- xfail: foreign_callback_in_extern_struct, foreign_callback_field_assign -->
+  because a C-layout type exists for one reason, to match a C header, so the construction route cannot
+  matter. This is the shape real C APIs use: WebGPU, CoreAudio and miniaudio all take their callback
+  inside a descriptor struct, which is exactly where a callback runs on a thread kama did not create. At
+  the bind rather than at the field's declaration, because a descriptor a program only ever RECEIVES
+  from C holds no kama function, and an annotation that drives no check is worth nothing. An `fnptr`
+  field on an ORDINARY type is a kama callback table, invisible to C, and declares nothing. <!-- test: foreign_callback_ok -->
 - **`@foreignEntry` names a region, and the region is checked.** Every function bound to a
   `@foreignEntry` signature — at any bind position — and every body that carries the attribute itself is
   a root, and the region is the root plus everything it reaches, over the same call graph the no-heap
@@ -711,7 +719,8 @@ says which. The threading contract of a C API is knowledge only the seam author 
   one `unsafe fn` at the seam to turn it into a `ref`, and everything downstream is safe and typed,
   `Atomic<T>` fields included.
 - **The attribute on a body is the declared escape** for a pointer handed to C by a route no bind can
-  see — stored in a struct, registered later — the same role `@noheap` on a `fnptr` plays for allocation.
+  see — placed in raw memory, registered later — the same role `@noheap` on a `fnptr` plays for
+  allocation. A descriptor struct is no longer such a route: it is a bind, and it is checked (above).
 
 #### Recoverable regions — `@onPanic(recover: <literal>)` ✅
 

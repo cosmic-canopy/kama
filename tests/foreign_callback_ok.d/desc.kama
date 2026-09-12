@@ -1,0 +1,41 @@
+// The accepting side of the descriptor-struct rule, end to end: C reaches into the struct and calls the
+// kama function through it (`c_submit`), which is the crossing the annotation is about. It is accepted
+// because the `fnptr` type states which thread the C API calls it on; without that it is refused at the
+// bind, whichever route builds the struct — tests/xfail/foreign_callback_in_extern_struct goes through
+// aggregate init, tests/xfail/foreign_callback_field_assign assigns the field by name (the spelling
+// examples/webgpu/triangle.kama uses), and both messages name the field that made the type C-visible.
+//
+// `Table` is the control that matters most: an `fnptr` field on an ORDINARY type is a pure-kama callback
+// table, invisible to C, and it needs no annotation at all. The rule keys on `type extern value` for
+// exactly that reason — a C-layout type exists only to be handed to C.
+extern "cb.h";
+
+@callerThread fnptr int32 Op(int32 x);        // qsort's contract: C calls it on the calling isolate
+@foreignEntry fnptr int32 RenderCb(int32 n);  // a device callback's: a thread kama did not create
+fnptr int32 Plain(int32 x);                   // never reaches C, so it declares nothing
+
+type extern value Desc { public Op f; public int32 n; }
+
+type extern value Info { public RenderCb cb; public int32 mode; }
+
+type value Table {
+    public Plain f;
+    public ctor make(Plain f) { this.f = f; }
+}
+
+extern fn int32 c_submit(Desc d);
+
+fn int32 bump(int32 x)   { return x + 1; }
+fn int32 render(int32 n) { return n * 10; }
+fn int32 twice(int32 x)  { return x * 2; }
+
+unsafe fn int32 run() {
+    Desc d = Desc(f: bump, n: 4);        // aggregate init: C calls bump(4) -> 5
+    Info i = Info();
+    i.mode = 3;
+    i.cb   = render;                     // ...and by field name, the WebGPU spelling
+    Table t = Table.make(f: twice);      // a kama-only table: no annotation, no crossing
+    return c_submit(d: d) + i.cb(n: i.mode) + t.f(x: 10);   // 5 + 30 + 20 = 55
+}
+
+fn int32 main() { return run(); }

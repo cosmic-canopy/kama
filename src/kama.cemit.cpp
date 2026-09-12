@@ -18140,6 +18140,17 @@ std::string CEmitter::externAggregateInit(const std::string& nm, ClassInfo& ci,
                              + "' initializer").c_str(), srcLine);
                 continue;
             }
+            // This is a BIND position like any other, and it did not judge itself. Every other one — an
+            // assignment, a call argument, a return, a field or module `static` initializer — reaches
+            // `checkFnPtrValueBind` through `rejectValueKindMismatch`; this path writes the field store
+            // by hand, so it reached none of them, and three shipped guarantees leaked through it in one
+            // spelling. Measured on the same program written two ways, `Desc(f: fn)` accepted and
+            // `d.f = fn` refused: a SHAPE-mismatched function (the mismatched-indirect-call UB the funnel
+            // exists to prevent), a non-`@noheap` function bound to a `@noheap` signature, and — the one
+            // that matters most — a `@foreignEntry` bind never recorded as a region ROOT, so the
+            // module-static read check never walked the callback at all.
+            for (auto& f : ci.fields)
+                if (f.name == fn) { checkFnPtrValueBind(fieldCType(ci.name, f), a->expression, srcLine); break; }
             out += nm + "." + fn + " = " + emitExpression(a->expression) + "; ";
         }
     return out;
@@ -20736,12 +20747,57 @@ void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t,
         unsupported((t.display + " is bound to `" + demangleForDisplay(sigCName) + "`, which is `@noheap` — "
                      "declare `" + t.name + "` `@noheap` too, so a no-heap caller calling through the "
                      "slot still gets the guarantee").c_str(), line);
+    // A kama function landing in a slot C can call through must state which thread it runs on — the same
+    // demand `checkForeignCrossing` makes of a callback handed over as an ARGUMENT, made one indirection
+    // further out, where the callback rides inside a descriptor struct (WebGPU, CoreAudio, miniaudio all
+    // take it that way). Judged HERE because this is the funnel every bind position already reaches, so
+    // the construction route cannot matter: a named `ctor` argument, `d.f = cb`, a derived `of`, a local
+    // bound first and assigned after, a module `static` initializer.
+    //
+    // At the BIND and not at the extern struct's field declaration, deliberately. A descriptor a program
+    // only ever RECEIVES from C has no kama function in it, so demanding the annotation there would buy
+    // nothing and mean something worse — an annotation that drives no check is exactly the inert surface
+    // this compiler refuses elsewhere (see `friend` on a contract). It is demanded where it does work.
+    auto cv = _cVisibleSigs.find(sigCName);
+    if (cv != _cVisibleSigs.end() && !sit->second.foreignEntry && !sit->second.callerThread)
+        unsupported((t.display + " is bound to `" + demangleForDisplay(sigCName) + "`, a callback C can "
+                     "call through the field `" + cv->second + "` of a C-layout type, and a callback's "
+                     "threading contract cannot be inferred — mark the `fnptr` type `@callerThread` if "
+                     "the C API calls it on the calling isolate, or `@foreignEntry` if it may run on a "
+                     "thread kama did not create (where a module `static` assigned elsewhere is a "
+                     "different object)").c_str(), line);
     // A function bound to a `@foreignEntry` signature IS a foreign entry: the signature declared that the
     // C API may call it on a thread kama did not create, and every bind position funnels through here.
     // First root wins, so a body the author also annotated keeps its own line.
     if (sit->second.foreignEntry && !_probingTemplate && !t.cName.empty() && !_foreignEntryFns.count(t.cName))
         _foreignEntryFns[t.cName] = ForeignEntryFn{ demangleForDisplay(t.cName), line, diagFile(),
                                                     demangleForDisplay(sigCName) };
+}
+
+// Which `fnptr` types C can see, and the field that made each one visible. A `type extern value` exists
+// for one reason — to match a C header's layout — so a callback field declared on one is a slot C calls
+// through, and a kama function bound into it has crossed exactly as surely as one handed over as an
+// argument. That is the hole the first consumer found: their three WebGPU callbacks all ride inside
+// descriptor structs, so `checkForeignCrossing` (per-ARGUMENT, keyed on the parameter's own type) never
+// looked at them, and a tree carrying ZERO annotations built clean.
+//
+// A FLAT walk is enough, and that is worth stating because a transitive one looks necessary and is not:
+// nesting is covered because the inner struct declares the sig field itself (`Outer{Inner i}` +
+// `Inner{Op f}` records `Op` when the walk reaches `Inner`), and a pointer field is covered for the same
+// reason — `UnsafeConstPtr<Desc>` names `Desc`, whose own fields this walk visits on its own account.
+//
+// Runs after bakeFieldCTypes, which is the ONLY sanctioned way to read a field's type (see fieldCType).
+void CEmitter::mapCVisibleSigs()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.isExternStruct) continue;
+        for (auto& f : ci.fields) {
+            std::string ft = fieldCType(ci.name, f);
+            if (!isSigType(ft) || _cVisibleSigs.count(ft)) continue;   // first field to name it wins
+            _cVisibleSigs[ft] = demangleForDisplay(ci.name) + "." + f.name;
+        }
+    }
 }
 
 // A `fnptr`-typed destination in any position OTHER than a local initializer — an assignment, a call
@@ -30392,6 +30448,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     bakeFieldCTypes();     // ...and resolve every field's type in its OWN class's scope, before any body
                            // walk can resolve it in a reader's. computeDestructible installs the same
                            // context immediately below; this is that answer, kept.
+    mapCVisibleSigs();     // ...which is what lets this read a callback field's type: every `fnptr` a
+                           // C-layout struct exposes, for the crossing check at each bind.
     computeDestructible();
     // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
     // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)

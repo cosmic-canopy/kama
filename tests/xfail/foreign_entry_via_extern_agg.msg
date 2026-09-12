@@ -1,0 +1,1 @@
+it reads module static `gain`, which `main` assigns outside the region
