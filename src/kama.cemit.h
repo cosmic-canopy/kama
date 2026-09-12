@@ -827,6 +827,7 @@ public:
     // FFI link hint: was this C header `extern "<…>";`'d anywhere? (pay-for-what-you-use — the driver
     // appends `-lm` only when `<math.h>` is used, `-lws2_32` only for sockets, etc.)
     bool externsHeader(const std::string& h) const { return _externedHeaders.count(h) > 0; }
+    bool spawnsThreads() const { return _spawnsThreads; }   // lowered a `spawn`/`isolate`/`parallel_for` — see noteThreadSpawn
 
     // ---- Semantic query surface (LSP / front-end-as-library) --------------------------------------
     // `collectProgram()` — the parse-time name resolution + type-checking + ownership analysis — is
@@ -1543,6 +1544,8 @@ private:
     // Record one call edge out of the body being emitted. A no-op outside a body, and self-edges are
     // dropped (direct recursion cannot make a function allocate that did not already).
     void recordCallEdge(const std::string& callee, int line);
+    bool _spawnsThreads = false;
+    void noteThreadSpawn();
     // The ONE spelling of a deep copy (`T__copy(&(x))`), so its call edge is recorded in one place.
     std::string copyCall(const std::string& cls, const std::string& lvalue);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.

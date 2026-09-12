@@ -4721,7 +4721,7 @@ Cross-isolate state is confined to three greppable seams, the same way raw memor
 | --- | --- | --- | --- | --- |
 | module `static` | **per-isolate** state — each isolate gets its own copy | `_Thread_local` | `_Thread_local` (emscripten pthreads share one linear memory, so TLS is what makes it per-isolate) | a plain C `static`, zero cost (one core = one isolate) |
 | `hardware` | `volatile` MMIO and the single-core ISR↔loop flag | `volatile T*` | n/a | the register/ISR seam — *not* cross-isolate |
-| `Atomic<T>` | the **only** cross-isolate mutable sharing | `_Atomic` / `<stdatomic.h>` | Atomics over a SharedArrayBuffer | atomics, if multicore |
+| `Atomic<T>` | the **only** cross-isolate mutable sharing | `_Atomic` / `<stdatomic.h>` | Atomics over a SharedArrayBuffer when the program creates a thread; otherwise the build is single-threaded and needs neither | atomics, if multicore |
 
 The load-bearing rule: **a module `static` is per-isolate by construction, so it cannot be observed
 by another isolate and therefore cannot race.** To share mutable state you must reach for

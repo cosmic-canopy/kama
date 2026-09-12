@@ -5661,6 +5661,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         for (size_t i = 0; i < caps.size(); ++i) {
             indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
         }
+        noteThreadSpawn();
         indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
         indent(d); *_out << "}\n";
         // Hand the join to the enclosing `scope`, which runs it on EVERY exit path (fall-through and the
@@ -5693,6 +5694,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     for (size_t i = 0; i < caps.size(); ++i) {
         indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
     }
+    noteThreadSpawn();
     indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
     indent(d); *_out << "}\n";
     indent(d); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
@@ -15145,6 +15147,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     indent(depth); *_out << "kama_isolate_t " << hnd << ";\n";
     if (isBorrow) {
         // M4.2 borrow: `val` is already `(void*)&(local)` — spawn with it directly. No box, no free.
+        noteThreadSpawn();
         indent(depth); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << val << ");\n";
     } else {
         // M2/M4.1 move: heap the moved bundle, spawn with the box (the trampoline frees it). The malloc
@@ -15155,6 +15158,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
         indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
         indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
+        noteThreadSpawn();
         indent(depth + 1); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
         indent(depth);     *_out << "}\n";
     }
@@ -15177,6 +15181,7 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
         unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);
     std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
     std::ostringstream e;
+    noteThreadSpawn();
     e << "({ " << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << ")); "
       << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
       << "*" << arg << " = (" << val << "); "
@@ -23324,6 +23329,17 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
 
 // One call edge out of the body being emitted. Only a plain C identifier is an edge: see the hook in
 // emitReorderedCall for why an indirect call is not one, and where each is gated instead.
+// A thread is created ONLY by the compiler's own lowering of `spawn`/`isolate` and `parallel_for` — no library
+// source calls the seam's spawn — so this is the precise answer to "does this program need a threaded
+// runtime". The driver reads it for wasm, where the answer is a HOSTING MODEL (`-pthread`, PROXY_TO_PTHREAD,
+// a SharedArrayBuffer and its COOP/COEP headers), not a link flag: keyed on which seam headers a module
+// externs, importing `Atomic` alone made a browser build threaded, because `std::concurrent`'s `Isolate`
+// methods are emitted whether or not a program uses them (consumer KB-26).
+void CEmitter::noteThreadSpawn()
+{
+    if (!_probingTemplate) _spawnsThreads = true;   // a probe emits no code
+}
+
 void CEmitter::recordCallEdge(const std::string& callee, int srcLine)
 {
     if (_probingTemplate) return;                     // a probe emits no code, so it makes no edges

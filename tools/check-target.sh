@@ -153,6 +153,18 @@ reject MACOS   "-Wl,-Bstatic" "macOS pthreads live in libc — nothing to link s
 #     all, so it gets no wrapper either.
 reject WINDOWS "-Wl,-Bstatic" "a non-threaded program links no pthread to make static"
 
+# 2c. WASM THREADS ARE A HOSTING MODEL, not a link flag: `-pthread` + PROXY_TO_PTHREAD run `main` on a worker
+#     and need a SharedArrayBuffer, whose COOP/COEP headers break a cross-origin WebSocket. So a browser build
+#     is threaded only when the program CREATES a thread (`spawn`/`isolate`/`parallel_for`) — never because it
+#     imported `std::concurrent::Atomic`, whose module also carries `Isolate` (consumer KB-26: that one import
+#     made a WebGPU client die four layers away, reading `getContext` on a worker with no `document`).
+ATOMIC_ONLY="$ROOT/tests/atomic_signed.kama"
+if [ ! -f "$ATOMIC_ONLY" ]; then echo "check-target: missing $ATOMIC_ONLY" >&2; exit 1; fi
+want   WASM "-pthread"        "a program that spawns needs emscripten pthreads" "$THREADED"
+want   WASM "PROXY_TO_PTHREAD" "…and main on a worker, so it may block on join" "$THREADED"
+reject WASM "-pthread"        "importing Atomic creates no thread (KB-26)" "$ATOMIC_ONLY"
+reject WASM "PROXY_TO_PTHREAD" "importing Atomic must not move main to a worker (KB-26)" "$ATOMIC_ONLY"
+
 #     The opt-IN to the DLL, both spellings. `--shared` was already taken (it picks the OUTPUT kind), so
 #     this is its own switch — and it has to be a real one, because the target's `ldflags` escape hatch
 #     cannot cleanly UNDO a -Bstatic the driver already emitted.

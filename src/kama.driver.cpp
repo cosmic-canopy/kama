@@ -5243,8 +5243,10 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
-    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h")     // std::concurrent seams ->
-                                       || emitter.externsHeader("kama_channel.h");    // native -lpthread (isolate OR channel)
+    // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
+    // hosting model, so only for a program that actually creates a thread (KB-26 — see noteThreadSpawn).
+    if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
+                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
     out.close();
     for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
@@ -5286,8 +5288,10 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
-    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h")     // std::concurrent seams ->
-                                       || emitter.externsHeader("kama_channel.h");    // native -lpthread (isolate OR channel)
+    // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
+    // hosting model, so only for a program that actually creates a thread (KB-26 — see noteThreadSpawn).
+    if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
+                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
     header.close();
     for (auto& f : moduleFiles) f->close();
 
