@@ -1,0 +1,4 @@
+// KR-46: a user generic's type argument, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+type value Box<X> { public X x; }
+fn int32 f(Box<ShownErr> b) { return 0; }
+fn int32 main() { return 0; }

@@ -1,0 +1,2 @@
+// KR-46: a type argument of a local (`Optional<X>`), naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn int32 main() { Optional<geo::HidErr> x = Optional::None; return 0; }

@@ -1,0 +1,3 @@
+// KR-46: an `Owned<X>` parameter, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 f(Owned<ShownVal> p) { return 0; }
+fn int32 main() { return 0; }

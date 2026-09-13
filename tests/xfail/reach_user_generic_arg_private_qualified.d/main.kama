@@ -1,0 +1,4 @@
+// KR-46: a user generic's type argument, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+type value Box<X> { public X x; }
+fn int32 f(Box<geo::HidErr> b) { return 0; }
+fn int32 main() { return 0; }

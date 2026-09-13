@@ -713,40 +713,57 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     return value;   // builtin/forward/unresolved — caller handles
 }
 
-// The `ns::path` of a registered type (class / enum / interface / generic template) whose bare trailing
-// name is `value`, or "" if none exists. Turns an unresolved user type name into a clean "not imported —
-// it lives in X" diagnostic instead of leaking a C-level 'undeclared identifier'. Safe against
-// type-params / forward-refs: those aren't registered types, so this returns "" and the caller stays quiet.
-std::string CEmitter::namespaceOfType(const std::string& value) const
+// A name no scope of this file binds, reported by what ANOTHER file declares under it: "not imported — add
+// this import" when a module exports one, "not exported by that file" when only a private one exists.
+// Returns false, reporting nothing, when no module file declares it — the caller's "unknown" is then the
+// right message. `known` says which table the name belongs in (types, or module constants).
+//
+// Asked of each file's own scope, never by splitting table keys on `__`. That split used to be the whole
+// answer, and it matched a generic INSTANCE's key too (`Result_geo__Shown_geo__ShownErr` ends in
+// `ShownErr`), so the hint said `add import { Result_geo::Shown_geo::ShownErr };`; it also named a PRIVATE
+// declaration's module as the import to add, which no import can satisfy.
+bool CEmitter::reportDeclaredElsewhere(const std::string& noun, const std::string& name,
+                                       const std::function<bool(const std::string&)>& known,
+                                       const char* what, int line)
 {
-    auto demangleNs = [](const std::string& key) -> std::string {
-        auto p = key.rfind("__");
-        if (p == std::string::npos) return std::string();   // no namespace segment
-        std::string ns = key.substr(0, p), out;
-        // A file-private key carries `___F<file>` after its module; the hint names the MODULE (the
-        // import to add), never the file segment, which nothing can spell.
-        auto f = ns.find("___F");
-        if (f != std::string::npos) ns = ns.substr(0, f);
-        for (size_t i = 0; i < ns.size(); ++i) {
-            if (i + 1 < ns.size() && ns[i] == '_' && ns[i + 1] == '_') { out += "::"; ++i; }
-            else out += ns[i];
+    auto userDecl = [&](const std::string& k) {
+        if (!known(k)) return false;
+        const std::string f = declFileOf(k);
+        return !f.empty() && f[0] != '<';                 // not an FFI spelling, not compiler-owned
+    };
+    std::set<std::string> exportedBy, privateIn;
+    for (auto& kv : _unitCtx) {
+        const NsCtx& c = kv.second;
+        if (!c.isPublic) continue;                        // a loose file's names are unimportable (§2e.27)
+        if (userDecl(c.scope + "__" + name)) exportedBy.insert(c.module);
+        const std::string pk = c.privScope + "__" + name;
+        if (userDecl(pk)) privateIn.insert(declFileOf(pk));
+    }
+    // ⚠️ The spelling this names has to be one that PARSES. It said `import ns::{Name}` — the module form
+    // the module campaign deleted — so the one message whose whole job is to hand the reader a line to
+    // paste handed them a syntax error (`unexpected IDENTIFIER, expecting {`). There is one import form
+    // now, `import { … };`.
+    if (!exportedBy.empty()) {
+        // Two modules may export the same name (`DecodeError` in base64 and hex); each import is offered,
+        // since only the reader knows which one they meant.
+        std::string where, fix;
+        for (auto& m : exportedBy) {
+            where += (where.empty() ? "`" : " and `") + m + "`";
+            fix += (fix.empty() ? "add `import { " : ", or add `import { ") + m + "::" + name + " };`";
         }
-        return out;
-    };
-    auto trailing = [](const std::string& key) -> std::string {
-        auto p = key.rfind("__");
-        return p == std::string::npos ? std::string() : key.substr(p + 2);   // only NAMESPACED keys match
-    };
-    auto scan = [&](const auto& m) -> std::string {
-        for (auto& kv : m) if (trailing(kv.first) == value) return demangleNs(kv.first);
-        return std::string();
-    };
-    std::string r;
-    if (!(r = scan(_classes)).empty())      return r;
-    if (!(r = scan(_enums)).empty())        return r;
-    if (!(r = scan(_interfaces)).empty())   return r;
-    if (!(r = scan(_genericTypes)).empty()) return r;
-    return std::string();
+        unsupported((noun + " `" + name + "` is not imported — it lives in " + where + "; " + fix).c_str(),
+                    line, name);
+        return true;
+    }
+    if (privateIn.empty()) return false;
+    // Only a PRIVATE declaration exists, so no import can reach it — naming one would send the reader to add
+    // a line that fails. The same words `checkReach` uses for a qualified spelling of it.
+    std::string files;
+    for (auto& f : privateIn) files += (files.empty() ? "`" : " or `") + f + "`";
+    unsupported(("`" + name + "` is not exported by " + files + ", so " + what
+                 + " cannot name it — visibility is per FILE, and a name leaves its file only through that "
+                   "file's `export { … };`. Add it there if it is meant to be reachable").c_str(), line);
+    return true;
 }
 
 // Is `n` a generic TYPE-PARAM name rather than a real type? Type params flow through the type resolver
@@ -2358,9 +2375,8 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
 // spelling with the *more* type information got the *less* checking. That same hole is what let the old
 // `Ptr<T>` spelling survive `check` after the rename. No re-derivation is needed to close it: `cType` maps a
 // resolved generic to its mangled instance, so the `cTypeResult != name` guard below already lets every
-// known one through, and only an unresolved head comes back as its own bare spelling. The generic ARGUMENT
-// is still not walked here — `InlineArray<int32, N>`'s `N` is a const-generic value, and the argument
-// position has its own checks.
+// known one through, and only an unresolved head comes back as its own bare spelling. So this judges ONE
+// node: each caller walks the type arguments under it (`forEachTypeArg`) and calls this per node.
 void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                                  const char* what, int line)
 {
@@ -2387,17 +2403,26 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
                      "allocation, an `extern fn`)").c_str(), line);
         return;
     }
-    std::string ns = namespaceOfType(name);
-    // ⚠️ The spelling this names has to be one that PARSES. It said `import ns::{Name}` — the module form
-    // the module campaign deleted — so the one message whose whole job is to hand the reader a line to
-    // paste handed them a syntax error (`unexpected IDENTIFIER, expecting {`). There is one import form
-    // now, `import { … };`, which is also what the phase-3b message below already teaches.
-    if (!ns.empty())
-        unsupported((std::string("type `") + name + "` is not imported — it lives in `" + ns
-                     + "`; add `import { " + ns + "::" + name + " };`").c_str(), line, name);
-    else
+    const bool reported = reportDeclaredElsewhere("type", name, [&](const std::string& k) {
+        return _classes.count(k) || _enums.count(k) || _interfaces.count(k) || _genericTypes.count(k);
+    }, what, line);
+    if (!reported)
         unsupported((std::string("unknown type `") + name + "` in " + what
                      + " — no such type is declared or imported").c_str(), line, name);
+}
+
+// The TYPE arguments a spelling writes — its `<…>` entries and a qualifier's `::<…>` — never a `#(…)` value,
+// which the parser appends to the same vector after `nTypeArgs`.
+void CEmitter::forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f)
+{
+    if (!t) return;
+    if (t->genericArgs) {
+        for (size_t i = 0; i < t->genericArgs->size(); ++i) {
+            const SharedIdentifier& a = (*t->genericArgs)[i];
+            if (a && !a->constArgValue && (t->nTypeArgs < 0 || (int)i < t->nTypeArgs)) f(a);
+        }
+    } else if (t->genericArg) f(t->genericArg);
+    if (t->qualifierGenericArgs) for (auto& a : *t->qualifierGenericArgs) if (a) f(a);
 }
 
 bool CEmitter::isComptimeParamHere(const std::string& nm) const
@@ -2934,18 +2959,21 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                      "the same name, which binds a compile-time value for this whole declaration and "
                      "outranks every runtime name — rename it").c_str(), id->line);
     };
-    auto check = [&](const SharedIdentifier& t, const char* what) {
+    // One type spelling, judged at its head AND at every type argument under it, to any depth. The rules
+    // used to stop at the head, and `cType` maps any generic instance to SOME mangled name, so a bad name
+    // nested as an argument — `Result<Uuid, UuidError>` without importing `UuidError` — passed and failed in
+    // clang. A name is judged by the same rules wherever in the spelling it sits.
+    std::function<void(const SharedIdentifier&, const char*)> checkTypeNode =
+        [&](const SharedIdentifier& t, const char* what) {
         if (!t || !t->value) return;
-        if (rejectBareCChar(t, what, t->line)) return;   // a C `char` element outside a raw pointer
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
         // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
         // `Base` is resolved against that type's BASE, so it is not on the stack here either; a `Base` in
         // a type that has none is still caught, just later, where the enclosing type is known.
         if (*t->value == "This" || *t->value == "Base") return;
         // A const param names a value, so a TYPE position naming one is a mistake, not a binding —
-        // `fn int32 f<const N: int32>(N x)` used to emit a bare `N` into C and die there. Only the type
-        // HEAD reaches here: `checkTypeResolves` bails on `genericArg`, so `InlineArray<int32, N>` — the
-        // legitimate ARGUMENT position — is untouched.
+        // `fn int32 f<const N: int32>(N x)` used to emit a bare `N` into C and die there. The legitimate
+        // position, a `#(N)` argument, is skipped below and never reaches here.
         if (cp.count(*t->value)) {
             unsupported(("`" + *t->value + "` is a comptime parameter — a value, not a type — so "
                          + what + " cannot name it").c_str(), t->line);
@@ -2956,6 +2984,34 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         checkNoLeak(t, what);
         checkTypeResolves(t, cType(t), what, t->line);
         rejectMintProtocolValue(t, what, t->line);
+        forEachTypeArg(t, [&](const SharedIdentifier& a) { checkTypeNode(a, what); });
+        // A `#(K)` argument names a VALUE, so it is judged as one: a module constant must be in reach of this
+        // file like any other name. It was never looked at, so an unimported, private or unknown `K` emitted
+        // a bare `K` into the instance's C name and failed in clang. A literal needs nothing; the declaration's
+        // own comptime parameter is bound, not referenced.
+        if (t->genericArgs && t->nTypeArgs >= 0)
+            for (size_t i = (size_t)t->nTypeArgs; i < t->genericArgs->size(); ++i) {
+                const SharedIdentifier& k = (*t->genericArgs)[i];
+                if (!k || !k->value || k->constArgValue || k->genericArg || tp.count(*k->value)) continue;
+                const bool qualified = k->qualifier && !k->qualifier->empty();
+                const std::string key = resolveModuleVar(*k->value, k->qualifier);
+                if (!key.empty()) { checkReach(key, *k->value, what, k->line, _nsCtx.unitPath, qualified); continue; }
+                if (qualified) {
+                    // `Type::NAME`, a type-associated constant — how `constArgN` reads a qualified size.
+                    auto tq = std::make_shared<StringList>(k->qualifier->begin(), k->qualifier->end() - 1);
+                    if (_typeConsts.count(resolveUserNameImpl(*k->qualifier->back(), tq) + "::" + *k->value)) continue;
+                }
+                if (!qualified && reportDeclaredElsewhere("constant", *k->value, [&](const std::string& mk) {
+                        return _moduleStatics.count(mk) > 0; }, what, k->line))
+                    continue;
+                unsupported(("unknown constant `" + *k->value + "` in " + what
+                             + " — no such constant is declared or imported").c_str(), k->line, *k->value);
+            }
+    };
+    auto check = [&](const SharedIdentifier& t, const char* what) {
+        if (!t || !t->value) return;
+        if (rejectBareCChar(t, what, t->line)) return;   // a C `char` element outside a raw pointer (scans the whole spelling)
+        checkTypeNode(t, what);
     };
     // Every LOCAL declared type in a body, checked for module privacy ONLY. `collectBindings` is the
     // statement walker (kama.query.cpp) the position index already uses; `stmtOnly` drops its `match`-arm
@@ -6268,6 +6324,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
+            // ...and every type argument under it, as `checkDeclaredTypes` does for a signature: the head
+            // alone waves `Optional<Zork>` through, because the instance mangles to some name regardless.
+            std::function<void(const SharedIdentifier&)> argsResolve = [&](const SharedIdentifier& a) {
+                checkTypeResolves(a, cType(a), "a local declaration", n->line);
+                forEachTypeArg(a, argsResolve);
+            };
+            forEachTypeArg(declType, argsResolve);
             if (_typeSubst.empty()) rejectBareCChar(declType, "a local", n->line);   // not during a poisoned instance's re-walk
             rejectMintProtocolValue(declType, "a local", n->line);
             // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal

@@ -1,0 +1,2 @@
+// KR-46: a depth-2 type argument of a local, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { Optional<Result<int32, HidErr>> r = Optional::None; return 0; }

@@ -1,0 +1,2 @@
+// KR-46: a `new` expression, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { Owned<ShownVal> p = new ShownVal.make(); return 0; }

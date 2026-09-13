@@ -1,0 +1,3 @@
+// KR-46: a return type's type argument, never called, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn Optional<geo::HidErr> f() { return Optional::None; }
+fn int32 main() { return 0; }

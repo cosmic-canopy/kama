@@ -1,0 +1,3 @@
+// KR-46: a field type, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+type value W { public ShownErr e; public ctor make() { this.e = ShownErr::Bad; } }
+fn int32 main() { W w = W.make(); return 0; }

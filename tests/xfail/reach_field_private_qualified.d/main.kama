@@ -1,0 +1,3 @@
+// KR-46: a field type, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+type value W { public geo::HidErr e; public ctor make() { this.e = geo::HidErr::Bad; } }
+fn int32 main() { W w = W.make(); return 0; }

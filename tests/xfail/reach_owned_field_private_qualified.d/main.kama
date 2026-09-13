@@ -1,0 +1,3 @@
+// KR-46: an `Owned<X>` field of a resource, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+type resource W { Owned<geo::HidVal> p; public ctor make(Owned<geo::HidVal> p) { this.p = give p; } }
+fn int32 main() { return 0; }

@@ -1,0 +1,2 @@
+// KR-46: a local's declared type, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { HidErr x = HidErr::Bad; return 0; }

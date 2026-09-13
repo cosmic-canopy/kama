@@ -1,0 +1,4 @@
+// KR-46: a field of a `@generate` type, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+@generate(Serializable, Deserializable)
+type value W { @field public geo::HidVal inner; public ctor make(geo::HidVal inner) { this.inner = inner; } }
+fn int32 main() { return 0; }

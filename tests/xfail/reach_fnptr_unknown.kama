@@ -1,0 +1,3 @@
+// KR-46: an `fnptr` parameter type, naming a name declared nowhere. Must be rejected, naming it.
+fnptr int32 Cb(ZorkVal x);
+fn int32 main() { return 0; }

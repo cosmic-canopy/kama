@@ -1,0 +1,186 @@
+// KR-46 positive control: every position the reach fixtures reject, spelled LEGALLY — imported.
+// The fix must not over-refuse any of these; each position's function must return 0.
+import { geo::SHOWNK, geo::Shown, geo::ShownC, geo::ShownErr, geo::ShownVal, geo::shownFn, std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer };
+
+// a local's declared type
+fn int32 main_local() { ShownErr x = ShownErr::Bad; return 0; }
+
+// a type argument of a local (`Optional<X>`)
+fn int32 main_optional_local() { Optional<ShownErr> x = Optional::None; return 0; }
+
+// the second type argument of a local (`Result<int32, X>`)
+fn int32 main_result_local() { Result<int32, ShownErr> r = Result::Ok(value: 1); return 0; }
+
+// a depth-2 type argument of a local
+fn int32 main_nested_local() { Optional<Result<int32, ShownErr>> r = Optional::None; return 0; }
+
+// a container's element type (`DynamicArray<X>`)
+fn int32 main_container_local() { DynamicArray<ShownErr> a = DynamicArray.empty(); return 0; }
+
+// a parameter type
+fn int32 f_param(ShownErr e) { return 0; }
+fn int32 main_param() { return 0; }
+
+// a parameter's type argument
+fn int32 f_optional_param(Optional<ShownErr> e) { return 0; }
+fn int32 main_optional_param() { return f_optional_param(e: Optional::None); }
+
+// a return type's type argument, never called
+fn Optional<ShownErr> f_optional_return() { return Optional::None; }
+fn int32 main_optional_return() { return 0; }
+
+// a return type's type argument, called
+fn Optional<ShownErr> f_optional_return_called() { return Optional::None; }
+fn int32 main_optional_return_called() { return match (f_optional_return_called()) { case Some(value: v): 1; case None: 0; }; }
+
+// a field type
+type value W_field { public ShownErr e; public ctor make() { this.e = ShownErr::Bad; } }
+fn int32 main_field() { W_field w = W_field.make(); return 0; }
+
+// a field's type argument, never constructed
+type value W_optional_field { public Optional<ShownErr> e; public ctor make() { this.e = Optional::None; } }
+fn int32 main_optional_field() { return 0; }
+
+// an `Owned<X>` field of a resource
+type resource W_owned_field { Owned<ShownVal> p; public ctor make(Owned<ShownVal> p) { this.p = give p; } }
+fn int32 main_owned_field() { return 0; }
+
+// a generic function's bound, never called
+fn int32 g_bound_fn<X: ShownC>(X x) { return x.cm(); }
+fn int32 main_bound_fn() { return 0; }
+
+// a generic type's bound
+type value G_bound_type<X: ShownC> { X x; }
+fn int32 main_bound_type() { return 0; }
+
+// an `implements` contract
+type value W_implements implements ShownC { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main_implements() { W_implements w = W_implements.make(); return w.cm() - 1; }
+
+// a type argument of an `implements` contract
+type contract Holds_implements_arg<X> for value { fn int32 cm(); }
+type value W_implements_arg implements Holds_implements_arg<ShownVal> { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main_implements_arg() { W_implements_arg w = W_implements_arg.make(); return w.cm() - 1; }
+
+// a turbofish type argument
+fn int32 z_turbofish<X>() { return 0; }
+fn int32 main_turbofish() { return z_turbofish::<ShownErr>(); }
+
+// a serde turbofish type argument
+fn int32 main_turbofish_deser() { string s = "{\"v\":1}"; deserializeJsonBuffer::<ShownVal>(src: give s); return 0; }
+
+// a `cast<UnsafePtr<X>>` type argument
+unsafe fn int32 f_cast_arg(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<ShownVal>>(p)); return 0; }
+fn int32 main_cast_arg() { return 0; }
+
+// a `sizeof` operand
+fn int32 main_sizeof() { usize n = sizeof(ShownVal); return 0; }
+
+// an `.as<X>()` downcast target
+fn int32 main_as_downcast() { Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<ShownErr>()) { case Some(value: x): 1; case None: 0; }; }; }
+
+// a variant expression
+fn int32 main_variant_expr() { Result<int32, Owned<Error>> r = Result::Err(error: ShownErr::Bad); return 0; }
+
+// a construction
+fn int32 main_ctor_call() { int32 n = ShownVal.make().v; return n - 1; }
+
+// a static call
+fn int32 main_static_call() { int32 n = ShownVal::stat(); return 0; }
+
+// an `InlineArray<X>#(2)` parameter's element type
+fn int32 f_inline_array_param(InlineArray<ShownErr>#(2) a) { return 0; }
+fn int32 main_inline_array_param() { return 0; }
+
+// an `Owned<X>` parameter
+fn int32 f_owned_param(Owned<ShownVal> p) { return 0; }
+fn int32 main_owned_param() { return 0; }
+
+// a `new` expression
+fn int32 main_new_expr() { Owned<ShownVal> p = new ShownVal.make(); return 0; }
+
+// a field of a `@generate` type
+@generate(Serializable, Deserializable)
+type value W_generate_field { @field public ShownVal inner; public ctor make(ShownVal inner) { this.inner = inner; } }
+fn int32 main_generate_field() { return 0; }
+
+// a `static`'s type argument
+static Optional<ShownErr> gs_static_decl;
+fn int32 main_static_decl() { return 0; }
+
+// a method return type's type argument
+type value W_method_return { public int32 a; public ctor make() { this.a = 1; } public fn Optional<ShownErr> m() { return Optional::None; } }
+fn int32 main_method_return() { W_method_return w = W_method_return.make(); return w.a - 1; }
+
+// a user generic's type argument
+type value Box_user_generic_arg<X> { public X x; }
+fn int32 f_user_generic_arg(Box_user_generic_arg<ShownErr> b) { return 0; }
+fn int32 main_user_generic_arg() { return 0; }
+
+// an `fnptr` parameter type
+fnptr int32 Cb_fnptr(ShownVal x);
+fn int32 main_fnptr() { return 0; }
+
+// a local inside a generic function, never called
+fn int32 g_generic_body<X>(X x) { Optional<ShownErr> o = Optional::None; return 0; }
+fn int32 main_generic_body() { return 0; }
+
+// a local inside a generic function, called
+fn int32 g_generic_body_called<X>(X x) { Optional<ShownErr> o = Optional::None; return 0; }
+fn int32 main_generic_body_called() { return g_generic_body_called(x: 1); }
+
+// a function call
+fn int32 main_fn_call() { int32 n = shownFn(); return n - 1; }
+
+// a constant read
+fn int32 main_const_read() { isize k = SHOWNK; return 0; }
+
+// a const-generic `#(K)` argument
+fn int32 f_const_generic_arg(InlineArray<int32>#(SHOWNK) a) { return 0; }
+fn int32 main_const_generic_arg() { return 0; }
+
+// a type argument of a `Result` instance that already exists
+fn int32 main_existing_instance() { Result<Shown, ShownErr> r = Shown.parse(n: 1); return 0; }
+
+// Each position fails with its own exit code, so a red run names the position.
+fn int32 main() {
+    if (main_local() != 0) { return 1; }
+    if (main_optional_local() != 0) { return 2; }
+    if (main_result_local() != 0) { return 3; }
+    if (main_nested_local() != 0) { return 4; }
+    if (main_container_local() != 0) { return 5; }
+    if (main_param() != 0) { return 6; }
+    if (main_optional_param() != 0) { return 7; }
+    if (main_optional_return() != 0) { return 8; }
+    if (main_optional_return_called() != 0) { return 9; }
+    if (main_field() != 0) { return 10; }
+    if (main_optional_field() != 0) { return 11; }
+    if (main_owned_field() != 0) { return 12; }
+    if (main_bound_fn() != 0) { return 13; }
+    if (main_bound_type() != 0) { return 14; }
+    if (main_implements() != 0) { return 15; }
+    if (main_implements_arg() != 0) { return 16; }
+    if (main_turbofish() != 0) { return 17; }
+    if (main_turbofish_deser() != 0) { return 18; }
+    if (main_cast_arg() != 0) { return 19; }
+    if (main_sizeof() != 0) { return 20; }
+    if (main_as_downcast() != 0) { return 21; }
+    if (main_variant_expr() != 0) { return 22; }
+    if (main_ctor_call() != 0) { return 23; }
+    if (main_static_call() != 0) { return 24; }
+    if (main_inline_array_param() != 0) { return 25; }
+    if (main_owned_param() != 0) { return 26; }
+    if (main_new_expr() != 0) { return 27; }
+    if (main_generate_field() != 0) { return 28; }
+    if (main_static_decl() != 0) { return 29; }
+    if (main_method_return() != 0) { return 30; }
+    if (main_user_generic_arg() != 0) { return 31; }
+    if (main_fnptr() != 0) { return 32; }
+    if (main_generic_body() != 0) { return 33; }
+    if (main_generic_body_called() != 0) { return 34; }
+    if (main_fn_call() != 0) { return 35; }
+    if (main_const_read() != 0) { return 36; }
+    if (main_const_generic_arg() != 0) { return 37; }
+    if (main_existing_instance() != 0) { return 38; }
+    return 0;
+}

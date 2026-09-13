@@ -1,0 +1,3 @@
+// KR-46: an `Owned<X>` parameter, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn int32 f(Owned<geo::HidVal> p) { return 0; }
+fn int32 main() { return 0; }

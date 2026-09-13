@@ -1,0 +1,15 @@
+export { ShownVal };
+
+@generate(Serializable, Deserializable)
+type value ShownVal {
+    @field public int32 v;
+    public ctor make() { this.v = 1; }
+    public static fn int32 stat() { return 5; }
+}
+
+@generate(Serializable, Deserializable)
+type value HidVal {
+    @field public int32 v;
+    public ctor make() { this.v = 2; }
+    public static fn int32 stat() { return 6; }
+}

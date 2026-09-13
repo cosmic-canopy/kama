@@ -1,0 +1,3 @@
+// KR-46: a container's element type (`DynamicArray<X>`), naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+import { std::collections::DynamicArray };
+fn int32 main() { DynamicArray<ShownErr> a = DynamicArray.empty(); return 0; }

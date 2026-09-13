@@ -1,0 +1,5 @@
+export { SHOWNK };
+
+comptime isize SHOWNK = 3;
+
+comptime isize HIDK = 4;

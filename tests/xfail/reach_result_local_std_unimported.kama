@@ -1,0 +1,3 @@
+// KR-46: a local's `Result` type argument, naming `UuidError` without importing it (only `Uuid` is). Must be rejected with the import that fixes it.
+import { std::uuid::Uuid };
+fn int32 main() { Result<Uuid, UuidError> r = Uuid.parse(text: "x"); return 0; }

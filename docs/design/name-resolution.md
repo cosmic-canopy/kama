@@ -1,7 +1,8 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** in progress. Plan step 1 (fixtures) is DONE and measured; **next is plan step 2, the one
-walk**. Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
+**Status:** in progress. Plan step 1 (fixtures) and step 2 slice 1 (nested type arguments + hints, `0.9.322`)
+are DONE; **next is step 2 slice 2, the declaration positions not walked today**. Found building KR-12 at
+`0.9.320`. This is the working doc for the campaign: the probe grid, the
 results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
 the `tests/xfail/` fixtures carry the record.
 
@@ -45,10 +46,17 @@ global allocator → **KR-50** allocator-aware errors.
 2. Recreate the scratch tools: extract `genfix.py` from the appendix into `.scratch/imports/`
    (`awk '/^### \`genfix.py\`/{f=1} f&&/^\`\`\`python/{b=1;next} b&&/^\`\`\`$/{exit} b' docs/design/name-resolution.md > .scratch/imports/genfix.py`),
    then `python3 .scratch/imports/genfix.py .` writes all 162 fixtures + the two controls into `tests/`.
-3. Classify them on the current compiler with `classify.sh` (appendix) — expect **12 ACCEPTED, 36 C, 71 MSG,
-   43 green**. A different count means the compiler moved; record it here before changing anything.
-4. `rm -rf tests/xfail/reach_* tests/reach_controls_*` before any gate run that is not meant to be red, and
-   re-generate for the slice being worked. Then the plan below, step 2, slice 1.
+3. Classify them on the current compiler with `classify.sh` (appendix) — expect, at `0.9.322`, **12 ACCEPTED,
+   12 C, 30 MSG, 108 green**. A different count means the compiler moved; record it here before changing
+   anything. (`genfix.py` overwrites the 107 fixtures already in the tree with identical content.)
+4. Before a gate run, delete every generated fixture that is not green (`classify.sh | grep -v ^green`), and
+   `tests/reach_controls_qualified.d` until it builds. Then the plan below, step 2, slice 2.
+
+**Slice 1 landed at `0.9.322`.** In the tree: 107 reach fixtures and `tests/reach_controls_imported.d`. Held
+back although green: `reach_bound_type_unknown` — its diagnostic points at line 1 (the comment), and a bound
+is slice 2's position; it lands there with the right line. `reach_controls_qualified.d` is still refused at
+`implements geo::ShownC` (slice 2), and behind that `#(geo::SHOWNK)` — a LEGAL qualified module constant —
+still fails in C: `constArgN` reads every qualified size as `Type::NAME` (a side defect, its own commit).
 
 **Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
 leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`). Windows VM:
@@ -284,7 +292,18 @@ still fails in C behind it).
 2. **One walk**, grown out of `checkDeclaredTypes` — it already visits every declaration once, before
    emission (called at the tail of `collectProgram`), sets `_nsCtx` per unit and binds type/const params, so
    it is the single visit; nothing new goes beside it. In commit slices, each gated green:
-   1. **Nested type arguments + hints.** Replace the head-only `check` lambda with a recursive
+   1. **DONE (`0.9.322`) — 43 → 108 green, C 36 → 12, MSG 71 → 30, no fixture regressed.** What landed:
+      `check` became the recursive `checkTypeNode` over `forEachTypeArg` (a spelling's `<…>` and qualifier
+      `::<…>` entries, never its `#(…)` values); the local-declaration site in `emitStatement` walks the same
+      arguments. The head is still judged by `checkTypeResolves` — an unknown generic HEAD (`Zork<int32>`)
+      was already caught, so the `cType(t) != name` guard was not the hole; the unwalked arguments were.
+      `#(K)` is resolved through `resolveModuleVar` and judged by `checkReach`, else reported. The hint is
+      `reportDeclaredElsewhere` (replaces `namespaceOfType`), asked of each file's scope in `_unitCtx`; it
+      serves types and constants. Found on the way: `InlineArray<int32, K>` — the retired comma spelling —
+      parsed and compiled when `K` was a NAME (a literal is already a parse error); the walk now refuses it
+      as an unknown type. The original slice text follows.
+
+      Replace the head-only `check` lambda with a recursive
       `checkTypeNode`: keep its head rules (`rejectBareCChar`, `This`/`Base`, const param in type position,
       `tp`, `checkQualifiedExport`, `checkNoLeak`, `rejectMintProtocolValue`), judge the head by RESOLVING the
       name (not `cType(t) != name`, which waves every generic instance through), recurse into `genericArgs`

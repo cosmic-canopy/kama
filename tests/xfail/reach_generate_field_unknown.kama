@@ -1,0 +1,4 @@
+// KR-46: a field of a `@generate` type, naming a name declared nowhere. Must be rejected, naming it.
+@generate(Serializable, Deserializable)
+type value W { @field public ZorkVal inner; public ctor make(ZorkVal inner) { this.inner = inner; } }
+fn int32 main() { return 0; }

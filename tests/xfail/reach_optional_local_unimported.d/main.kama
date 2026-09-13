@@ -1,0 +1,2 @@
+// KR-46: a type argument of a local (`Optional<X>`), naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { Optional<ShownErr> x = Optional::None; return 0; }

@@ -2673,7 +2673,9 @@ private:
     // Classes
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
-    std::string namespaceOfType(const std::string& value) const;  // `ns::path` of a registered type with bare name `value`, else "" (missing-import diagnostic)
+    // "not imported — add this import" / "not exported by that file" for a name another file declares; false if none does
+    bool reportDeclaredElsewhere(const std::string& noun, const std::string& name,
+                                 const std::function<bool(const std::string&)>& known, const char* what, int line);
     bool isTypeParamName(const std::string& n) const;              // `n` is a generic type-param (any template's, or an active binding)
     // The VALUE-position twin of checkTypeResolves: a bare or `::`-qualified name that no binding table,
     // function, module static, enum, type constant or type resolved. Says what the name IS when it is a
@@ -2687,6 +2689,7 @@ private:
     bool isComptimeParamHere(const std::string& nm) const;
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
+    static void forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
     // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
     //

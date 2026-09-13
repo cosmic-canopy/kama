@@ -1,0 +1,20 @@
+export { Shown, ShownErr };
+
+type enum ShownErr implements Error {
+    Bad, Worse(isize at);
+    public const fn string message() { return "shown"; }
+}
+
+type enum HidErr implements Error {
+    Bad, Worse(isize at);
+    public const fn string message() { return "hid"; }
+}
+
+type value Shown {
+    public int32 v;
+    public ctor make() { this.v = 1; }
+    public ctor Result<Shown, ShownErr> parse(int32 n) {
+        if (n < 0) { return Result::Err(error: ShownErr::Bad); }
+        return Result::Ok(value: Shown.make());
+    }
+}

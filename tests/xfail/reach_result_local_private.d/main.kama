@@ -1,0 +1,2 @@
+// KR-46: the second type argument of a local (`Result<int32, X>`), naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { Result<int32, HidErr> r = Result::Ok(value: 1); return 0; }

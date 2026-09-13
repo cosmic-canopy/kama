@@ -1,0 +1,2 @@
+// KR-46: a `cast<X>` target, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn int32 main() { int32 k = cast<int32>(cast<geo::HidErr>(0)); return 0; }

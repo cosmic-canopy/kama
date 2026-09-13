@@ -1,0 +1,2 @@
+// KR-46: a variant expression, naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: Zork::Bad); return 0; }

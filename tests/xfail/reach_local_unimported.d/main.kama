@@ -1,0 +1,2 @@
+// KR-46: a local's declared type, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { ShownErr x = ShownErr::Bad; return 0; }

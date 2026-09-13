@@ -1,0 +1,2 @@
+// KR-46: a constant read, naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { isize k = ZORKK; return 0; }

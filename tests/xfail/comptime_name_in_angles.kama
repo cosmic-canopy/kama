@@ -1,0 +1,6 @@
+// The twin of comptime_value_in_angles: a compile-time value spelled as a NAME in `<…>`. A literal there is a
+// parse error, but the grammar cannot tell a constant's name from a type's, so `InlineArray<int32, K>` parsed
+// — and compiled, until the declaration walk judged type ARGUMENTS as types. The spelling is `#(K)`.
+comptime isize K = 2;
+fn int32 f(InlineArray<int32, K> a) { return 0; }
+fn int32 main() { return 0; }

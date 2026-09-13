@@ -1,0 +1,3 @@
+// KR-46: a parameter's type argument, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 f(Optional<HidErr> e) { return 0; }
+fn int32 main() { return f(e: Optional::None); }

@@ -1,0 +1,2 @@
+// KR-46: the second type argument of a local (`Result<int32, X>`), naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { Result<int32, Zork> r = Result::Ok(value: 1); return 0; }

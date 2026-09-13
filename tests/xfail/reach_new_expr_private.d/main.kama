@@ -1,0 +1,2 @@
+// KR-46: a `new` expression, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { Owned<HidVal> p = new HidVal.make(); return 0; }

@@ -1,0 +1,3 @@
+// KR-46: a const-generic `#(K)` argument, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn int32 f(InlineArray<int32>#(geo::HIDK) a) { return 0; }
+fn int32 main() { return 0; }

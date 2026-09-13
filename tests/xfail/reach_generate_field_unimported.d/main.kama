@@ -1,0 +1,4 @@
+// KR-46: a field of a `@generate` type, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+@generate(Serializable, Deserializable)
+type value W { @field public ShownVal inner; public ctor make(ShownVal inner) { this.inner = inner; } }
+fn int32 main() { return 0; }

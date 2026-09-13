@@ -1,0 +1,3 @@
+// KR-46: an `InlineArray<X>#(2)` parameter's element type, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+fn int32 f(InlineArray<geo::HidErr>#(2) a) { return 0; }
+fn int32 main() { return 0; }

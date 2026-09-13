@@ -1,0 +1,1 @@
+add `import { std::uuid::UuidError };`

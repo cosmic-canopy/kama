@@ -1,0 +1,4 @@
+// KR-46: a parameter's `Result` type argument, naming `UuidError` without importing it (only `Uuid` is). Must be rejected with the import that fixes it.
+import { std::uuid::Uuid };
+fn int32 f(Result<Uuid, UuidError> r) { return 0; }
+fn int32 main() { return 0; }

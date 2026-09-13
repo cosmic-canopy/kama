@@ -1,0 +1,2 @@
+// KR-46: a `new` expression, naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { Owned<ZorkVal> p = new ZorkVal.make(); return 0; }
