@@ -252,6 +252,43 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### Generic enum members, and an explicit `Sendable` for them (KR-44) — RULED 2026-09-12
+
+**Measured at `0.9.317`.** A concrete enum may declare methods and `implements` (a contract must list `enum`
+among its kinds); it may not declare a field — its layout is its tag and payloads, and that stays. A GENERIC
+enum refuses members and contracts alike. The consequence that matters is `Sendable`: a payload-less enum
+crosses by nature, a tagged concrete enum must declare it, and a generic enum — unable to write `implements` —
+is judged by its payloads with no declaration. `Channel<Msg<int32>>` builds; `Channel<Msg<Shared<Leaf>>>` is
+refused naming the payload. It works, and it is implicit, which is exactly what the Sendable rule exists to
+forbid.
+
+**Ruling:** generic enums get what concrete enums have — methods and `implements`, with `when [...]` conditions
+per instance, as generic types already write them — and the by-payload rule is deleted. Comparable to Rust
+(`impl<T> … for Msg<T> where T: Send`) and Swift (conditional conformance on an enum). `Optional`/`Result`
+declare their `Sendable` in the prelude. The work: the member and conformance scan over a generic enum
+template, per-instance gating (the existing `whenConditionsHold` / `regateGenericInstances` path), the emission
+sites (a generic enum instance's bodies already arrive through `emitClassDefinitions`), and the migration of any
+generic enum that crosses an isolate undeclared.
+
+### `type expose value` — the C-layout type kama owns (KR-45) — RULED 2026-09-12
+
+`extern` is host→kama (kama uses what C defines: `extern fn`, `type extern value`); `expose` is kama→host
+(`expose fn`). The type half of `expose` did not exist, so a kama-defined struct handed to C had no spelling
+but a plain `type value` — and a plain `type value` crosses in both directions unmarked today
+(`extern fn int32 takes(Pair p)` and `expose fn Vec2 step(Vec2 v)` both pass `kama check`).
+
+**Ruling:** pair them. `type expose value Vec2 { float32 x; float32 y; }` is emitted by kama with a guaranteed C
+layout; `type extern value` keeps meaning "the header owns it, never emitted". A composite crossing BY VALUE,
+as a parameter or return of an `extern fn` or `expose fn`, must be one of the two — the marker is on the type
+declaration, never on a parameter, so the claim is made once and checked at every signature. Primitives and
+`UnsafePtr` are unchanged. Either kind may cross either direction (a host passes its own struct to an `expose
+fn`); the marker records who owns the layout, not which way the call goes.
+
+**Measured impact:** across `lib`/`prelude`/`tests`/`examples`/`bench`, the only plain-value crossings are two
+xfail fixtures (`foreign_callback_in_plain_struct`, `expose_generic`). Open question for the row: whether a
+`type expose value` may carry methods — `type extern value` may not (nothing would emit the body), but kama
+emits an expose type, so the reason does not apply; Rust's `#[repr(C)]` structs have methods.
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
