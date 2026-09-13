@@ -17769,6 +17769,18 @@ std::string CEmitter::implMethodCName(ClassInfo& tci, const std::string& method)
 }
 
 // Completeness: the impl must supply every method the contract requires.
+// ONE sentence for a missing contract method, whichever pass finds it — the enum/intrinsic conformance check at
+// collection or the vtbl emission for every implementer — named by the type as WRITTEN (a generic's template
+// name, not one instance). Same file, line and text means the diagnostic dedup reports it once; the vtbl pass
+// used to say "class missing contract method" a second time, and was the only thing a class ever said.
+std::string CEmitter::missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method)
+{
+    std::string who = ci.name;
+    if (ci.enumNode && ci.enumNode->identifier && ci.enumNode->identifier->value) who = *ci.enumNode->identifier->value;
+    else if (ci.node && ci.node->name && ci.node->name->value) who = *ci.node->name->value;
+    return "`" + who + "` implements `" + contract + "` but is missing method `" + method + "` required by the contract";
+}
+
 void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                      const std::string& tkey, int line)
 {
@@ -24541,10 +24553,10 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                     auto ti = _genericTypes.find(_genericTypeInsts[ci.name].templateKey);
                     present = ti != _genericTypes.end() && ti->second.methods.count(m.name);
                 }
-                if (!present) unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.declLine());
+                if (!present) unsupported(missingContractMethod(ci, ii.name, m.name).c_str(), ci.declLine());
                 continue;
             }
-            if (!mi) { unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.declLine()); continue; }
+            if (!mi) { unsupported(missingContractMethod(ci, ii.name, m.name).c_str(), ci.declLine()); continue; }
             // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).
             if (mi->visibility != Visibility::Public)

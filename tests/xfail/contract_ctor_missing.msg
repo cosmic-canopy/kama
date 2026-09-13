@@ -1,1 +1,1 @@
-missing contract method
+is missing method `create`

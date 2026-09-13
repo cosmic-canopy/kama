@@ -1,1 +1,1 @@
-missing contract method 'area'
+is missing method `area`
