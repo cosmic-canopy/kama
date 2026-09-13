@@ -130,8 +130,9 @@ done > "$tmp/markers"
 # emulated and a spawn costs orders of magnitude more, which made this the SLOWEST GUARD IN THE SUITE
 # — 495s of a 533s phase — while compiling absolutely nothing. Since no guard is `check-heavy`, that
 # one number WAS the phase: twelve cores sat idle underneath it. Keep this loop process-free.
-# (KR-18 — the ROADMAP now carries stable ids, so this citation cannot drift the way the old positional
-# "row 16" did: that number was already pointing one row off by the time anyone read it.)
+# The campaign this belonged to is finished and its row is closed; the measurements, the ~336x
+# spawn:expansion ratio and the substitutions that LOOK equivalent and are not now live in
+# docs/platforms/windows.md, under "The suite's wall clock, and where the time actually goes".
 saved_ifs=$IFS
 while IFS= read -r m; do
     [ -z "$m" ] && continue

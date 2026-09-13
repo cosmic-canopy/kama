@@ -40,7 +40,7 @@ qcache=$(mktemp -d); trap 'rm -rf "$tmp" "$qcache"' EXIT
 # and ~131 preload writes, INCLUDING every cache hit. Setting a variable removes the subshell; `set --`
 # removes the `tr`. `cksum` prints "<checksum> <bytes>", and the old `tr -cd '0-9'` concatenated both
 # numbers, so "$1$2" is byte-for-byte the same key. `set --` inside a function rebinds only that
-# function's positionals, so the caller's "$1" is untouched. (KR-18.)
+# function's positionals, so the caller's "$1" is untouched. (docs/platforms/windows.md § The suite's wall clock.)
 qkey_into() {
     set -- $(printf '%s|%s' "$1" "$2" | cksum)
     _qk="$1$2"
@@ -56,7 +56,7 @@ qkey_into() {
 # translated here and never reaches the compiler.
 # ⚠️ `dirname` is pure string manipulation, and this walks to the root, so `$(dirname)` INSIDE THE LOOP
 # cost ~10 forks per call across 49 `--project` assertions. msys2 emulates `fork`: measured idle on this
-# box a `$(dirname …)` is ~49.6 ms against ~0.5 ms for `${p%/*}`. (KR-18.)
+# box a `$(dirname …)` is ~49.6 ms against ~0.5 ms for `${p%/*}`. (docs/platforms/windows.md § The suite's wall clock.)
 #
 # ⚠️ `${_d%/*}` is NOT dirname, and substituting it naively hangs this loop: on a path with no slash it
 # returns the input UNCHANGED, so the `!= "."` condition never trips and it spins forever; on "/a" it
@@ -209,7 +209,7 @@ expect() {
     # `?` literal — unquoted it becomes a glob and the guard starts asserting something else. Equivalent
     # to the grep it replaces because `$want` never contains a newline: a match spanning a line boundary
     # would have to contain one. The failure arm keeps its pipeline — it runs only when already failing.
-    # (KR-18.)
+    # (docs/platforms/windows.md § The suite's wall clock.)
     case $out in
         *"$want"*)
             echo "  ok: query$args ~ '$want'" ;;

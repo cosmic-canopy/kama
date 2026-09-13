@@ -470,8 +470,75 @@ entries here. One has shipped:
     correctness for the program, its arguments, its environment and its cwd; it does **not** buy
     long-path support for the cwd or the executable. That is a Win32 limit, not a seam limit.
 
-The **wall clock** is the other thing to know: the suite is ~1819 s here against ~75 s in the Linux
-container (read the vintage note under [Running things](#running-things) before comparing those two).
-The cost is per-fixture C compilation plus Windows process startup — `kama build -j`
-parallelizes, but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out per fixture instead. A Defender
-exclusion on the runner's temp dir is the cheapest untried lever.
+## The suite's wall clock, and where the time actually goes
+
+The suite is **~1356 s** here (2026-09-12, `0.9.309`) against ~75 s in the Linux container — read the
+vintage note under [Running things](#running-things) before comparing those two. It was ~1819 s on
+2026-09-06; the difference is a guard-side campaign that is now finished, and what remains is inherent.
+
+**The phase breakdown is the thing to read before optimizing anything**, because it has repeatedly been
+guessed wrong:
+
+| phase | wall | |
+| --- | --- | --- |
+| single-file fixtures | 437 s | one `kama` + one `clang` each |
+| xfail fixtures | 338 s | same |
+| `check-*.sh` guards | 322 s | 67 guards in parallel |
+| analysis agreement | 51 s | |
+| multi-file fixtures | 16 s | |
+
+So **the fixture phase is ~62% and the guards ~24%.** `kama build -j` parallelizes, but `run_tests.sh`
+deliberately pins `KAMA_BUILD_JOBS=1` and fans out per fixture instead, which is correct under a
+saturating fan-out. **Any future suite-speed work has to target the fixture phase** — the guard side is
+spent (below). A Defender exclusion on the runner's temp dir remains the cheapest untried lever, and it
+is machine configuration rather than anything the repo can ship.
+
+### The guard-spawn campaign — finished, with numbers worth keeping
+
+msys2 has no real `fork` and emulates it, which makes a process spawn pathologically expensive here and
+made three guards spend most of their time on string handling a shell builtin does for free. Measured
+idle on this box, and these ratios are **structural — portable Windows facts, unlike the seconds**:
+
+| operation (×100) | cost | per call |
+| --- | --- | --- |
+| `printf \| wc -c \| tr` | 15468 ms | 154.7 ms |
+| `${#var}` | 46 ms | 0.46 ms — **~336×** |
+| `$(dirname …)` | 4964 ms | 49.6 ms |
+| `${p%/*}` | 48 ms | 0.48 ms — **~103×** |
+
+`check-doc-claims` (495.8 s → out of the slowest-8), `check-query` (147 s → 89 s alone; 239 s → ~167 s
+in phase) and `check-lsp` (46 s → 12 s alone; 161 s → out of the slowest-8) were rewritten fork-free,
+each proven byte-identical on the happy *and* failure paths. ⚠️ **A guard costs far more inside the
+parallel phase than alone** (`check-lsp` 46 s → 161.5 s), because process creation is what contends —
+so removing spawns helps more than an isolated measurement predicts.
+
+⚠️ **Three substitutions that look obvious and are wrong** — each cost real time, and each is now
+commented at its call site:
+- **`${#var}` is not a drop-in for `printf | wc -c`.** `Content-Length` is a BYTE count and `${#}` is
+  locale-aware in bash; 6 of `check-lsp`'s 116 frames carry non-ASCII, where it reports short and
+  desyncs the stream. Toggle `LC_ALL=C` around the expansion (bash re-runs `setlocale` on an `LC_*`
+  assignment).
+- **`${p%/*}` is not a drop-in for `dirname`.** A slash-free path comes back unchanged, so a
+  walk-to-root loop never terminates; `/a` yields `""` rather than `/`.
+- **`case "$out" in *"$want"*)` must keep the variable QUOTED**, or `[`, `*` and `?` become globs. In
+  `check-query`'s `reject` that would report a prelude leak as clean.
+
+### ⚠️ This box cannot resolve a small wall-clock effect
+
+Measured 2026-09-12 with `./dev check`, 68 guards, 0 failed every run: 408 s before the sweep, 346 s
+after — and a **repeat of the identical post-change configuration gave 268 s**. Run-to-run spread (78 s)
+exceeds the effect being measured (62 s). A tell in the same data: `check-packages` "improved" ~20 s
+across those runs *without being touched*.
+
+So **per-guard numbers reproduce and phase totals do not** — `check-query` read 168.2 s and 166.7 s on
+the two post-change runs, 1% apart. Quote per-guard figures; treat any phase-wall claim as needing
+interleaved A/B/A/B over several runs, or a quieter machine. This is the same caveat as the QEMU/emulation
+note above, sharpened into a number.
+
+**What is deliberately NOT being pursued**, so it is not re-proposed as unexamined: `check-packages`
+(~175 s) and `check-manifest` (~120 s) are now the top guards and are **not** spawn-bound — 103 real
+`kama` invocations and 67 full build+link+run respectively, at ~2.8-2.9 s each, with six text-processing
+spawns in 1,185 lines and ~67 in 789. Their only lever is *fewer compiler invocations per guard*
+(sharing one published registry, `kama check` where no artifact is asserted), and the arithmetic caps
+that at ~147 s summed ≈ 20-30 s of suite wall — about **2%**. Genuinely optional until the guard phase
+is the bound again, which it is not.

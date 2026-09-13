@@ -32,7 +32,7 @@ frame() {
     # This was `printf '%s' "$body" | wc -c | tr -d ' '` — four processes per call, 116 calls — for a
     # length the shell knows. msys2 emulates `fork`: measured idle on this box, that pipeline costs
     # ~155 ms against ~0.5 ms for a parameter expansion, and the cost is worse still in the parallel guard
-    # phase, where process creation contends. Keep this fork-free. (KR-18.)
+    # phase, where process creation contends. Keep this fork-free. (docs/platforms/windows.md § The suite's wall clock.)
     _lc=${LC_ALL-__lc_unset__}; LC_ALL=C; len=${#body}
     if [ "$_lc" = __lc_unset__ ]; then unset LC_ALL; else LC_ALL=$_lc; fi
     printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body" >> "$session"
@@ -548,7 +548,7 @@ fail=0
 # substring test the shell does itself. QUOTING "$1" INSIDE THE PATTERN IS LOAD-BEARING — it is what keeps
 # `[`, `]`, `*` and `?` literal, and 42 of the substrings below carry brackets
 # (`'"diagnostics":[]'`, `'"triggerCharacters":[".",":"]'`). Unquoted, those 42 silently become globs and
-# the guard starts asserting something else. Same rule in cfgexpect/cfgreject. (KR-18.)
+# the guard starts asserting something else. Same rule in cfgexpect/cfgreject. (docs/platforms/windows.md § The suite's wall clock.)
 expect() {
     case "$out" in
         *"$1"*)
