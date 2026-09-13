@@ -1,0 +1,69 @@
+// std::uuid — a `Uuid` field on the wire is its canonical text, on every backend. JSON is the case that
+// matters (a database row or an HTTP body carries the string), and the positional KBIN round trip proves the
+// same body serves a backend with no names and no delimiters. Text that is not a UUID is `DeError::Malformed`
+// rather than a zero id. Six flags sum to 63.
+import { std::uuid::Uuid,
+         std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type value Order {
+    @field public Uuid id;
+    @field public int32 qty;
+    public ctor make(Uuid id, int32 qty) { this.id = id; this.qty = qty; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Uuid id = match (Uuid.parse(text: "017f22e2-79b0-7cc3-98c4-dc0c0c07398f")) {
+        case Ok(value: u): u;
+        case Err(error: e): { return 100; }
+    };
+    Order o = Order.make(id: id, qty: 3);
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: o);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 101; } };
+    if (j == "{\"id\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"qty\":3}") { r = r + 1; }
+
+    Result<Order, Owned<Error>> jb = deserializeJsonBuffer::<Order>(src: give j);
+    Order back = match (jb) { case Ok(value: x): x; case Err(error: e): { return 102; } };
+    if (back.id == id && back.qty == 3) { r = r + 2; }
+
+    // A bare `Uuid` is a JSON string on its own.
+    Uuid v = Uuid.v7();
+    Result<string, Owned<Error>> vr = serializeJsonBuffer(v: v);
+    string vj = match (give vr) { case Ok(value: x): give x; case Err(error: e): { return 103; } };
+    Result<Uuid, Owned<Error>> vb = deserializeJsonBuffer::<Uuid>(src: give vj);
+    Uuid v2 = match (vb) { case Ok(value: x): x; case Err(error: e): { return 104; } };
+    if (v2 == v) { r = r + 4; }
+
+    // The positional binary backend.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: o);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 105; } };
+    Result<Order, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Order>(src: give bytes);
+    Order pback = match (pb) { case Ok(value: x): x; case Err(error: e): { return 106; } };
+    if (pback.id == id && pback.qty == 3) { r = r + 8; }
+
+    // A string that is not a UUID fails the read, and says Malformed.
+    string bad = "{\"id\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398\",\"qty\":3}";
+    Result<Order, Owned<Error>> fb = deserializeJsonBuffer::<Order>(src: give bad);
+    bool malformed = match (fb) {
+        case Ok(value: x): false;
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: de): de == DeError::Malformed;
+            case None: false;
+        };
+    };
+    if (malformed) { r = r + 16; }
+
+    // A number where the string belongs is the reader's own error, not a parse of nothing.
+    string num = "{\"id\":42,\"qty\":3}";
+    Result<Order, Owned<Error>> nb = deserializeJsonBuffer::<Order>(src: give num);
+    bool refused = match (nb) { case Ok(value: x): false; case Err(error: e): true; };
+    if (refused) { r = r + 32; }
+
+    return r;
+}

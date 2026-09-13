@@ -1,0 +1,101 @@
+// std::uuid — the value side: parse, format, bytes, the special values, and the three contracts that make a
+// `Uuid` a key. The two example ids are RFC 9562 Appendix A.3 (v4) and A.6 (v7), so the text form, the byte
+// order and the v7 timestamp layout are pinned against the standard rather than against this module.
+// Eight flags sum to 255.
+import { std::uuid::Uuid, std::uuid::UuidError,
+         std::collections::Set, std::collections::SortedSet };
+
+fn bool failsAt(const ref string text, isize want) {
+    return match (Uuid.parse(text: text)) {
+        case Ok(value: u): false;
+        case Err(error: e): match (e) {
+            case InvalidCharacter(at: a): a == want;
+            case InvalidLength: false;
+        };
+    };
+}
+
+fn bool failsLength(const ref string text) {
+    return match (Uuid.parse(text: text)) {
+        case Ok(value: u): false;
+        case Err(error: e): match (e) {
+            case InvalidCharacter(at: a): false;
+            case InvalidLength: true;
+        };
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // RFC 9562 A.6: unix_ts_ms 0x017F22E279B0 (1645557742000), rand_a 0xCC3, rand_b 0x18C4DC0C0C07398F.
+    Uuid v7 = match (Uuid.parse(text: "017F22E2-79B0-7CC3-98C4-DC0C0C07398F")) {
+        case Ok(value: u): u;
+        case Err(error: e): { return 1; }
+    };
+    // Uppercase in, lowercase out — and the round trip is the identity.
+    string t7 = "${v7}";
+    bool ms = match (v7.unixMillis()) { case Some(value: m): m == 1645557742000i64; case None: false; };
+    if (t7 == "017f22e2-79b0-7cc3-98c4-dc0c0c07398f" && v7.version() == 7ui8 && ms) { r = r + 1; }
+
+    // RFC 9562 A.3, and a v4 has no timestamp to read.
+    Uuid v4 = match (Uuid.parse(text: "919108f7-52d1-4320-9bac-f847db4148a8")) {
+        case Ok(value: u): u;
+        case Err(error: e): { return 2; }
+    };
+    bool noMs = match (v4.unixMillis()) { case Some(value: m): false; case None: true; };
+    if ("${v4}" == "919108f7-52d1-4320-9bac-f847db4148a8" && v4.version() == 4ui8 && noMs) { r = r + 2; }
+
+    // Network byte order, both directions, and leading zeros survive formatting.
+    InlineArray<uint8>#(16) b = v7.bytes();
+    bool order = b[0] == 0x01ui8 && b[1] == 0x7Fui8 && b[6] == 0x7Cui8 && b[8] == 0x98ui8 && b[15] == 0x8Fui8;
+    InlineArray<uint8>#(16) small = [0; 16];
+    small[15] = 1ui8;
+    Uuid one = Uuid.fromBytes(bytes: small);
+    if (order && Uuid.fromBytes(bytes: b) == v7 && "${one}" == "00000000-0000-0000-0000-000000000001") { r = r + 4; }
+
+    // The special values bound every other id.
+    Uuid nil = Uuid.nil();
+    Uuid max = Uuid.max();
+    if ("${nil}" == "00000000-0000-0000-0000-000000000000" && "${max}" == "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        && nil < v7 && v7 < max && v4 > v7 && nil.version() == 0ui8) { r = r + 8; }
+
+    // Strict: every error says where, and a hyphen is only a hyphen in its four places.
+    if (failsLength(text: "") && failsLength(text: "017f22e279b07cc398c4dc0c0c07398f")
+        && failsLength(text: "{017f22e2-79b0-7cc3-98c4-dc0c0c07398f}")
+        && failsAt(text: "017f22e2-79b0-7cc3-98c4-dc0c0c07398g", want: 35)
+        && failsAt(text: "017f22e2+79b0-7cc3-98c4-dc0c0c07398f", want: 8)
+        && failsAt(text: "017f22e279b0-7cc3-98c4-dc0c0c07398f-", want: 8)
+        && failsAt(text: " 17f22e2-79b0-7cc3-98c4-dc0c0c07398f", want: 0)) { r = r + 16; }
+
+    // The error reads as a sentence.
+    string msg = match (Uuid.parse(text: "017f22e2-79b0-7cc3-98c4-dc0c0c07398g")) {
+        case Ok(value: u): "";
+        case Err(error: e): e.message();
+    };
+    if (msg == "invalid UUID character at byte 35") { r = r + 32; }
+
+    // Ordering is byte order: an id differing only in its last byte, and one only in its first.
+    InlineArray<uint8>#(16) later = v7.bytes();
+    later[15] = 0x90ui8;
+    InlineArray<uint8>#(16) first = v7.bytes();
+    first[0] = 0x02ui8;
+    Uuid l = Uuid.fromBytes(bytes: later);
+    Uuid f = Uuid.fromBytes(bytes: first);
+    if (v7 < l && l < f && v7 != l && v7.compareTo(other: v7) == Ordering::Equal) { r = r + 64; }
+
+    // A hash key and a sorted key. Swapping the two words must not collide the ids in a set.
+    Set<Uuid> seen = Set.empty();
+    seen.add(key: v7);
+    seen.add(key: v4);
+    seen.add(key: v7);
+    SortedSet<Uuid> sorted = SortedSet.empty();
+    sorted.add(key: f);
+    sorted.add(key: v7);
+    sorted.add(key: l);
+    Uuid lowest = match (sorted.first()) { case Some(value: u): u; case None: nil; };
+    if (seen.length() == 2 && seen.contains(key: v4) && !seen.contains(key: f)
+        && sorted.length() == 3 && lowest == v7) { r = r + 128; }
+
+    return r;
+}

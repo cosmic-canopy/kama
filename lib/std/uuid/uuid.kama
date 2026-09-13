@@ -1,0 +1,221 @@
+import { std::random::entropy, std::time::unixNow };
+export { Uuid, UuidError };
+
+// UUIDs — RFC 9562 (IETF, May 2024), which obsoletes RFC 4122. Two ways to make one:
+//
+//   `Uuid.v7()` — TIME-ORDERED, and the default for a key. A 48-bit big-endian Unix-millisecond prefix,
+//     then 12 bits of sub-millisecond time, then 62 random bits. Ids made later compare greater, so a
+//     B-tree or LSM index appends instead of splitting pages at random — the whole reason v7 exists.
+//   `Uuid.v4()` — 122 RANDOM bits and nothing else. For an id that must not reveal when it was made
+//     (RFC 9562 §6.12 names that case); it indexes like noise.
+//
+// A `Uuid` is a 16-byte VALUE — two words, big-endian octets 0-7 and 8-15 — so comparing `(hi, lo)` is
+// exactly the byte-lexicographic order the RFC sorts by, and equality, hashing and ordering cost two word
+// compares. There is no `string` convention beside it: a string compares by bytes too, but it is 36 bytes on
+// the heap, case-sensitive where the RFC is not, and parses nothing.
+//
+// TEXT is the canonical `8-4-4-4-12`. Formatting writes lowercase (RFC 9562 §4); parsing reads either case
+// and nothing else — no braces, no `urn:uuid:`, no un-hyphenated 32 digits, no whitespace. A wrapper is the
+// caller's to strip, the `std::encoding::hex` stance: a lenient parser has to decide which inputs mean what,
+// and that decision is not its. `Parseable` is a primitive-only contract, so the spelling is `Uuid.parse`,
+// the `hex::decode` shape, and it fails with a position rather than coming up absent.
+//
+// MONOTONICITY is RFC 9562 §6.2 Method 3 plus a strict-increase guard. The 12 `rand_a` bits carry the
+// sub-millisecond fraction of the wall clock, and if that 60-bit tick does not exceed the previous id's, it
+// becomes previous + 1. So ids from ONE isolate strictly increase — under a coarse clock (wasm), within
+// one tick, and when the wall clock steps backward, where the embedded time runs ahead until the clock
+// catches up. A carry out of the 12 bits advances the millisecond, which §6.2 permits; PostgreSQL 18's
+// `uuidv7()` does the same. The last tick is a module `static`, so it is per isolate: ids from two
+// isolates interleave to within a tick and are never equal, since each carries 62 bits from the OS
+// generator. A process-wide atomic would buy a cross-thread order no reader of the ids can observe.
+//
+// RANDOMNESS comes from `std::random::entropy`, the OS's own generator, on every call: the random bits of an
+// id are only worth having if they cannot be guessed (RFC 9562 §6.9). Each id draws one 16-byte buffer.
+// No pool is kept — it would park key-grade bytes in memory to save a syscall that Go's `uuid` and Postgres
+// both pay per id. ⚠️ A v7 still leaks its creation time, and neither version is an access token: an id is a
+// name, and anything that grants access by knowing one wants a real secret beside it.
+//
+// SERDE writes the canonical string on every backend. A UUID is serialized to meet a database or an HTTP
+// API, and a second, binary, wire form would make the bytes a program writes depend on which backend it
+// chose.
+
+// The length of the text form: 32 hex digits and 4 hyphens.
+comptime isize TEXTLEN = 36;
+
+type enum UuidError implements Error {
+    InvalidLength, InvalidCharacter(isize at);
+
+    public const fn string message() {
+        return match (this) {
+            case InvalidLength:           "a UUID is 36 characters: 8-4-4-4-12 hex digits";
+            case InvalidCharacter(at: a): "invalid UUID character at byte ${a}";
+        };
+    }
+}
+
+// The previous v7 tick in this isolate: Unix milliseconds << 12 | the 12-bit sub-millisecond fraction.
+static uint64 lastTicks;
+
+// One digit to its nibble, either case; 255 for anything that is not one.
+fn uint8 nibble(uint8 c) {
+    if (c >= 48ui8 && c <= 57ui8)  { return c - 48ui8; }          // 0-9
+    if (c >= 97ui8 && c <= 102ui8) { return c - 97ui8 + 10ui8; }  // a-f
+    if (c >= 65ui8 && c <= 70ui8)  { return c - 65ui8 + 10ui8; }  // A-F
+    return 255ui8;
+}
+
+// A hyphen belongs at exactly these four offsets of the text form.
+fn bool hyphenAt(isize i) { return i == 8 || i == 13 || i == 18 || i == 23; }
+
+// The next v7 tick: strictly greater than the last one this isolate handed out.
+fn uint64 nextTicks() {
+    int64 ns = unixNow().asUnixNanos();
+    if (ns < 0i64) { ns = 0i64; }                                  // a pre-1970 clock is not representable
+    uint64 u = cast<uint64>(ns);
+    uint64 frac = (u % 1000000ui64) * 4096ui64 / 1000000ui64;      // [0, 4096)
+    uint64 ticks = ((u / 1000000ui64) << 12ui64) | frac;
+    if (ticks <= lastTicks) { ticks = lastTicks + 1ui64; }
+    lastTicks = ticks;
+    return ticks;
+}
+
+// Big-endian: the first byte of `b` from `at` is the most significant of the word.
+fn uint64 loadWord(InlineArray<uint8>#(16) b, isize at) {
+    uint64 w = 0ui64;
+    isize i = 0;
+    while (i < 8) {
+        w = (w << 8ui64) | cast<uint64>(b[cast<usize>(at + i)]);
+        i = i + 1;
+    }
+    return w;
+}
+
+type value Uuid implements Equatable<This>, Comparable<This>, Hashable, Formattable,
+                           Serializable, Deserializable<This>, Sendable {
+    uint64 hi;
+    uint64 lo;
+
+    ctor words(uint64 hi, uint64 lo) {
+        this.hi = hi;
+        this.lo = lo;
+    }
+
+    // A time-ordered id. Strictly greater than the previous `v7()` made by this isolate.
+    public ctor v7() {
+        uint64 ticks = nextTicks();
+        InlineArray<uint8>#(16) b = [0; 16];
+        borrow b.viewMut() as v { entropy(into: v); }
+        // unix_ts_ms (48) | ver (4) | rand_a (12) — the tick's millisecond part, then its fraction.
+        uint64 hi = ((ticks >> 12ui64) << 16ui64) | 0x7000ui64 | (ticks & 0xFFFui64);
+        return Uuid.words(hi: hi, lo: (loadWord(b: b, at: 8) & 0x3FFFFFFFFFFFFFFFui64) | 0x8000000000000000ui64);
+    }
+
+    // A random id: 122 bits from the OS generator, version 4, the RFC 9562 variant.
+    public ctor v4() {
+        InlineArray<uint8>#(16) b = [0; 16];
+        borrow b.viewMut() as v { entropy(into: v); }
+        uint64 hi = (loadWord(b: b, at: 0) & 0xFFFFFFFFFFFF0FFFui64) | 0x4000ui64;
+        return Uuid.words(hi: hi, lo: (loadWord(b: b, at: 8) & 0x3FFFFFFFFFFFFFFFui64) | 0x8000000000000000ui64);
+    }
+
+    // All zero bits (RFC 9562 §5.9) and all one bits (§5.10): the least and greatest UUIDs.
+    public ctor nil() { return Uuid.words(hi: 0ui64, lo: 0ui64); }
+    public ctor max() { return Uuid.words(hi: 0xFFFFFFFFFFFFFFFFui64, lo: 0xFFFFFFFFFFFFFFFFui64); }
+
+    // The 16 octets in network order — what a database's binary UUID column and a wire protocol carry.
+    // Any 16 bytes are accepted; the version and variant are whatever they say.
+    public ctor fromBytes(InlineArray<uint8>#(16) bytes) {
+        return Uuid.words(hi: loadWord(b: bytes, at: 0), lo: loadWord(b: bytes, at: 8));
+    }
+
+    public const fn InlineArray<uint8>#(16) bytes() {
+        InlineArray<uint8>#(16) octets = [0; 16];
+        isize i = 0;
+        while (i < 8) {
+            uint64 shift = cast<uint64>(56 - i * 8);
+            octets[cast<usize>(i)]     = truncate<uint8>((this.hi >> shift) & 255ui64);
+            octets[cast<usize>(8 + i)] = truncate<uint8>((this.lo >> shift) & 255ui64);
+            i = i + 1;
+        }
+        return octets;
+    }
+
+    // The canonical text form, hex digits in either case. Anything else is an error that says where.
+    public ctor Result<Uuid, UuidError> parse(const ref string text) {
+        if (text.length() != TEXTLEN) { return Result::Err(error: UuidError::InvalidLength); }
+        uint64 hi = 0ui64;
+        uint64 lo = 0ui64;
+        isize nibbles = 0;
+        isize i = 0;
+        while (i < TEXTLEN) {
+            uint8 c = text[i];
+            if (hyphenAt(i: i)) {
+                if (c != 45ui8) { return Result::Err(error: UuidError::InvalidCharacter(at: i)); }   // '-'
+            } else {
+                uint8 n = nibble(c: c);
+                if (n == 255ui8) { return Result::Err(error: UuidError::InvalidCharacter(at: i)); }
+                if (nibbles < 16) { hi = (hi << 4ui64) | cast<uint64>(n); }
+                else              { lo = (lo << 4ui64) | cast<uint64>(n); }
+                nibbles = nibbles + 1;
+            }
+            i = i + 1;
+        }
+        return Result::Ok(value: Uuid.words(hi: hi, lo: lo));
+    }
+
+    // The 4-bit version field as stored: 7 or 4 for the ids made here, anything at all for `fromBytes`.
+    public const fn uint8 version() { return truncate<uint8>((this.hi >> 12ui64) & 15ui64); }
+
+    // The creation time of a v7, in Unix milliseconds; `None` for any other version or variant, which
+    // has no timestamp to read. A v7 made while the clock stood still can run a little ahead (see above).
+    public const fn Optional<int64> unixMillis() {
+        if ((this.lo >> 62ui64) != 2ui64 || this.version() != 7ui8) { return Optional::None; }
+        return Optional::Some(value: cast<int64>(this.hi >> 16ui64));
+    }
+
+    public const fn bool equals(const ref Uuid other) { return this.hi == other.hi && this.lo == other.lo; }
+
+    public const fn Ordering compareTo(const ref Uuid other) {
+        if (this.hi < other.hi) { return Ordering::Less; }
+        if (this.hi > other.hi) { return Ordering::Greater; }
+        if (this.lo < other.lo) { return Ordering::Less; }
+        if (this.lo > other.lo) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+
+    // A content hash, like an integer's: the map's finalizer does the mixing. The multiply keeps the two
+    // words from cancelling (a plain `hi ^ lo` collides every id with its halves swapped).
+    public const fn uint64 hash() { return (this.hi * 0x9E3779B97F4A7C15ui64) ^ this.lo; }
+
+    // Lowercase `8-4-4-4-12`, zero-padded: time_low, time_mid, time_hi_and_version, the clock sequence
+    // with the variant, and the node.
+    public const fn void format(ref Formatter f) {
+        f.writeU64Radix(v: this.hi >> 32ui64, radix: 16, width: 32, upper: 0, prefix: 0, pad: 8, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: this.hi >> 16ui64, radix: 16, width: 16, upper: 0, prefix: 0, pad: 4, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: this.hi, radix: 16, width: 16, upper: 0, prefix: 0, pad: 4, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: this.lo >> 48ui64, radix: 16, width: 16, upper: 0, prefix: 0, pad: 4, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: this.lo, radix: 16, width: 48, upper: 0, prefix: 0, pad: 12, flags: 1);
+    }
+
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        Formatter f = Formatter.make();
+        this.format(f: ref f);
+        string text = f.finish();
+        w.writeString(v: ref text);
+        if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Uuid, Owned<Error>> deserialize(Deserializer r) {
+        string text = r.readString();
+        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        return match (Uuid.parse(text: text)) {
+            case Ok(value: u): Result::Ok(value: u);
+            case Err(error: pe): { r.failWith(e: DeError::Malformed); return Result::Err(error: DeError::Malformed); }
+        };
+    }
+}

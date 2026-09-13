@@ -1807,6 +1807,52 @@ by hand, and give the same bytes on every target; the fixtures pin the FIPS 180-
 million-`a` message, streamed in odd-sized pieces) and the RFC 6455 example. HMAC and SHA-512 are the
 recorded next cut.
 
+### UUID (`std::uuid`) ✅
+
+`import { std::uuid::Uuid, std::uuid::UuidError };` — RFC 9562 identifiers as a 16-byte **value**, made
+two ways: `v7`, time-ordered and the default for a key, and `v4`, for an id that must not say when it was
+made.
+
+```kama
+Uuid id  = Uuid.v7();                               // later ids compare greater
+Uuid tok = Uuid.v4();                               // 122 random bits, no timestamp
+string s = "${id}";                                 // "01932c07-a4b2-7c3e-8f1a-5b6c7d8e9f00"
+Result<Uuid, UuidError> r = Uuid.parse(text: s);    // either case in, strict 8-4-4-4-12
+InlineArray<uint8>#(16) raw = id.bytes();           // network order: a binary column, a wire field
+Optional<int64> ms = id.unixMillis();               // Some for a v7, None for anything else
+Map<Uuid, Account> byId = Map.empty();              // Hashable, Comparable, Sendable, serde-ready
+```
+
+**Why v7 is the default.** A v7 is a 48-bit Unix-millisecond prefix, 12 bits of sub-millisecond time and
+62 random bits, so ids made later sort later and a B-tree or LSM index appends instead of splitting pages
+at random. A v4 indexes like noise, and that is also its use: RFC 9562 §6.12 names the id whose creation
+time must not leak. .NET 9, Python 3.14, Ruby 3.3 and PostgreSQL 18 all added v7 for the same reason;
+Go, Rust and Zig leave UUIDs to a package, and the ubiquity of that package is the argument for `std`.
+<!-- test: uuid_text, uuid_generate -->
+
+**Six deliberate answers:**
+1. **A type, not a `string` convention.** Two big-endian words, so `<` is exactly the RFC's byte order
+   (not Java's signed-`long` order), `bytes()` is network order (not .NET's mixed-endian `ToByteArray`),
+   and nothing allocates. <!-- test: uuid_text -->
+2. **Text is canonical and parsing is strict.** `"${id}"` writes lowercase `8-4-4-4-12`; `Uuid.parse`
+   reads either case and nothing else — braces, `urn:uuid:`, 32 bare digits and whitespace are
+   `InvalidLength` or `InvalidCharacter(at:)`, the `hex` stance: the caller strips a wrapper. It is a
+   `Result` because `Parseable` is a primitive-only contract. <!-- test: uuid_text -->
+3. **Strictly increasing within an isolate** (RFC 9562 §6.2 Method 3). The 12 `rand_a` bits carry the
+   clock's sub-millisecond fraction, and a tick that does not exceed the previous id's becomes previous + 1
+   — under a coarse clock, inside one tick, and when the wall clock steps backward, where the embedded time
+   runs ahead until the clock catches up (PostgreSQL 18's `uuidv7()` does the same). <!-- test: uuid_generate -->
+4. **Per isolate, not process-wide.** The last tick is a module `static`. Ids from two isolates interleave
+   to within a tick and never collide, since each carries 62 bits from the OS generator; a cross-thread
+   order is not something a reader of the ids could observe.
+5. **Every id draws from the OS generator** (`std::random::entropy`), because the random bits are only
+   worth having unguessable (§6.9), and no pool keeps key-grade bytes in memory to save the syscall. An
+   id is still a name, not a credential: a v7 dates itself, and anything that grants access by knowing an
+   id wants a secret beside it.
+6. **On the wire a `Uuid` is its canonical string, on every backend.** It is serialized to meet a
+   database or an HTTP API, and text that is not a UUID fails the read as `DeError::Malformed` rather than
+   decoding to some id. <!-- test: uuid_serde -->
+
 ### Encoding (`std::encoding`) ✅
 
 `import { std::encoding::base64::serializeJsonBuffer, std::encoding::base64::deserializeJsonBuffer, std::encoding::base64::encodeUrl,

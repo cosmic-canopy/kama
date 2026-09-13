@@ -45,22 +45,6 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 **The language surface is feature-complete.** Anything that would *break* source has to land before the
 tag or wait for 2.0.
 
-### UUIDv7 (2026-09-11)
-
-RFC 9562 (IETF, May 2024). Freely implementable — an IETF standards-track RFC carries no licensing
-constraint on implementations. A v7 is a 48-bit big-endian Unix-millisecond prefix followed by randomness
-with the version/variant bits pinned, so ids generated over time sort by creation order; that is the whole
-reason to want it over v4, since a time-ordered key is dramatically kinder to a B-tree index or an LSM store
-than a uniformly random one.
-
-Both halves already ship — `std::random` for the CSPRNG and `std::time` for the millisecond clock — so this
-is a library row, not a subsystem. What has to be decided rather than discovered: whether the type is a
-`type value Uuid` (128 bits, `Formattable`/`Parseable`/`Hashable`/`Comparable`, and `Comparable` is what
-makes the sort order a usable property) or a `string` convention; whether v4 ships beside it for the cases
-where time-ordering leaks information; and the canonical hyphenated text form on both the parse and format
-sides. Monotonicity within a single millisecond is the one genuinely subtle part — the RFC offers several
-counter methods, and picking one is a decision to write down rather than to leave to the implementation.
-
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no

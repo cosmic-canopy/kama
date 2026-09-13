@@ -1,0 +1,61 @@
+// std::uuid — generation: the version and variant bits of both kinds, a v7's timestamp against the wall
+// clock, and the property v7 exists for. 100 000 consecutive v7s must STRICTLY increase: far more than one
+// per clock tick, so this is the strict-increase guard being exercised, not the clock. It runs on every leg —
+// the wasm leg is the coarse-clock case. Six flags sum to 63.
+import { std::uuid::Uuid, std::time::unixNow, std::collections::DynamicArray, std::collections::sort };
+
+// RFC 9562 variant: the top two bits of octet 8 are `10`.
+fn bool rfcVariant(Uuid u) {
+    InlineArray<uint8>#(16) b = u.bytes();
+    return (b[8] & 0xC0ui8) == 0x80ui8;
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    Uuid a = Uuid.v4();
+    Uuid b = Uuid.v4();
+    bool none = match (a.unixMillis()) { case Some(value: m): false; case None: true; };
+    if (a.version() == 4ui8 && rfcVariant(u: a) && rfcVariant(u: b) && a != b && none) { r = r + 1; }
+
+    int64 before = unixNow().asUnixMillis();
+    Uuid s = Uuid.v7();
+    int64 after = unixNow().asUnixMillis();
+    int64 ms = match (s.unixMillis()) { case Some(value: m): m; case None: 0i64 - 1i64; };
+    if (s.version() == 7ui8 && rfcVariant(u: s)) { r = r + 2; }
+    // The first id of the process carries the clock it read. (Later ones may run ahead: see the guard.)
+    if (ms >= before && ms <= after) { r = r + 4; }
+
+    // Strictly increasing, every one of them.
+    DynamicArray<Uuid> ids = DynamicArray::<Uuid>.empty();
+    Uuid prev = Uuid.v7();
+    bool increasing = prev > s;
+    isize i = 0;
+    while (i < 100000) {
+        Uuid next = Uuid.v7();
+        if (!(next > prev)) { increasing = false; }
+        if (i < 1000) { ids.add(item: next); }
+        prev = next;
+        i = i + 1;
+    }
+    if (increasing) { r = r + 8; }
+
+    // Sorting a batch changes nothing: generation order IS sort order.
+    DynamicArray<Uuid> sorted = DynamicArray::<Uuid>.empty();
+    i = 0;
+    while (i < ids.length()) { sorted.add(item: ids[i]); i = i + 1; }
+    borrow sorted.viewMut() as v { sort(items: v); }
+    bool same = sorted.length() == 1000;
+    i = 0;
+    while (i < sorted.length()) { if (sorted[i] != ids[i]) { same = false; } i = i + 1; }
+    if (same) { r = r + 16; }
+
+    // …and every id after the loop is still a v7 whose clock has not run far ahead: the guard borrows at
+    // most one tick (1/4096 ms) per id beyond what the clock supplied.
+    Uuid last = Uuid.v7();
+    int64 lastMs = match (last.unixMillis()) { case Some(value: m): m; case None: 0i64; };
+    int64 now = unixNow().asUnixMillis();
+    if (last.version() == 7ui8 && lastMs >= ms && lastMs <= now + 25i64) { r = r + 32; }
+
+    return r;
+}

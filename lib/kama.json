@@ -104,6 +104,9 @@
     },
     "time": {
       "visibility": "public"
+    },
+    "uuid": {
+      "visibility": "public"
     }
   }
 }
