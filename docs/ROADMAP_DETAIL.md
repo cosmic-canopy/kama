@@ -285,9 +285,14 @@ declaration, never on a parameter, so the claim is made once and checked at ever
 fn`); the marker records who owns the layout, not which way the call goes.
 
 **Measured impact:** across `lib`/`prelude`/`tests`/`examples`/`bench`, the only plain-value crossings are two
-xfail fixtures (`foreign_callback_in_plain_struct`, `expose_generic`). Open question for the row: whether a
-`type expose value` may carry methods — `type extern value` may not (nothing would emit the body), but kama
-emits an expose type, so the reason does not apply; Rust's `#[repr(C)]` structs have methods.
+xfail fixtures (`foreign_callback_in_plain_struct`, `expose_generic`). **Ruled 2026-09-12: a `type expose value` may carry
+methods and ctors.** `type extern value` may not because nothing would emit the body; kama emits an expose type, so
+that reason does not apply. Members are not part of the layout — the host sees the struct and nothing else — so
+they cost the crossing nothing. What they buy is ONE type: without them a crossing value needs a plain `type value`
+for kama-side behaviour plus a layout twin, and a field-by-field conversion at every boundary. Construction is the
+ordinary kama spelling (`Vec2.of(…)`); whether an expose type also takes `type extern value`'s by-name aggregate
+init is the one thing left to settle while building it ("one way to do a thing" says ctors only). Precedent: Rust
+`#[repr(C)]` structs have `impl` blocks.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
