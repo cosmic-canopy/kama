@@ -8383,6 +8383,10 @@ static bool enumIsTagged(EnumDeclarationNode* ed)
 // `node` (that one is a ClassDeclarationNode), so anything reporting a diagnostic against a type must come
 // through here rather than dereferencing `node`.
 int ClassInfo::declLine() const { return node ? node->line : (enumNode ? enumNode->line : 0); }
+ClassBaseDeclarationNode* ClassInfo::baseTypesDecl() const
+{
+    return node ? node->baseTypes.get() : (enumNode ? enumNode->baseTypes.get() : nullptr);
+}
 
 ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name)
 {
@@ -11649,43 +11653,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                 kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
         }
     }
-    // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances). A
-    // generic contract implemented with the class's own param (`Box<T> implements Deref<T>`) mangles to the
-    // concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
-    if (ci.node && ci.node->baseTypes && ci.node->baseTypes->interfaces) {
-        ci.interfaces.clear();
-        // `This` is bound to THIS instance, not the template: a pinned conformance on a generic type
-        // (`DynamicArray<T,A> implements Copyable<This>`) has to name `Copyable_DynamicArray_int32...`,
-        // one per instance. linkBases skips generic instances, so this is the only place it can happen —
-        // without it every instance registers the literal `Copyable_This` and they all collide.
-        ScopedStr  _ts(_thisType, mangled);
-        ScopedThis _tt(_typeSubst, synthId(mangled));
-        for (auto& itf : *ci.node->baseTypes->interfaces) {
-            if (!itf || !itf->value) continue;
-            // A conditional interface (`Copyable(bare:) when […]`, `Iterable<T> when […]`) is present only
-            // when its when-conditions hold for this instance — drop it otherwise (generalizes the old
-            // Copyable-only gate; the methods it fronts are dropped by the method gate above).
-            if (itf->whenParams && !itf->whenParams->empty()) {
-                std::vector<std::string> wp, wb;
-                std::vector<SharedIdentifier> wn;
-                for (size_t c = 0; c < itf->whenParams->size(); ++c) {
-                    auto& p = (*itf->whenParams)[c];
-                    auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
-                    wp.push_back(p && p->value ? *p->value : "");
-                    wb.push_back(resolveWhenBound(b));
-                    wn.push_back(b);
-                }
-                if (!whenConditionsHold(wp, wb, wn, params, concrete)) continue;
-            }
-            std::string base = resolveUserName(*itf->value, itf->qualifier);
-            if (itf->genericArg && _genericContracts.count(base)) {
-                scanTypeForGenericContracts(itf);                     // register `Deref_Point` under subst
-                base = genericTypeMangle(base, itf->genericArgs);     // mangleElem resolves the class param
-            }
-            ci.interfaces.push_back(base);
-        }
-    }
+    // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances).
+    if (ci.baseTypesDecl() && ci.baseTypesDecl()->interfaces && (!ci.enumNode || _filledEnumTemplates.count(tmpl)))
+        ci.interfaces = instanceInterfaces(ci, mangled, params, concrete);
     _classes[mangled] = ci;
+    if (ci.enumNode && _filledEnumTemplates.count(tmpl)) checkEnumInstanceConformances(_classes[mangled], tmpl);
 
     // Transitive close: register any collection / generic type the substituted members use.
     for (auto& f : ci.fields) scanTypeForCollections(f.type);
@@ -11729,6 +11701,104 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
+}
+
+// A generic instance's `implements` list, resolved under THIS instance's subst (which the caller has bound).
+// A generic contract implemented with the type's own param (`Box<T> implements Deref<T>`) mangles to the
+// concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
+std::vector<std::string> CEmitter::instanceInterfaces(const ClassInfo& ci, const std::string& mangled,
+                                                      const std::vector<std::string>& params,
+                                                      const std::vector<SharedIdentifier>& concrete)
+{
+    std::vector<std::string> out;
+    // `This` is bound to THIS instance, not the template: a pinned conformance on a generic type
+    // (`DynamicArray<T,A> implements Copyable<This>`) has to name `Copyable_DynamicArray_int32...`,
+    // one per instance. linkBases skips generic instances, so this is the only place it can happen —
+    // without it every instance registers the literal `Copyable_This` and they all collide.
+    ScopedStr  _ts(_thisType, mangled);
+    ScopedThis _tt(_typeSubst, synthId(mangled));
+    for (auto& itf : *ci.baseTypesDecl()->interfaces) {
+        if (!itf || !itf->value) continue;
+        // A conditional interface (`Copyable(bare:) when […]`, `Iterable<T> when […]`) is present only
+        // when its when-conditions hold for this instance — drop it otherwise (generalizes the old
+        // Copyable-only gate; the methods it fronts are dropped by the method gate).
+        if (itf->whenParams && !itf->whenParams->empty()) {
+            std::vector<std::string> wp, wb;
+            std::vector<SharedIdentifier> wn;
+            for (size_t c = 0; c < itf->whenParams->size(); ++c) {
+                auto& p = (*itf->whenParams)[c];
+                auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+                wp.push_back(p && p->value ? *p->value : "");
+                wb.push_back(resolveWhenBound(b));
+                wn.push_back(b);
+            }
+            if (!whenConditionsHold(wp, wb, wn, params, concrete)) continue;
+        }
+        std::string base = resolveUserName(*itf->value, itf->qualifier);
+        if (itf->genericArg && _genericContracts.count(base)) {
+            scanTypeForGenericContracts(itf);                     // register `Deref_Point` under subst
+            base = genericTypeMangle(base, itf->genericArgs);     // mangleElem resolves the class param
+        }
+        out.push_back(base);
+    }
+    return out;
+}
+
+// A generic ENUM instance's conformances are checked here, per instance, because an enum has no
+// `ClassDeclarationNode` and so never reaches the class conformance sweep — the concrete-enum path
+// (collectEnumConformances) checks its own the same way. Reported against the template's declaration, in
+// the template's FILE, so N instances missing the same method are one diagnostic, not N.
+void CEmitter::checkEnumInstanceConformances(ClassInfo& inst, const std::string& tmpl)
+{
+    ScopedStr _cu(_collectingUnitPath, inst.declFile);
+    const std::string bare = inst.enumNode && inst.enumNode->identifier ? *inst.enumNode->identifier->value : tmpl;
+    for (auto& c : inst.interfaces) {
+        _polyDispatchContracts.insert(c);   // dynamic dispatch through a fat pointer + boxing into `Owned<C>`
+        checkImplCompleteness(inst, c, bare, inst.declLine());
+    }
+}
+
+// Bring an instance cut BEFORE its generic enum's template was filled (collectEnumConformances) up to date:
+// a prelude derive or a signature scan registers `Result<…>`/`Optional<…>` instances long before contracts
+// exist. The template's methods and `implements` list are applied exactly as registerGenericTypeInst would
+// have applied them, and ADDED to what the instance already holds — its derived members stay.
+void CEmitter::instantiateEnumMembers(const GenericTypeInst& gi)
+{
+    auto ci = _classes.find(gi.mangledName);
+    auto ti = _genericTypes.find(gi.templateKey);
+    if (ci == _classes.end() || ti == _genericTypes.end()) return;
+    const std::vector<std::string>& params = _genericTypeParams[gi.templateKey];
+    NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    _nsCtx = _genericTypeCtx[gi.templateKey];
+    _typeSubst.clear();
+    for (size_t i = 0; i < params.size() && i < gi.typeArgs.size(); ++i) _typeSubst[params[i]] = gi.typeArgs[i];
+    ClassInfo& inst = ci->second;
+    {
+        ScopedStr _ts(_thisType, gi.mangledName);
+        for (auto& kv : ti->second.methods) {
+            if (inst.methods.count(kv.first)) continue;
+            const MethodInfo& tm = kv.second;
+            if (!tm.whenParams.empty()
+                && !whenConditionsHold(tm.whenParams, tm.whenBounds, tm.whenBoundNodes, params, gi.typeArgs))
+                continue;
+            MethodInfo mi = tm;
+            mi.cName  = gi.mangledName + "__" + kv.first;
+            mi.params = paramSigsOf(tm.node->params);
+            inst.methods[kv.first] = mi;
+        }
+    }
+    if (inst.baseTypesDecl() && inst.baseTypesDecl()->interfaces)
+        for (auto& c : instanceInterfaces(inst, gi.mangledName, params, gi.typeArgs))
+            if (std::find(inst.interfaces.begin(), inst.interfaces.end(), c) == inst.interfaces.end())
+                inst.interfaces.push_back(c);
+    for (auto& kv : inst.methods) {
+        scanTypeForCollections(kv.second.returnType);
+        if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
+    }
+    _typeSubst = savedSubst;
+    _nsCtx = savedCtx;
+    checkEnumInstanceConformances(_classes[gi.mangledName], gi.templateKey);
 }
 
 // A contract's method-prototype list — from _interfaces (a concrete contract or a specialized
@@ -17249,6 +17319,40 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // A recorded conformance is STATIC-dispatch-only (it lands in `staticOnlyInterfaces`, so no fat-pointer
 // vtable is emitted for it). `isPrimitive` gates the serde-return scan: a primitive's
 // `Result<scalar, Owned<Error>>` monomorph only matters when the program actually uses serde.
+// The MethodInfo for a method declared in a `type enum`'s own body or a `type intrinsic` block — both
+// always public, and neither has a `ClassDeclarationNode` to come through collectClasses. A `when [...]`
+// gate is recorded for a GENERIC enum's template, where each instance judges it.
+MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey,
+                                    const std::string& contract)
+{
+    const std::string mname = *md->name->value;
+    MethodInfo mi;
+    mi.cName        = tkey + "__" + mname;
+    mi.returnType   = md->returnType;
+    mi.params       = paramSigsOf(md->params);
+    mi.node         = md;
+    mi.isConst      = md->isConst;
+    checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, mname, md->line);
+    mi.isUnsafe     = modHas(md->modifiers, "unsafe");
+    mi.isPlaceReturn = md->isRef;
+    mi.isConstPlace  = md->isConstRef;
+    // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
+    // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
+    mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
+    mi.isCtor       = md->isCtor;
+    mi.visibility   = Visibility::Public;   // a contract's methods are public
+    mi.fromContract = contract;             // an injected method, not part of the type's own API
+    if (md->whenParams)
+        for (size_t c = 0; c < md->whenParams->size(); ++c) {
+            auto& p = (*md->whenParams)[c];
+            auto& b = md->whenBounds ? (*md->whenBounds)[c] : p;
+            mi.whenParams.push_back(p && p->value ? *p->value : "");
+            mi.whenBounds.push_back(resolveWhenBound(b));
+            mi.whenBoundNodes.push_back(b);
+        }
+    return mi;
+}
+
 void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                                  const std::string& contract, const std::string& tkey,
                                  bool isPrimitive)
@@ -17263,22 +17367,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                              + "` conflicts with an existing method on the type").c_str(), md->line);
                 continue;
             }
-            MethodInfo mi;
-            mi.cName        = tkey + "__" + mname;
-            mi.returnType   = md->returnType;
-            mi.params       = paramSigsOf(md->params);
-            mi.node         = md;
-            mi.isConst      = md->isConst;
-            checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, mname, md->line);
-            mi.isUnsafe     = modHas(md->modifiers, "unsafe");
-            mi.isPlaceReturn = md->isRef;
-            mi.isConstPlace  = md->isConstRef;
-            // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
-            // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
-            mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
-            mi.isCtor       = md->isCtor;
-            mi.visibility   = Visibility::Public;   // a contract's methods are public
-            mi.fromContract = contract;             // an injected method, not part of the type's own API
+            MethodInfo mi = enumMethodInfo(md, tkey, contract);
             // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
             // only matters when the program uses serde — skip registering it otherwise (the impl itself
             // is likewise gated off in emitHeaderContent). Every other return scans normally.
@@ -17332,16 +17421,52 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             if (ed->baseTypes && ed->baseTypes->base)
                 unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
                              "a contract is declared with `implements`").c_str(), ed->line);
+            std::string name = qualify(bare);
+
+            // An enum's layout is its tag plus its variant payloads — there is no struct to add a field
+            // to, and nothing else it could own, so a field or a destructor is a mistake worth naming
+            // rather than dropping silently (the method loops only look at methods). Generic or not.
+            if (ed->members)
+                for (auto& m : *ed->members) {
+                    if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
+                        unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
+                                     "its tag and its variant payloads; put the data in a variant payload")
+                                    .c_str(), m->line);
+                    else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
+                        unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
+                                     "nothing beyond its payloads, which drop themselves").c_str(), m->line);
+                }
+
             if (ed->typeParams && !ed->typeParams->empty()) {
-                // A generic enum's `@generate` is handled at its TEMPLATE (collectEnums) and applied per
-                // instance, so it never needs this path; only members/contracts are refused here.
-                if (hasMembers || hasIfaces)
-                    unsupported(("`type enum " + bare + "<…>` cannot declare members or contracts yet — a "
-                                 "generic enum is a monomorphization template, so each instance would need its "
-                                 "own conformance").c_str(), ed->line);
+                // A generic enum is a monomorphization TEMPLATE: its members and `implements` list land on
+                // the template here, and each instance takes them per instance — a `when [...]` gate judged
+                // against that instance's arguments, exactly as a generic class's are. `@generate` never
+                // needs this path (collectEnums applies it per instance). The template is filled HERE and
+                // not in collectEnums because a `when` bound names a contract, and contracts are collected
+                // after enums; an instance cut before now is refreshed below.
+                auto tt = _genericTypes.find(name);
+                if (tt == _genericTypes.end()) continue;   // errored earlier — already diagnosed
+                ClassInfo& tmpl = tt->second;
+                if (ed->members)
+                    for (auto& m : *ed->members) {
+                        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+                        if (!md || !md->name || !md->name->value) continue;
+                        const std::string mname = *md->name->value;
+                        if (tmpl.methods.count(mname)) {
+                            unsupported(("duplicate method '" + mname + "' in '" + bare + "'").c_str(), md->line);
+                            continue;
+                        }
+                        tmpl.methods[mname] = enumMethodInfo(md, name, /*contract=*/"");
+                    }
+                // From here on a new instance takes its `implements` list at registration; the ones cut
+                // earlier are refreshed. Copied first: a refresh scans member types, which can register more.
+                _filledEnumTemplates.insert(name);
+                std::vector<GenericTypeInst> earlier;
+                for (auto& kv : _genericTypeInsts)
+                    if (kv.second.templateKey == name) earlier.push_back(kv.second);
+                for (auto& gi : earlier) instantiateEnumMembers(gi);
                 continue;
             }
-            std::string name = qualify(bare);
 
             // Resolve the declared contracts under the ENUM's own ns context (already active), with
             // `This` bound so a PINNED contract mangles to this enum (`Comparable<This>` -> `Comparable_Color`).
@@ -17370,20 +17495,6 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             // header — which means its PROTOTYPES must be static too, or the C compiler sees a static
             // declaration following a non-static one. `preludeStatic` is what drives that linkage.
             if (_preludeEnums.count(name)) eci.preludeStatic = true;
-
-            // An enum's layout is its tag plus its variant payloads — there is no struct to add a field
-            // to, and nothing else it could own, so a field or a destructor is a mistake worth naming
-            // rather than dropping silently (injectImplMethods only looks at methods).
-            if (ed->members)
-                for (auto& m : *ed->members) {
-                    if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
-                        unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
-                                     "its tag and its variant payloads; put the data in a variant payload")
-                                    .c_str(), m->line);
-                    else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
-                        unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
-                                     "nothing beyond its payloads, which drop themselves").c_str(), m->line);
-                }
 
             // The members are the enum's OWN API (empty `contract` — they are declared in its own body),
             // unlike a `type intrinsic` block's, which belong to the contract that carried them in.
@@ -26673,10 +26784,10 @@ void CEmitter::regateGenericInstances()
             inst.methods.erase(mkv.first);
             inst.ctors.erase(mkv.first);
         }
-        if (ti->second.node && ti->second.node->baseTypes && ti->second.node->baseTypes->interfaces) {
+        if (ti->second.baseTypesDecl() && ti->second.baseTypesDecl()->interfaces) {
             ScopedStr  _ts(_thisType, gi.mangledName);
             ScopedThis _tt(_typeSubst, synthId(gi.mangledName));
-            for (auto& itf : *ti->second.node->baseTypes->interfaces) {
+            for (auto& itf : *ti->second.baseTypesDecl()->interfaces) {
                 if (!itf || !itf->value || !itf->whenParams || itf->whenParams->empty()) continue;
                 std::vector<std::string> wp, wb;
                 std::vector<SharedIdentifier> wn;

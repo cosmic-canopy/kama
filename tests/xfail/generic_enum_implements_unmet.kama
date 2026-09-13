@@ -1,0 +1,6 @@
+// `Maybe<T> implements Tag when [T: Tag]` — `Maybe<Plain>` does not meet the gate, so it does not implement
+// `Tag`, and binding it to a `Tag` is refused like any non-implementer.
+type contract Tag for value, enum { fn int32 tag(); }
+type value Plain { public int32 v; public ctor of(int32 v) { this.v = v; } }
+type enum Maybe<T> implements Tag when [T: Tag] { Has(T v), Nope; public fn int32 tag() when [T: Tag] { return 1; } }
+fn int32 main() { Maybe<Plain> p = Maybe::Nope; Tag t = p; return 0; }

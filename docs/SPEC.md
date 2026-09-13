@@ -4217,9 +4217,25 @@ type enum IoError : uint8 implements Error {
 The `;` separating variants from members is **mandatory**, and it is what makes the body unambiguous: a
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract, but **not a field or a destructor** — its layout is its tag plus its
-variant payloads, and it owns nothing beyond them. Declaring a method-carrying contract gives a
+variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Declaring a method-carrying contract gives a
 payload-less enum a tagged representation so it can hold the method and a dispatch vtable; that is
 transparent to its by-value uses.
+
+A **generic** enum declares members and contracts the same way, and — like a generic `value` — each
+instance takes them **per instance**: a `when [...]` gate on a method or on an `implements` entry is judged
+against that instance's own arguments.
+
+```kama
+type enum Maybe<T> implements Tag when [T: Tag] {
+    Has(T v), Nope;
+    public const fn bool has() { return match (this) { case Has(v: v): true; case Nope: false; }; }
+    public fn int32 tag() when [T: Tag] { return match (this) { case Has(v: v): v.tag(); case Nope: 0; }; }
+}
+```
+
+`Maybe<Tagged>` implements `Tag` and has `tag()`; `Maybe<Plain>` has neither, and binding it to a `Tag` is <!-- xfail: generic_enum_implements_unmet -->
+refused. A missing contract method is reported once, at the template. (`tests/generic_enum_members.kama`, <!-- xfail: generic_enum_missing_contract_method -->
+`tests/generic_enum_members_cross_module.d/`.)
 
 **`type enum E : IntType`** pins the tag to a fixed-width integer — `uint8` for a wire format or a packed
 MMIO field, where the default (a compiler-chosen `enum` width) is not something you can serialize against.

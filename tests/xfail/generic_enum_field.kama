@@ -1,0 +1,5 @@
+// A generic enum takes members now, but still no field: an enum's data is its variant payloads.
+type enum M<T> { A(T x), B;
+    public int32 f;
+}
+fn int32 main() { return 0; }

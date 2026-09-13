@@ -8,10 +8,9 @@
 // not trip the "a `static` method has no `this`" path), a type param and a const param in one list, and
 // an `InlineArray<T>#(N)` field whose size comes from the enclosing type's const param.
 //
-// NOT covered, because the language does not allow it: the same thing on a generic ENUM. A generic enum
-// cannot declare members at all ("a generic enum is a monomorphization template, so each instance would
-// need its own conformance"), so a const param there can never be read as a value. EnumDeclarationNode
-// carries the same const-param data and it stays unread until that limitation lifts.
+// And the same on a generic ENUM, which could not declare a member at all until KR-44 — so its const
+// param was carried by EnumDeclarationNode and read by nothing. `Cap<bool>#(4)` and `Cap<int32>#(9)` each
+// bind their own `N`, in an instance method and in a static.
 type value Fx comptime(int32 F) {
     public int32 raw;
     public ctor of(int32 raw)      { this.raw = raw; }
@@ -19,6 +18,11 @@ type value Fx comptime(int32 F) {
     public fn int32 toWhole()      { return this.raw >> F; }
     public fn int32 bits()         { return F; }
     public static fn int32 shift() { return F; }                // no `this` in scope
+}
+
+type enum Cap<T> comptime(int32 N) { Full(T x), Empty;
+    public fn int32 cap()           { return N; }
+    public static fn int32 twice()  { return N * 2; }
 }
 
 type value Buf<T> comptime(int32 N) {
@@ -44,5 +48,9 @@ fn int32 main() {
     if (Fx#(16)::shift() == 16) { n = n + 1; }
     if (buf.size() == 3)       { n = n + 1; }
     if (buf.a.length() == 3)   { n = n + 1; }
-    return n;   // 8
+    Cap<bool>#(4) e = Cap::Empty;
+    Cap<int32>#(9) f = Cap::Full(x: 1);
+    if (e.cap() == 4 && f.cap() == 9)     { n = n + 1; }
+    if (Cap::<bool>#(4)::twice() == 8)    { n = n + 1; }
+    return n;   // 10
 }

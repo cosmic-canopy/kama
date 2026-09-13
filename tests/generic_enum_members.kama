@@ -1,0 +1,36 @@
+// A GENERIC enum declares members and conformances, as a concrete one does (KR-44). It is a monomorphization
+// template, so each instance takes the members and judges every `when [...]` gate against its OWN argument:
+// `Maybe<Tagged>` implements `Tag` and has `tag()`, `Maybe<Plain>` has neither and still builds. Covers a
+// const method over `match (this)`, a static, a method returning the parameter, a gated method, dispatch
+// through a contract value, and a template nothing instantiates (its bodies must still emit cleanly).
+// Kept < 256 so the exit code isn't truncated. The cross-module half is generic_enum_members_cross_module.d.
+type contract Tag for value, enum { fn int32 tag(); }
+type value Plain { public int32 v; public ctor of(int32 v) { this.v = v; } }
+type value Tagged implements Tag { public int32 v; public ctor of(int32 v) { this.v = v; } public fn int32 tag() { return this.v; } }
+
+type enum Maybe<T> implements Tag when [T: Tag] {
+    Has(T v), Nope;
+    public const fn bool has() { return match (this) { case Has(v: v): true; case Nope: false; }; }
+    public static fn Maybe<T> none() { return Maybe::Nope; }
+    public fn T getOr(T d) { return match (this) { case Has(v: v): v; case Nope: d; }; }
+    public fn int32 tag() when [T: Tag] { return match (this) { case Has(v: v): v.tag() + 100; case Nope: 0; }; }
+}
+type enum Unused<T> { A(T x), B; public fn int32 k() { return 7; } }
+
+fn int32 viaContract(ref Tag t) { return t.tag(); }
+
+fn int32 main() {
+    Maybe<int32> m = Maybe::Has(v: 3);
+    Maybe<int32> n = Maybe::<int32>::none();
+    Maybe<Tagged> t = Maybe::Has(v: Tagged.of(v: 5));
+    Maybe<Plain> p = Maybe::Has(v: Plain.of(v: 1));   // no `Tag`, no `tag()` — and nothing asks for them
+    int32 r = 0;
+    if (m.has()) { r = r + 1; }
+    if (!n.has()) { r = r + 2; }
+    r = r + m.getOr(d: 0) * 10;          // 30
+    r = r + t.tag();                     // 105
+    if (p.has()) { r = r + 10; }
+    Tag tv = t;
+    r = r + viaContract(t: tv);          // 105 again, through the vtbl
+    return r - 100;                      // 1 + 2 + 30 + 105 + 10 + 105 - 100 = 153
+}

@@ -414,6 +414,8 @@ struct ClassInfo {
     // contract on an enum).
     EnumDeclarationNode*              enumNode = nullptr;
     int  declLine() const;   // out-of-line: both node types are only forward-declared here
+    // The `extends`/`implements` clause of whichever declaration this is — a class's or an enum's.
+    ClassBaseDeclarationNode* baseTypesDecl() const;
 
     // RAII
     bool                              hasDtor = false;   // declares its own ~dtor
@@ -1880,6 +1882,15 @@ private:
     void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                            const std::string& contract, const std::string& tkey, bool isPrimitive);
+    MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
+    // Generic enums (KR-44): a template's members + `implements` are filled in collectEnumConformances; an
+    // instance cut before that is refreshed, one cut after takes them at registration.
+    std::set<std::string> _filledEnumTemplates;
+    std::vector<std::string> instanceInterfaces(const ClassInfo& ci, const std::string& mangled,
+                                                const std::vector<std::string>& params,
+                                                const std::vector<SharedIdentifier>& concrete);
+    void checkEnumInstanceConformances(ClassInfo& inst, const std::string& tmpl);
+    void instantiateEnumMembers(const GenericTypeInst& gi);
     // The impl must supply every method the contract requires.
     void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                const std::string& tkey, int line);

@@ -1,0 +1,5 @@
+// A generic enum's conformance is checked like a concrete one's: `M<T> implements Tag` with no `tag()`.
+// Reported once, at the template, however many instances there are.
+type contract Tag for value, enum { fn int32 tag(); }
+type enum M<T> implements Tag { A(T x), B; }
+fn int32 main() { M<int32> a = M::B; M<bool> b = M::B; return 0; }

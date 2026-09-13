@@ -1,0 +1,9 @@
+// The template lives in one module and is instantiated in another, over a type the template's module has
+// never heard of: the instance's members, its `when` gates and its `Tag` vtbl are all minted at the use.
+export { Tag, Maybe };
+type contract Tag for value, enum { fn int32 tag(); }
+type enum Maybe<T> implements Tag when [T: Tag] {
+    Has(T v), Nope;
+    public const fn bool has() { return match (this) { case Has(v: v): true; case Nope: false; }; }
+    public fn int32 tag() when [T: Tag] { return match (this) { case Has(v: v): v.tag() + 100; case Nope: 0; }; }
+}
