@@ -1,6 +1,7 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** measured, not started — **the next work item** (maintainer, 2026-09-12). Found building KR-12
+**Status:** in progress (2026-09-13) — fixtures generated and measured RED (see **Fixtures**), not yet
+committed: each lands with the fix slice that turns it green. Next: plan step 2, the one walk. Found building KR-12
 at `0.9.320`. This is the working doc for the campaign: the probe grid it was measured with, the results,
 the root causes, and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and the `tests/xfail/`
 fixtures carry the record.
@@ -227,6 +228,49 @@ also imported bare, and `InlineArray<int32>#(geo::SHOWNK)` fails in C.
 4. **Turbofish** falls through to an unrelated message when a type argument fails (~22743).
 5. **Hints:** `namespaceOfType` (~660) splits every `_classes`/`_enums` key on its last `__`, instance keys
    included, and does not filter unexported keys.
+
+## Fixtures (plan step 1) — generated, measured RED at `0.9.321`
+
+`genfix.py` (appendix) writes them from the templates above, one per (position, case), with ONE `.msg`
+rule per case so every position is held to the same diagnostic:
+
+| case | fixture | `.msg` must contain |
+|---|---|---|
+| a | `tests/xfail/reach_<pos>_unknown.kama` (single file — the analysis-agreement leg covers it) | `` unknown type `Zork` `` / `` unknown contract `ZorkC` `` / the value name |
+| b | `tests/xfail/reach_<pos>_unimported.d/` (minimal `geo`) | `` add `import { geo::ShownErr };` `` — the hint must be right |
+| c, cq | `tests/xfail/reach_<pos>_private[_qualified].d/` | `` `HidErr` is not exported by `` — never an import hint |
+| bs | `tests/xfail/reach_result_{local,param,return,field}_std_unimported.kama`, `reach_hex_decode_…` | `` add `import { std::uuid::UuidError };` `` |
+
+Positive controls: `tests/reach_controls_imported.d/` and `tests/reach_controls_qualified.d/` — every
+position in one program (each fails with its own exit code). Each template was first built LEGALLY on its
+own (`genfix.py <root> --controls <dir>`, 39/39 build and return 0), so no rejection fixture passes by
+accident of a broken template. `cast_direct` has no legal spelling (an enum is not castable) and so no
+control; `extern_sig` has only the qualified one (see the extern decision below).
+
+**Measured on `0.9.321`:** 162 fixtures — **12 compile** (`implements_arg` a/b/c/cq; `bound_fn`,
+`bound_type`, `turbofish`, `turbofish_deser`, `variant_expr`, `generic_body`, `generic_body_called`,
+`extern_sig` — all cq), **36 fail in C**, **71 carry the wrong message**, 43 already right. The imported
+control builds and runs; the qualified one is refused at `implements geo::ShownC` (and `#(geo::SHOWNK)`
+still fails in C behind it).
+
+**What the fixtures showed that the results table above did not:**
+
+- The serde turbofish with a private qualified type COMPILES once isolated — T19's template also spelled the
+  type in the local's declared type, which is what refused it. Likewise a generic TYPE's bound (`bound_type`
+  cq), not only a function's.
+- Several cells the table scores KD carry the wrong message: a bound naming a bad contract reports "`X` has
+  no bound providing `cm`" (`bound_fn` a/b/c); `implements` reports "unknown contract in implements" and
+  names nothing; an unimported function or constant reports "call to unknown function" / "cannot resolve"
+  with no import hint (`fn_call`, `const_read` b/c).
+- The **b** hint is mangled for a LOCAL module too, not only for std: `import { Result_geo::Shown_geo::ShownErr }`
+  (`local_unimported` — `geo` already builds a `Result<Shown, ShownErr>`), and every bare **c** hint
+  suggests importing the private name.
+- `xprobes.sh` below had a bug: `n=${t%%:*}` cut `geo::HidErr:cq` at the FIRST colon, so every X-series
+  **cq** probe spelled `geo`, not `geo::HidErr`. Those cq results were harness artifacts; the fixtures replace
+  them.
+- The analysis-agreement leg of `run_tests.sh` skips `.d` fixtures on the belief that files are checked one
+  at a time; `kama check` takes several files, and all 24 existing `tests/xfail/*.d` are refused by it. It
+  should cover them, so the generic-body `check`/`build` disagreement is asserted in both directions.
 
 ## Plan
 
@@ -595,3 +639,215 @@ fn int32 main() { Optional<Result<LocalV, Zork>> r = Optional::None; return 0; }
 K
 ```
 
+
+### `genfix.py`
+
+Run from the repo root: `python3 .scratch/imports/genfix.py .` writes every fixture above into `tests/`;
+`python3 .scratch/imports/genfix.py . --controls <dir>` writes the legal twin of each template instead.
+
+```python
+#!/usr/bin/env python3
+"""Generate the KR-46 xfail fixtures from the probe grid (docs/design/name-resolution.md).
+
+One fixture per (position, case). Case `a` is a single file; b/c/cq are `.d` directories carrying a
+minimal `geo` module; `bs` (std, single file) only for the positions of the reported repro.
+Writes into tests/xfail/ and prints the names it wrote.
+"""
+import os, sys
+
+ROOT = sys.argv[1]
+XF = os.path.join(ROOT, "tests", "xfail")
+CONTROLS = sys.argv[3] if len(sys.argv) > 3 and sys.argv[2] == "--controls" else None
+
+# kind -> (exported twin, private twin) declarations for geo/lib.kama
+DECLS = {
+    "T": ("type enum ShownErr implements Error {\n    Bad, Worse(isize at);\n    public const fn string message() { return \"shown\"; }\n}",
+          "type enum HidErr implements Error {\n    Bad, Worse(isize at);\n    public const fn string message() { return \"hid\"; }\n}"),
+    "R": ("@generate(Serializable, Deserializable)\ntype value ShownVal {\n    @field public int32 v;\n    public ctor make() { this.v = 1; }\n    public static fn int32 stat() { return 5; }\n}",
+          "@generate(Serializable, Deserializable)\ntype value HidVal {\n    @field public int32 v;\n    public ctor make() { this.v = 2; }\n    public static fn int32 stat() { return 6; }\n}"),
+    "F": ("fn int32 shownFn() { return 1; }", "fn int32 hidFn() { return 2; }"),
+    "K": ("comptime isize SHOWNK = 3;", "comptime isize HIDK = 4;"),
+    "C": ("type contract ShownC for value { fn int32 cm(); }", "type contract HidC for value { fn int32 cm(); }"),
+}
+SHOWN_T = {"T": "ShownErr", "R": "ShownVal", "F": "shownFn", "K": "SHOWNK", "C": "ShownC"}
+HID_T   = {"T": "HidErr",   "R": "HidVal",   "F": "hidFn",   "K": "HIDK",   "C": "HidC"}
+ZORK    = {"T": "Zork",     "R": "ZorkVal",  "F": "zorkFn",  "K": "ZORKK",  "C": "ZorkC"}
+
+# (fixture stem, placeholder kind, extra imports, what the cell is, template). `@X@` is the name, `@V@` a variant of it.
+POS = [
+    ("local",                 "T", [], "a local's declared type", "fn int32 main() { @X@ x = @V@; return 0; }"),
+    ("optional_local",        "T", [], "a type argument of a local (`Optional<X>`)", "fn int32 main() { Optional<@X@> x = Optional::None; return 0; }"),
+    ("result_local",          "T", [], "the second type argument of a local (`Result<int32, X>`)", "fn int32 main() { Result<int32, @X@> r = Result::Ok(value: 1); return 0; }"),
+    ("nested_local",          "T", [], "a depth-2 type argument of a local", "fn int32 main() { Optional<Result<int32, @X@>> r = Optional::None; return 0; }"),
+    ("container_local",       "T", ["std::collections::DynamicArray"], "a container's element type (`DynamicArray<X>`)", "fn int32 main() { DynamicArray<@X@> a = DynamicArray.empty(); return 0; }"),
+    ("param",                 "T", [], "a parameter type", "fn int32 f(@X@ e) { return 0; }\nfn int32 main() { return 0; }"),
+    ("optional_param",        "T", [], "a parameter's type argument", "fn int32 f(Optional<@X@> e) { return 0; }\nfn int32 main() { return f(e: Optional::None); }"),
+    ("optional_return",       "T", [], "a return type's type argument, never called", "fn Optional<@X@> f() { return Optional::None; }\nfn int32 main() { return 0; }"),
+    ("optional_return_called","T", [], "a return type's type argument, called", "fn Optional<@X@> f() { return Optional::None; }\nfn int32 main() { return match (f()) { case Some(value: v): 1; case None: 0; }; }"),
+    ("field",                 "T", [], "a field type", "type value W { public @X@ e; public ctor make() { this.e = @V@; } }\nfn int32 main() { W w = W.make(); return 0; }"),
+    ("optional_field",        "T", [], "a field's type argument, never constructed", "type value W { public Optional<@X@> e; public ctor make() { this.e = Optional::None; } }\nfn int32 main() { return 0; }"),
+    ("owned_field",           "R", [], "an `Owned<X>` field of a resource", "type resource W { Owned<@X@> p; public ctor make(Owned<@X@> p) { this.p = give p; } }\nfn int32 main() { return 0; }"),
+    ("bound_fn",              "C", [], "a generic function's bound, never called", "fn int32 g<X: @X@>(X x) { return x.cm(); }\nfn int32 main() { return 0; }"),
+    ("bound_type",            "C", [], "a generic type's bound", "type value G<X: @X@> { X x; }\nfn int32 main() { return 0; }"),
+    ("implements",            "C", [], "an `implements` contract", "type value W implements @X@ { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }\nfn int32 main() { W w = W.make(); return w.cm() - 1; }"),
+    ("implements_arg",        "R", [], "a type argument of an `implements` contract", "type contract Holds<X> for value { fn int32 cm(); }\ntype value W implements Holds<@X@> { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }\nfn int32 main() { W w = W.make(); return w.cm() - 1; }"),
+    ("turbofish",             "T", [], "a turbofish type argument", "fn int32 z<X>() { return 0; }\nfn int32 main() { return z::<@X@>(); }"),
+    ("turbofish_deser",       "R", ["std::serialization::text::json::deserializeJsonBuffer"], "a serde turbofish type argument", "fn int32 main() { string s = \"{\\\"v\\\":1}\"; deserializeJsonBuffer::<@X@>(src: give s); return 0; }"),
+    ("cast_arg",              "R", [], "a `cast<UnsafePtr<X>>` type argument", "unsafe fn int32 f(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<@X@>>(p)); return 0; }\nfn int32 main() { return 0; }"),
+    ("sizeof",                "R", [], "a `sizeof` operand", "fn int32 main() { usize n = sizeof(@X@); return 0; }"),
+    ("as_downcast",           "T", [], "an `.as<X>()` downcast target", "fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<@X@>()) { case Some(value: x): 1; case None: 0; }; }; }"),
+    ("variant_expr",          "T", [], "a variant expression", "fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: @V@); return 0; }"),
+    ("ctor_call",             "R", [], "a construction", "fn int32 main() { int32 n = @X@.make().v; return n - 1; }"),
+    ("static_call",           "R", [], "a static call", "fn int32 main() { int32 n = @X@::stat(); return 0; }"),
+    ("inline_array_param",    "T", [], "an `InlineArray<X>#(2)` parameter's element type", "fn int32 f(InlineArray<@X@>#(2) a) { return 0; }\nfn int32 main() { return 0; }"),
+    ("owned_param",           "R", [], "an `Owned<X>` parameter", "fn int32 f(Owned<@X@> p) { return 0; }\nfn int32 main() { return 0; }"),
+    ("new_expr",              "R", [], "a `new` expression", "fn int32 main() { Owned<@X@> p = new @X@.make(); return 0; }"),
+    ("generate_field",        "R", [], "a field of a `@generate` type", "@generate(Serializable, Deserializable)\ntype value W { @field public @X@ inner; public ctor make(@X@ inner) { this.inner = inner; } }\nfn int32 main() { return 0; }"),
+    ("static_decl",           "T", [], "a `static`'s type argument", "static Optional<@X@> gs;\nfn int32 main() { return 0; }"),
+    ("method_return",         "T", [], "a method return type's type argument", "type value W { public int32 a; public ctor make() { this.a = 1; } public fn Optional<@X@> m() { return Optional::None; } }\nfn int32 main() { W w = W.make(); return w.a - 1; }"),
+    ("user_generic_arg",      "T", [], "a user generic's type argument", "type value Box<X> { public X x; }\nfn int32 f(Box<@X@> b) { return 0; }\nfn int32 main() { return 0; }"),
+    ("fnptr",                 "R", [], "an `fnptr` parameter type", "fnptr int32 Cb(@X@ x);\nfn int32 main() { return 0; }"),
+    ("generic_body",          "T", [], "a local inside a generic function, never called", "fn int32 g<X>(X x) { Optional<@X@> o = Optional::None; return 0; }\nfn int32 main() { return 0; }"),
+    ("generic_body_called",   "T", [], "a local inside a generic function, called", "fn int32 g<X>(X x) { Optional<@X@> o = Optional::None; return 0; }\nfn int32 main() { return g(x: 1); }"),
+    ("fn_call",               "F", [], "a function call", "fn int32 main() { int32 n = @X@(); return n - 1; }"),
+    ("const_read",            "K", [], "a constant read", "fn int32 main() { isize k = @X@; return 0; }"),
+    ("const_generic_arg",     "K", [], "a const-generic `#(K)` argument", "fn int32 f(InlineArray<int32>#(@X@) a) { return 0; }\nfn int32 main() { return 0; }"),
+    ("cast_direct",           "T", [], "a `cast<X>` target", "fn int32 main() { int32 k = cast<int32>(cast<@X@>(0)); return 0; }"),
+    ("extern_sig",            "R", [], "an `extern fn` signature", "extern fn int32 kama_probe_nope(@X@ x);\nfn int32 main() { return 0; }"),
+]
+# The reported repro: a Result instance geo already builds, named with an unimported error type.
+SHOWN = "type value Shown {\n    public int32 v;\n    public ctor make() { this.v = 1; }\n    public ctor Result<Shown, ShownErr> parse(int32 n) {\n        if (n < 0) { return Result::Err(error: ShownErr::Bad); }\n        return Result::Ok(value: Shown.make());\n    }\n}"
+POS.append(("existing_instance", "T", ["geo::Shown"], "a type argument of a `Result` instance that already exists",
+            "fn int32 main() { Result<Shown, @X@> r = Shown.parse(n: 1); return 0; }"))
+
+CASES = {
+    "a":  ("unknown",           "a name declared nowhere"),
+    "b":  ("unimported",        "a name `geo` exports that this file does not import"),
+    "c":  ("private",           "a name private to `geo/lib.kama`, spelled bare"),
+    "cq": ("private_qualified", "a name private to `geo/lib.kama`, spelled qualified"),
+}
+# `extern fn` keeps its C seam for an unqualified name (a header typedef is not a kama type), so only the
+# qualified private spelling is a cell there.
+ONLY = {"extern_sig": {"cq"}}
+
+def variant(kind, name):
+    return name + "::Bad" if kind == "T" else name
+
+def msg_for(kind, case, stem):
+    if case == "a":
+        word = {"T": "type", "R": "type", "C": "contract"}.get(kind)
+        if word and stem not in ("variant_expr", "ctor_call", "static_call"):
+            return f"unknown {word} `{ZORK[kind]}`"
+        return f"`{ZORK[kind]}`"
+    if case == "b":
+        return f"add `import {{ geo::{SHOWN_T[kind]} }};`"
+    return f"`{HID_T[kind]}` is not exported by"
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f: f.write(text)
+
+
+# The reported repro, against std: `Uuid` imported, its error type not. Single files — std needs no fixture module.
+STD = [
+    ("result_local", "a local's `Result` type argument", "fn int32 main() { Result<Uuid, @X@> r = Uuid.parse(text: \"x\"); return 0; }"),
+    ("result_param", "a parameter's `Result` type argument", "fn int32 f(Result<Uuid, @X@> r) { return 0; }\nfn int32 main() { return 0; }"),
+    ("result_return", "a return type's `Result` type argument", "fn Result<Uuid, @X@> f() { return Uuid.parse(text: \"x\"); }\nfn int32 main() { return 0; }"),
+    ("result_field", "a field's `Result` type argument", "type value W { public Result<Uuid, @X@> r; public ctor make() { this.r = Uuid.parse(text: \"x\"); } }\nfn int32 main() { W w = W.make(); return 0; }"),
+]
+def gen_std():
+    out = []
+    for stem, what, tmpl in STD:
+        fx = f"reach_{stem}_std_unimported"
+        write(os.path.join(XF, fx + ".kama"),
+              f"// KR-46: {what}, naming `UuidError` without importing it (only `Uuid` is). Must be rejected with the import that fixes it.\n"
+              "import { std::uuid::Uuid };\n" + tmpl.replace("@X@", "UuidError") + "\n")
+        write(os.path.join(XF, fx + ".msg"), "add `import { std::uuid::UuidError };`")
+        out.append(fx)
+    fx = "reach_hex_decode_std_unimported"
+    write(os.path.join(XF, fx + ".kama"),
+          "// KR-46: a `Result` type argument naming `DecodeError` without importing it. Must be rejected with the import that fixes it.\n"
+          "import { std::encoding::hex::decode, std::collections::DynamicArray };\n"
+          "fn int32 main() { Result<DynamicArray<uint8>, DecodeError> r = decode(text: \"00\"); return 0; }\n")
+    write(os.path.join(XF, fx + ".msg"), "add `import { std::encoding::hex::DecodeError };`")
+    out.append(fx)
+    return out
+
+# Positive controls: every position in ONE program, imported (d) or qualified-and-unimported (bq).
+import re
+RENAME = ["main", "W", "f", "g", "z", "G", "Box", "Cb", "Holds", "gs", "kama_probe_nope"]
+def gen_positive(qualified):
+    parts, calls, imps = [], [], {"geo::Shown"}
+    for stem, kind, imports, what, tmpl in POS:
+        if stem == "cast_direct": continue                      # no legal spelling exists
+        if stem == "extern_sig" and not qualified: continue     # a bare name there is a C spelling
+        name = ("geo::" if qualified else "") + SHOWN_T[kind]
+        if not qualified: imps.add("geo::" + SHOWN_T[kind])
+        imps.update(i for i in imports if not i.startswith("geo::"))
+        if stem == "existing_instance" and not qualified: imps.add("geo::ShownErr")
+        body = tmpl.replace("@V@", variant(kind, name)).replace("@X@", name)
+        for r in RENAME:
+            body = re.sub(r"(?<![\w:])" + r + r"(?=\s*[<(;{ .:])", f"{r}_{stem}", body)
+        parts.append(f"// {what}\n{body}")
+        calls.append(f"main_{stem}()")
+    kinds = ["T", "R", "F", "K", "C"]
+    lib = "export { Shown, " + ", ".join(SHOWN_T[k] for k in kinds) + " };\n\n" + \
+          "\n\n".join(DECLS[k][0] + "\n\n" + DECLS[k][1] for k in kinds) + "\n\n" + SHOWN + "\n"
+    how = "qualified and never imported (`geo::ShownErr`)" if qualified else "imported"
+    main = (f"// KR-46 positive control: every position the reach fixtures reject, spelled LEGALLY — {how}.\n"
+            "// The fix must not over-refuse any of these; each position's function must return 0.\n"
+            f"import {{ {', '.join(sorted(imps))} }};\n\n" + "\n\n".join(parts) +
+            "\n\n// Each position fails with its own exit code, so a red run names the position.\nfn int32 main() {\n"
+            + "".join(f"    if ({c} != 0) {{ return {i + 1}; }}\n" for i, c in enumerate(calls)) + "    return 0;\n}\n")
+    d = os.path.join(ROOT, "tests", "reach_controls_" + ("qualified" if qualified else "imported") + ".d")
+    write(os.path.join(d, "main.kama"), main)
+    write(os.path.join(d, "geo", "lib.kama"), lib)
+    write(os.path.join(d, "expect"), "0\n")
+    return os.path.basename(d)
+
+written = []
+if CONTROLS:
+    for stem, kind, imports, what, tmpl in POS:
+        if stem == "cast_direct": continue   # no legal spelling: an enum is not castable at all
+        d = os.path.join(CONTROLS, stem)
+        name = SHOWN_T[kind]
+        body = tmpl.replace("@V@", variant(kind, name)).replace("@X@", name)
+        if stem == "extern_sig": body = body.replace("kama_probe_nope(ShownVal x)", "kama_probe_nope(int32 x)")
+        imps = list(dict.fromkeys(imports + ["geo::" + name]))
+        shown, hid = DECLS[kind]
+        exports = [name] + (["Shown"] if stem == "existing_instance" else [])
+        extra = "\n\n" + SHOWN if stem == "existing_instance" else ""
+        write(os.path.join(d, "geo", "lib.kama"), f"export {{ {', '.join(exports)} }};\n\n{shown}\n\n{hid}{extra}\n")
+        write(os.path.join(d, "main.kama"), f"import {{ {', '.join(imps)} }};\n" + body + "\n")
+    sys.exit(0)
+for stem, kind, imports, what, tmpl in POS:
+    for case, (suffix, desc) in CASES.items():
+        if stem in ONLY and case not in ONLY[stem]: continue
+        if stem == "existing_instance" and case == "a": imports_here = ["geo::Shown"]
+        else: imports_here = list(imports)
+        name = {"a": ZORK, "b": SHOWN_T, "c": HID_T, "cq": {k: "geo::" + v for k, v in HID_T.items()}}[case][kind]
+        body = tmpl.replace("@V@", variant(kind, name)).replace("@X@", name)
+        correct = "rejected, naming it" if case != "b" else "rejected with the import that fixes it"
+        head = f"// KR-46: {what}, naming {desc}. Must be {correct}.\n"
+        imp = f"import {{ {', '.join(imports_here)} }};\n" if imports_here else ""
+        fx = f"reach_{stem}_{suffix}"
+        needs_geo = case != "a" or stem == "existing_instance"
+        if not needs_geo:
+            write(os.path.join(XF, fx + ".kama"), head + imp + body + "\n")
+            write(os.path.join(XF, fx + ".msg"), msg_for(kind, case, stem))
+        else:
+            d = os.path.join(XF, fx + ".d")
+            shown, hid = DECLS[kind]
+            exports = [SHOWN_T[kind]]
+            extra = ""
+            if stem == "existing_instance":
+                exports.insert(0, "Shown"); extra = "\n\n" + SHOWN
+            lib = f"export {{ {', '.join(exports)} }};\n\n{shown}\n\n{hid}{extra}\n"
+            write(os.path.join(d, "geo", "lib.kama"), lib)
+            write(os.path.join(d, "main.kama"), head + imp + body + "\n")
+            write(os.path.join(d, "msg"), msg_for(kind, case, stem))
+        written.append(fx)
+written += gen_std()
+written += [gen_positive(False), gen_positive(True)]
+print("\n".join(written))
+```
