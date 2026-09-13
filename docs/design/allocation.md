@@ -6,6 +6,25 @@ mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it fo
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
 for `docs/design/` says.
 
+## Picking this up
+
+This work follows KR-46; the handoff state, the agreed order, the per-host gate and the maintainer's
+working constraints are written once, in [name-resolution.md § Picking this up](name-resolution.md#picking-this-up--on-any-machine),
+and apply here unchanged. The decisions that are specific to this campaign, made by the maintainer on
+2026-09-12:
+
+- `kama_alloc` and `kama_free` are the ONLY allocation primitives. They delegate to the program's global
+  allocator, which defaults to `malloc`/`free` and which a user can replace.
+- EVERY allocation site is covered — emitted C, runtime headers, the OS seam, the prelude — so replacing the
+  global allocator is complete. The mixed alloc/free families are a defect to remove, not a quirk to document.
+- Error boxing is allocator-aware.
+- `--no-heap` is reach-based, consistently.
+- **No workaround in serde's error path**: a failing `deserialize` returns `Err`; a placeholder `Ok` plus the
+  reader's sticky flag, or a boundary net that converts one, were both considered and rejected.
+
+Still open, to be decided here and written down: declaration vs weak symbol for the replacement (§3), a
+sized `kama_free` (§2), and a per-call error allocator (§4).
+
 ## What is wanted
 
 1. **`--no-heap` is reach-based, consistently.** The flag proves the PROGRAM, and a program is what its

@@ -5,6 +5,46 @@ at `0.9.320`. This is the working doc for the campaign: the probe grid it was me
 the root causes, and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and the `tests/xfail/`
 fixtures carry the record.
 
+## Picking this up — on any machine
+
+This campaign spans several sessions and may move between hosts, so everything a fresh session needs is in
+git: this doc, [allocation.md](allocation.md), and the rows in `docs/ROADMAP.md`. Nothing depends on an
+assistant's local memory or on a scratch directory.
+
+**State at handoff (2026-09-12).** `dev` at `0.9.320`. The work that surfaced all of this shipped:
+`0.9.318` (a foreign member's return type resolves in its own file), `0.9.319` (`.as<T>()` across units),
+`0.9.320` (`std::uuid`, KR-12). They passed the native suite (1702/0) and all 68 guards on the Windows VM.
+⚠️ **The sanitizer and wasm legs have NOT run for `0.9.318`–`0.9.320`** — that host has no container
+runtime. On a host that has one, run them first: `./dev test san` and `./dev test wasm` (or `./dev matrix`).
+
+**The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
+reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
+global allocator → **KR-50** allocator-aware errors.
+
+**How the maintainer wants this done** — the constraints, not suggestions:
+
+- **Production grade. Root cause, never a workaround.** A defect found along the way is fixed where it
+  lives, in its own commit, with its own `VERSION` bump and a regression fixture that fails on the previous
+  compiler, and the commit cites where it was found (`— found building KR-46`). If it is too big for that,
+  it becomes a KR row with its reasoning, not a library-side dodge.
+- **Consistent principles.** A rule that holds in some positions and not others is the defect (that is
+  what this row is). The same goes for `--no-heap` in KR-47.
+- **Fixtures land RED first**, and a doc claim that something is rejected carries its `tests/xfail/` marker.
+- **The user pushes.** Commit on `dev`; do not push. Fetch and rebase onto `origin/dev` at the start of a
+  session — other work lands in between.
+
+**First steps for KR-46:**
+
+1. `git fetch && git rebase origin/dev`, `./dev build`.
+2. Re-run the grid from the appendix on the current compiler and diff against the results table below —
+   some cells may have moved. Record what changed here.
+3. Then the plan below, step 1 (fixtures), private-name ACCEPTED cells first.
+
+**Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file. Windows VM:
+`./dev matrix` cannot pass there (no containers, and it skips the guards when the container leg fails), so
+the gate is `./dev test` then `./dev check`, each into its own log, and the san/wasm legs are reported as
+not run. See `docs/platforms/windows.md` for driving that shell.
+
 ## The rule, and where it breaks
 
 `SPEC.md` § Modules: a name is spelled in a file only if that file declares it, imports it, or it comes from
@@ -216,3 +256,336 @@ L. The walk itself is modest; the risk is breadth — every type position in the
 (~28k lines of kama) proving no LEGAL spelling is refused. `kama check` runs over every fixture in the
 suite's analysis-agreement phase, which is the net for that: it caught the 33-fixture regression the
 `0.9.318` scope fix first introduced.
+
+## Appendix — the probe harness, verbatim
+
+Recreate it anywhere: make a scratch directory (e.g. `.scratch/imports/`, which is gitignored), write the
+files below into it, put the `geo` module from **How it was measured** at `geo/lib.kama`, then
+
+```sh
+ROOT=$(pwd); . tools/kama-bin.sh; export KAMA; bash .scratch/imports/runall.sh && bash .scratch/imports/table.sh
+```
+
+from the repo root. `runall.sh` regenerates `probes/` from `probes.txt` and runs every cell (`JOBS=4` parallel);
+`table.sh` prints the `check/build` grid. `xprobes.sh` writes the follow-up programs into `xprobes/`; run
+each with `bash run1.sh xprobes/<name>`. A probe binary is named `p.exe` on every host.
+
+### `probes.txt`
+
+```text
+=== T01_local_decl_init
+fn int32 main() { @T@ x = @V@; return 0; }
+=== T03_arg1_optional
+fn int32 main() { Optional<@T@> x = Optional::None; return 0; }
+=== T04_arg1_result
+fn int32 main() { Result<int32, @T@> r = Result::Ok(value: 1); return 0; }
+=== T05_arg2_opt_result
+fn int32 main() { Optional<Result<int32, @T@>> r = Optional::None; return 0; }
+=== T06_arg1_dynarray
+#import std::collections::DynamicArray
+fn int32 main() { DynamicArray<@T@> a = DynamicArray.empty(); return 0; }
+=== T07_param
+fn int32 f(@T@ e) { return 0; }
+fn int32 main() { return 0; }
+=== T08_param_nested
+fn int32 f(Optional<@T@> e) { return 0; }
+fn int32 main() { return f(e: Optional::None); }
+=== T09_return_nested
+fn Optional<@T@> f() { return Optional::None; }
+fn int32 main() { return 0; }
+=== T10_return_nested_called
+fn Optional<@T@> f() { return Optional::None; }
+fn int32 main() { return match (f()) { case Some(value: v): 1; case None: 0; }; }
+=== T11_field_value
+type value W { public @T@ e; public ctor make() { this.e = @V@; } }
+fn int32 main() { W w = W.make(); return 0; }
+=== T12_field_nested_uncalled
+type value W { public Optional<@T@> e; public ctor make() { this.e = Optional::None; } }
+fn int32 main() { return 0; }
+=== T13_field_resource_owned
+type resource W { Owned<@R@> p; public ctor make(Owned<@R@> p) { this.p = give p; } }
+fn int32 main() { return 0; }
+=== T14_generic_bound_fn
+fn int32 g<X: @C@>(X x) { return x.cm(); }
+fn int32 main() { return 0; }
+=== T15_generic_bound_type
+type value G<X: @C@> { X x; }
+fn int32 main() { return 0; }
+=== T16_implements
+type value W implements @C@ { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main() { W w = W.make(); return w.cm() - 1; }
+=== T17_implements_generic_arg
+type contract Holds<X> for value { fn int32 cm(); }
+type value W implements Holds<@R@> { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main() { return 0; }
+=== T18_turbofish_fn
+fn int32 z<X>() { return 0; }
+fn int32 main() { return z::<@T@>(); }
+=== T19_turbofish_deser
+#import std::serialization::text::json::deserializeJsonBuffer
+fn int32 main() { string s = "{\"v\":1}"; Result<@R@, Owned<Error>> g = deserializeJsonBuffer::<@R@>(src: give s); return 0; }
+=== T20_cast
+unsafe fn int32 f(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<@R@>>(p)); return 0; }
+fn int32 main() { return 0; }
+=== T21_sizeof
+fn int32 main() { usize n = sizeof(@R@); return 0; }
+=== T22_as_downcast
+fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<@T@>()) { case Some(value: x): 1; case None: 0; }; }; }
+=== T24_variant_expr
+fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: @V@); return 0; }
+=== T25_ctor_call
+fn int32 main() { int32 n = @R@.make().v; return n - 1; }
+=== T26_static_fn_call
+fn int32 main() { int32 n = @R@::stat(); return 0; }
+=== T27_inlinearray_elem
+fn int32 f(InlineArray<@T@>#(2) a) { return 0; }
+fn int32 main() { return 0; }
+=== T28_owned_param
+fn int32 f(Owned<@R@> p) { return 0; }
+fn int32 main() { return 0; }
+=== T30_new_expr
+fn int32 main() { Owned<@R@> p = new @R@.make(); return 0; }
+=== T31_extern_fn_sig
+extern fn int32 kama_probe_nope(@R@ x);
+fn int32 main() { return 0; }
+=== T32_generate_field
+@generate(Serializable, Deserializable)
+type value W { @field public @R@ inner; public ctor make(@R@ inner) { this.inner = inner; } }
+fn int32 main() { return 0; }
+=== T33_static_var
+static Optional<@T@> gs;
+fn int32 main() { return 0; }
+=== T34_method_return_nested
+type value W { public int32 a; public ctor make() { this.a = 1; } public fn Optional<@T@> m() { return Optional::None; } }
+fn int32 main() { W w = W.make(); return w.a - 1; }
+=== T35_user_generic_arg
+type value Box<X> { public X x; }
+fn int32 f(Box<@T@> b) { return 0; }
+fn int32 main() { return 0; }
+=== T36_fnptr_sig
+fnptr int32 Cb(@R@ x);
+fn int32 main() { return 0; }
+=== T37_generic_fn_body_uncalled
+fn int32 g<X>(X x) { Optional<@T@> o = Optional::None; return 0; }
+fn int32 main() { return 0; }
+=== T38_generic_fn_body_called
+fn int32 g<X>(X x) { Optional<@T@> o = Optional::None; return 0; }
+fn int32 main() { return g(x: 1); }
+=== F01_fn_call
+fn int32 main() { int32 n = @F@(); return n - 1; }
+=== F02_const_read
+fn int32 main() { isize k = @K@; return 0; }
+=== F03_const_in_arraysize
+fn int32 f(InlineArray<int32>#(@K@) a) { return 0; }
+fn int32 main() { return 0; }
+```
+
+### `gen.sh`
+
+```bash
+#!/bin/bash
+# Generate probes/<probe>__<case>/{main.kama,geo/lib.kama} from probes.txt. Cases:
+#  a  totally unknown          b  exported by geo, not imported     bq qualified geo::X, not imported (should be OK)
+#  c  private in geo, bare     cq private, qualified geo::HidX      d  imported (control)
+#  bs std::uuid UuidError unimported (T/V only)                     bsq std::uuid::UuidError qualified (should be OK)
+set -u
+cd "$(dirname "$0")"
+rm -rf probes; mkdir probes
+declare -A T V R F K C I
+T[a]=Zork;        V[a]=Zork::Bad;          R[a]=ZorkVal;      F[a]=zorkFn;      K[a]=ZORKK;      C[a]=ZorkC;      I[a]="geo::Shown"
+T[b]=ShownErr;    V[b]=ShownErr::Bad;      R[b]=ShownVal;     F[b]=shownFn;     K[b]=SHOWNK;     C[b]=ShownC;     I[b]="geo::Shown"
+T[bq]=geo::ShownErr; V[bq]=geo::ShownErr::Bad; R[bq]=geo::ShownVal; F[bq]=geo::shownFn; K[bq]=geo::SHOWNK; C[bq]=geo::ShownC; I[bq]="geo::Shown"
+T[c]=HidErr;      V[c]=HidErr::Bad;        R[c]=HidVal;       F[c]=hidFn;       K[c]=HIDK;       C[c]=HidC;       I[c]="geo::Shown"
+T[cq]=geo::HidErr; V[cq]=geo::HidErr::Bad; R[cq]=geo::HidVal; F[cq]=geo::hidFn; K[cq]=geo::HIDK;  C[cq]=geo::HidC; I[cq]="geo::Shown"
+T[d]=ShownErr;    V[d]=ShownErr::Bad;      R[d]=ShownVal;     F[d]=shownFn;     K[d]=SHOWNK;     C[d]=ShownC;     I[d]="geo::Shown, geo::ShownErr, geo::ShownVal, geo::shownFn, geo::SHOWNK, geo::ShownC"
+T[bs]=UuidError;  V[bs]=UuidError::InvalidLength; R[bs]=; F[bs]=; K[bs]=; C[bs]=; I[bs]="geo::Shown, std::uuid::Uuid"
+T[bsq]=std::uuid::UuidError; V[bsq]=std::uuid::UuidError::InvalidLength; R[bsq]=; F[bsq]=; K[bsq]=; C[bsq]=; I[bsq]="geo::Shown, std::uuid::Uuid"
+name=; body=; extra=
+flush() {
+  [ -z "$name" ] && return
+  for cs in a b bq c cq d bs bsq; do
+    skip=0
+    for p in R F K C; do eval "val=\${$p[$cs]}"; if [ -z "$val" ] && printf '%s' "$body" | grep -q "@$p@"; then skip=1; fi; done
+    [ $skip = 1 ] && continue
+    # T23 matches on ShownErr — for std cases, match on Uuid.parse instead
+    b="$body"
+    case $cs in bs|bsq) b="${b//Shown.parse(n: 0 - 1)/Uuid.parse(text: \"x\")}"; b="${b//::Bad/::InvalidLength}"; b="${b//::Worse(at: a)/::InvalidCharacter(at: a)}";; esac
+    b="${b//@T@/${T[$cs]}}"; b="${b//@V@/${V[$cs]}}"; b="${b//@R@/${R[$cs]}}"; b="${b//@F@/${F[$cs]}}"; b="${b//@K@/${K[$cs]}}"; b="${b//@C@/${C[$cs]}}"
+    d=probes/${name}__$cs; mkdir -p $d/geo; cp geo/lib.kama $d/geo/
+    imp="${I[$cs]}"; [ -n "$extra" ] && imp="$imp$extra"
+    printf 'import { %s };\n%s' "$imp" "$b" > $d/main.kama
+  done
+}
+while IFS= read -r line; do
+  case "$line" in
+    "=== "*) flush; name=${line#=== }; body=; extra=;;
+    "#import "*) extra="$extra, ${line#\#import }";;
+    *) body="$body$line"$'\n';;
+  esac
+done < probes.txt
+flush
+ls probes | wc -l
+```
+
+### `run1.sh`
+
+```bash
+#!/bin/bash
+# run1.sh <probe dir> : kama check, kama build, run; one summary line to <dir>/result
+d=$1; cd "$d" || exit
+ck=$("$KAMA" check main.kama geo/lib.kama 2>&1); ckrc=$?
+bd=$("$KAMA" build main.kama geo/lib.kama -o p.exe 2>&1); bdrc=$?
+ckline=$(printf '%s\n' "$ck" | grep -m1 -E "error|OK" | sed 's/^.*main.kama:/main:/; s/^.*lib.kama:/lib:/')
+if [ $bdrc = 0 ]; then ./p.exe >/dev/null 2>&1; bl="BUILT run_rc=$?"
+elif printf '%s' "$bd" | grep -q "clang failed"; then bl="C_ERROR: $(printf '%s\n' "$bd" | grep -m1 'error:' | sed 's/^.*error: //')"
+else bl="KAMA_ERR($bdrc): $(printf '%s\n' "$bd" | grep -m1 -E 'error|rror' | sed 's/^.*main.kama:/main:/; s/^.*lib.kama:/lib:/')"; fi
+printf '%s\tcheck(rc=%s): %s\tbuild: %s\n' "$(basename $d)" "$ckrc" "$ckline" "$bl" > result
+```
+
+### `runall.sh`
+
+```bash
+#!/bin/bash
+# Re-run everything:  MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'pushd /c/Users/matt/Documents/kama >/dev/null; ROOT=$(pwd); . tools/kama-bin.sh; export KAMA; bash .scratch/imports/runall.sh'
+cd "$(dirname "$0")"; bash gen.sh
+ls -d probes/*/ | xargs -P ${JOBS:-4} -n1 bash run1.sh
+cat probes/*/result > results.tsv; wc -l results.tsv
+```
+
+### `table.sh`
+
+```bash
+#!/bin/bash
+# Condense results.tsv: per cell  <check>/<build>  where check: ok|K ; build: run|K|C
+cd "$(dirname "$0")"
+awk -F'\t' '{
+  split($1,p,"__"); pos=p[1]; cs=p[2]; poss[pos]=1
+  ck = ($2 ~ /rc=0/) ? "ok" : "K"
+  if ($3 ~ /BUILT/) b="run"; else if ($3 ~ /C_ERROR/) b="C"; else b="K"
+  cell[pos,cs]=ck "/" b
+} END {
+  n=split("a b bq c cq d bs bsq",cols," ")
+  printf "%-32s","position"; for(i=1;i<=n;i++) printf "%-8s",cols[i]; print ""
+  m=asorti(poss,sp)
+  for(j=1;j<=m;j++){ printf "%-32s",sp[j]; for(i=1;i<=n;i++){ v=cell[sp[j],cols[i]]; printf "%-8s",(v==""?"-":v)}; print "" }
+}' results.tsv
+```
+
+### `xprobes.sh`
+
+```bash
+#!/bin/bash
+# Second batch: targeted follow-ups. Writes xprobes/<name>/main.kama (+geo copy); run via run1.sh like probes/.
+cd "$(dirname "$0")"; rm -rf xprobes; mkdir xprobes
+mk() { mkdir -p xprobes/$1/geo; cp geo/lib.kama xprobes/$1/geo/; cat > xprobes/$1/main.kama; }
+# (1) the reported repro shape: a Result instance that ALREADY exists in the program (geo's Shown.parse)
+for t in ShownErr:b Zork:a HidErr:c geo::HidErr:cq; do n=${t%%:*}; c=${t##*:}
+mk X01_existing_instance_init__$c <<K
+import { geo::Shown };
+fn int32 main() { Result<Shown, $n> r = Shown.parse(n: 1); return 0; }
+K
+mk X02_existing_instance_okctor__$c <<K
+import { geo::Shown };
+fn int32 main() { Result<Shown, $n> r = Result::Ok(value: Shown.make()); return 0; }
+K
+mk X03_existing_instance_param__$c <<K
+import { geo::Shown };
+fn int32 f(Result<Shown, $n> r) { return 0; }
+fn int32 main() { return 0; }
+K
+mk X04_bound_unused__$c <<K
+import { geo::Shown };
+fn int32 g<X: ${n/Err/C}>(X x) { return 0; }
+fn int32 main() { return g(x: 1); }
+K
+mk X05_implements_arg_called__$c <<K
+import { geo::Shown };
+type contract Holds<X> for value { fn int32 cm(); }
+type value W implements Holds<$n> { public int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main() { W w = W.make(); return w.cm() - 1; }
+K
+mk X06_cast_direct__$c <<K
+import { geo::Shown };
+fn int32 main() { int32 k = cast<int32>(cast<$n>(0)); return 0; }
+K
+mk X07_sizeof_plain__$c <<K
+import { geo::Shown };
+fn int32 main() { usize k = sizeof($n); return 0; }
+K
+done
+mk X01_existing_instance_init__d <<'K'
+import { geo::Shown, geo::ShownErr };
+fn int32 main() { Result<Shown, ShownErr> r = Shown.parse(n: 1); return 0; }
+K
+mk X08_implements_qualified_imported__d <<'K'
+import { geo::Shown, geo::ShownC };
+type value W implements geo::ShownC { public int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main() { W w = W.make(); return w.cm() - 1; }
+K
+mk X09_hex_decode__b <<'K'
+import { std::encoding::hex::decode, std::collections::DynamicArray };
+fn int32 main() { Result<DynamicArray<uint8>, DecodeError> r = decode(text: "00"); return 0; }
+K
+mk X09_hex_decode__d <<'K'
+import { std::encoding::hex::decode, std::encoding::hex::DecodeError, std::collections::DynamicArray };
+fn int32 main() { Result<DynamicArray<uint8>, DecodeError> r = decode(text: "00"); return 0; }
+K
+mk X10_uuid_param__bs <<'K'
+import { std::uuid::Uuid };
+fn int32 f(Result<Uuid, UuidError> r) { return 0; }
+fn int32 main() { return 0; }
+K
+mk X11_uuid_return__bs <<'K'
+import { std::uuid::Uuid };
+fn Result<Uuid, UuidError> f() { return Uuid.parse(text: "x"); }
+fn int32 main() { return 0; }
+K
+mk X12_uuid_field__bs <<'K'
+import { std::uuid::Uuid };
+type value W { public Result<Uuid, UuidError> r; public ctor make() { this.r = Uuid.parse(text: "x"); } }
+fn int32 main() { W w = W.make(); return 0; }
+K
+mk X13_private_qualified_variant_run__cq <<'K'
+import { geo::Shown };
+fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: geo::HidErr::Worse(at: 7)); return 0; }
+K
+mk X14_private_fn_as_bound_qualified__cq <<'K'
+import { geo::Shown };
+type value R2 implements geo::ShownC { public int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 g<X: geo::HidC>(X x) { return x.cm(); }
+fn int32 main() { return 0; }
+K
+mk X15_private_turbofish_used__cq <<'K'
+import { geo::Shown };
+fn usize z<X>() { return sizeof(X); }
+fn int32 main() { return cast<int32>(z::<geo::HidVal>()) - 4; }
+K
+# (3) which FIRST type argument hides an unresolved second one?
+i=0
+for first in "int32" "string" "Shown" "geo::Shown" "Optional<int32>" "DynamicArray<int32>" "LocalV" "Zork"; do i=$((i+1))
+mk Y0${i}_result_first_arg__a <<K
+import { geo::Shown, std::collections::DynamicArray };
+type value LocalV { public int32 a; }
+fn int32 f(Result<$first, Zork> r) { return 0; }
+fn int32 main() { return 0; }
+K
+done
+mk Y09_optional_user_then_unknown__a <<'K'
+import { geo::Shown };
+type value LocalV { public int32 a; }
+type value Pair<A, B> { public A a; public B b; }
+fn int32 f(Pair<LocalV, Zork> r) { return 0; }
+fn int32 main() { return 0; }
+K
+mk Y10_unknown_first__a <<'K'
+import { geo::Shown };
+fn int32 f(Result<Zork, int32> r) { return 0; }
+fn int32 main() { return 0; }
+K
+mk Y11_local_decl_result_userfirst__a <<'K'
+import { geo::Shown };
+type value LocalV { public int32 a; }
+fn int32 main() { Optional<Result<LocalV, Zork>> r = Optional::None; return 0; }
+K
+```
+
