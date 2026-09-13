@@ -1,0 +1,7 @@
+// Inference inside a generic body is deferred to each instantiation (KR-21 a) — and a bound the instantiation
+// does not meet is refused there, naming the argument (`int32`, not the empty spelling a substituted argument
+// used to print).
+type contract Tag for value { fn int32 tag(); }
+fn int32 needTag<T: Tag>(T x) { return x.tag(); }
+fn int32 outer<T>(T x) { return needTag(x: x); }
+fn int32 main() { return outer(x: 5); }

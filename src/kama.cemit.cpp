@@ -12814,6 +12814,11 @@ bool CEmitter::bindGenericArg(const std::string& pty, const std::string& pname, 
     // generic TYPE's member, being re-walked for one instantiation. Substituting first is what lets
     // an argument declared with the ENCLOSING template's parameter (`V`) read as the concrete type.
     SharedIdentifier at = deepSubstType(exprTypeNode(arg, localTys));
+    // An argument typed by the ENCLOSING template's own parameter (`idA(x: x)` inside `fn T idB<T>(T x)`) is
+    // not a failed inference: this is the template's own walk, where `T` is still open, and each
+    // instantiation re-walks the body with `T` bound (registerInstGenerics) and infers there. Refusing here
+    // is what made a generic calling a generic need a turbofish the argument already implied (KR-21 a).
+    if (!isConcreteTypeArg(at) && at && argCarriesUnboundParam(at)) { _inferSawOpenArg = true; return false; }
     if (!isConcreteTypeArg(at)) {
         unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
                      "' is not a literal or a locally-typed value").c_str(), line);
@@ -12858,6 +12863,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     struct DeferredLit { std::string pty, pname; SharedExpression expr; };
     std::vector<DeferredLit> deferred;   // unsuffixed literals, bound after every typed argument
     if (seed) bind = *seed;
+    _inferSawOpenArg = false;
 
     // Structurally unify a parameter's declared type against the argument's concrete type, binding
     // every type parameter that appears anywhere inside it — `View<T>`, `DynamicArray<T>`,
@@ -12871,7 +12877,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         [&](const SharedIdentifier& pt, const SharedIdentifier& at) -> bool {
         if (!pt || !pt->value || !at || !at->value) return true;
         if (!pt->genericArg && tps.count(*pt->value)) {          // a bare type-param position — bind it
-            if (!isConcreteTypeArg(at)) return true;
+            if (!isConcreteTypeArg(at)) { if (argCarriesUnboundParam(at)) _inferSawOpenArg = true; return true; }
             auto b = bind.find(*pt->value);
             if (b != bind.end() && mangleElem(b->second) != mangleElem(at)) {
                 unsupported(("cannot unify type parameter '" + *pt->value + "' (" + mangleElem(b->second) +
@@ -12999,6 +13005,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
 
     for (auto& tp : *tmpl->typeParams) {
         if (tp && !bind.count(*tp)) {
+            if (_inferSawOpenArg) return false;   // the template's own walk — see bindGenericArg
             // A comptime parameter is a VALUE, and values are written in their own group — pointing the
             // reader at a turbofish would name brackets that can no longer hold one.
             const bool isValue = cps.count(*tp) != 0;
@@ -18549,7 +18556,10 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
     bool ok = true;
     std::string cls = cType(concreteArg);                 // concrete class key (or a primitive C type)
     std::string rkey = primKey(concreteArg);              // the CONFORMANCE key — `cls` still feeds _classes
-    std::string clsName = (concreteArg && concreteArg->value) ? *concreteArg->value : cls;   // source-level
+    // source-level — and a SUBSTITUTED argument (a primitive bound to an enclosing template's `T`) carries no
+    // spelling, which made the diagnostic read "type argument `` for …"; its conformance key is its kama name.
+    std::string clsName = (concreteArg && concreteArg->value && !concreteArg->value->empty())
+                        ? *concreteArg->value : demangleForDisplay(rkey.empty() ? cls : rkey);
     ClassInfo* ci = _classes.count(cls) ? &_classes[cls] : nullptr;
     for (auto& b : *bounds) {
         if (!b || !b->value) continue;

@@ -1,0 +1,18 @@
+// A generic function calling a generic function INFERS the callee's parameters from its own, as any call does
+// (KR-21 a). `idA(x: x)` inside `fn T idB<T>(T x)` used to be refused — "argument 'x' is not a literal or a
+// locally-typed value" — although `x` IS typed, by `T`: the template's own walk sees `T` open, and refusing
+// there never let the per-instance walk (where `T` is `int32`) answer. A turbofish was the only spelling.
+// Covers a bare `T`, a container of `T` (`ref DynamicArray<T>`), a local typed by `T`, and two levels.
+// A real mistake still lands at instantiation: tests/xfail/generic_infer_in_generic_bound.
+import { std::collections::DynamicArray };
+fn T idA<T>(T x) { return x; }
+fn T idB<T>(T x) { return idA(x: x); }
+fn T first<T>(ref DynamicArray<T> a) { return a[0]; }
+fn T head<T>(ref DynamicArray<T> a) { return first(a: a); }
+fn T deep<T>(T x) { T y = idB(x: x); return idA(x: y); }
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 7);
+    int64 w = idB(x: cast<int64>(20));
+    return idB(x: 5) + head(a: d) + deep(x: 3) + cast<int32>(w);   // 5 + 7 + 3 + 20
+}

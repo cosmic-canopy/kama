@@ -3996,7 +3996,8 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 
 - **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int32, int32>>`) — nested
   `>>` needs no space. `type value`/`resource` generics both work (a generic resource is move-only with a
-  per-instance dtor). Function type args are inferred from the call.
+  per-instance dtor). Function type args are inferred from the call — inside a generic body too, where an
+  argument typed by the enclosing `T` infers per instantiation (`fn T outer<T>(T v) { return ident(x: v); }`). <!-- test: generic_infer_in_generic -->
 - **Turbofish — explicit type arguments.** When inference can't determine the type args — most commonly a
   **return-only generic** whose type parameter never appears in an argument — spell them explicitly with
   `f::<int32>()` (the `::` before `<` is unambiguous). Turbofish reaches a generic *function*; a generic

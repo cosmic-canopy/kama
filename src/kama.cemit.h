@@ -1898,6 +1898,7 @@ private:
                              bool isExternFn, int line);
     std::string whenGateReason(const std::string& inst, const std::string& method);
     static const char* const kCompileForOnMember;
+    bool _inferSawOpenArg = false;   // an inference argument still names the enclosing template's parameter
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
     void instantiateEnumMembers(const GenericTypeInst& gi);

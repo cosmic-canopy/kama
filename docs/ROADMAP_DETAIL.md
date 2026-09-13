@@ -757,19 +757,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   became legal at `0.9.239` and a derived template that *nobody instantiates* then failed to compile, because
   the uninstantiated-template probe asked an opaque `T` whether it conformed and three rules answered "no"
   (`0.9.240`).
-- **A generic FREE function cannot call a generic free function with its own type parameter.**
-  `fn T outer<T>(T v) { return ident(x: v); }` reports "cannot infer generic type parameter 'T' —
-  argument 'x' is not a literal or a locally-typed value". `collectGenericInsts` walks each body ONCE,
-  verbatim, with `_typeSubst` empty, so the argument's declared type reads as a bare name and
-  `inferGenericInst` rejects it *in that pre-pass* — before the per-instantiation re-walk that would
-  resolve it. The same fixpoint already answers this for a generic call inside a generic **TYPE**'s
-  member (`registerInstGenerics`); the free-fn-inside-free-fn case never got the matching treatment.
-  Fix = let the pre-pass DEFER an unresolvable argument instead of diagnosing it, and diagnose only what
-  is still unbound after the fixpoint settles. Clean diagnostic, not silent, so it is a limitation rather
-  than a hazard — but it blocks the ordinary "thin generic wrapper" shape. Found while checking whether
-  a comptime param could be passed to a generic call; it fails identically for a type param, so it
-  is the general gap, not a comptime one.
-
 - ~~**`INT32_MIN` has no direct spelling.**~~ **Fixed.** `-2147483648` folds the negation into the
   literal at parse time (Rust's rule): the magnitude is one past INT32_MAX so the literal alone is
   rejected, but under a unary minus it fits exactly. It previously did not work at all and for an
