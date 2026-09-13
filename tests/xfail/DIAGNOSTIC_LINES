@@ -252,6 +252,7 @@ dup_type_same_file	dup_type_same_file.kama:5
 elem_method_const	elem_method_const.kama:12
 empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
 enum_bare_spelling	enum_bare_spelling.kama:4
+enum_contract_method_not_public	enum_contract_method_not_public.kama:5
 enum_extends	enum_extends.kama:3
 enum_field	enum_field.kama:4
 enum_member_bare_sibling	enum_member_bare_sibling.kama:4
@@ -259,6 +260,7 @@ enum_member_cycle	enum_member_cycle.kama:3
 enum_member_float	enum_member_float.kama:2
 enum_member_not_const	enum_member_not_const.kama:3
 enum_member_out_of_range	enum_member_out_of_range.kama:3
+enum_method_private	enum_method_private.kama:8
 enum_missing_contract_method	enum_missing_contract_method.kama:2
 enum_recursive	enum_recursive.kama:1
 enum_type_as_value	enum_type_as_value.kama:4

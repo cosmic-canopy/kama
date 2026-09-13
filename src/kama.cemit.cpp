@@ -17321,8 +17321,15 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
     // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
     mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
     mi.isCtor       = md->isCtor;
-    mi.visibility   = Visibility::Public;   // a contract's methods are public
     mi.fromContract = contract;             // an injected method, not part of the type's own API
+    // A `type intrinsic` block's methods belong to its contract, so they are public. An enum's OWN members
+    // follow the member rule every other kind follows — private unless written `public` — which they did
+    // not: this was `Public` for both, so an enum method with no modifier was callable from any module.
+    mi.visibility   = contract.empty() ? visibilityOf(md->modifiers, Visibility::Private, md->line)
+                                       : Visibility::Public;
+    if (mi.visibility == Visibility::Protected)
+        unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + tkey
+                     + "` is an `enum`, so its members are `private` or `public`").c_str(), md->line);
     if (md->whenParams)
         for (size_t c = 0; c < md->whenParams->size(); ++c) {
             auto& p = (*md->whenParams)[c];

@@ -4216,7 +4216,8 @@ type enum IoError : uint8 implements Error {
 
 The `;` separating variants from members is **mandatory**, and it is what makes the body unambiguous: a
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
-methods with or without a contract, but **not a field or a destructor** — its layout is its tag plus its
+methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->
+they satisfy a contract — but **not a field or a destructor** — its layout is its tag plus its
 variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Declaring a method-carrying contract gives a
 payload-less enum a tagged representation so it can hold the method and a dispatch vtable; that is
 transparent to its by-value uses.

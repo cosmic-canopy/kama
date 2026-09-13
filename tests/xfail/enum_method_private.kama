@@ -1,0 +1,9 @@
+// An enum's members follow the member rule: private unless written `public`. Enum methods used to be public
+// whatever was written, so `secret()` was callable from any file. Generic or not.
+type enum Color { Red, Green; fn int32 secret() { return 5; } public fn int32 open() { return this.secret(); } }
+type enum Maybe<T> { Has(T v), Nope; fn int32 hidden() { return 1; } }
+fn int32 main() {
+    Color c = Color::Red;
+    Maybe<int32> m = Maybe::Nope;
+    return c.open() + c.secret() + m.hidden();
+}

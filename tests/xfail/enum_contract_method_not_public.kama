@@ -1,0 +1,7 @@
+// A method that satisfies a contract must be `public` — on an enum as on a class. It was accepted only because
+// every enum method was silently public.
+type contract Tag for value, enum { fn int32 tag(); }
+type enum E implements Tag { A, B;
+    fn int32 tag() { return 2; }
+}
+fn int32 main() { return 0; }

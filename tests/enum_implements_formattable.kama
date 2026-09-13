@@ -9,7 +9,7 @@ type enum Shape implements Formattable {
     Circle(int32 r),
     Nil;
 
-    const fn void format(ref Formatter f) {
+    public const fn void format(ref Formatter f) {
         match (this) {
             case Circle(r: r): { f.writeStr(s: "circle:"); f.writeI64(v: cast<int64>(r)); }
             case Nil:          { f.writeStr(s: "nil"); }
@@ -22,7 +22,7 @@ type enum Color implements Formattable {
     Red,
     Green;
 
-    const fn void format(ref Formatter f) {
+    public const fn void format(ref Formatter f) {
         match (this) {
             case Red:   { f.writeStr(s: "red"); }
             case Green: { f.writeStr(s: "green"); }
