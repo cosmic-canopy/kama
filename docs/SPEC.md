@@ -2832,7 +2832,17 @@ Fields, methods (take an implicit `self`), named constructors, field initializer
 Members are **private by default**; `new` is reserved for the heap (`Owned`/`Shared` element construction), so
 a stack value uses `Counter.make(start: 40)`, not `new Counter.make(...)`. A constructor may also be called
 **inline in a call argument** — `f(x: Counter.make(start: 5))` — it materializes a temporary passed by value (a
-`value` copies, a `resource` moves); use a local for a `ref`/`out` parameter.
+`value` copies, a `resource` moves); use a local for a `ref`/`out` parameter. On a **generic** type the argument
+position pins the instance just as a declaration does: the parameter's type is the destination
+(`take(b: Box.empty())` at a `Box<int32>`), and with no destination the constructor's own arguments bind its
+type parameters (`generic(b: Box.of(v: x))`, `Box.of(v: 8).get()`). <!-- test: generic_ctor_arg_infer -->
+<!-- xfail: generic_ctor_uninferable -->
+
+`new` builds an **enum** on the heap with the variant's own spelling — `Shared<Geo> g = new Geo::Circle(r: 4);`
+(and `new Geo::Point()` for a payload-less one). <!-- test: new_enum_variant --> A value is never converted into
+a heap handle over its own type: `Shared<Pt> p = Pt.make(x: 1)` and `Shared<Geo> g = Geo::Circle(r: 4)` are
+compile errors that name `new`, in every position a handle is bound. <!-- xfail: heap_handle_bare_value -->
+(Boxing a value into a handle over a **contract** — `Owned<Hashable> h = 20` — is a different operation, and legal.)
 
 A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
 declared **`type resource`** and is move-only:
@@ -3532,17 +3542,20 @@ a type that declares `implements C` in its **own body** is untouched — its met
 interpolation is exempt: `"${x}"` is the compiler's own lowering to `Formattable`, not something an author
 wrote.
 
-**Widening — a primitive as a contract value.** A primitive can be bound to a contract, as a borrow or as
-an owning box:
+**Widening — a primitive as a contract value.** A primitive or a `string` can be bound to a contract, as a
+borrow or as an owning box, from any expression — a literal, a local, a field, a call or method result, a
+cast, arithmetic — and in any position that takes a contract value: <!-- test: contract_intrinsic_box -->
 
 ```kama
 Hashable h = 3;                  // a BORROW — a fat pointer over block-scoped storage. Cannot escape:
 fn void f(Hashable h) { … }      // the same escape check that governs every contract value applies.
 Owned<Hashable> o = 42;          // an OWNING box — the form that can be a field, an element, a return.
+Owned<Formattable> t = give s;   // a `string` box owns the string: a named one is handed off (`give`/`copy`)
 ```
 
 The machinery is pay-for-what-you-use: the vtable and its deref thunks (an intrinsic's method takes `self`
-by value; a vtbl slot passes `void*`) are emitted only for the pairs a program actually widens.
+by value; a vtbl slot passes `void*`) are emitted only for the pairs a program actually widens. A bare named
+`string` into an owning box is a compile error, as any owning hand-off without a marker is. <!-- xfail: owned_contract_string_bare -->
 
 **Why a kind rather than a mechanism.** Before this, a primitive had no kama spelling at all, so the only
 way to give it a contract was `implements C for T` — a *retroactive* block reaching into a type from
@@ -3921,7 +3934,11 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 - **Contract bounds** — `fn sort<T: Comparable>(…)`, `type value Map<K: Hashable + Comparable, V>`. `+` means
   **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param value;
   because it's monomorphized, those calls are **static direct calls** (zero cost, no vtable). Each concrete
-  type argument is checked to satisfy its bounds, else a clean compile error.
+  type argument is checked to satisfy its bounds, else a clean compile error. A bound on a generic contract names
+  its **arguments** too, in a declared bound and a `when [...]` gate alike: `<P: Source<int32>>` and
+  `when [P: Source<int32>]` hold for a type implementing `Source<int32>`, and not for one implementing only
+  `Source<string>`; an argument may be another parameter (`when [P: Source<T>]`). <!-- test: when_generic_contract_bound -->
+  <!-- xfail: bound_generic_contract_arg_mismatch --> <!-- xfail: when_generic_contract_arg_mismatch -->
 
   **A bound is what the body may call, and nothing else.** Reaching a member the bounds do not declare is
   an error at the DECLARATION, naming the bound that is missing rather than the method that is not there:
@@ -4958,7 +4975,10 @@ edge — `Shared`/`Weak<Contract>` — reconstructs the concrete type from each 
 the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the contract →
 `DeError::TypeMismatch`. A node's nested parts are walked inline: a by-value field whose type itself reaches
 a `Shared`, or an `Owned` pointee that does, contributes its edges to the OWNER's entry — one table, one id
-per pointee. <!-- test: ser_graph_nested_reach --> Every nominal implementor of a contract used as a graph
+per pointee. <!-- test: ser_graph_nested_reach --> An **enum** takes part on the same terms as a type: a
+`Shared`/`Weak` in a variant's payload is an edge (written as an id inside the ordinary `{"tag":…,"value":{…}}`
+frame), and a `@generate` enum may be a node — an edge's pointee, or the root — built on the heap with
+`new Geo::Circle(r: 4)`. <!-- test: ser_graph_enum --> <!-- test: ser_bin_graph_enum --> Every nominal implementor of a contract used as a graph
 edge, and every pointee of a concrete one, **must** be `@generate(Serializable, Deserializable)` — this is
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
