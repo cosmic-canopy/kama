@@ -1,0 +1,27 @@
+import { std::memory::Shared, std::memory::Weak };
+// KR-15 #1 — `Weak<Contract>` named ONLY in locals. `Shared<Shape>` registers its type-erased `Weak` partner,
+// and a later local `Weak<Shape>` used to overwrite it with the library class, whose body then failed with
+// "cannot tell which `Shared` to construct" (weak.kama) — whether or not `tryUpgrade` was ever called. A
+// program that named `Weak<Shape>` in any signature first built, which is why tests/shared_iface (it has
+// `fn Weak<Shape> orphan()`) never saw it. So this file names it in no signature at all.
+type contract Shape for resource { fn int32 area(); }
+type resource Sq implements Shape {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+}
+fn int32 viaAssign() {
+    Shared<Shape> a = new Sq.make(s: 6);
+    Weak<Shape> live = a;
+    Optional<Shared<Shape>> lu = live.tryUpgrade();
+    return match (lu) { case Some(value: u): u.area(); case None: 0; };   // 36
+}
+fn int32 viaDowngrade() {
+    Shared<Shape> b = new Sq.make(s: 2);
+    Weak<Shape> w = b.downgrade();
+    Optional<Shared<Shape>> bu = w.tryUpgrade();
+    return match (bu) { case Some(value: u): u.area(); case None: 0; };   // 4
+}
+fn int32 main() {
+    return viaAssign() + viaDowngrade();                                   // 40
+}

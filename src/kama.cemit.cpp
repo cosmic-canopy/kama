@@ -11419,6 +11419,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     std::string mangled = tmpl;
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
+    // ...and a name already registered as a built-in SMART POINTER. A `Shared<Contract>` registers its `Weak`
+    // partner that way (below), over the same concrete args, and never as a generic instance — so a later
+    // `Weak<Shape>` missed the dedup above and overwrote the type-erased partner with the library class, whose
+    // body then could not construct its `Shared`. Only a program that named `Weak<Shape>` in a signature FIRST
+    // (the library class registered, then overwritten by the partner) built; `tests/shared_iface` is one (KR-15).
+    if (_collections.count(mangled) && isSmartPtrClass(mangled)) return;
 
     // A library heap owner (`… implements HeapOwner<T>`) over a CONTRACT element is Rust's
     // `Box<dyn Trait>`: the type-erased `{obj,vtbl}` fat pointer + vtable dispatch/drop can't be safe
