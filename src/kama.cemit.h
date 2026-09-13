@@ -2807,6 +2807,8 @@ private:
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
     std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName,
                                   InvocationNode* call = nullptr); // X::<A>.name -> the instance
+    std::string newVariantEnum(ObjectCreationNode* oc, const std::string& elem);
+    std::string newVariantValue(const std::string& enumC, ObjectCreationNode* oc);
     SharedIdentifier inferDotCtorInstance(InvocationNode* inv, std::map<std::string, SharedIdentifier>& localTys);
     // Set when the header starts emitting: from here a generic instance registered for the first time would
     // have no struct or bodies, so an inference that needs one may only READ what discovery registered.

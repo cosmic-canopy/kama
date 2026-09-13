@@ -377,6 +377,7 @@ graph_owned_of_shared	graph_owned_of_shared.kama:16
 graph_read_by_value	-
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
+heap_handle_bare_value	heap_handle_bare_value.kama:7
 identity_char_constref_argument	identity_char_constref_argument.kama:10
 identity_char_literal	identity_char_literal.kama:12 identity_char_literal.kama:13
 identity_char_to_int	identity_char_to_int.kama:14 identity_char_to_int.kama:15 identity_char_to_int.kama:16

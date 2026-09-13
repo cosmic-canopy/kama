@@ -1,0 +1,9 @@
+// A heap handle is not its pointee, and nothing converts a value into one: heap construction says `new`
+// (`new Geo::Circle(r: 4)`, as `new Pt.make(…)` for a type). The bare value passed `kama check` in every
+// position and reached clang as an assignment of a `Geo` to a `Shared<Geo>` (KR-15).
+import { std::memory::Shared };
+type enum Geo { Circle(int32 r), Point }
+fn int32 main() {
+    Shared<Geo> g = Geo::Circle(r: 4);
+    return 0;
+}

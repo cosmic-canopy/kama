@@ -2123,6 +2123,24 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
             return;
         }
     }
+    // A HEAP OWNER given the very value it would own (`Shared<Pt> p = Pt.make(x: 1)`, `Owned<Geo> g =
+    // Geo::Point`). The exemptions below exist for a wrapper that HOLDS a value (`Optional<Pt> o = p`), and
+    // they let this through too — into clang, which refused assigning a `Pt` to a handle in every position.
+    // A handle is not its pointee and nothing converts one into the other: heap construction says `new`.
+    // (A value into a CONTRACT handle — `Owned<Error>`, `Owned<Hashable>` — is a box, and never reaches
+    // here: its element is the contract, not the value's own type.)
+    {
+        const std::string owned = heapOwnerTarget(dstCType);
+        const std::string vc = src.empty() ? typeOfExpr(value) : src;
+        if (!owned.empty() && !vc.empty() && !isInterface(owned) && (vc == owned || isBaseOf(owned, vc))) {
+            const bool isEnum = (_classes.count(vc) && _classes[vc].isVariant) || _enums.count(vc);
+            unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, a heap handle, "
+                         "and a `" + demangleForDisplay(vc) + "` value is not one — build it on the heap with `new` ("
+                         + (isEnum ? "`new " + demangleForDisplay(vc) + "::Variant(…)`"
+                                   : "`new " + demangleForDisplay(vc) + ".make(…)`") + ")").c_str(), line);
+            return;
+        }
+    }
     if (!plainUserClass(dstCType)) return;
     if (src.empty() || src == dstCType || !plainUserClass(src)) return;
     if (isBaseOf(dstCType, src)) return;                       // an inheritance UPCAST is the point of one
@@ -6308,6 +6326,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
+                    { std::string ve = newVariantEnum(oc, !heapOwnerTarget(ty).empty() ? heapOwnerTarget(ty) : std::string());
+                      if (!ve.empty()) octy = ve; }
                     // `try new T(...)` (M-step5): the non-panic entry — build `Optional<Owned<T>>`, `None` on
                     // OOM instead of `kama_panic`. `nm` is assigned by both branches (declared/RAII-tracked
                     // above). Mirrors the `ctorIsFallible` shape just below (wrap-a-box-in-a-sum-type).
@@ -6459,7 +6479,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 else
                                     *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (oc->ctorName)
+                                if (oc->ctorName || _classes[C].isVariant)
                                     emitNewFactoryMove(C, hp, oc, n->line, depth);
                                 // adopt the T* — the base subobject when widening (offset-0), else the ptr itself.
                                 std::string adoptArg = hp;
@@ -22181,6 +22201,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
     // as `None` rather than trapping), so it is gated too — under the name the user wrote.
     rejectIfNoHeap(oc->isTry ? "try new" : "new", srcLine);
     std::string octy = cType(oc->type);
+    { std::string ve = newVariantEnum(oc, heapOwnerTarget(targetCType)); if (!ve.empty()) octy = ve; }
     // one precise diagnostic + a declared degenerate temp (see header) — suppresses the caller's gate.
     auto reject = [&](const std::string& msg) -> std::string {
         unsupported(msg.c_str(), srcLine);
@@ -22251,7 +22272,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
                          + C + "* " + hp + " = (" + C + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + ")));";
         else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
-        if (oc->ctorName) {
+        if (oc->ctorName || _classes[C].isVariant) {
             std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
             if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
         }
@@ -28824,8 +28845,43 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
 // MOVES the result into the freshly-`malloc`'d heap slot. Shared by the local-decl path (emitNewFactoryMove)
 // and the hoist path (tryHoistInlineValue). M4a: infallible only — a fallible (`Result`) ctor is rejected
 // here (M4b threads `Result<Owned<T>,E>` through the box path).
+// `new Geo::Circle(r: 4)` — a VARIANT built on the heap. `new` is kama's heap operator and a variant is how
+// an enum is constructed, so this is the one spelling for `Shared<Geo>`/`Owned<Geo>` over an enum, as
+// `new Pt.make(…)` is over a type. It had no spelling at all: `new` only ever took a constructor, an enum
+// has none, and the bare `Shared<Geo> g = Geo::Circle(r: 4)` reached clang (KR-15 #5).
+// The enum a `new` builds, as a C name: `oc` names a variant of a concrete enum, or of the generic enum
+// template the handle's element `elem` instantiates. "" when it names no variant.
+std::string CEmitter::newVariantEnum(ObjectCreationNode* oc, const std::string& elem)
+{
+    if (!oc || oc->ctorName || !oc->type || !oc->type->value || !oc->type->qualifier || oc->type->qualifier->empty())
+        return "";
+    auto q = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < oc->type->qualifier->size(); ++i) q->push_back((*oc->type->qualifier)[i]);
+    std::string en = resolveUserName(*oc->type->qualifier->back(), q);
+    if (!_classes.count(en) || !_classes[en].isVariant) {
+        auto of = _genericTypeInstOf.find(elem);
+        if (!_genericTypes.count(en) || of == _genericTypeInstOf.end() || of->second != en) return "";
+        en = elem;
+    }
+    for (auto& v : _classes[en].variants) if (v.name == *oc->type->value) return en;
+    return "";
+}
+
+// ...and its value, which the box moves into the heap slot exactly as a factory result is.
+std::string CEmitter::newVariantValue(const std::string& enumC, ObjectCreationNode* oc)
+{
+    ScopedStr _vt(_variantTargetType, enumC);
+    if (!oc->args || oc->args->empty()) return emitExpression(oc->type);   // `new Geo::Point()`
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto iv = std::make_shared<InvocationNode>(*_synthCtx, SharedExpression(), oc->args);
+    iv->identifier = oc->type;
+    iv->line = oc->line;
+    return emitExpression(iv);
+}
+
 std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
 {
+    if (!oc->ctorName && _classes.count(cls) && _classes[cls].isVariant) return newVariantValue(cls, oc);
     const std::string cn = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
     // Diagnostics use the SOURCE spelling the user wrote (`Box`), not the mangled `_classes` key.
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
@@ -29069,7 +29125,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
 std::string CEmitter::emitTryNewBox(const std::string& target, const std::string& lval,
                                     ObjectCreationNode* oc, int srcLine)
 {
-    const std::string cls = cType(oc->type);
+    std::string cls = cType(oc->type);
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
     // The declared result must be `Optional<Owned<T>>` — read the `Some` payload type off the monomorphized
     // Optional ClassInfo (substituted-concrete), like emitFallibleNewBox reads its `Ok`/`Err`.
@@ -29084,6 +29140,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     }
     std::string S = fieldCType(target, someV->payload[0]);   // the inner Owned/Shared instance
     const std::string someName = someV->payload[0].name;              // "value"
+    { std::string ve = newVariantEnum(oc, heapOwnerTarget(S)); if (!ve.empty()) cls = ve; }
     // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
     // Mirrors emitFallibleNewBox's interface branch (malloc `.obj`, construct into it, set `.vtbl`, and —
     // Shared — the ctrl) with ONE deliberate difference, which is this verb's whole reason to exist:
@@ -29208,7 +29265,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     // Construct the object at `hp`: a named ctor (`try new T.make(...)`, the M8 norm) MOVES a factory result
     // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
     std::string ctorStmt;
-    if (oc->ctorName) {
+    if (oc->ctorName || (_classes.count(cls) && _classes[cls].isVariant)) {
         std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
         if (fc.empty()) return "";                            // diagnostic already emitted
         ctorStmt = "*(" + hp + ") = " + fc + "; ";

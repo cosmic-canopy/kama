@@ -1,0 +1,22 @@
+import { std::memory::Shared, std::memory::Owned };
+// `new Geo::Circle(r: 4)` — an enum built on the heap. `new` is kama's heap operator and a variant is how an
+// enum is constructed, so this is the one spelling for `Shared`/`Owned` over an enum, as `new Pt.make(…)` is
+// over a type. It had no spelling at all: `new` only ever took a constructor, and the bare
+// `Shared<Geo> g = Geo::Circle(r: 4)` passed `kama check` and reached clang (KR-15). The bare form is now a
+// refusal pointing here (tests/xfail/heap_handle_bare_value).
+type enum Geo { Circle(int32 r), Point;
+    public const fn int32 size() { return match (this) { case Circle(r: r): r; case Point: 100; }; }
+}
+type enum Maybe<T> { Has(T v), Nope }
+fn Shared<Geo> make() { return new Geo::Circle(r: 9); }                 // a return value
+fn int32 measure(Owned<Geo> g) { return g.size(); }
+fn int32 main() {
+    Shared<Geo> g = new Geo::Circle(r: 4);                             // a declaration
+    Shared<Geo> g2 = g;                                               // …shared
+    Owned<Geo> p = new Geo::Point();                                   // a payload-less variant
+    Shared<Maybe<int32>> m = new Maybe::Has(v: 3);                     // a generic enum, pinned by the handle
+    Optional<Owned<Geo>> t = try new Geo::Circle(r: 5);                // the non-panic form
+    int32 tv = match (t) { case Some(value: o): o.size(); case None: 0; };
+    Shared<Geo> k = make();
+    return g.size() + g2.size() + p.size() + tv + k.size() + measure(g: new Geo::Circle(r: 2));   // 4+4+100+5+9+2 = 124
+}
