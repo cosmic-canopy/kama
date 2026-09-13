@@ -14080,9 +14080,32 @@ bool CEmitter::indexesUserOp(ElementAccessNode* ea)
 // cType(typeNode) resolved in the type-substitution context of a generic-instance class `inCls` — so a
 // method's `T`-typed return (e.g. `iterator()` -> `VecIter<T>`, `next()` -> `Optional<T>`) resolves to
 // the concrete instance (`VecIter_int32` / `Optional_int32`). Mirrors computeDestructible's binding.
+//
+// A NON-generic class still has a home: its member signatures were written in its declaring file and
+// name what THAT file imports. Rendering them under the caller's `_nsCtx` made `Uuid.parse(…)`'s
+// `Result<Uuid, UuidError>` mangle against the consumer's imports, so a consumer that imported `Uuid` but
+// not `UuidError` got an unknown `Result_…` and "`match` subject's type could not be resolved".
+// (tests/ctor_result_foreign_err.d). Scope-less infos (prelude, intrinsic collections) keep the plain path.
 std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode)
 {
-    if (!_genericTypeInsts.count(inCls)) return cType(typeNode);   // non-generic: plain
+    if (!_genericTypeInsts.count(inCls)) {
+        auto ci = _classes.find(inCls);
+        if (ci == _classes.end() || ci->second.isIntrinsicColl) return cType(typeNode);
+        // The declaring file's WHOLE context — names, unit path, private scope, export list — exactly as
+        // its own bodies were judged. `enterClassCtx` rebuilds only the name half and leaves `unitPath`
+        // empty, and the visibility check then judged every reference as coming from nowhere: a generic
+        // `json::deserializeJsonBuffer::<Point>` reached a test file's own unexported `Point` and was
+        // refused under `kama check`. No such file (the prelude, a synthesized type) keeps the plain path.
+        const NsCtx* home = nullptr;
+        for (auto& kv : _unitCtx) if (kv.second.unitPath == ci->second.declFile) { home = &kv.second; break; }
+        if (!home || ci->second.declFile.empty()) return cType(typeNode);
+        NsCtx savedCtx = _nsCtx;
+        _nsCtx = *home;
+        ScopedStr _cu(_collectingUnitPath, ci->second.declFile);
+        std::string r = cType(typeNode);
+        _nsCtx = savedCtx;
+        return r;
+    }
     auto savedSubst = _typeSubst; NsCtx savedCtx = _nsCtx;
     const GenericTypeInst& gi = _genericTypeInsts[inCls];
     _nsCtx = _genericTypeInstCtx.count(inCls) ? _genericTypeInstCtx[inCls] : _genericTypeCtx[gi.templateKey];
@@ -27999,26 +28022,14 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
                 // A method on a generic INSTANCE returns the template's unbound type
                 // (`Weak<T>.tryUpgrade() -> Optional<Shared<T>>`). Bind the owning instance's
                 // type args + its ctx so the return mangles concretely (else `match(w.tryUpgrade())`
-                // can't find the Optional variant). Mirrors emitGenericTypeInst's binding.
+                // can't find the Optional variant). A non-generic owner is rendered in its own file's
+                // scope too, so a `Result<T, E>` naming an `E` the caller never imported still resolves.
                 std::string ownerCls = owner ? owner->name : cls;
-                NsCtx savedCtx = _nsCtx;
-                std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
                 // A `This` return type resolves to the method's OWNER — the same binding the operator
                 // path makes for `This operator+`. Without it `t.merge(…)` on a named receiver reaches
                 // cType with `_thisType` empty and dies as "`This` is only valid inside a type".
                 ScopedStr _ts(_thisType, ownerCls);
-                auto gi = _genericTypeInsts.find(ownerCls);
-                if (gi != _genericTypeInsts.end()) {
-                    _typeSubst.clear();
-                    const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
-                    for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
-                        _typeSubst[ps[i]] = gi->second.typeArgs[i];
-                    _nsCtx = _genericTypeInstCtx.count(ownerCls) ? _genericTypeInstCtx[ownerCls]
-                                                                 : _genericTypeCtx[gi->second.templateKey];
-                }
-                std::string rc = cType(mi->returnType);
-                _typeSubst = savedSubst; _nsCtx = savedCtx;
-                return rc;
+                return cTypeInInstance(ownerCls, mi->returnType);
             }
         }
         // A CONTRACT (fat-pointer) receiver: the method lives in _interfaces, not _classes, so the
@@ -28101,10 +28112,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         if (_classes.count(cls)) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&_classes[cls], *inv->identifier->value, &owner);
-            if (mi && mi->returnType) {
-                std::string rc = cType(mi->returnType);
-                return rc;
-            }
+            if (mi && mi->returnType) return cTypeInInstance(owner ? owner->name : cls, mi->returnType);
         }
     }
 

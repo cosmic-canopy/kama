@@ -1,0 +1,21 @@
+// A `match` on a foreign type's ctor or method whose return type names a type the CALLER did not import
+// (`WidgetError`). The return type used to be rendered against the caller's imports, so the `Result`
+// instance mangled to nothing and the match said its subject's type could not be resolved — the shape
+// `Uuid.parse(text:)` has, where importing `Uuid` alone is the natural spelling. Exit 5.
+import { lib::Widget };
+
+fn int32 main() {
+    Widget w = match (Widget.make(n: 3)) {            // a dot-on-type ctor
+        case Ok(value: v): v;
+        case Err(error: e): { return 100; }
+    };
+    Widget g = match (w.grow(by: 2)) {                // an instance method
+        case Ok(value: v): v;
+        case Err(error: e): { return 101; }
+    };
+    int32 refused = match (Widget.make(n: 12)) {      // the Err arm is reachable too
+        case Ok(value: v): 50;
+        case Err(error: e): 0;
+    };
+    return g.n + refused;
+}

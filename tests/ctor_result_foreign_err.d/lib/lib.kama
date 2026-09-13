@@ -1,0 +1,19 @@
+export { Widget, WidgetError };
+
+// A type whose members return a `Result` naming an error type the consumer never imports. The member's
+// signature is written in THIS file, so its types resolve against THIS file's names, whoever calls it.
+type enum WidgetError implements Error {
+    TooBig, Negative;
+    public const fn string message() { return "bad widget"; }
+}
+
+type value Widget {
+    public int32 n;
+    public ctor Result<Widget, WidgetError> make(int32 n) {
+        if (n < 0) { return Result::Err(error: WidgetError::Negative); }
+        if (n > 9) { return Result::Err(error: WidgetError::TooBig); }
+        return Result::Ok(value: Widget.of(n: n));
+    }
+    ctor of(int32 n) { this.n = n; }
+    public fn Result<Widget, WidgetError> grow(int32 by) { return Widget.make(n: this.n + by); }
+}
