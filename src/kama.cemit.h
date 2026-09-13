@@ -2721,7 +2721,7 @@ private:
     // (`exprClass`, through a `give` hand-off, the discovery-stashed inline instance, the qualified
     // variant name), with no diagnostic on failure. "" when it is not a resolvable variant class, which
     // is the only answer a total classifier may give. `inlineSubj` (optional) reports steps 3–4.
-    std::string matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj = nullptr);
+    std::string matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj = nullptr, std::string* handleCls = nullptr);
     // Install one arm's payload bindings for the duration of classifying that arm's value. Binds the
     // subject instance's type args itself, per resolution — the caller must NOT hold them open.
     std::vector<SavedLocalType> bindArmPayloadTypes(const ClassInfo& ci, const SharedMatchArm& a);

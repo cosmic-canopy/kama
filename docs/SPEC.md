@@ -4290,7 +4290,8 @@ member of `Shape`'s scope, reached with `::` like any other scope member; supply
 `Shape`. That is why construction's dot-on-type rule does not apply here: there is no type to dot.
 
 **`match`** is the **one** construct for branching on an enum — payload-less enums, tagged unions, and the
-`Optional`/`Result` prelude types alike. It is **value-producing** (usable in statement or expression
+`Optional`/`Result` prelude types alike — and an enum behind an `Owned`/`Shared` handle, which it matches <!-- test: match_heap_handle -->
+through the handle, borrowing the payloads in place (not `give`, and not a `Weak`, which must be upgraded first). It is **value-producing**<!-- xfail: match_handle_give, match_handle_weak --> (usable in statement or expression
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
 It is also the only construct that *reads* an enum, which is why the only way to *build* one from an
 integer — `try cast<E>(x)`, above — hands back an `Optional<E>`: a value that names no variant arrives as

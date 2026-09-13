@@ -1094,13 +1094,27 @@ void CEmitter::hideShadowedLocal(const std::string& name, bool refBinder)
     if (!refBinder) _refParams.erase(name);
 }
 
-std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj)
+std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj, std::string* handleCls)
 {
     if (inlineSubj) *inlineSubj = false;
+    if (handleCls) handleCls->clear();
     if (!m) return "";
     std::string subjCls = exprClass(m->subject);
     // `match (give x)` — the consuming form resolves through the hand-off to x's class.
     if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
+    // THROUGH A HEAP HANDLE (KR-42): `match (g)` on an `Owned<Geo>`/`Shared<Geo>` matches the enum it points at,
+    // as a method call on the same handle auto-derefs. The subject's class is the POINTEE; the handle is
+    // reported so the emitter borrows through it. A `Weak` is not seen through — it must be upgraded first.
+    {
+        std::string pointee = heapOwnerTarget(subjCls);
+        if (pointee.empty() && isSmartPtrClass(subjCls) && smartKind(subjCls) != CollKind::Weak)
+            pointee = _classes[subjCls].collElemClass;
+        auto pc = pointee.empty() ? _classes.end() : _classes.find(pointee);
+        if (pc != _classes.end() && pc->second.isVariant) {
+            if (handleCls) *handleCls = subjCls;
+            return pointee;
+        }
+    }
     // A value-producing variant ctor as the SUBJECT: the concrete instance was inferred + registered at
     // discovery and its mangled name stashed, because it cannot be re-inferred here.
     if (subjCls.empty()) {
@@ -21885,14 +21899,25 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // materialized (below) so the same instance is constructed. The recovery itself is shared with the
     // classifier, which needs the identical answer and may not diagnose — see `matchSubjectClassQuiet`.
     bool inlineVariantSubj = false;
-    std::string subjCls = matchSubjectClassQuiet(m, &inlineVariantSubj);
+    std::string handleCls;   // non-empty: the subject is an `Owned`/`Shared` over the enum, borrowed through
+    std::string subjCls = matchSubjectClassQuiet(m, &inlineVariantSubj, &handleCls);
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
         if (!enumTy.empty()) { emitMatchPlainEnum(m, enumTy, resultTemp, depth); return; }
         // Say which of the two it is. Claiming "requires an enum subject" about a resolvable non-enum
         // named the wrong cause; claiming it about something unresolvable said nothing about the fix.
-        if (!subjCls.empty())
+        // A `Weak` over an enum is the one handle not seen through: it may already be dangling.
+        const bool weakEnum = subjCls.rfind("std__memory__Weak", 0) == 0 && _classes.count(subjCls)
+                           && [&] { auto g = _genericTypeInsts.find(subjCls);
+                                    if (g == _genericTypeInsts.end() || g->second.typeArgs.empty()) return false;
+                                    auto pc = _classes.find(cType(g->second.typeArgs[0]));
+                                    return pc != _classes.end() && pc->second.isVariant; }();
+        if (weakEnum)
+            unsupported(("`match` subject is a `" + demangleForDisplay(subjCls) + "`, which may no longer point at "
+                         "anything — upgrade it first (`tryUpgrade()` gives an `Optional<Shared<…>>`) and match "
+                         "the `Shared`").c_str(), m->line);
+        else if (!subjCls.empty())
             unsupported(("`match` subject has type `" + subjCls + "`, which is neither an enum nor a "
                          "tagged union").c_str(), m->line);
         else
@@ -21948,7 +21973,33 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
     // a `ref string` param — `match (map.get("k"))`), so their decls land BEFORE the subject line, not
     // inside the first arm body (which would leave them undeclared at the point of use).
-    if (subjConsumed) {
+    if (!handleCls.empty()) {
+        // `match (h)` through a heap handle: borrow the pointee in place, so payload bindings borrow from the
+        // object the handle owns. A lvalue handle is dereffed where it lives; a call result is held in a temp
+        // (the handle, dropped after the switch — releasing its share) and dereffed there.
+        if (subjConsumed) {
+            unsupported(("`match (give …)` on a `" + demangleForDisplay(handleCls) + "` — a handle's enum is "
+                         "borrowed through it, not moved out of it; match the handle itself (`match (h)`)").c_str(),
+                        m->line);
+            return;
+        }
+        const bool lib = !heapOwnerTarget(handleCls).empty();
+        bool ph = _hoistOK; _hoistOK = true;
+        std::string hExpr = emitPlace(m->subject);
+        _hoistOK = ph;
+        flushHoisted(depth);
+        std::string place = hExpr;
+        if (!subjLvalue) {
+            subjLocMark = _scopes.empty() ? 0 : _scopes.back().locals.size();
+            subjOwner = "__msubj" + std::to_string(_tempCounter++);
+            indent(depth); *_out << handleCls << " " << subjOwner << " = " << hExpr << ";\n";
+            recordDestructibleLocal(subjOwner, handleCls);   // see the drop below
+            place = subjOwner;
+        }
+        indent(depth); *_out << subjCls << "* " << sp << " = (" << subjCls << "*)"
+                             << (lib ? derefFnName(handleCls, true) + "(&(" + place + "))"
+                                     : "(" + place + ").ptr") << ";\n";
+    } else if (subjConsumed) {
         // `match (give x)`: the subject is a hand-off. Emit the moved-from source, materialize an owning temp
         // (bitwise handle copy), and mark the source moved (its own scope-drop then no-ops). Payload bindings
         // MOVE out of this temp (destructure-move); the temp's post-switch drop no-ops the defused slots.

@@ -1,0 +1,9 @@
+// A handle's enum is borrowed through it, never moved out of it — `match (give g)` on a `Shared<Geo>` would take
+// the payload away from every other owner of the share. Match the handle itself.
+import { std::memory::Shared };
+type enum Geo { Circle(int32 r), Point }
+fn int32 main() {
+    Shared<Geo> g = new Geo::Circle(r: 4);
+    int32 n = match (give g) { case Circle(r: r): r; case Point: 0; };
+    return n;
+}

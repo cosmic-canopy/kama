@@ -528,6 +528,8 @@ match_block_no_value	match_block_no_value.kama:6
 match_borrow_give_iface_payload	match_borrow_give_iface_payload.kama:8
 match_borrow_give_payload	match_borrow_give_payload.kama:7
 match_empty_arm	match_empty_arm.kama:8
+match_handle_give	match_handle_give.kama:7
+match_handle_weak	match_handle_weak.kama:7
 match_label_duplicate	match_label_duplicate.kama:5
 match_label_missing	match_label_missing.kama:5
 match_label_unknown	match_label_unknown.kama:6

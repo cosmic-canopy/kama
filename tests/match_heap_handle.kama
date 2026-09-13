@@ -1,0 +1,29 @@
+// `match` sees through a heap handle (KR-42): `match (g)` on an `Owned<Geo>`/`Shared<Geo>` matches the enum it
+// points at, as a method call on the same handle auto-derefs. The enum is BORROWED through the handle — a payload
+// binding (`s`) borrows from the object the handle owns, so nothing is copied or moved — and a handle that is a
+// call result is held in a temp and released after the switch (the san leg checks the share is dropped exactly
+// once). Covers Owned and Shared, a shared copy, a generic enum, a call result, a field, a parameter, and statement
+// position. It had no spelling before `new Geo::Circle(r: 4)` (0.9.316) put an enum behind a handle at all.
+// `match (give h)` and a `Weak` subject are refused: tests/xfail/match_handle_give, match_handle_weak.
+import { std::memory::Shared, std::memory::Owned };
+type enum Geo { Circle(int32 r), Label(string s), Point }
+type enum Maybe<T> { Has(T v), Nope }
+type resource Holder { Shared<Geo> g; public ctor of(Shared<Geo> g) { this.g = g; } public fn int32 kind() { int32 k = match (this.g) { case Point: 50; case _: 0; }; return k; } }
+fn Shared<Geo> make() { return new Geo::Label(s: "hello"); }
+fn int32 size(Shared<Geo> g) { int32 n = match (g) { case Circle(r: r): r; case Label(s: s): cast<int32>(s.length()); case Point: 100; }; return n; }
+fn int32 main() {
+    Owned<Geo> o = new Geo::Circle(r: 4);
+    Shared<Geo> sh = new Geo::Label(s: "abc");
+    Shared<Geo> sh2 = sh;
+    Shared<Maybe<int32>> m = new Maybe::Has(v: 9);
+    Holder h = Holder.of(g: new Geo::Point());
+    int32 a = match (o) { case Circle(r: x): x; case _: 0; };                          // 4
+    int32 b = match (sh2) { case Label(s: s): cast<int32>(s.length()); case _: 0; };   // 3
+    int32 c = match (m) { case Has(v: v): v; case Nope: 0; };                          // 9
+    int32 d = match (make()) { case Label(s: s): cast<int32>(s.length()); case _: 0; };// 5, a call result
+    int32 e = h.kind();                                                                // 50, a field
+    int32 f = size(g: sh);                                                             // 3
+    int32 r = a + b + c + d + e + f;
+    match (o) { case Circle(r: x): { r = r + x; } case _: { } };                       // 4, statement position
+    return r;                                                                          // 78
+}

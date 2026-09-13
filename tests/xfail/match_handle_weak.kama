@@ -1,0 +1,9 @@
+// A `Weak` is the one handle `match` does not see through: it may no longer point at anything. Upgrade it first.
+import { std::memory::Shared, std::memory::Weak };
+type enum Geo { Circle(int32 r), Point }
+fn int32 main() {
+    Shared<Geo> g = new Geo::Circle(r: 4);
+    Weak<Geo> w = g.downgrade();
+    int32 n = match (w) { case Circle(r: r): r; case Point: 0; };
+    return n;
+}
