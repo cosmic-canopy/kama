@@ -1,0 +1,6 @@
+// A `type intrinsic` block names concrete primitives; a `when` there had nothing to condition on and was dropped.
+type contract Tag for intrinsic { fn int32 tag(); }
+type intrinsic <int32> implements Tag when [Q: Tag] {
+    public fn int32 tag() { return 1; }
+}
+fn int32 main() { return 0; }

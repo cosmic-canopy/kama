@@ -1,0 +1,12 @@
+// A concrete type has no parameters, so a `when` on its member was never read and the member was always
+// there — code that looks gated and is not. Refused on a value and on an enum alike.
+type contract Tag for value, enum { fn int32 tag(); }
+type value V {
+    public int32 v;
+    public ctor of(int32 v) { this.v = v; }
+    public fn int32 t() when [T: Tag] { return 1; }
+}
+type enum E { A, B;
+    public fn int32 t() when [T: Tag] { return 1; }
+}
+fn int32 main() { return 0; }

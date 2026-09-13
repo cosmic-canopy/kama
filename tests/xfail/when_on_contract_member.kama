@@ -1,0 +1,5 @@
+// A contract member cannot be conditional: the gate was parsed and dropped.
+type contract Tag for value {
+    fn int32 tag() when [T: Tag];
+}
+fn int32 main() { return 0; }

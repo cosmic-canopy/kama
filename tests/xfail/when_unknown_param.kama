@@ -1,0 +1,12 @@
+// A `when` gate must name one of the type's OWN parameters. `U` and `Q` name nothing, and were accepted: the
+// gate was judged "conservatively", so the member silently vanished from every instance.
+type contract Tag for value, enum { fn int32 tag(); }
+type value Box<T> {
+    public T v;
+    public ctor of(T v) { this.v = v; }
+    public fn int32 tag() when [U: Tag] { return 1; }
+}
+type enum M<T> implements Tag when [Q: Tag] { A(T x), B;
+    public fn int32 tag() { return 1; }
+}
+fn int32 main() { return 0; }

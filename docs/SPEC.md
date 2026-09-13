@@ -3985,6 +3985,9 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   `when [P: Source<int32>]` hold for a type implementing `Source<int32>`, and not for one implementing only
   `Source<string>`; an argument may be another parameter (`when [P: Source<T>]`). <!-- test: when_generic_contract_bound -->
   <!-- xfail: bound_generic_contract_arg_mismatch --> <!-- xfail: when_generic_contract_arg_mismatch -->
+  A `when` gate conditions on the declaring type's **own** parameters: naming one it does not have is an
+  error, and so is a `when` on a concrete type, a `contract` member or a `type intrinsic` block, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
+  is no parameter to condition on. <!-- xfail: when_on_contract_member, when_on_intrinsic -->
 
   **A bound is what the body may call, and nothing else.** Reaching a member the bounds do not declare is
   an error at the DECLARATION, naming the bound that is missing rather than the method that is not there:

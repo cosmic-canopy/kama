@@ -8225,6 +8225,10 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     // signature names `UnsafePtr` must be an `unsafe fn`, and a caller cannot invoke one
                     // without holding an `UnsafePtr`. That is what keeps `A: Allocator` a safe bound while
                     // `allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
+                    if (md->whenParams && !md->whenParams->empty())
+                        unsupported(("a `contract` member (`" + (md->name && md->name->value ? *md->name->value : std::string())
+                                     + "`) cannot be conditional — a contract is one guarantee for every "
+                                       "implementer; put the `when` on the implementing type's method").c_str(), md->line);
                     if (modHas(md->modifiers, "unsafe"))
                         unsupported(("`unsafe` marks a function BODY, and the `contract` member `"
                                      + (md->name && md->name->value ? *md->name->value : std::string())
@@ -8988,6 +8992,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (cd->baseTypes->interfaces)
                 for (auto& itf : *cd->baseTypes->interfaces) {
                     if (!itf || !itf->value) continue;
+                    checkWhenParams(itf->whenParams, cd->typeParams, ci.name, ci.declLine());
                     ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
                     // Copyable is NOMINAL: `implements Copyable(bare: give|copy)` is the opt-in (a lone
                     // `copy()` no longer implies it). Recognized by name — the capability markers are
@@ -9224,6 +9229,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
                         checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, *md->name->value, md->line);
+                        checkWhenParams(md->whenParams, cd->typeParams, ci.name, md->line);
                         if (md->whenParams)   // `fn … when [P: B, …]` — conditional method (AND of all)
                             for (size_t c = 0; c < md->whenParams->size(); ++c) {
                                 auto& p = (*md->whenParams)[c];
@@ -11701,6 +11707,29 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
+}
+
+// A `when [P: B]` gate conditions a member or a conformance on one of the declaring type's OWN parameters. A
+// name that is not one was accepted and then judged "conservatively": on a generic type the member silently
+// vanished from every instance, and on a concrete type — which has no parameters at all — the gate was
+// never read, so the member was always there. Both look like working code, so both are refused.
+void CEmitter::checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
+                               const std::string& owner, int line)
+{
+    if (!whenParams) return;
+    for (auto& p : *whenParams) {
+        if (!p || !p->value) continue;
+        bool known = false;
+        if (typeParams) for (auto& t : *typeParams) if (t && *t == *p->value) known = true;
+        if (known) continue;
+        const int at = p->line ? p->line : line;
+        if (!typeParams || typeParams->empty())
+            unsupported(("`when [" + *p->value + ": …]` conditions on a type parameter, and `" + owner
+                         + "` has none — a gate on a concrete type would hold always or never; remove it").c_str(), at);
+        else
+            unsupported(("`when [" + *p->value + ": …]` names `" + *p->value + "`, which is not a type parameter "
+                         "of `" + owner + "` — a gate conditions on the type's own parameters").c_str(), at);
+    }
 }
 
 // A generic instance's `implements` list, resolved under THIS instance's subst (which the caller has bound).
@@ -17423,7 +17452,11 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                     else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
                                      "nothing beyond its payloads, which drop themselves").c_str(), m->line);
+                    else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                        checkWhenParams(md->whenParams, ed->typeParams, bare, md->line);
                 }
+            if (hasIfaces)
+                for (auto& i : *ifaceNodes) if (i) checkWhenParams(i->whenParams, ed->typeParams, bare, ed->line);
 
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // A generic enum is a monomorphization TEMPLATE: its members and `implements` list land on
@@ -17601,6 +17634,17 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         unsupported("`type intrinsic <…>` must declare a contract — a block with no `implements` gives the "
                     "primitives in it nothing", n->line);
         return;
+    }
+    {
+        bool gated = false;
+        for (auto& i : *ifaces) if (i && i->whenParams && !i->whenParams->empty()) gated = true;
+        if (auto members = n->members)
+            for (auto& m : *members)
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                    if (md->whenParams && !md->whenParams->empty()) gated = true;
+        if (gated)
+            unsupported("`type intrinsic <…>` names concrete primitives, so there is no type parameter for "
+                        "`when` to condition on — remove the gate", n->line);
     }
     if (ifaces->size() > 1) {
         unsupported("`type intrinsic <…>` declares ONE contract per block — a method's contract has to be "

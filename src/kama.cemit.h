@@ -1890,6 +1890,8 @@ private:
                                                 const std::vector<std::string>& params,
                                                 const std::vector<SharedIdentifier>& concrete);
     void checkEnumInstanceConformances(ClassInfo& inst, const std::string& tmpl);
+    void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
+                         const std::string& owner, int line);
     void instantiateEnumMembers(const GenericTypeInst& gi);
     // The impl must supply every method the contract requires.
     void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
