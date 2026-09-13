@@ -12196,6 +12196,9 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
                 if (CtorInfo* ct = _classes[dt].ctorByName(*ma->identifier->value))
                     return ct->returnType ? ct->returnType : synthId(dt);
             }
+            // ...and on a generic TEMPLATE, the instance its own arguments pin (`Box.of(v: x)` is a
+            // `Box<int32>`), so a generic callee can infer from it: `take(b: Box.of(v: x))`.
+            if (SharedIdentifier inst = inferDotCtorInstance(iv, localTys)) return inst;
         }
         // A METHOD call on a typed receiver: the method's declared return type, with the host's generic
         // arguments substituted — `xs.length()` on a `DynamicArray<int32>` is an `isize`. mintReturnTypeNode
@@ -12385,6 +12388,62 @@ SharedIdentifier CEmitter::inferInlineVariantInstance(InvocationNode* inv,
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<a1>"));
     auto inst = synthId(*qual->back());
     if (!tq->empty()) inst->qualifier = tq;
+    inst->genericArg  = argList->front();
+    inst->genericArgs = argList;
+    return inst;
+}
+
+// The instance a dot-on-type ctor call on a generic TEMPLATE constructs, pinned by the ctor's OWN arguments:
+// `Box.of(v: 3)` binds `T` from `v`, exactly as a generic function binds from its arguments. Each ctor
+// parameter declared as a bare type parameter binds from its argument's type; an unbound trailing parameter
+// takes its default, and any other unbound one means the call cannot be inferred (null) — the caller then
+// says so ("give the type arguments"). The instance is REGISTERED on the way out, which is a dedup no-op for
+// every call after the discovery pass that first reaches it (KR-15).
+SharedIdentifier CEmitter::inferDotCtorInstance(InvocationNode* inv, std::map<std::string, SharedIdentifier>& localTys)
+{
+    auto* ma = inv ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr;
+    auto* rid = ma ? dynamic_cast<IdentifierNode*>(ma->expression.get()) : nullptr;
+    if (!rid || !rid->value || rid->genericArgs || !ma->identifier || !ma->identifier->value
+        || ma->identifier->genericArgs || localTys.count(*rid->value)) return nullptr;
+    const std::string tmpl = resolveUserName(*rid->value, rid->qualifier);
+    auto gt = _genericTypes.find(tmpl);
+    if (gt == _genericTypes.end() || gt->second.isVariant || _classes.count(tmpl)) return nullptr;
+    auto mit = gt->second.methods.find(*ma->identifier->value);
+    if (mit == gt->second.methods.end() || !mit->second.isCtor || !mit->second.node) return nullptr;
+    auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mit->second.node);
+    if (!md || !md->params) return nullptr;
+    const std::vector<std::string>& params = _genericTypeParams[tmpl];
+    if (params.empty()) return nullptr;
+
+    std::map<std::string, SharedExpression> byName;
+    if (inv->args) for (auto& a : *inv->args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
+    std::map<std::string, SharedIdentifier> bind;
+    for (auto& p : *md->params) {
+        if (!p || !p->type || !p->type->value || p->type->genericArgs || !p->identifier || !p->identifier->value) continue;
+        if (std::find(params.begin(), params.end(), *p->type->value) == params.end()) continue;
+        auto ai = byName.find(*p->identifier->value);
+        if (ai == byName.end()) return nullptr;
+        SharedIdentifier at = exprTypeNode(ai->second, localTys);
+        if (!isConcreteTypeArg(at)) return nullptr;
+        auto prev = bind.find(*p->type->value);
+        if (prev != bind.end() && cType(prev->second) != cType(at)) return nullptr;   // two arguments disagree
+        bind[*p->type->value] = at;
+    }
+    auto dit = _genericTypeDefaults.find(tmpl);
+    SharedIdentifierList argList = std::make_shared<IdentifierList>();
+    for (size_t i = 0; i < params.size(); ++i) {
+        auto b = bind.find(params[i]);
+        if (b != bind.end()) { argList->push_back(b->second); continue; }
+        bool defaulted = dit != _genericTypeDefaults.end() && i < dit->second.size() && dit->second[i];
+        if (!defaulted) return nullptr;
+        break;   // a defaulted parameter and everything after it: registration fills the defaults
+    }
+    if (argList->empty()) return nullptr;
+    if (!_discoveryClosed) registerGenericTypeInst(tmpl, argList);
+    else if (!_classes.count(genericTypeMangle(tmpl, argList))) return nullptr;   // never discovered: say so, not clang
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<a1>"));
+    auto inst = synthId(*rid->value);
+    if (rid->qualifier && !rid->qualifier->empty()) inst->qualifier = rid->qualifier;
     inst->genericArg  = argList->front();
     inst->genericArgs = argList;
     return inst;
@@ -18548,6 +18607,23 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         bool ctorIsFactory = false;
         if (ctorCls.empty()) { std::string dt = dotCtorFactoryClass(argExpr);
             if (!dt.empty()) { ctorCls = dt; ctorIsFactory = true; } }
+        // ...and one on a generic TEMPLATE whose instance this parameter names (`take(b: Box.of(v: 4))` at a
+        // `Box<int64>`): the parameter IS the destination, exactly as a declaration's type is, so it pins the
+        // instance before the ctor's own arguments get a say — `4` is then an `int64`, and `Box.empty()`,
+        // which has no argument to infer from, resolves at all (KR-15).
+        std::string genericCtorDest;
+        if (ctorCls.empty())
+            if (auto* div = dynamic_cast<InvocationNode*>(argExpr.get()))
+                if (auto* dma = dynamic_cast<MemberAccessNode*>(div->expression.get())) {
+                    std::string dt;
+                    auto of = _genericTypeInstOf.find(p.className);
+                    if (of != _genericTypeInstOf.end() && isTypeReceiver(dma, dt) && of->second == dt
+                        && dma->identifier && dma->identifier->value) {
+                        CtorInfo* ct = _classes[p.className].ctorByName(*dma->identifier->value);
+                        if (ct && !ct->isFallible) { ctorCls = p.className; ctorIsFactory = true; genericCtorDest = p.className; }
+                    }
+                }
+        ScopedStr _gcd(_variantTargetType, genericCtorDest.empty() ? _variantTargetType : genericCtorDest);
         // A value-producing RHS in argument position that needs its type from context: an inline variant
         // construction (`f(o: Optional::Some(…))` / `…::None`) or a value-producing `match` (`f(x: match(…))`).
         // Thread the PARAM's C type as the target so the union instance / match result resolves, exactly as
@@ -18723,8 +18799,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // one an enclosing position left behind. Leaving it set is what let a `match` reachable
                 // from here adopt an ancestor's type and truncate in silence; cleared, the same shape hits
                 // the existing "a value-producing `match` must appear in a typed position" error instead.
+                // (A generic ctor's destination is the one this PARAMETER supplied, not an ancestor's.)
                 std::string pmt = _matchTargetCType, pvt = _variantTargetType;
-                _matchTargetCType.clear(); _variantTargetType.clear();
+                _matchTargetCType.clear(); _variantTargetType = genericCtorDest;
                 val = st.empty() ? emitExpression(argExpr) : st;
                 _matchTargetCType = pmt; _variantTargetType = pvt;
                 valHoisted = !st.empty();   // st => a hoisted string/primitive temp; else a bare rvalue
@@ -27867,7 +27944,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         // regression for any type that becomes generic, which is exactly what `Fixed16_16` just did.
         std::string dotTy;
         if (isTypeReceiver(ma, dotTy)) {
-            std::string inst = dotOnTypeInstance(ma, dotTy);
+            std::string inst = dotOnTypeInstance(ma, dotTy, inv);
             auto ci = _classes.find(inst);
             if (ci != _classes.end()) {
                 auto cit = ci->second.ctors.find(method);
@@ -29475,7 +29552,7 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
 // `Pair.make::<int32>()`), or inference from the enclosing typed position (`Pair<int32> q = Pair.make(…)`).
 // Returns `typeName` unchanged for a concrete type, and for a generic whose instance cannot be pinned down —
 // callers distinguish by whether the result is in `_classes`. #M7-E2/E3
-std::string CEmitter::dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName)
+std::string CEmitter::dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName, InvocationNode* call)
 {
     if (!recv || _classes.count(typeName) || !_genericTypeParams.count(typeName)) return typeName;
     IdentifierNode* rid = dynamic_cast<IdentifierNode*>(recv->expression.get());
@@ -29487,6 +29564,7 @@ std::string CEmitter::dotOnTypeInstance(MemberAccessNode* recv, const std::strin
         auto of = _genericTypeInstOf.find(_variantTargetType);
         if (of != _genericTypeInstOf.end() && of->second == typeName) return _variantTargetType;
     }
+    if (SharedIdentifier inst = inferDotCtorInstance(call, _localTypeNodes)) return cType(inst);
     return typeName;
 }
 
@@ -29504,7 +29582,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                         && static_cast<IdentifierNode*>(recv->expression.get())->value)
                         ? *static_cast<IdentifierNode*>(recv->expression.get())->value : typeName;
     // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
-    std::string tn = dotOnTypeInstance(recv, typeName);
+    std::string tn = dotOnTypeInstance(recv, typeName, call);
     // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block
     // (`type intrinsic <int32> implements Deserializable`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
@@ -31793,6 +31871,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     // populates, so the swap is safe; the six `externsHeader(...)` call sites all run later still.
     collectProgram({unit});
     emitIncludes({unit});           // FFI #include directives
+    _discoveryClosed = true;
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
     if (_sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU — see the definition
@@ -31829,6 +31908,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     emitIncludes(units);        // FFI #include directives (before any type decls)
     // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
     // `#line` directives with an EMPTY file name, because the emitter is constructed with no path.
+    _discoveryClosed = true;
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent(units); }
     header << "#endif /* " << guard << " */\n";
 

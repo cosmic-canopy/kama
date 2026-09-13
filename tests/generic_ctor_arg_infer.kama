@@ -1,0 +1,39 @@
+// KR-15 #3 — a constructor on a generic TEMPLATE in a position with no written type arguments. It resolved
+// only from a turbofish or a declaration's type, so every argument position failed with "cannot tell which
+// `Box` to construct" — even at a parameter that names the instance outright. Now a parameter is the
+// destination, as a declaration's type is, and without one the ctor's own arguments pin the instance.
+type value Box<T> {
+    T v;
+    public ctor of(T v) { this.v = v; }
+    public ctor empty() { this.v = cast<T>(0); }
+    public const fn T get() { return this.v; }
+}
+type value Pair<A, B = int32> {
+    A a;
+    B b;
+    public ctor of(A a) { this.a = a; this.b = cast<B>(5); }
+    public fn B second() { return this.b; }
+}
+type value Host {
+    int32 k;
+    public ctor of(int32 k) { this.k = k; }
+    public fn int32 add(Box<int32> b) { return b.get() + this.k; }
+}
+fn int32 take(Box<int32> b) { return b.get(); }
+fn int64 wide(Box<int64> b) { return b.get(); }
+fn int32 peek(const ref Box<int32> b) { return b.get(); }
+fn T generic<T>(Box<T> b) { return b.get(); }
+fn int32 pairB<A>(Pair<A> p) { return p.second(); }
+
+fn int32 main() {
+    int32 x = 4;
+    if (take(b: Box.of(v: 3)) != 3) { return 1; }                   // a concrete parameter
+    if (take(b: Box.empty()) != 0) { return 2; }                    // ...with nothing to infer from
+    if (wide(b: Box.of(v: 4)) != cast<int64>(4)) { return 3; }      // the parameter wins: `4` is an int64
+    if (peek(b: Box.of(v: 6)) != 6) { return 4; }                   // a `const ref` parameter
+    if (generic(b: Box.of(v: x)) != 4) { return 5; }                // a generic callee: the ctor's args pin T
+    if (Box.of(v: 8).get() != 8) { return 6; }                      // a receiver
+    Host h = Host.of(k: 10);
+    if (h.add(b: Box.of(v: 2)) != 12) { return 7; }                 // a method-call argument
+    return pairB(p: Pair.of(a: true)) + 20;                         // a defaulted parameter: 25
+}

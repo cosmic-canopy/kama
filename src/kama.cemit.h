@@ -2805,7 +2805,12 @@ private:
     void             checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
-    std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName); // X::<A>.name -> the instance
+    std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName,
+                                  InvocationNode* call = nullptr); // X::<A>.name -> the instance
+    SharedIdentifier inferDotCtorInstance(InvocationNode* inv, std::map<std::string, SharedIdentifier>& localTys);
+    // Set when the header starts emitting: from here a generic instance registered for the first time would
+    // have no struct or bodies, so an inference that needs one may only READ what discovery registered.
+    bool _discoveryClosed = false;
     // What a member reached through a TYPE actually is, and the one sentence that names its right spelling.
     // Shared by the call path (`V.f(...)`, emitDotOnTypeCtorCall) and the read path (`V.f`,
     // rejectDotOnTypeRead) so the two can never disagree on how the `::`/`.` split is written.

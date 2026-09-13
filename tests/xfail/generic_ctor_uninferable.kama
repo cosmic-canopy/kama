@@ -1,0 +1,9 @@
+// A constructor on a generic template with neither a destination nor an argument that pins its parameter
+// cannot be resolved, and says which type arguments to give (KR-15).
+type value Box<T> {
+    T v;
+    public ctor empty() { this.v = cast<T>(0); }
+    public fn T get() { return this.v; }
+}
+fn T generic<T>(Box<T> b) { return b.get(); }
+fn int32 main() { return generic(b: Box.empty()); }
