@@ -1675,6 +1675,25 @@ struct-returning C fn (`div(...)` above) or by **by-name aggregate init** — `d
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
 `UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).
 
+**A struct crossing by value.** A struct passed or returned BY VALUE through an `extern fn` or an `expose fn` is
+a `type extern value`, and nothing else is. The layout has to be one both sides agree on, and only a C header
+can state it: an `extern fn`'s prototype IS the header's, which declares its own struct, so a kama type there is
+a second, incompatible C type; and the host calling an `expose fn` has nothing to match but a layout kama never
+promised. So the struct lives in a header both sides include, and kama binds it:
+
+| by value | `extern fn` (kama calls C) | `expose fn` (C calls kama) |
+|---|---|---|
+| plain `type value`, a `resource`, an enum with payloads, a generic instance | refused | refused |
+| `type extern value` | ✅ | ✅ |
+
+<!-- xfail: crossing_plain_value_extern, crossing_enum_payload, crossing_generic_instance --> What passes
+unmarked is what is not a kama composite — a primitive, a pointer (`UnsafePtr<T>`, `ref`), an `fnptr`, a
+payload-less `enum` (a C integer), a name the header itself declares — and kama's own intrinsics, whose layout
+is its ABI: `string` (the runtime header's `kama_string`, on an `extern fn`), `InlineArray`/`Simd`, and
+`View`/`ConstView`. Fixture: `tests/extern_value_crossing.d/`, both directions against a real C file. <!-- test: extern_value_crossing -->
+(A kama-OWNED C-layout type, `type expose value`, is recorded to revisit alongside a generated host header —
+ROADMAP KR-52.)
+
 ### Time (`std::time`) ✅
 
 `import { std::time::Duration, std::time::Instant, std::time::SystemTime, std::time::monotonicNow,
@@ -2679,7 +2698,8 @@ expose fn int32 version() { return 3; }
 - **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected. <!-- xfail: expose_on_method -->
 - **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a <!-- xfail: expose_bad_abi -->
   collection (`DynamicArray`/`FixedArray`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
-  refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead.
+  refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead. A struct
+  passed by value must be a `type extern value` — see *A struct crossing by value* under *FFI*. <!-- xfail: crossing_plain_value_expose -->
 - **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **exported symbols are
   unique** across the program, whether a symbol is the kama name or a `@linkName` (they share the C <!-- xfail: linkname_dup_expose -->
   namespace — clashes with libc are yours to avoid, as with `extern`).

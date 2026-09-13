@@ -1,0 +1,19 @@
+// A struct crosses into C by value only as a `type extern value`: the C header owns the layout and both sides
+// include it, so it works in BOTH directions — an `extern fn` taking and returning one, and an `expose fn` the
+// host calls with one. A plain `type value` is refused in either position (tests/xfail/crossing_plain_value_*):
+// an `extern fn`'s prototype is the header's, so kama's own struct there is a second C type, and an `expose fn`'s
+// host would be matching a layout kama never promised.
+extern "pair.h";
+type extern value Pair { public int32 a; public int32 b; }
+extern fn int32 takes_pair(Pair p);
+extern fn Pair make_pair(int32 a);
+extern fn int32 host_calls();
+expose fn int32 sum_pair(Pair p) { return p.a + p.b; }
+
+unsafe fn int32 go() {
+    Pair m = make_pair(a: 2);                          // {2, 3} back by value
+    return takes_pair(p: Pair(a: 4, b: 2))             // 42
+         + takes_pair(p: m)                            // 23
+         + host_calls();                               // 7, through kama's `sum_pair`
+}
+fn int32 main() { return go(); }                       // 72

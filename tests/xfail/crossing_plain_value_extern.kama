@@ -1,0 +1,7 @@
+// A plain `type value` handed BY VALUE to an `extern fn`. The prototype comes from the C header, which declares
+// its own struct, so kama's is a second, incompatible C type — it used to pass `kama check` and fail in clang
+// ("passing 'Pair' to parameter of incompatible type"). Bind the header's struct with `type extern value`.
+extern "stdio.h";
+type value Pair { public int32 a; public int32 b; public ctor of(int32 a, int32 b) { this.a = a; this.b = b; } }
+extern fn int32 takes_pair(Pair p);
+fn int32 main() { return 0; }

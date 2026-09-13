@@ -2726,6 +2726,48 @@ void CEmitter::checkQualifiedExport(const SharedIdentifier& t, const char* what)
 //
 // Runs from the tail of `collectProgram` — see the call site for why that point, and not earlier, is the
 // only sound one.
+// A struct crossing into C BY VALUE needs a layout both sides agree on, and only a C header can be that
+// agreement: an `extern fn`'s prototype IS the header's, so a kama-emitted struct there is a second C type
+// (clang: "incompatible type") — and an `expose fn`'s host has nothing to match but a layout kama never
+// promised. So a composite crossing by value is a `type extern value`, whose layout the header owns and both
+// sides include (KR-45). What is not a kama composite passes: a primitive, a pointer, a `fnptr`, a
+// payload-less enum (a C integer), and a name the header itself declares. kama's own intrinsics pass too —
+// `string` is the runtime header's `kama_string`, `InlineArray`/`Simd` are compiler-emitted value arrays,
+// and `View`/`ConstView` are the stdlib's `{ptr, len}` borrow — their layout is kama's ABI, not a guess.
+// Owning types keep the `expose` refusal in emitFunction (RAII cannot cross); `string` by value is the
+// runtime's own convention on an `extern fn`, so only the `expose` side refuses it.
+void CEmitter::rejectPlainCrossing(const SharedIdentifier& t, const char* where, const std::string& fname,
+                                   bool isExternFn, int line)
+{
+    if (!t || !t->value) return;
+    const std::string cty = cType(t);
+    if (cty.empty() || cty.back() == '*' || isSigType(cty)) return;
+    auto it = _classes.find(cty);
+    if (it == _classes.end()) return;                     // a primitive, a C enum, or the header's own name
+    const ClassInfo& ci = it->second;
+    if (ci.isExternStruct) return;
+    if (ci.isIntrinsicColl) {
+        if (ci.collKind == CollKind::Fixed || isValueVectorKind(ci.collKind)) return;
+        if (ci.collKind == CollKind::String || !isExternFn) return;   // expose: emitFunction's owning refusal
+    }
+    auto gi = _genericTypeInsts.find(cty);
+    if (gi != _genericTypeInsts.end()
+        && (gi->second.templateKey == "std__collections__View" || gi->second.templateKey == "std__collections__ConstView"))
+        return;
+    if (!isExternFn && (isSmartPtrClass(cty) || ownsByValue(cty))) return;   // emitFunction says it
+    const std::string shown = demangleForDisplay(cty);
+    const std::string fn = std::string(isExternFn ? "extern fn " : "expose fn ") + fname;
+    std::string kind = ci.enumNode ? "an `enum` with payloads" : ci.isGenericInst ? "a generic instance"
+                     : ci.kind == TypeKind::Resource ? "a `resource`" : "a plain `type value`";
+    unsupported(("`" + shown + "` crosses into C by value as " + where + " of `" + fn + "`, but it is " + kind
+                 + ", and kama promises no C layout for it" + (isExternFn
+                     ? " — the C header's prototype declares its own struct, so kama's would be a second, "
+                       "incompatible type. Bind the header's struct with `type extern value`"
+                     : " — the host would be matching a layout nothing states. Declare the struct in a C header "
+                       "both sides include and bind it with `type extern value`, or pass an `UnsafePtr`")).c_str(),
+                line);
+}
+
 void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units)
 {
     // The prelude and the built-in modules are compiler-owned sources: they are collect-only, they are not
@@ -2875,11 +2917,21 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // `CompareFn` typedef the header declares is deliberately NOT a kama type, and `cType`
                 // passes such a name through verbatim as the literal C spelling. That is the FFI seam
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
-                if (isExtern(fn)) {
+                if (isExtern(fn) || isExposed(fn)) {
+                    const bool ext = isExtern(fn);
+                    const std::string fname = fn->name && fn->name->value ? *fn->name->value : std::string();
                     // ...except the one rule that IS about the C spelling: a bare `cchar` in an extern signature.
-                    rejectBareCChar(fn->returnType, "a return type", fn->line);
-                    if (fn->parameters) for (auto& p : *fn->parameters) if (p) rejectBareCChar(p->type, "a parameter", p->line);
-                    continue;
+                    if (ext) rejectBareCChar(fn->returnType, "a return type", fn->line);
+                    if (fn->returnType)
+                        rejectPlainCrossing(fn->returnType, "the return", fname, ext, fn->line);
+                    if (fn->parameters)
+                        for (auto& p : *fn->parameters) {
+                            if (!p) continue;
+                            if (ext) rejectBareCChar(p->type, "a parameter", p->line);
+                            if (!paramByRef(p.get()))
+                                rejectPlainCrossing(p->type, "a parameter", fname, ext, p->line ? p->line : fn->line);
+                        }
+                    if (ext) continue;
                 }
                 ownerExported = fn->name && fn->name->value && _exported.count(qualify(*fn->name->value));
                 bindTypeParams(fn->typeParams, fn->comptimeParams,
@@ -21472,12 +21524,22 @@ void CEmitter::checkForeignCrossing(const std::string& calleeCName, const ParamS
         std::string chain;
         for (const std::string& cand : { p.className, exprClass(e) }) {
             if (cand.empty()) continue;
-            auto cc = _classes.find(cand);
+            // Behind a pointer too (`UnsafeConstPtr<Holder>` + `addr(of:)`): since KR-45 a plain type cannot
+            // cross BY VALUE at all, so the pointer is the one route left, and the filter looked the POINTER
+            // type up (`Holder const*`), found no class, and let it through unwalked.
+            std::string base = cand;
+            while (!base.empty() && base.back() == '*') {
+                base.pop_back();
+                const std::string cq = " const";
+                if (base.size() > cq.size() && base.compare(base.size() - cq.size(), cq.size(), cq) == 0)
+                    base.erase(base.size() - cq.size());
+            }
+            auto cc = _classes.find(base);
             if (cc == _classes.end() || cc->second.isExternStruct) continue;
             std::set<std::string> seen;
-            if (!reachesUnannotatedSig(cand, chain, seen) || chain.empty()) continue;
-            unsupported(("`" + demangleForDisplay(cand) + "` is handed to the C function `" + calleeCName
-                         + "` carrying a callback in `" + demangleForDisplay(cand) + "." + chain + "`, and "
+            if (!reachesUnannotatedSig(base, chain, seen) || chain.empty()) continue;
+            unsupported(("`" + demangleForDisplay(base) + "` is handed to the C function `" + calleeCName
+                         + "` carrying a callback in `" + demangleForDisplay(base) + "." + chain + "`, and "
                          "a callback's threading contract cannot be inferred — mark that `fnptr` type "
                          "`@callerThread` if the C API calls it on the calling isolate, or `@foreignEntry` "
                          "if it may run on a thread kama did not create (where a module `static` assigned "

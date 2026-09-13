@@ -1891,6 +1891,8 @@ private:
                                                 const std::vector<SharedIdentifier>& concrete);
     void checkEnumInstanceConformances(ClassInfo& inst, const std::string& tmpl);
     std::string missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method);
+    void rejectPlainCrossing(const SharedIdentifier& t, const char* where, const std::string& fname,
+                             bool isExternFn, int line);
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
     void instantiateEnumMembers(const GenericTypeInst& gi);

@@ -1,0 +1,6 @@
+// A generic value instance (`Box<int32>`) has a kama-mangled layout no header can name. (A generic ENUM such as
+// `Optional<int32>` is refused as an enum with payloads — tests/xfail/crossing_enum_payload.)
+extern "stdio.h";
+type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }
+extern fn int32 takes_box(Box<int32> b);
+fn int32 main() { return 0; }

@@ -1,0 +1,4 @@
+// A plain `type value` returned BY VALUE from an `expose fn`: the host would match a layout kama never promised.
+type value Vec2 { public float32 x; public float32 y; public ctor of(float32 x, float32 y) { this.x = x; this.y = y; } }
+expose fn Vec2 origin() { return Vec2.of(x: 0.0, y: 0.0); }
+fn int32 main() { return 0; }

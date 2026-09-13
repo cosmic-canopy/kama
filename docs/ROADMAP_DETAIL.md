@@ -306,29 +306,40 @@ and judges its reach from the file that wrote it, independent of what gets emitt
 cannot disagree. Every cell of the grid above becomes a `tests/xfail/` fixture landed RED first, the
 ACCEPTED ones before anything else.
 
-### `type expose value` — the C-layout type kama owns (KR-45) — RULED 2026-09-12
+### A generated host header, and `type expose value` (KR-52) — measured 2026-09-13
 
-`extern` is host→kama (kama uses what C defines: `extern fn`, `type extern value`); `expose` is kama→host
-(`expose fn`). The type half of `expose` did not exist, so a kama-defined struct handed to C had no spelling
-but a plain `type value` — and a plain `type value` crosses in both directions unmarked today
-(`extern fn int32 takes(Pair p)` and `expose fn Vec2 step(Vec2 v)` both pass `kama check`).
+**Where it came from.** The by-value crossing rule (SPEC *FFI*, shipped `0.9.327`) was ruled as a PAIR — `type extern value` (a C header owns the layout) and
+`type expose value` (kama owns and emits it) — and then measured across both function kinds before building:
 
-**Ruling:** pair them. `type expose value Vec2 { float32 x; float32 y; }` is emitted by kama with a guaranteed C
-layout; `type extern value` keeps meaning "the header owns it, never emitted". A composite crossing BY VALUE,
-as a parameter or return of an `extern fn` or `expose fn`, must be one of the two — the marker is on the type
-declaration, never on a parameter, so the claim is made once and checked at every signature. Primitives and
-`UnsafePtr` are unchanged. Either kind may cross either direction (a host passes its own struct to an `expose
-fn`); the marker records who owns the layout, not which way the call goes.
+| by value | `extern fn` (prototype from the C header) | `expose fn` (C calls kama) |
+|---|---|---|
+| plain `type value` | clang: *"incompatible type 'Pair'"* | builds; the host guesses a layout |
+| `type extern value` | works (measured) | works (measured) |
+| `type expose value` | **cannot work** — the header declares its own struct, so kama's is a second C type (mangled name) or a redefinition (bare name) | works; the host writes a matching typedef |
 
-**Measured impact:** across `lib`/`prelude`/`tests`/`examples`/`bench`, the only plain-value crossings are two
-xfail fixtures (`foreign_callback_in_plain_struct`, `expose_generic`). **Ruled 2026-09-12: a `type expose value` may carry
-methods and ctors.** `type extern value` may not because nothing would emit the body; kama emits an expose type, so
-that reason does not apply. Members are not part of the layout — the host sees the struct and nothing else — so
-they cost the crossing nothing. What they buy is ONE type: without them a crossing value needs a plain `type value`
-for kama-side behaviour plus a layout twin, and a field-by-field conversion at every boundary. Construction is the
-ordinary kama spelling (`Vec2.of(…)`); whether an expose type also takes `type extern value`'s by-name aggregate
-init is the one thing left to settle while building it ("one way to do a thing" says ctors only). Precedent: Rust
-`#[repr(C)]` structs have `impl` blocks.
+So `type extern value` covers every cell that can compile, and `expose` adds exactly one thing: kama as the
+source of truth for a layout NO C header states, usable only by an `expose fn`. Without a generated header the
+host has to hand-write that struct anyway, which is what `extern` already asks — so the rule shipped with one
+marker (maintainer, 2026-09-13), and the two markers are not "extern and/or expose" on one type: each answers
+WHO owns the layout, and only one side can.
+
+**Wanted here:** `kama build` emits a host-includable header — every `expose fn` prototype and every by-value
+type it names — and with it, decide `type expose value` (the header is what makes a kama-owned layout real for a
+host). Measured facts to start from: struct names never reach the linker, so kama's scoped C name (`geo__Vec2`)
+costs the ABI nothing and the header can spell the bare `Vec2`; an `expose fn` returning a callback is already
+refused (`foreign_callback_expose_return`); ⛔ the maintainer requires `expose` for types to be revisited here.
+
+### `type extern value` carries ctors and methods (KR-53)
+
+An extern type refuses every runtime member (`refuseExternMember`: *"nothing would emit the body"*). That
+reason does not hold — a member is a kama function emitted like any other; the struct itself is the only part
+the header owns. `0.9.327` made `type extern value` the only type that crosses into C by value, so without members
+every FFI struct with behaviour is two types and a field-by-field conversion at each boundary (Rust's
+`#[repr(C)]` structs take `impl` blocks). **The open question is construction:** a kama ctor must assign every
+field, while by-name aggregate init (`div_t(quot: 3, rem: 2)`) exists for partial init with the rest zeroed —
+the WebGPU descriptor case, ten fields and three set. Either ctors join aggregate init (two ways to build one
+value), or a ctor on an extern type gets a zero-fill rule and aggregate init goes (one way). Decide with
+examples before building.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 

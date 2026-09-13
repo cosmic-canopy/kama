@@ -1,0 +1,8 @@
+// An enum with payloads is a tag plus a union kama lays out — no C header can state it — so it cannot cross by
+// value either. A payload-less enum is a C integer and does.
+extern "stdio.h";
+type enum Shape { Circle(int32 r), Point }
+type enum Color { Red, Green }
+extern fn int32 takes_color(Color c);
+extern fn int32 takes_shape(Shape s);
+fn int32 main() { return 0; }
