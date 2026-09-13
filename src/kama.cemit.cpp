@@ -869,6 +869,28 @@ bool cNumSigned(const std::string& ct)
         || ct == "float"  || ct == "double"  || ct == "ptrdiff_t" || ct == "long";
 }
 bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
+
+// The C type a primitive `lhs op rhs` computes in, when the EMITTER can say so without asking C: both
+// operands one wide numeric type, or an `int32` literal beside one (C's usual conversions then yield the
+// other side's type — which is also what `KAMA_ADD`'s `_Generic` would have selected). "" otherwise, and
+// the caller keeps the `_Generic` form. This exists because that form spells every operand twice, so a
+// nested chain doubles its C at each level (see `KAMA_ADD_T` in kama_runtime.h); knowing the type lets
+// the caller name the helper itself and write each operand once.
+std::string arithCType(const std::string& lt, bool lLit32, const std::string& rt, bool rLit32)
+{
+    auto wide = [](const std::string& t) {
+        return t == "int32_t" || t == "int64_t" || t == "uint32_t" || t == "uint64_t" || cNumFloat(t);
+    };
+    if (wide(lt) && (lt == rt || rLit32)) return lt;
+    if (wide(rt) && lLit32) return rt;
+    return "";
+}
+// The fixed-width helper suffix of a type `arithCType` answered (`kama_div_i32`, `KAMA_ADD_T(i64, …)`).
+const char* arithSuffix(const std::string& ct)
+{
+    return ct == "int32_t" ? "i32" : ct == "int64_t" ? "i64" : ct == "uint32_t" ? "u32"
+         : ct == "uint64_t" ? "u64" : ct == "float" ? "f32" : "f64";
+}
 bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t" || ct == "long" || ct == "unsigned long"; }
 
 // A numeric target's range as C TEXT, for the runtime narrowing check. Deliberately not numbers:
@@ -3840,11 +3862,26 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // A `Simd` operand keeps C's own vector operator: `_Generic` cannot see a vector type, and a
         // float lane division is IEEE (an unsigned lane shift is defined; the signed cases return above).
         const bool vec = isSimdColl(lc) || isSimdColl(rc);
-        if (!vec && (token == LTLT || token == GTGT))
-            return open + (token == LTLT ? "KAMA_SHL(" : "KAMA_SHR(") + emitExpression(lhs) + ", "
-                 + emitExpression(rhs) + "))";
+        // Known operand type -> the helper is named here and each operand written once (`arithCType`).
+        // A shift's type is its LEFT operand's alone; the amount is widened to `long long` either way.
+        auto lit32 = [](const SharedExpression& e) { return dynamic_cast<Int32Node*>(e.get()) != nullptr; };
+        const std::string known = vec ? std::string()
+            : (token == LTLT || token == GTGT) ? arithCType(typeOfExpr(lhs), false, typeOfExpr(lhs), false)
+            : arithCType(typeOfExpr(lhs), lit32(lhs), typeOfExpr(rhs), lit32(rhs));
+        const bool knownInt = !known.empty() && !cNumFloat(known);
+        if (!vec && (token == LTLT || token == GTGT)) {
+            const std::string l = emitExpression(lhs), r = emitExpression(rhs);
+            if (knownInt)
+                return open + "kama_" + (token == LTLT ? "shl_" : "shr_") + arithSuffix(known) + "(" + l
+                     + ", (long long)(" + r + ")))";
+            return open + (token == LTLT ? "KAMA_SHL(" : "KAMA_SHR(") + l + ", " + r + "))";
+        }
         const std::string l = emitExpression(lhs), r = emitExpression(rhs);
-        const std::string body = (!vec && token == SLASH)   ? "KAMA_DIV(" + l + ", " + r + ")"
+        const std::string body = (!vec && token == SLASH && !known.empty())
+                                   ? std::string("kama_div_") + arithSuffix(known) + "(" + l + ", " + r + ")"
+                               : (!vec && token == PERCENT && knownInt)
+                                   ? std::string("kama_mod_") + arithSuffix(known) + "(" + l + ", " + r + ")"
+                               : (!vec && token == SLASH)   ? "KAMA_DIV(" + l + ", " + r + ")"
                                : (!vec && token == PERCENT) ? "KAMA_MOD(" + l + ", " + r + ")"
                                : l + " " + binaryOperator(token) + " " + r;
         // D-arith, the CHECK half. `resT` non-empty means a sub-`int` result, which is exactly where the
@@ -3883,6 +3920,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // `-fsanitize=signed-integer-overflow`, the last sanitizer flag the driver passed.
         // (`resT` non-empty here is an UNSIGNED sub-`int` — the signed one returned above — whose wrap is
         // defined and whose result `open` truncates; it stays the plain operator.)
+        // With the type known, the helper `_Generic` would have selected is named here instead.
+        if (arithTok && !vec && resT.empty() && !known.empty())
+            return std::string(token == PLUS ? "KAMA_ADD_T(" : token == MINUS ? "KAMA_SUB_T(" : "KAMA_MUL_T(")
+                 + arithSuffix(known) + ", " + l + ", " + r + ")";
         if (arithTok && !vec && resT.empty())
             return std::string(token == PLUS ? "KAMA_ADD(" : token == MINUS ? "KAMA_SUB(" : "KAMA_MUL(")
                  + l + ", " + r + ")";
@@ -4683,6 +4724,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 return "(" + t + ")(" + op + emitExpression(v->expression) + ")";
             }
             // ...and at 32/64 bits `-TYPE_MIN` overflows too: KAMA_NEG traps in debug, wraps in release.
+            if (v->token == MINUS && (t == "int32_t" || t == "int64_t"))   // operand written once — see KAMA_NEG_T
+                return std::string("KAMA_NEG_T(") + arithSuffix(t) + ", " + emitExpression(v->expression) + ")";
             if (v->token == MINUS && (t.empty() || (cNumBits(t) && !cNumFloat(t)) || cNumFloat(t)))
                 return "KAMA_NEG(" + emitExpression(v->expression) + ")";
         }

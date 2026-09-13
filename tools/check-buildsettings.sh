@@ -526,7 +526,7 @@ echo "check-buildsettings: \`reproducible-float\` forbids the C compiler fusing 
 
 # ⚠️ THIS CANNOT BE A tests/*.d FIXTURE, and finding out why is the reason the oracle lives here.
 # run_tests.sh builds every fixture in DEBUG, where `a * b + c` is emitted as
-# `KAMA_ADD(KAMA_MUL(a, b), c)` — the trap-checking macros, which already break the single expression
+# `KAMA_ADD_T(f64, KAMA_MUL_T(f64, a, b), c)` — the trap-checking macros, which already break the single expression
 # clang would have contracted. So a debug fixture passes identically with and without the key: it would
 # look like coverage and assert nothing. The divergence only exists in a release build, which only a
 # guard can ask for.

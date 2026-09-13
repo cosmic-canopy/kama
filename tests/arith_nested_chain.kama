@@ -1,0 +1,36 @@
+// Nested checked arithmetic must compile in time LINEAR in its depth. `KAMA_ADD` & co dispatch with `_Generic`,
+// which spells each operand twice, so every nesting level doubled the emitted C: a 20-term sum took 7 s to
+// compile and a 40-term one exhausted clang's source locations ("translation unit is too large"). A known
+// operand type now names its helper directly (`KAMA_ADD_T`, `kama_div_i64`), writing each operand once.
+// One 40-deep chain per operator the rewrite touched. Found building KR-46.
+fn int32 i() { return 1; }
+fn int64 l() { return 1; }
+fn uint32 u() { return 1; }
+fn uint64 ul() { return 1; }
+fn float64 d() { return 1.0; }
+
+fn int32 main() {
+    int32 addI = i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i() + i();
+    if (addI != 40) { return 1; }
+    int64 subL = l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l() - l();
+    if (subL != -38) { return 2; }
+    int64 mulL = l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l() * l();
+    if (mulL != 1) { return 3; }
+    uint64 addU = ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul() + ul();
+    if (addU != cast<uint64>(40)) { return 4; }
+    uint32 mulU = u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u() * u();
+    if (mulU != cast<uint32>(1)) { return 5; }
+    float64 addD = d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d() + d();
+    if (addD != 40.0) { return 6; }
+    int64 divL = l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l() / l();
+    if (divL != 1) { return 7; }
+    int32 modI = i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i() % i();
+    if (modI != 0) { return 8; }
+    uint32 shlU = u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u() << u();
+    if (shlU != cast<uint32>(0)) { return 9; }   // 1 shifted left by 1, 39 times: every bit falls off
+    int64 shrL = l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l() >> l();
+    if (shrL != 0) { return 10; }
+    int32 negI = -(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(-(i()))))))))))))))))))))))))))))))))))))))));
+    if (negI != 1) { return 11; }
+    return 0;
+}

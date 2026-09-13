@@ -1495,8 +1495,8 @@ UB:
 - **Signed overflow** (`+`/`-`/`*`, and `-x` on `TYPE_MIN`) **traps** in debug builds (catches the
   accidental-overflow bug during development — `kama: arithmetic overflow -- int32 + overflowed`,
   `tests/trap/signed_overflow`, `neg_min`) and **wraps** two's-complement in release (`-fwrapv`, zero-cost,
-  *defined* — not UB). The debug check is the compiler's own (`KAMA_ADD`/`SUB`/`MUL`/`NEG`, the overflow
-  builtins under `!NDEBUG`, the plain operator under `NDEBUG`), so a debug overflow prints which operation
+  *defined* — not UB). The debug check is the compiler's own (`KAMA_ADD`/`SUB`/`MUL`/`NEG`, or `KAMA_ADD_T` & co.
+  where the operand type is known — the overflow builtins under `!NDEBUG`, the plain operator under `NDEBUG`), so a debug overflow prints which operation
   overflowed, runs the panic hook and is recoverable inside an `@onPanic` region. **A compound assignment
   and `++`/`--` follow the same rule** through place operators that take the place by address — `a[idx()]
   += 1` evaluates its index exactly once, `i++` hands back the old value — which is also what gives `int8

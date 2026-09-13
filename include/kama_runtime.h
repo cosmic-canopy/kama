@@ -876,10 +876,12 @@ static inline T kama_add_##SUF(T a, T b) { return (T)(a + b); }                 
 static inline T kama_sub_##SUF(T a, T b) { return (T)(a - b); }                 \
 static inline T kama_mul_##SUF(T a, T b) { return (T)(a * b); }                 \
 static inline T kama_neg_##SUF(T a)      { return (T)(-a); }
-KAMA_WIDE_ARITH(i32, int,                INT32_MIN, 32)
+KAMA_WIDE_ARITH(i32, int32_t,            INT32_MIN, 32)
+KAMA_WIDE_ARITH(i64, int64_t,            INT64_MIN, 64)
 KAMA_WIDE_ARITH(l,   long,               LONG_MIN,  (int)(sizeof(long) * 8))
 KAMA_WIDE_ARITH(ll,  long long,          LLONG_MIN, 64)
-KAMA_PLAIN_ARITH(u32, unsigned int)
+KAMA_PLAIN_ARITH(u32, uint32_t)
+KAMA_PLAIN_ARITH(u64, uint64_t)
 KAMA_PLAIN_ARITH(ul,  unsigned long)
 KAMA_PLAIN_ARITH(ull, unsigned long long)
 KAMA_PLAIN_ARITH(f32, float)
@@ -898,6 +900,23 @@ KAMA_PLAIN_ARITH(f64, double)
 #  define KAMA_SUB(a, b) KAMA_VAL_SEL(sub, (a) - (b))((a), (b))
 #  define KAMA_MUL(a, b) KAMA_VAL_SEL(mul, (a) * (b))((a), (b))
 #  define KAMA_NEG(a)    KAMA_VAL_SEL(neg, (a) + 0)((a))
+#endif
+// ...and the same operators with the type ALREADY KNOWN (`S` is a fixed-width suffix), which the emitter writes
+// whenever it knows the operand type — see `arithCType` in kama.cemit.cpp. The `_Generic` forms above have
+// to spell each operand TWICE, once to select on and once to pass, so nesting them doubles the C at every
+// level: a 20-term `f() + f() + …` took 7 s to compile and 38 terms exhausted clang's source locations.
+// Here each operand is written once, so the C grows linearly. Same two tiers, for every type — so a float
+// `a * b + c` still cannot contract into an FMA in debug, exactly as under `KAMA_ADD`.
+#ifdef NDEBUG
+#  define KAMA_ADD_T(S, a, b) ((a) + (b))
+#  define KAMA_SUB_T(S, a, b) ((a) - (b))
+#  define KAMA_MUL_T(S, a, b) ((a) * (b))
+#  define KAMA_NEG_T(S, a)    (-(a))
+#else
+#  define KAMA_ADD_T(S, a, b) kama_add_##S((a), (b))
+#  define KAMA_SUB_T(S, a, b) kama_sub_##S((a), (b))
+#  define KAMA_MUL_T(S, a, b) kama_mul_##S((a), (b))
+#  define KAMA_NEG_T(S, a)    kama_neg_##S((a))
 #endif
 
 // PLACE operators — compound assignment and `++`/`--` — take the place BY ADDRESS, so `a[idx()] += 1`
