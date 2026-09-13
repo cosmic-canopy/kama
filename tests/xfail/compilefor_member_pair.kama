@@ -1,0 +1,12 @@
+// Two same-named members, each gated for a different platform, are what someone writes BELIEVING a member
+// `@compileFor` works — so the refusal must be about the gate. It used to be "duplicate method 'onlyWin'"
+// first, about code whose real mistake is the attribute (KR-21 d). Each gated member is refused, once.
+type value Pt {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    @compileFor(OS_WINDOWS)
+    public fn int32 onlyWin() { return 1; }
+    @compileFor(!OS_WINDOWS)
+    public fn int32 onlyWin() { return 2; }
+}
+fn int32 main() { Pt p = Pt.make(x: 0); return p.onlyWin(); }

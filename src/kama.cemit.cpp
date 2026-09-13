@@ -313,6 +313,13 @@ const std::string& CEmitter::diagFile() const
     return _sourcePath;
 }
 
+// `@compileFor` on a member: one sentence, raised at collection (collectClasses) and again where emission reaches the
+// attribute (emitAttributes) — identical text, so the diagnostic dedup reports it once.
+const char* const CEmitter::kCompileForOnMember =
+    "`@compileFor` gates a whole top-level declaration, and a member is not one — the gate would be silently "
+    "ignored here. Gate the enclosing `type` instead (which drops every member with it), or split the member "
+    "into two types";
+
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
     unsupported(rawWhat, srcLine, std::string());
@@ -9491,7 +9498,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // answered every call. Same rule as `duplicate function` at file scope — kama has
                         // no overloading — so a member name is declared once. (`redeclares … inherits` is
                         // the base-class case and lives with the inheritance checks.)
-                        if (ci.methods.count(*md->name->value))
+                        // A member `@compileFor` is refused here, at COLLECTION, and not only where emission
+                        // reaches the attribute: two same-named members each gated for a different platform are
+                        // exactly what someone writes when they believe the gate works, and the duplicate rule
+                        // below used to answer first — "duplicate method" — about code whose real mistake is the
+                        // gate. The text is the emitter's, so the second report dedups onto this one (KR-21 d).
+                        const bool gated = hasAttr(md->attributes, "compileFor");
+                        if (gated) unsupported(kCompileForOnMember, md->line);
+                        auto dupIt = ci.methods.find(*md->name->value);
+                        const bool prevGated = dupIt != ci.methods.end() && dupIt->second.node
+                                            && hasAttr(dupIt->second.node->attributes, "compileFor");
+                        if (dupIt != ci.methods.end() && !gated && !prevGated)
                             unsupported(("duplicate method '" + *md->name->value + "' in '" + ci.name
                                          + "' — kama has no overloading, so a member name may be declared "
                                            "only once in its type; the second body would silently replace the first").c_str(),
@@ -23645,10 +23662,7 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // is never evaluated and never stripped — it would reach this branch on every build and do
             // nothing at all, silently. A gate that silently fails open is the worst shape a conditional
             // can take, and it is exactly what the first external project hit with `@compileFor(NATIVE)`.
-            if (onMember)
-                unsupported("`@compileFor` gates a whole top-level declaration, and a member is not one — "
-                            "the gate would be silently ignored here. Gate the enclosing `type` instead "
-                            "(which drops every member with it), or split the member into two types", line);
+            if (onMember) unsupported(kCompileForOnMember, line);
         } else if (an == "align" || an == "packed") {
             // Layout control is a property of a TYPE, not of one declaration — so there is one way to
             // align an object rather than two, which is the call Rust makes as well (`#[repr(align(N))]`
