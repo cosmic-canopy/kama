@@ -19,11 +19,11 @@ Build
 Test — each task builds first, so it can never run against a stale compiler
   fixture <name>…   build + run JUST these tests/<name>.kama against their .expect  ← ITERATE WITH THIS
   test              native fixture suite            (host)
-  test san          ASan/UBSan fixture suite        (container — see below)
-  test tsan         ThreadSanitizer fixture suite   (container — opt-in, see below)
-  test msan         MemorySanitizer fixture suite   (container — opt-in, see below)
-  test wasm         wasm/node fixture suite         (container)
-  test linux        the CI Linux leg, exactly       (container — opt-in, see below)
+  test san          ASan/UBSan fixture suite        (container on macOS — see below)
+  test tsan         ThreadSanitizer fixture suite   (container on macOS — opt-in, see below)
+  test msan         MemorySanitizer fixture suite   (container on macOS — opt-in, see below)
+  test wasm         wasm/node fixture suite         (container on macOS)
+  test linux        the CI Linux leg, exactly       (container on macOS — opt-in, see below)
   test all          native + san + wasm
   check             the tools/check-*.sh guard scripts (host)
   matrix            test all + check — the full pre-commit gate
@@ -63,7 +63,9 @@ dependencies are declared, but a `git stash`/`git checkout` cycle can restore so
 deciding to rebuild, and the result is objects compiled against two different class layouts — a corrupt
 compiler that builds cleanly. A clean rebuild is the fix; the symptom is never a real code bug.
 
-Why `san`, `tsan`, `msan` and `wasm` are container-only:
+Why `san`, `tsan`, `msan` and `wasm` run in the container — on macOS. A LINUX host runs them (and `linux`)
+natively against the host build, because the container would build into the same out/Linux-<arch>/; the
+wasm leg then needs emsdk's `emcc` on PATH.
   - macOS has no LeakSanitizer, so a host KAMA_SAN run reports "detect_leaks is not supported on
     this platform" for every fixture and tells you nothing.
   - MemorySanitizer does not exist on macOS at all (Linux/FreeBSD only), so `msan` has nowhere else
@@ -83,6 +85,25 @@ EOF
 JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 build_host()      { make -j"$JOBS"; }
 build_container() { tools/cdev make -j"$JOBS"; }
+
+# One opt-in suite leg (`leg KAMA_SAN`). The container exists for what macOS lacks (see the help text), and
+# on a LINUX host it is worse than unneeded: the container is Linux on the same arch, so it builds into the
+# very `out/Linux-<arch>/` the host build uses and silently replaces the host binary with its own. A Linux
+# host has everything the legs need, so it runs them natively against the host build.
+#
+# `env -u KAMA_SKIP_CHECKS`: `matrix` sets it for the native leg only, and `tools/cdev` never forwarded it
+# into these legs — the san leg must keep running its guards (see `matrix`). Natively it would leak, so the
+# native arm drops it explicitly. The wasm leg needs `emcc` on PATH (emsdk: `. <emsdk>/emsdk_env.sh`).
+leg() {
+  if [ "$(uname -s)" = Linux ]; then
+    if [ "$1" = KAMA_WASM ] && ! command -v "${EMCC:-emcc}" >/dev/null 2>&1; then
+      echo "dev test wasm: no emcc on PATH — install emsdk and source its emsdk_env.sh" >&2; exit 2
+    fi
+    build_host; env -u KAMA_SKIP_CHECKS "$1=1" ./run_tests.sh
+  else
+    build_container; tools/cdev exec env "$1=1" ./run_tests.sh
+  fi
+}
 
 task="${1:-help}"; [ $# -gt 0 ] && shift || true
 case "$task" in
@@ -143,25 +164,27 @@ case "$task" in
   test)
     case "${1:-native}" in
       native) build_host;      ./run_tests.sh ;;
-      san)    build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh ;;
+      san)    leg KAMA_SAN ;;
       # The other two -fsanitize sets. run_tests.sh has carried the KAMA_TSAN block since the M2
       # concurrency seam landed — complete, with its own flags, TSAN_OPTIONS and mutual exclusion — and
       # NOTHING SET IT: this dispatch offered only native|linux|san|wasm|all, so the declared
       # shared-nothing proof had never once run. Adding the case IS the fix. Same shape for msan.
-      tsan)   build_container; tools/cdev exec env KAMA_TSAN=1 ./run_tests.sh ;;
-      msan)   build_container; tools/cdev exec env KAMA_MSAN=1 ./run_tests.sh ;;
-      wasm)   build_container; tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
+      tsan)   leg KAMA_TSAN ;;
+      msan)   leg KAMA_MSAN ;;
+      wasm)   leg KAMA_WASM ;;
       # The CI Linux leg, run the way CI runs it: plain run_tests.sh on Linux, no KAMA_SAN/KAMA_WASM.
       # NOTHING else here is that. `native` runs it on the host; `san`/`wasm` run a DIFFERENT set on Linux
       # and carry 1 and 0 guards respectively. So a Linux-only guard failure was invisible locally — a
       # bashism in a guard (`sh` is bash on macOS, dash on Debian) sat green here and red in CI.
       # Deliberately NOT in `all` or `matrix`: it is a container round-trip, and paying it per commit is a
       # tax. Run it before closing a campaign, or before any push that touches tools/check-*.sh.
-      linux)  build_container; tools/cdev exec ./run_tests.sh ;;
+      # On a Linux host `native` already IS this leg, so it runs there (see `leg` for the out/ collision).
+      linux)  if [ "$(uname -s)" = Linux ]; then build_host; ./run_tests.sh
+              else build_container; tools/cdev exec ./run_tests.sh; fi ;;
       all)
         build_host;      ./run_tests.sh
-        build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh
-                         tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
+        leg KAMA_SAN
+        leg KAMA_WASM ;;
       *) echo "dev test: expected native|linux|san|tsan|msan|wasm|all" >&2; exit 2 ;;
     esac ;;
 
