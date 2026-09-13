@@ -11823,6 +11823,43 @@ void CEmitter::checkWhenParams(const SharedIdentifierList& whenParams, const Sha
     }
 }
 
+// Why a generic instance lacks a method its TEMPLATE declares: the method's `when [...]` gate failed for this
+// instance's arguments. Returns the clause to append to "has no method" — naming the gate and the first
+// argument that fails it — or "" when the template has no such gated method. Without it the message read as
+// if the method were never declared, while a gated CONSTRUCTOR in the same position already said why (KR-43).
+std::string CEmitter::whenGateReason(const std::string& inst, const std::string& method)
+{
+    auto gi = _genericTypeInsts.find(inst);
+    if (gi == _genericTypeInsts.end()) return "";
+    auto tt = _genericTypes.find(gi->second.templateKey);
+    if (tt == _genericTypes.end()) return "";
+    auto mit = tt->second.methods.find(method);
+    if (mit == tt->second.methods.end() || mit->second.whenParams.empty()) return "";
+    const MethodInfo& tm = mit->second;
+    const std::vector<std::string>& params = _genericTypeParams[gi->second.templateKey];
+    std::string cond;
+    for (size_t i = 0; i < tm.whenParams.size(); ++i)
+        cond += (i ? ", " : "") + tm.whenParams[i] + ": " + demangleForDisplay(tm.whenBounds[i]);
+    std::string why;
+    for (size_t c = 0; c < tm.whenParams.size() && why.empty(); ++c)
+        for (size_t i = 0; i < params.size() && i < gi->second.typeArgs.size(); ++i) {
+            if (params[i] != tm.whenParams[c]) continue;
+            // whenConditionsHold treats a serde gate as unmet in a program that serializes nothing — say that,
+            // rather than blame an argument that may well be Serializable.
+            if (!_usesSerde && (tm.whenBounds[c] == "Serializable" || tm.whenBounds[c] == "Deserializable")) {
+                why = ", and this program uses no serialization, so a `" + tm.whenBounds[c] + "` gate is off";
+                break;
+            }
+            std::vector<std::string> wp{tm.whenParams[c]}, wb{tm.whenBounds[c]};
+            std::vector<SharedIdentifier> wn{c < tm.whenBoundNodes.size() ? tm.whenBoundNodes[c] : SharedIdentifier()};
+            if (!whenConditionsHold(wp, wb, wn, params, gi->second.typeArgs))
+                why = ", and `" + demangleForDisplay(cType(gi->second.typeArgs[i])) + "` (for `" + params[i]
+                    + "`) does not satisfy `" + demangleForDisplay(tm.whenBounds[c]) + "`";
+            break;
+        }
+    return " — it is declared `when [" + cond + "]`" + why;
+}
+
 // A generic instance's `implements` list, resolved under THIS instance's subst (which the caller has bound).
 // A generic contract implemented with the type's own param (`Box<T> implements Deref<T>`) mangles to the
 // concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
@@ -29049,7 +29086,9 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         }
                     }
         }
-        unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
+        unsupported(("`" + clsName + "` has no method `" + method + "`" + whenGateReason(clsName, method)).c_str(),
+                    srcLine);
+        return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
     // M6 B3a: the spelling at `site` is a REFERENCE to the method just resolved — the single most common

@@ -1896,6 +1896,7 @@ private:
     std::string missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method);
     void rejectPlainCrossing(const SharedIdentifier& t, const char* where, const std::string& fname,
                              bool isExternFn, int line);
+    std::string whenGateReason(const std::string& inst, const std::string& method);
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
     void instantiateEnumMembers(const GenericTypeInst& gi);

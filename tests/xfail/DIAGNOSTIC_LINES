@@ -845,6 +845,7 @@ virtual_in_plain	virtual_in_plain.kama:2
 virtual_on_value	virtual_on_value.kama:2
 weak_no_deref	weak_no_deref.kama:23
 when_generic_contract_arg_mismatch	when_generic_contract_arg_mismatch.kama:12
+when_method_unmet	when_method_unmet.kama:17 when_method_unmet.kama:18
 when_multi_off	when_multi_off.kama:14
 when_on_concrete_type	when_on_concrete_type.kama:10 when_on_concrete_type.kama:7
 when_on_contract_member	when_on_contract_member.kama:3

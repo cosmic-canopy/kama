@@ -4018,6 +4018,8 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   A `when` gate conditions on the declaring type's **own** parameters: naming one it does not have is an
   error, and so is a `when` on a concrete type, a `contract` member or a `type intrinsic` block, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
   is no parameter to condition on. <!-- xfail: when_on_contract_member, when_on_intrinsic -->
+  Calling a member an instance's gate removed names the gate and the argument that fails it (`` `Wrap<Plain>` <!-- xfail: when_method_unmet -->
+  has no method `tag` — it is declared `when [P: Tag]`, and `Plain` (for `P`) does not satisfy `Tag` ``).
 
   **A bound is what the body may call, and nothing else.** Reaching a member the bounds do not declare is
   an error at the DECLARATION, naming the bound that is missing rather than the method that is not there:

@@ -1,0 +1,19 @@
+// A method removed by an unmet `when` gate is named WITH its gate and the argument that fails it (KR-43).
+// It used to read "`Wrap<Plain>` has no method `tag`", as if the method were never declared, while a gated
+// constructor in the same position already said why. A generic enum's gated method answers the same way.
+type contract Tag for value { fn int32 tag(); }
+type value Plain { public ctor of() { } }
+type value Wrap<P> {
+    P inner;
+    public ctor of(P inner) { this.inner = inner; }
+    public fn int32 tag() when [P: Tag] { return this.inner.tag(); }
+}
+type enum Maybe<T> { Has(T v), Nope;
+    public fn int32 tag() when [T: Tag] { return 1; }
+}
+fn int32 main() {
+    Wrap<Plain> w = Wrap::<Plain>.of(inner: Plain.of());
+    Maybe<Plain> m = Maybe::Nope;
+    return w.tag()
+         + m.tag();
+}
