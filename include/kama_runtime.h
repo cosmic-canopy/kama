@@ -59,6 +59,16 @@ _Static_assert(sizeof(double) == 8, "kama: float64 maps to C double and must be 
 #  endif
 #endif
 
+// `.as<T>()`'s identity fallback: does a boxed error's vtbl name the type `T`? A byte compare rather than
+// `strcmp` because this header calls no libc (see the includes above). The pointer compare that precedes
+// it is not enough on its own — a prelude enum's vtbl is `static` in the shared header, one copy per unit
+// (CEmitter::emitAsDowncast).
+static inline bool kama_type_name_eq(const char* a, const char* b) {
+    if (!a) return false;
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+
 
 // KAMA_EXPORT — the kama→host boundary decoration for an `expose fn`. It gives the
 // (unmangled, bare-named) function stable C-ABI linkage a host can resolve: `dlsym`

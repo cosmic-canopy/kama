@@ -1,0 +1,36 @@
+// `.as<T>()` recovers a boxed error whichever unit boxed it. It compared vtbl ADDRESSES, and a prelude
+// enum's vtbl is duplicated per unit, so a `DeError` boxed by a library — every hand-written or library
+// `deserialize` — came back `None` in its caller. Six flags sum to 63.
+import { lib::failPrelude, lib::failOwn, lib::LibError };
+
+fn Result<int32, Owned<Error>> localPrelude() { return Result::Err(error: DeError::Malformed); }
+
+fn int32 main() {
+    int32 r = 0;
+    match (localPrelude()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<DeError>()) { case Some(value: d): { if (d == DeError::Malformed) { r = r + 1; } } case None: {} }; }
+    };
+    match (failPrelude()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<DeError>()) { case Some(value: d): { if (d == DeError::Malformed) { r = r + 2; } } case None: {} }; }
+    };
+    match (failOwn()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<LibError>()) { case Some(value: d): { r = r + 4; } case None: {} }; }
+    };
+    // …and a miss is still a miss, across the boundary in both directions.
+    match (failPrelude()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<LibError>()) { case Some(value: d): {} case None: { r = r + 8; } }; }
+    };
+    match (failOwn()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<DeError>()) { case Some(value: d): {} case None: { r = r + 16; } }; }
+    };
+    match (failPrelude()) {
+        case Ok(value: v): {}
+        case Err(error: e): { match (e.as<SerError>()) { case Some(value: d): {} case None: { r = r + 32; } }; }
+    };
+    return r;
+}

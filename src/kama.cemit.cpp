@@ -11908,6 +11908,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
         indent(1);
         if (pci->isScalarRecv) *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
         else                   *_out << ".__dtor = (void(*)(void*))&" << pci->name << "__dtor,\n";
+        if (isPolyDispatchContract(cn)) { indent(1); *_out << ".__type = \"" << pci->name << "\",\n"; }
         *_out << "};\n\n";
     }
     _out = saved;
@@ -24296,6 +24297,8 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
     // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
     indent(1); *_out << "void (*__dtor)(void*);\n";
+    // The implementer's C name, for `.as<T>()` — see emitAsDowncast for why a pointer compare alone is wrong.
+    if (isPolyDispatchContract(ii.name)) { indent(1); *_out << "const char* __type;\n"; }
     *_out << "};\n";
     *_out << "struct " << ii.name << " { void* obj; const " << ii.name << "_vtbl* vtbl; };\n\n";
 }
@@ -24396,6 +24399,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         indent(1);
         if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
         else                 *_out << ".__dtor = (void(*)(void*))0,\n";
+        if (isPolyDispatchContract(ii.name)) { indent(1); *_out << ".__type = \"" << ci.name << "\",\n"; }
         *_out << "};\n\n";
     }
 }
@@ -29540,7 +29544,13 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
 }
 
 // Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`,
-// yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table. On a hit it
+// yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table — and then, when
+// the pointers differ, the vtbl's `__type` name. The pointer alone is not an identity: a PROMOTED PRELUDE
+// enum (`DeError`, `SerError`) has no home module, so its vtbl is `static` in the shared header and every
+// unit holds its own copy. A `DeError` boxed in `std::uuid` (or any library's `deserialize`) carried that
+// unit's address, and `.as<DeError>()` in the caller's unit answered `None` for exactly the error serde
+// returns (tests/as_downcast_cross_unit.d). A C name is unique program-wide, so the name compare is exact;
+// the pointer compare stays first because it is the common hit and costs nothing. On a hit it
 // COPIES the enum value out (`*(T*)(op).obj`) — a borrow, so `op` stays valid on the `None` branch. `T` must
 // be a non-destructible enum implementing the contract (a value copy-out of an owned payload would alias).
 std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
@@ -29574,7 +29584,8 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
     }
     std::string optC = cType(optionalTypeNode(ad->type));
     std::string op = "(" + emitExpression(ad->operand) + ")";   // side-effect-free (a binding / field access)
-    return "((" + op + ".vtbl == &" + enumC + "__as_" + contract + ") ? "
+    return "((" + op + ".vtbl == &" + enumC + "__as_" + contract + " || kama_type_name_eq(" + op
+         + ".vtbl->__type, \"" + enumC + "\")) ? "
          + "(" + optC + "){ .tag = " + optC + "_Some, .u.Some = { .value = *(" + enumC + "*)" + op + ".obj } } : "
          + "(" + optC + "){ .tag = " + optC + "_None })";
 }
