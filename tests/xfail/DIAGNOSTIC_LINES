@@ -288,6 +288,7 @@ expose_on_method	expose_on_method.kama:3
 extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
 extern_disagree	main.kama:4 main.kama:6
+extern_type_leak	lib.kama:7
 extern_undeclared	main.kama:3 main.kama:4
 extern_value_method	extern_value_method.kama:6
 extern_value_named_ctor	extern_value_named_ctor.kama:6

@@ -1667,6 +1667,9 @@ private:
     // idiom SPEC prescribes, so the answer is a SET of declaring files per C name rather than one
     // `declFile`, and `checkReach` asks whether the referencing file is in it.
     std::map<std::string, std::set<std::string>> _externDeclSites;   // literal C name -> files declaring it
+    std::map<std::string, std::set<std::string>> _externExportedBy;   // extern key -> files whose `export` lists it
+    bool externExportedFrom(const std::string& name, const std::string& modScope) const;
+    std::string importedExtern(const std::string& target) const;
     std::map<std::string, std::string> _externSymbolOwner;           // C symbol -> the kama name bound to it (one per program)
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots

@@ -1,5 +1,5 @@
-// `malloc` is declared in lib.kama and NOT here. An extern is a reference to a C symbol, not a module
-// symbol — it is never exported or imported, so a file that names one declares it.
+// `malloc` is declared in lib.kama and NOT here, and lib.kama does not export it — so this file neither
+// declares nor imports it, and the prelude's own declaration must not stand in for either.
 import { helper };
 unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(64)); free(p: p); return helper(); }
 fn int32 main() { return work(); }

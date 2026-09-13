@@ -269,16 +269,16 @@ blank key.
 
 ### Where the FFI goes — a `native` module, by convention
 
-`extern` is the one declaration that is not a module symbol. It keeps its literal C spelling, so it is
-never `export`ed and never `import`ed: **a file that names an extern declares it**, and every declaration
-of one C symbol in the program must agree ([SPEC](SPEC.md#ffi--calling-c-)). Repeating
-`extern fn UnsafePtr malloc(usize n);` in each file that calls `malloc` is correct and idiomatic — a
-declaration is not a definition, and it is exactly what including a C header does.
+An `extern` is a file-private declaration like any other, keeping its literal C spelling: a file names an
+extern it **declares**, or one it **imports** from a file that `export`s it. Every declaration of one C
+symbol in the program must agree ([SPEC](SPEC.md#ffi--calling-c-)), so repeating
+`extern fn UnsafePtr malloc(usize n);` in each file that calls `malloc` stays correct — and a C struct the
+FFI module binds (`type extern value`) can be exported with it rather than re-declared by every user.
 
-When you would rather not repeat it, **wrap the extern in an ordinary `fn` and export that.** The wrapper
-is a normal module symbol, so `export`, `import` and `visibility` all work on it the usual way — and it is
-free: `--release` folds the program into a single translation unit, so a pass-through wrapper compiles to
-the same instructions as calling the extern directly.
+Calling an exported `extern fn` still requires an `unsafe fn` in the importing file. To offer a **safe**
+surface, **wrap the extern in an ordinary `fn` and export that** — it is free: `--release` folds the
+program into a single translation unit, so a pass-through wrapper compiles to the same instructions as
+calling the extern directly.
 
 The convention is to put those together in **one `native` module per project**, at the source root:
 

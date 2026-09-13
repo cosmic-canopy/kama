@@ -592,6 +592,7 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     if (!qualifier || qualifier->empty()) {
         auto sa = _nsCtx.symbolAliases.find(value);
         if (sa != _nsCtx.symbolAliases.end() && known(sa->second)) return sa->second;
+        if (sa != _nsCtx.symbolAliases.end()) { std::string ext = importedExtern(sa->second); if (!ext.empty()) return ext; }
     }
     // `global::X` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases:
     // the same symbol as bare `X`, nameable even where a local declaration shadows the spelling. `global`
@@ -619,6 +620,9 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
         }
         std::string cand = nsMangled + "__" + value;
         if (known(cand)) return cand;
+        // An extern keeps its literal key, so a qualified spelling reaches it only if THAT module exports
+        // it; anything else stays unresolved rather than falling to the literal name some other file declares.
+        if (_externDeclSites.count(value)) return externExportedFrom(value, nsMangled) ? value : cand;
         std::string priv = siblingPrivateKey(value, known, nsMangled);   // that module's file-private name -> checkReach refuses it
         return priv.empty() ? value : priv;
     }
@@ -2617,12 +2621,14 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     // every extern name used to walk straight out of this predicate. A file could call `malloc` having
     // neither declared nor imported it — measured at 0.9.84, and it built, linked and ran.
     //
-    // The rule is DECLARE, not import: an extern is a reference to a symbol someone else defines, it keeps
-    // its literal C spelling and is never scope-prefixed, so there is no module surface for an `export` to
-    // put it on and nothing for an `import` to bind. Repeating the declaration is what SPEC prescribes and
-    // what all 109 declaring files already do. A file that would rather not repeat it wraps the extern in
-    // an ordinary `fn` and exports THAT — which costs nothing: `--release` folds every unit into one TU
-    // (kama.driver.cpp), and a pass-through wrapper compiles to assembly byte-identical to the direct call.
+    // An extern is an ordinary FILE-PRIVATE declaration: the file that declares it may name it, and another
+    // file reaches it the way it reaches any name — the declaring file `export`s it and this file `import`s
+    // it (or spells it qualified, which the resolver only resolves through a module that exports it).
+    // Repeating the declaration stays legal: two declarations are two bindings of one C symbol, and the
+    // agreement checks in collectSignatures/collectClasses hold them identical. (Until 0.9.329 the rule was
+    // DECLARE-only — "an extern is not a module symbol". Its reason was the C symbol having no module
+    // surface; a declaration does have one, and calling an extern already requires `unsafe`, so exporting
+    // one widens nothing safe code can do.)
     //
     // No `<`-prefixed exemption here, deliberately. The prelude declares `malloc`/`free` for
     // `GlobalAllocator`, and letting a compiler-owned declaration satisfy every file would leave the same
@@ -2631,12 +2637,23 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
         auto ext = _externDeclSites.find(key);
         if (ext != _externDeclSites.end()) {
             if (ext->second.count(refFile)) return;                        // declared right here — always
-            std::string other = *ext->second.begin();
-            unsupported(("`" + spelled + "` is an `extern` C symbol declared in `" + other + "`, and this "
-                         "file does not declare it — " + what + " cannot name it. An extern is not a module "
-                         "symbol: it keeps its literal C spelling, so it is never `export`ed or `import`ed. "
-                         "Repeat the declaration in this file, or call a `fn` that wraps it (a wrapper is "
-                         "free in `--release`, which builds one translation unit)").c_str(), line);
+            if (qualified) return;                                         // resolved only through an exporting module
+            const NsCtx* rc = nullptr;
+            if (_nsCtx.unitPath == refFile) rc = &_nsCtx;
+            else for (auto& kv : _unitCtx) if (kv.second.unitPath == refFile) { rc = &kv.second; break; }
+            if (rc) for (auto& sa : rc->symbolAliases) if (importedExtern(sa.second) == key) return;   // imported
+            std::string other;   // a USER file that declares it, when there is one — the prelude's is not importable
+            for (auto& f : ext->second) if (!f.empty() && f[0] != '<') { other = f; break; }
+            const bool offered = _externExportedBy.count(key) != 0;
+            unsupported(("`" + spelled + "` is an `extern` "
+                         + (other.empty() ? std::string("this file neither declares nor imports") + " — " + what
+                                            + " cannot name it (the prelude's own declaration is not offered to "
+                                              "user code). Declare it in this file"
+                                          : "declared in `" + other + "`, and this file neither declares nor "
+                                            "imports it — " + what + " cannot name it. "
+                                            + (offered ? "Import it (`import { … };`) from the file that exports it"
+                                                       : "Export it from the file that declares it and import it here")
+                                            + ", or repeat the declaration in this file")).c_str(), line);
             return;
         }
     }
@@ -2688,6 +2705,26 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
                  "add `import { " + spelled + " };`. A module's files share a name space but not a scope: "
                  "`export` offers a name and `import` accepts it, so every name a file uses is written "
                  "down at its top").c_str(), line, spelled);
+}
+
+// Does a file whose module scope is `modScope` export the extern `name`? An extern keeps its literal key, so
+// the module half of an import (`a::b::{name}`) is matched against the exporting file's scope instead.
+bool CEmitter::externExportedFrom(const std::string& name, const std::string& modScope) const
+{
+    auto ex = _externExportedBy.find(name);
+    if (ex == _externExportedBy.end()) return false;
+    for (auto& kv : _unitCtx)
+        if (ex->second.count(kv.second.unitPath) && kv.second.scope == modScope) return true;
+    return false;
+}
+
+// The extern an import's alias target (`<module>__<name>`) names, or "" when it names none.
+std::string CEmitter::importedExtern(const std::string& target) const
+{
+    const size_t cut = target.rfind("__");
+    if (cut == std::string::npos) return "";
+    const std::string name = target.substr(cut + 2);
+    return externExportedFrom(name, target.substr(0, cut)) ? name : std::string();
 }
 
 // The file a reference is being written in, for `checkReach`. Empty outside a body walk.
@@ -2806,8 +2843,16 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     auto checkNoLeak = [&](const SharedIdentifier& t, const char* what) {
         if (!ownerExported || !t || !t->value) return;
         const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
-        if (declFileOf(key) != _nsCtx.unitPath || _nsCtx.unitPath.empty()) return;
-        if (_exported.count(key)) return;
+        // An extern type this file declares is file-private like any other, under its literal key.
+        auto ds = _externDeclSites.find(key);
+        if (ds != _externDeclSites.end()) {
+            if (_nsCtx.unitPath.empty() || !ds->second.count(_nsCtx.unitPath)) return;
+            auto ex = _externExportedBy.find(key);
+            if (ex != _externExportedBy.end() && ex->second.count(_nsCtx.unitPath)) return;
+        } else {
+            if (declFileOf(key) != _nsCtx.unitPath || _nsCtx.unitPath.empty()) return;
+            if (_exported.count(key)) return;
+        }
         unsupported(("`" + *t->value + "` is not exported by this file, but " + what
                      + " of an exported declaration names it — a consumer could reach the declaration and "
                        "not the type. Export it too, or take it out of the exported surface").c_str(),
@@ -3075,6 +3120,7 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
     if (!qualifier || qualifier->empty()) {
         auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{fn as g}`
         if (sa != _nsCtx.symbolAliases.end() && _funcs.count(sa->second)) return sa->second;
+        if (sa != _nsCtx.symbolAliases.end()) { std::string ext = importedExtern(sa->second); if (!ext.empty()) return ext; }
     }
     SharedStringList q = qualifier;                      // `global::…` — see resolveUserNameImpl
     bool rooted = q && !q->empty() && *(*q)[0] == "global";
@@ -3095,6 +3141,7 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
         }
         std::string cand = nsMangled + "__" + name;
         if (_funcs.count(cand)) return cand;
+        if (_externDeclSites.count(name)) return externExportedFrom(name, nsMangled) ? name : cand;   // see resolveUserNameImpl
         std::string priv = siblingPrivateKey(name, [&](const std::string& k) { return _funcs.count(k) > 0; }, nsMangled);
         return priv.empty() ? name : priv;
     }
@@ -31456,6 +31503,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                        || _constStatics.count(q);   // a module `comptime` — SPEC: "subject to the module
                                                     // `export { }` surface". It is a named constant, so it
                                                     // publishes like a function; see emitHeaderContent.
+            // An extern this file declares is exported under its literal key, recorded per exporting FILE
+            // (many files may declare one C symbol; only the ones that export it offer it).
+            if (!exists) {
+                auto ds = _externDeclSites.find(*name);
+                if (ds != _externDeclSites.end() && ds->second.count(_nsCtx.unitPath)) {
+                    exists = true;
+                    _externExportedBy[*name].insert(_nsCtx.unitPath);
+                }
+            }
             // A MUTABLE module `static` is a different answer, and it deserves its own sentence rather
             // than the phantom "there is no such top-level declaration" — the declaration is right there.
             if (!exists && _moduleStatics.count(q)) {
@@ -31529,6 +31585,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // in this module and never exported now lives under its file's scope, and case 2 below
                 // must still find it to say so.
                 bool live = anyTable(q) || (sameModule && !siblingPrivateKey(*sym->identifier->value, anyTable).empty());
+                if (externExportedFrom(*sym->identifier->value, mod)) {   // an exported extern: literal key
+                    recordRef(*sym->identifier->value, sym->identifier.get());
+                    continue;
+                }
                 if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);

@@ -1,0 +1,7 @@
+// `mk` is exported and returns `div_t`, which this file keeps private — a consumer could call `mk` and not
+// name its result. A file-private extern type leaks through a signature like any private type.
+export { mk };
+extern "<stdlib.h>";
+type extern value div_t { public int32 quot; public int32 rem; }
+extern fn div_t div(int32 numer, int32 denom);
+unsafe fn div_t mk() { return div(numer: 7, denom: 2); }

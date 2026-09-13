@@ -1073,9 +1073,13 @@ an extern function, so there are no redeclaration conflicts; and the runtime hid
 (block-scope declarations), so **no** C function (not even `malloc`) is available without its header — a
 missing include is a plain C error, never a silent guess.
 
-**An `extern` is DECLARED in every file that names it — never exported, never imported.** It keeps its
-literal C spelling and is therefore not a module symbol: there is no surface for an `export` to put it on
-and nothing for an `import` to bind.
+**An `extern` is a file-private declaration, like any other.** A file names an extern it declares, or one it
+imports from a file that `export`s it — a `type extern value` and an `extern fn` alike, keeping its literal C
+spelling either way. A file that names one it neither declares nor imports is refused. <!-- xfail: extern_undeclared -->
+Repeating the declaration in another file is still legal — every declaration of one C symbol must agree
+(`tests/xfail/extern_disagree`), and a file in a loose build root, with no module to import from, has no other
+way. Exporting an extern widens nothing: CALLING one requires an `unsafe fn` wherever it is imported; wrapping
+it in an ordinary `fn` is how a module offers a SAFE surface instead. `tools/check-extern-rung.sh` holds all of it.
 
 **`@linkName("symbol")` binds an `extern fn` to a C symbol spelled differently from its kama name** —
 Rust's `#[link_name]`. The kama name is what the file calls; the string is what the call emits. It is

@@ -23,11 +23,13 @@
 #      Both files write `memcpy(dst: d, src: s, n: 4)`. Named arguments REORDER off the winning FuncSig, so
 #      a.kama's correct call emitted `memcpy(s, d, 4)` — source and destination reversed. It built and ran.
 #
-# THE RULE IS DECLARE, NOT IMPORT, and assertion 6 is what pins that distinction. An extern is a reference
-# to a symbol someone else defines; there is no module surface for an `export` to put it on. A file that
-# would rather not repeat the declaration wraps the extern in an ordinary `fn` and exports THAT (assertion
-# 7) — which costs nothing, because `--release` folds every unit into one translation unit and a
-# pass-through wrapper compiles to assembly byte-identical to the direct call. Measured at 0.9.85.
+# THE RULE (since 0.9.329): an extern is a FILE-PRIVATE declaration like any other. A file names an extern it
+# DECLARES, or one it IMPORTS from a file that exports it (assertion 6). Repeating the declaration stays legal
+# — two declarations are two bindings of one C symbol, held identical by the agreement rule (assertions 2-5)
+# — and it is the only way for a file in a loose build root, which has no module to import from. Wrapping an
+# extern in an ordinary `fn` (assertion 7) remains the way to offer a SAFE surface. (Until 0.9.329 the rule
+# was declare-only, "an extern has no module surface"; a declaration does have one, and calling an extern
+# already requires `unsafe`, so exporting one widens nothing safe code can do. Maintainer ruling 2026-09-13.)
 #
 # ⚠️ VERIFIED BY DISABLING THE MECHANISM, not by reading it — and doing that CORRECTED this header, which
 # first claimed assertion 6 for the rung. Measured, with each half gated off in turn:
@@ -35,13 +37,10 @@
 #   FFI arm out of `checkReach`      -> 1 and 1b fail.        2, 3, 4, 5, 6, 7 pass.
 #   agreement out of the collectors  -> 3, 4 and 5 fail.      1, 1b, 2, 6, 7 pass.
 #
-# So **assertion 6 is a canary, not an assertion of either rule** — it is refused by the export-list
-# validation that has always been there, because an extern registers in `_funcs` under its LITERAL name
-# while `export { malloc }` is validated against `qualify("malloc")`. That is worth knowing rather than
-# hiding: "an extern is not exportable" needed no code, it falls out of the literal spelling, and this
-# assertion is a REGRESSION guard on that property. Assertions 2 and 7 are the CONTROLS and must pass in
-# every configuration — a guard whose every line fires when the rule is off is testing the compiler's
-# ability to reject something, not the rule.
+# (That table predates 0.9.329, when assertion 6 was a canary on the literal-key export validation refusing
+# `export { malloc }`; it is now the positive half of the rung — see its own comment.) Assertions 2 and 7 are
+# the CONTROLS and must pass in every configuration — a guard whose every line fires when the rule is off is
+# testing the compiler's ability to reject something, not the rule.
 #
 # Guards run in parallel: private mktemp -d, no writes to the worktree, no `cd` outside a subshell, and the
 # compiler reached through $KAMA rather than the ./kama symlink.
@@ -87,8 +86,8 @@ fn int32 main() { return work(); }'
 rc=0; "$KAMA" check "$tmp/leak/kama.json" > "$tmp/leak.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
     bad "a file calling an extern declared only in a SIBLING was accepted (the rung leak)"
-elif ! grep -q "does not declare it" "$tmp/leak.out"; then
-    bad "rejected, but not by the FFI rung — the reason must say the file does not declare it"
+elif ! grep -q "neither declares nor imports it" "$tmp/leak.out"; then
+    bad "rejected, but not by the FFI rung — the reason must say the file neither declares nor imports it"
     sed -n 1,3p "$tmp/leak.out" >&2
 else
     ok "an extern named but not declared in this file is refused"
@@ -202,26 +201,24 @@ else
     ok "disagreeing extern struct fields are refused, naming the other file"
 fi
 
-# --- 6. CANARY: an extern is DECLARED, never exported or imported -------------------------------------
-# The distinction the design rests on. An extern has no module surface: `export { malloc }` must not be the
-# way to share it, or the rule becomes "declare OR import" — two ways to do one thing, and every one of the
-# 84 project-less files that declares an extern needs somewhere to import it FROM.
-# ⚠️ Neither rule enforces this; the export-list validation does, because an extern's table key is its
-# LITERAL name and `export` is validated against the qualified one. Kept as a regression guard on a
-# property that falls out of the spelling — see the header's fail-check table.
+# --- 6. An extern is EXPORTED by the file that declares it and IMPORTED by another ---------------------
+# The file rung, applied to an extern the way it applies to every name: the declaring file offers it, the
+# importing file accepts it. The leak in assertion 1 is the same program without the two lines that say so.
 mkproj expo \
-'export { malloc };
+'export { malloc, free };
 extern "<stdlib.h>";
-extern fn UnsafePtr malloc(usize n);' \
-'import { expo::malloc };
-unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(8)); return 0; }
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);' \
+'import { expo::malloc, expo::free as release };
+unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(8)); release(p: p); return 0; }
 fn int32 main() { return work(); }'
-rc=0; "$KAMA" check "$tmp/expo/kama.json" > "$tmp/expo.out" 2>&1 || rc=$?
-if [ "$rc" -eq 0 ]; then
-    bad "\`export { malloc }\` + \`import\` was accepted — an extern is not a module symbol, and if this"
-    bad "  path works the rule silently became 'declare OR import' with two ways to do one thing"
+if ! "$KAMA" build "$tmp/expo/kama.json" -o "$tmp/expo.bin" > "$tmp/expo.out" 2>&1; then
+    bad "\`export { malloc }\` + \`import\` was refused — an extern is an ordinary file-private declaration"
+    sed -n 1,3p "$tmp/expo.out" >&2
+elif ! "$tmp/expo.bin"; then
+    bad "the exported-extern program built but did not run correctly"
 else
-    ok "an extern cannot be exported and imported — the rule is DECLARE"
+    ok "an extern is exported by its declaring file and imported (an \`as\` alias included) by another"
 fi
 
 # --- 7. CONTROL: the WRAPPER is the sharing mechanism, and it works today ------------------------------
@@ -241,7 +238,7 @@ if ! "$KAMA" build "$tmp/wrap/kama.json" -o "$tmp/wrap.bin" > "$tmp/wrap.out" 2>
 elif ! "$tmp/wrap.bin"; then
     bad "the wrapper program built but did not run correctly"
 else
-    ok "an extern is shared by wrapping it in an ordinary fn (the control, and the documented way)"
+    ok "an extern is still shared by wrapping it in an ordinary fn (the control, and the SAFE surface)"
 fi
 
 if [ "$fails" -gt 0 ]; then echo "check-extern-rung: FAIL ($fails)" >&2; exit 1; fi
