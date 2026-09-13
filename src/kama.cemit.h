@@ -2962,7 +2962,7 @@ private:
     // source, copy duplicates). Shared by `return` and value-producing `match` arms (`:= give x` / `:= List()`).
     void emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
                             SharedExpression value, int line, int depth,
-                            const char* what = "this value");
+                            const char* what = "this value", bool kindChecked = false);
     // The kind rule against an ALREADY-LOWERED destination C type, for the hand-off sites that have one
     // (a return value, a `match` arm, a call argument) rather than a declared type node.
     // Two user classes that are not the same class, not an upcast, and not a widening. See the block

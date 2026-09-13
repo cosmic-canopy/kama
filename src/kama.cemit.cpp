@@ -6084,8 +6084,12 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
         // An inline field initializer (`const int32 kind = 7;`) applies here too, exactly as the
         // instance-ctor path applies it — else a factory-built value loses it (zero instead of 7). #M8d.2
         if (f.initializer) {
-            line(lineNo); indent(depth);
-            *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
+            // Through the hand-off funnel, with the FIELD's type as the destination — the same one a return
+            // value and a `match` arm take — so a destination-typed construction (`DynamicArray<T> items =
+            // DynamicArray.empty();`) resolves as it does in a local initializer, instead of refusing with
+            // "give the type arguments" when they are already on the field (KR-21 b).
+            emitOwnedValueInto(nm + "." + f.name, fieldCType(ty, f), f.initializer, lineNo, depth, "a field initializer",
+                               /*kindChecked=*/true);
             continue;
         }
         // The BAKED type — this class may be declared in another module, and resolving its field types
@@ -13385,7 +13389,14 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
             if (cd->typeParams && !cd->typeParams->empty()) continue;
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
-                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                // A field's DEFAULT INITIALIZER is code too — it runs in every ctor — so a generic call in one
+                // (`int32 n = pick(x: 7);`) must be discovered like one in a body (KR-21 b). Neither discovery
+                // pass walked it, so the call reached the emitter with no instantiation registered.
+                if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
+                    if (fd->declarators)
+                        for (auto& d : *fd->declarators)
+                            if (d && d->initializer) { std::map<std::string, SharedIdentifier> lt; scanExprForGenerics(d->initializer, lt); }
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
                     std::map<std::string, SharedIdentifier> lt; seed(md->params, lt);
                     scanStmtForGenerics(md->body, lt);
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -14053,6 +14064,8 @@ void CEmitter::registerInstGenerics()
             _typeSubst.clear();
             for (size_t i = 0; i < pit->second.size() && i < gi.typeArgs.size(); ++i)
                 if (gi.typeArgs[i]) _typeSubst[pit->second[i]] = gi.typeArgs[i];
+            for (auto& f : sit->second.fields)   // field default initializers — see collectGenericInsts
+                if (f.initializer) { std::map<std::string, SharedIdentifier> lt; scanExprForGenerics(f.initializer, lt); }
             for (auto& kv : sit->second.methods) {
                 ClassMethodDeclarationNode* md = kv.second.node;
                 if (!md || !md->body) continue;                       // intrinsic / synthesized — no body
@@ -21827,7 +21840,7 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 // apply the give/copy matrix (smart-ptr / resource / collection / bindable — move consumes the source, copy
 // duplicates). Mirrors the `return`-value hand-off, shared with value-producing `match` arms.
 void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
-                                  SharedExpression value, int line, int depth, const char* what)
+                                  SharedExpression value, int line, int depth, const char* what, bool kindChecked)
 {
     int handoff = 0;   // 0 none, 1 give, 2 copy
     SharedExpression v = value;
@@ -21836,8 +21849,12 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     // value-producing `match` arm. Checked on the UNWRAPPED value, so `return give x;` is judged on `x`.
     // `dstCType` is empty for a void return and for a statement-position `match`, which reads as Unknown
     // and says nothing — the same silence every other unresolved destination gets.
-    rejectValueKindMismatch(dstCType, v, what, line);
-    rejectContractNonConformance(dstCType, v, what, line);     // the branch that rule leaves to a contract
+    // A FIELD initializer was judged at its declaration, on its own line (checkDeclaredTypes); judging it again
+    // here would repeat it against the ctor that runs it.
+    if (!kindChecked) {
+        rejectValueKindMismatch(dstCType, v, what, line);
+        rejectContractNonConformance(dstCType, v, what, line);     // the branch that rule leaves to a contract
+    }
     bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
     std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`

@@ -352,7 +352,6 @@ generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2
 generic_arity	generic_arity.kama:4
 generic_bare_use	generic_bare_use.kama:4
 generic_bound_unsat	generic_bound_unsat.kama:11
-generic_call_unresolved_instance	generic_call_unresolved_instance.kama:18
 generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11 generic_ctor_incomplete_field.kama:16
 generic_ctor_uninferable	generic_ctor_uninferable.kama:9
 generic_enum_field	generic_enum_field.kama:3

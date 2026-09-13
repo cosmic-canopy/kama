@@ -809,16 +809,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   read from a four-byte allocation). It sits inside `unsafe fn`, which is the sanctioned trusted region,
   and the two C spellings differ so clang does see it — hence tracked here rather than in the identity
   rule, which covers only types that SHARE a spelling.
-- **A field's DEFAULT INITIALIZER is not walked by either discovery pass.** `collectGenericInsts` and
-  `collectCollections` both read a field's declared *type* and never its initializer expression, so
-  `public int32 v = ident(x: 7);` — a generic call as a field default — is never discovered. It used to
-  emit the template's own mangled C name and let clang refuse the result; since `0.9.100` it is a kama
-  diagnostic naming the callee, pinned by `tests/xfail/generic_call_unresolved_instance.kama`. The
-  workaround is the turbofish or a call from a body. Fixing it means walking the initializer in both
-  passes and settling the substitution context for a generic type's fields, which is why it is tracked
-  here rather than folded into the walk-parity work. ⚠️ **`tools/check-scan-parity.sh` cannot see this
-  one** — it holds the two walks at parity on AST *node kinds*, and this is an asymmetry in which
-  *declarations* get walked at all, which is the same for both.
 - **Capturing closures — sized, not scheduled (audit verdict, 2026-09-07).** The shape a UI event table wants
   today is a generic functor: `type contract Handler<E> { fn void call(E e); }`, one `type resource` per handler
   carrying its captures as fields, stored as `Owned<Handler<E>>` in the table — the comparator twin

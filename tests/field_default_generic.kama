@@ -1,0 +1,32 @@
+// A field's DEFAULT INITIALIZER is code that runs in every ctor, and generic code in it resolves like generic code
+// anywhere else (KR-21 b):
+//   - a generic CALL (`pick(x: 7)`) is discovered — neither discovery pass walked a field initializer, so the call
+//     reached the emitter with no instantiation and a refusal demanding a turbofish;
+//   - a DESTINATION-typed construction (`DynamicArray<T> items = DynamicArray.empty();`) takes its arguments from
+//     the field, as it does from a local — it said "give the type arguments" when they were on the field already.
+// Both in a concrete type and in a generic one (per instance). The container default is dropped once (san leg).
+import { std::collections::DynamicArray };
+fn T pick<T>(T x) { return x; }
+type value Cfg {
+    public int32 n = pick(x: 7);
+    public int32 empty = cast<int32>(DynamicArray::<int16>.withCapacity(capacity: 4).length());   // an instance named nowhere else
+    public ctor make() { }
+}
+type resource Bag {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    public ctor make() { }
+    public fn int32 fill() { this.xs.add(item: 4); this.xs.add(item: 5); return cast<int32>(this.xs.length()); }
+}
+type resource Box<T> {
+    T item;
+    int64 tag = pick(x: cast<int64>(3));
+    DynamicArray<T> items = DynamicArray.empty();
+    public ctor of(T item) { this.item = item; }
+    public fn int64 t() { this.items.add(item: this.item); return this.tag + cast<int64>(this.items.length()); }
+}
+fn int32 main() {
+    Cfg c = Cfg.make();
+    Bag g = Bag.make();
+    Box<int32> b = Box.of(item: 1);
+    return c.n + c.empty + g.fill() + cast<int32>(b.t());   // 7 + 0 + 2 + (3 + 1)
+}
