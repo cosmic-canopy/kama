@@ -5,6 +5,7 @@
 // cannot matter. Deleting `@foreignEntry` from the real example's `AdapterCb` produces this message.
 fnptr void Cb(int32 status);
 
+@generate(zero)
 type extern value CallbackInfo { public Cb callback; public int32 mode; }
 
 extern fn void c_request(CallbackInfo ci);
@@ -12,7 +13,7 @@ extern fn void c_request(CallbackInfo ci);
 fn void onDone(int32 status) { }
 
 unsafe fn void request() {
-    CallbackInfo ci = CallbackInfo();
+    CallbackInfo ci = CallbackInfo.zero();
     ci.mode     = 3;
     ci.callback = onDone;   // ERROR: `Cb` reaches C through `CallbackInfo.callback` and says no thread
     c_request(ci: ci);

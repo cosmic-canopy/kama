@@ -1,4 +1,5 @@
-// An extern struct's AGGREGATE INITIALIZER is a bind position, and it used to judge nothing: this exact
+// An extern struct's CONSTRUCTOR argument is a bind position (it was the aggregate initializer until KR-53,
+// which judged nothing): this exact
 // program was accepted while the same bind written `d.f = wrong;` was refused (tests/fnptr_basic's
 // sibling rule). A shape-mismatched function reaching a function pointer is the UB class the bind funnel
 // exists to prevent — the indirect call then passes the wrong number of arguments, which UBSan's
@@ -6,11 +7,12 @@
 // tests/xfail/foreign_entry_via_extern_agg, the same leak costing a THREADING guarantee.
 fnptr int32 Op(int32 x);
 
+@generate(of)
 type extern value Desc { public Op f; public int32 n; }
 
 fn int32 wrong(int32 a, int32 b) { return a + b; }   // two params, not one
 
 fn int32 main() {
-    Desc d = Desc(f: wrong, n: 1);   // ERROR: `wrong` does not match `Op`
+    Desc d = Desc.of(f: wrong, n: 1);   // ERROR: `wrong` does not match `Op`
     return d.n;
 }

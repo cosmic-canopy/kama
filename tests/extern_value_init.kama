@@ -1,15 +1,30 @@
-// A `type extern value` (C-POD) struct can be aggregate-initialized with named field args
-// (`div_t(quot: 3, rem: 2)`); previously the args were silently dropped and the struct
-// zero-inited. Unset fields stay zero (from the `= {0}` declaration). See ROADMAP_DETAIL §2.
+// A `type extern value` is built by a constructor, like every kama type (KR-53) — by-name aggregate init
+// (`div_t(quot: 3, rem: 2)`) is gone (tests/xfail/extern_value_nameless). The struct is still the header's;
+// its ctors, methods, operators and statics are kama functions. A field a ctor does not assign is ZERO — the
+// header owns the layout and kama may declare only the fields it uses — and `@generate(zero)` is the partial
+// init the old aggregate form was for: zero it, then set what you need.
 extern "<stdlib.h>";
-type extern value div_t { int32 quot; int32 rem; }
+
+@generate(zero, of)
+type extern value div_t {
+    public int32 quot; public int32 rem;
+    public ctor whole(int32 q) { this.quot = q; }                   // `rem` zero-filled
+    public const fn int32 back(int32 d) { return this.quot * d + this.rem; }
+    public static fn int32 seven() { return 7; }
+    public div_t operator+(div_t o) { return div_t.of(quot: this.quot + o.quot, rem: this.rem + o.rem); }
+}
 
 fn int32 sumDiv(div_t d) { return d.quot + d.rem; }
 
 fn int32 main() {
-    div_t d = div_t(quot: 3, rem: 2);          // full aggregate init -> 5
-    div_t d2 = div_t(quot: 40);                // partial: rem stays 0
-    d = div_t(quot: 10, rem: 5);               // reassignment -> 15
-    int32 inl = sumDiv(d: div_t(quot: 7, rem: 8));   // inline in arg position -> 15
-    return d.quot + d.rem + d2.quot + d2.rem + inl;  // 15 + 40 + 15 = 70? recompute below
+    div_t d  = div_t.of(quot: 3, rem: 2);           // memberwise -> 5
+    div_t d2 = div_t.whole(q: 40);                  // partial through a ctor: rem is 0 -> 40
+    div_t z  = div_t.zero();                        // partial through `zero` + a store
+    z.rem = 6;                                      // -> 6
+    d = div_t.of(quot: 10, rem: 5);                 // reassignment -> 15
+    int32 inl = sumDiv(d: div_t.of(quot: 7, rem: 8));   // inline in argument position -> 15
+    div_t s = d + d2;                               // an operator -> 50 + 5
+    return sumDiv(d: d) + sumDiv(d: d2) + sumDiv(d: z) + inl   // 15 + 40 + 6 + 15 = 76
+         + s.back(d: 1) - 55                        // 55 - 55
+         + div_t::seven();                          // 83
 }

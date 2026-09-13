@@ -6650,12 +6650,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // STACK value, constructed in place (`Box b = Box(id: 5)`).
                     if (_classes[ty].isAbstractClass)
                         unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
-                    if (_classes[ty].isExternStruct) {
-                        // extern (C-POD) struct: no kama ctor — aggregate-init the named fields onto
-                        // the `= {0}` declared above (`WGPUColor c = WGPUColor(r: 1.0, g: 0.5)`).
-                        std::string s = externAggregateInit(nm, _classes[ty], stackCtor->args, n->line);
-                        if (!s.empty()) { line(n->line); indent(depth); *_out << s << "\n"; }
-                    } else {
+                    {
                         // A bare `Type(args)` has no ctor to call — it would SILENTLY drop the args and leave
                         // the value uninitialized. Reject and point at the named form. This fires for a type
                         // with NO ctor too: that case used to fall through to a bare `T v;` reading
@@ -7265,15 +7260,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     auto g = _genericTypeInstOf.find(lty);
                     if (rn == lty || (g != _genericTypeInstOf.end() && g->second == rn)) {
                         checkConstWrite(as->unaryExpression, n->line);
-                        if (_classes[lty].isExternStruct) {
-                            // extern (C-POD) reassignment (`cfg = WGPUX(field: v)`): reset to `{0}`
-                            // then set the named fields. POD -> no dtor release, no move-state.
-                            std::string b = emitExpression(as->unaryExpression);
-                            std::string s = externAggregateInit(b, _classes[lty], iv->args, n->line);
-                            line(n->line); indent(depth);
-                            *_out << b << " = (" << lty << "){0}; " << s << "\n";
-                            return;
-                        }
                         // Nameless reassignment (`b = Box(id: 5)`) — no ctor to bind. Reject with the
                         // context-aware advice; an exempt type (intrinsic collection) falls through to the
                         // ordinary assignment path below rather than being silently dropped.
@@ -9156,16 +9142,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
                         "for polymorphism declare a `contract`", cd->line);
 
-        // A `type extern value` is C's struct: its layout comes from a header and it is never emitted, so a
-        // runtime member would be CALLED and never DEFINED (clang: "call to undeclared function"). Refused
-        // at the declaration and still recorded, so a use site resolves instead of cascading into advice to
-        // declare the member just refused; a `comptime fn` is never emitted and stays legal.
-        auto refuseExternMember = [&](const std::string& what, int line) {
-            unsupported(("`" + ci.name + "` is a `type extern value` — C's struct, whose layout comes from a "
-                         "header — so it may not declare " + what + ": nothing would emit its body. Construct "
-                         "it by aggregate init (`" + ci.name + "(field: …)`), and put behavior in a free "
-                         "function or in a kama `type value` that wraps it").c_str(), line);
-        };
+        // A `type extern value` may declare ctors, methods, operators and statics (KR-53): the STRUCT is the
+        // header's and is never emitted, but a member is an ordinary kama function, emitted like any other —
+        // from the one declaration that carries the members (see the merge below and `classOf` in
+        // emitModuleContent). Until KR-53 they were refused on the premise that nothing would emit the body.
         if (cd->members) {
             for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
@@ -9321,8 +9301,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 { md, visibilityOf(md->modifiers, Visibility::Private, md->line), ci.name };
                         continue;
                     }
-                    if (ci.isExternStruct)
-                        refuseExternMember(md->isCtor ? "a constructor" : "a method", md->line);
                     if (md->name && md->name->value) {
                         MethodInfo mi;
                         mi.cName      = ci.name + "__" + *md->name->value;
@@ -9596,8 +9574,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // an operator overload registers as a method under a synthetic name
                     // (`op_add`/`op_neg`/…), disambiguated by arity: 0 params = unary-on-`this`,
                     // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
-                    if (ci.isExternStruct)
-                        refuseExternMember("an operator", od->line);
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                     // The six comparison operators are CONTRACT-driven and may not be declared directly:
@@ -9755,6 +9731,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      "does not emit it (the real layout comes from the header), and the "
                                      "last declaration collected decides how BOTH files type every read of "
                                      "its members").c_str(), cd->line);
+                    // MEMBERS belong to ONE declaration. The fields are the header's and every copy repeats
+                    // them; a ctor or method is kama code with one body, so a second declaration carrying
+                    // members would define it twice. Share the type by exporting it from the declaring file.
+                    const bool mine = !ci.methods.empty(), theirs = !was.methods.empty();
+                    if (mine && theirs)
+                        unsupported(("`type extern value " + *cd->name->value + "` declares members here and in `"
+                                     + was.declFile + "` — its fields may be repeated, but its ctors and methods "
+                                     "have one body each. Declare them once and `export` the type from that "
+                                     "file").c_str(), cd->line);
+                    if (theirs) {   // this copy is fields only (or a refused second set): keep the first declaration's members
+                        ci.methods = was.methods; ci.ctors = was.ctors;
+                        ci.node = was.node; ci.declFile = was.declFile;
+                    }
                 }
             }
             _classes[ci.name] = ci;
@@ -18688,42 +18677,6 @@ static std::string litRvalueCType(ASTNode* n)
 // struct is already `= {0}`, so only provided fields are set (unset -> zero). An unknown field or a
 // positional arg is a clean compile error. Returns "" for no args. Extern structs are POD (no
 // ctor/dtor) -> no move/drop; the caller emits/hoists the returned string.
-std::string CEmitter::externAggregateInit(const std::string& nm, ClassInfo& ci,
-                                          SharedArgumentList args, int srcLine)
-{
-    std::string out;
-    // `ctor div_t(…)` was refused at its declaration (refuseExternMember); reading this call's arguments
-    // as FIELDS would add "unknown field" about the ctor's parameters, pointing away from the fault.
-    if (ci.ctors.count(ci.name)) return out;
-    if (args)
-        for (auto& a : *args) {
-            if (!a->name || !a->name->value) {
-                unsupported(("extern struct '" + ci.name + "' init needs named field arguments "
-                             "(e.g. `" + ci.name + "(field: value)`)").c_str(), srcLine);
-                continue;
-            }
-            const std::string& fn = *a->name->value;
-            if (!ci.fieldNames.count(fn)) {
-                unsupported(("unknown field '" + fn + "' in extern struct '" + ci.name
-                             + "' initializer").c_str(), srcLine);
-                continue;
-            }
-            // This is a BIND position like any other, and it did not judge itself. Every other one — an
-            // assignment, a call argument, a return, a field or module `static` initializer — reaches
-            // `checkFnPtrValueBind` through `rejectValueKindMismatch`; this path writes the field store
-            // by hand, so it reached none of them, and three shipped guarantees leaked through it in one
-            // spelling. Measured on the same program written two ways, `Desc(f: fn)` accepted and
-            // `d.f = fn` refused: a SHAPE-mismatched function (the mismatched-indirect-call UB the funnel
-            // exists to prevent), a non-`@noheap` function bound to a `@noheap` signature, and — the one
-            // that matters most — a `@foreignEntry` bind never recorded as a region ROOT, so the
-            // module-static read check never walked the callback at all.
-            for (auto& f : ci.fields)
-                if (f.name == fn) { checkFnPtrValueBind(fieldCType(ci.name, f), a->expression, srcLine); break; }
-            out += nm + "." + fn + " = " + emitExpression(a->expression) + "; ";
-        }
-    return out;
-}
-
 // ---- `@generate(of|zero)` bag ctors (construction-model M6) ---------------------------------------------
 // A transparent `value` (all public fields — a data bag) may derive `of`/`zero` named ctors instead of
 // hand-writing them. Both are infallible static factories returning the value by C-value; registered in
@@ -19009,12 +18962,6 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // A named `ctor` factory returns by value — MOVE it into the temp (`T t = T__make(…)`).
                 _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
                 if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
-                val = t;
-            } else if (_classes[ctorCls].isExternStruct) {
-                // extern (C-POD) struct inline in arg position (`f(color: WGPUColor(r: 1.0))`):
-                // aggregate-init a zeroed temp; no kama ctor / dtor.
-                std::string fi = externAggregateInit(t, _classes[ctorCls], ctorIv->args, srcLine);
-                _hoisted.push_back(ctorCls + " " + t + " = {0}; " + fi);
                 val = t;
             } else {
                 // A nameless `Type(args)` inline in argument position — no ctor to bind. Reject with the
@@ -20336,7 +20283,9 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         bool bare     = !_classes.count(fc);                                  // primitive / raw `UnsafePtr` / enum
         if (isOwning)                      owning.insert(f.name);
         else if (!isDefaultFillable(fc))   noDefault.insert(f.name);          // e.g. a stateful `A alloc`
-        if (f.initializer || owner.genZero) continue;                         // declared default / blessed zero bag
+        // declared default / blessed zero bag / a C struct, which a ctor on it zero-fills (KR-53): the header owns
+        // the layout and kama may declare only the fields it uses, so "every field" is not kama's to demand.
+        if (f.initializer || owner.genZero || owner.isExternStruct) continue;
         if (isOwning || bare || !isDefaultFillable(fc)) mustAssign.insert(f.name);
     }
     if (mustAssign.empty() || !body || !body->statements) return;             // nothing to seal
@@ -24901,7 +24850,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
-    if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
+    if (ci.isIntrinsicColl) return;   // the macro provides these (an extern type's STRUCT is the header's; its members are kama's)
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method prototypes
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.destructible)
@@ -25337,7 +25286,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
-    if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
+    if (ci.isIntrinsicColl) return;   // the macro provides these (an extern type's members are kama's — see emitClassPrototypes)
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method bodies/sigs
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
@@ -30795,13 +30744,13 @@ MethodInfo* CEmitter::placeMethodOf(const std::string& cls, const std::string& m
 // fields public — a data bag can bless its own memberwise/zero state), never for a `resource` or a value
 // with private fields, which must state a real `ctor`.
 //
-// Two exemptions: an intrinsic collection has no kama ctor to point at (and `BindableFunctionPtr`, the one
-// that took this spelling, is now built by `BindableFunctionPtr.bind`); a `type extern value` (C-POD) —
-// `div_t(quot: 3, rem: 2)` IS aggregate init, there is no ctor to name.
+// One exemption: an intrinsic collection has no kama ctor to point at (and `BindableFunctionPtr`, the one
+// that took this spelling, is now built by `BindableFunctionPtr.bind`). A `type extern value` used to be the
+// second — `div_t(quot: 3, rem: 2)` was by-name aggregate init — until KR-53 gave it constructors.
 // Returns true when it rejected, so a caller can suppress its own follow-on diagnostic.
 bool CEmitter::rejectNamelessConstruction(const ClassInfo& ci, const std::string& disp, bool viaNew, int srcLine)
 {
-    if (ci.isIntrinsicColl || ci.isExternStruct) return false;
+    if (ci.isIntrinsicColl) return false;
 
     if (!ci.ctors.empty()) {
         // Named ctors exist — point at them by their real names rather than a guessed `make`.
@@ -32229,6 +32178,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         if (cd && cd->name && cd->name->value) {
             std::string mangled = qualify(*cd->name->value);
             if (_classes.count(mangled)) return &_classes[mangled];
+            // An extern type keeps its literal key, and many files may declare it: its members' bodies are
+            // emitted from the ONE declaration that carries them (the collect-time merge points `node` there).
+            auto ext = _classes.find(*cd->name->value);
+            if (ext != _classes.end() && ext->second.isExternStruct && ext->second.node == cd) return &ext->second;
         }
         return nullptr;
     };

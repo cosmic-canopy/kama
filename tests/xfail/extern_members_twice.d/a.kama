@@ -1,0 +1,6 @@
+// The FIELDS of a `type extern value` may be repeated in every file that declares the struct — they are the
+// header's — but a member is kama code with one body. Two declarations carrying members would define it twice;
+// declare them once and export the type from that file.
+extern "<stdlib.h>";
+type extern value div_t { public int32 quot; public int32 rem; public fn int32 sum() { return this.quot + this.rem; } }
+fn int32 main() { return 0; }

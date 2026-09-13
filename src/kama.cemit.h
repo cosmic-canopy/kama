@@ -3172,8 +3172,6 @@ private:
                                   const std::string& trailingArg = "");
     // Field-wise init of an extern (C-POD) struct from NAMED args (`nm.f = e; …`). The struct is
     // already `= {0}`, so only provided fields are set; unknown field / positional arg = clean error.
-    std::string externAggregateInit(const std::string& nm, ClassInfo& ci,
-                                     SharedArgumentList args, int srcLine);
 
     // Helpers
     std::string cType(SharedIdentifier type);

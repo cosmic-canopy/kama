@@ -701,7 +701,7 @@ says which. The threading contract of a C API is knowledge only the seam author 
   and a signature claiming both is a contradiction. <!-- xfail: foreign_crossing_both --> `@callerThread` on an
   ordinary body describes no crossing and is refused; it belongs on a `fnptr` type or an `expose fn`. <!-- xfail: callerthread_on_body -->
 - **A callback FIELD of a `type extern value` is a crossing too**, and it is judged at the **bind** —
-  wherever the kama function lands in the field, through an aggregate initializer or by field name — <!-- xfail: foreign_callback_in_extern_struct, foreign_callback_field_assign -->
+  wherever the kama function lands in the field, through the type's constructor or by field name — <!-- xfail: foreign_callback_in_extern_struct, foreign_callback_field_assign -->
   because a C-layout type exists for one reason, to match a C header, so the construction route cannot
   matter. This is the shape real C APIs use: WebGPU, CoreAudio and miniaudio all take their callback
   inside a descriptor struct, which is exactly where a callback runs on a thread kama did not create. At
@@ -1671,11 +1671,16 @@ fn int32 main() {
 
 `type extern value Foo { ... }` is an **external** struct provided by an included header / linked code —
 kama uses its fields (all public, the C layout) but never re-emits it (so no redefinition), and its name is
-the literal C name. It declares **no runtime member**: a method, `ctor`, operator or `static fn` on one is
-rejected at its declaration, since nothing would emit the body. <!-- xfail: extern_value_method, extern_value_named_ctor, extern_value_type_named_ctor, extern_value_operator, extern_value_static_fn -->
-Behavior goes in a free function or a kama `type value` wrapping it. Construct it either by binding a
-struct-returning C fn (`div(...)` above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
-(unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
+the literal C name. It **may declare ctors, methods, operators and `static fn`s** — the struct is the header's,
+but a member is an ordinary kama function, emitted like any other — and it is **built by a constructor like
+every kama type**: bind a struct-returning C fn (`div(...)` above), call one of its ctors, or opt into
+`@generate(of)` (memberwise) / `@generate(zero)` (a C struct's fields are public, so it is a data bag). The
+nameless `div_t(quot: 3, rem: 2)` is refused. <!-- xfail: extern_value_nameless --> **A field a ctor does not
+assign is zero**, not an error: the header owns the layout and kama may declare only the fields it uses — so
+partial init of a large descriptor is `WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero(); bd.size = 64;`.
+The fields may be repeated in another file that declares the same struct; the members have one body each, so
+they are declared once and the type is exported from there. (`tests/extern_value_init.kama`.) <!-- test: extern_value_init -->
+`addr(of: x)` takes the address of a
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
 `UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).
 
@@ -2957,9 +2962,8 @@ Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an own
   `Enum::Variant(…)` keep `::`. So `.make(` greps for construction and catches nothing else. There is **no
   nameless `Type(…)` call form** for a kama type — it silently dropped its arguments, and it is a hard
   error in every position (`Type(…)`, `new Type(…)`, `try new Type(…)`, `new(allocator: a) Type(…)`, and a
-  reassignment `x = Type(…)`). One thing keeps that spelling because it is the *only* spelling it has:
-  a `type extern value`, where `div_t(quot: 3, rem: 2)` is by-name **aggregate init** of a C struct that has
-  no constructor to name. A generic ctor
+  reassignment `x = Type(…)`) — a `type extern value` included, which kept that spelling as by-name aggregate
+  init until it gained constructors. A generic ctor
   puts the turbofish on the **type**: `T::<Args>.make(…)`.
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields

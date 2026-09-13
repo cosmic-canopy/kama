@@ -1,8 +1,0 @@
-// A `type extern value` is C's struct: never emitted, so a method on one would be CALLED and never DEFINED
-// (clang: "call to undeclared function"). Refused at the declaration, by `kama check` too. KR-41.
-extern "<stdlib.h>";
-type extern value div_t {
-    int32 quot; int32 rem;
-    public const fn int32 sum() { return this.quot + this.rem; }
-}
-fn int32 main() { div_t d = div_t(quot: 1, rem: 2); return d.sum(); }

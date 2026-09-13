@@ -1,0 +1,2 @@
+extern "<stdlib.h>";
+type extern value div_t { public int32 quot; public int32 rem; public fn int32 twice() { return this.quot * 2; } }

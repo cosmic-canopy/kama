@@ -329,18 +329,6 @@ host). Measured facts to start from: struct names never reach the linker, so kam
 costs the ABI nothing and the header can spell the bare `Vec2`; an `expose fn` returning a callback is already
 refused (`foreign_callback_expose_return`); ⛔ the maintainer requires `expose` for types to be revisited here.
 
-### `type extern value` carries ctors and methods (KR-53)
-
-An extern type refuses every runtime member (`refuseExternMember`: *"nothing would emit the body"*). That
-reason does not hold — a member is a kama function emitted like any other; the struct itself is the only part
-the header owns. `0.9.327` made `type extern value` the only type that crosses into C by value, so without members
-every FFI struct with behaviour is two types and a field-by-field conversion at each boundary (Rust's
-`#[repr(C)]` structs take `impl` blocks). **The open question is construction:** a kama ctor must assign every
-field, while by-name aggregate init (`div_t(quot: 3, rem: 2)`) exists for partial init with the rest zeroed —
-the WebGPU descriptor case, ten fields and three set. Either ctors join aggregate init (two ways to build one
-value), or a ctor on an extern type gets a zero-fill rule and aggregate init goes (one way). Decide with
-examples before building.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

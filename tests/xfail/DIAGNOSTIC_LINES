@@ -288,14 +288,10 @@ expose_on_method	expose_on_method.kama:3
 extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
 extern_disagree	main.kama:4 main.kama:6
+extern_members_twice	b.kama:2
 extern_type_leak	lib.kama:7
 extern_undeclared	main.kama:3 main.kama:4
-extern_value_method	extern_value_method.kama:6
-extern_value_named_ctor	extern_value_named_ctor.kama:6
-extern_value_operator	extern_value_operator.kama:5
-extern_value_static_fn	extern_value_static_fn.kama:5
-extern_value_type_named_ctor	extern_value_type_named_ctor.kama:6
-extern_value_unknown_field	extern_value_unknown_field.kama:6
+extern_value_nameless	extern_value_nameless.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
 field_on_bool	field_on_bool.kama:3
@@ -314,7 +310,7 @@ float_literal_to_int	float_literal_to_int.kama:1
 floatint_local	floatint_local.kama:1
 fn_type_param_default	fn_type_param_default.kama:10
 fnptr_bind_arg_shape	fnptr_bind_arg_shape.kama:11
-fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:14
+fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16
 for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12
@@ -324,15 +320,15 @@ foreach_ref_give	foreach_ref_give.kama:8
 foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
 foreign_callback_expose_return	foreign_callback_expose_return.kama:9
-foreign_callback_field_assign	foreign_callback_field_assign.kama:17
-foreign_callback_in_extern_struct	foreign_callback_in_extern_struct.kama:18
+foreign_callback_field_assign	foreign_callback_field_assign.kama:18
+foreign_callback_in_extern_struct	foreign_callback_in_extern_struct.kama:19
 foreign_callback_in_plain_struct	foreign_callback_in_plain_struct.kama:17
 foreign_crossing_bare_name	foreign_crossing_bare_name.kama:5
 foreign_crossing_both	foreign_crossing_both.kama:2
 foreign_crossing_undeclared	foreign_crossing_undeclared.kama:10
 foreign_entry_static_read	foreign_entry_static_read.kama:10
 foreign_entry_static_transitive	foreign_entry_static_transitive.kama:7
-foreign_entry_via_extern_agg	foreign_entry_via_extern_agg.kama:14
+foreign_entry_via_extern_agg	foreign_entry_via_extern_agg.kama:15
 foreign_entry_via_fnptr_bind	foreign_entry_via_fnptr_bind.kama:7
 friend_generic_arity	friend_generic_arity.kama:9
 friend_generic_member_typo	friend_generic_member_typo.kama:9

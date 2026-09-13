@@ -1,8 +1,0 @@
-// Aggregate-initializing a `type extern value` with a field name it does not have is a
-// clean compile error (never a silent drop). See ROADMAP_DETAIL §2.
-extern "<stdlib.h>";
-type extern value div_t { int32 quot; int32 rem; }
-fn int32 main() {
-    div_t d = div_t(nope: 1);
-    return d.quot;
-}

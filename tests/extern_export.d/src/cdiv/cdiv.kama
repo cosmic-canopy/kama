@@ -2,7 +2,10 @@
 // exports them, and main.kama imports them — no second declaration. `labs` stays private to this file.
 export { div_t, div, abs };
 extern "<stdlib.h>";
-type extern value div_t { public int32 quot; public int32 rem; }
+type extern value div_t {
+    public int32 quot; public int32 rem;
+    public const fn int32 back(int32 d) { return this.quot * d + this.rem; }   // a member travels with the type
+}
 extern fn div_t div(int32 numer, int32 denom);
 extern fn int32 abs(int32 x);
 extern fn clong labs(clong x);

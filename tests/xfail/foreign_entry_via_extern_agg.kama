@@ -2,19 +2,20 @@
 // the shape one — and this is the one that mattered, because it is silent rather than merely unchecked.
 // A function bound to a `@foreignEntry` signature IS a foreign entry: it may run on a thread kama did
 // not create, where a module `static` holds only its declared initialiser. Binding through an extern
-// struct's aggregate initializer never recorded the root, so the region was never walked and this read
-// was never judged — while the identical program written `d.f = render;` was refused
+// struct's aggregate initializer — the route that is now its constructor's argument — never recorded the
+// root, so the region was never walked and this read was never judged — while the identical program written `d.f = render;` was refused
 // (tests/xfail/foreign_entry_via_fnptr_bind is the same rule reached by a local bind).
 @foreignEntry fnptr int32 Cb(int32 n);
 
 static int32 gain = 0;
 
+@generate(of)
 type extern value Desc { public Cb f; public int32 n; }
 
 fn int32 render(int32 n) { return n + gain; }   // ERROR: reads a static `main` assigns
 
 fn int32 main() {
     gain = 7;
-    Desc d = Desc(f: render, n: 1);
+    Desc d = Desc.of(f: render, n: 1);
     return d.n;
 }

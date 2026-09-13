@@ -32,28 +32,36 @@ extern fn UnsafePtr calloc(usize count, usize size);
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
 type extern value WGPUStringView { UnsafeConstPtr<cchar> data; usize length; }
 type extern value WGPUChainedStruct { UnsafePtr next; int32 sType; }
+@generate(zero)
 type extern value WGPUSurfaceConfiguration {
     UnsafePtr nextInChain; UnsafePtr device; int32 format; uint64 usage;
     uint32 width; uint32 height; int32 alphaMode; int32 presentMode;
 }
+@generate(zero)
 type extern value WGPUSurfaceTexture { UnsafePtr nextInChain; UnsafePtr texture; int32 status; }
 type extern value WGPUColor { float64 r; float64 g; float64 b; float64 a; }
+@generate(zero)
 type extern value WGPURenderPassColorAttachment {
     UnsafePtr nextInChain; UnsafePtr view; uint32 depthSlice; UnsafePtr resolveTarget;
     int32 loadOp; int32 storeOp; WGPUColor clearValue;
 }
+@generate(zero)
 type extern value WGPURenderPassDescriptor {
     UnsafePtr nextInChain; WGPUStringView label; usize colorAttachmentCount; UnsafePtr colorAttachments;
 }
 
 // --- M2: shader module + render pipeline ---
+@generate(zero)
 type extern value WGPUShaderSourceWGSL { WGPUChainedStruct chain; WGPUStringView code; }
+@generate(zero)
 type extern value WGPUShaderModuleDescriptor { UnsafePtr nextInChain; WGPUStringView label; }
+@generate(zero)
 type extern value WGPUColorTargetState { UnsafePtr nextInChain; int32 format; UnsafePtr blend; uint64 writeMask; }
 type extern value WGPUVertexState {
     UnsafePtr nextInChain; UnsafePtr module; WGPUStringView entryPoint;
     usize constantCount; UnsafePtr constants; usize bufferCount; UnsafePtr buffers;
 }
+@generate(zero)
 type extern value WGPUFragmentState {
     UnsafePtr nextInChain; UnsafePtr module; WGPUStringView entryPoint;
     usize constantCount; UnsafePtr constants; usize targetCount; UnsafePtr targets;
@@ -62,6 +70,7 @@ type extern value WGPUPrimitiveState {
     UnsafePtr nextInChain; int32 topology; int32 stripIndexFormat; int32 frontFace; int32 cullMode; uint32 unclippedDepth;
 }
 type extern value WGPUMultisampleState { UnsafePtr nextInChain; uint32 count; uint32 mask; uint32 alphaToCoverageEnabled; }
+@generate(zero)
 type extern value WGPURenderPipelineDescriptor {
     UnsafePtr nextInChain; WGPUStringView label; UnsafePtr layout;
     WGPUVertexState vertex; WGPUPrimitiveState primitive; UnsafePtr depthStencil;
@@ -69,10 +78,13 @@ type extern value WGPURenderPipelineDescriptor {
 }
 
 // --- uniform buffer + bind group (feeds the rotation angle to the shader) ---
+@generate(zero)
 type extern value WGPUBufferDescriptor { UnsafePtr nextInChain; WGPUStringView label; uint64 usage; uint64 size; uint32 mappedAtCreation; }
+@generate(zero)
 type extern value WGPUBindGroupEntry {
     UnsafePtr nextInChain; uint32 binding; UnsafePtr buffer; uint64 offset; uint64 size; UnsafePtr sampler; UnsafePtr textureView;
 }
+@generate(zero)
 type extern value WGPUBindGroupDescriptor { UnsafePtr nextInChain; WGPUStringView label; UnsafePtr layout; usize entryCount; UnsafePtr entries; }
 
 // The async callback shapes (message is a WGPUStringView passed by value).
@@ -82,7 +94,9 @@ type extern value WGPUBindGroupDescriptor { UnsafePtr nextInChain; WGPUStringVie
 @foreignEntry fnptr void AdapterCb(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
 @foreignEntry fnptr void DeviceCb(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
 
+@generate(zero)
 type extern value WGPURequestAdapterCallbackInfo { UnsafePtr nextInChain; int32 mode; AdapterCb callback; UnsafePtr userdata1; UnsafePtr userdata2; }
+@generate(zero)
 type extern value WGPURequestDeviceCallbackInfo  { UnsafePtr nextInChain; int32 mode; DeviceCb  callback; UnsafePtr userdata1; UnsafePtr userdata2; }
 
 // ----- WebGPU functions -----
@@ -150,20 +164,20 @@ fn string triangleWgsl() {
 // Build the render pipeline for the triangle (device is ready; format is the surface's).
 unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     string wgsl = triangleWgsl();
-    WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL();
+    WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL.zero();
     src.chain.sType = 2;                 // WGPUSType_ShaderSourceWGSL
     src.code.data = wgsl.cstr();
     src.code.length = cast<usize>(wgsl.length());
-    WGPUShaderModuleDescriptor smDesc = WGPUShaderModuleDescriptor();
+    WGPUShaderModuleDescriptor smDesc = WGPUShaderModuleDescriptor.zero();
     smDesc.nextInChain = cast<UnsafePtr>(addr(of: src));
     UnsafePtr shader = wgpuDeviceCreateShaderModule(device: device, descriptor: addr(of: smDesc));
 
-    WGPUColorTargetState colorTarget = WGPUColorTargetState();
+    WGPUColorTargetState colorTarget = WGPUColorTargetState.zero();
     colorTarget.format = format;
     colorTarget.writeMask = 15;          // WGPUColorWriteMask_All (0xF)
 
     string fsEntry = "fs";
-    WGPUFragmentState frag = WGPUFragmentState();
+    WGPUFragmentState frag = WGPUFragmentState.zero();
     frag.module = shader;
     frag.entryPoint.data = fsEntry.cstr();
     frag.entryPoint.length = cast<usize>(fsEntry.length());
@@ -171,7 +185,7 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     frag.targets = cast<UnsafePtr>(addr(of: colorTarget));
 
     string vsEntry = "vs";
-    WGPURenderPipelineDescriptor pd = WGPURenderPipelineDescriptor();
+    WGPURenderPipelineDescriptor pd = WGPURenderPipelineDescriptor.zero();
     pd.vertex.module = shader;
     pd.vertex.entryPoint.data = vsEntry.cstr();
     pd.vertex.entryPoint.length = cast<usize>(vsEntry.length());
@@ -188,7 +202,7 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
 // that list: any other reason for a missing texture. Reconfiguring on all of them is an unbounded
 // allocation loop (see frameTick), because each call allocates a fresh set of full-screen textures.
 unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
-    WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
+    WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration.zero();
     cfg.device = device;
     cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
     cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment
@@ -210,19 +224,19 @@ unsafe fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, 
     st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
 
     // Uniform buffer (holds the rotation angle) + a bind group over the pipeline's auto layout.
-    WGPUBufferDescriptor bd = WGPUBufferDescriptor();
+    WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero();
     bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08)
     bd.size = 16;
     UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
     st[0].uniformBuf = ubuf;
 
     UnsafePtr bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline: st[0].pipeline, groupIndex: 0);
-    WGPUBindGroupEntry entry = WGPUBindGroupEntry();
+    WGPUBindGroupEntry entry = WGPUBindGroupEntry.zero();
     entry.binding = 0;
     entry.buffer = ubuf;
     entry.offset = 0;
     entry.size = 16;
-    WGPUBindGroupDescriptor bgd = WGPUBindGroupDescriptor();
+    WGPUBindGroupDescriptor bgd = WGPUBindGroupDescriptor.zero();
     bgd.layout = bgl;
     bgd.entryCount = 1;
     bgd.entries = cast<UnsafePtr>(addr(of: entry));
@@ -236,7 +250,7 @@ unsafe fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message
     UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
     st[0].adapter = adapter;
 
-    WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo();
+    WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo.zero();
     ci.mode = 3;              // WGPUCallbackMode_AllowSpontaneous
     ci.callback = onDevice;
     ci.userdata1 = u1;
@@ -278,7 +292,7 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     wgpuQueueWriteBuffer(queue: st[0].queue, buffer: st[0].uniformBuf, bufferOffset: 0,
                          data: cast<UnsafePtr>(addr(of: angle)), size: 4);
 
-    WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
+    WGPUSurfaceTexture surfTex = WGPUSurfaceTexture.zero();
     wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
     UnsafePtr tex = surfTex.texture;
     if (tex == null) {
@@ -326,7 +340,7 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     UnsafePtr view = wgpuTextureCreateView(texture: tex, descriptor: null);
     UnsafePtr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
 
-    WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
+    WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment.zero();
     att.view = view;
     att.depthSlice = 4294967295ui32;   // WGPU_DEPTH_SLICE_UNDEFINED
     att.loadOp = 2;                // WGPULoadOp_Clear
@@ -337,7 +351,7 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     att.clearValue.b = cast<float64>((frame + 133) % 200) / 200.0;
     att.clearValue.a = 1.0;
 
-    WGPURenderPassDescriptor rp = WGPURenderPassDescriptor();
+    WGPURenderPassDescriptor rp = WGPURenderPassDescriptor.zero();
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = cast<UnsafePtr>(addr(of: att));
 
@@ -382,7 +396,7 @@ unsafe fn int32 appMain() {
     st[0].surface = surface;
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.
-    WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo();
+    WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo.zero();
     ci.mode = 3;                              // WGPUCallbackMode_AllowSpontaneous
     ci.callback = onAdapter;
     ci.userdata1 = cast<UnsafePtr>(st);

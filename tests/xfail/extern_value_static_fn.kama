@@ -1,7 +1,0 @@
-// A `static fn` on a `type extern value` has no body anywhere either — refused at the declaration. KR-41.
-extern "<stdlib.h>";
-type extern value div_t {
-    int32 quot; int32 rem;
-    public static fn int32 seven() { return 7; }
-}
-fn int32 main() { return div_t::seven(); }

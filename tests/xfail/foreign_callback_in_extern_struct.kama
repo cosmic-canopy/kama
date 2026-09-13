@@ -3,11 +3,12 @@
 // indirection further out. This is the shape real C APIs use: WebGPU, CoreAudio and miniaudio all take
 // their callback inside a struct, which is precisely where a callback runs on a thread kama did not
 // create. It is refused at the BIND, so no construction route can slip past: here the kama function
-// reaches the field through an aggregate initializer, never touching the field by name.
+// reaches the field through the type's constructor, never touching the field by name.
 //
 // The accepting twin is tests/foreign_callback_ok (same struct, `@callerThread` on the signature).
 fnptr int32 Op(int32 x);
 
+@generate(of)
 type extern value Desc { public Op f; public int32 n; }
 
 extern fn int32 c_submit(Desc d);
@@ -15,7 +16,7 @@ extern fn int32 c_submit(Desc d);
 fn int32 cb(int32 x) { return x + 1; }
 
 unsafe fn int32 install() {
-    Desc d = Desc(f: cb, n: 1);   // ERROR: `Op` reaches C through `Desc.f` and says no thread
+    Desc d = Desc.of(f: cb, n: 1);   // ERROR: `Op` reaches C through `Desc.f` and says no thread
     return c_submit(d: d);
 }
 

@@ -1,0 +1,6 @@
+// A `type extern value` is built by a constructor like every kama type, so the nameless `div_t(quot: 1, rem: 2)`
+// — by-name aggregate init until KR-53 — is refused with the ordinary advice: declare a ctor, or opt into
+// `@generate(of)` / `@generate(zero)` (a C struct's fields are public, so it is a data bag).
+extern "<stdlib.h>";
+type extern value div_t { public int32 quot; public int32 rem; }
+fn int32 main() { div_t d = div_t(quot: 1, rem: 2); return d.quot; }
