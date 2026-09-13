@@ -1,10 +1,9 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** in progress (2026-09-13) — fixtures generated and measured RED (see **Fixtures**), not yet
-committed: each lands with the fix slice that turns it green. Next: plan step 2, the one walk. Found building KR-12
-at `0.9.320`. This is the working doc for the campaign: the probe grid it was measured with, the results,
-the root causes, and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and the `tests/xfail/`
-fixtures carry the record.
+**Status:** in progress. Plan step 1 (fixtures) is DONE and measured; **next is plan step 2, the one
+walk**. Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
+results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
+the `tests/xfail/` fixtures carry the record.
 
 ## Picking this up — on any machine
 
@@ -12,16 +11,17 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc, [allocation.md](allocation.md), and the rows in `docs/ROADMAP.md`. Nothing depends on an
 assistant's local memory or on a scratch directory.
 
-**State at handoff (2026-09-12).** `dev` at `0.9.320`. The work that surfaced all of this shipped:
-`0.9.318` (a foreign member's return type resolves in its own file), `0.9.319` (`.as<T>()` across units),
-`0.9.320` (`std::uuid`, KR-12). They passed the native suite (1702/0) and all 68 guards on the Windows VM.
-**Picked up on Linux (Ubuntu 24.04, 2026-09-13).** `./dev matrix` at `0.9.320` is green there — native
-1702/0, san 1703/0, wasm 1673/0, 68 guards — which is the first sanitizer and wasm run for `0.9.318`–`0.9.320`.
-A Linux host runs those legs natively now (`dev`, 12b14faa), so the gate below needs no container there. The
-grid was re-run on that host and **no cell moved**. One precision for the results table: its turbofish
-**cq** "ACC — runs" is `z::<geo::HidVal>()` (X15); T19's `deserializeJsonBuffer::<geo::HidVal>` is refused,
-but only because its template also spells the private type in the local's declared type, so the turbofish
-there is never the thing judged.
+**State at handoff (2026-09-13, Linux).** `dev` at `0.9.321` (`fa77056f`), gate green on every leg: native
+1703/0, san 1704/0, wasm 1674/0, 68 guards. Since the Windows handoff at `0.9.320`:
+
+- `12b14faa` — a Linux host runs the san/tsan/msan/wasm/linux legs natively (the container would build into
+  the same `out/Linux-<arch>/` and replace the host binary). First san/wasm run of `0.9.318`–`0.9.320`: green.
+- `b26d5e36` — the grid re-measured on Linux: no cell moved.
+- `01eec6e8` (`0.9.321`) — found building KR-46: nested checked arithmetic emitted C that doubled per level
+  (a 38-term sum crashed clang). Fixed at the emitter; not part of KR-46's scope.
+- `fa77056f` — the KR-46 fixtures: generated, every template proven legal, **119 of 162 red**. They are NOT
+  in the tree — each lands with the fix slice that turns it green, so every commit keeps the gate green.
+  Their generator is `genfix.py` in the appendix; the **Fixtures** section says what they found.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
 reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
@@ -39,18 +39,23 @@ global allocator → **KR-50** allocator-aware errors.
 - **The user pushes.** Commit on `dev`; do not push. Fetch and rebase onto `origin/dev` at the start of a
   session — other work lands in between.
 
-**First steps for KR-46:**
+**First steps next session:**
 
 1. `git fetch && git rebase origin/dev`, `./dev build`.
-2. Re-run the grid from the appendix on the current compiler and diff against the results table below —
-   some cells may have moved. Record what changed here.
-3. Then the plan below, step 1 (fixtures), private-name ACCEPTED cells first.
+2. Recreate the scratch tools: extract `genfix.py` from the appendix into `.scratch/imports/`
+   (`awk '/^### \`genfix.py\`/{f=1} f&&/^\`\`\`python/{b=1;next} b&&/^\`\`\`$/{exit} b' docs/design/name-resolution.md > .scratch/imports/genfix.py`),
+   then `python3 .scratch/imports/genfix.py .` writes all 162 fixtures + the two controls into `tests/`.
+3. Classify them on the current compiler with `classify.sh` (appendix) — expect **12 ACCEPTED, 36 C, 71 MSG,
+   43 green**. A different count means the compiler moved; record it here before changing anything.
+4. `rm -rf tests/xfail/reach_* tests/reach_controls_*` before any gate run that is not meant to be red, and
+   re-generate for the slice being worked. Then the plan below, step 2, slice 1.
 
 **Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
 leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`). Windows VM:
 `./dev matrix` cannot pass there (no containers, and it skips the guards when the container leg fails), so
 the gate is `./dev test` then `./dev check`, each into its own log, and the san/wasm legs are reported as
-not run. See `docs/platforms/windows.md` for driving that shell.
+not run. See `docs/platforms/windows.md` for driving that shell. Iterate with `./dev fixture <name>…` — it
+runs `tests/xfail/<name>` too, but NOT a `.d` directory; `classify.sh` is the inner loop for those.
 
 ## The rule, and where it breaks
 
@@ -274,31 +279,50 @@ still fails in C behind it).
 
 ## Plan
 
-1. **Fixtures first, RED.** One `tests/xfail/` fixture per failing cell, private-name ACCEPTED cells first
-   (they are the correctness hole). Each carries a `.msg` substring naming the bad name, and a row in
-   `tests/xfail/DIAGNOSTIC_LINES` (`KAMA_UPDATE_DIAG_LINES=1 ./dev test`). Multi-file cases are
-   `tests/xfail/<name>.d/` with the `geo` module above. The **bq**/**d** controls — including the two LEGAL
-   spellings that fail today (`implements geo::ShownC`, `#(geo::SHOWNK)`) — become a positive fixture, so the
-   fix cannot over-refuse.
-2. **One walk.** A single recursive resolver over a type node — outer name, every type argument, `#(…)`
-   arguments — that resolves each name and judges its reach from the file that wrote it, called from EVERY
-   type position: declarations (including `static`), signatures, fields, bounds, `implements` and its
-   arguments, turbofish, `cast`/`sizeof`, `.as<>()`, `new`, qualified variant and ctor expressions. It runs
-   in collection, independent of what is emitted, so `check` and `build` cannot disagree; `checkReach`'s
-   emission-time callers then become redundant and are deleted rather than kept beside it.
-3. **Generic bodies** are judged once, at the template, from the template's file — the instance skip at
-   ~2663 goes.
-4. **Hints** come from the declaration table (declaring file + export list), never from a mangled key, and
-   never suggest importing a name that is not exported.
-5. **Turbofish** reports the failing type argument itself.
-6. **`SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
+1. **Fixtures, RED — DONE** (see **Fixtures**). Each lands with the slice below that turns it green, with its
+   row in `tests/xfail/DIAGNOSTIC_LINES` (`KAMA_UPDATE_DIAG_LINES=1 ./dev test`; read that diff).
+2. **One walk**, grown out of `checkDeclaredTypes` — it already visits every declaration once, before
+   emission (called at the tail of `collectProgram`), sets `_nsCtx` per unit and binds type/const params, so
+   it is the single visit; nothing new goes beside it. In commit slices, each gated green:
+   1. **Nested type arguments + hints.** Replace the head-only `check` lambda with a recursive
+      `checkTypeNode`: keep its head rules (`rejectBareCChar`, `This`/`Base`, const param in type position,
+      `tp`, `checkQualifiedExport`, `checkNoLeak`, `rejectMintProtocolValue`), judge the head by RESOLVING the
+      name (not `cType(t) != name`, which waves every generic instance through), recurse into `genericArgs`
+      and `qualifierGenericArgs`, and resolve a `#(K)` identifier as a VALUE judged for reach
+      (`constArgValue` literals skip). Rewrite `namespaceOfType` from the declaration table (`declFileOf` +
+      `_exported`): no instance keys, never a private name. One message per case (the **Fixtures** table).
+      Turns green: the param/return/field/local/static/`Owned`/`InlineArray`/user-generic C cells, the
+      `Optional`/`Result`/`DynamicArray` MSG cells, all hint cells, `const_generic_arg`.
+   2. **Declaration positions not walked today:** `static` declarations; `implements` contract AND its type
+      arguments (the contract-name check is at ~24360, and names nothing); class base types; bounds on
+      function, type and method type params, before any instantiation (~18245 today, instantiation-time
+      only; `bound_fn` a/b/c's "`X` has no bound providing `cm`" is ~13307 firing first); `fnptr`
+      signatures. Keep the walk in step with `buildPositions` step (2) in `kama.query.cpp`.
+   3. **Body positions.** Replace `checkBodyLocals` (export-only, over `collectBindings`) with a full statement
+      + expression walk — `collectBindingsExpr` (~1681 in `kama.query.cpp`) is NOT exhaustive (no
+      `SizeofNode`, `BitcastNode`, turbofish args, `ObjectCreationNode::type`), so it cannot be reused as is.
+      Judge: local declared types (full `checkTypeNode`), `Cast`/`Bitcast`/`Sizeof`/`AsDowncast` types,
+      `new`, turbofish args, and the qualified head of a value expression (`geo::HidErr::Bad`, `X::stat()`,
+      `X.make()`) via `checkReach(qualified=true)`. A generic METHOD's own type params must be bound here —
+      their absence is why `checkBodyLocals` stayed export-only. Turbofish (~22787) then reports the failing
+      argument, not "only valid on a generic function".
+   4. **Generic bodies once, at the template** — remove the instance skips in `checkReach` (~2653 and
+      ~2685) only once slice 3 covers those positions; then delete each emission-time `checkReach` caller
+      (~577, ~3015, ~4442, ~22697, ~23029) whose positions the walk provably covers (its fixtures stay green
+      with the call removed). A bare function call or constant read needs local-scope knowledge the walk
+      does not have: a caller kept for that stays with a comment saying so, and this doc records it.
+   Also, in the slice that first needs it: extend the analysis-agreement leg of `run_tests.sh` (~1071) to
+   `.d` fixtures (`kama check` over all their files, or their `kama.json`) — measured: all 24 existing
+   `tests/xfail/*.d` are already refused by it.
+3. **`SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
    `<!-- xfail: … -->` marker (check-doc-claims).
+4. Re-run the grid at the end (every a/b/c/cq/bs cell KD, every bq/bsq/d cell runs), paste the table into
+   the commit that deletes this doc, and delete KR-46 from `ROADMAP.md` and `ROADMAP_DETAIL.md` §2.
 
-**Open — decide during the work, and write the answer here:** the `extern fn` signature skip (~2856) is
-deliberate — an extern names C types owned by its header (`tests/callback_qsort.d`), which kama must pass
-through verbatim. But a name that IS a kama declaration (qualified, or found in the program's tables) in an
-extern signature could still be judged for reach without breaking that seam. Whether to, and how a C typedef
-is told apart from a misspelled kama type, is the one design question here.
+**`extern fn` — decided (2026-09-13):** keep the skip for an UNQUALIFIED name — an extern names C types owned
+by its header (`tests/callback_qsort.d`), and a bare spelling there is the literal C name. A QUALIFIED name is
+never a C spelling, so it is judged for reach like any other position (`reach_extern_sig_private_qualified`;
+the qualified control carries `geo::ShownVal`). Line numbers in this section are `0.9.321`.
 
 ## Size and risk
 
@@ -850,4 +874,29 @@ for stem, kind, imports, what, tmpl in POS:
 written += gen_std()
 written += [gen_positive(False), gen_positive(True)]
 print("\n".join(written))
+```
+
+### `classify.sh`
+
+The inner loop for the reach fixtures (`./dev fixture` cannot run a `.d`): builds each one the way the xfail
+leg does and prints `ACCEPTED` (compiled), `C` (failed in the C compiler), `MSG` (refused without its `.msg`)
+or `green`. Run from the repo root after `genfix.py`; `sort | uniq -c` on column 1 gives the counts.
+
+```bash
+#!/bin/bash
+# classify.sh — one line per tests/xfail/reach_* fixture: <verdict> <name>
+ROOT=$(pwd); . tools/kama-bin.sh
+w=$(mktemp -d)
+for f in tests/xfail/reach_*; do
+  case $f in *.msg) continue;; esac
+  n=${f##*/}; n=${n%.kama}; n=${n%.d}
+  if [ -d "$f" ]; then m=$f/msg; files=$(find "$f" -name '*.kama' | sort); else m=tests/xfail/$n.msg; files=$f; fi
+  "$KAMA" build $files -o "$w/$n" >/dev/null 2>"$w/$n.err"; rc=$?
+  if [ $rc -eq 0 ]; then v=ACCEPTED
+  elif grep -q "clang\|error generated" "$w/$n.err"; then v=C
+  elif ! grep -qF "$(cat "$m")" "$w/$n.err"; then v=MSG
+  else v=green; fi
+  echo "$v $n"
+done
+rm -rf "$w"
 ```
