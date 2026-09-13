@@ -372,6 +372,7 @@ graph_alloc_iface	graph_alloc_iface.kama:23
 graph_coll_no_itermut	graph_coll_no_itermut.kama:17
 graph_coll_unmarked	graph_coll_unmarked.kama:22
 graph_delegate_unmarked	graph_delegate_unmarked.kama:44
+graph_enum_pointee_not_generate	graph_enum_pointee_not_generate.kama:8
 graph_handle_not_a_node	-
 graph_owned_of_shared	graph_owned_of_shared.kama:16
 graph_read_by_value	-

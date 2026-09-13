@@ -1,0 +1,128 @@
+// A graph edge inside an enum PAYLOAD, and an enum as a graph NODE (KR-15 #5, maintainer ruling: supported).
+// An enum was never a node and a payload `Shared` was never walked as an edge, so both shapes were refused —
+// as "has no `Serializable` half" and "is not `@generate`", about types that were. A payload edge is now
+// written as the pointee's id exactly as a struct field's is, inside the ordinary `{tag, value}` frame, and
+// each round trip below re-encodes what it READ BACK — so a lost identity (two copies of one pointee) or a
+// lost edge changes the bytes.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::memory::Shared,
+    std::memory::Weak,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+
+@generate(Serializable, Deserializable)
+type enum Slot { Full(Shared<Leaf> l), Maybe(Optional<Shared<Leaf>> o, int32 n), Empty }
+
+@generate(Serializable, Deserializable)
+type resource Holder {
+    @field Slot a;
+    @field Slot b;
+    @field Slot c;
+    @field Slot d;
+    public ctor make(Shared<Leaf> l) {
+        Shared<Leaf> m = l;
+        Shared<Leaf> k = l;
+        this.a = Slot::Full(l: give l);
+        this.b = Slot::Full(l: give m);                   // the same Leaf through a second payload
+        this.c = Slot::Maybe(o: Optional::Some(value: give k), n: 3);   // ...and through a nullable one
+        this.d = Slot::Empty;
+    }
+}
+
+// A cycle through payloads: a parent owns its child through `Down`, the child points back through `Up`.
+@generate(Serializable, Deserializable)
+type enum Down { Child(Shared<Tree> t), Bottom }
+@generate(Serializable, Deserializable)
+type enum Up { Parent(Weak<Tree> t), Top }
+@generate(Serializable, Deserializable)
+type resource Tree {
+    @field int32 id;
+    @field Down down;
+    @field Up up;
+    public ctor make(int32 id) { this.id = id; this.down = Down::Bottom; this.up = Up::Top; }
+    public fn void setDown(Shared<Tree> t) { this.down = Down::Child(t: give t); }
+    public fn void setUp(Weak<Tree> t) { this.up = Up::Parent(t: give t); }
+}
+
+// An enum as the POINTEE of an edge: a table entry of its own, one entry however many edges reach it —
+// a tagged one, and a payload-less one, whose value on the wire is its bare name.
+@generate(Serializable, Deserializable)
+type enum Geo { Circle(int32 r), Point }
+@generate(Serializable, Deserializable)
+type enum Mode { Fast, Slow }
+@generate(Serializable, Deserializable)
+type resource Shapes {
+    @field Shared<Geo> first;
+    @field Shared<Geo> again;
+    @field Shared<Mode> mode;
+    public ctor make(Shared<Geo> g, Shared<Mode> m) {
+        Shared<Geo> h = g; this.first = give g; this.again = give h; this.mode = give m;
+    }
+}
+
+fn int32 main() {
+    Shared<Leaf> leaf = new Leaf.make(v: 7);
+    Shared<Holder> h = new Holder.make(l: give leaf);
+    Result<string, Owned<Error>> hr = serializeJsonBuffer(v: h);
+    string hj = match (give hr) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
+    if (hj != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Holder\",\"value\":{\"a\":{\"tag\":\"Full\",\"value\":{\"l\":2}},\"b\":{\"tag\":\"Full\",\"value\":{\"l\":2}},\"c\":{\"tag\":\"Maybe\",\"value\":{\"o\":2,\"n\":3}},\"d\":{\"tag\":\"Empty\"}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}}]}") {
+        return 1;
+    }
+    Result<Shared<Holder>, Owned<Error>> hb = deserializeJsonBuffer::<Shared<Holder>>(src: copy hj);
+    Shared<Holder> h2 = match (give hb) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<string, Owned<Error>> h2r = serializeJsonBuffer(v: h2);
+    string h2j = match (give h2r) { case Ok(value: s): give s; case Err(error: e): { return 3; } };
+    if (h2j != hj) { return 4; }
+
+    Shared<Tree> root = new Tree.make(id: 1);
+    Shared<Tree> kid = new Tree.make(id: 2);
+    kid.setUp(t: root.downgrade());
+    root.setDown(t: give kid);
+    Result<string, Owned<Error>> tr = serializeJsonBuffer(v: root);
+    string tj = match (give tr) { case Ok(value: s): give s; case Err(error: e): { return 251; } };
+    if (tj != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Tree\",\"value\":{\"id\":1,\"down\":{\"tag\":\"Child\",\"value\":{\"t\":2}},\"up\":{\"tag\":\"Top\"}}},{\"id\":2,\"type\":\"Tree\",\"value\":{\"id\":2,\"down\":{\"tag\":\"Bottom\"},\"up\":{\"tag\":\"Parent\",\"value\":{\"t\":1}}}}]}") {
+        return 5;
+    }
+    Result<Shared<Tree>, Owned<Error>> tb = deserializeJsonBuffer::<Shared<Tree>>(src: copy tj);
+    Shared<Tree> t2 = match (give tb) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    Result<string, Owned<Error>> t2r = serializeJsonBuffer(v: t2);
+    string t2j = match (give t2r) { case Ok(value: s): give s; case Err(error: e): { return 7; } };
+    if (t2j != tj) { return 8; }
+
+    Shared<Geo> g = new Geo::Circle(r: 4);
+    Shared<Mode> md = new Mode::Slow();
+    Shared<Shapes> sh = new Shapes.make(g: give g, m: give md);
+    Result<string, Owned<Error>> sr = serializeJsonBuffer(v: sh);
+    string sj = match (give sr) { case Ok(value: s): give s; case Err(error: e): { return 252; } };
+    if (sj != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Shapes\",\"value\":{\"first\":2,\"again\":2,\"mode\":3}},{\"id\":2,\"type\":\"Geo\",\"value\":{\"tag\":\"Circle\",\"value\":{\"r\":4}}},{\"id\":3,\"type\":\"Mode\",\"value\":\"Slow\"}]}") {
+        return 9;
+    }
+    Result<Shared<Shapes>, Owned<Error>> sb = deserializeJsonBuffer::<Shared<Shapes>>(src: copy sj);
+    Shared<Shapes> s2 = match (give sb) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
+    Result<string, Owned<Error>> s2r = serializeJsonBuffer(v: s2);
+    string s2j = match (give s2r) { case Ok(value: s): give s; case Err(error: e): { return 11; } };
+    if (s2j != sj) { return 12; }
+
+    // An enum as the ROOT: the graph is handed to the backend as the enum's own handle.
+    Shared<Leaf> rl = new Leaf.make(v: 5);
+    Shared<Slot> root2 = new Slot::Full(l: give rl);
+    Result<string, Owned<Error>> rr = serializeJsonBuffer(v: root2);
+    string rj = match (give rr) { case Ok(value: s): give s; case Err(error: e): { return 253; } };
+    if (rj != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Slot\",\"value\":{\"tag\":\"Full\",\"value\":{\"l\":2}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":5}}]}") {
+        return 13;
+    }
+    Result<Shared<Slot>, Owned<Error>> rb = deserializeJsonBuffer::<Shared<Slot>>(src: copy rj);
+    Shared<Slot> r2 = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
+    Result<string, Owned<Error>> r2r = serializeJsonBuffer(v: r2);
+    string r2j = match (give r2r) { case Ok(value: s): give s; case Err(error: e): { return 15; } };
+    if (r2j != rj) { return 16; }
+
+    // A forged wire naming a variant the enum does not have is an Err, not a half-read shell.
+    Result<Shared<Slot>, Owned<Error>> bad = deserializeJsonBuffer::<Shared<Slot>>(src: "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Slot\",\"value\":{\"tag\":\"Nope\"}}]}");
+    match (bad) { case Ok(value: x): { return 17; } case Err(error: e): { } };
+    return 0;
+}

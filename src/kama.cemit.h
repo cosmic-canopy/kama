@@ -2384,6 +2384,13 @@ private:
     // A "bag" = a `value` whose every field is public — the only shape `of`/`zero` may be generated for.
     bool        isTransparentValue(const ClassInfo& ci) const;
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
+    // The externally-tagged frame alone, each payload field written by `writeField(field, access, depth)` —
+    // shared by the by-value derive and a graph node's `writeNode`, so the two wires cannot drift.
+    void emitVariantWriteFrame(ClassInfo& ci,
+                               const std::function<void(const FieldInfo&, const std::string&, int)>& writeField);
+    // `switch (self->tag)` over every payload field (access `self->u.V.f`) — a graph pass's per-tag walk.
+    void emitVariantPayloadWalk(ClassInfo& ci,
+                                const std::function<void(const FieldInfo&, const std::string&, int)>& walkField);
     void emitEnumDeserializeDefinition(ClassInfo& ci);
     // The per-tag siblings of the three class-side derived bodies: a variant's data lives in
     // `variants[i].payload`, not in `fields`, so each switches on `self->tag` and reaches
@@ -2462,6 +2469,7 @@ private:
     void emitGraphNodeHelperProtos(ClassInfo& ci);  // visitEdges / writeNode / wireEdges / __readInto prototypes
     void emitGraphNodeHelpers(ClassInfo& ci);       // …their bodies
     void emitGraphReadInto(ClassInfo& ci);          // `K____readInto`: pass-1 field read into a shell
+    void emitGraphReadIntoVariant(ClassInfo& ci);   // …its enum arm: the tagged frame, read in place
     void emitGraphSerializeDefinition(ClassInfo& ci);     // the write driver, as the node's own `serialize`
     void emitGraphDeserializeDefinition(ClassInfo& ci);   // the read driver — returns `Shared<T>`
     std::string graphHandleRootType(ClassInfo& ci);       // `Result<Shared<K>, Owned<Error>>`, or ""

@@ -1,0 +1,106 @@
+// The binary twin of tests/ser_graph_enum: enum payload edges and enum graph nodes through all three KBIN
+// backends (KR-15 #5). A positional or numbered reader has no key to resynchronise on, so a frame count the
+// enum node writes differently from the one its shell reads fails here where JSON would forgive it. Each
+// round trip re-encodes what it READ BACK and compares bytes.
+import {
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+    std::memory::Weak,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+@generate(Serializable, Deserializable)
+type enum Slot { Full(Shared<Leaf> l), Maybe(Optional<Shared<Leaf>> o, int32 n), Empty }
+@generate(Serializable, Deserializable)
+type enum Geo { Circle(int32 r), Point }
+@generate(Serializable, Deserializable)
+type enum Down { Child(Shared<Tree> t), Bottom }
+@generate(Serializable, Deserializable)
+type enum Up { Parent(Weak<Tree> t), Top }
+@generate(Serializable, Deserializable)
+type resource Tree {
+    @field int32 id;
+    @field Down down;
+    @field Up up;
+    public ctor make(int32 id) { this.id = id; this.down = Down::Bottom; this.up = Up::Top; }
+    public fn void setDown(Shared<Tree> t) { this.down = Down::Child(t: give t); }
+    public fn void setUp(Weak<Tree> t) { this.up = Up::Parent(t: give t); }
+}
+@generate(Serializable, Deserializable)
+type resource World {
+    @field Slot a;
+    @field Slot b;
+    @field Slot c;
+    @field Shared<Geo> g;
+    @field Shared<Geo> g2;
+    @field Shared<Tree> tree;
+    public ctor make(Shared<Leaf> l, Shared<Geo> g, Shared<Tree> tree) {
+        Shared<Leaf> m = l;
+        Shared<Geo> h = g;
+        this.a = Slot::Full(l: give l);
+        this.b = Slot::Maybe(o: Optional::Some(value: give m), n: 9);
+        this.c = Slot::Empty;
+        this.g = give g;
+        this.g2 = give h;
+        this.tree = give tree;
+    }
+}
+
+fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    isize i = 0; isize n = src.length();
+    while (i < n) { c.add(item: src[i]); i = i + 1; }
+    return give c;
+}
+fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    isize i = 0; isize n = a.length();
+    while (i < n) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn Shared<World> build() {
+    Shared<Tree> root = new Tree.make(id: 1);
+    Shared<Tree> kid = new Tree.make(id: 2);
+    kid.setUp(t: root.downgrade());
+    root.setDown(t: give kid);
+    Shared<Leaf> leaf = new Leaf.make(v: 7);
+    Shared<Geo> geo = new Geo::Circle(r: 4);
+    return new World.make(l: give leaf, g: give geo, tree: give root);
+}
+
+fn int32 main() {
+    Shared<World> w = build();
+
+    Result<DynamicArray<uint8>, Owned<Error>> n1 = serializeKbinNamedBuffer(v: w);
+    DynamicArray<uint8> nb = match (give n1) { case Ok(value: b): give b; case Err(error: e): { return 250; } };
+    Result<Shared<World>, Owned<Error>> nr = deserializeKbinNamedBuffer::<Shared<World>>(src: clone(src: ref nb));
+    Shared<World> nw = match (give nr) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    Result<DynamicArray<uint8>, Owned<Error>> n2 = serializeKbinNamedBuffer(v: nw);
+    DynamicArray<uint8> nb2 = match (give n2) { case Ok(value: b): give b; case Err(error: e): { return 2; } };
+    if (!bytesEqual(a: ref nb, b: ref nb2)) { return 3; }
+
+    Result<DynamicArray<uint8>, Owned<Error>> u1 = serializeKbinNumberedBuffer(v: w);
+    DynamicArray<uint8> ub = match (give u1) { case Ok(value: b): give b; case Err(error: e): { return 251; } };
+    Result<Shared<World>, Owned<Error>> ur = deserializeKbinNumberedBuffer::<Shared<World>>(src: clone(src: ref ub));
+    Shared<World> uw = match (give ur) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    Result<DynamicArray<uint8>, Owned<Error>> u2 = serializeKbinNumberedBuffer(v: uw);
+    DynamicArray<uint8> ub2 = match (give u2) { case Ok(value: b): give b; case Err(error: e): { return 5; } };
+    if (!bytesEqual(a: ref ub, b: ref ub2)) { return 6; }
+
+    Result<DynamicArray<uint8>, Owned<Error>> p1 = serializeKbinPositionalBuffer(v: w);
+    DynamicArray<uint8> pb = match (give p1) { case Ok(value: b): give b; case Err(error: e): { return 252; } };
+    Result<Shared<World>, Owned<Error>> pr = deserializeKbinPositionalBuffer::<Shared<World>>(src: clone(src: ref pb));
+    Shared<World> pw = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+    Result<DynamicArray<uint8>, Owned<Error>> p2 = serializeKbinPositionalBuffer(v: pw);
+    DynamicArray<uint8> pb2 = match (give p2) { case Ok(value: b): give b; case Err(error: e): { return 8; } };
+    if (!bytesEqual(a: ref pb, b: ref pb2)) { return 9; }
+    return 0;
+}

@@ -1,0 +1,11 @@
+// An enum may be a graph node (KR-15 #5), on the same terms as a type: it must carry the serde halves the
+// walk writes it through. This one does not, so the edge reaching it is refused — and the refusal is now
+// true, where it used to say the same thing about an enum that WAS `@generate`.
+import { std::memory::Shared };
+type enum Geo { Circle(int32 r), Point }
+@generate(Serializable, Deserializable)
+type resource Holder {
+    @field Shared<Geo> g;
+    public ctor make(Shared<Geo> g) { this.g = give g; }
+}
+fn int32 main() { return 0; }

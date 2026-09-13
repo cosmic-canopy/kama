@@ -25766,6 +25766,23 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     // around nothing — and a bare string is what every other format writes for a fieldless variant
     // (serde_json included). The shape is decided by the TYPE, not per value, so a schema still reads
     // cleanly: a payload-less enum is always a string, a tagged one is always an object.
+    // (emitVariantWriteFrame decides which.)
+    emitVariantWriteFrame(ci, [&](const FieldInfo& f, const std::string& access, int d) {
+        emitSerFieldWrite(f.type, access, d, resC);
+    });
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    *_out << "}\n\n";
+}
+
+// The externally-tagged frame (see emitEnumSerializeDefinition), with each payload field handed to
+// `writeField`. A payload-less enum is its bare variant name.
+void CEmitter::emitVariantWriteFrame(ClassInfo& ci,
+                                     const std::function<void(const FieldInfo&, const std::string&, int)>& writeField)
+{
     if (isUnitEnum(ci.name)) {
         indent(1); *_out << "switch (self->tag) {\n";
         for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
@@ -25777,12 +25794,6 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
         }
         indent(1); *_out << "default: break;\n";
         indent(1); *_out << "}\n";
-        indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-        std::string ubox = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ubox << " } };\n";
-        indent(1); *_out << "}\n";
-        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
-        *_out << "}\n\n";
         return;
     }
     // The outer frame is `{tag}` or `{tag, value}`, so its field count is VARIANT-dependent — and
@@ -25818,7 +25829,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
                 // one), so its id is positional by construction and can never be reordered.
                 indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(f.name) << ", " << pi << "u);\n";
                 ScopedStr _sf(_serdeField, f.name);
-                emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2, resC);
+                writeField(f, "self->u." + v.name + "." + f.name, 2);
             }
             indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
         }
@@ -25828,12 +25839,24 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     indent(1); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
-    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+}
+
+void CEmitter::emitVariantPayloadWalk(ClassInfo& ci,
+                                      const std::function<void(const FieldInfo&, const std::string&, int)>& walkField)
+{
+    indent(1); *_out << "switch (self->tag) {\n";
+    for (auto& v : ci.variants) {
+        if (v.payload.empty()) continue;
+        indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+        for (auto& f : v.payload) {
+            ScopedStr _sf(_serdeField, f.name);
+            walkField(f, "self->u." + v.name + "." + f.name, 2);
+        }
+        indent(2); *_out << "break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
-    *_out << "}\n\n";
 }
 
 // Enum deserialize: read `tag`, dispatch, read the `value` object positionally, construct the variant. An
@@ -26055,14 +26078,14 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
 {
     // A graph node's pair IS the walker: `serialize` writes the whole envelope from this root and
     // `deserialize` reads it back as a handle. Everything else is the by-value derive.
-    if (mi.isSynthSer) { ci.isVariant ? emitEnumSerializeDefinition(ci)
-                       : (ci.reachesPointer ? emitGraphSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
+    if (mi.isSynthSer) { ci.reachesPointer ? emitGraphSerializeDefinition(ci)
+                       : (ci.isVariant ? emitEnumSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
     if (mi.isSynthDe)  {
         // An `Owned<X>` box read is neither: it has no fields of its own, it reads its POINTEE by value and
         // adopts the block. See registerOwnedDeserialize.
         if (ci.ownedBoxDe) { emitOwnedDeserializeDefinition(ci); return; }
-        ci.isVariant ? emitEnumDeserializeDefinition(ci)
-                     : (ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
+        ci.graphDeserialize ? emitGraphDeserializeDefinition(ci)
+                            : (ci.isVariant ? emitEnumDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
     if (mi.isSynthFormat) { ci.isVariant ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
     if (mi.isSynthCmp) {                                              // keyed by the method name
         if (name == "equals") ci.isVariant ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
@@ -26094,13 +26117,13 @@ void CEmitter::emitVariantSynthBodies(ClassInfo& ci)
 }
 
 // ---- Object-graph serialization: the per-type ADAPTERS ------------------------------------------------
-// A `@generate` type that reaches a Shared/Weak field (or is such a pointee, or the `T` of an `ObjectGraph<T>`)
-// is a GRAPH NODE. The compiler emits nothing of the algorithm any more — no id table, no two-pass driver,
-// no envelope: that is `std::serialization::graph::ObjectGraph<T>`, a library type over the ordinary token
-// protocol. What only the compiler can do — reflect over the node's fields — it does as small adapters, the
-// prelude's `GraphSerializable` (typeName/typeIndex/visitEdges/writeNode), `GraphDeserializable` (wireEdges)
-// and `GraphRoot` (readShell/takeRoot), plus one C helper per node (`K____readInto`) and, per contract used as
-// an edge, a vtable resolver pair. Every call the adapters make goes through a prelude contract's vtable.
+// A `@generate` type or enum that reaches a Shared/Weak edge (or is such an edge's pointee) is a GRAPH NODE.
+// The walk is emitted C over the runtime's `kama_ser_graph`/`kama_de_graph`: the node's own
+// `serialize`/`deserialize` are the drivers (the `{root, objects}` envelope, the id table, the two-pass read),
+// and each node gets four helpers — `K__visitEdges`/`K__writeNode` (write) and `K____readInto`/`K__wireEdges`
+// (read) — plus, per contract used as an edge, a resolver pair. An enum node's helpers walk the payload of
+// whichever variant it holds, inside the same `{tag, value}` frame its by-value derive writes. (An earlier
+// design put the algorithm in a library `ObjectGraph<T>` over prelude `Graph*` contracts; it was reverted.)
 //
 // Edges. A `Shared<X>`/`Weak<X>` field is written as a `u64` id the walker answers (`intern`), read back in
 // two passes: pass 1 (`readInto`) reads the id and STASHES it in the handle's own pointer slot with the control
@@ -26155,7 +26178,9 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
 // Both the writer (`typeName`) and the reader (the shell chain) must agree, so they share this.
 std::string CEmitter::graphWireName(const ClassInfo& ci)
 {
-    return (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
+    if (ci.node && ci.node->name && ci.node->name->value) return *ci.node->name->value;
+    if (ci.enumNode && ci.enumNode->identifier && ci.enumNode->identifier->value) return *ci.enumNode->identifier->value;
+    return ci.name;
 }
 
 // Synthesize a `Shared<elem>` type node (the graph deserialize return type: `decode::<Shared<T>>` hands back
@@ -26273,12 +26298,11 @@ bool CEmitter::typeHasGraphAdapters(const std::string& cls) const
     return it != _classes.end() && it->second.isGraphNode && it->second.reachesPointer;
 }
 
-// The node set (post-computeReachesPointer): a `@generate` type that reaches a Shared/Weak field, the `T` of
-// an `ObjectGraph<T>`, and — transitively — every pointee of a node's Shared/Weak edge (a contract edge's
-// pointees are every nominal `@generate` implementor). Then the PRUNE: every other `@generate` class loses the
-// adapters registerGraphAdapters declared eagerly, and a node that reaches a pointer loses its by-value pair
-// (a graph is never a value — `serializeJsonBuffer(v: node)` must fail the bound, not write a wrong wire).
-// Records the node order, which is each node's wire `typeIndex`.
+// The node set (post-computeReachesPointer): a `@generate` type or enum that reaches a Shared/Weak edge — a
+// field, or an enum's payload field — and, transitively, every pointee of a node's edge (a contract edge's
+// pointees are every nominal `@generate` implementor). Then a node reached only inline loses its synthesized
+// by-value `deserialize`, and a root-able one has it retargeted to hand back `Shared<T>`. Records the node
+// order, which is each node's wire `typeIndex`.
 void CEmitter::computeGraphNodeTypes()
 {
     NsCtx saved = _nsCtx;
@@ -26290,7 +26314,10 @@ void CEmitter::computeGraphNodeTypes()
     };
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (!ci.isVariant && ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) seed(kv.first);
+        // An enum is a node on the same terms as a type: its edges live in variant payloads, which
+        // computeReachesPointer already walks. (The prelude's `Optional`/`Result` carry no `@generate`, so the
+        // gate keeps them out.)
+        if (ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) seed(kv.first);
     }
     // A PARTICIPANT is not a node — it has no identity, so nothing points at it and it gets no table entry
     // — but its edges are real and their pointees must be nodes. A participant reached as a FIELD is
@@ -26339,8 +26366,8 @@ void CEmitter::computeGraphNodeTypes()
                     bool impl  = std::find(c2.interfaces.begin(),      c2.interfaces.end(),      e.elemC) != c2.interfaces.end();
                     bool staticOnly = std::find(c2.staticOnlyInterfaces.begin(), c2.staticOnlyInterfaces.end(), e.elemC) != c2.staticOnlyInterfaces.end();
                     if (!impl || staticOnly) continue;
-                    if (!c2.isVariant && (c2.genSerialize || c2.genDeserialize
-                                          || graphTwinNeeded(c2, true) || graphTwinNeeded(c2, false))) seed(kv2.first);
+                    if (c2.genSerialize || c2.genDeserialize
+                        || graphTwinNeeded(c2, true) || graphTwinNeeded(c2, false)) seed(kv2.first);
                     // A non-@generate implementor has no adapters — at runtime it would flow through the edge
                     // and be SILENTLY dropped from the wire. Reject at the edge field.
                     else unsupported(("`" + kv2.first + "` implements the serialized graph-edge contract `" + e.elemC +
@@ -26355,8 +26382,8 @@ void CEmitter::computeGraphNodeTypes()
             // A pointee is a node if it has a serde half AT ALL — derived or hand-written. `@generate` buys
             // a field walk, which a node needs only if the compiler is the one finding its edges; a
             // hand-written body finds its own, and its four walk helpers are its twin.
-            if (!it->second.isVariant && (it->second.genSerialize || it->second.genDeserialize
-                                          || graphTwinNeeded(it->second, true) || graphTwinNeeded(it->second, false)))
+            if (it->second.genSerialize || it->second.genDeserialize
+                || graphTwinNeeded(it->second, true) || graphTwinNeeded(it->second, false))
                 seed(e.elemC);
             else unsupported(("`" + demangleForDisplay(e.elemC) + "` is the pointee of a serialized graph edge (field `" + f.name
                               + "`) but is not `@generate(Serializable/Deserializable)` — a node is written through its own "
@@ -26367,6 +26394,8 @@ void CEmitter::computeGraphNodeTypes()
             if (f.serSkip) continue;
             seedField(f.type, f);
         }
+        for (auto& v : ci.variants)                         // an enum's edges are its payload fields
+            for (auto& f : v.payload) seedField(f.type, f);
         // A participant's own ELEMENTS — its type arguments. A collection's fields are an `UnsafePtr<T>`
         // and bookkeeping, never the element, which is why this has to be asked separately (the same
         // reason computeReachesPointer asks it separately).
@@ -26983,6 +27012,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     if (!ci.genDeserialize) return;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
+    if (ci.isVariant) { emitGraphReadIntoVariant(ci); return; }
     // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
     for (auto& f : ci.fields) {
         if (f.serSkip) continue;
@@ -27007,6 +27037,53 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << "FieldKey__dtor(&__key);\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    *_out << "}\n\n";
+}
+
+// An enum shell's pass 1: the by-value enum frame (emitEnumDeserializeDefinition), read straight into the
+// shell — tag first, then the payload fields in place, so an edge's id is stashed in its own handle and no
+// temporary carries it. An unknown tag, or a frame that breaks off, fails the graph read; the shell then holds
+// a valid variant (tag set before any payload is read, the rest zeroed), which is all its dtor needs.
+void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
+{
+    auto closeObj = [&](int d) {
+        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
+                            "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
+        indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
+    };
+    const bool unit = isUnitEnum(ci.name);
+    if (!unit) {
+        indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
+        indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
+        indent(1); *_out << "{ FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";   // the "tag" key
+    }
+    emitVariantKeySlot(ci, 1);
+    for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+        auto& v = ci.variants[vi];
+        indent(1); *_out << (vi ? "else if" : "if") << " (__vslot == " << vi << ") {\n";
+        indent(2); *_out << "self->tag = " << ci.name << "_" << v.name << ";\n";
+        for (auto& f : v.payload)   // zero is `Some(0)` for an Optional — start every one at None
+            if (f.type && f.type->value && *f.type->value == "Optional") {
+                std::string oc = cType(f.type);
+                indent(2); *_out << "self->u." << v.name << "." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+            }
+        if (!v.payload.empty()) {
+            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+            indent(2); *_out << "{ FieldKey __kv = r.vtbl->field(r.obj); FieldKey__dtor(&__kv); }\n";   // the "value" key
+            indent(2); *_out << "r.vtbl->beginObject(r.obj, " << v.payload.size() << ");\n";
+            for (auto& f : v.payload) {
+                indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+                indent(2); *_out << "{ FieldKey __pk = r.vtbl->field(r.obj); FieldKey__dtor(&__pk); }\n";
+                ScopedStr _sf(_serdeField, f.name);
+                emitGraphFieldRead(f.type, "self->u." + v.name + "." + f.name, 2);
+            }
+            closeObj(2);   // the value object
+        }
+        if (!unit) closeObj(2);   // the outer object
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "else { r.vtbl->fail(r.obj); kama_de_graph_fail(g, DeError_Malformed); }\n";
+    indent(1); *_out << "FieldKey__dtor(&__tag);\n";
     *_out << "}\n\n";
 }
 
@@ -27043,6 +27120,8 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         // object table be an ARRAY: `beginArray(count)` states its length up front, which is the whole
         // reason a positional backend can carry a graph at all.
         *_out << stat << "void " << K << "__visitEdges(" << K << "* self, struct kama_ser_graph* g)\n{\n";
+        if (ci.isVariant)   // an enum's edges are the payload fields of whichever variant it holds
+            emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldVisit(f.type, a, d); });
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
             ScopedStr _sf(_serdeField, fp->name);
             emitGraphFieldVisit(fp->type, "self->" + fp->name, 1);
@@ -27051,6 +27130,10 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
         // the id discovery already assigned it.
         *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
+        if (ci.isVariant) {   // the by-value enum frame, with an edge written as its id
+            emitVariantWriteFrame(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWrite(f.type, a, d); });
+            *_out << "}\n\n";
+        } else {
         std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
         indent(1); *_out << "w->vtbl->beginObject(w->obj, " << wf.size() << ");\n";
         for (const FieldInfo* fp : wf) {
@@ -27061,10 +27144,13 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         }
         indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
         *_out << "}\n\n";
+        }
     }
     if (ci.genDeserialize) {
         // READ PASS 2 — every id the shell stashed becomes a retained handle.
         *_out << stat << "void " << K << "__wireEdges(" << K << "* self, struct kama_de_graph* g)\n{\n";
+        if (ci.isVariant)
+            emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWire(f.type, a, d); });
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) {
             ScopedStr _sf(_serdeField, fp->name);
             emitGraphFieldWire(fp->type, "self->" + fp->name, 1);
@@ -31582,6 +31668,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // (its vtables went out ahead of the generic instantiations above — see there for why)
             emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
             emitVariantSynthBodies(eci);               // whatever `@generate` synthesized for it
+            if (eci.isGraphNode) { emitGraphNodeHelpers(eci); emitGraphReadInto(eci); }
         }
         _emitStaticClass = false;
     }
@@ -31860,6 +31947,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                     // emitClassPrototypes; classOf skips enums, so emit here alongside the dtor). The unit's
                     // scope is already active (_nsCtx = _unitCtx above), so payload types resolve.
                     emitVariantSynthBodies(eci);
+                    // ...and a graph node's walk helpers, which emitClassDefinitions gives a type.
+                    if (eci.isGraphNode) { emitGraphNodeHelpers(eci); emitGraphReadInto(eci); }
                 }
             }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
