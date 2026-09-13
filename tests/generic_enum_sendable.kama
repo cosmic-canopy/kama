@@ -1,0 +1,41 @@
+// A generic enum crosses an isolate by DECLARING it, per instance, like every other generic type (KR-44):
+// `Msg<T> implements Sendable when [T: Sendable]`. It used to be the one type that crossed with no
+// declaration, judged by its payloads — `tests/xfail/generic_enum_sendable_undeclared` is that program,
+// now refused. The declaration is verified, not trusted (`generic_enum_sendable_unmet`). The enum's own
+// method runs on the receiving side, so members and the conformance are exercised together.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
+
+type enum Msg<T> implements Sendable when [T: Sendable] {
+    Data(T v), Stop;
+    public const fn bool isStop() { return match (this) { case Data(v: v): false; case Stop: true; }; }
+}
+
+fn void producer(Sender<Msg<int32>> tx) {
+    int32 i = 1;
+    while (i <= 9) {
+        tx.send(item: Msg::Data(v: i));
+        i = i + 1;
+    }
+    tx.send(item: Msg::Stop);
+}
+
+fn int32 main() {
+    Channel<Msg<int32>> ch = Channel.bounded(capacity: 4);
+    Sender<Msg<int32>>   tx = ch.sender();
+    Receiver<Msg<int32>> rx = ch.receiver();
+    Isolate h = spawn producer(tx: give tx);
+    int32 sum = 0;
+    bool going = true;
+    while (going) {
+        Optional<Msg<int32>> m = rx.recv();
+        match (m) {
+            case Some(value: msg): {
+                if (msg.isStop()) { going = false; }
+                else { int32 v = match (msg) { case Data(v: d): d; case Stop: 0; }; sum = sum + v; }
+            }
+            case None: { going = false; }
+        };
+    }
+    h.join();
+    return sum;   // 1 + … + 9 = 45
+}

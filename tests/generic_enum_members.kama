@@ -16,6 +16,7 @@ type enum Maybe<T> implements Tag when [T: Tag] {
     public fn int32 tag() when [T: Tag] { return match (this) { case Has(v: v): v.tag() + 100; case Nope: 0; }; }
 }
 type enum Unused<T> { A(T x), B; public fn int32 k() { return 7; } }
+type enum Side<T> { L, R; public fn int32 k() { return 3; } }   // payload-less: members promote it to a tag
 
 fn int32 viaContract(ref Tag t) { return t.tag(); }
 
@@ -30,7 +31,9 @@ fn int32 main() {
     r = r + m.getOr(d: 0) * 10;          // 30
     r = r + t.tag();                     // 105
     if (p.has()) { r = r + 10; }
+    Side<bool> sd = Side::R;
+    r = r + sd.k();                      // 3
     Tag tv = t;
     r = r + viaContract(t: tv);          // 105 again, through the vtbl
-    return r - 100;                      // 1 + 2 + 30 + 105 + 10 + 105 - 100 = 153
+    return r - 100;                      // 1 + 2 + 30 + 105 + 10 + 3 + 105 - 100 = 156
 }

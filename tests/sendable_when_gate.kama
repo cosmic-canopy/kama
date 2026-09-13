@@ -1,7 +1,7 @@
 // The declaring side, end to end. A user generic writes its rule the way the stdlib does —
 // `Sendable when [T: Sendable]` — and a bundle composes every shape that crosses without its own
-// declaration: a stdlib container over a declared element, a generic enum (`Optional<T>`, judged by its
-// payload because a generic enum cannot declare a contract yet), a raw pointer (the C seam), a primitive.
+// declaration: a stdlib container over a declared element, a generic enum (`Optional<T>`, which declares
+// `Sendable when [T: Sendable]` in the prelude), a raw pointer (the C seam), a primitive.
 import { std::concurrent::Isolate, std::concurrent::Atomic, std::collections::DynamicArray };
 type value Leaf implements Sendable { public int32 v; public ctor make(int32 v) { this.v = v; } }
 type resource Box<T> implements Sendable when [T: Sendable] {

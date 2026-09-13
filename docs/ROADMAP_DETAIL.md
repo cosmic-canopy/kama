@@ -306,24 +306,6 @@ and judges its reach from the file that wrote it, independent of what gets emitt
 cannot disagree. Every cell of the grid above becomes a `tests/xfail/` fixture landed RED first, the
 ACCEPTED ones before anything else.
 
-### Generic enum members, and an explicit `Sendable` for them (KR-44) — RULED 2026-09-12
-
-**Measured at `0.9.317`.** A concrete enum may declare methods and `implements` (a contract must list `enum`
-among its kinds); it may not declare a field — its layout is its tag and payloads, and that stays. A GENERIC
-enum refuses members and contracts alike. The consequence that matters is `Sendable`: a payload-less enum
-crosses by nature, a tagged concrete enum must declare it, and a generic enum — unable to write `implements` —
-is judged by its payloads with no declaration. `Channel<Msg<int32>>` builds; `Channel<Msg<Shared<Leaf>>>` is
-refused naming the payload. It works, and it is implicit, which is exactly what the Sendable rule exists to
-forbid.
-
-**Ruling:** generic enums get what concrete enums have — methods and `implements`, with `when [...]` conditions
-per instance, as generic types already write them — and the by-payload rule is deleted. Comparable to Rust
-(`impl<T> … for Msg<T> where T: Send`) and Swift (conditional conformance on an enum). `Optional`/`Result`
-declare their `Sendable` in the prelude. The work: the member and conformance scan over a generic enum
-template, per-instance gating (the existing `whenConditionsHold` / `regateGenericInstances` path), the emission
-sites (a generic enum instance's bodies already arrive through `emitClassDefinitions`), and the migration of any
-generic enum that crosses an isolate undeclared.
-
 ### `type expose value` — the C-layout type kama owns (KR-45) — RULED 2026-09-12
 
 `extern` is host→kama (kama uses what C defines: `extern fn`, `type extern value`); `expose` is kama→host
@@ -788,13 +770,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   than a hazard — but it blocks the ordinary "thin generic wrapper" shape. Found while checking whether
   a comptime param could be passed to a generic call; it fails identically for a type param, so it
   is the general gap, not a comptime one.
-
-- **A generic `enum` cannot declare members or contracts.** `type enum Tag comptime(int32 N) { A; public fn
-  int32 bump() { return N; } }` is rejected — "a generic enum is a monomorphization template, so each
-  instance would need its own conformance". Clean diagnostic and a real limitation: it is why
-  `EnumDeclarationNode`'s const-param data still has no reader after the comptime-parameters campaign, since a
-  const param can only be READ inside a body and a generic enum has none. Whoever lifts this should add
-  the const-param fixture that could not be written (`tests/constgen_value_type.kama` records the gap).
 
 - ~~**`INT32_MIN` has no direct spelling.**~~ **Fixed.** `-2147483648` folds the negation into the
   literal at parse time (Rust's rule): the magnitude is one past INT32_MAX so the literal alone is

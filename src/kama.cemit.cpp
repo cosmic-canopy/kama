@@ -16385,38 +16385,19 @@ std::string CEmitter::unsendableReason(const std::string& cls)
         }
     }
     for (auto& itf : ci.interfaces) if (itf == S) return "";           // NOMINAL: declared (and `when`-gated)
-    // A GENERIC enum instance (`Optional<T>`, `SendResult<T>`, a user `Msg<T>`) cannot declare a contract
-    // yet (ROADMAP §2, "generic `enum` members"), so it is the one shape judged by its payloads: a sum type
-    // has nothing its payloads do not show. A non-generic enum declares, like every other type.
-    if (ci.isGenericInst && ci.enumNode && !ci.variants.empty()) {
-        const NsCtx savedCtx = _nsCtx;
-        const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-        enterClassCtx(ci);
-        std::string out;
-        for (auto& v : ci.variants) {
-            for (auto& f : v.payload) {
-                const std::string fc = cType(f.type);
-                const std::string r = unsendableReason(fc);
-                if (!r.empty()) { out = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`) is not Sendable (" + r + ")"; break; }
-            }
-            if (!out.empty()) break;
-        }
-        _nsCtx = savedCtx; _typeSubst = savedSubst;
-        return out;
-    }
     // A generic instance whose TEMPLATE declares it: say which `when` condition failed for which argument,
     // so an arena-backed container names its allocator rather than "does not declare".
     if (ci.isGenericInst && _genericTypeInsts.count(cls)) {
         const GenericTypeInst& gi = _genericTypeInsts[cls];
         auto ti = _genericTypes.find(gi.templateKey);
-        ClassDeclarationNode* tn = ti != _genericTypes.end() ? ti->second.node : nullptr;
-        if (tn && tn->baseTypes && tn->baseTypes->interfaces) {
+        ClassBaseDeclarationNode* tb = ti != _genericTypes.end() ? ti->second.baseTypesDecl() : nullptr;
+        if (tb && tb->interfaces) {
             const NsCtx savedCtx = _nsCtx;
             const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
             enterClassCtx(ci);
             std::string out;
             const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-            for (auto& itf : *tn->baseTypes->interfaces) {
+            for (auto& itf : *tb->interfaces) {
                 if (!itf || !itf->value || resolveUserName(*itf->value, itf->qualifier) != S) continue;
                 if (!itf->whenParams) break;
                 for (size_t c = 0; c < itf->whenParams->size() && out.empty(); ++c) {

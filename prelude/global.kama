@@ -12,15 +12,14 @@
 // inline `null`/value case in emitSerFieldWrite), and a derived `{"tag":"Some",…}` would be a second
 // form for one type, disagreeing with the first by position.
 @generate(Equatable, Hashable, Formattable)
-type enum Optional<T> { Some(T value), None }
+type enum Optional<T> implements Sendable when [T: Sendable] { Some(T value), None }
 @generate(Equatable, Hashable, Formattable)
-type enum Result<T, E: Error> { Ok(T value), Err(E error) }
-// ⚠️ Neither declares `Sendable`, and not by choice: a GENERIC enum cannot declare a contract yet (ROADMAP
-// §2, "generic `enum` members") — it can now DERIVE one, which is what the attributes above do, but a
-// derive registers a conformance and does not let the author write `implements`. Until it can, a generic
-// enum instance is judged by its payloads — see unsendableReason — because a sum type has nothing its
-// payloads do not show. (`Optional`'s DECLARATION LINE is pinned by tools/check-lsp.sh and
-// check-query.sh, which assert go-to-definition on it; moving it moves those.)
+type enum Result<T, E: Error> implements Sendable when [T: Sendable, E: Sendable] { Ok(T value), Err(E error) }
+// `Sendable` is DECLARED, per instance, as on every other generic type: `Optional<int32>` crosses an
+// isolate and `Optional<Shared<Leaf>>` does not, and the declaration is verified over the payloads rather
+// than trusted. (A generic enum used to be the one type judged by its payloads with no declaration at all.)
+// `Optional`'s DECLARATION LINE and column are pinned by tools/check-lsp.sh and check-query.sh, which
+// assert go-to-definition on it; moving it moves those.
 // The empty value — the payload for a fallible op that succeeds with nothing to return
 // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
 // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant

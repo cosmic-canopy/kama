@@ -1,0 +1,5 @@
+// A generic enum is not Sendable by accident: `Msg<int32>` has only Sendable payloads and still declares
+// nothing, so it cannot be a channel's element. Write `implements Sendable when [T: Sendable]` (KR-44).
+import { std::concurrent::Channel };
+type enum Msg<T> { Data(T v), Stop }
+fn int32 main() { Channel<Msg<int32>> ch = Channel.bounded(capacity: 1); return 0; }

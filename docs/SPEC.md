@@ -4639,10 +4639,10 @@ Sendable, and nothing holding it may claim to be. <!-- xfail: sendable_undeclare
 
 What may cross **without** a declaration is exactly what cannot carry one: a primitive and `string`
 (declared for them in the prelude, like `Hashable`), a payload-less `enum`, a bare `fnptr` value, and the C
-seam — `UnsafePtr` and an extern struct. A **generic enum** (`Optional<T>`, a user `Msg<T>`) cannot declare
-a contract yet — it can *derive* one with `@generate` (see *Derives*), but a derive registers a conformance
-and gives the author no way to write `implements` — so it alone is judged by its payloads: a sum type has
-nothing they do not show. The stdlib
+seam — `UnsafePtr` and an extern struct. A **generic enum** is not on that list: it declares, per instance,
+like a generic `value` — the prelude's `Optional<T> implements Sendable when [T: Sendable]` (and `Result`'s, <!-- test: generic_enum_sendable -->
+over both parameters) — so `Msg<int32>` with no declaration is refused as a channel element, and an <!-- xfail: generic_enum_sendable_undeclared -->
+unconditional `Msg<T> implements Sendable` is still verified over each instance's payloads. <!-- xfail: generic_enum_sendable_unmet --> The stdlib
 writes its own rules in the same words — `Sendable when [T: Sendable, A: Sendable]` on every container, so <!-- test: sendable_when_gate -->
 an arena-backed `DynamicArray<T, BumpAllocator>` cannot cross (its allocator points into the parent's <!-- xfail: sendable_arena_container -->
 arena), and `Sendable when [T: Immutable]` on `Shared`/`Weak`, which is the rule "a shared handle may cross
