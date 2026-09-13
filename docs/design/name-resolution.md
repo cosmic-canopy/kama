@@ -14,8 +14,13 @@ assistant's local memory or on a scratch directory.
 **State at handoff (2026-09-12).** `dev` at `0.9.320`. The work that surfaced all of this shipped:
 `0.9.318` (a foreign member's return type resolves in its own file), `0.9.319` (`.as<T>()` across units),
 `0.9.320` (`std::uuid`, KR-12). They passed the native suite (1702/0) and all 68 guards on the Windows VM.
-⚠️ **The sanitizer and wasm legs have NOT run for `0.9.318`–`0.9.320`** — that host has no container
-runtime. On a host that has one, run them first: `./dev test san` and `./dev test wasm` (or `./dev matrix`).
+**Picked up on Linux (Ubuntu 24.04, 2026-09-13).** `./dev matrix` at `0.9.320` is green there — native
+1702/0, san 1703/0, wasm 1673/0, 68 guards — which is the first sanitizer and wasm run for `0.9.318`–`0.9.320`.
+A Linux host runs those legs natively now (`dev`, 12b14faa), so the gate below needs no container there. The
+grid was re-run on that host and **no cell moved**. One precision for the results table: its turbofish
+**cq** "ACC — runs" is `z::<geo::HidVal>()` (X15); T19's `deserializeJsonBuffer::<geo::HidVal>` is refused,
+but only because its template also spells the private type in the local's declared type, so the turbofish
+there is never the thing judged.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
 reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
@@ -40,7 +45,8 @@ global allocator → **KR-50** allocator-aware errors.
    some cells may have moved. Record what changed here.
 3. Then the plan below, step 1 (fixtures), private-name ACCEPTED cells first.
 
-**Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file. Windows VM:
+**Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
+leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`). Windows VM:
 `./dev matrix` cannot pass there (no containers, and it skips the guards when the container leg fails), so
 the gate is `./dev test` then `./dev check`, each into its own log, and the san/wasm legs are reported as
 not run. See `docs/platforms/windows.md` for driving that shell.
@@ -457,18 +463,18 @@ cat probes/*/result > results.tsv; wc -l results.tsv
 ```bash
 #!/bin/bash
 # Condense results.tsv: per cell  <check>/<build>  where check: ok|K ; build: run|K|C
+# Sorted by `sort`, not gawk's `asorti` — Debian/Ubuntu ship mawk as `awk`, which has no asorti.
 cd "$(dirname "$0")"
 awk -F'\t' '{
-  split($1,p,"__"); pos=p[1]; cs=p[2]; poss[pos]=1
-  ck = ($2 ~ /rc=0/) ? "ok" : "K"
+  split($1,p,"__"); ck = ($2 ~ /rc=0/) ? "ok" : "K"
   if ($3 ~ /BUILT/) b="run"; else if ($3 ~ /C_ERROR/) b="C"; else b="K"
-  cell[pos,cs]=ck "/" b
-} END {
-  n=split("a b bq c cq d bs bsq",cols," ")
-  printf "%-32s","position"; for(i=1;i<=n;i++) printf "%-8s",cols[i]; print ""
-  m=asorti(poss,sp)
-  for(j=1;j<=m;j++){ printf "%-32s",sp[j]; for(i=1;i<=n;i++){ v=cell[sp[j],cols[i]]; printf "%-8s",(v==""?"-":v)}; print "" }
-}' results.tsv
+  print p[1] "\t" p[2] "\t" ck "/" b
+}' results.tsv | sort | awk -F'\t' '
+  function row(  i, v) { printf "%-32s", pos; for (i = 1; i <= n; i++) { v = cell[cols[i]]; printf "%-8s", (v == "" ? "-" : v) }; print "" }
+  BEGIN { n = split("a b bq c cq d bs bsq", cols, " "); printf "%-32s", "position"; for (i = 1; i <= n; i++) printf "%-8s", cols[i]; print "" }
+  $1 != pos { if (pos != "") row(); pos = $1; split("", cell) }
+  { cell[$2] = $3 }
+  END { if (pos != "") row() }'
 ```
 
 ### `xprobes.sh`
