@@ -6450,7 +6450,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // INTERFACE-element intrinsic path (`isSmartPtrClass`, M11d — each fat handle carries its
                     // own `A alloc` value + `objsize`, drawing the pointee/ctrl from `A`); handled inline below.
                     if (isBindableClass(ty)) {
-                        emitBindableNew(nm, ty, oc, depth);   // bind obj + method
+                        // `new` is the HEAP operator and a bindable is a value (its object is already on the
+                        // heap, behind the `Owned`/`Shared` it takes) — so it is built like any other value.
+                        unsupported("a `BindableFunctionPtr` is built by its constructor, not `new` — write "
+                                    "`BindableFunctionPtr.bind(obj: …, method: Type::method)`", n->line);
                     } else if (isSmartPtrClass(ty)) {
                         std::string T = _classes[ty].collElemClass;
                         if (isSmartPtrClass(octy) || isBindableClass(octy))
@@ -21573,18 +21576,19 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
     return "0";
 }
 
-// `new BindableFunctionPtr<Sig>(obj: x, method: T::m)` — bind an object + a
-// method. Ownership follows x's pointer type: Owned MOVES in (sole owner), Shared
-// RETAINS (shared owner). The receiver is hidden, so Sig excludes it.
-void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
-                               ObjectCreationNode* oc, int depth)
+// `BindableFunctionPtr.bind(obj: x, method: T::m)` — bind an object + a method, the one intrinsic built by a
+// named constructor (dot-on-type), like every kama type. Ownership follows x's pointer type: Owned MOVES in
+// (sole owner), Shared RETAINS (shared owner). The receiver is hidden, so Sig excludes it. The type's
+// argument comes from the destination (`BindableFunctionPtr<Compare> c = BindableFunctionPtr.bind(…)`), as
+// `Channel.bounded(…)` takes its element.
+void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
+                                const SharedArgumentList& args, int ln, int depth)
 {
-    int ln = oc->type ? oc->type->line : 0;
     const std::string& sigCName = _classes[octy].collElemClass;
 
     SharedExpression objArg, methodArg;
-    if (oc->args)
-        for (auto& a : *oc->args) {
+    if (args)
+        for (auto& a : *args) {
             if (!a || !a->name || !a->name->value) continue;
             if (*a->name->value == "obj")    objArg = a->expression;
             else if (*a->name->value == "method") methodArg = a->expression;
@@ -21656,6 +21660,19 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
     else { indent(depth); *_out << "(" << objE << ").ptr = NULL;\n"; }
 }
 
+// `BindableFunctionPtr.bind(…)` — the dot-on-type constructor call, or null. The receiver is the bare type
+// name (its argument comes from the destination), so no binding of that name may shadow it.
+InvocationNode* CEmitter::bindableBindCall(const SharedExpression& e)
+{
+    auto* call = dynamic_cast<InvocationNode*>(e.get());
+    auto* ma = call ? dynamic_cast<MemberAccessNode*>(call->expression.get()) : nullptr;
+    auto* rid = ma ? dynamic_cast<IdentifierNode*>(ma->expression.get()) : nullptr;
+    if (!rid || !rid->value || *rid->value != "BindableFunctionPtr" || (rid->qualifier && !rid->qualifier->empty()))
+        return nullptr;
+    if (!ma->identifier || !ma->identifier->value || *ma->identifier->value != "bind") return nullptr;
+    return call;
+}
+
 // `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
 // function (no object) or MOVE another bindable.
 void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
@@ -21663,6 +21680,11 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
 {
     const std::string& sigCName = _classes[ty].collElemClass;
 
+    if (InvocationNode* bind = bindableBindCall(init)) {
+        line(init->line);
+        emitBindableBind(nm, ty, bind->args, init->line, depth);
+        return;
+    }
     if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
         if (id->value) {
             // Another BindableFunctionPtr lvalue -> move (copy + invalidate the source).
@@ -21689,7 +21711,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
                       << fit->second.cName << "; " << nm << ".elemdtor = NULL;\n";
                 return;
             }
-            unsupported("a BindableFunctionPtr binds via `new BindableFunctionPtr<Sig>(obj:, method:)`, "
+            unsupported("a BindableFunctionPtr binds via `BindableFunctionPtr.bind(obj:, method:)`, "
                         "a free function, or another BindableFunctionPtr", init->line);
             return;
         }
@@ -30404,6 +30426,16 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                     call->line);
         return "0";
     }
+    // `BindableFunctionPtr.bind(…)` takes its signature from the DESTINATION, and the one destination that
+    // names it is a local's declared type — emitBindablePromote builds it there. Anywhere else (a return, an
+    // argument, an assignment) the receiver would otherwise read as an unknown name.
+    if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
+        if (rid->value && *rid->value == "BindableFunctionPtr" && method == "bind") {
+            unsupported("`BindableFunctionPtr.bind(…)` takes its signature from the local it initializes — "
+                        "bind one first (`BindableFunctionPtr<Sig> b = BindableFunctionPtr.bind(obj: …, "
+                        "method: …);`) and hand that on with `give`", call->line);
+            return "0";
+        }
     std::string cls = exprClass(receiver);
     // `p[0].m()` on a LOCAL raw `UnsafePtr<T>`: `exprClass` deliberately does not type a local raw element
     // (a store through one — `nd[i] = od[i]` in the collections — must stay a bitwise relocate, and
@@ -30716,9 +30748,9 @@ MethodInfo* CEmitter::placeMethodOf(const std::string& cls, const std::string& m
 // fields public — a data bag can bless its own memberwise/zero state), never for a `resource` or a value
 // with private fields, which must state a real `ctor`.
 //
-// Two exemptions, both because the nameless spelling is the ONLY spelling there:
-//   - an intrinsic collection — `new BindableFunctionPtr<Sig>(obj: …, method: …)`;
-//   - a `type extern value` (C-POD) — `div_t(quot: 3, rem: 2)` IS aggregate init; there is no ctor to name.
+// Two exemptions: an intrinsic collection has no kama ctor to point at (and `BindableFunctionPtr`, the one
+// that took this spelling, is now built by `BindableFunctionPtr.bind`); a `type extern value` (C-POD) —
+// `div_t(quot: 3, rem: 2)` IS aggregate init, there is no ctor to name.
 // Returns true when it rejected, so a caller can suppress its own follow-on diagnostic.
 bool CEmitter::rejectNamelessConstruction(const ClassInfo& ci, const std::string& disp, bool viaNew, int srcLine)
 {

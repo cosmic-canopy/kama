@@ -1,0 +1,10 @@
+// `BindableFunctionPtr.bind(…)` takes its signature from the local it initializes, so it is written as a local's
+// initializer and handed on from there — not directly as a return value or an argument.
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type resource Probe { int32 id; public ctor make(int32 id) { this.id = id; } public fn int32 read(int32 d) { return this.id + d; } }
+fn BindableFunctionPtr<Get> mk() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    return BindableFunctionPtr.bind(obj: p, method: Probe::read);
+}
+fn int32 main() { BindableFunctionPtr<Get> g = mk(); return g(d: 1); }

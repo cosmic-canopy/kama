@@ -14,7 +14,7 @@ type resource Probe {
 }
 fn int32 use() {
     Owned<Probe> p = new Probe.make(id: 1);
-    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
 }
 fn int32 main() {

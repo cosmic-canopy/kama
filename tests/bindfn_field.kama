@@ -25,7 +25,7 @@ type resource Handler {
 }
 fn int32 use() {
     Owned<Probe> p = new Probe.make(id: 1);
-    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     Handler h = Handler.make(cb: give g);
     return h.fire();                          // 42; `h` drops here -> the bindable -> Probe::~ once
 }

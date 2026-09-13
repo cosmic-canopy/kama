@@ -3152,8 +3152,9 @@ private:
                               SharedExpression argExpr, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.
-    void        emitBindableNew(const std::string& nm, const std::string& octy,
-                                ObjectCreationNode* oc, int depth);
+    void        emitBindableBind(const std::string& nm, const std::string& octy,
+                                 const SharedArgumentList& args, int ln, int depth);
+    InvocationNode* bindableBindCall(const SharedExpression& e);
     void        emitBindablePromote(const std::string& nm, const std::string& ty,
                                     SharedExpression init, int depth);
     std::string emitBindableInvoke(const std::string& recv, const std::string& cls,

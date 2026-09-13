@@ -15,7 +15,7 @@ type resource Probe {
 }
 fn int32 use() {
     Shared<Probe> p = new Probe.make(id: 1);
-    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
 }
 fn int32 main() {

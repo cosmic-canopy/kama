@@ -2629,7 +2629,9 @@ int32 n = d(self: ref u, o: ref v);
 
 **`BindableFunctionPtr<Sig>`** — a callable that *captures* a receiver so you don't pass it each call. Unlike
 the zero-cost `fnptr`, it carries an object (opt-in cost) and is **RAII-managed**. It's constructed like any
-other object, and **the ownership model follows the pointer type you hand in** — no separate keyword:
+other object — by its constructor, `BindableFunctionPtr.bind`, whose signature comes from the local it initializes <!-- xfail: bindable_bind_not_local -->
+(not `new`: a bindable is a value, and its object is already on the heap behind the pointer you hand in) — and <!-- xfail: bindable_new -->
+**the ownership model follows the pointer type you hand in** — no separate keyword:
 
 ```kama
 fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
@@ -2637,9 +2639,9 @@ type value Scaler { int32 k; public ctor make(int32 k){ Scaler r; r.k = k; retur
                public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
 
 Owned<Scaler>  s  = new Scaler.make(k: 3);     // (constructed as Owned)
-BindableFunctionPtr<Compare> c  = new BindableFunctionPtr<Compare>(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
+BindableFunctionPtr<Compare> c  = BindableFunctionPtr.bind(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
 Shared<Scaler> s2 = new Scaler.make(k: 2);
-BindableFunctionPtr<Compare> c2 = new BindableFunctionPtr<Compare>(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
+BindableFunctionPtr<Compare> c2 = BindableFunctionPtr.bind(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
 BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) — so this type "accepts either"
 
 int32 r = c(a: 9, b: 2);                 // -> Scaler::apply(boundObj, 9, 2) = (9-2)*3 = 21
@@ -2951,9 +2953,9 @@ Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an own
   `Enum::Variant(…)` keep `::`. So `.make(` greps for construction and catches nothing else. There is **no
   nameless `Type(…)` call form** for a kama type — it silently dropped its arguments, and it is a hard
   error in every position (`Type(…)`, `new Type(…)`, `try new Type(…)`, `new(allocator: a) Type(…)`, and a
-  reassignment `x = Type(…)`). Two things keep that spelling because it is the *only* spelling they have:
+  reassignment `x = Type(…)`). One thing keeps that spelling because it is the *only* spelling it has:
   a `type extern value`, where `div_t(quot: 3, rem: 2)` is by-name **aggregate init** of a C struct that has
-  no constructor to name, and the intrinsic `new BindableFunctionPtr<Sig>(obj:, method:)`. A generic ctor
+  no constructor to name. A generic ctor
   puts the turbofish on the **type**: `T::<Args>.make(…)`.
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields

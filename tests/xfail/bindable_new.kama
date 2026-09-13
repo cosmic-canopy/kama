@@ -1,0 +1,10 @@
+// `new` is the heap operator, and a `BindableFunctionPtr` is a value (the object it captures is already behind
+// the `Owned`/`Shared` it takes). It is built by its constructor, like every kama type: `BindableFunctionPtr.bind`.
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type resource Probe { int32 id; public ctor make(int32 id) { this.id = id; } public fn int32 read(int32 d) { return this.id + d; } }
+fn int32 main() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    return g(d: 1);
+}

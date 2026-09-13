@@ -9,7 +9,7 @@ type value Probe {
 }
 fn BindableFunctionPtr<Get> make(int32 id) {
     Owned<Probe> p = new Probe.make(id: id);
-    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g;
 }
 fn int32 main() {

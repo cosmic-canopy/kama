@@ -17,7 +17,7 @@ type resource Handler implements Sendable {
 fn void worker(Handler h) { }
 fn int32 main() {
     Shared<Probe> p = new Probe.make(id: 1);
-    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     Handler h = Handler.make(cb: give g);
     Isolate w = spawn worker(h: give h);
     w.join();

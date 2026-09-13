@@ -50,6 +50,8 @@ bind_foreach_narrow	bind_foreach_narrow.kama:3
 bind_foreach_operand	bind_foreach_operand.kama:3
 bind_match_narrow	bind_match_narrow.kama:4
 bind_match_operand	bind_match_operand.kama:3
+bindable_bind_not_local	bindable_bind_not_local.kama:8
+bindable_new	bindable_new.kama:8
 binder_shadow_for_local	binder_shadow_for_local.kama:10
 binder_shadow_foreach_field	binder_shadow_foreach_field.kama:14
 binder_shadow_foreach_local	binder_shadow_foreach_local.kama:16
