@@ -254,6 +254,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ### Name resolution and visibility stop at the outer type (KR-46) — measured 2026-09-12, `0.9.320`
 
+**Working doc: [docs/design/name-resolution.md](design/name-resolution.md)** — the probe module, every
+position template, the full results grid, the root causes with line numbers, and the plan. What follows is
+the summary.
+
 Found building `std::uuid`: `Result<Uuid, UuidError> r = Uuid.parse(…)` with only `Uuid` imported is not a
 kama error — clang reports `use of undeclared identifier 'Result_std__uuid__Uuid_UuidError'`. A kama program
 must never fail in C, so the whole class was probed: ~300 programs, every position a type or value name can
