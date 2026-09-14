@@ -2690,6 +2690,8 @@ private:
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
     static void forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
+    static void forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
+    bool constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile);
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
     // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
     //

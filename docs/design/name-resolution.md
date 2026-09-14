@@ -55,8 +55,10 @@ global allocator → **KR-50** allocator-aware errors.
 **Slice 1 landed at `0.9.322`.** In the tree: 107 reach fixtures and `tests/reach_controls_imported.d`. Held
 back although green: `reach_bound_type_unknown` — its diagnostic points at line 1 (the comment), and a bound
 is slice 2's position; it lands there with the right line. `reach_controls_qualified.d` is still refused at
-`implements geo::ShownC` (slice 2), and behind that `#(geo::SHOWNK)` — a LEGAL qualified module constant —
-still fails in C: `constArgN` reads every qualified size as `Type::NAME` (a side defect, its own commit).
+`implements geo::ShownC` (slice 2). Behind that, `#(geo::SHOWNK)` — a LEGAL qualified module constant —
+failed in C because `constArgN` read every qualified size as `Type::NAME`; fixed at `0.9.323`
+(`tests/const_generic_qualified_module.d`), together with the reach judgment of a local's `#(K)` that the
+fold would otherwise have bypassed (`tests/xfail/const_generic_qualified_private_local.d`).
 
 **Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
 leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`). Windows VM:

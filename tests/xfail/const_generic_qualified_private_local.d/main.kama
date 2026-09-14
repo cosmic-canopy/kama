@@ -1,0 +1,6 @@
+// A PRIVATE module constant spelled qualified as a local's size. Once a qualified size folded, nothing on
+// the body path judged its reach, and this compiled — found building KR-46.
+fn int32 main() {
+    InlineArray<int32>#(geo::HIDDEN) b = [1, 2, 3, 4];
+    return b[0] - 1;
+}

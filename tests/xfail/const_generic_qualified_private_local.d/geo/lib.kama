@@ -1,0 +1,4 @@
+export { CAP };
+
+comptime isize CAP = 3;
+comptime isize HIDDEN = 4;

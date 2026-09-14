@@ -132,6 +132,7 @@ const_contract_impl	const_contract_impl.kama:9
 const_contract_recv	const_contract_recv.kama:11
 const_escape_obj	const_escape_obj.kama:4
 const_escape_ref	const_escape_ref.kama:3
+const_generic_qualified_private_local	main.kama:4
 const_give	const_give.kama:7 const_give.kama:8
 const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14

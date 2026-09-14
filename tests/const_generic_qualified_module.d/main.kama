@@ -1,0 +1,9 @@
+// A module constant spelled QUALIFIED as a compile-time argument, never imported. `geo::CAP` is a legal
+// spelling everywhere a name is, but a qualified size was read only as `Type::NAME`, so it did not fold and
+// `InlineArray_int32_CAP` reached clang — found building KR-46.
+fn isize count(InlineArray<int32>#(geo::CAP) a) { return 0; }
+
+fn int32 main() {
+    InlineArray<int32>#(geo::CAP) a = [4, 5, 6];
+    return cast<int32>(count(a: a)) + a[2];
+}

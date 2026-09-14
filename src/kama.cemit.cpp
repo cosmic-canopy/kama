@@ -2425,6 +2425,27 @@ void CEmitter::forEachTypeArg(const SharedIdentifier& t, const std::function<voi
     if (t->qualifierGenericArgs) for (auto& a : *t->qualifierGenericArgs) if (a) f(a);
 }
 
+// The `#(…)` values a spelling writes that are NAMES (`#(K)`, `#(geo::CAP)`) — a literal or an expression
+// needs no resolution.
+void CEmitter::forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f)
+{
+    if (!t || !t->genericArgs || t->nTypeArgs < 0) return;
+    for (size_t i = (size_t)t->nTypeArgs; i < t->genericArgs->size(); ++i) {
+        const SharedIdentifier& k = (*t->genericArgs)[i];
+        if (k && k->value && !k->constArgValue && !k->genericArg) f(k);
+    }
+}
+
+// A `#(K)` naming a module constant, judged for reach from `refFile` like any other name. False when `K`
+// names no module constant — a comptime parameter, a type constant, or nothing — which the caller answers.
+bool CEmitter::constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile)
+{
+    const std::string key = resolveModuleVar(*k->value, k->qualifier);
+    if (key.empty()) return false;
+    checkReach(key, *k->value, what, k->line, refFile, k->qualifier && !k->qualifier->empty());
+    return true;
+}
+
 bool CEmitter::isComptimeParamHere(const std::string& nm) const
 {
     // Function half of the probe: every param of the template is in _probeTypeParams, and only the TYPE
@@ -2989,24 +3010,20 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         // file like any other name. It was never looked at, so an unimported, private or unknown `K` emitted
         // a bare `K` into the instance's C name and failed in clang. A literal needs nothing; the declaration's
         // own comptime parameter is bound, not referenced.
-        if (t->genericArgs && t->nTypeArgs >= 0)
-            for (size_t i = (size_t)t->nTypeArgs; i < t->genericArgs->size(); ++i) {
-                const SharedIdentifier& k = (*t->genericArgs)[i];
-                if (!k || !k->value || k->constArgValue || k->genericArg || tp.count(*k->value)) continue;
-                const bool qualified = k->qualifier && !k->qualifier->empty();
-                const std::string key = resolveModuleVar(*k->value, k->qualifier);
-                if (!key.empty()) { checkReach(key, *k->value, what, k->line, _nsCtx.unitPath, qualified); continue; }
-                if (qualified) {
-                    // `Type::NAME`, a type-associated constant — how `constArgN` reads a qualified size.
-                    auto tq = std::make_shared<StringList>(k->qualifier->begin(), k->qualifier->end() - 1);
-                    if (_typeConsts.count(resolveUserNameImpl(*k->qualifier->back(), tq) + "::" + *k->value)) continue;
-                }
-                if (!qualified && reportDeclaredElsewhere("constant", *k->value, [&](const std::string& mk) {
-                        return _moduleStatics.count(mk) > 0; }, what, k->line))
-                    continue;
-                unsupported(("unknown constant `" + *k->value + "` in " + what
-                             + " — no such constant is declared or imported").c_str(), k->line, *k->value);
+        forEachConstArgName(t, [&](const SharedIdentifier& k) {
+            if (tp.count(*k->value) || constArgReaches(k, what, _nsCtx.unitPath)) return;
+            const bool qualified = k->qualifier && !k->qualifier->empty();
+            if (qualified) {
+                // `Type::NAME`, a type-associated constant — how `constArgN` reads a qualified size.
+                auto tq = std::make_shared<StringList>(k->qualifier->begin(), k->qualifier->end() - 1);
+                if (_typeConsts.count(resolveUserNameImpl(*k->qualifier->back(), tq) + "::" + *k->value)) return;
             }
+            if (!qualified && reportDeclaredElsewhere("constant", *k->value, [&](const std::string& mk) {
+                    return _moduleStatics.count(mk) > 0; }, what, k->line))
+                return;
+            unsupported(("unknown constant `" + *k->value + "` in " + what
+                         + " — no such constant is declared or imported").c_str(), k->line, *k->value);
+        });
     };
     auto check = [&](const SharedIdentifier& t, const char* what) {
         if (!t || !t->value) return;
@@ -6326,11 +6343,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             checkTypeResolves(declType, ty, "a local declaration", n->line);
             // ...and every type argument under it, as `checkDeclaredTypes` does for a signature: the head
             // alone waves `Optional<Zork>` through, because the instance mangles to some name regardless.
+            // A `#(K)` naming a module constant is judged for reach here too: `constArgN` folds a qualified
+            // private one, so without this `#(geo::HIDK)` in a body compiled. An unresolved `K` is left to
+            // the fold's own diagnostic.
             std::function<void(const SharedIdentifier&)> argsResolve = [&](const SharedIdentifier& a) {
                 checkTypeResolves(a, cType(a), "a local declaration", n->line);
                 forEachTypeArg(a, argsResolve);
+                forEachConstArgName(a, [&](const SharedIdentifier& k) {
+                    constArgReaches(k, "a local declaration", refFilePath()); });
             };
             forEachTypeArg(declType, argsResolve);
+            forEachConstArgName(declType, [&](const SharedIdentifier& k) {
+                constArgReaches(k, "a local declaration", refFilePath()); });
             if (_typeSubst.empty()) rejectBareCChar(declType, "a local", n->line);   // not during a poisoned instance's re-walk
             rejectMintProtocolValue(declType, "a local", n->line);
             // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal
@@ -10187,6 +10211,11 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         std::string en = resolveUserName(*arg->qualifier->back(), tq);
         auto tc = _typeConsts.find(en + "::" + *arg->value);
         if (tc != _typeConsts.end() && tc->second.hasValue) { out = tc->second.value; return true; }
+        // ...or `module::NAME`, a module `comptime` spelled qualified. This branch used to return here, so
+        // `#(geo::CAP)` never reached the module lookup below and a legal size failed to fold.
+        const std::string mk = resolveModuleVar(*arg->value, arg->qualifier);
+        auto mc = mk.empty() ? _moduleConsts.end() : _moduleConsts.find(mk);
+        if (mc != _moduleConsts.end()) { out = mc->second; return true; }
         return false;
     }
     if (arg->value && !arg->genericArg) {
@@ -10197,8 +10226,8 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         auto lv = _constLocalVals.find(*arg->value);
         if (lv != _constLocalVals.end()) { out = lv->second; return true; }
         // 6b-2: a module `comptime NAME`. Through `resolveModuleVar`, not a bare `qualify`, so an
-        // IMPORTED or module-QUALIFIED constant can size an `InlineArray` too — publishing a constant
-        // is only useful if a consumer can then use it where a constant is required.
+        // IMPORTED constant can size an `InlineArray` too — publishing a constant is only useful if a
+        // consumer can then use it where a constant is required. (A QUALIFIED one is the branch above.)
         const std::string mk = resolveModuleVar(*arg->value, arg->qualifier);
         if (!mk.empty()) {
             auto mc = _moduleConsts.find(mk);
