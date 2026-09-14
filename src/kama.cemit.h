@@ -779,6 +779,10 @@ public:
     // std::log, `main` seeds it into the process env (overwrite=0), so a shipped binary carries its project
     // default log filter while `--log`/`KAMA_LOG` still override it (M5).
     void setLogDefault(const std::string& spec) { _logDefault = spec; }
+    // Roots of source the author cannot edit — the stdlib and the package store (realpath'd, no trailing '/'). A
+    // diagnostic raised while emitting a generic instance whose template lives under one names the INSTANTIATION
+    // site instead (KR-38): see attributeToInstSite.
+    void setForeignRoots(const std::vector<std::string>& roots) { _foreignRoots = roots; }
     // Maps a unit's source path to the manifest of the package that owns it ("" when nothing does, and
     // for the synthetic prelude units). Supplied by the driver — resolving it is filesystem work, and it
     // is consulted only when a diagnostic has to say which package a conformance came from.
@@ -1899,6 +1903,26 @@ private:
     std::string whenGateReason(const std::string& inst, const std::string& method);
     static const char* const kCompileForOnMember;
     bool _inferSawOpenArg = false;   // an inference argument still names the enclosing template's parameter
+    // file:line of a type argument refused at registration — its instance never exists, so a construction on the
+    // same line has nothing to build and must not report that as a second, unrelated mistake.
+    std::set<std::string> _refusedTypeArgSites;
+    std::vector<std::string> _foreignRoots;
+    bool isForeignFile(const std::string& path) const;
+    struct InstSite { std::string file; int line = 0; std::string label; };
+    std::map<std::string, InstSite> _instSites;   // instance mangled name -> the user site that instantiated it
+    InstSite _attrSite;                           // active while a foreign template's instance is emitted
+    void recordInstSite(const std::string& mangled, const std::string& templateKey,
+                        const std::vector<SharedIdentifier>& args, int line);
+    void attributeToInstSite(std::string& file, int& line, std::string& message) const;
+    struct ScopedAttrSite {
+        InstSite& slot; InstSite saved;
+        ScopedAttrSite(CEmitter& e, const std::string& mangled, const std::string& templateFile)
+            : slot(e._attrSite), saved(e._attrSite) {
+            auto it = e._instSites.find(mangled);
+            if (it != e._instSites.end() && e.isForeignFile(templateFile)) slot = it->second;
+        }
+        ~ScopedAttrSite() { slot = saved; }
+    };
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
     void instantiateEnumMembers(const GenericTypeInst& gi);

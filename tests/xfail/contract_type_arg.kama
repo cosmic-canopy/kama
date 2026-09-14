@@ -1,0 +1,11 @@
+// A contract value borrows its object, so a type that holds one as `T` would dangle — refused ONCE, at the type
+// argument, for a user generic as for a collection (tests/xfail/iface_collection). A heap handle is the exception:
+// `Owned<Shape>` / `Shared<Shape>` box the object (tests/box_iface, rc_iface, weak_iface).
+type contract Shape for value { fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
+type value Holder<T> { T item; public ctor of(T item) { this.item = item; } }
+fn int32 main() {
+    Sq q = Sq.make(s: 2);
+    Holder<Shape> h = Holder.of(item: q);
+    return 0;
+}

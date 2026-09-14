@@ -130,6 +130,7 @@ bool CEmitter::ctFail(const char* what, int line)
         d.code = "comptime";
         d.message = std::string("comptime evaluation: ") + what;
         d.file = reportPath(diagFile());   // the prelude names its own file when the install has it — see reportPath
+        attributeToInstSite(d.file, d.line, d.message);   // a stdlib type's assert names the author's instantiation (KR-38)
         _diagnostics.push_back(d);
         _ctFailed = true;
     }

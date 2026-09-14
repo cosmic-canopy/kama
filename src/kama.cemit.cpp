@@ -320,6 +320,53 @@ const char* const CEmitter::kCompileForOnMember =
     "ignored here. Gate the enclosing `type` instead (which drops every member with it), or split the member "
     "into two types";
 
+// Source the author cannot edit: a compiler-owned `<…>` unit, or a file under the stdlib or package-store roots.
+bool CEmitter::isForeignFile(const std::string& path) const
+{
+    if (path.empty()) return false;
+    if (path[0] == '<') return true;
+    for (auto& r : _foreignRoots)
+        if (!r.empty() && path.size() > r.size() && path.compare(0, r.size(), r) == 0 && path[r.size()] == '/') return true;
+    return false;
+}
+
+// The site that instantiated `mangled`, recorded once, when it is registered: the use site's file and line —
+// or, when it is registered from inside another foreign instance's body, THAT instance's user site, so a chain
+// of stdlib instances still leads back to the line the author wrote.
+void CEmitter::recordInstSite(const std::string& mangled, const std::string& templateKey,
+                              const std::vector<SharedIdentifier>& args, int line)
+{
+    if (_instSites.count(mangled)) return;
+    if (!_attrSite.file.empty()) { _instSites[mangled] = _attrSite; return; }
+    const std::string f = !_nsCtx.unitPath.empty() ? _nsCtx.unitPath : diagFile();
+    if (f.empty() || isForeignFile(f) || line <= 0) return;
+    // The label spells the instance as source would — `Fixed<int8>#(16)`, `deserializeJsonBuffer<Shared<Pt>>` —
+    // rather than demangling its C name, which cannot tell a namespace separator from a type-argument boundary.
+    std::string types, values;
+    for (auto& a : args) {
+        int64_t v;
+        if (a && a->constArgValue && constArgN(a, v)) values += (values.empty() ? "" : ", ") + std::to_string(v);
+        else types += (types.empty() ? "" : ", ") + (a ? demangleForDisplay(mangleElem(a)) : std::string("?"));
+    }
+    std::string label = demangleForDisplay(templateKey);
+    const size_t cut = label.rfind("::");
+    if (cut != std::string::npos) label = label.substr(cut + 2);
+    label += (types.empty() ? "" : "<" + types + ">") + (values.empty() ? "" : "#(" + values + ")");
+    _instSites[mangled] = { f, line, label };
+}
+
+// KR-38: a diagnostic raised INSIDE a foreign template's instance — at a stdlib line the author never wrote —
+// is reported at the instantiation site, with the stdlib location kept as a note. The mistake is the type
+// argument (or the call) the author chose, and some of these facts are settled only after collection, so the
+// refusal cannot move to a bound; what can move is where it is reported. `rawFile` is the unrendered file.
+void CEmitter::attributeToInstSite(std::string& file, int& line, std::string& message) const
+{
+    if (_attrSite.file.empty() || !isForeignFile(diagFile())) return;
+    message += " (in `" + _attrSite.label + "`, instantiated here; raised at " + file + ":" + std::to_string(line) + ")";
+    file = reportPath(_attrSite.file);
+    line = _attrSite.line;
+}
+
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
     unsupported(rawWhat, srcLine, std::string());
@@ -331,7 +378,9 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
 // than "nobody got round to it".
 void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& subject)
 {
-    const std::string display = demangleForDisplay(rawWhat);
+    std::string display = demangleForDisplay(rawWhat);
+    std::string dfile = reportPath(diagFile());
+    attributeToInstSite(dfile, srcLine, display);
     const char* what = display.c_str();
     // ONE mistake, ONE diagnostic. A generic type's member body is emitted once per instantiation, so a
     // rule that fires inside one fired once per instantiation: `Box<int32>` and `Box<bool>` turned a
@@ -341,7 +390,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     //
     // The `/* TODO(kama): unsupported … */` marker below is deliberately NOT deduped: it is a property of
     // the emission site, one per body actually emitted, and it keeps `--keep-c` honest.
-    if (!_reportedDiags.insert(reportPath(diagFile()) + ":" + std::to_string(srcLine) + ":" + display).second) {
+    if (!_reportedDiags.insert(dfile + ":" + std::to_string(srcLine) + ":" + display).second) {
         *_out << "/* TODO(kama): unsupported " << what << " */";
         return;
     }
@@ -360,7 +409,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     // reportPath, not diagFile: a diagnostic owned by the prelude names the prelude's FILE when the
     // install has it (and the driver has verified it is still what this binary compiled), and its
     // synthetic `<prelude>` name when it does not. The unit keeps its name either way.
-    d.file = reportPath(diagFile());
+    d.file = dfile;
     d.subject = subject;
     _diagnostics.push_back(d);
     *_out << "/* TODO(kama): unsupported " << what << " */";
@@ -11615,6 +11664,48 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
             }
         }
 
+    // A CONTRACT as a generic type ARGUMENT, for the same reason as a view: a contract value borrows its object
+    // (a fat pointer to someone else's storage), so a collection buffering it or a type holding it dangles. Only
+    // a heap handle takes one — anything implementing `HeapOwner` (`Owned`, `Shared`, a user `Box<T>`), which
+    // BOXES it, routed below through the interface-owner path — and `Weak`, its partner. Refused here, once, at
+    // the argument — the instance's bodies used to refuse it instead, a dozen times over at stdlib lines the
+    // author never wrote (`DynamicArray<Shape>`: 12 diagnostics across dynamic_array.kama and view.kama).
+    //
+    // Decided from the TEMPLATES, not from what is registered yet: a program may name `RcWeak<Shape>` in a
+    // signature before its `Rc<Shape>` exists, so "is this a weak partner" is the routing's own rule below — some
+    // `HeapOwner` template has a method returning this template — asked of the declarations directly.
+    bool boxesContract = tmpl == _weakTmpl;
+    if (!boxesContract && !_heapOwnerContract.empty()) {
+        auto ownsHeap = [&](const ClassInfo& t) {
+            for (auto& ifn : t.interfaces) if (resolveUserName(ifn, nullptr) == _heapOwnerContract) return true;
+            return false;
+        };
+        auto ti = _genericTypes.find(tmpl);
+        if (ti != _genericTypes.end() && ownsHeap(ti->second)) boxesContract = true;
+        for (auto& kv : _genericTypes) {
+            if (boxesContract) break;
+            if (kv.first == tmpl || !kv.second.copyable || !ownsHeap(kv.second)) continue;
+            for (auto& mk : kv.second.methods) {
+                const SharedIdentifier& rt = mk.second.returnType;
+                if (rt && rt->value && rt->genericArg && resolveUserName(*rt->value, rt->qualifier) == tmpl) {
+                    boxesContract = true; break;
+                }
+            }
+        }
+    }
+    if (!opaqueArg && !boxesContract)
+        for (auto& c : concrete) {
+            const std::string base = (c && c->value && !c->genericArg) ? resolveUserName(*c->value, c->qualifier) : "";
+            if (!base.empty() && (isInterface(base) || _genericContracts.count(base))) {
+                const std::string shown = demangleForDisplay(base);
+                unsupported(("a contract (`" + shown + "`) borrows its object, so it can't be a type argument of `"
+                             + demangleForDisplay(tmpl) + "` — it would dangle; own the object instead (`Owned<"
+                             + shown + ">` or `Shared<" + shown + ">`)").c_str(), line);
+                _refusedTypeArgSites.insert(reportPath(diagFile()) + ":" + std::to_string(line));
+                return;
+            }
+        }
+
     std::string mangled = tmpl;
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
@@ -11739,6 +11830,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
 
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
+    recordInstSite(mangled, tmpl, concrete, line);
     _genericTypeInstOf[mangled] = tmpl;
     _genericTypeInstOrder.push_back(mangled);
     // Emit the instance's members under the TEMPLATE's ctx, so a name the template body references in
@@ -13174,6 +13266,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                                  : inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi);
                 if (ok) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+                    recordInstSite(gi.mangledName, gi.templateKey, gi.typeArgs, inv->line);
                     _callInst[inv][substSig()] = gi.mangledName;   // per call node, per enclosing substitution
                 } else {
                     _genericInferFailed.insert(inv);   // already diagnosed here — see the emit-side rule
@@ -13435,6 +13528,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     // directly rather than through `unitOfDecl`, which answers nothing for a prelude/std template.
     auto dfIt = _genericDeclFile.find(gi.templateKey);
     ScopedStr _edf(_emitDeclFile, dfIt == _genericDeclFile.end() ? std::string() : dfIt->second);
+    ScopedAttrSite _as(*this, gi.mangledName, dfIt == _genericDeclFile.end() ? std::string() : dfIt->second);
 
     NsCtx savedCtx = _nsCtx;
     auto cit = _genericCtx.find(gi.templateKey);
@@ -28271,6 +28365,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     // instantiate it. `declFile` is recorded at collection for exactly this, and unlike `unitOfDecl` it
     // answers for a prelude/std template too — `Shared<T>` and `Weak<T>` are the ones every program hits.
     ScopedStr _edf(_emitDeclFile, tmplIt == _genericTypes.end() ? std::string() : tmplIt->second.declFile);
+    ScopedAttrSite _as(*this, gi.mangledName, tmplIt == _genericTypes.end() ? std::string() : tmplIt->second.declFile);
     NsCtx savedCtx = _nsCtx;
     // emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
     // same-scope user generic this equals the template's home ctx.
@@ -30171,6 +30266,8 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // The sibling branch above stays live under a probe: calling a static through dot-on-type is the
         // wrong spelling whatever `T` turns out to be. THIS one is pure absence — `DynamicArray<T>.new()`
         // has no instance to name until something instantiates the enclosing template.
+        else if (_refusedTypeArgSites.count(reportPath(diagFile()) + ":" + std::to_string(call->line)))
+            ;   // the target's type argument was refused on this line — that IS the mistake (registerGenericTypeInst)
         else if (!deferUnknownWhileProbing(DK_DotCtor))
             unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
                          + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "

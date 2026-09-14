@@ -194,6 +194,7 @@ contract_return_mismatch	contract_return_mismatch.kama:9
 contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5
 contract_return_mismatch_intrinsic	contract_return_mismatch_intrinsic.kama:5
 contract_static_mismatch	contract_static_mismatch.kama:12
+contract_type_arg	contract_type_arg.kama:9
 contract_with_body	contract_with_body.kama:2
 contract_with_field	contract_with_field.kama:2
 copy_conditional_off	copy_conditional_off.kama:13
@@ -305,7 +306,7 @@ file_gate_module_all_gated	main.kama:8
 file_gate_operand	file_gate_operand.kama:12
 file_gate_still_parsed	file_gate_still_parsed.kama:13
 fixed_backing_int64	fixed_backing_int64.kama:12
-fixed_bad_pairing	-
+fixed_bad_pairing	fixed_bad_pairing.kama:13
 float_bare_dot	float_bare_dot.kama:6
 float_literal_to_int	float_literal_to_int.kama:1
 floatint_local	floatint_local.kama:1
@@ -384,9 +385,9 @@ graph_coll_no_itermut	graph_coll_no_itermut.kama:17
 graph_coll_unmarked	graph_coll_unmarked.kama:22
 graph_delegate_unmarked	graph_delegate_unmarked.kama:44
 graph_enum_pointee_not_generate	graph_enum_pointee_not_generate.kama:8
-graph_handle_not_a_node	-
+graph_handle_not_a_node	graph_handle_not_a_node.kama:11
 graph_owned_of_shared	graph_owned_of_shared.kama:16
-graph_read_by_value	-
+graph_read_by_value	graph_read_by_value.kama:16
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
 heap_handle_bare_value	heap_handle_bare_value.kama:7
@@ -403,7 +404,7 @@ identity_enum_to_int	identity_enum_to_int.kama:9
 identity_int_to_enum	identity_int_to_enum.kama:13
 identity_sig_arity	identity_sig_arity.kama:20
 identity_sig_cross_sig	identity_sig_cross_sig.kama:13
-iface_collection	-
+iface_collection	iface_collection.kama:6
 iface_field	iface_field.kama:5
 iface_method_private	iface_method_private.kama:7
 iface_ref_concrete	iface_ref_concrete.kama:12

@@ -2336,6 +2336,7 @@ static void configureEmitter(CEmitter& e)
     e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
+    e.setForeignRoots({ absolutePath(resolveStdlibDir(g_argv0)), absolutePath(storeDir()) });   // KR-38 attribution
     // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
     // packages claim the same conformance, so it is a callback rather than a precomputed per-unit table:
     // the walk is filesystem work the emitter has no business doing, and it runs at most once per error.
