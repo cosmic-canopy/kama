@@ -12,9 +12,35 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-14, Linux).** KR-46 (name resolution and visibility at every type position) shipped at
-`0.9.340`; its record is `SPEC.md` § Modules, the `tests/xfail/reach_*` fixtures and the git log. `dev` is
-ahead of `origin/dev`, unpushed. Nothing in this campaign has started.
+**State (2026-09-14, Linux).** `dev` at `0.9.345`: `origin/dev` plus this handoff, nothing else unpushed. Gate
+green on every leg at that HEAD: native 1913/0, san 1914/0, wasm 1884/0, 69 guards, analysis agreement
+860 + 1024. Since
+this campaign was opened, KR-46 (name resolution and visibility at every type position) shipped at `0.9.340`
+— its record is `SPEC.md` § Modules, the `tests/xfail/reach_*` fixtures and the git log — and KR-52 (the
+generated host header, `type expose value`) at `0.9.341`–`0.9.345`. Rows filed since: **KR-54** (a
+`@compileFor`-dropped declaration is never checked) and **KR-55** (an enum's values are an ABI promise) — ⚠️ **KR-55 is being worked on on the
+maintainer's Mac: do not pick it up here**, and expect its commits in the next rebase (it may touch the
+emitter this campaign reads). Nothing in this campaign has started. A new
+roadmap row takes the `Next id:` counter at the top of `docs/ROADMAP.md`, and bumps it.
+
+**First steps next session:**
+
+1. `git fetch && git rebase origin/dev`, `./dev build`. Other work lands between sessions (15 commits did
+   during KR-46): if the rebase brings emitter changes, re-run the matrix on the rebased HEAD before building
+   on it.
+2. Re-verify **What is true today** below before designing against it — it was measured by reading at
+   `0.9.318`. Re-run at `0.9.340` and again at `0.9.345` (2026-09-14), the behaviour held and the function
+   anchors exist; only the line numbers moved. The three probes, each `fn int32 main() { return 0; }` behind one import and built with
+   `kama build --no-heap`, calling nothing: `std::uuid::Uuid` is refused 4 times (error boxes at
+   `uuid.kama:209`/`215`/`218`, an interpolation at `:51`); `std::serialization::text::json::deserializeJsonBuffer`
+   28 times (error boxes at `json.kama:71` and `prelude/global.kama:429`–`456`, a `substring` at `json.kama:308`);
+   `std::encoding::hex::DecodeError` once, at the interpolation in its `message()` (`hex.kama:27`). (`hex::decode` itself is `@compileFor(!NOHEAP)` and correctly absent
+   — not a probe.) A different answer means the compiler moved — record it here first.
+3. KR-47's design pass, with KR-39 in view (below): the roots, the ungated sites, how an extern declares that
+   it allocates, and the diagnostic's chain. Settle it in §1 of this doc before code; a fork against what is
+   written here goes to the maintainer with measured costs.
+4. Then fixtures RED first: the three probes above as positive fixtures that must BUILD under `--no-heap`,
+   and every existing `noheap_*` xfail re-read to confirm it still fails through a reached chain.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-47** reach-based `--no-heap` →
 **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable global allocator → **KR-50**
@@ -75,7 +101,13 @@ sized `kama_free` (§2), and a per-call error allocator (§4).
 5. **No workaround in serde's error path.** A `deserialize` that fails returns `Err`; it never smuggles a
    failure through the reader's sticky flag with a placeholder `Ok` to dodge an allocation.
 
-## What is true today (measured by reading, `0.9.318`; line numbers are that version's)
+## What is true today (measured by reading, `0.9.318`; behaviour re-verified at `0.9.345`)
+
+Line numbers below are `0.9.318`'s unless marked. The `--no-heap` anchors at `0.9.345`: `rejectIfNoHeap`
+`src/kama.cemit.cpp:24512`, `rejectNoHeapIndirect` 24548, `checkNoHeapTransitive` 24679,
+`ownedErrorTypeNode` 27351, `emitStickyErrBox` 27398, `emitPrimBoxIntoContract` 30626,
+`emitEnumBoxIntoContract` 30644; `kama_alloc`/`kama_free` `include/kama_runtime.h:123`/`126`;
+`kama_panic_handler` rt:436. Find a site by its function name, not its number.
 
 **Three families, all libc underneath:**
 
