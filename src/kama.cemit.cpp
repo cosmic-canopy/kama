@@ -19007,17 +19007,226 @@ bool CEmitter::isExposed(FunctionDeclarationNode* fn)
 // (`a_b::c` and `a::b_c`), so collectSignatures refuses two names that meet. `@linkName` overrides it.
 std::string CEmitter::exposedSymbol(const std::string& name) const
 {
+    return hostQualified(_nsCtx.module, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath, name);
+}
+
+// The one qualification rule, shared by a symbol and by a type name in the generated host header.
+std::string CEmitter::hostQualified(const std::string& module, const std::string& unitPath, const std::string& name)
+{
     std::string prefix;
-    if (!_nsCtx.module.empty()) {
-        for (size_t i = 0; i < _nsCtx.module.size(); ++i) {
-            if (_nsCtx.module.compare(i, 2, "::") == 0) { prefix += '_'; ++i; continue; }
-            char c = _nsCtx.module[i];
+    if (!module.empty()) {
+        for (size_t i = 0; i < module.size(); ++i) {
+            if (module.compare(i, 2, "::") == 0) { prefix += '_'; ++i; continue; }
+            char c = module[i];
             prefix += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
         }
-    } else {
-        prefix = privateScopeFor(_nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath).substr(2);
+    } else if (!unitPath.empty()) {
+        prefix = privateScopeFor(unitPath).substr(2);
     }
     return prefix.empty() ? name : prefix + "_" + name;
+}
+
+// ---- The host header (KR-52) ---------------------------------------------------------------------------
+//
+// `kama build` writes `<project>.h` beside its output whenever the program exposes a function: the C a host
+// includes to call it, generated from the same tables the definitions were emitted from, so the two cannot
+// drift. Hand-written prototypes were the alternative, and nothing checked them.
+//
+// It is a SEPARATE translation of each C type, not the internal header's spelling: the internal header needs
+// `kama_runtime.h` and names types the way kama mangles them (`_Fprobe__World`), neither of which a host can
+// use. So every type an exposed signature reaches is re-spelled for the host —
+//   - a C primitive stays itself, and `kama_cchar` is `char`;
+//   - a `type extern value` keeps its C name, and the header includes what its declaring file `extern`s;
+//   - a kama type of a module takes the same qualification as a symbol (`geo::Vec2` -> `geo_Vec2`), and one
+//     reached only through a pointer is OPAQUE, so kama stays free to change it;
+//   - a layout kama owns and promises — `View`/`ConstView`, and an intrinsic `InlineArray`/`Simd` value —
+//     is written out from its real fields; an intrinsic has no module, so it is prefixed `kama_`;
+//   - a payload-less enum and a `fnptr` are re-declared in host terms.
+// Struct TAGS never reach the linker, which is what makes a different spelling of the same layout sound.
+namespace {
+bool isHostPrimitiveCType(const std::string& t)
+{
+    static const std::set<std::string> prims = {
+        "void", "bool", "char", "float", "double", "size_t", "ptrdiff_t",
+        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t" };
+    return prims.count(t) > 0;
+}
+}
+
+struct CEmitter::HostHeader {
+    std::vector<std::string>           includes;   // as written in `extern "…";`, deduped, in first-use order
+    std::ostringstream                 decls;      // typedefs, each after what it names
+    std::set<std::string>              declared;   // internal C types already translated
+    std::map<std::string, std::string> owner;      // host name -> the internal C type that claimed it
+    std::string                        err;
+};
+
+std::string CEmitter::hostTypeName(HostHeader& h, const std::string& internal, const std::string& declFile)
+{
+    std::string module, unit;
+    for (auto& kv : _unitCtx) {
+        const NsCtx& c = kv.second;
+        if (declFile.empty() || c.unitPath != declFile) continue;
+        std::string bare;
+        for (const std::string* sc : { &c.privScope, &c.scope })
+            if (!sc->empty() && internal.compare(0, sc->size() + 2, *sc + "__") == 0) { bare = internal.substr(sc->size() + 2); break; }
+        if (!bare.empty()) { module = c.module; unit = c.unitPath; std::string n = hostQualified(module, unit, bare);
+            // An instance's suffix spells its arguments with kama's internal `__` (`View_geo__Vec2`), which C++
+            // reserves; the host gets `_`, and the collision check below catches the join it makes ambiguous.
+            for (size_t at; (at = n.find("__")) != std::string::npos; ) n.erase(at, 1);
+            auto claimed = h.owner.emplace(n, internal);
+            if (!claimed.second && claimed.first->second != internal && h.err.empty())
+                h.err = "`" + demangleForDisplay(internal) + "` and `" + demangleForDisplay(claimed.first->second)
+                      + "` would both be `" + n + "` in the host header — rename one";
+            return n; }
+    }
+    std::string n = "kama_" + internal;   // compiler-owned: an intrinsic or a prelude type, in no module
+    for (size_t at; (at = n.find("__")) != std::string::npos; ) n.erase(at, 1);
+    h.owner.emplace(n, internal);
+    return n;
+}
+
+// `byRef`: a `ref`/`out` parameter, whose C type is the pointee's spelling with the `*` added by the caller —
+// it reaches its type through a pointer exactly as an `UnsafePtr<T>` does, so it must not publish a layout.
+std::string CEmitter::hostCType(HostHeader& h, const std::string& ct, bool byRef)
+{
+    size_t cut = ct.find_first_of(" *");
+    const std::string base = ct.substr(0, cut);
+    const std::string rest = cut == std::string::npos ? std::string() : ct.substr(cut);
+    const bool viaPointer = byRef || rest.find('*') != std::string::npos;
+    return hostBaseType(h, base, viaPointer) + rest;
+}
+
+std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base, bool viaPointer)
+{
+    if (isHostPrimitiveCType(base)) return base;
+    if (base == "kama_cchar") return "char";
+
+    auto addIncludes = [&](const std::string& declFile) {
+        for (auto& kv : _unitCtx) {
+            const CompilationUnit* u = kv.first;
+            if (!u || !u->name || *u->name != declFile || !u->codeDeclarationList) continue;
+            for (auto& d : *u->codeDeclarationList)
+                if (auto* inc = dynamic_cast<IncludeNode*>(d.get()))
+                    if (inc->header && std::find(h.includes.begin(), h.includes.end(), *inc->header) == h.includes.end())
+                        h.includes.push_back(*inc->header);
+        }
+    };
+
+    auto sit = _sigs.find(base);
+    if (sit != _sigs.end()) {
+        const SigInfo si = sit->second;
+        const std::string name = hostTypeName(h, base, si.declFile);
+        if (h.declared.insert(base).second) {
+            std::string line = "typedef " + hostCType(h, si.retCType) + " (*" + name + ")(";
+            if (si.params.empty()) line += "void";
+            for (size_t i = 0; i < si.params.size(); ++i) {
+                const ParamSig& p = si.params[i];
+                bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
+                line += std::string(i ? ", " : "") + (constPtr ? "const " : "") + hostCType(h, p.className, p.byRef)
+                      + (p.byRef ? "*" : "") + (p.name.empty() ? "" : " " + p.name);
+            }
+            h.decls << line << ");\n";
+        }
+        return name;
+    }
+
+    auto eit = _enums.find(base);
+    if (eit != _enums.end()) {
+        const EnumInfo& ei = eit->second;
+        const std::string name = hostTypeName(h, base, ei.declFile);
+        if (h.declared.insert(base).second) {
+            h.decls << (ei.underlyingCType.empty() ? "typedef enum " + name + " {" : "typedef " + ei.underlyingCType + " " + name + ";\nenum {");
+            int64_t next = 0;
+            for (size_t i = 0; i < ei.members.size(); ++i) {
+                const EnumMember& m = ei.members[i];
+                const int64_t v = m.hasFolded ? m.folded : next;
+                h.decls << (i ? ", " : " ") << name << "_" << m.name << " = " << v;
+                next = v + 1;
+            }
+            h.decls << (ei.underlyingCType.empty() ? " } " + name + ";\n" : " };\n");
+        }
+        return name;
+    }
+
+    auto cit = _classes.find(base);
+    if (cit == _classes.end()) return base;   // a name a C header declares, passed through as `extern` does
+    const ClassInfo& ci = cit->second;
+    if (ci.isExternStruct) { addIncludes(ci.declFile); return base; }
+
+    auto gi = _genericTypeInsts.find(base);
+    std::string declFile = ci.declFile;
+    if (gi != _genericTypeInsts.end()) {   // an instance is named in its TEMPLATE's module: `std_collections_View_int32`
+        auto tpl = _genericTypes.find(gi->second.templateKey);
+        declFile = tpl != _genericTypes.end() ? tpl->second.declFile : std::string();
+    }
+    const std::string name = hostTypeName(h, base, declFile);
+    if (!h.declared.insert(base).second) return name;
+    if (ci.isIntrinsicColl && _collections.count(base)) {
+        const CollectionInfo& info = _collections[base];
+        if (info.kind == CollKind::Fixed) {
+            const std::string elem = hostCType(h, info.elemCType);
+            h.decls << "typedef struct " << name << " { " << elem << " v[" << info.constValue << "]; } " << name << ";\n";
+            return name;
+        }
+        if (isValueVectorKind(info.kind)) {
+            const std::string elem = hostCType(h, info.elemCType);
+            h.decls << "typedef " << elem << " " << name << " __attribute__((vector_size(sizeof(" << elem << ") * "
+                    << info.constValue << ")));\n";
+            return name;
+        }
+    }
+    const bool isView = gi != _genericTypeInsts.end()
+        && (gi->second.templateKey == "std__collections__View" || gi->second.templateKey == "std__collections__ConstView");
+    if (isView || !viaPointer) {
+        // A layout kama promises: written from the struct's own fields, each re-spelled for the host.
+        std::string body;
+        for (const FieldInfo& f : ci.fields) body += " " + hostCType(h, fieldCType(ci.name, f)) + " " + f.name + ";";
+        h.decls << "typedef struct " << name << " {" << body << " } " << name << ";\n";
+        return name;
+    }
+    h.decls << "typedef struct " << name << " " << name << ";\n";   // reached only through a pointer: opaque
+    return name;
+}
+
+std::string CEmitter::writeHostHeader(std::ostream& out, const std::string& fileName, bool& wrote)
+{
+    wrote = false;
+    HostHeader h;
+    std::ostringstream protos;
+    std::map<std::string, const FuncSig*> bySymbol;   // one prototype per exported symbol, in symbol order
+    for (auto& kv : _funcs)
+        if (kv.second.node && isExposed(kv.second.node)) bySymbol[symbolOf(kv.second)] = &kv.second;
+    if (bySymbol.empty()) return "";
+    for (auto& kv : bySymbol) {
+        const FuncSig& s = *kv.second;
+        protos << hostCType(h, s.retCType) << " " << kv.first << "(";
+        if (s.params.empty()) protos << "void";
+        for (size_t i = 0; i < s.params.size(); ++i) {
+            const ParamSig& p = s.params[i];
+            bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
+            bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
+            protos << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "")
+                   << hostCType(h, p.className, p.byRef) << (p.byRef ? "*" : "") << (p.name.empty() ? "" : " " + p.name);
+        }
+        protos << ");\n";
+    }
+    if (!h.err.empty()) return h.err;
+
+    std::string guard = "KAMA_HOST_";
+    for (char c : fileName) guard += std::isalnum((unsigned char)c) ? (char)std::toupper((unsigned char)c) : '_';
+    out << "/* " << fileName << " — generated by kama. Do not edit.\n"
+        << "   The C interface to this program's `expose fn`s; regenerated by every build. */\n"
+        << "#ifndef " << guard << "\n#define " << guard << "\n"
+        << "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n";
+    for (const std::string& inc : h.includes)
+        out << "#include " << (inc[0] == '<' ? inc : "\"" + inc + "\"") << "\n";
+    out << "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+    const std::string d = h.decls.str();
+    if (!d.empty()) out << d << "\n";
+    out << protos.str() << "\n#ifdef __cplusplus\n}\n#endif\n#endif\n";
+    wrote = true;
+    return "";
 }
 
 // `@linkName("sym")` on an `extern fn` or an `expose fn`: the C symbol, validated — Rust's `#[link_name]`

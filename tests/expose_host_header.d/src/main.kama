@@ -1,0 +1,29 @@
+// The generated host header, from the C side. kama writes `hosthdr.h` beside the output because this program
+// exposes functions, and puts it on the include path of the project's own `csources`; csrc/host.c declares
+// nothing about kama by hand — every prototype and type below reaches C only through that header:
+//   - a module-qualified symbol per function (`hosthdr_shapes_classify`), and `@linkName` verbatim;
+//   - a payload-less enum as its integer typedef plus constants (`hosthdr_shapes_Kind_Square = 4`);
+//   - a `fnptr` as a function-pointer typedef the host passes its own function through;
+//   - a kama type reached by pointer as an OPAQUE struct (`hosthdr_shapes_Shape`), so its layout stays kama's;
+//   - an `InlineArray` and a `ConstView` by value, laid out from their real fields;
+//   - a `type extern value` by its C name, with the generated header including the C header that owns it.
+// C calls back into kama for each, and the sum proves every value crossed intact.
+import { hosthdr::shapes::classify, hosthdr::shapes::Kind, std::collections::ConstView };
+extern "rgb.h";
+
+type extern value Rgb { public uint8 r; public uint8 g; public uint8 b; }
+fnptr int32 Op(int32 x);
+
+extern fn int32 host_run();
+
+expose fn int32 apply(Op f, int32 x) { return f(x: x); }
+expose fn int32 sumFour(InlineArray<int32>#(4) xs) { return xs[0] + xs[1] + xs[2] + xs[3]; }
+expose fn int32 sumView(ConstView<int32> xs) { int32 t = 0; foreach (int32 v in xs) { t += v; } return t; }
+expose fn int32 green(Rgb c) { return cast<int32>(c.g); }
+@linkName("host_visible_answer") expose fn int32 answer() { return 42; }
+
+unsafe fn int32 viaHost() { return host_run(); }
+
+fn int32 main() {
+    return viaHost() + (classify(side: 0) == Kind::Dot ? 0 : 100);   // kama calls the same function by kama name
+}

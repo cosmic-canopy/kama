@@ -317,7 +317,8 @@ refused (`foreign_callback_expose_return`); ⛔ the maintainer requires `expose`
   per field, a C11 `_Static_assert` (`tests/xfail/extern_value_layout.d`).
 - **The header is always written** beside the output when a program has an `expose fn` — no flag, since a host
   that forgot one falls back to hand-written prototypes — and the project's own `csources` get it on their
-  include path.
+  include path. SHIPPED `0.9.343`, named for the PROJECT rather than `-o` (a `csources` file includes it by a
+  name the build operator does not choose), `tests/expose_host_header.d` + `tools/check-host-header.sh`.
 - **Exposed C names are QUALIFIED by module path**, joined with `_` — SHIPPED `0.9.342`. Bare names threw away the
   scoping modules exist for at exactly the boundary where a collision is hardest to see: two modules exposing
   `tick` were refused (and two of the three refusals were bugs), and an `expose fn open` broke any host

@@ -1,0 +1,7 @@
+export { Kind, Shape, classify, known };
+
+type enum Kind : int32 { Dot = 1, Square = 4 }
+type resource Shape { int32 side = 0; public ctor make(int32 side) { this.side = side; } public fn int32 get() { return side; } }
+
+expose fn Kind classify(int32 side) { return side == 0 ? Kind::Dot : Kind::Square; }   // `hosthdr_shapes_classify`
+expose unsafe fn bool known(UnsafePtr<Shape> s) { return s != null; }                 // `Shape` stays opaque

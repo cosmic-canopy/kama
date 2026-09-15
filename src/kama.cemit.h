@@ -832,6 +832,10 @@ public:
                     const std::vector<std::ostream*>& moduleStreams,
                     const std::vector<std::string>& sourcePaths);  // per-module #line paths
 
+    // KR-52: write the host header — every `expose fn` prototype and every type it names, re-spelled for a
+    // host. `wrote` is false when the program exposes nothing (nothing is written). Returns an error, or "".
+    std::string writeHostHeader(std::ostream& out, const std::string& fileName, bool& wrote);
+
     // FFI link hint: was this C header `extern "<…>";`'d anywhere? (pay-for-what-you-use — the driver
     // appends `-lm` only when `<math.h>` is used, `-lws2_32` only for sockets, etc.)
     bool externsHeader(const std::string& h) const { return _externedHeaders.count(h) > 0; }
@@ -2590,6 +2594,11 @@ private:
     static bool isExtern(FunctionDeclarationNode* fn);
     static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary
     std::string exposedSymbol(const std::string& name) const;   // its host symbol: module path + name
+    static std::string hostQualified(const std::string& module, const std::string& unitPath, const std::string& name);
+    struct HostHeader;   // the host header under construction — see writeHostHeader
+    std::string hostTypeName(HostHeader& h, const std::string& internal, const std::string& declFile);
+    std::string hostCType(HostHeader& h, const std::string& ct, bool byRef = false);
+    std::string hostBaseType(HostHeader& h, const std::string& base, bool viaPointer);
 
     // Inheritance/vtable resolution
     std::vector<ClassInfo*> topoOrderClasses();
