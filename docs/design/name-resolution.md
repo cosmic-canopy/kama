@@ -1,9 +1,8 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** in progress. Every fixture is green at `0.9.340`: plan step 1 (fixtures) and step 2 slices 1–3
-(type arguments + hints, declaration positions, body positions) are DONE. **Next is the remainder of step 2
-slice 4 (the analysis-agreement leg over `.d` fixtures), then plan steps 3 and 4 (SPEC, final grid, delete this
-doc and the row).** Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
+**Status:** in progress. Every fixture is green at `0.9.340`: plan steps 1 and 2 (fixtures; slices 1–4 — type
+arguments + hints, declaration positions, body positions, the analysis-agreement leg over `.d` fixtures) are
+DONE. **Next is plan step 3 (`SPEC.md` § Modules) and step 4 (final grid, delete this doc and the row).** Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
 results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
 the `tests/xfail/` fixtures carry the record.
 
@@ -23,6 +22,8 @@ green on every leg at each KR-46 commit. The KR-46 commits so far, oldest first:
   `extern fn` signature; the stdlib gains the sibling imports those positions had never been asked for.
 - slice 3 (`0.9.340`) — body positions, judged where the emitter resolves them; `kama build` judges names
   inside generic bodies (it never had the decl→unit map `kama check` had).
+- KR-54 (docs) — a declaration `@compileFor` drops is never checked; its own row, found deciding slice 3.
+- slice 4 (test harness) — the analysis-agreement leg checks every `.d` fixture as one program.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
 reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
@@ -347,11 +348,14 @@ still fails in C behind it).
       **The FFI seam, made exact:** `cast<CompareFn>(c)` (`tests/callback_qsort.d`) names a header typedef.
       A bare name the file's own `extern fn` signatures spell is recorded as a C spelling that file
       introduced (`_externCSpellings`), and a body type may name exactly those; `cast<CompareFnX>` is refused.
-   4. **Mostly absorbed by slice 3.** The emission-time `checkReach` callers STAY — they are where body names
-      are judged, by the decision above — and the instance guards in `checkReach` stay: with the decl→unit
-      map built in every mode, they judge correctly rather than skip. What remains: extend the
-      analysis-agreement leg of `run_tests.sh` (~1071) to `.d` fixtures (`kama check` over all their files, or
-      their `kama.json`) — measured: all 24 pre-KR-46 `tests/xfail/*.d` are already refused by it.
+   4. **DONE — mostly absorbed by slice 3.** The emission-time `checkReach` callers STAY — they are where body
+      names are judged, by the decision above — and the instance guards in `checkReach` stay: with the
+      decl→unit map built in every mode, they judge correctly rather than skip. What landed: the
+      analysis-agreement leg of `run_tests.sh` checks every `.d` fixture as ONE program (its manifest, else
+      every `.kama` under it, sorted; a dependency fixture in the copy `multi_one` installed). Measured before
+      the change: all 146 xfail `.d` refused by `check`, all 44 positive `.d` accepted — 813 + 868 became
+      857 + 1014. Proven able to fail: a throwaway xfail `.d` whose `extern "<missing.h>"` only clang rejects
+      reported `MISMATCH … kama check accepts it` and failed the leg.
 3. **`SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
    `<!-- xfail: … -->` marker (check-doc-claims).
 4. Re-run the grid at the end (every a/b/c/cq/bs cell KD, every bq/bsq/d cell runs), paste the table into

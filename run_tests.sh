@@ -1009,6 +1009,31 @@ check_pos_one() {
           head -3 "$TMP/ck_$name.err"; } >"$TMP/ck_$name.bad"
     fi
 }
+# A multi-file fixture is ONE program, so it is checked as one: its manifest when it has one, else every .kama
+# under it, sorted — the operands both build legs use. A dependency fixture is checked in the copy
+# `multi_one` ran `pkg install` in, since its `.kama/deps` view exists only there.
+dir_operands() { if [ -f "$1/kama.json" ]; then echo "$1/kama.json"; else find "$1" -name '*.kama' | sort; fi; }
+check_dir_pos_one() {
+    local dir="$1" name src
+    name="${dir##*/}"; name="${name%.d}"
+    src="$dir"; [ -d "$TMP/wm_$name/src" ] && src="$TMP/wm_$name/src"
+    # shellcheck disable=SC2046
+    if ! "$KAMA" check $(dir_operands "$src") >/dev/null 2>"$TMP/ckdir_$name.err"; then
+        { echo "  MISMATCH $name.d: builds, but \`kama check\` rejects it (the editor would show a clean program as broken)"
+          head -3 "$TMP/ckdir_$name.err"; } >"$TMP/ckdir_$name.bad"
+    fi
+}
+check_dir_neg_one() {
+    local dir="$1" name ck_rc
+    name="${dir##*/}"; name="${name%.d}"
+    # shellcheck disable=SC2046
+    "$KAMA" check $(dir_operands "$dir") >/dev/null 2>&1; ck_rc=$?
+    if [ "$ck_rc" -eq 0 ]; then
+        echo "  MISMATCH xfail/$name.d: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken program as clean)" >"$TMP/ckdir_x_$name.bad"
+    elif [ "$ck_rc" -ge 128 ]; then
+        echo "  MISMATCH xfail/$name.d: \`kama check\` CRASHED (signal $((ck_rc-128))) — the language server would die on this input" >"$TMP/ckdir_x_$name.bad"
+    fi
+}
 check_neg_one() {
     local src="$1" name ck_rc
     name="${src##*/}"; name="${name%.kama}"
@@ -1068,10 +1093,12 @@ for src in "$TESTS_DIR"/*.kama; do
     ck_pos=$((ck_pos+1))
     echo "$src" >>"$TMP/ck_pos.list"
 done
-# Single-file fixtures only. A tests/xfail/<name>.d/ fixture is one build over SEVERAL files, and this
-# leg checks each file independently — the rejection it asserts (a collision between two modules, a
-# module declining to export) exists only in the combined build, so feeding its files in one at a time
-# would assert nothing and report a confident pass. The .d fixtures are covered by the leg above.
+# Single-file fixtures in the batch. A .d fixture is one program over SEVERAL files, and the batch checks
+# each operand as its own program — the rejection a .d asserts (a collision between two modules, a module
+# declining to export) exists only in the combined program, so batching its files would assert nothing and
+# report a confident pass. The .d fixtures are checked whole, below. (They used to be skipped outright, on
+# the belief that `kama check` takes one file; it takes a program, and KR-46 needed a generic body's
+# `check`/`build` disagreement asserted over the multi-file fixtures that exhibit it.)
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     name="${src##*/}"; name="${name%.kama}"
@@ -1094,13 +1121,25 @@ fi
 
 # Solo re-runs: normally empty. These produce every message this leg prints, batched or not.
 ck_pids=()
+for dir in "$TESTS_DIR"/*.d; do
+    [ -d "$dir" ] || continue
+    name="${dir##*/}"; name="${name%.d}"
+    [ -f "$TMP/md_$name.res" ] && [ "$(cat "$TMP/md_$name.res")" = "PASS" ] || continue   # only programs that built
+    ck_pos=$((ck_pos+1)); spawn check_dir_pos_one "$dir"; ck_pids+=($!)
+done
+for dir in "$TESTS_DIR"/xfail/*.d; do
+    [ -d "$dir" ] || continue
+    name="${dir##*/}"; name="${name%.d}"
+    if analysis_skip "$name"; then echo "  SKIP xfail/$name.d (rejected by the C compiler, not by kama)"; continue; fi
+    ck_neg=$((ck_neg+1)); spawn check_dir_neg_one "$dir"; ck_pids+=($!)
+done
 while read -r src; do [ -n "$src" ] || continue; spawn check_pos_one "$src"; ck_pids+=($!); done <"$TMP/ck_pos.redo"
 while read -r src; do [ -n "$src" ] || continue; spawn check_neg_one "$src"; ck_pids+=($!); done <"$TMP/ck_neg.redo"
 if [ ${#ck_pids[@]} -gt 0 ]; then wait "${ck_pids[@]}" 2>/dev/null; fi   # normally EMPTY — see above
 phase_end
 # Report mismatches in fixture order — a MISMATCH names the fixture, so stable ordering keeps a diff of two
 # runs meaningful.
-for f in "$TMP"/ck_*.bad "$TMP"/ckx_*.bad; do
+for f in "$TMP"/ck_*.bad "$TMP"/ckx_*.bad "$TMP"/ckdir_*.bad; do
     [ -e "$f" ] || continue
     cat "$f"; ck_bad=$((ck_bad+1))
 done
