@@ -257,7 +257,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 **The defect.** A payload-less enum lowers to an integer — until it declares a method, `implements` a contract or
 carries `@generate`. Then `collectEnumConformances` PROMOTES it: a `buildVariantClassInfo` struct `{ tag }`, its
 `EnumInfo` moved from `_enums` to `_promotedEnums`, its methods taking `E* self`. Adding one method changes what the
-enum IS in C — its `sizeof`, its type, its ABI — with nothing in the source saying so (GOALS 5), and a payload-less
+enum IS in C — `typedef int32_t Color` becomes `struct Color { tag }`, and its methods take `Color* self` — with
+nothing in the source saying so (GOALS 5; the size happens to stay 4 for an `int32` tag, measured), and a payload-less
 enum becomes two things depending on whether it has a method (GOALS 4). The cost is measured, not hypothetical:
 `93d88a52` (`0.9.234`) fixed SIX scalar operations promotion had silently broken — `==` demanding `Equatable`,
 `cast<int32>` reaching clang as a struct cast, `try cast` claiming it could not fail, `Green = 5` dropped,
@@ -293,8 +294,8 @@ path added. An enum WITH payloads stays a struct — it genuinely is a tag plus 
    not. `tests/enum_promoted_scalar_ops.kama` and `tests/enum_map_key.kama` are the existing guards of the scalar
    operations and the contract half.
 
-**Done when:** `_promotedEnums` and the promotion branch are gone; a payload-less enum's `sizeof` is its integer with
-or without members; the six `0.9.234` operations still hold; methods, contracts and `@generate` work on `type extern
+**Done when:** `_promotedEnums` and the promotion branch are gone; a payload-less enum's C type is its integer with or
+without members (`.scratch/next-session/kr57_promotion.kama` probes it); the six `0.9.234` operations still hold; methods, contracts and `@generate` work on `type extern
 enum` and `type expose enum` (the `0.9.346` refusal and its xfail flip to a passing fixture, SPEC's rule rewritten).
 
 ### A named C constant (KR-56) — found 2026-09-15, converting the WebGPU example to `type extern enum`
