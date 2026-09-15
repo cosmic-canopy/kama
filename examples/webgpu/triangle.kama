@@ -29,21 +29,51 @@ extern fn void  kama_gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT pr
 // ----- libc -----
 extern fn UnsafePtr calloc(usize count, usize size);
 
+// ----- WebGPU C enums (only the constants we name; the header owns every value) -----
+// Each variant IS the C constant, verbatim, and no number is written: the web (emdawnwebgpu) and native
+// (wgpu-native) builds each read their own `webgpu.h`, so the values are whatever that header says.
+type extern enum WGPUSType : int32 { WGPUSType_ShaderSourceWGSL }
+type extern enum WGPUTextureFormat : int32 { WGPUTextureFormat_Undefined, WGPUTextureFormat_BGRA8Unorm }
+type extern enum WGPUCompositeAlphaMode : int32 { WGPUCompositeAlphaMode_Auto }
+type extern enum WGPUPresentMode : int32 { WGPUPresentMode_Fifo }
+type extern enum WGPUPrimitiveTopology : int32 { WGPUPrimitiveTopology_TriangleList }
+type extern enum WGPUIndexFormat : int32 { WGPUIndexFormat_Undefined }
+type extern enum WGPUFrontFace : int32 { WGPUFrontFace_Undefined }
+type extern enum WGPUCullMode : int32 { WGPUCullMode_Undefined }
+type extern enum WGPULoadOp : int32 { WGPULoadOp_Clear }
+type extern enum WGPUStoreOp : int32 { WGPUStoreOp_Store }
+type extern enum WGPUCallbackMode : int32 { WGPUCallbackMode_AllowSpontaneous }
+type extern enum WGPURequestAdapterStatus : int32 { WGPURequestAdapterStatus_Success }
+type extern enum WGPURequestDeviceStatus : int32 { WGPURequestDeviceStatus_Success }
+type extern enum WGPUSurfaceGetCurrentTextureStatus : int32 {
+    WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal, WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal,
+    WGPUSurfaceGetCurrentTextureStatus_Timeout, WGPUSurfaceGetCurrentTextureStatus_Outdated,
+    WGPUSurfaceGetCurrentTextureStatus_Lost, WGPUSurfaceGetCurrentTextureStatus_Error
+}
+// `Occluded` is a wgpu-native EXTENSION, declared in its own `webgpu/wgpu.h` under its own enum — the web
+// header has neither — so it is bound only where that header exists (see isOccluded).
+@compileFor(!ARCH_WASM32) extern "<webgpu/wgpu.h>";
+@compileFor(!ARCH_WASM32)
+type extern enum WGPUNativeSurfaceGetCurrentTextureStatus : int32 { WGPUSurfaceGetCurrentTextureStatus_Occluded }
+
+// Bit flags are not enums in webgpu.h — they are `static const` values OR'd together — and kama cannot yet
+// bind a C constant by name, so the three flag values below are still spelled as numbers (ROADMAP KR-56).
+
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
 type extern value WGPUStringView { UnsafeConstPtr<cchar> data; usize length; }
-type extern value WGPUChainedStruct { UnsafePtr next; int32 sType; }
+type extern value WGPUChainedStruct { UnsafePtr next; WGPUSType sType; }
 @generate(zero)
 type extern value WGPUSurfaceConfiguration {
-    UnsafePtr nextInChain; UnsafePtr device; int32 format; uint64 usage;
-    uint32 width; uint32 height; int32 alphaMode; int32 presentMode;
+    UnsafePtr nextInChain; UnsafePtr device; WGPUTextureFormat format; uint64 usage;
+    uint32 width; uint32 height; WGPUCompositeAlphaMode alphaMode; WGPUPresentMode presentMode;
 }
 @generate(zero)
-type extern value WGPUSurfaceTexture { UnsafePtr nextInChain; UnsafePtr texture; int32 status; }
+type extern value WGPUSurfaceTexture { UnsafePtr nextInChain; UnsafePtr texture; WGPUSurfaceGetCurrentTextureStatus status; }
 type extern value WGPUColor { float64 r; float64 g; float64 b; float64 a; }
 @generate(zero)
 type extern value WGPURenderPassColorAttachment {
     UnsafePtr nextInChain; UnsafePtr view; uint32 depthSlice; UnsafePtr resolveTarget;
-    int32 loadOp; int32 storeOp; WGPUColor clearValue;
+    WGPULoadOp loadOp; WGPUStoreOp storeOp; WGPUColor clearValue;
 }
 @generate(zero)
 type extern value WGPURenderPassDescriptor {
@@ -56,7 +86,7 @@ type extern value WGPUShaderSourceWGSL { WGPUChainedStruct chain; WGPUStringView
 @generate(zero)
 type extern value WGPUShaderModuleDescriptor { UnsafePtr nextInChain; WGPUStringView label; }
 @generate(zero)
-type extern value WGPUColorTargetState { UnsafePtr nextInChain; int32 format; UnsafePtr blend; uint64 writeMask; }
+type extern value WGPUColorTargetState { UnsafePtr nextInChain; WGPUTextureFormat format; UnsafePtr blend; uint64 writeMask; }
 type extern value WGPUVertexState {
     UnsafePtr nextInChain; UnsafePtr module; WGPUStringView entryPoint;
     usize constantCount; UnsafePtr constants; usize bufferCount; UnsafePtr buffers;
@@ -67,7 +97,8 @@ type extern value WGPUFragmentState {
     usize constantCount; UnsafePtr constants; usize targetCount; UnsafePtr targets;
 }
 type extern value WGPUPrimitiveState {
-    UnsafePtr nextInChain; int32 topology; int32 stripIndexFormat; int32 frontFace; int32 cullMode; uint32 unclippedDepth;
+    UnsafePtr nextInChain; WGPUPrimitiveTopology topology; WGPUIndexFormat stripIndexFormat; WGPUFrontFace frontFace;
+    WGPUCullMode cullMode; uint32 unclippedDepth;
 }
 type extern value WGPUMultisampleState { UnsafePtr nextInChain; uint32 count; uint32 mask; uint32 alphaToCoverageEnabled; }
 @generate(zero)
@@ -91,13 +122,13 @@ type extern value WGPUBindGroupDescriptor { UnsafePtr nextInChain; WGPUStringVie
 // `@foreignEntry`: wgpu's completion callbacks are not documented to run on the requesting thread, and
 // the native backend has its own device threads — so both take the conservative mark and thread their
 // state through `userdata1`/`userdata2`, which is what those parameters are for.
-@foreignEntry fnptr void AdapterCb(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
-@foreignEntry fnptr void DeviceCb(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
+@foreignEntry fnptr void AdapterCb(WGPURequestAdapterStatus status, UnsafePtr adapter, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
+@foreignEntry fnptr void DeviceCb(WGPURequestDeviceStatus status, UnsafePtr device, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
 
 @generate(zero)
-type extern value WGPURequestAdapterCallbackInfo { UnsafePtr nextInChain; int32 mode; AdapterCb callback; UnsafePtr userdata1; UnsafePtr userdata2; }
+type extern value WGPURequestAdapterCallbackInfo { UnsafePtr nextInChain; WGPUCallbackMode mode; AdapterCb callback; UnsafePtr userdata1; UnsafePtr userdata2; }
 @generate(zero)
-type extern value WGPURequestDeviceCallbackInfo  { UnsafePtr nextInChain; int32 mode; DeviceCb  callback; UnsafePtr userdata1; UnsafePtr userdata2; }
+type extern value WGPURequestDeviceCallbackInfo  { UnsafePtr nextInChain; WGPUCallbackMode mode; DeviceCb  callback; UnsafePtr userdata1; UnsafePtr userdata2; }
 
 // ----- WebGPU functions -----
 extern fn UnsafePtr  wgpuCreateInstance(UnsafePtr descriptor);
@@ -162,10 +193,10 @@ fn string triangleWgsl() {
 }
 
 // Build the render pipeline for the triangle (device is ready; format is the surface's).
-unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
+unsafe fn UnsafePtr makePipeline(UnsafePtr device, WGPUTextureFormat format) {
     string wgsl = triangleWgsl();
     WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL.zero();
-    src.chain.sType = 2;                 // WGPUSType_ShaderSourceWGSL
+    src.chain.sType = WGPUSType::WGPUSType_ShaderSourceWGSL;
     src.code.data = wgsl.cstr();
     src.code.length = cast<usize>(wgsl.length());
     WGPUShaderModuleDescriptor smDesc = WGPUShaderModuleDescriptor.zero();
@@ -174,7 +205,7 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
 
     WGPUColorTargetState colorTarget = WGPUColorTargetState.zero();
     colorTarget.format = format;
-    colorTarget.writeMask = 15;          // WGPUColorWriteMask_All (0xF)
+    colorTarget.writeMask = 15;          // WGPUColorWriteMask_All (0xF) — a flag, see KR-56 above
 
     string fsEntry = "fs";
     WGPUFragmentState frag = WGPUFragmentState.zero();
@@ -189,7 +220,7 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     pd.vertex.module = shader;
     pd.vertex.entryPoint.data = vsEntry.cstr();
     pd.vertex.entryPoint.length = cast<usize>(vsEntry.length());
-    pd.primitive.topology = 4;           // WGPUPrimitiveTopology_TriangleList
+    pd.primitive.topology = WGPUPrimitiveTopology::WGPUPrimitiveTopology_TriangleList;
     pd.multisample.count = 1;
     pd.multisample.mask = 4294967295ui32;    // 0xFFFFFFFF
     pd.fragment = cast<UnsafePtr>(addr(of: frag));
@@ -204,28 +235,28 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
 unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
     WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration.zero();
     cfg.device = device;
-    cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
-    cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment
+    cfg.format = WGPUTextureFormat::WGPUTextureFormat_BGRA8Unorm;
+    cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment — a flag, see KR-56 above
     cfg.width = 512;
     cfg.height = 512;
-    cfg.alphaMode = 0;        // WGPUCompositeAlphaMode_Auto
-    cfg.presentMode = 1;      // WGPUPresentMode_Fifo
+    cfg.alphaMode = WGPUCompositeAlphaMode::WGPUCompositeAlphaMode_Auto;
+    cfg.presentMode = WGPUPresentMode::WGPUPresentMode_Fifo;
     wgpuSurfaceConfigure(surface: surface, config: addr(of: cfg));
 }
 
 // Device is ready: grab the queue, configure the surface for the canvas, go live.
-unsafe fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
+unsafe fn void onDevice(WGPURequestDeviceStatus status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
     UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
     st[0].device = device;
     st[0].queue = wgpuDeviceGetQueue(device: device);
 
     configureSurface(device: device, surface: st[0].surface);
 
-    st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
+    st[0].pipeline = makePipeline(device: device, format: WGPUTextureFormat::WGPUTextureFormat_BGRA8Unorm);
 
     // Uniform buffer (holds the rotation angle) + a bind group over the pipeline's auto layout.
     WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero();
-    bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08)
+    bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08) — flags, see KR-56 above
     bd.size = 16;
     UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
     st[0].uniformBuf = ubuf;
@@ -246,16 +277,27 @@ unsafe fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, 
 }
 
 // Adapter is ready: request a device.
-unsafe fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
+unsafe fn void onAdapter(WGPURequestAdapterStatus status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
     UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
     st[0].adapter = adapter;
 
     WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo.zero();
-    ci.mode = 3;              // WGPUCallbackMode_AllowSpontaneous
+    ci.mode = WGPUCallbackMode::WGPUCallbackMode_AllowSpontaneous;
     ci.callback = onDevice;
     ci.userdata1 = u1;
     wgpuAdapterRequestDevice(adapter: adapter, descriptor: null, callbackInfo: ci);
 }
+
+// Whether a surface status is wgpu-native's `Occluded` extension. It is a constant of a DIFFERENT C enum
+// (the native header's), so the comparison is on the integer both enums are; the web build has no such
+// status at all, and says so.
+@compileFor(!ARCH_WASM32)
+fn bool isOccluded(WGPUSurfaceGetCurrentTextureStatus status) {
+    return cast<int32>(status)
+        == cast<int32>(WGPUNativeSurfaceGetCurrentTextureStatus::WGPUSurfaceGetCurrentTextureStatus_Occluded);
+}
+@compileFor(ARCH_WASM32)
+fn bool isOccluded(WGPUSurfaceGetCurrentTextureStatus status) { return false; }
 
 // One frame: acquire the swapchain texture, clear it to an animated colour, submit.
 //
@@ -296,18 +338,18 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
     UnsafePtr tex = surfTex.texture;
     if (tex == null) {
-        int32 status = surfTex.status;
+        WGPUSurfaceGetCurrentTextureStatus status = surfTex.status;
 
         // OCCLUDED IS NOT AN ERROR, and getting this wrong is what took a machine down.
         //
-        // 0x00030001 (196609) is `WGPUSurfaceGetCurrentTextureStatus_Occluded` — a wgpu-native
+        // `WGPUSurfaceGetCurrentTextureStatus_Occluded` (0x00030001) is a wgpu-native
         // EXTENSION declared in webgpu/wgpu.h, not one of the six values in the standard webgpu.h
         // enum, which is why code that only reads webgpu.h never thinks to handle it. It means the
         // window simply is not visible: covered by another window, minimized, or on another Space.
         // Nothing is wrong and there is nothing to draw. Treating it as "the swapchain is stale" and
         // reconfiguring gives an unbounded allocation loop for as long as the window stays covered —
         // and putting a terminal in front of the window is enough to trigger it.
-        if (status == 196609) {
+        if (isOccluded(status: status)) {
             if (st[0].occluded == 0) { println(s: "triangle: window occluded — skipping frames"); }
             st[0].occluded = st[0].occluded + 1;
             keep = kama_gpu_pump(device: st[0].device);
@@ -315,15 +357,19 @@ unsafe fn int32 frameTick(UnsafePtr state) {
             return keep;
         }
 
-        // Outdated(4) and Lost(5) genuinely need the swapchain rebuilt — flag it, and the rebuild
-        // happens once at the top of the next tick. Timeout(3) is transient and Error(6) is
+        // Outdated and Lost genuinely need the swapchain rebuilt — flag it, and the rebuild
+        // happens once at the top of the next tick. Timeout is transient and Error is
         // deterministic; rebuilding on either would be the same runaway under a different name, so
         // both just skip the frame and the streak backstop below catches a status that never clears.
-        if (status == 4 || status == 5) { st[0].needsConfigure = 1; }
+        if (status == WGPUSurfaceGetCurrentTextureStatus::WGPUSurfaceGetCurrentTextureStatus_Outdated
+            || status == WGPUSurfaceGetCurrentTextureStatus::WGPUSurfaceGetCurrentTextureStatus_Lost) {
+            st[0].needsConfigure = 1;
+        }
 
         st[0].failStreak = st[0].failStreak + 1;
         if (st[0].failStreak > 600) {
-            println(s: "triangle: no surface texture for 600 consecutive frames (status ${status}) — stopping");
+            int32 code = cast<int32>(status);
+            println(s: "triangle: no surface texture for 600 consecutive frames (status ${code}) — stopping");
             return 0;
         }
         keep = kama_gpu_pump(device: st[0].device);
@@ -343,8 +389,8 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment.zero();
     att.view = view;
     att.depthSlice = 4294967295ui32;   // WGPU_DEPTH_SLICE_UNDEFINED
-    att.loadOp = 2;                // WGPULoadOp_Clear
-    att.storeOp = 1;               // WGPUStoreOp_Store
+    att.loadOp = WGPULoadOp::WGPULoadOp_Clear;
+    att.storeOp = WGPUStoreOp::WGPUStoreOp_Store;
     // Full-range RGB sweep with phase offsets — an obvious colour cycle (~3.3s).
     att.clearValue.r = cast<float64>(frame % 200) / 200.0;
     att.clearValue.g = cast<float64>((frame + 66) % 200) / 200.0;
@@ -397,7 +443,7 @@ unsafe fn int32 appMain() {
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.
     WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo.zero();
-    ci.mode = 3;                              // WGPUCallbackMode_AllowSpontaneous
+    ci.mode = WGPUCallbackMode::WGPUCallbackMode_AllowSpontaneous;
     ci.callback = onAdapter;
     ci.userdata1 = cast<UnsafePtr>(st);
     wgpuInstanceRequestAdapter(instance: inst, options: null, callbackInfo: ci);

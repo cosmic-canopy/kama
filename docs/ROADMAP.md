@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-56**
+**Next id: KR-57**
 
 ## The shape
 
@@ -78,6 +78,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-49 | **A replaceable global allocator** — `kama_alloc`/`kama_free` delegate to a global allocator that defaults to `malloc`/`free` and that a program replaces (a declaration vs a weak link-time symbol is the one surface decision). `Shared.adopt`'s hard-coded control block and the `SortedMap` root move onto `A` in the same step. Allocation campaign step 3 | M | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-50 | **Allocator-aware errors** — boxing an error into `Owned<Error>` calls `malloc` directly instead of drawing from an allocator; route it (and primitive boxing) through the box's `A`, so a replaced global allocator covers every fallible API. Decide whether a PER-CALL error allocator (a contract change to serde) is wanted. Allocation campaign step 4 | M | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-54 | **A declaration `@compileFor` drops is never checked** — it is pruned before collection, so neither the declaration walk nor emission sees it: `@compileFor(ARCH_WASM32) fn int32 f(Zork z)` builds clean on native, signature and body included. Code for a target not built daily rots silently, which is the portability promise failing quietly. Judging names before pruning is wrong (a target-only extern legitimately exists on one target only); the likely answer is analysis per declared target (`kama check` over every target in `kama.json`) — a design decision first. Found closing the name-resolution campaign (`0.9.340`) | M? | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-56 | **kama cannot bind a named C constant** — a C API's bit flags are `static const` values (`WGPUBufferUsage_Uniform`, `WGPUTextureUsage_RenderAttachment` in webgpu.h) or `#define`s, not enum constants, so `type extern enum` cannot name them and `examples/webgpu/triangle.kama` still spells three as numbers. The C-to-kama half of the same no-magic rule `type extern enum` applied to enums; wants a design pass (a `static const` and a `#define` differ in what kama can learn about them) with bytes before code | — | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-1 | **`std::time` calendar** — civil-from-days, ISO-8601 format/parse, no zone database; whole or not at all | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-2 | **No incremental build** — every build recompiles everything. ⚠️ Largely already answered and never rowed: `zig cc` has a content-addressed per-TU object cache (measured 4.13 s cold, **0.11 s after editing one file**), so a bundled install is incremental today and kama's own object cache is mostly moot. What is left is the SLIM install, which uses clang and has no cache | — | [§9](ROADMAP_DETAIL.md#s9) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
