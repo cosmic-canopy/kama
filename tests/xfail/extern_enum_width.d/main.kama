@@ -1,0 +1,7 @@
+// A `type extern enum` states its width because C leaves an enum's size to the compiler, and the build holds the
+// statement to the header: this `Level` is an `int`-sized C enum, so `: uint8` would read one byte of four. It is
+// a C11 `_Static_assert`, since the C compiler — not kama — reads the header, which makes it a BUILD failure that
+// `kama check` cannot see (run_tests.sh `analysis_skip`).
+extern "level.h";
+type extern enum Level : uint8 { LEVEL_LOW, LEVEL_HIGH }
+fn int32 main() { Level l = Level::LEVEL_HIGH; return l == Level::LEVEL_HIGH ? 0 : 1; }

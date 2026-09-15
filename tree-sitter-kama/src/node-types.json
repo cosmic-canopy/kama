@@ -3285,6 +3285,10 @@
           "named": true
         },
         {
+          "type": "function_modifier",
+          "named": true
+        },
+        {
           "type": "modifier",
           "named": true
         }

@@ -78,6 +78,34 @@ type expose value Stats
           (identifier))))))
 
 ================================================================================
+expose and extern mark who owns an enum's values
+================================================================================
+
+type expose enum Kind : int32 { Dot = 1 }
+type extern enum VkFormat : int32 { VK_FORMAT_UNDEFINED }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (function_modifier)
+    (type_declaration_head
+      (identifier))
+    (primitive_type)
+    (enum_body
+      (enum_member
+        (identifier)
+        (integer_literal))))
+  (enum_declaration
+    (modifier)
+    (type_declaration_head
+      (identifier))
+    (primitive_type)
+    (enum_body
+      (enum_member
+        (identifier)))))
+
+================================================================================
 A contract declares which kinds it is for
 ================================================================================
 

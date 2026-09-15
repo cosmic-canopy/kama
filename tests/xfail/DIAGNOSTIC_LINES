@@ -208,9 +208,10 @@ copy_resource_coll	copy_resource_coll.kama:8
 copy_value	copy_value.kama:5
 copyable_no_bare_default	copyable_no_bare_default.kama:10
 copyable_no_method	copyable_no_method.kama:3
-crossing_enum_payload	crossing_enum_payload.kama:7
+crossing_enum_payload	crossing_enum_payload.kama:6
 crossing_generic_instance	crossing_generic_instance.kama:5
 crossing_inline_array_plain	crossing_inline_array_plain.kama:5
+crossing_plain_enum	crossing_plain_enum.kama:6
 crossing_plain_value_expose	crossing_plain_value_expose.kama:3
 crossing_plain_value_extern	crossing_plain_value_extern.kama:6
 ctor_declares_own_type	ctor_declares_own_type.kama:9
@@ -263,9 +264,14 @@ dup_module_fn	b.kama:3
 dup_type_same_file	dup_type_same_file.kama:5
 elem_method_const	elem_method_const.kama:12
 empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
+enum_attribute_unknown	enum_attribute_unknown.kama:3
 enum_bare_spelling	enum_bare_spelling.kama:4
+enum_boundary_members	enum_boundary_members.kama:3
+enum_boundary_no_width	enum_boundary_no_width.kama:2
+enum_boundary_payload	enum_boundary_payload.kama:2
 enum_contract_method_not_public	enum_contract_method_not_public.kama:5
 enum_extends	enum_extends.kama:3
+enum_extern_and_expose	enum_extern_and_expose.kama:2
 enum_field	enum_field.kama:4
 enum_member_bare_sibling	enum_member_bare_sibling.kama:4
 enum_member_cycle	enum_member_cycle.kama:3
@@ -289,23 +295,32 @@ export_module_static	export_module_static.kama:8
 export_qualified_ref	export_qualified_ref.kama:17 export_qualified_ref.kama:18
 export_qualified_ref_local	export_qualified_ref_local.kama:15
 expose_bad_abi	expose_bad_abi.kama:2
+expose_enum_missing_value	expose_enum_missing_value.kama:3
+expose_enum_on_extern_fn	expose_enum_on_extern_fn.kama:4
 expose_generic	expose_generic.kama:2
 expose_on_method	expose_on_method.kama:3
 expose_value_and_extern	expose_value_and_extern.kama:3
 expose_value_field_type	expose_value_field_type.kama:6
 expose_value_generic	expose_value_generic.kama:3
 expose_value_on_extern_fn	expose_value_on_extern_fn.kama:5
+expose_value_plain_enum_field	expose_value_plain_enum_field.kama:4
 expose_value_private_field	expose_value_private_field.kama:5
 expose_value_resource	expose_value_resource.kama:4
 extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
 extern_c_spelling_other_file	main.kama:8
 extern_disagree	main.kama:4 main.kama:6
+extern_enum_comptime	extern_enum_comptime.kama:5
+extern_enum_disagree	main.kama:6
+extern_enum_missing_constant	main.kama:7
+extern_enum_value	extern_enum_value.kama:4
+extern_enum_width	-
 extern_members_twice	b.kama:2
 extern_type_leak	lib.kama:7
 extern_undeclared	main.kama:3 main.kama:4
 extern_value_layout	-
 extern_value_nameless	extern_value_nameless.kama:6
+extern_value_plain_enum_field	extern_value_plain_enum_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
 field_on_bool	field_on_bool.kama:3
@@ -515,6 +530,7 @@ linkname_dup_expose	linkname_dup_expose.kama:5
 linkname_no_arg	linkname_no_arg.kama:3
 linkname_on_fn	linkname_on_fn.kama:4
 linkname_on_fnptr	linkname_on_fnptr.kama:2
+linkname_on_plain_enum	linkname_on_plain_enum.kama:3
 linkname_on_type	linkname_on_type.kama:3
 linkname_rebound_extern	b.kama:2
 lit_negative_into_usize	lit_negative_into_usize.kama:7

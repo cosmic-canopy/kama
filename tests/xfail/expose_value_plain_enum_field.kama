@@ -1,0 +1,5 @@
+// A published layout publishes its fields' values too: a plain enum field would put numbers kama never promised
+// into the host header.
+type enum Mode : int32 { Off, On }
+type expose value Settings { public Mode mode; public ctor of(Mode mode) { this.mode = mode; } }
+fn int32 main() { return 0; }

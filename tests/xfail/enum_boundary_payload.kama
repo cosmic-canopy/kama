@@ -1,0 +1,3 @@
+// A C enum is a set of integer constants; a variant with a payload is a tagged union C cannot spell.
+type expose enum Shape : int32 { Circle(int32 r) }
+fn int32 main() { return 0; }

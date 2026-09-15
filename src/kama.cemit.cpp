@@ -2938,6 +2938,24 @@ void CEmitter::rejectPlainCrossingC(const std::string& cty, const char* where, c
                                    bool isExternFn, int line)
 {
     if (cty.empty() || cty.back() == '*' || isSigType(cty)) return;
+    auto en = _enums.find(cty);
+    if (en != _enums.end()) {
+        // KR-55 — an enum's values cross exactly as a struct's layout does: someone must own them.
+        const EnumInfo& ei = en->second;
+        const std::string fn = std::string(isExternFn ? "extern fn " : "expose fn ") + fname;
+        if (ei.isExtern) return;
+        if (ei.isExpose && !isExternFn) return;
+        if (ei.isExpose)
+            unsupported(("`" + demangleForDisplay(cty) + "` crosses into C as " + where + " of `" + fn + "`, but it is "
+                         "a `type expose enum` — values KAMA owns, and an `extern fn`'s prototype comes from a C header "
+                         "that defines its own enum. A C-owned enum is a `type extern enum`").c_str(), line);
+        else
+            unsupported(("`" + demangleForDisplay(cty) + "` crosses into C as " + where + " of `" + fn + "`, but it is a "
+                         "plain enum, whose values nothing promises to C — inserting a variant would renumber the rest "
+                         "silently. Bind the header's enum with `type extern enum`, or publish kama's with `type expose "
+                         "enum` (every value spelled)").c_str(), line);
+        return;
+    }
     auto it = _classes.find(cty);
     if (it == _classes.end()) return;                     // a primitive, a C enum, or the header's own name
     const ClassInfo& ci = it->second;
@@ -8798,7 +8816,38 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
         rejectPinOutsideContract(ed->typePins, ed->typeParams, "an enum", ed->line);
-        std::string name = qualify(*ed->identifier->value);
+        const bool isExtern = enumHasModifier(ed, "extern"), isExpose = enumHasModifier(ed, "expose");
+        const std::string& bare = *ed->identifier->value;
+        // KR-55: who owns an enum's values at the C boundary — a C header (`extern`) or kama (`expose`).
+        if (isExtern || isExpose) {
+            const char* mk = isExtern ? "extern" : "expose";
+            bool shapeOk = false;
+            if (isExtern && isExpose)
+                unsupported(("`" + bare + "` is both `extern` and `expose` — `extern` binds an enum a C header "
+                             "defines, `expose` publishes one kama defines, and one side owns its values").c_str(), ed->line);
+            else if (enumIsTagged(ed))
+                unsupported(("`type " + std::string(mk) + " enum " + bare + "` cannot be generic or carry payloads — "
+                             "a C enum is a set of integer constants; a tagged union has no C spelling").c_str(), ed->line);
+            else if (!ed->underlyingType)
+                unsupported(("`type " + std::string(mk) + " enum " + bare + "` must state its width (`: int32`, "
+                             "`: uint32`, …) — C leaves an enum's size to the compiler, so the crossing states "
+                             "it and the build checks it").c_str(), ed->line);
+            else shapeOk = true;
+            if (shapeOk && ed->body)
+                for (auto& m : *ed->body) {
+                    if (!m || !m->identifier || !m->identifier->value) continue;
+                    if (isExtern && m->constantExpression)
+                        unsupported(("`" + bare + "::" + *m->identifier->value + "` writes a value, but `" + bare
+                                     + "` is a `type extern enum` — its values are the C header's. Name the "
+                                       "constant and leave the number to C").c_str(), m->line);
+                    if (isExpose && !m->constantExpression)
+                        unsupported(("`" + bare + "::" + *m->identifier->value + "` has no value, but `" + bare
+                                     + "` is a `type expose enum` — the host header publishes every value, so each "
+                                       "is written out: inserting a variant must not renumber one a host compiled "
+                                       "against").c_str(), m->line);
+                }
+        }
+        std::string name = isExtern ? bare : qualify(bare);   // an extern enum keeps its literal C name
         _enumDeclNodes[name] = ed;   // the LSP def-site table's only source for enums
         if (unit == _preludeUnit) _preludeEnums.insert(name);
 
@@ -8815,6 +8864,20 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                                  "none to control: a payload-less one lowers to an integer, and a tagged "
                                  "one to a tag plus a per-variant union. To fix an enum's tag width write "
                                  "`type enum E : IntType`").c_str(), ed->line);
+        // ...and every OTHER name is refused too, for the same reason: the `@generate` loops skip what they do not
+        // recognize, so `@linkName` on a plain enum (or a typo'd `@genrate`) compiled clean and did nothing.
+        if (ed->attributes)
+            for (auto& at : *ed->attributes) {
+                if (!at || !at->name || *at->name == "align" || *at->name == "packed" || *at->name == "generate") continue;
+                if (*at->name == "linkName") {
+                    if (!enumHasModifier(ed, "expose"))
+                        unsupported("`@linkName` names what a host sees, and only a `type expose enum` has a host-visible "
+                                    "name to fix — a `type extern enum` is the header's own name already", ed->line);
+                    continue;
+                }
+                unsupported(("unknown enum attribute `@" + *at->name + "` (expected `@generate`, or `@linkName` on a "
+                             "`type expose enum`)").c_str(), ed->line);
+            }
 
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
@@ -8873,6 +8936,10 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
         EnumInfo ei;
         ei.name  = name;
+        ei.isExtern = isExtern;
+        ei.isExpose = isExpose;
+        ei.line = ed->line;
+        if (isExpose) ei.hostName = linkNameOf(ed->attributes, ed->line);
         ei.scope = _nsCtx.scope;
         ei.usings = _nsCtx.usings;
         ei.symbolAliases = _nsCtx.symbolAliases;
@@ -8887,8 +8954,33 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ei.members.push_back(em);
                 }
         ei.declFile = _collectingUnitPath;
+        if (isExtern) {
+            if (!ei.declFile.empty()) _externDeclSites[name].insert(ei.declFile);
+            // ONE C enum, so every declaration of it in a program must agree — the rule a repeated
+            // `type extern value` and `extern fn` already follow. A declaration may be repeated where it is
+            // used; a different width or constant list would decide how BOTH files read the type.
+            auto prev = _enums.find(name);
+            if (prev != _enums.end() && prev->second.isExtern && !prev->second.declFile.empty()
+                && prev->second.declFile != ei.declFile) {
+                std::string names, prevNames;
+                for (auto& m : ei.members) names += " " + m.name;
+                for (auto& m : prev->second.members) prevNames += " " + m.name;
+                if (prev->second.underlyingCType != ei.underlyingCType || names != prevNames)
+                    unsupported(("this `type extern enum " + name + "` disagrees with the one in `" + prev->second.declFile
+                                 + "` — `" + name + "` is ONE C enum, so every declaration of it in a program must "
+                                   "declare the same width and the same constants, in the same order").c_str(), ed->line);
+            }
+        }
         _enums[ei.name] = ei;
     }
+}
+
+bool CEmitter::enumHasModifier(const EnumDeclarationNode* ed, const char* mod)
+{
+    if (ed && ed->modifiers)
+        for (auto& m : *ed->modifiers)
+            if (m && m->value && *m->value == mod) return true;
+    return false;
 }
 
 // Validate one `@align(N)` / `@packed` and fold it into a type's layout state.
@@ -8928,6 +9020,19 @@ void CEmitter::readLayoutAttr(const AttributeNode& at, int& alignN, bool& packed
 // enum Name { Name_M0, Name_M1 = <expr>, … }
 void CEmitter::emitEnum(EnumInfo& ei)
 {
+    // A C enum: nothing is declared — the header already did — and kama's own constant spelling
+    // (`<Enum>_<Member>`, which every use site, `match` arm and `try cast` emits) is an ALIAS for the C constant
+    // of that exact name. So the values are the header's by construction, a constant the header does not define
+    // fails to compile naming it, and the declared width is held to the C type's size.
+    if (ei.isExtern) {
+        const std::string at = ei.declFile + ":" + std::to_string(ei.line);
+        *_out << "_Static_assert(sizeof(" << ei.name << ") == sizeof(" << ei.underlyingCType << "), \"kama: `type extern enum "
+              << ei.name << " : " << primKeyOfCType(ei.underlyingCType) << "` (" << cEscapeStringBody(at)
+              << ") — the C enum is not that size; state the width the header's type has\");\n";
+        for (auto& m : ei.members) *_out << "#define " << ei.name << "_" << m.name << " (" << m.name << ")\n";
+        *_out << "\n";
+        return;
+    }
     // `enum Name : IntType` pins the value to a fixed-width integer. ISO C can't set an enum's
     // underlying type, so emit `typedef <ctype> Name;` + an anonymous enum carrying the constants.
     if (!ei.underlyingCType.empty()) {
@@ -17951,6 +18056,16 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             if (!hasMembers && !hasIfaces && !hasGen) continue;   // an ordinary enum — the lightweight path, untouched
 
             const std::string& bare = *ed->identifier->value;
+            if (enumHasModifier(ed, "extern") || enumHasModifier(ed, "expose")) {
+                // Members, a contract or `@generate` PROMOTE an enum to a tagged struct, which is exactly the
+                // representation a C integer constant is not — so on an enum that crosses to C they would
+                // silently change what crosses.
+                unsupported(("`type " + std::string(enumHasModifier(ed, "extern") ? "extern" : "expose") + " enum "
+                             + bare + "` cannot declare members, `implements` or `@generate` — kama gives an enum "
+                               "those by lowering it to a struct, and a C enum is an integer. Write a free function "
+                               "over the enum instead").c_str(), ed->line);
+                continue;
+            }
             if (ed->baseTypes && ed->baseTypes->base)
                 unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
                              "a contract is declared with `implements`").c_str(), ed->line);
@@ -19176,17 +19291,21 @@ std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base)
     auto eit = _enums.find(base);
     if (eit != _enums.end()) {
         const EnumInfo& ei = eit->second;
-        const std::string name = hostTypeName(h, base, ei.declFile);
+        if (ei.isExtern) { addIncludes(ei.declFile); return base; }   // the header's own enum, by its own name
+        // A `type expose enum` (the crossing rule admits no other): kama's values, every one spelled, published
+        // under the same qualification as a symbol unless `@linkName` fixed the name.
+        const std::string name = ei.hostName.empty() ? hostTypeName(h, base, ei.declFile) : ei.hostName;
+        if (!ei.hostName.empty()) {
+            auto claimed = h.owner.emplace(name, base);
+            if (!claimed.second && claimed.first->second != base && h.err.empty())
+                h.err = "`" + demangleForDisplay(base) + "` and `" + demangleForDisplay(claimed.first->second)
+                      + "` would both be `" + name + "` in the host header — rename one";
+        }
         if (h.declared.insert(base).second) {
-            h.decls << (ei.underlyingCType.empty() ? "typedef enum " + name + " {" : "typedef " + ei.underlyingCType + " " + name + ";\nenum {");
-            int64_t next = 0;
-            for (size_t i = 0; i < ei.members.size(); ++i) {
-                const EnumMember& m = ei.members[i];
-                const int64_t v = m.hasFolded ? m.folded : next;
-                h.decls << (i ? ", " : " ") << name << "_" << m.name << " = " << v;
-                next = v + 1;
-            }
-            h.decls << (ei.underlyingCType.empty() ? " } " + name + ";\n" : " };\n");
+            h.decls << "typedef " << ei.underlyingCType << " " << name << ";\nenum {";
+            for (size_t i = 0; i < ei.members.size(); ++i)
+                h.decls << (i ? ", " : " ") << name << "_" << ei.members[i].name << " = " << ei.members[i].folded;
+            h.decls << " };\n";
         }
         return name;
     }
@@ -22124,6 +22243,20 @@ void CEmitter::checkExposeValues()
 {
     for (auto& kv : _classes) {
         const ClassInfo& ci = kv.second;
+        if (ci.isExternStruct) {
+            // A C struct's enum field is a C enum: a plain kama enum there would read the header's integer
+            // with kama's own numbering (KR-55), which is the drift the extern/expose pair exists to prevent.
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);
+            for (const FieldInfo& f : ci.fields) {
+                auto e = _enums.find(fieldCType(ci.name, f));
+                if (e == _enums.end() || e->second.isExtern) continue;
+                unsupported(("`" + ci.name + "." + f.name + "` is the enum `" + demangleForDisplay(e->first) + "`, but `"
+                             + ci.name + "` is a `type extern value` — a C struct's enum field holds a C enum, so bind "
+                               "it with `type extern enum` and let the header supply the values").c_str(),
+                            f.nameId ? f.nameId->line : ci.node ? ci.node->line : 0);
+            }
+            continue;
+        }
         if (!ci.isExposeStruct) continue;
         ScopedStr _cu(_collectingUnitPath, ci.declFile);
         const std::string shown = demangleForDisplay(ci.name);
@@ -22139,7 +22272,14 @@ void CEmitter::checkExposeValues()
                 if (co == _collections.end() || !(co->second.kind == CollKind::Fixed || isValueVectorKind(co->second.kind))) break;
                 ct = co->second.elemCType;
             }
-            if (ct.empty() || ct.back() == '*' || isSigType(ct) || ct == "kama_cchar" || _enums.count(ct)) continue;
+            if (ct.empty() || ct.back() == '*' || isSigType(ct) || ct == "kama_cchar") continue;
+            if (_enums.count(ct)) {
+                if (_enums[ct].isExtern || _enums[ct].isExpose) continue;
+                unsupported(("`" + shown + "." + f.name + "` is the plain enum `" + demangleForDisplay(ct) + "`, whose "
+                             "values nothing promises to C — a `type expose value` field's enum is a `type expose "
+                             "enum` (kama's values, published) or a `type extern enum` (a C header's)").c_str(), ln);
+                continue;
+            }
             auto c = _classes.find(ct);
             if (c == _classes.end()) {
                 static const std::set<std::string> prims = { "bool", "float", "double", "size_t", "ptrdiff_t",
@@ -30581,8 +30721,10 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
         if (unitDst) { for (auto& v : _classes[dst].variants) names.push_back(v.name); }
         else         { for (auto& m : _enums[dst].members)    names.push_back(m.name); }
         bool contiguous = !names.empty();
-        if (const EnumInfo* ei = enumInfo(dst))
+        if (const EnumInfo* ei = enumInfo(dst)) {
             for (auto& m : ei->members) if (m.value) { contiguous = false; break; }
+            if (ei->isExtern) contiguous = false;   // C owns the values: test membership by constant name
+        }
         if (contiguous) {
             const std::string top = std::to_string((long long)names.size() - 1);
             test = unsignedSrc ? (t + " > " + top + "ULL")
@@ -32046,7 +32188,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
                 if (ed->identifier && ed->identifier->value) {
                     std::string n = qualify(*ed->identifier->value);
-                    claimType(n, *ed->identifier->value, ed->line);
+                    if (!enumHasModifier(ed, "extern")) claimType(n, *ed->identifier->value, ed->line);
                     // pre-register a tagged/generic enum where its real home is (a class-like
                     // type / a generic template), NOT _enums — else emitEnum would emit a bogus enum.
                     if (ed->typeParams && !ed->typeParams->empty()) {
@@ -32060,6 +32202,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         _genericTypeCtx[n] = _nsCtx;
                     }
                     else if (enumIsTagged(ed))                      _classes[n].name = n;
+                    else if (enumHasModifier(ed, "extern")) {       // a C enum's name is global and literal
+                        const std::string& lit = *ed->identifier->value;
+                        _enums[lit].name = lit;
+                        _externNames.insert(lit);
+                    }
                     else                                            _enums[n].name = n;
                 }
             }

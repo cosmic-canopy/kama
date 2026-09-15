@@ -329,6 +329,7 @@ module.exports = grammar({
       seq(
         optional($.attribute_list),
         'type',
+        optional($.function_modifier),   // `type expose enum` (KR-55), directly after `type` as on a value
         repeat($.modifier),
         'enum',
         field('name', $.type_declaration_head),

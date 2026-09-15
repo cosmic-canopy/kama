@@ -1,0 +1,1 @@
+a C struct's enum field holds a C enum

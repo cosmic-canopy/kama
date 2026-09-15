@@ -1,0 +1,7 @@
+// A C struct's enum field holds a C enum. A plain kama enum there reads the header's integer with kama's own
+// numbering, so it is refused: bind the C enum with `type extern enum`.
+extern "stdio.h";
+type enum Mode : int32 { Off, On }
+@generate(zero)
+type extern value Settings { public Mode mode; }
+fn int32 main() { return 0; }

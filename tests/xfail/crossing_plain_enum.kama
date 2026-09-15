@@ -1,0 +1,7 @@
+// An enum's values cross into C the way a struct's layout does: someone must own them. A plain kama enum numbers
+// its variants itself, so inserting one silently renumbers the rest — a host compiled against the old numbers
+// passes the wrong value. It used to cross as "a C integer" unexamined. Bind a C header's enum with
+// `type extern enum`, or publish kama's with `type expose enum`, whose every value is spelled.
+type enum Mode : int32 { Off, On }
+expose fn Mode current() { return Mode::On; }
+fn int32 main() { return 0; }

@@ -1,0 +1,7 @@
+// `Level` is ONE C enum, so every declaration of it in a program must agree — the rule a repeated
+// `type extern value` and `extern fn` already follow. This one lists a different set of constants than
+// gfx/lib.kama's, and whichever was collected last would decide how both files read the type.
+import { gfx::lowOf };
+extern "stdio.h";
+type extern enum Level : int32 { LEVEL_LOW }
+fn int32 main() { return 0; }

@@ -1,0 +1,9 @@
+export { Format, bitsOf };
+extern "fmt.h";
+
+// The same C enum bound again in a second module — legal because it is IDENTICAL, the rule a repeated
+// `type extern value` and `extern fn` already follow.
+type extern enum Format : int32 { FORMAT_UNDEFINED, FORMAT_RGBA8, FORMAT_BGRA8 }
+extern fn int32 fmt_bits(Format f);
+
+unsafe fn int32 bitsOf(Format f) { return fmt_bits(f: f); }

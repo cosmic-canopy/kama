@@ -1,0 +1,5 @@
+// Every attribute an enum does not use is refused. The `@generate` loops skip names they do not know, so a stray or
+// misspelled attribute on an enum used to compile clean and do nothing.
+@genrate(Equatable)
+type enum Mode { Off, On }
+fn int32 main() { return 0; }

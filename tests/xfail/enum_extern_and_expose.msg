@@ -1,0 +1,1 @@
+is both `extern` and `expose`

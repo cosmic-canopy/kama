@@ -1,0 +1,5 @@
+// A `type extern enum` binds constants a C header defines, so the header owns every value. Writing one in kama
+// would be a second source of truth for the same number — the drift the marker exists to remove.
+extern "stdio.h";
+type extern enum Level : int32 { LEVEL_LOW = 1 }
+fn int32 main() { return 0; }

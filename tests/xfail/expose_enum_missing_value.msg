@@ -1,0 +1,1 @@
+the host header publishes every value

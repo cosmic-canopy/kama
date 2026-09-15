@@ -1706,15 +1706,47 @@ and `expose fn` say who owns a body:
 | plain `type value`, a `resource`, an enum with payloads, a generic instance | refused | refused |
 | `type extern value` | ✅ | ✅ |
 | `type expose value` | refused | ✅ |
+| a plain `enum` | refused | refused |
+| `type extern enum` | ✅ | ✅ |
+| `type expose enum` | refused | ✅ |
 
 A plain `type value` is refused because nothing states its layout, and marking one is what makes a layout <!-- xfail: crossing_plain_value_extern, crossing_enum_payload, crossing_generic_instance -->
 a promise: an unmarked value stays free to change, which is what keeps every other value type's layout kama's
 own. What passes unmarked is what is not a kama composite — a primitive, a pointer (`UnsafePtr<T>`, `ref`), an
-`fnptr`, a payload-less `enum` (a C integer), a name the header itself declares — and kama's own intrinsics,
+`fnptr`, a name the header itself declares — and kama's own intrinsics,
 whose layout is its ABI: `string` (the runtime header's `kama_string`, on an `extern fn`), `InlineArray`/`Simd`,
 and `View`/`ConstView`. An `InlineArray` lays its elements out inline, so its element answers the same question:
 an array of a plain value is refused. Fixture: `tests/extern_value_crossing.d/`, both directions against a <!-- xfail: crossing_inline_array_plain -->
 real C file. <!-- test: extern_value_crossing -->
+
+**An enum crossing to C** answers the same question for its VALUES, with the same pair. A plain enum numbers its
+variants itself, so inserting one silently renumbers the rest — it is refused at the boundary: in a signature, <!-- xfail: crossing_plain_enum -->
+as a field of a `type extern value` or `type expose value`, or as an `InlineArray` element. <!-- xfail: extern_value_plain_enum_field, expose_value_plain_enum_field -->
+
+- **`type extern enum`** — an enum a C header defines. Each variant IS the C constant's name, verbatim, and kama
+  writes no values; the emitted C uses those constants, so the numbers are the header's by construction. Binding a
+  C enum is naming it:
+
+  ```kama
+  extern "vulkan.h";
+  type extern enum VkFormat : int32 { VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM }
+  cfg.format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;   // C: `cfg.format = VK_FORMAT_R8G8B8A8_UNORM;`
+  ```
+
+  Writing a value is refused, since the header owns them. The width is stated (`: int32` — C leaves an enum's <!-- xfail: extern_enum_value -->
+  size to its compiler) and the build holds it to the C type's size; a constant the header does not define is <!-- xfail: extern_enum_width -->
+  refused by the C compiler, by name. Both are build failures, since only the C compiler reads the header. <!-- xfail: extern_enum_missing_constant -->
+  `try cast<E>(n)` tests membership against the C constants, and `match` covers them like any enum. Its values
+  cannot be folded at compile time — they live in the header, which kama never reads. Like a `type extern value` <!-- xfail: extern_enum_comptime -->
+  it is a module symbol (`export`/`import`) under its literal C name, and may be declared again where it is used
+  only if the declarations are identical. <!-- xfail: extern_enum_disagree --> Fixture: `tests/extern_enum.d/`. <!-- test: extern_enum -->
+- **`type expose enum`** — values kama owns, which the generated host header publishes (*Exposing to a host*).
+  Every value is written out, so a variant cannot be renumbered under a host that compiled against it. <!-- xfail: expose_enum_missing_value -->
+
+Either marker requires the width (`: int32`) and a payload-less enum: a tagged union has no C spelling. Neither <!-- xfail: enum_boundary_no_width, enum_boundary_payload -->
+takes both markers — one side owns the values. And neither may declare methods, a contract or `@generate`, <!-- xfail: enum_extern_and_expose -->
+because kama gives an enum those by lowering it to a struct, and the enum C sees is an integer; write a free <!-- xfail: enum_boundary_members -->
+function over it instead. A `type expose enum` crosses an `expose fn` only, as a `type expose value` does. <!-- xfail: expose_enum_on_extern_fn -->
 
 ### Time (`std::time`) ✅
 
@@ -2737,8 +2769,9 @@ expose fn int32 version() { return 3; }                                    // dl
   guard) and needs no kama header. Each type is spelled for the host: a C primitive as itself and `cchar` as
   `char`; a `type extern value` by its C name, with the header including the file that `extern`s it; a kama
   type by the same module qualification as a symbol (`geo::Vec2` → `geo_Vec2`), **opaque** when it is reached
-  through a pointer or `ref` — its layout stays kama's to change; a payload-less `enum` as its integer typedef
-  plus `Kind_Square = 4` constants; a `fnptr` as a function-pointer typedef; and a layout kama owns and
+  through a pointer or `ref` — its layout stays kama's to change; a `type extern enum` by its C name, including
+  its header like a `type extern value`; a `type expose enum` as its integer typedef plus one constant per value
+  (`geo_Kind_Square = 4`, or `@linkName`'s name for the type); a `fnptr` as a function-pointer typedef; and a layout kama owns and
   promises — `View`/`ConstView`, `InlineArray`, `Simd` — from its real fields (a compiler intrinsic in no module
   is prefixed `kama_`). Two types that would share a host name are refused. The header is regenerated by
   every build, removed by a build that exposes nothing, and never written over a file kama did not generate
@@ -2764,12 +2797,13 @@ expose fn int32 version() { return 3; }                                    // dl
   The rules follow from what a published layout is. It is a **`value`**, since a resource, view or contract <!-- xfail: expose_value_resource -->
   owns, borrows or dispatches, which C cannot honor. It is **not generic** — a host needs one struct. Every field <!-- xfail: expose_value_generic -->
   is **`public`**, because the header shows the whole struct and C has no `private`; and every field is <!-- xfail: expose_value_private_field -->
-  something C can hold — a primitive, a pointer, a `fnptr`, a payload-less enum, another `type extern value` or <!-- xfail: expose_value_field_type -->
+  something C can hold — a primitive, a pointer, a `fnptr`, a `type extern enum` or `type expose enum`, another `type extern value` or <!-- xfail: expose_value_field_type -->
   `type expose value`, or an `InlineArray` of those. It is never also `extern`: one side owns a layout. It is <!-- xfail: expose_value_and_extern -->
   built by its constructors and may have methods, like any value; `@packed`/`@align` reach the header. Within
   kama it is emitted under kama's own C name — struct tags never reach the linker, so the host's spelling and
   kama's are the same layout. `@linkName` fixes the host's name, and only on this form, since no other type <!-- xfail: linkname_on_type -->
-  has a name a host sees. Fixture: `tests/expose_value.d/`, C building, reading and passing each shape. <!-- test: expose_value -->
+  has a name a host sees (on an enum, likewise only on a `type expose enum`). Fixture: `tests/expose_value.d/`, <!-- xfail: linkname_on_plain_enum -->
+  C building, reading and passing each shape. <!-- test: expose_value -->
 
 **Rules** (checked at compile time — a clear error, never a silent no-op):
 - **Free functions — and one type form.** `expose` is not a member modifier; on a method or field it is <!-- xfail: expose_on_method -->

@@ -976,6 +976,9 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
         # The same cost for a `type extern value` field checked against its C header: the header's layout is
         # the C compiler's to read, so the mismatch is a `_Static_assert` only `kama build` reaches.
         extern_value_layout) return 0 ;;
+        # And for a `type extern enum` held to its header (KR-55): the width is a `_Static_assert`, and a constant
+        # the header does not define is refused by the C compiler naming it — both are the header's to answer.
+        extern_enum_width|extern_enum_missing_constant) return 0 ;;
     esac
     return 1
 }

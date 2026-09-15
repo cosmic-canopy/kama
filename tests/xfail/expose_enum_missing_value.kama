@@ -1,0 +1,4 @@
+// The host header publishes every value of a `type expose enum`, so each is written out: an implicit value is one
+// past its predecessor, and inserting a variant would renumber every later one a host compiled against.
+type expose enum Level : int32 { Low = 1, High }
+fn int32 main() { return 0; }

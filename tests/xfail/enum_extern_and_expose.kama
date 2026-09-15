@@ -1,0 +1,3 @@
+// One side owns an enum's values: a C header (`extern`) or kama (`expose`), never both.
+type expose extern enum Level : int32 { LOW }
+fn int32 main() { return 0; }

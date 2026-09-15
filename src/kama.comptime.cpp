@@ -202,6 +202,10 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         if (EnumInfo* ei = enumInfo(owner))
             for (size_t i = 0; i < ei->members.size(); ++i)
                 if (ei->members[i].name == *id->value) {
+                    if (ei->isExtern)   // KR-55: named where it is USED, which is the line the author can change
+                        return ctFail(("`" + ei->name + "::" + *id->value + "` is a constant of a `type extern enum`, "
+                                       "whose values the C header defines — kama cannot fold one; compare against "
+                                       "the constant at run time").c_str(), id->line);
                     int64_t v;
                     if (!enumMemberValue(*ei, i, v)) return false;
                     asInt(v);
@@ -788,6 +792,7 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
 bool CEmitter::enumMemberValue(EnumInfo& ei, size_t idx, int64_t& out)
 {
     EnumMember& m = ei.members[idx];
+    if (ei.isExtern) return false;   // KR-55: never folded; the one caller that reaches here reports at the use
     if (m.hasFolded) { out = m.folded; return true; }
     if (m.folding)
         return ctFail(("enum member `" + demangleForDisplay(ei.name) + "::" + m.name
@@ -891,7 +896,7 @@ void CEmitter::foldEnumMembers()
     // promoted `type enum Code implements Hashable { Ok, Bad = 5 }` emitted `Bad` as 1.
     for (auto* tbl : { &_enums, &_promotedEnums })
         for (auto& kv : *tbl)
-            for (size_t i = 0; i < kv.second.members.size(); ++i) {
+            for (size_t i = 0; i < kv.second.members.size() && !kv.second.isExtern; ++i) {
                 _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
                 int64_t v;
                 enumMemberValue(kv.second, i, v);

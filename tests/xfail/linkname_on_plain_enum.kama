@@ -1,0 +1,5 @@
+// `@linkName` fixes a name a host sees. A plain enum has none, and a `type extern enum` is already the header's
+// own name — only a `type expose enum` has one to fix.
+@linkName("Mode")
+type enum Mode : int32 { Off = 0 }
+fn int32 main() { return 0; }

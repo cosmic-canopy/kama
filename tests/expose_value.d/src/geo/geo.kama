@@ -1,6 +1,6 @@
 export { Vec2, Kind, lengthSq };
 
-type enum Kind : int32 { Point = 1, Segment = 2 }
+type expose enum Kind : int32 { Point = 1, Segment = 2 }
 
 // A layout kama owns, published to the host as `exposeval_geo_Vec2`: named for its module like a symbol.
 type expose value Vec2 {

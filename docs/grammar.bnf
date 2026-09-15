@@ -1575,6 +1575,12 @@ enum_declaration
 
   | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
        /* `@generate(...) type enum …` */
+  /* `type expose enum E : int32` — values kama OWNS and the generated host header publishes (KR-55), the pair of
+     `type extern enum`. Spelled directly after `type`, exactly as `type expose value` is (see that rule). */
+  | TYPE EXPOSE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+
+  | attribute_list TYPE EXPOSE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+
   ;
 enum_underlying_opt
   : /* Nothing */

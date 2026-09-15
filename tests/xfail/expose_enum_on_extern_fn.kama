@@ -1,0 +1,5 @@
+// A `type expose enum` holds values KAMA owns, so it crosses only where kama owns the function. An `extern fn`
+// belongs to C, whose header defines its own enum for that parameter.
+type expose enum Level : int32 { Low = 1 }
+extern fn int32 c_level(Level l);
+fn int32 main() { return 0; }

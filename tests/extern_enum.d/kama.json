@@ -1,0 +1,8 @@
+{
+  "name": "externenum", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "csources": ["csrc/fmt.c"],
+  "modules": {
+    ".":    { "visibility": "internal" },
+    "gfx":  { "visibility": "internal" }
+  }
+}

@@ -696,6 +696,14 @@ struct EnumInfo   {
     std::map<std::string, std::string> symbolAliases;   // per-symbol imports, so a member initializer resolves one
     std::string underlyingCType;                // `enum E : IntType` -> fixed-width int C type; "" = plain `enum`
     std::string declFile;                       // the unit that declared it — the file rung's key (see `checkReach`)
+    // KR-55. `type extern enum` binds a C enum: `name` is its literal C type, each member IS a C constant's name,
+    // and kama writes no values — the header's are used (emitEnum aliases kama's constant spelling to them).
+    // `type expose enum` is one kama owns and the host header publishes: every value spelled, `hostName` its
+    // `@linkName` or "". A plain enum is neither, and is refused at the C boundary.
+    bool        isExtern = false;
+    bool        isExpose = false;
+    std::string hostName;
+    int         line = 0;
 };
 
 // True for a name the BUILD CONFIGURATION owns (DEBUG/RELEASE/HOSTED and the OS_/ARCH_/ABI_ namespaces
@@ -1692,7 +1700,8 @@ private:
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one
-    void checkExposeValues();   // KR-52: every `type expose value` field is public and C-representable
+    void checkExposeValues();
+    static bool enumHasModifier(const EnumDeclarationNode* ed, const char* mod);   // `type extern|expose enum`   // KR-52: every `type expose value` field is public and C-representable
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx

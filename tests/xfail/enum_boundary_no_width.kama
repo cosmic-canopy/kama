@@ -1,0 +1,3 @@
+// C leaves an enum's size to its compiler, so an enum that crosses to C states its width, and the build checks it.
+type expose enum Level { Low = 1 }
+fn int32 main() { return 0; }

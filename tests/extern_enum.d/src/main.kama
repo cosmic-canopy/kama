@@ -1,0 +1,39 @@
+// `type extern enum` — an enum a C header defines, bound by NAME. Each variant is the C constant's own name,
+// verbatim, and kama writes no values: the emitted C uses those constants, so the numbers are the header's by
+// construction. Before, `extern` on an enum parsed and was silently dropped — kama numbered the variants itself
+// and handed C `1` where the header said `18`. Exercised:
+//   - the values reaching C (`fmt_bits`, `surface_score`) and coming back (`try cast` tests membership against
+//     the C constants, not a range kama guessed);
+//   - `match` over the constants;
+//   - an extern enum as a `type extern value` field, held to the header's layout;
+//   - an `expose fn` taking and returning one, called from C through the generated header, which includes the
+//     C header rather than redefining the enum;
+//   - the enum declared identically in two modules, and imported from one of them.
+import { externenum::gfx::bitsOf };
+extern "fmt.h";
+
+type extern enum Format : int32 { FORMAT_UNDEFINED, FORMAT_RGBA8, FORMAT_BGRA8 }
+
+@generate(of)
+type extern value Surface { public int32 width; public Format format; }
+
+extern fn int32 surface_score(Surface s);
+extern fn int32 host_calls();
+
+expose fn Format pick(Format f) { return f == Format::FORMAT_RGBA8 ? Format::FORMAT_BGRA8 : Format::FORMAT_UNDEFINED; }
+
+unsafe fn int32 run() {
+    Format f = Format::FORMAT_BGRA8;
+    int32 arm = match (f) { case FORMAT_UNDEFINED: 0; case FORMAT_RGBA8: 1; case FORMAT_BGRA8: 2; };
+    Optional<Format> known = try cast<Format>(18);
+    Optional<Format> unknown = try cast<Format>(19);
+    int32 casts = match (known) { case Some(value: v): 10; case None: 0; }
+                + match (unknown) { case Some(value: v): 1000; case None: 0; };
+    return bitsOf(f: f)                                                        // 32
+         + (surface_score(s: Surface.of(width: 1, format: f)) - 27)            //  1: 1 + 27, the header's value
+         + arm                                                                 //  2
+         + casts                                                               // 10
+         + host_calls();                                                       //  5
+}
+
+fn int32 main() { return run(); }   // 50

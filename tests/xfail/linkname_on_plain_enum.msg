@@ -1,0 +1,1 @@
+only a `type expose enum` has a host-visible name

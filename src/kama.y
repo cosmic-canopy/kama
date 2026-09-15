@@ -2288,6 +2288,14 @@ enum_declaration
     {      $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $4, $5, $6, $7); }
   | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
     {      $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }   /* `@generate(...) type enum …` */
+  /* `type expose enum E : int32` — values kama OWNS and the generated host header publishes (KR-55), the pair of
+     `type extern enum`. Spelled directly after `type`, exactly as `type expose value` is (see that rule). */
+  | TYPE EXPOSE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    {      $3->insert($3->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $2));
+           $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $3, $5, $6, $7, $8); }
+  | attribute_list TYPE EXPOSE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    {      $4->insert($4->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3));
+           $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $6, $7, $8, $9); }
   ;
 enum_underlying_opt
   : /* Nothing */        { $$ = SharedIdentifier(); }

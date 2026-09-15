@@ -1,0 +1,6 @@
+// A `type extern enum` constant's value lives in the C header, which kama never reads — so it cannot be folded at
+// compile time. Compare against the constant at run time instead.
+extern "stdio.h";
+type extern enum Level : int32 { LEVEL_LOW }
+comptime int32 N = cast<int32>(Level::LEVEL_LOW);
+fn int32 main() { return 0; }

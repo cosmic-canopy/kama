@@ -1,0 +1,4 @@
+// kama gives an enum methods, a contract or `@generate` by lowering it to a struct — and an enum that crosses to C
+// must stay the integer C expects, so those are refused there.
+type expose enum Level : int32 { Low = 1; fn int32 weight() { return 1; } }
+fn int32 main() { return 0; }

@@ -1,0 +1,7 @@
+// A `type extern enum`'s variants are the C constants' own names, so a name the header does not define names
+// nothing — here `LEVEL_MEDIUM`, a typo or a constant from another version of the library. kama writes no value to
+// hide that behind: the emitted C uses the constant, and the C compiler refuses it by name. A BUILD failure, not
+// a `kama check` one, since only the C compiler reads the header (run_tests.sh `analysis_skip`).
+extern "level.h";
+type extern enum Level : int32 { LEVEL_LOW, LEVEL_MEDIUM }
+fn int32 main() { Level l = Level::LEVEL_MEDIUM; return l == Level::LEVEL_LOW ? 0 : 1; }
