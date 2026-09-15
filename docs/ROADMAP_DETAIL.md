@@ -300,6 +300,32 @@ target's flags active, and a diagnostic says which target it came from. Open que
 cost (N analyses — the pass is seconds, not minutes), how a loose build (no manifest, no declared targets)
 answers, and whether `kama build` should warn when a manifest declares targets the build did not check.
 
+### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building KR-47, `0.9.345`
+
+SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
+says kama has no shadowing. It does: a binding may take the name of a FUNCTION, and the function stays callable
+beside it. Measured on a loose file, native host:
+
+```kama
+fn int32 helper() { return 5; }
+fn int32 use(int32 helper) { return helper + helper(); }   // builds, runs, returns 5 + arg
+fn int32 main() { int32 print = 2; return use(helper: print) - 7; }
+```
+
+builds clean and exits 0. It only works because a user function is qualified in C (`_Fb__helper`), so the C
+local and the C function never meet. A PRELUDE function is emitted bare, and there the same program is a clang
+error: `fn int32 count(int32 args) { return args + cast<int32>(args().count()); }` emits a C parameter `args`
+that shadows the C function `args`, and kama accepts what C then refuses.
+
+Wanted: the binding is refused, as every other shadowing is, naming the function it would hide. Not a C-side
+rename: that would make the C compile and leave the kama rule saying something false. Cost to measure: the
+stdlib binds `args` twice in `lib/std/process/process.kama` (`buildArgv`'s parameter, `Command`'s field). Whether
+a FIELD counts (it is reached as `this.args`, never bare) is part of the design, as is which functions are "in
+scope" (imported, prelude, same module). The `tests/xfail/shadow_*` family is where the refusal lands.
+
+Why KR-47 found it: KR-47's call graph is read from the emitted C, and a C local named like a bare prelude
+function is the one identifier the scan cannot tell from a reference without seeing declarations.
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

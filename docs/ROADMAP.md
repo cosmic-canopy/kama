@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-57**
+**Next id: KR-58**
 
 ## The shape
 
@@ -97,6 +97,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-26 | **`std::input`** — the seam pumps the window event queue and throws it away, on both targets: no keyboard, mouse, wheel, pointer-lock, resize, focus or gamepad. Peer of `std::gpu`, and the reason the first engine on kama derives its own window | M | [§8](ROADMAP_DETAIL.md#s8) |
 | KR-39 | **`@noheap` cannot cross a contract slot even when the callee is knowable** — a `@noheap` caller cannot use serde at all: the refusal is `Deserializer.readI32`, a contract member not declared `@noheap`, so nothing about scalar reads is provable. Two answers, and the second is the better one. Declaring the scalar members `@noheap` is the shipped mechanism (every backend is then checked against it, and `readString`/`writeString` stay unmarked because they genuinely allocate) — but `serializeJsonBuffer` CONSTRUCTS its backend and boxes it, so the concrete implementation is statically known and the compiler could prove the callee and check that body directly, with nothing declared on the contract. That is the devirtualization ladder (the **Performance** row) reaching a real consumer | M | [§4](ROADMAP_DETAIL.md#s4) |
 | KR-40 | **Binding comments** — documentation syntax that cannot drift from the declaration it references. Motivating case: a contract member with no caller in kama source (the compiler emits the call), where a reader asks "why is this here?" and a comment is the only answer — and comments are not binding. Wanted at the declaration, checked against what it names, so a rename or a removal is an error rather than silent rot. Unscoped: needs a design pass on what a binding comment may assert before any syntax is proposed | — | [§1](ROADMAP_DETAIL.md#s1) |
+| KR-57 | **A binding may take the name of a function in scope** — SPEC says kama has no shadowing, but `fn int32 use(int32 helper) { return helper + helper(); }` builds and runs; with a bare PRELUDE function (`args`, `print`) the emitted C local shadows the C function and clang refuses what kama accepted. Refuse the binding like every other shadowing, not rename it in C | S? | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — tooling & ecosystem
 
