@@ -513,6 +513,9 @@ struct ClassInfo {
     // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
     // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
     bool                              isScalarRecv = false;
+    // A payload-less enum that declares members, a contract or `@generate`: this ClassInfo holds those, and
+    // the enum itself stays a C integer (`_enums`) — `this` is its value, as a primitive's is (KR-59).
+    bool isScalarEnum() const { return isScalarRecv && enumNode != nullptr; }
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a
     // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
@@ -1360,14 +1363,6 @@ private:
     // themselves are injected later in applyIntrinsicImpl, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _intrinsicConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
-    // A PAYLOAD-LESS enum that was PROMOTED to a variant ClassInfo (it declared members or a contract, so
-    // it needed somewhere to hang them — collectEnumConformances). Promotion moves it out of `_enums` and
-    // into `_classes`, which used to LOSE the two things a payload-less enum still is: its member VALUES
-    // (`Green = 5`, folded by foldEnumMembers, which walks `_enums`) and its membership list (what
-    // `try cast<Color>(n)` tests against). Its EnumInfo is kept here rather than left in `_enums`, because
-    // `_enums.count()` is what every "is this a bare C integer?" test asks and a promoted enum is a
-    // `struct { Tag tag; }`. Read by foldEnumMembers, emitVariantStruct and emitTryCast; see isUnitEnum.
-    std::map<std::string, EnumInfo>      _promotedEnums;
     // Every enum's decl node, keyed by qualified name. Its remaining consumer is the LSP/query def-site
     // table (kama.query.cpp), which is the ONLY place either kind of enum gets a def-site: a tagged enum
     // is lowered to a variant ClassInfo and never reaches `_enums`, and the `_classes` loop skips variant
@@ -1896,14 +1891,10 @@ private:
     // to an integer", and every scalar operation the language grants one (`==`/`!=`, `cast<intN>`,
     // `try cast<E>`, a member value) must therefore keep working after promotion — each reads `.tag`.
     // Not the same question as `isEnum`, which asks whether the name is still a bare C integer.
-    // An enum's member list, wherever it lives: `_enums` for a bare C integer, `_promotedEnums` for one
-    // that was promoted to a variant ClassInfo. Every consumer that asks "what are this enum's members
-    // and their values" wants both — a promotion does not change the answer, only where it is stored.
+    // A payload-less enum's member list and values, or nullptr. Members or not, it is always in `_enums`.
     EnumInfo* enumInfo(const std::string& name) {
         auto it = _enums.find(name);
-        if (it != _enums.end()) return &it->second;
-        auto pt = _promotedEnums.find(name);
-        return pt == _promotedEnums.end() ? nullptr : &pt->second;
+        return it == _enums.end() ? nullptr : &it->second;
     }
     // One payload-less-enum operand's tag, spelled for how that operand EMITS: `this` inside the enum's
     // own method is already `self`, a pointer (addrOfOperand says the same), and everything else is a
@@ -2167,6 +2158,10 @@ private:
     std::string intrinsicContractVtbl(const std::string& key, const std::string& cn);
     std::string contractVtblOf(const std::string& concrete, const std::string& iface);
     std::string renderIntrinsicContractVtbl(const std::string& key, const std::string& cn);
+    std::string selfArg(const std::string& ct, const std::string& place);
+    bool        isEnumConstant(SharedExpression e);
+    std::string scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m);
+    void        emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key);
     std::string emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,
                                         const std::string& valExpr, int srcLine);
     void registerGenericContractInst(const std::string& tmpl, SharedIdentifierList args);
@@ -2470,6 +2465,7 @@ private:
     // The same two-arm resolution for a tagged enum's SELECTOR: emits `FieldKey __tag = …; int32_t
     // __vslot = …;`, where the slot is the variant's declaration index (also its C tag value).
     void emitVariantKeySlot(const ClassInfo& ci, int depth);
+    std::string scalarEnumIs(const ClassInfo& ci, size_t vi, const std::string& operand);
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
@@ -2493,7 +2489,8 @@ private:
     // The externally-tagged frame alone, each payload field written by `writeField(field, access, depth)` —
     // shared by the by-value derive and a graph node's `writeNode`, so the two wires cannot drift.
     void emitVariantWriteFrame(ClassInfo& ci,
-                               const std::function<void(const FieldInfo&, const std::string&, int)>& writeField);
+                               const std::function<void(const FieldInfo&, const std::string&, int)>& writeField,
+                               const std::string& scalarSelf = "self");
     // `switch (self->tag)` over every payload field (access `self->u.V.f`) — a graph pass's per-tag walk.
     void emitVariantPayloadWalk(ClassInfo& ci,
                                 const std::function<void(const FieldInfo&, const std::string&, int)>& walkField);

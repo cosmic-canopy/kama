@@ -4060,10 +4060,18 @@ std::string CEmitter::emitOperandByValue(SharedExpression e)
     return emitExpression(e);
 }
 
+// `Color::Red` — an identifier, but it names an enum's integer constant: a value, not a place.
+bool CEmitter::isEnumConstant(SharedExpression e)
+{
+    auto* id = dynamic_cast<IdentifierNode*>(e.get());
+    return id && id->qualifier && !id->qualifier->empty() && !exprEnumType(e).empty();
+}
+
 std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
 {
     ASTNode* n = e.get();
-    if (dynamic_cast<ThisAccessNode*>(n)) return emitExpression(e);   // `this` is already `self` (a pointer)
+    if (dynamic_cast<ThisAccessNode*>(n))   // `this` is already `self` — a pointer, except on a scalar receiver
+        return (_currentClass && _currentClass->isScalarRecv) ? "&(" + emitExpression(e) + ")" : emitExpression(e);
     std::string ct = hoistCtorIfInline(e);
     if (!ct.empty()) return "&" + ct;   // inline ctor operand → a hoisted, addressable temp
     rejectUnhoistableCtor(e);
@@ -4072,6 +4080,7 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     // lets a chained mutation `m.getRef(k).bump()` / `m.getRef(k) = x` write THROUGH the borrow, like `a[i]`.
     bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
                   || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
+    if (isEnumConstant(e)) lvalue = false;
     std::string em = emitExpression(e);
     if (lvalue || cls.empty()) {
         // A READ-ONLY place (a `const ref T` call, `cv[i]` through a const `operator[]`) is a `T const*` in
@@ -4142,7 +4151,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     auto enumOperandClass = [&](SharedExpression e) {
         std::string t = typeOfExpr(e);
         auto it = _classes.find(t);
-        return (it != _classes.end() && it->second.isVariant) ? t : std::string();
+        return (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) ? t : std::string();
     };
     if (lc.empty()) lc = enumOperandClass(lhs);
     if (rc.empty()) rc = enumOperandClass(rhs);
@@ -4356,8 +4365,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // taking the call would make `@generate(Equatable)` cost something that `implements Equatable`
         // does not. A HAND-WRITTEN `equals` still wins — the author meant it — and the derived body is
         // still emitted and still used wherever the conformance is (a `Map` key, a `<T: Equatable>` bound).
-        if ((!cm || cm->isSynthCmp) && eq && isUnitEnum(lc)) {
-            const std::string l = unitEnumTag(lhs), r = unitEnumTag(rhs);
+        if ((!cm || cm->isSynthCmp) && eq && ci != _classes.end() && ci->second.isScalarEnum()) {
+            const std::string l = emitExpression(lhs), r = emitExpression(rhs);
             return "(" + l + (token == EQEQ ? " == " : " != ") + r + ")";
         }
         if (!cm) {
@@ -4372,8 +4381,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             return "0";
         }
         canAccess(&ci->second, cm->visibility, cm->cName, line);
-        std::string call = cm->cName + "(" + addrOfOperand(lhs, lc, line) + ", "
-                                           + addrOfOperand(rhs, rc, line) + ")";
+        std::string call = cm->cName + "(" + (ci->second.isScalarEnum() ? emitExpression(lhs) : addrOfOperand(lhs, lc, line))
+                                     + ", " + addrOfOperand(rhs, rc, line) + ")";
         switch (token) {
             case EQEQ:  return call;
             case NOTEQ: return "(!" + call + ")";
@@ -9299,7 +9308,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         // own memberwise constructor (`Shape::Circle(r: 2)` names the tag and takes the payload), so `of`
         // would be a second spelling of the one that exists — and `zero` names no variant at all, since
         // an enum has no "all fields zeroed" state, only a choice between tags.
-        if (ci.isVariant)
+        if (ci.isVariant || ci.isScalarEnum())
             unsupported("`@generate(of, zero)` is not offered on an `enum`: a variant is already its own "
                         "memberwise constructor (`E::Variant(field: …)`), and `zero` names no variant. "
                         "Construct the one you mean", line);
@@ -12603,6 +12612,32 @@ std::string CEmitter::intrinsicContractVtbl(const std::string& key, const std::s
     return sym;
 }
 
+// A scalar receiver (a primitive, a payload-less enum) takes `self` BY VALUE, while a contract slot passes
+// `void* self` — so each slot points at a thunk that loads the scalar and calls the method. Named per
+// (target, contract, method), since two contracts may each require a method of the same name.
+std::string CEmitter::scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m)
+{
+    return key + "__as_" + cn + "__" + m + "__thunk";
+}
+
+void CEmitter::emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key)
+{
+    for (auto& m : ii.methods) {
+        if (m.isCtor) continue;           // a contract-required ctor has no slot
+        MethodInfo* mi = findMethod(&ci, m.name, nullptr);
+        if (!mi) continue;
+        std::string ret = cType(m.returnType) + placeRetSuffix(m.isPlaceReturn, m.isConstPlace);
+        *_out << "static inline " << ret << " " << scalarSlotThunk(key, ii.name, m.name)
+              << ifaceSlotSig(m.params) << " {\n";
+        indent(1);
+        if (ret != "void") *_out << "return ";
+        *_out << mi->cName << "(*(" << ci.name << "*)self";
+        if (m.params) for (auto& p : *m.params) if (p && p->identifier && p->identifier->value)
+            *_out << ", " << *p->identifier->value;
+        *_out << ");\n}\n";
+    }
+}
+
 // The definition itself. A PRIMITIVE's methods take `self` BY VALUE (`isScalarRecv`) while a slot passes
 // `void* self` — hence a thunk per slot. A `string`'s take a pointer, exactly as a class's do, so its slots
 // are the class cast and its `__dtor` is the string's own.
@@ -12619,21 +12654,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
     {
         ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii->second);
         ContractSubst _cs(*this, ii->second);
-        if (pci->isScalarRecv)
-            for (auto& m : ii->second.methods) {
-                if (m.isCtor) continue;           // a contract-required ctor has no slot
-                MethodInfo* mi = findMethod(pci, m.name, nullptr);
-                if (!mi) continue;
-                std::string ret = cType(m.returnType);
-                *_out << "static inline " << ret << " " << key << "__" << m.name << "__thunk"
-                      << ifaceSlotSig(m.params) << " {\n";
-                indent(1);
-                if (ret != "void") *_out << "return ";
-                *_out << mi->cName << "(*(" << pci->name << "*)self";
-                if (m.params) for (auto& p : *m.params) if (p && p->identifier && p->identifier->value)
-                    *_out << ", " << *p->identifier->value;
-                *_out << ");\n}\n";
-            }
+        if (pci->isScalarRecv) emitScalarSlotThunks(*pci, ii->second, key);
         *_out << "static const " << cn << "_vtbl " << key << "__as_" << cn << " = {\n";
         for (auto& m : ii->second.methods) {
             if (m.isCtor) continue;
@@ -12641,7 +12662,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
             if (!mi) continue;
             indent(1);
             if (pci->isScalarRecv)
-                *_out << "." << m.name << " = &" << key << "__" << m.name << "__thunk,\n";
+                *_out << "." << m.name << " = &" << scalarSlotThunk(key, cn, m.name) << ",\n";
             else
                 *_out << "." << m.name << " = (" << cType(m.returnType)
                       << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << "(*)" << ifaceSlotSig(m.params)
@@ -16356,7 +16377,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
     std::map<std::string, SharedIdentifier> savedSubstOuter = _typeSubst;
 
     std::function<void(ClassInfo*)> visit = [&](ClassInfo* ci) {
-        if (!ci || done.count(ci)) return;
+        if (!ci || done.count(ci) || ci->isScalarRecv) return;   // a payload-less enum is its integer, not a struct
         if (visiting.count(ci)) {
             // This runs from a whole-program pass, where `_collectingUnitPath` is unwound and `_sourcePath`
             // is "" in a multi-file build — so the cycle used to be reported against no file at all. The
@@ -18026,9 +18047,9 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
 // and BEFORE buildVtables(), which is what lets the `<E>__as_<C>` vtbl be emitted from the declaration
 // instead of retrofitted afterwards.
 //
-// A payload-less enum is a bare C integer with nowhere to hang a method, so declaring members (or a
-// method-carrying contract) PROMOTES it to a variant ClassInfo — an all-payload-less variant emits
-// `struct { Tag tag; }`, no union, so the cost is just the tag.
+// A payload-less enum stays its C integer whatever it declares (KR-59). Its members, contracts and derives
+// live on a ClassInfo that is a SCALAR receiver — `isScalarEnum`: `this` is the value, as a primitive's is
+// under `type intrinsic`, and each contract slot reaches a method through a thunk.
 void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>& units)
 {
     for (auto& u : units) {
@@ -18124,19 +18145,17 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             { ScopedStr _ts(_thisType, name); ScopedThis _tt(_typeSubst, synthId(name));
               resolveInterfaceNames(ifaces, ifaceNodes); }
 
-            // Promote a still-plain enum. A tagged/payload enum already has its `_classes` entry.
+            // A payload-less enum gets its member ClassInfo here; a tagged one already has its `_classes` entry.
             auto ci = _classes.find(name);
             if (ci == _classes.end()) {
                 if (!_enums.count(name)) continue;   // unknown/errored earlier — already diagnosed
-                _classes[name] = buildVariantClassInfo(ed, name);
-                _classes[name].declFile = u && u->name ? *u->name : std::string();
-                // KEEP the EnumInfo, in `_promotedEnums`. What the enum still IS — its member values and
-                // its membership list — lives nowhere else: `foldEnumMembers` walks `_enums` (so a
-                // promoted `Green = 5` was silently dropped and the C enumerator emitted bare), and
-                // `emitTryCast`'s membership test reads the same table. Moved rather than left, because
-                // `_enums.count()` is the "bare C integer?" test and this one is now a struct.
-                _promotedEnums[name] = _enums[name];
-                _enums.erase(name);   // now a tagged class: match/construction take the variant path
+                ClassInfo sci = buildVariantClassInfo(ed, name);
+                sci.isVariant = false;          // its variants stay listed (names only) for the derives
+                sci.tagCType.clear();
+                sci.kind = TypeKind::Value;
+                sci.isScalarRecv = true;
+                sci.declFile = u && u->name ? *u->name : std::string();
+                _classes[name] = sci;
                 ci = _classes.find(name);
             }
             ClassInfo& eci = ci->second;
@@ -18154,7 +18173,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 if (dup) { unsupported(("`" + bare + "` already implements `" + c + "`").c_str(), ed->line); continue; }
                 eci.interfaces.push_back(c);
                 // Dynamic dispatch through a fat pointer + (P2) boxing into `Owned<C>`.
-                if (eci.isVariant) _polyDispatchContracts.insert(c);
+                _polyDispatchContracts.insert(c);
                 checkImplCompleteness(eci, c, bare, ed->line);
             }
 
@@ -20036,6 +20055,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // legal (a `const ref` borrow may take a read-only place), so the cast states the ABI, the
                 // same way every receiver and `__at` site does. A class param was always cast (the upcast).
                 const bool constPlaceToConstRef = p.isConst && !p.className.empty() && isConstReceiver(argExpr);
+                if (isEnumConstant(argExpr))   // `Color::Red` is a constant with no address: borrow a temporary
+                    s += "(" + exprEnumType(argExpr) + "[]){ " + val + " }";
+                else
                 s += (isClass(p.className) || constPlaceToConstRef)
                          ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base / the read-only place
                          : ("&(" + val + ")");
@@ -22721,6 +22743,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
+        if (enumTy.empty() && cit != _classes.end() && cit->second.isScalarEnum() && handleCls.empty())
+            enumTy = subjCls;
         if (!enumTy.empty()) { emitMatchPlainEnum(m, enumTy, resultTemp, depth); return; }
         // Say which of the two it is. Claiming "requires an enum subject" about a resolvable non-enum
         // named the wrong cause; claiming it about something unresolvable said nothing about the fix.
@@ -23213,6 +23237,7 @@ std::string CEmitter::exprEnumType(SharedExpression e)
     auto asEnum = [&](const std::string& ty) -> std::string {
         return (!ty.empty() && _enums.count(ty)) ? ty : std::string();
     };
+    if (dynamic_cast<ThisAccessNode*>(e.get())) return asEnum(_thisType);   // inside the enum's own method
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         if (!id->value) return "";
         // A qualified member of a plain enum, written inline (`match (Level::High)`). The qualifier names
@@ -23670,10 +23695,13 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // `<Enum>__as_Error` vtbl. Checked FIRST (before the move-only branches): if the field is a
             // poly-dispatch-contract handle and the arg is an implementing enum, boxing is always right.
             // `exprClass` is "" for a variant literal, so recover the source enum via variantExprEnumCType.
-            std::string boxEnum = (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isVariant)
-                                    ? argCls : variantExprEnumCType(argExpr);
-            if (isSmartPtrClass(fcls) && !boxEnum.empty() && _classes.count(boxEnum)
-                && _classes[boxEnum].isVariant
+            auto enumClass = [&](const std::string& c) {
+                auto it = _classes.find(c);
+                return it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum());
+            };
+            std::string boxEnum = enumClass(argCls) ? argCls : variantExprEnumCType(argExpr);
+            if (boxEnum.empty() && enumClass(typeOfExpr(argExpr))) boxEnum = typeOfExpr(argExpr);   // `E::A` of an integer enum
+            if (isSmartPtrClass(fcls) && !boxEnum.empty() && enumClass(boxEnum)
                 && isPolyDispatchContract(_classes[fcls].collElemClass)
                 && implementsContractTemplate(&_classes[boxEnum], _classes[fcls].collElemClass)) {
                 if (!_hoistOK)
@@ -25502,21 +25530,7 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
     // field is the pinned integer type, but the constants are still needed for `switch` labels).
     if (ci.tagCType.empty()) *_out << "typedef enum " << ci.name << "_Tag {\n";
     else                     *_out << "enum {\n";
-    // A PROMOTED payload-less enum keeps its member VALUES (`type enum Code implements Hashable { Ok,
-    // Bad = 5 }`) — they are the enum's surface, and promotion is an implementation detail of giving it
-    // somewhere to hang a method. Written as the FOLDED decimal, exactly as emitEnum writes an unpromoted
-    // one; a tagged enum has no member values to write (the grammar gives a payload variant no `= expr`),
-    // so this lookup simply misses for one. Matched by NAME rather than by index: the two lists are built
-    // from the same `ed->body` and agree today, and a name is the thing that cannot silently drift.
-    const EnumInfo* pe = nullptr;
-    { auto pit = _promotedEnums.find(ci.name); if (pit != _promotedEnums.end()) pe = &pit->second; }
-    for (auto& v : ci.variants) {
-        indent(1); *_out << ci.name << "_" << v.name;
-        if (pe)
-            for (auto& m : pe->members)
-                if (m.name == v.name) { if (m.value && m.hasFolded) *_out << " = " << m.folded; break; }
-        *_out << ",\n";
-    }
+    for (auto& v : ci.variants) { indent(1); *_out << ci.name << "_" << v.name << ",\n"; }
     if (ci.tagCType.empty()) *_out << "} " << ci.name << "_Tag;\n";
     else                     *_out << "};\n";
 
@@ -25709,6 +25723,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         // (No `This` binding — see emitInterfaceTypes. The slot signature and the concrete function now
         //  agree because a pinned parameter substitutes identically on both sides.)
         ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
+        if (ci.isScalarRecv) emitScalarSlotThunks(ci, ii, ci.name);   // a payload-less enum's `self` is its integer
         // EXTERNAL linkage (not `static`) + a forward decl in the shared header, so a value can be bound to
         // this contract across module boundaries (e.g. a generic `json::parse<T>`/`toString<T>` in one unit
         // instantiated with a type whose vtable is defined in another). Defined once, in the owning unit.
@@ -25775,8 +25790,11 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             // instance key; one check, one message.
             }
             indent(1);
-            *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
-                 << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
+            if (ci.isScalarRecv)
+                *_out << "." << m.name << " = &" << scalarSlotThunk(ci.name, ii.name, m.name) << ",\n";
+            else
+                *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
+                     << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
         }
         // the virtual-destructor slot — the concrete dtor (cast to the erased signature),
         // or NULL when this impl owns nothing to free.
@@ -25978,16 +25996,17 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << "}\n";
     }
 #endif
+    const std::string selfC = ci.name + (ci.isScalarRecv ? " self" : "* self");   // a payload-less enum passes its value
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
-        if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
+        if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << selfC << ", Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
-        if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << ci.name << "* self, Formatter* f);\n"; continue; }   // `@generate(Formattable)`
+        if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << selfC << ", Formatter* f);\n"; continue; }   // `@generate(Formattable)`
         if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
-            if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << ci.name << "* self, " << ci.name << "* other);\n";
-            else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << ci.name << "* self);\n";
+            if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << selfC << ", " << ci.name << "* other);\n";
+            else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
             continue;
         }
         rejectStoredInterface(mi.returnType, "returned from a method",
@@ -26680,7 +26699,7 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
     // enum / nested struct / collection -> its own FALLIBLE serialize (self by pointer, Serializer* through).
     std::string innerRes = cType(resultUnitOwnedErrorTypeNode());
     std::string t = "__sw" + std::to_string(_tempCounter++);
-    indent(depth); *_out << innerRes << " " << t << " = " << cType(ty) << "__serialize(&(" << access << "), w);\n";
+    indent(depth); *_out << innerRes << " " << t << " = " << cType(ty) << "__serialize(" << selfArg(cType(ty), access) << ", w);\n";
     if (resultCType.empty()) {
         // graph-node/void context: sticky flag carries the failure to the boundary — drop the redundant box.
         indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { "
@@ -26771,6 +26790,13 @@ void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const Fie
     // cannot share the `Id` switch, since an explicit id may collide numerically with another field's rank.
     indent(depth + 1); *_out << "if (__key.u.Position.rank < " << fields.size() << "u) __slot = (int32_t)__key.u.Position.rank;\n";
     indent(depth); *_out << "}\n";
+}
+
+// `self` holds a payload-less enum's `vi`th member. An `if` test and not a `case`: a `type extern enum` may bind
+// two C names that share one value, and a `switch` over those is a duplicate-case error in C.
+std::string CEmitter::scalarEnumIs(const ClassInfo& ci, size_t vi, const std::string& operand)
+{
+    return operand + " == " + ci.name + "_" + ci.variants[vi].name;
 }
 
 void CEmitter::emitVariantKeySlot(const ClassInfo& ci, int depth)
@@ -26872,7 +26898,15 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
         unsupported(("`@generate(Formattable)` needs every field to be a primitive/string or a type that "
                      "`implements Formattable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    indent(1); *_out << ct << "__format(&" << access << ", f);\n";
+    indent(1); *_out << ct << "__format(" << selfArg(ct, access) << ", f);\n";
+}
+
+// A method's `self` argument for the value at `place`: its address, except for a type whose methods take
+// `self` by value — a payload-less enum, which is its integer (KR-59).
+std::string CEmitter::selfArg(const std::string& ct, const std::string& place)
+{
+    auto it = _classes.find(ct);
+    return (it != _classes.end() && it->second.isScalarEnum()) ? "(" + place + ")" : "&(" + place + ")";
 }
 
 // One field's equality test for the derived `equals`. A primitive compares with C `==`; `string` goes
@@ -26897,7 +26931,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
         unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
                      "`implements Equatable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    return ct + "__equals(&" + a + ", &" + b + ")";
+    return ct + "__equals(" + selfArg(ct, a) + ", &" + b + ")";
 }
 
 // `@generate(Equatable)` — the synthesized memberwise `equals`. Field order is declaration order, so the
@@ -26937,7 +26971,7 @@ std::string CEmitter::hashFieldExpr(SharedIdentifier ty, const std::string& acce
         unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
                      "`implements Hashable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    return ct + "__hash(&" + access + ")";
+    return ct + "__hash(" + selfArg(ct, access) + ")";
 }
 
 // `@generate(Hashable)` — the field-walked hash. Each field contributes its OWN `hash()` (the same cheap
@@ -27171,7 +27205,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     // HEADER (a prelude enum, a generic enum instance) must match the `static inline` prototype
     // emitClassPrototypes already wrote for it, or each TU gets its own external copy of the same symbol.
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
-          << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+          << "__serialize(" << ci.name << (ci.isScalarEnum() ? " self" : "* self") << ", Serializer* w)\n{\n";
     // A PAYLOAD-LESS enum is a NAME, not a record, and it goes on the wire as one: `"Green"`, not
     // `{"tag":"Green"}`. There is no payload for the object to carry, so the object would be a wrapper
     // around nothing — and a bare string is what every other format writes for a fieldless variant
@@ -27192,19 +27226,14 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
 // The externally-tagged frame (see emitEnumSerializeDefinition), with each payload field handed to
 // `writeField`. A payload-less enum is its bare variant name.
 void CEmitter::emitVariantWriteFrame(ClassInfo& ci,
-                                     const std::function<void(const FieldInfo&, const std::string&, int)>& writeField)
+                                     const std::function<void(const FieldInfo&, const std::string&, int)>& writeField,
+                                     const std::string& scalarSelf)
 {
-    if (isUnitEnum(ci.name)) {
-        indent(1); *_out << "switch (self->tag) {\n";
+    if (ci.isScalarEnum()) {
         for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
-            auto& v = ci.variants[vi];
-            indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
-            indent(2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
-            indent(2); *_out << "break;\n";
-            indent(1); *_out << "}\n";
+            indent(1); *_out << (vi ? "else if" : "if") << " (" << scalarEnumIs(ci, vi, scalarSelf) << ") "
+                             << "w->vtbl->variant(w->obj, " << kamaStrLit(ci.variants[vi].name) << ", " << vi << "u);\n";
         }
-        indent(1); *_out << "default: break;\n";
-        indent(1); *_out << "}\n";
         return;
     }
     // The outer frame is `{tag}` or `{tag, value}`, so its field count is VARIANT-dependent — and
@@ -27279,15 +27308,14 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     for (auto& v : ci.variants) if (v.payload.empty()) { dflt = v.name; break; }
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(Deserializer r)\n{\n";   // linkage: see emitEnumSerializeDefinition
-    indent(1); *_out << ci.name << " __result = (" << ci.name << "){0};\n";
+    indent(1); *_out << ci.name << " __result = " << (ci.isScalarEnum() ? std::string("0") : "(" + ci.name + "){0}") << ";\n";
     // The reader half of the bare-string form — read the name, match it against the variants, and Err on
     // one that names none (there is no "unknown" variant to park on and no payload to skip).
-    if (isUnitEnum(ci.name)) {
+    if (ci.isScalarEnum()) {
         emitVariantKeySlot(ci, 1);
         indent(1); *_out << "switch (__vslot) {\n";
         for (size_t i = 0; i < ci.variants.size(); ++i) {
-            indent(2); *_out << "case " << i << ": __result = (" << ci.name << "){ .tag = "
-                             << ci.name << "_" << ci.variants[i].name << " }; break;\n";
+            indent(2); *_out << "case " << i << ": __result = " << ci.name << "_" << ci.variants[i].name << "; break;\n";
         }
         indent(2); *_out << "default: r.vtbl->fail(r.obj); break;\n";
         indent(1); *_out << "}\n";
@@ -27396,7 +27424,16 @@ void CEmitter::emitEnumFormatDefinition(ClassInfo& ci)
 {
     int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
-          << "__format(" << ci.name << "* self, Formatter* f)\n{\n";
+          << "__format(" << ci.name << (ci.isScalarEnum() ? " self" : "* self") << ", Formatter* f)\n{\n";
+    if (ci.isScalarEnum()) {
+        for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+            indent(1); *_out << (vi ? "else if" : "if") << " (" << scalarEnumIs(ci, vi, "self") << ") {\n";
+            emitFmtLiteral(ci.variants[vi].name);
+            indent(1); *_out << "}\n";
+        }
+        *_out << "}\n\n";
+        return;
+    }
     indent(1); *_out << "switch (self->tag) {\n";
     for (auto& v : ci.variants) {
         indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
@@ -27424,7 +27461,8 @@ void CEmitter::emitEnumEqualsDefinition(ClassInfo& ci)
 {
     int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "bool " << ci.name
-          << "__equals(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
+          << "__equals(" << ci.name << (ci.isScalarEnum() ? " self, " : "* self, ") << ci.name << "* other)\n{\n";
+    if (ci.isScalarEnum()) { indent(1); *_out << "return self == *other;\n}\n\n"; return; }
     indent(1); *_out << "if (self->tag != other->tag) { return false; }\n";
     bool anyPayload = false;
     for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
@@ -27456,9 +27494,9 @@ void CEmitter::emitEnumHashDefinition(ClassInfo& ci)
 {
     int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "uint64_t " << ci.name
-          << "__hash(" << ci.name << "* self)\n{\n";
+          << "__hash(" << ci.name << (ci.isScalarEnum() ? " self" : "* self") << ")\n{\n";
     indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
-    indent(1); *_out << "h = (h ^ (uint64_t)(self->tag)) * 16777619ULL;\n";
+    indent(1); *_out << "h = (h ^ (uint64_t)(" << (ci.isScalarEnum() ? "self" : "self->tag") << ")) * 16777619ULL;\n";
     bool anyPayload = false;
     for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
     if (anyPayload) {
@@ -27490,17 +27528,18 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
     // A graph node's pair IS the walker: `serialize` writes the whole envelope from this root and
     // `deserialize` reads it back as a handle. Everything else is the by-value derive.
     if (mi.isSynthSer) { ci.reachesPointer ? emitGraphSerializeDefinition(ci)
-                       : (ci.isVariant ? emitEnumSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
+                       : (ci.isVariant || ci.isScalarEnum() ? emitEnumSerializeDefinition(ci) : emitSerializeDefinition(ci)); return; }
     if (mi.isSynthDe)  {
         // An `Owned<X>` box read is neither: it has no fields of its own, it reads its POINTEE by value and
         // adopts the block. See registerOwnedDeserialize.
         if (ci.ownedBoxDe) { emitOwnedDeserializeDefinition(ci); return; }
         ci.graphDeserialize ? emitGraphDeserializeDefinition(ci)
-                            : (ci.isVariant ? emitEnumDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
-    if (mi.isSynthFormat) { ci.isVariant ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
+                            : (ci.isVariant || ci.isScalarEnum() ? emitEnumDeserializeDefinition(ci) : emitDeserializeDefinition(ci)); return; }
+    const bool isEnumType = ci.isVariant || ci.isScalarEnum();
+    if (mi.isSynthFormat) { isEnumType ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
     if (mi.isSynthCmp) {                                              // keyed by the method name
-        if (name == "equals") ci.isVariant ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
-        else                  ci.isVariant ? emitEnumHashDefinition(ci)   : emitHashDefinition(ci);
+        if (name == "equals") isEnumType ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
+        else                  isEnumType ? emitEnumHashDefinition(ci)   : emitHashDefinition(ci);
         return;
     }
     emitBagCtorBody(ci, name);   // M6 `@generate(of|zero)` — never a variant (registerDerives refuses it)
@@ -28423,7 +28462,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     if (!ci.genDeserialize) return;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
-    if (ci.isVariant) { emitGraphReadIntoVariant(ci); return; }
+    if (ci.isVariant || ci.isScalarEnum()) { emitGraphReadIntoVariant(ci); return; }
     // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
     for (auto& f : ci.fields) {
         if (f.serSkip) continue;
@@ -28462,7 +28501,7 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
                             "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
         indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
     };
-    const bool unit = isUnitEnum(ci.name);
+    const bool unit = ci.isScalarEnum() || isUnitEnum(ci.name);
     if (!unit) {
         indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
         indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
@@ -28472,7 +28511,7 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
     for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
         auto& v = ci.variants[vi];
         indent(1); *_out << (vi ? "else if" : "if") << " (__vslot == " << vi << ") {\n";
-        indent(2); *_out << "self->tag = " << ci.name << "_" << v.name << ";\n";
+        indent(2); *_out << (ci.isScalarEnum() ? "*self = " : "self->tag = ") << ci.name << "_" << v.name << ";\n";
         for (auto& f : v.payload)   // zero is `Some(0)` for an Optional — start every one at None
             if (f.type && f.type->value && *f.type->value == "Optional") {
                 std::string oc = cType(f.type);
@@ -28541,8 +28580,9 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
         // the id discovery already assigned it.
         *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
-        if (ci.isVariant) {   // the by-value enum frame, with an edge written as its id
-            emitVariantWriteFrame(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWrite(f.type, a, d); });
+        if (ci.isVariant || ci.isScalarEnum()) {   // the by-value enum frame, with an edge written as its id
+            emitVariantWriteFrame(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWrite(f.type, a, d); },
+                                  "(*self)");   // a node is reached through its handle, so `self` is a pointer
             *_out << "}\n\n";
         } else {
         std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
@@ -28704,7 +28744,7 @@ void CEmitter::emitNullSerializer()
     // `failed()` is always false, so this is unreachable — but a contract slot must be filled with
     // something of the right type, and `SerError` has a TAGGED repr (a payload-less enum that declares a
     // method), so the tag is not itself a value.
-    *_out << stat << "SerError __kama_ns_errorCode(void* o) { (void)o; return (SerError){ .tag = SerError_IoError }; }\n";
+    *_out << stat << "SerError __kama_ns_errorCode(void* o) { (void)o; return SerError_IoError; }\n";
     *_out << "static const Serializer_vtbl __kama_null_ser_vtbl = {\n";   // a table, not a function: no `inline`
     indent(1); *_out << ".beginObject = __kama_ns_usize, .endObject = __kama_ns_void,\n";
     indent(1); *_out << ".field = __kama_ns_field, .variant = __kama_ns_variant,\n";
@@ -29141,7 +29181,7 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     // Malformed, so it is reported first.
     indent(1); *_out << "if (__g.failed) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
-    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError){ .tag = (DeError_Tag)__g.code });\n";
+    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError)__g.code);\n";
     std::string gbox = emitStickyErrBox(2);
     indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
     indent(1); *_out << "}\n";
@@ -29216,7 +29256,7 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
     indent(1); *_out << "kama_de_graph_free(&__g);\n";
     indent(1); *_out << "if (__g.failed) {\n";
-    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError){ .tag = (DeError_Tag)__g.code });\n";
+    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError)__g.code);\n";
     std::string gbox = emitStickyErrBox(2);
     indent(2); *_out << "if (__rv.tag == " << resC << "_Ok) " << cType(retNode->genericArgs->at(0))
                      << "__dtor(&__rv.u.Ok.value);\n";
@@ -30248,7 +30288,8 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     }
 #endif
     // Static call; upcast self to the declaring class (offset-0 valid). Also the devirtualized path.
-    std::string self = "(" + owner->name + "*)" + recvPtr;
+    std::string self = owner->isScalarEnum() ? "*(" + recvPtr + ")"       // a payload-less enum is passed by value
+                                             : "(" + owner->name + "*)" + recvPtr;
     // A NESTED PARTICIPANT — a container of containers of edges, a node's participant field reached from a
     // twin — needs the same graph its owner is walking. (The EDGE case is answered at the top of this
     // function, before auto-deref can reach the pointee.)
@@ -30353,6 +30394,10 @@ std::string CEmitter::newVariantEnum(ObjectCreationNode* oc, const std::string& 
     auto q = std::make_shared<StringList>();
     for (size_t i = 0; i + 1 < oc->type->qualifier->size(); ++i) q->push_back((*oc->type->qualifier)[i]);
     std::string en = resolveUserName(*oc->type->qualifier->back(), q);
+    if (EnumInfo* ei = _enums.count(en) ? &_enums[en] : nullptr) {       // a payload-less enum's member
+        for (auto& mb : ei->members) if (mb.name == *oc->type->value) return en;
+        return "";
+    }
     if (!_classes.count(en) || !_classes[en].isVariant) {
         auto of = _genericTypeInstOf.find(elem);
         if (!_genericTypes.count(en) || of == _genericTypeInstOf.end() || of->second != en) return "";
@@ -30376,7 +30421,7 @@ std::string CEmitter::newVariantValue(const std::string& enumC, ObjectCreationNo
 
 std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
 {
-    if (!oc->ctorName && _classes.count(cls) && _classes[cls].isVariant) return newVariantValue(cls, oc);
+    if (!oc->ctorName && ((_classes.count(cls) && _classes[cls].isVariant) || isEnum(cls))) return newVariantValue(cls, oc);
     const std::string cn = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
     // Diagnostics use the SOURCE spelling the user wrote (`Box`), not the mangled `_classes` key.
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
@@ -30406,7 +30451,7 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
 // writes through the pointer with no drop; we mirror that discipline.
 bool CEmitter::newBuildsValue(const std::string& cls, ObjectCreationNode* oc)
 {
-    if (oc->ctorName) return true;
+    if (oc->ctorName || isEnum(cls)) return true;
     auto it = _classes.find(cls);
     return it != _classes.end() && it->second.isVariant;
 }
@@ -30861,8 +30906,8 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
         // 0,5,6), and then the only honest test is membership, written against the emitted constants so
         // it stays correct whatever the author wrote. clang folds either shape back into a jump table.
         // The member NAMES come from whichever form this enum is in — `_enums` for a bare C integer,
-        // `ci.variants` for a promoted one (whose tag constants carry the same names). Whether any member
-        // has an EXPLICIT value is asked of the EnumInfo, which a promoted enum keeps in `_promotedEnums`;
+        // `ci.variants` for a generic payload-less instance (whose tag constants carry the same names).
+        // Whether any member has an EXPLICIT value is asked of the EnumInfo;
         // a generic payload-less enum instance (`type enum E<T> { A, B }` at `E<int32>`) has no EnumInfo at
         // all and no way to write one, so it is contiguous by construction — which is why this reads the
         // two facts separately instead of dereferencing a lookup that can legitimately miss.
@@ -30973,7 +31018,7 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
     }
     std::string enumC = cType(ad->type);
     std::string tname = (ad->type && ad->type->value) ? *ad->type->value : enumC;
-    if (!_classes.count(enumC) || !_classes[enumC].isVariant) {
+    if (!_classes.count(enumC) || !(_classes[enumC].isVariant || _classes[enumC].isScalarEnum())) {
         unsupported(("`.as<" + tname + ">()` — `" + tname + "` is not an enum").c_str(), ad->type ? ad->type->line : 0);
         return "0";
     }
@@ -32177,7 +32222,7 @@ static unsigned implementerKind(const ClassInfo& ci)
     // mapping governs the layout/copy/pass path. Only the conformance gate has to tell them apart, so
     // it keys on the flag and :4914 stays exactly as it is.
     if (ci.isBorrow)                   return IK_View;
-    if (ci.isVariant)                  return IK_Enum;    // a `type enum` promoted to a tagged class
+    if (ci.isVariant || ci.isScalarEnum()) return IK_Enum;   // a `type enum` with members
     if (ci.kind == TypeKind::Value)    return IK_Value;
     if (ci.kind == TypeKind::Resource) return IK_Resource;
     return 0;
@@ -33090,7 +33135,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = true;
         for (const std::string& name : _preludeEnums) {
             auto it = _classes.find(name);
-            if (it == _classes.end() || !it->second.isVariant) continue;
+            if (it == _classes.end() || !(it->second.isVariant || it->second.isScalarEnum())) continue;
             ClassInfo& eci = it->second;
             scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, eci.declFile);
@@ -33119,7 +33164,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         // A promoted prelude ENUM is `preludeStatic` too — for the PROTOTYPE linkage, which must match its
         // static-inline bodies — but its definitions are class-shaped here (ctors, fields, a vtbl loop) and
         // an enum has none of that. The dedicated block just below emits its bodies instead.
-        if (kv.second.isVariant) continue;
+        if (kv.second.isVariant || kv.second.isScalarEnum()) continue;
         scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings, kv.second.symbolAliases);
         ScopedStr _cu(_collectingUnitPath, kv.second.declFile);   // whose code this is — see diagFile()
         _emitStaticClass = true;
@@ -33136,7 +33181,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = true;
         for (const std::string& name : _preludeEnums) {
             auto it = _classes.find(name);
-            if (it == _classes.end() || !it->second.isVariant) continue;   // only a promoted enum reaches _classes
+            if (it == _classes.end() || !(it->second.isVariant || it->second.isScalarEnum())) continue;   // only an enum with members reaches _classes
             ClassInfo& eci = it->second;
             scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, eci.declFile);   // whose code this is — see diagFile()
@@ -33412,7 +33457,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // prototype are in the header). Generic-enum instances are emitted static-inline in the header.
             if (ed->identifier && ed->identifier->value) {
                 auto it = _classes.find(qualify(*ed->identifier->value));
-                if (it != _classes.end() && it->second.isVariant) {
+                if (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) {
                     ClassInfo& eci = it->second;
                     if (eci.destructible) emitDtorDefinition(eci);
                     // Model C: emit the `<Enum>__as_<C>` vtbl DEFINITION for any poly-dispatch contract the
