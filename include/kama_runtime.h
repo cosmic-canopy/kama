@@ -85,6 +85,17 @@ static inline bool kama_type_name_eq(const char* a, const char* b) {
   #define KAMA_EXPORT __attribute__((visibility("default"), used))
 #endif
 
+// KAMA_C_KIND — the arithmetic CLASS of an expression's type, as an integer constant: 1 bool, 2 integer,
+// 3 floating, 0 anything else (a pointer, a struct, an array). A `type extern value` binds a C header's
+// struct, and the kama field list is a CLAIM about that header; the emitter checks each field with
+// `sizeof` AND this class, so `int32` against a `short` or a `float` fails the build instead of truncating.
+// Signedness is deliberately not a class: a C enum's compatible type is `int` or `unsigned int` by
+// implementation, and `int32` is the one spelling a binding uses for it. The operand is never evaluated.
+#define KAMA_C_KIND(x) _Generic((x), _Bool: 1, float: 3, double: 3, long double: 3,                  \
+    char: 2, signed char: 2, short: 2, int: 2, long: 2, long long: 2,                                \
+    unsigned char: 2, unsigned short: 2, unsigned int: 2, unsigned long: 2, unsigned long long: 2,   \
+    default: 0)
+
 // KAMA_ISOLATE_LOCAL — the per-isolate storage class for a module-level `static` (MCU campaign step 1).
 // A module `static` is per-isolate BY CONSTRUCTION (concurrency spec, "three sharing seams"): it cannot be
 // seen by another isolate, so it cannot race; cross-isolate sharing stays on the `Atomic<T>` seam.

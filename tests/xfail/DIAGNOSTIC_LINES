@@ -297,6 +297,7 @@ extern_disagree	main.kama:4 main.kama:6
 extern_members_twice	b.kama:2
 extern_type_leak	lib.kama:7
 extern_undeclared	main.kama:3 main.kama:4
+extern_value_layout	-
 extern_value_nameless	extern_value_nameless.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14

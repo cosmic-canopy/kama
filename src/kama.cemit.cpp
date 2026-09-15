@@ -21818,6 +21818,35 @@ void CEmitter::mapCVisibleSigs()
     }
 }
 
+// A `type extern value` emits no struct — the header's is used — so its field list is a claim nothing read:
+// `int32 a` over a header's `short a` compiled clean and `a: 70000` truncated silently (measured, KR-52). kama
+// does not model C layout (clang does, see `comptime assert`), so the check is handed to the C compiler, and
+// it therefore fails at BUILD rather than `kama check`. Order and a subset of the header's fields are fine —
+// every read is by name — so what is asserted is exactly what decides how a value is read: its size and class.
+void CEmitter::emitExternLayoutChecks()
+{
+    bool any = false;
+    for (auto& kv : _classes) {
+        const ClassInfo& ci = kv.second;
+        if (!ci.isExternStruct) continue;
+        for (const FieldInfo& f : ci.fields) {
+            const int ln = f.nameId ? f.nameId->line : ci.node ? ci.node->line : 0;
+            const std::string at = ci.declFile + (ln ? ":" + std::to_string(ln) : std::string());
+            const std::string ct = fieldCType(ci.name, f);
+            if (ct.empty()) continue;
+            const std::string field = "((" + ci.name + "*)0)->" + f.name;
+            const std::string kamaTy = f.type && f.type->value ? *f.type->value : ct;
+            const std::string note = "kama: `" + demangleForDisplay(ci.name) + "." + f.name + "` is declared `" + kamaTy
+                + "` (" + at + "), but the C header's field differs in size or in kind (integer, floating, bool) — "
+                  "make the kama field match the header";
+            *_out << "_Static_assert(sizeof(" << field << ") == sizeof(" << ct << ") && KAMA_C_KIND(" << field
+                  << ") == KAMA_C_KIND(*(" << ct << "*)0), \"" << cEscapeStringBody(note) << "\");\n";
+            any = true;
+        }
+    }
+    if (any) *_out << "\n";
+}
+
 // Does this type reach a callback that states no thread, and through which chain of fields? The answer
 // `_cVisibleSigs` cannot give, for the two crossings where the type is kama's own rather than a C-layout
 // one: a composite handed to an `extern fn`, and an `expose fn`'s return. There the callback sits one or
@@ -32173,6 +32202,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         }
     }
     for (auto& kv : _interfaces) { scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings, kv.second.symbolAliases); emitInterfaceTypes(kv.second); }
+    emitExternLayoutChecks();   // after every body: a field may hold an `InlineArray` or a kama value by value
 
     // Forward-declare each class-interface vtable (`C__as_I`) — the definitions have external linkage (see
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.

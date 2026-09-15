@@ -1,0 +1,12 @@
+// A `type extern value` binds a C header's struct, so its field list is a CLAIM about that header — and kama
+// emits no struct of its own to disagree with, so nothing used to read the claim. Here `level` is a `short`
+// in the header but `int32` in kama, and `gain` is a `float` bound as `int32`: this built, and a `level` of
+// 70000 was truncated to 4464 on the way into C. Each field is now checked for size and kind (integer,
+// floating, bool) with a C11 `_Static_assert`, so the build fails naming the field. It is a BUILD failure,
+// not a `kama check` one — kama does not model C layout, the C compiler does (run_tests.sh `analysis_skip`).
+extern "shapes.h";
+@generate(zero)
+type extern value Sample { public int32 level; public int32 gain; }
+extern fn int32 sample_level(Sample s);
+unsafe fn int32 go() { return sample_level(s: Sample.zero()); }
+fn int32 main() { return go(); }

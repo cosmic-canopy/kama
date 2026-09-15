@@ -1680,6 +1680,12 @@ assign is zero**, not an error: the header owns the layout and kama may declare 
 partial init of a large descriptor is `WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero(); bd.size = 64;`.
 The fields may be repeated in another file that declares the same struct; the members have one body each, so
 they are declared once and the type is exported from there. (`tests/extern_value_init.kama`.) <!-- test: extern_value_init -->
+The field list is a claim about the header, and **the build checks it**: each field must match the header's in
+size and in kind (integer, floating, `bool`), so `int32 level` over a C `short level` is a build error naming <!-- xfail: extern_value_layout -->
+the field rather than a silent truncation. Order does not matter (every read is by name) and a binding may name
+a subset of the header's fields. Signedness is not compared — a C enum field is `int` or `unsigned int` by
+implementation, and `int32` is how a binding spells it. The check is a C11 `_Static_assert`, because the C
+compiler, not kama, reads the header's layout — so it fails at `kama build`, not at `kama check`.
 `addr(of: x)` takes the address of a
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
 `UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).

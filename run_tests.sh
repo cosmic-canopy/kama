@@ -973,6 +973,9 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
     # docs say so at the surface. Adding an entry here is a deliberate act — read the note above first.
     case "$1" in
         comptime_assert_layout_false) return 0 ;;
+        # The same cost for a `type extern value` field checked against its C header: the header's layout is
+        # the C compiler's to read, so the mismatch is a `_Static_assert` only `kama build` reaches.
+        extern_value_layout) return 0 ;;
     esac
     return 1
 }

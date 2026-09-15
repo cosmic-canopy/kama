@@ -1580,6 +1580,9 @@ private:
     // at the bind rather than at the extern struct's declaration.
     std::map<std::string, std::string>                       _cVisibleSigs;     // sig cName -> "Struct.field"
     void mapCVisibleSigs();
+    // Checks every `type extern value` field against the C header it binds — size and arithmetic class,
+    // one `_Static_assert` each (see KAMA_C_KIND in kama_runtime.h for why that and not signedness).
+    void emitExternLayoutChecks();
     // Does `cty` reach a `fnptr` type that states no threading contract, and through which chain of
     // fields? The other two crossings — a composite handed to an `extern fn` and an `expose fn`'s return
     // — carry the callback one or more fields down, where `_cVisibleSigs` cannot answer because the
