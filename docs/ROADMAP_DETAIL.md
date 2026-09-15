@@ -252,25 +252,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### A named C constant (KR-56) — found 2026-09-15, converting the WebGPU example to `type extern enum`
-
-`type extern enum` (SPEC *FFI*) binds a C enum's constants by name, so no number is written in kama. Converting
-`examples/webgpu/triangle.kama` removed every enum magic number but three, and those three are not enum constants
-at all. webgpu.h declares its bit flags as typed constants that are OR'd together:
-
-```c
-typedef uint64_t WGPUBufferUsage;
-static const WGPUBufferUsage WGPUBufferUsage_Uniform = 0x0000000000000040;
-static const WGPUBufferUsage WGPUBufferUsage_CopyDst = 0x0000000000000008;
-```
-
-kama has no way to name one, so the example writes `bd.usage = 72; // Uniform (0x40) | CopyDst (0x08)` — the
-same unchecked hand copy `type extern enum` removed for enums. Many C APIs spell constants as `#define` instead (GLFW, most of
-POSIX). **Wanted:** a binding for a named C constant that writes no value, as `type extern enum` does. The two C
-forms differ in what the compiler can learn — a `static const` has a type the header states, a `#define` has
-none — so a design pass should decide whether one spelling covers both (and where the type comes from for a
-macro), with the bytes shown, before any code. The flags' `|` composition must stay ordinary integer arithmetic.
-
 ### A declaration `@compileFor` drops is never checked (KR-54) — measured 2026-09-14, `0.9.340`
 
 `pruneInactiveDecls` removes an inactive declaration from its unit before name pre-registration and

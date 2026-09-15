@@ -60,6 +60,7 @@ const char* symKindName(SymKind k)
         case SymKind::GenericFn:   return "generic-fn";
         case SymKind::Local:       return "local";
         case SymKind::Param:       return "param";
+        case SymKind::Constant:    return "constant";
     }
     return "symbol";
 }
@@ -647,6 +648,12 @@ void CEmitter::buildDefSites()
         SymKind k = _generics.count(kv.first) ? SymKind::GenericFn : SymKind::Function;
         addDefSite(kv.first, k, unit, sig.node, sig.node->name, bareOf(sig.node->name, kv.first), "");
     }
+
+    // `extern const T NAME;` (KR-56) — keyed by its literal name, which is what a reference records.
+    for (auto& kv : _externConsts)
+        if (kv.second.node)
+            addDefSite(kv.first, SymKind::Constant, unitOfDecl(kv.second.node), kv.second.node, kv.second.node->name,
+                       kv.first, "");
 
     // Bindings the walk recorded (M3.4): locals, params, foreach/match bindings. Their key already encodes
     // the declaration site, and the identifier node IS the declaration — range and selectionRange coincide.
@@ -2342,11 +2349,20 @@ void CEmitter::addNamesInScope(const QueryCtx& qc, const std::vector<QueryBindin
         }
         emit(label, CompletionKind::Function, detail + ")", "");
     }
+    // An `extern const` is a C binding like an `extern fn`, offered on the same terms: in the file that declares it.
+    for (auto& kv : _externConsts) {
+        auto d = _defSites.find(kv.first);
+        if (d != _defSites.end() && d->second.unit == qc.unit)
+            emit(kv.first, CompletionKind::Constant, "extern const " + spellTypeIn("", kv.second.type), "");
+    }
     // Per-symbol imports (`import a::b::{X as Y}`) bind a LOCAL spelling that no key-prefix walk can find.
-    for (auto& a : _nsCtx.symbolAliases)
+    for (auto& a : _nsCtx.symbolAliases) {
         if (_classes.count(a.second) || _funcs.count(a.second) || _enums.count(a.second)
             || _interfaces.count(a.second) || _genericTypes.count(a.second))
             emit(a.first, _funcs.count(a.second) ? CompletionKind::Function : CompletionKind::Type, "", "");
+        else if (_externConsts.count(importedExtern(a.second)))
+            emit(a.first, CompletionKind::Constant, "", "");
+    }
 
     for (size_t i = 0; i < kamaKeywordCount(); ++i) emit(kamaKeywordAt(i), CompletionKind::Keyword, "", "");
 }

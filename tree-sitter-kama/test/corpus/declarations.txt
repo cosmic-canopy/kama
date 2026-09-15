@@ -836,3 +836,30 @@ fn void main()
         (variable_declarator
           (identifier)
           (integer_literal))))))
+
+================================================================================
+extern const binds a C constant by name, with no value
+================================================================================
+
+extern "webgpu.h";
+@linkName("GLFW_KEY_ESCAPE") extern const int32 escapeKey;
+extern const uint64 WGPUBufferUsage_Uniform;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_declaration
+    (string_literal
+      (string_content)))
+  (extern_const_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (string_literal
+            (string_content)))))
+    (primitive_type)
+    (identifier))
+  (extern_const_declaration
+    (primitive_type)
+    (identifier)))

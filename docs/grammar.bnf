@@ -470,6 +470,8 @@ function_declaration
 plain_function_declaration
   : EXTERN STRING_LITERAL SEMICOLON
 
+  | EXTERN CONST type IDENTIFIER SEMICOLON
+
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block

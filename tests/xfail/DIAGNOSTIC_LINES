@@ -308,6 +308,14 @@ expose_value_resource	expose_value_resource.kama:4
 extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
 extern_c_spelling_other_file	main.kama:8
+extern_const_array_size	extern_const_array_size.kama:5
+extern_const_assign	extern_const_assign.kama:5
+extern_const_comptime	extern_const_comptime.kama:5
+extern_const_disagree	main.kama:5
+extern_const_missing	main.kama:7
+extern_const_not_primitive	extern_const_not_primitive.kama:4
+extern_const_rebound	extern_const_rebound.kama:5
+extern_const_width	-
 extern_disagree	main.kama:4 main.kama:6
 extern_enum_comptime	extern_enum_comptime.kama:5
 extern_enum_disagree	main.kama:6

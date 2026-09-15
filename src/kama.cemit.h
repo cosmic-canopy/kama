@@ -1725,6 +1725,17 @@ private:
     bool externExportedFrom(const std::string& name, const std::string& modScope) const;
     std::string importedExtern(const std::string& target) const;
     std::map<std::string, std::string> _externSymbolOwner;           // C symbol -> the kama name bound to it (one per program)
+    // `extern const T NAME;` (KR-56), keyed by the kama name, which is also the literal C name unless `@linkName`.
+    struct ExternConst { SharedIdentifier type; std::string cType; std::string symbol; std::string declFile; int line = 0;
+                         ExternConstNode* node = nullptr; };
+    std::map<std::string, ExternConst> _externConsts;
+    void collectExternConst(ExternConstNode* xc);
+    // The `_externConsts` key a name reaches — declared here, imported, or qualified through an export — or "".
+    // The extern ladder `resolveFuncImpl` already climbs; an extern constant is reached exactly as an extern fn is.
+    std::string resolveExternConst(const std::string& name, SharedStringList qualifier) {
+        const std::string k = resolveFuncImpl(name, qualifier);
+        return _externConsts.count(k) ? k : std::string();
+    }
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
@@ -2145,7 +2156,7 @@ private:
     std::string contractVtblOf(const std::string& concrete, const std::string& iface);
     std::string renderIntrinsicContractVtbl(const std::string& key, const std::string& cn);
     std::string selfArg(const std::string& ct, const std::string& place);
-    bool        isEnumConstant(SharedExpression e);
+    std::string constantTempCType(SharedExpression e);
     std::string scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m);
     void        emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key);
     std::string emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,

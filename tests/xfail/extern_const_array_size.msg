@@ -1,0 +1,1 @@
+is an `extern const`, whose value the C header defines

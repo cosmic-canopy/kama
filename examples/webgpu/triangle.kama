@@ -56,8 +56,12 @@ type extern enum WGPUSurfaceGetCurrentTextureStatus : int32 {
 @compileFor(!ARCH_WASM32)
 type extern enum WGPUNativeSurfaceGetCurrentTextureStatus : int32 { WGPUSurfaceGetCurrentTextureStatus_Occluded }
 
-// Bit flags are not enums in webgpu.h — they are `static const` values OR'd together — and kama cannot yet
-// bind a C constant by name, so the three flag values below are still spelled as numbers (ROADMAP KR-56).
+// Bit flags are not enums in webgpu.h — they are `static const` values OR'd together — so they are bound by name
+// with `extern const`: no number is written here, and the build holds each to the header's size and kind.
+extern const uint64 WGPUColorWriteMask_All;
+extern const uint64 WGPUTextureUsage_RenderAttachment;
+extern const uint64 WGPUBufferUsage_Uniform;
+extern const uint64 WGPUBufferUsage_CopyDst;
 
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
 type extern value WGPUStringView { UnsafeConstPtr<cchar> data; usize length; }
@@ -205,7 +209,7 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, WGPUTextureFormat format) {
 
     WGPUColorTargetState colorTarget = WGPUColorTargetState.zero();
     colorTarget.format = format;
-    colorTarget.writeMask = 15;          // WGPUColorWriteMask_All (0xF) — a flag, see KR-56 above
+    colorTarget.writeMask = WGPUColorWriteMask_All;
 
     string fsEntry = "fs";
     WGPUFragmentState frag = WGPUFragmentState.zero();
@@ -236,7 +240,7 @@ unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
     WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration.zero();
     cfg.device = device;
     cfg.format = WGPUTextureFormat::WGPUTextureFormat_BGRA8Unorm;
-    cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment — a flag, see KR-56 above
+    cfg.usage = WGPUTextureUsage_RenderAttachment;
     cfg.width = 512;
     cfg.height = 512;
     cfg.alphaMode = WGPUCompositeAlphaMode::WGPUCompositeAlphaMode_Auto;
@@ -256,7 +260,7 @@ unsafe fn void onDevice(WGPURequestDeviceStatus status, UnsafePtr device, WGPUSt
 
     // Uniform buffer (holds the rotation angle) + a bind group over the pipeline's auto layout.
     WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero();
-    bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08) — flags, see KR-56 above
+    bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     bd.size = 16;
     UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
     st[0].uniformBuf = ubuf;

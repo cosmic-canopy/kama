@@ -92,6 +92,7 @@
 ; ── declarations, most specific and therefore last ─────────────────────────────────────────────────────
 (function_declaration name: (identifier) @function)
 (extern_declaration name: (identifier) @function)
+(extern_const_declaration name: (identifier) @constant)
 (fnptr_declaration name: (identifier) @function)
 (method_declaration name: (method_name) @function)
 (method_declaration name: (method_name (identifier) @function))

@@ -1894,7 +1894,9 @@ std::string CEmitter::moduleStaticCTypeRaw(SharedExpression e)
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
     if (!id || !id->value) return "";
     auto ms = _moduleStatics.find(qualify(*id->value));
-    return ms == _moduleStatics.end() ? "" : classifierCType(ms->second);
+    if (ms != _moduleStatics.end()) return classifierCType(ms->second);
+    const std::string xk = resolveExternConst(*id->value, id->qualifier);
+    return xk.empty() ? "" : classifierCType(_externConsts[xk].type);
 }
 
 // Recurses through exactly the shapes `constValue` folds through, plus the ternary — everywhere a literal
@@ -4059,11 +4061,19 @@ std::string CEmitter::emitOperandByValue(SharedExpression e)
     return emitExpression(e);
 }
 
-// `Color::Red` — an identifier, but it names an enum's integer constant: a value, not a place.
-bool CEmitter::isEnumConstant(SharedExpression e)
+// An identifier that names a CONSTANT rather than a place — an enum member (`Color::Red`) or an `extern const`,
+// which may be a `#define` — so a borrow of it needs a temporary. Answers that temporary's C type, or "".
+std::string CEmitter::constantTempCType(SharedExpression e)
 {
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
-    return id && id->qualifier && !id->qualifier->empty() && !exprEnumType(e).empty();
+    if (!id || !id->value) return "";
+    if (id->qualifier && !id->qualifier->empty()) {
+        const std::string en = exprEnumType(e);
+        if (!en.empty()) return en;
+    }
+    if (_localTypes.count(*id->value) || _paramNames.count(*id->value)) return "";
+    const std::string xk = resolveExternConst(*id->value, id->qualifier);
+    return xk.empty() ? "" : cType(_externConsts[xk].type);
 }
 
 std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
@@ -4079,8 +4089,9 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     // lets a chained mutation `m.getRef(k).bump()` / `m.getRef(k) = x` write THROUGH the borrow, like `a[i]`.
     bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
                   || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
-    if (isEnumConstant(e)) lvalue = false;
+    const std::string constTy = constantTempCType(e);
     std::string em = emitExpression(e);
+    if (!constTy.empty()) return "(" + constTy + "[]){ " + em + " }";
     if (lvalue || cls.empty()) {
         // A READ-ONLY place (a `const ref T` call, `cv[i]` through a const `operator[]`) is a `T const*` in
         // C, and every runtime helper takes `T*`: `const fn` is ABI-neutral, so the front end has already
@@ -4849,6 +4860,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                v->qualifier && !v->qualifier->empty());
                 recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
                 return key;
+            }
+            // `extern const T NAME;` (KR-56) → the C constant's own spelling; the header owns the value.
+            const std::string xk = resolveExternConst(nm, v->qualifier);
+            if (!xk.empty()) {
+                if (!v->synthesized)
+                    checkReach(xk, nm, "this reference", v->line, refFilePath(), v->qualifier && !v->qualifier->empty());
+                recordRef(xk, v);
+                return "(" + _externConsts[xk].symbol + ")";
             }
         }
         // Nothing above bound the name, and it is not a local, a parameter or a ref-param either: it
@@ -8277,6 +8296,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
         if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) continue;   // collectModuleVars, every unit first
+        if (auto* xc = dynamic_cast<ExternConstNode*>(decl.get())) { collectExternConst(xc); continue; }
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
         rejectPinOutsideContract(fn->typePins, fn->typeParams, "a function", fn->line);
@@ -8519,6 +8539,48 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             _genericDeclFile[sig.cName] = _collectingUnitPath;
         }
     }
+}
+
+// `extern const T NAME;` — a C constant, bound by name the way an `extern fn` is: repeated only identically, one kama
+// binding per C symbol, and a PRIMITIVE, since a pointer/struct/string constant has no by-value kind to check (a
+// string macro is a `char[N]`, a braced `*_INIT` macro is not an expression at all).
+void CEmitter::collectExternConst(ExternConstNode* xc)
+{
+    if (!xc->name || !xc->name->value || !xc->type) return;
+    const std::string& nm = *xc->name->value;
+    const int ln = xc->name->line;
+    std::string ct = cType(xc->type);
+    const std::string key = primKeyOfCType(ct);
+    if (!isScalarPrimKey(key) || key == "char" || xc->type->genericArg) {
+        unsupported(("`extern const " + nm + "` must be a number or `bool` — a C constant crosses by value, and only "
+                     "a primitive has a size and kind the build can hold to the header's; bind a pointer or a "
+                     "struct constant through a C function that returns it").c_str(), ln);
+        return;
+    }
+    ExternConst ec;
+    ec.type = xc->type; ec.cType = ct; ec.declFile = _collectingUnitPath; ec.line = ln; ec.node = xc;
+    const std::string link = linkNameOf(xc->attributes, xc->line);
+    ec.symbol = link.empty() ? nm : link;
+    auto prev = _externConsts.find(nm);
+    if (prev != _externConsts.end() && (prev->second.cType != ct || prev->second.symbol != ec.symbol)) {
+        unsupported(("this `extern const " + nm + "` disagrees with the one in `" + prev->second.declFile + "`:"
+                     + std::to_string(prev->second.line) + " — `" + nm + "` is ONE C constant, so every declaration of "
+                       "it must state the same type and bind the same symbol").c_str(), ln);
+        return;
+    }
+    if (_funcs.count(nm)) {
+        unsupported(("`" + nm + "` is already an `extern fn` — one C name is one kind of thing").c_str(), ln);
+        return;
+    }
+    auto own = _externSymbolOwner.find(ec.symbol);
+    if (own != _externSymbolOwner.end() && own->second != nm) {
+        unsupported(("the C symbol `" + ec.symbol + "` is already bound as `" + own->second + "` — one C symbol has "
+                     "one kama binding in a program; name that one here").c_str(), ln);
+        return;
+    }
+    _externSymbolOwner[ec.symbol] = nm;
+    if (!_collectingUnitPath.empty()) _externDeclSites[nm].insert(_collectingUnitPath);
+    _externConsts[nm] = ec;
 }
 
 // `<T is This>` outside a `type contract` — see the header for why this is semantic and not a parse error.
@@ -16601,6 +16663,8 @@ SharedIdentifier CEmitter::unsizedFixedPlaceholder(const SharedIdentifier& t, co
         if (_ctErroredConsts.count(mk)) reported = true;
         else if (!mk.empty() && !_constStatics.count(mk))
             why = "`" + *nArg->value + "` is a runtime `static` — declare it `comptime`";
+        else if (mk.empty() && !resolveExternConst(*nArg->value, nArg->qualifier).empty())
+            why = "`" + *nArg->value + "` is an `extern const`, whose value the C header defines — kama cannot fold one";
         else if (mk.empty())
             why = "`" + *nArg->value + "` names no `comptime` constant";
     }
@@ -19955,7 +20019,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                         "or contract borrow", srcLine);
         if (isInterface(p.className)) {
             std::string c = exprClass(argExpr);
-            if (c.empty() && isEnumConstant(argExpr)) c = exprEnumType(argExpr);   // `Level::Low` into a contract
+            if (c.empty() && _classes.count(constantTempCType(argExpr))) c = constantTempCType(argExpr);   // `Level::Low` into a contract
             if (p.byRef) {
                 // `ref`/`out` interface: the callee may reseat the caller's handle, so the
                 // argument must be an actual interface variable (pass its address). A
@@ -19980,7 +20044,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
                 // the borrow the callee reads, exactly as a `const ref` class rvalue is (the `ref` arm below).
                 if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(argExpr.get())))
-                    && !valHoisted && (!isNamedValue(argExpr.get()) || isEnumConstant(argExpr))) {
+                    && !valHoisted && (!isNamedValue(argExpr.get()) || !constantTempCType(argExpr).empty())) {
                     if (_hoistOK) {
                         std::string t = "__ifcarg" + std::to_string(_tempCounter++);
                         _hoisted.push_back(c + " " + t + " = " + val + ";");
@@ -20070,8 +20134,8 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // legal (a `const ref` borrow may take a read-only place), so the cast states the ABI, the
                 // same way every receiver and `__at` site does. A class param was always cast (the upcast).
                 const bool constPlaceToConstRef = p.isConst && !p.className.empty() && isConstReceiver(argExpr);
-                if (isEnumConstant(argExpr))   // `Color::Red` is a constant with no address: borrow a temporary
-                    s += "(" + exprEnumType(argExpr) + "[]){ " + val + " }";
+                if (!constantTempCType(argExpr).empty())   // `Color::Red`, an `extern const`: no address, borrow a temporary
+                    s += "(" + constantTempCType(argExpr) + "[]){ " + val + " }";
                 else
                 s += (isClass(p.className) || constPlaceToConstRef)
                          ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base / the read-only place
@@ -20729,9 +20793,15 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     // `_constLocals` so the message fits an integer binder (the deep-const wording below is about
     // reaching THROUGH a binding, which this one has no inside to reach) — and because this one helper
     // is on every write path there is: assignment, compound assignment, `++`/`--`, and `ref`/`out` args.
+    const auto* tid = dynamic_cast<IdentifierNode*>(target.get());
+    const bool externConst = tid && tid->value && !_localTypes.count(*tid->value) && !_paramNames.count(*tid->value)
+                          && !resolveExternConst(*tid->value, tid->qualifier).empty();
     if (!root.empty() && _comptimeSubst.count(root))
         unsupported(("cannot assign to `" + root + "` — it is a comptime parameter, a compile-time "
                      "value fixed at instantiation").c_str(), srcLine);
+    else if (externConst)
+        unsupported(("cannot assign to `" + *tid->value + "` — it is an `extern const`, a constant the C header "
+                     "defines").c_str(), srcLine);
     else if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
@@ -22346,6 +22416,17 @@ void CEmitter::emitExternLayoutChecks()
                   << ") == KAMA_C_KIND(*(" << ct << "*)0), \"" << cEscapeStringBody(note) << "\");\n";
             any = true;
         }
+    }
+    // `extern const T NAME;` (KR-56) — the same claim about a header, about a constant instead of a field. It holds
+    // for a `#define` too: `KAMA_C_KIND` and `sizeof` never evaluate their operand, and a macro's literal has a type.
+    for (auto& kv : _externConsts) {
+        const ExternConst& ec = kv.second;
+        const std::string note = "kama: `extern const " + kv.first + "` is declared `" + primKeyOfCType(ec.cType) + "` ("
+            + ec.declFile + ":" + std::to_string(ec.line) + "), but the C constant differs in size or in kind (integer, "
+              "floating, bool) — state the type the header gives it";
+        *_out << "_Static_assert(sizeof(" << ec.symbol << ") == sizeof(" << ec.cType << ") && KAMA_C_KIND(" << ec.symbol
+              << ") == KAMA_C_KIND(*(" << ec.cType << "*)0), \"" << cEscapeStringBody(note) << "\");\n";
+        any = true;
     }
     if (any) *_out << "\n";
 }
@@ -31409,6 +31490,8 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
         // every module `static`. One missing lookup, three symptoms.
         if (id->value) { auto ms = _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier));
                          if (ms != _moduleStatics.end() && ms->second) return cType(ms->second); }
+        if (id->value) { const std::string xk = resolveExternConst(*id->value, id->qualifier);
+                         if (!xk.empty()) return cType(_externConsts[xk].type); }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -31458,6 +31541,8 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
         if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
         if (id->value) { auto ms = _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier));   // module `static`/`comptime`
                          if (ms != _moduleStatics.end() && ms->second) return ms->second; }
+        if (id->value) { const std::string xk = resolveExternConst(*id->value, id->qualifier);          // `extern const`
+                         if (!xk.empty()) return _externConsts[xk].type; }
     } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
@@ -32118,6 +32203,8 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
             return (c->name && c->name->value) ? *c->name->value : std::string();
         if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))
             return (e->identifier && e->identifier->value) ? *e->identifier->value : std::string();
+        if (auto* x = dynamic_cast<ExternConstNode*>(d))
+            return (x->name && x->name->value) ? *x->name->value : std::string();
         return std::string();
     };
 
@@ -32131,6 +32218,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         // node here is the WHOLE mechanism — emitIncludes re-derives the `#include` set by walking this
         // very list, so a gated-out header emits no directive and contributes no driver link hint.
         if (auto* i = dynamic_cast<IncludeNode*>(d))               return &i->attributes;
+        if (auto* x = dynamic_cast<ExternConstNode*>(d))           return &x->attributes;
         return nullptr;
     };
 
@@ -32171,6 +32259,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
             const char* what = nullptr;
             bool isFnPtr = false;
             if (dynamic_cast<IncludeNode*>(decl.get())) what = "`extern \"<header>\";`";
+            else if (dynamic_cast<ExternConstNode*>(decl.get())) what = "an `extern const`";   // a symbol: `@linkName` fits
             else if (auto* f = dynamic_cast<FunctionDeclarationNode*>(decl.get()))
                 if (!f->block) { isFnPtr = !isExtern(f); what = isFnPtr ? "a `fnptr`" : "an `extern fn`"; }
             for (auto& at : *filtered) {
@@ -32181,7 +32270,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                     // include — neither is a symbol to rename. Validated at collection (`linkNameOf`);
                     // a bodied declaration is judged by `declAttrPrefix`.
                     if (!what || (!isFnPtr && !dynamic_cast<IncludeNode*>(decl.get()))) continue;
-                    unsupported(("`@linkName` names the symbol of an `extern fn` or an `expose fn`, and "
+                    unsupported(("`@linkName` names the symbol of an `extern fn`, an `extern const` or an `expose fn`, and "
                                  + std::string(what) + " has no symbol to rename").c_str(), decl->line);
                     continue;
                 }
@@ -33484,8 +33573,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                     if (eci.isGraphNode) { emitGraphNodeHelpers(eci); emitGraphReadInto(eci); }
                 }
             }
-        } else if (dynamic_cast<IncludeNode*>(decl.get())) {
-            // FFI #include — emitted in the header by emitIncludes
+        } else if (dynamic_cast<IncludeNode*>(decl.get()) || dynamic_cast<ExternConstNode*>(decl.get())) {
+            // FFI #include — emitted in the header by emitIncludes; an `extern const` emits nothing (the header
+            // defines it; its size/kind check is emitExternLayoutChecks')
         } else if (dynamic_cast<IntrinsicImplNode*>(decl.get())) {
             // `type intrinsic <…> implements C { … }` — its methods were injected into each target's
             // conformance registry and their bodies emitted just above; nothing at this top-level site.

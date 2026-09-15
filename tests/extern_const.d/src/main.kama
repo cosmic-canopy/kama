@@ -1,0 +1,27 @@
+// `extern const T NAME;` — a C constant bound by NAME (KR-56). kama writes no value: a use emits the C constant, so
+// the number is the header's by construction, and the build holds each declaration to the constant's size and kind
+// (integer, floating, bool). One spelling covers both shapes a C API uses — a `static const` and a `#define`.
+// Exercised:
+//   - two `static const` flags OR'd in a module that exports them, reaching C (`take_usage` sees 72);
+//   - a `#define` of each literal kind (`int` as `int32`, `double` as `float64`, the latter bound by `@linkName`);
+//   - an imported constant, a qualified one, one borrowed by `const ref`, and one interpolated.
+import { externconst::gpu::USAGE_UNIFORM, externconst::gpu::uniformCopy };
+extern "flags.h";
+
+extern const int32 KEY_ESCAPE;
+@linkName("GAIN") extern const float64 gain;
+extern fn int32 take_usage(uint64 u);
+
+fn int32 byRef(const ref int32 k) { return k; }
+
+unsafe fn int32 run() {
+    string shown = "${KEY_ESCAPE}";
+    if (!shown.equals(other: "256")) { return 200; }
+    return take_usage(u: uniformCopy())                                   // 72: 0x40 | 0x08, the header's values
+         + (byRef(k: KEY_ESCAPE) - 250)                                   //  6
+         + cast<int32>(gain * 2.0)                                        //  3
+         + (externconst::gpu::USAGE_COPY_DST == 8 ? 10 : 900)             // 10
+         + (USAGE_UNIFORM == 64 ? 1 : 900);                               //  1
+}
+
+fn int32 main() { return run(); }   // 92

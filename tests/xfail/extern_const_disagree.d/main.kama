@@ -1,0 +1,6 @@
+// `BUFSIZ` is ONE C constant, so every declaration of it in a program must state the same type — the rule a
+// repeated `extern fn` and `type extern value` already follow. This one says `int64` where lib/lib.kama says `int32`.
+import { lib::bufSize };
+extern "stdio.h";
+extern const int64 BUFSIZ;
+fn int32 main() { return 0; }

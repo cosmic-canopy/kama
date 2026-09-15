@@ -1016,6 +1016,7 @@ function_declaration
   | attribute_list plain_function_declaration   {
       if (auto fn = std::dynamic_pointer_cast<FunctionDeclarationNode>($2)) fn->attributes = $1;
       else if (auto inc = std::dynamic_pointer_cast<IncludeNode>($2)) inc->attributes = $1;
+      else if (auto xc = std::dynamic_pointer_cast<ExternConstNode>($2)) xc->attributes = $1;
       $$ = $2;
    }
   ;
@@ -1023,6 +1024,12 @@ function_declaration
 plain_function_declaration
   : EXTERN STRING_LITERAL SEMICOLON   {
       $$ = std::make_shared<IncludeNode>(SCANNER_CODEGENCONTEXT, $2);   /* extern "<header.h>"; (FFI #include) */
+   }
+  | EXTERN CONST type IDENTIFIER SEMICOLON   {
+      /* `extern const T NAME;` — a C constant a header defines (KR-56): a name and a type, never a value. */
+      auto xc = std::make_shared<ExternConstNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4));
+      STAMP_LOC(xc->name, @4);
+      $$ = xc;
    }
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );

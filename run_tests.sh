@@ -979,6 +979,8 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
         # And for a `type extern enum` held to its header (KR-55): the width is a `_Static_assert`, and a constant
         # the header does not define is refused by the C compiler naming it — both are the header's to answer.
         extern_enum_width|extern_enum_missing_constant) return 0 ;;
+        # ...and for an `extern const` held to its header's size and kind (KR-56): the same `_Static_assert`.
+        extern_const_width|extern_const_missing) return 0 ;;
     esac
     return 1
 }

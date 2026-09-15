@@ -1771,6 +1771,33 @@ unchanged. <!-- test: enum_boundary_members --> A C enum declared in several fil
 those declarations. <!-- xfail: extern_enum_members_twice --> A `type expose enum` crosses an `expose fn` only, as a
 `type expose value` does. <!-- xfail: expose_enum_on_extern_fn -->
 
+**A named C constant — `extern const T NAME;`** binds a constant a header defines, by name, the way `type extern enum`
+binds an enum's: kama writes no value, a use emits the C name, so the number is the header's by construction. One
+spelling covers both shapes a C API uses — a typed `static const` (webgpu.h's bit flags) and a `#define` (GLFW's
+keys) — and bit flags compose with the ordinary integer operators:
+
+```kama
+extern "webgpu.h";
+extern const uint64 WGPUBufferUsage_Uniform;      // static const WGPUBufferUsage WGPUBufferUsage_Uniform = 0x40;
+extern const uint64 WGPUBufferUsage_CopyDst;
+bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;   // C: `bd.usage = (WGPUBufferUsage_Uniform) | (…);`
+```
+
+- **The type is stated, and the build holds it to the header's** — its size and its kind (integer, floating, `bool`),
+  the rule a `type extern value` field follows. A macro has a type too: `#define KEY 256` is an `int`, so it binds as
+  `int32`. A mismatch is a C11 `_Static_assert` naming the kama declaration, and a name the header does not define <!-- xfail: extern_const_width -->
+  is refused by the C compiler, by name — both build failures, since only the C compiler reads the header. <!-- xfail: extern_const_missing -->
+- **A number or `bool` only.** A constant crosses by value, and only a primitive has a kind to check: a string macro <!-- xfail: extern_const_not_primitive -->
+  is a `char[N]` and a braced `*_INIT` macro is not an expression. Bind those through a C function.
+- **Never folded.** Its value lives in the header, which kama never reads — and a C `static const` is not even a C11
+  constant expression — so it cannot initialize a `comptime` constant or size an array; state the number in a <!-- xfail: extern_const_comptime, extern_const_array_size -->
+  `comptime` of your own there. A module `static` needs a compile-time initializer, so it cannot take one either.
+- **Read-only, and safe to read.** It is never a write target, and reading one is not a call into C, so it needs no <!-- xfail: extern_const_assign -->
+  `unsafe`. A `const ref` borrow of one gets a temporary, as for any constant.
+- **A module symbol like every extern** — file-private, `export`ed and `import`ed, repeated in another file only if
+  the declarations agree, and `@linkName("SYMBOL")` binds a C spelling that is not the kama name; one C symbol has one <!-- xfail: extern_const_disagree, extern_const_rebound -->
+  kama binding in a program. Fixture: `tests/extern_const.d/`. <!-- test: extern_const -->
+
 ### Time (`std::time`) ✅
 
 `import { std::time::Duration, std::time::Instant, std::time::SystemTime, std::time::monotonicNow,

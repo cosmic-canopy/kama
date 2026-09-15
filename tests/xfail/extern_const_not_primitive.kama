@@ -1,0 +1,5 @@
+// An `extern const` crosses by value, and only a primitive has a size and kind the build can hold to the header's.
+// A string macro is a `char[N]`, not a pointer, and a braced `*_INIT` macro is not an expression at all.
+extern "stdio.h";
+extern const string VERSION;
+fn int32 main() { return 0; }

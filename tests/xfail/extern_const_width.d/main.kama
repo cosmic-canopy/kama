@@ -1,0 +1,6 @@
+// An `extern const` states its type and the build holds it to the header's: `WIDE_MASK` is a 64-bit constant, so
+// `int32` would read half of it. A C11 `_Static_assert`, since the C compiler — not kama — reads the header, which
+// makes it a BUILD failure that `kama check` cannot see (run_tests.sh `analysis_skip`).
+extern "wide.h";
+extern const int32 WIDE_MASK;
+fn int32 main() { return WIDE_MASK == 0 ? 0 : 1; }

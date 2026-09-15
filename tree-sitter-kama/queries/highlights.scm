@@ -111,6 +111,7 @@
 ; ── declarations, most specific and therefore LAST ─────────────────────────────────────────────────────
 (function_declaration name: (identifier) @function)
 (extern_declaration name: (identifier) @function)
+(extern_const_declaration name: (identifier) @constant)
 (fnptr_declaration name: (identifier) @function)
 ; A wrapper-node capture is invisible when the wrapper contains an identifier — see the ordering note at
 ; the top. Capture BOTH: the inner identifier for `fn T area()`, and the node itself for `fn T copy()`,

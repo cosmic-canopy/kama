@@ -1,0 +1,6 @@
+// An `extern const`'s value lives in the C header, which kama never reads — and a C `static const` is not even a
+// C11 constant expression — so it cannot be folded at compile time.
+extern "stdio.h";
+extern const int32 BUFSIZ;
+comptime int32 N = BUFSIZ;
+fn int32 main() { return N; }

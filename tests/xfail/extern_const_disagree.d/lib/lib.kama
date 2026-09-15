@@ -1,0 +1,4 @@
+export { bufSize };
+extern "stdio.h";
+extern const int32 BUFSIZ;
+fn int32 bufSize() { return BUFSIZ; }

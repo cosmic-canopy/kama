@@ -1,0 +1,6 @@
+// One C symbol has one kama binding in a program, as for an `extern fn`: two names for one constant would let
+// their declarations disagree in silence.
+extern "stdio.h";
+extern const int32 BUFSIZ;
+@linkName("BUFSIZ") extern const int32 bufferSize;
+fn int32 main() { return 0; }

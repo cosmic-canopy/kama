@@ -1,0 +1,7 @@
+export { USAGE_UNIFORM, USAGE_COPY_DST, uniformCopy };
+extern "flags.h";
+
+extern const uint64 USAGE_UNIFORM;
+extern const uint64 USAGE_COPY_DST;
+
+fn uint64 uniformCopy() { return USAGE_UNIFORM | USAGE_COPY_DST; }   // flags compose as ordinary integers

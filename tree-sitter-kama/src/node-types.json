@@ -3494,6 +3494,46 @@
     }
   },
   {
+    "type": "extern_const_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "primitive_type",
+            "named": true
+          },
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "extern_declaration",
     "named": true,
     "fields": {
@@ -6529,6 +6569,10 @@
         },
         {
           "type": "export_manifest",
+          "named": true
+        },
+        {
+          "type": "extern_const_declaration",
           "named": true
         },
         {

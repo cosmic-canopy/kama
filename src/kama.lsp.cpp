@@ -278,6 +278,7 @@ int symKindToLsp(SymKind k) {
         // but hover and the symbol-kind decoration in other requests still ask for a kind.
         case SymKind::Local:       return 13;   // Variable
         case SymKind::Param:       return 13;   // Variable
+        case SymKind::Constant:    return 14;   // Constant
     }
     return 5;
 }
@@ -313,6 +314,7 @@ int semTokenType(SymKind k) {
         case SymKind::Field:       return 7;   // property
         case SymKind::Local:       return 8;   // variable
         case SymKind::Param:       return 9;   // parameter
+        case SymKind::Constant:    return 8;   // variable — the legend has no constant; `readonly` is not sent
     }
     return 0;
 }

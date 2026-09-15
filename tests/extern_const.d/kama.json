@@ -1,0 +1,8 @@
+{
+  "name": "externconst", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "csources": ["csrc/flags.c"],
+  "modules": {
+    ".":    { "visibility": "internal" },
+    "gpu":  { "visibility": "internal" }
+  }
+}

@@ -219,6 +219,10 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
             auto qm = _moduleConsts.find(qk);
             if (qm != _moduleConsts.end()) { asInt(qm->second); return true; }
         }
+        if (!resolveExternConst(*id->value, id->qualifier).empty())   // KR-56, the qualified spelling
+            return ctFail(("`" + *id->value + "` is an `extern const`, whose value the C header defines — kama cannot "
+                           "fold one; use it at run time, or state the number in a `comptime` constant of your own").c_str(),
+                          id->line);
         return false;
     }
 
@@ -236,6 +240,10 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     if (cs != _comptimeSubst.end()) { asInt(cs->second.value); return true; }
     auto lv = _constLocalVals.find(*id->value);
     if (lv != _constLocalVals.end()) { asInt(lv->second); return true; }
+    if (!_localTypes.count(*id->value) && !resolveExternConst(*id->value, id->qualifier).empty())   // KR-56
+        return ctFail(("`" + *id->value + "` is an `extern const`, whose value the C header defines — kama cannot "
+                       "fold one; use it at run time, or state the number in a `comptime` constant of your own").c_str(),
+                      id->line);
     return false;
 }
 

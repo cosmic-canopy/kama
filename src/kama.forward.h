@@ -49,6 +49,7 @@ class CastNode;
 class BitcastNode;
 class EnumMemberDeclarationNode;
 class EnumDeclarationNode;
+class ExternConstNode;
 class IntrinsicImplNode;
 class MatchNode;
 class MatchArmNode;

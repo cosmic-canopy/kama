@@ -1,0 +1,7 @@
+// An `extern const` is the C constant's own name, so a name the header does not define names nothing — here
+// `KEY_SPACEBAR`, a typo or a constant from another version of the library. kama writes no value to hide that
+// behind: the emitted C uses the name, and the C compiler refuses it by name. A BUILD failure, not a `kama check`
+// one, since only the C compiler reads the header (run_tests.sh `analysis_skip`).
+extern "keys.h";
+extern const int32 KEY_SPACEBAR;
+fn int32 main() { return KEY_SPACEBAR == 32 ? 0 : 1; }

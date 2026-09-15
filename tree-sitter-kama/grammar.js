@@ -177,6 +177,7 @@ module.exports = grammar({
       choice(
         $.function_declaration,
         $.extern_declaration,
+        $.extern_const_declaration,
         $.fnptr_declaration,
         $.type_declaration,
         $.intrinsic_declaration,
@@ -426,6 +427,17 @@ module.exports = grammar({
           field('parameters', $.parameter_list),
           ';',
         ),
+      ),
+
+    // kama.y — `extern const T NAME;`: a C constant a header defines, bound by name with no value (KR-56).
+    extern_const_declaration: ($) =>
+      seq(
+        optional($.attribute_list),
+        'extern',
+        'const',
+        field('type', $._type),
+        field('name', $.identifier),
+        ';',
       ),
 
     fnptr_declaration: ($) =>

@@ -146,6 +146,17 @@ public:
         : ASTNode(context),  StatementNode(context), header(header) { }
 };
 
+// `extern const T NAME;` — a C constant a header defines, a `static const` or a `#define` alike (KR-56). kama writes
+// no value: a use emits the C name (or `@linkName`'s), and the build holds the constant to `T`'s size and kind.
+class ExternConstNode : public StatementNode {
+public:
+    SharedIdentifier type;
+    SharedIdentifier name;
+    SharedAttributeList attributes;   // `@compileFor` / `@linkName`
+    ExternConstNode(CodeGenContext& context, SharedIdentifier type, SharedIdentifier name)
+        : ASTNode(context), StatementNode(context), type(type), name(name) { }
+};
+
 class UsingDeclarationNode : public StatementNode {
 public:
     SharedIdentifier identifier;
@@ -1337,6 +1348,8 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
             if (v->variables)
                 for (auto& var : *v->variables)
                     if (var && var->name && var->name->value) unit->topLevelNames.insert(*var->name->value);
+        } else if (auto* x = dynamic_cast<ExternConstNode*>(d)) {           // extern const T NAME;
+            if (x->name && x->name->value) unit->topLevelNames.insert(*x->name->value);
         } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
             // `type intrinsic <int32> implements Parseable { … }` registers a conformance for a PRIMITIVE,
             // program-wide, under no name of its own. Two files in lib/ have one.

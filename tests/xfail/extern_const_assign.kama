@@ -1,0 +1,5 @@
+// An `extern const` is a constant the C header defines — a `#define` has no storage at all — so it is never a
+// write target.
+extern "stdio.h";
+extern const int32 BUFSIZ;
+fn int32 main() { BUFSIZ = 3; return 0; }

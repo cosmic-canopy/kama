@@ -286,6 +286,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "extern_const_declaration"
+        },
+        {
+          "type": "SYMBOL",
           "name": "fnptr_declaration"
         },
         {
@@ -1798,6 +1802,51 @@
               "value": ";"
             }
           ]
+        }
+      ]
+    },
+    "extern_const_declaration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "attribute_list"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "extern"
+        },
+        {
+          "type": "STRING",
+          "value": "const"
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_type"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },

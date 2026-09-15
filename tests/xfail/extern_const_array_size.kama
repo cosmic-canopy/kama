@@ -1,0 +1,5 @@
+// A size is a compile-time integer, and an `extern const` is the header's number, not kama's — the size cannot
+// come from one.
+extern "stdio.h";
+extern const int32 BUFSIZ;
+fn int32 main() { InlineArray<uint8>#(BUFSIZ) buf = [0; 4]; return 0; }
