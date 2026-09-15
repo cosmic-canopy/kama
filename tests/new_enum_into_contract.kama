@@ -1,0 +1,28 @@
+// `new E::V(…)` into a CONTRACT handle — `Owned<Sized>`/`Shared<Sized>` over an enum that implements `Sized`.
+// The box was allocated and its vtable set, but the variant was never written into it: the contract-handle
+// branches asked for a constructor name, and a variant has none, so `a.size()` read uninitialized memory
+// (`new Geo::Circle(r: 7)` answered 0). The handle over the enum's OWN type (tests/new_enum_variant) wrote it.
+// Every position a `new` reaches a contract handle from: a declaration, an argument, a return, `try new`.
+import { std::memory::Owned, std::memory::Shared };
+
+type contract Sized for value, enum { fn int32 size(); }
+
+type enum Geo implements Sized { Circle(int32 r), Point;
+    public fn int32 size() { return match (this) { case Circle(r: r): r; case Point: 100; }; }
+}
+type enum Side implements Sized { L, R;
+    public fn int32 size() { return match (this) { case L: 1; case R: 2; }; }
+}
+
+fn Owned<Sized> make() { return new Side::R(); }                       // a return value
+fn int32 measure(Shared<Sized> s) { return s.size(); }
+
+fn int32 main() {
+    Owned<Sized> a = new Geo::Circle(r: 7);                            // a declaration, payload
+    Shared<Sized> b = new Side::R();                                   // a declaration, payload-less
+    Owned<Sized> c = make();
+    Optional<Owned<Sized>> t = try new Geo::Point();                   // the non-panic form
+    int32 tv = match (t) { case Some(value: o): o.size(); case None: 0; };
+    // 7 + 2 + 2 + 100 + 5 = 116
+    return a.size() + b.size() + c.size() + tv + measure(s: new Geo::Circle(r: 5));
+}

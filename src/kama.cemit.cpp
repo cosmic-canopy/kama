@@ -6821,7 +6821,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 }
                                 indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (oc->ctorName)
+                                if (newBuildsValue(octy, oc))
                                     emitNewFactoryMove(octy, "(" + octy + "*)" + nm + ".obj", oc, n->line, depth);
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
                                 if (useAlloc) {
@@ -6847,7 +6847,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             line(n->line); indent(depth);
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                             indent(depth); *_out << "if (!" << nm << ".ptr) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                            if (oc->ctorName)
+                            if (newBuildsValue(T, oc))
                                 emitNewFactoryMove(T, nm + ".ptr", oc, n->line, depth);
                             if (smartKind(ty) == CollKind::Shared) {
                                 indent(depth); *_out << nm << ".ctrl = kama_ctrl_new();\n";
@@ -6911,7 +6911,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 else
                                     *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (oc->ctorName || _classes[C].isVariant)
+                                if (newBuildsValue(C, oc))
                                     emitNewFactoryMove(C, hp, oc, n->line, depth);
                                 // adopt the T* — the base subobject when widening (offset-0), else the ptr itself.
                                 std::string adoptArg = hp;
@@ -23503,7 +23503,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
                          + C + "* " + hp + " = (" + C + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + ")));";
         else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
-        if (oc->ctorName || _classes[C].isVariant) {
+        if (newBuildsValue(C, oc)) {
             std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
             if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
         }
@@ -23548,7 +23548,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         } else {
             box += " " + t + ".obj = malloc(sizeof(" + octy + "));";
         }
-        if (oc->ctorName) {
+        if (newBuildsValue(octy, oc)) {
             std::string cc = newFactoryCall(octy, oc, srcLine);
             if (!cc.empty()) box += " *((" + octy + "*)" + t + ".obj) = " + cc + ";";
         }
@@ -23569,7 +23569,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         return reject("cannot instantiate abstract class '" + T + "'");
     std::string t = "__newarg" + std::to_string(_tempCounter++);
     std::string box = targetCType + " " + t + " = {0}; " + t + ".ptr = (" + T + "*)malloc(sizeof(" + T + "));";
-    if (oc->ctorName) {
+    if (newBuildsValue(T, oc)) {
         std::string cc = newFactoryCall(T, oc, srcLine);
         if (!cc.empty()) box += " *(" + t + ".ptr) = " + cc + ";";
     }
@@ -30404,6 +30404,13 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
 // a RAW C assignment (NOT via emitAssignment): the slot is fresh malloc (garbage), so no drop-of-old is
 // inserted — that would free a wild pointer (the M3-bonus class of bug). The in-place `__ctor` path already
 // writes through the pointer with no drop; we mirror that discipline.
+bool CEmitter::newBuildsValue(const std::string& cls, ObjectCreationNode* oc)
+{
+    if (oc->ctorName) return true;
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isVariant;
+}
+
 void CEmitter::emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,
                                   ObjectCreationNode* oc, int lineNo, int depth)
 {
@@ -30675,7 +30682,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         std::string box = "__tbox"  + std::to_string(_tempCounter++);
         std::string ctl = "__tctrl" + std::to_string(_tempCounter++);
         std::string ap  = "__talloc" + std::to_string(_tempCounter++);
-        if (oc->ctorName) {
+        if (newBuildsValue(cls, oc)) {
             std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
             if (fc.empty()) return "";                            // diagnostic already emitted
             ctorStmt = "*(" + cls + "*)" + obj + " = " + fc + "; ";
@@ -30760,7 +30767,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     // Construct the object at `hp`: a named ctor (`try new T.make(...)`, the M8 norm) MOVES a factory result
     // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
     std::string ctorStmt;
-    if (oc->ctorName || (_classes.count(cls) && _classes[cls].isVariant)) {
+    if (newBuildsValue(cls, oc)) {
         std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
         if (fc.empty()) return "";                            // diagnostic already emitted
         ctorStmt = "*(" + hp + ") = " + fc + "; ";

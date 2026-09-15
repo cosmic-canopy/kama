@@ -2958,6 +2958,10 @@ private:
     // unproven bound on an opaque parameter, or simply no field of that name.
     void rejectMissingField(ClassInfo* ci, const std::string& cls, MemberAccessNode* ma, const std::string& field);
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
+    // Does `new` write a value into the slot it allocates? A named ctor does, and so does an enum variant
+    // (`new Geo::Point()`), which has no ctor name. Every heap destination asks HERE: the contract-handle
+    // branches once asked `oc->ctorName` alone and left a variant's box uninitialized.
+    bool        newBuildsValue(const std::string& cls, ObjectCreationNode* oc);
     void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
                                    ObjectCreationNode* oc, int lineNo, int depth);
     bool        ctorIsFallible(ObjectCreationNode* oc);                                 // new Type.name(...) ctor returns Result?
