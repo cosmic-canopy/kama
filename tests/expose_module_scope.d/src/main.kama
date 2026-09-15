@@ -1,0 +1,15 @@
+// An `expose fn` is scoped by its module like any function, and its C symbol carries that module: two modules
+// may each expose `tick`, each exports and imports like an ordinary name, and a host reaches them as
+// `exposemods_alpha_tick` and `exposemods_beta_tick`. Before, the symbol was the bare name, so this program
+// was refused three ways — "already exposed", "duplicate function 'tick' … in its module" across two
+// DIFFERENT modules, and `export { tick }` naming "no such top-level declaration" — and a bare `open` or
+// `time` collided with libc in the host's own translation unit.
+import { exposemods::alpha::tick, exposemods::beta::tick as btick };
+extern "host.h";
+extern fn int32 host_sum();
+
+unsafe fn int32 viaHost() { return host_sum(); }
+
+fn int32 main() {
+    return tick() + btick() + viaHost();   // 1 + 20 + 21 = 42
+}

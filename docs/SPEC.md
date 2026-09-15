@@ -669,8 +669,8 @@ It is rejected where there is no body to gate: on a module `static`, and on the 
 the exception, and by the same property rather than in spite of it: it declares a TYPE for someone else's
 body to satisfy, so the promise has somewhere to land (above). `@interrupt` and `@section` remain rejected <!-- xfail: attr_on_fnptr -->
 on all three, because they attach to emitted code and a `fnptr` emits only a typedef. `@interrupt` stays
-free-function-only (a vector table reaches its handler by **bare** symbol, and a member's C name is
-mangled and takes a receiver); `@section(".name")` is legal on a free `fn` and a member. The other
+free-function-only (a vector table reaches its handler by symbol, and a member's C name is mangled and
+takes a receiver); `@section(".name")` is legal on a free `fn` and a member. The other
 attribute a bodyless form accepts is `@linkName("…")` on an `extern fn` — it names a *symbol*, not a
 body, and an `extern fn` is the one bodyless form that has one (*FFI — calling C*); on a `fnptr` it is <!-- xfail: linkname_on_fnptr -->
 rejected, as it is on an ordinary `fn`, whose C name is kama's to choose. <!-- xfail: linkname_on_fn -->
@@ -2687,29 +2687,38 @@ qsort(buf: a.dataPtrMut(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // 
 ## Exposing to a host — `expose` ✅
 
 `extern` is the *host→kama* direction (kama calls C); **`expose` is the reverse** — it gives a **free
-function** a stable, host-callable entry point. `expose fn …` emits the function under its **bare,
-unmangled** C name (no `Namespace__` prefix — mirroring how `extern` keeps a literal name) decorated with
-`KAMA_EXPORT` for external linkage that survives dead-code elimination. **`@linkName("symbol")`** exports
-it under that symbol instead — Rust's `#[export_name]`, the same attribute an `extern fn` uses to bind one
-(*FFI — calling C*), so a host that knows the module by `host_tick` links against a kama `tick`:
+function** a stable, host-callable entry point, decorated with `KAMA_EXPORT` for external linkage that survives
+dead-code elimination. **Its C symbol is its module path joined to its name with `_`**: `expose fn tick` in
+module `game::sim` exports `game_sim_tick`. C has one flat namespace and kama's modules exist to keep names
+apart, so the module travels into the symbol — two modules may each expose `tick`, and neither collides with
+the other or with a libc `open`/`time` in the host's translation unit. A **loose file** is in no module, so its
+file name qualifies it (`gameplay.kama` → `gameplay_update`). Inside kama an exposed function is an ordinary
+function of its module: it is exported, imported and called by its kama name. `_` is the join rather than
+kama's internal `__`, which C++ reserves in any identifier. **`@linkName("symbol")`** is the one way to fix a
+symbol verbatim — Rust's `#[export_name]`, the same attribute an `extern fn` uses to bind one (*FFI — calling
+C*) — for a name someone else chose: a plugin API's entry point, an interrupt vector's handler, a host that
+already knows the module by `host_tick`:
 
 ```kama
 // gameplay.kama — a hot-reload module (note: no `main`)
-expose fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }
-expose fn int32 version() { return 3; }
-@linkName("host_tick") expose fn int32 tick() { return 41; }   // dlsym("host_tick"); there is no `tick`
+expose unsafe fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }   // dlsym("gameplay_update")
+expose fn int32 version() { return 3; }                                    // dlsym("gameplay_version")
+@linkName("host_tick") expose fn int32 tick() { return 41; }   // dlsym("host_tick"); there is no `gameplay_tick`
 ```
 
-(`tests/linkname_expose.d/` proves the exported name through the linker; `tests/support/expose_shared_check.sh` through `dlsym`.)
+(`tests/expose_module_scope.d/` proves two modules' symbols through the linker, `tests/linkname_expose.d/` the
+`@linkName`; `tests/support/expose_shared_check.sh` both through `dlsym`.) <!-- test: expose_module_scope -->
 
 - **Native shared library:** `kama build --shared gameplay.kama -o libgameplay.so` (→ `.dylib`/`.dll` per
   platform) builds a `-fPIC -shared -fvisibility=hidden` library where **only** the `expose`d symbols are
-  visible. A host `dlopen`s it and `dlsym`s `"update"` / `"version"` — the reload loop
+  visible. A host `dlopen`s it and `dlsym`s `"gameplay_update"` / `"gameplay_version"` — the reload loop
   (`dlopen`/watch/rebind over `unsafe`/`UnsafePtr`) is an ordinary library, not compiler magic. A `--shared`
   module needs no `main`.
-- **WASM:** a normal `kama build --target wasm` run exports each `expose`d function
-  (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE`), callable from JS as `Module._update` — no `--shared` (it is
-  native-only; the web host re-instantiates the module).
+- **WASM:** a normal `kama build --target wasm` run exports each `expose`d function from the `.wasm` module
+  (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE`) — `WebAssembly.Module.exports()` lists `gameplay_update`, and an
+  embedder instantiating the module calls it directly — no `--shared` (it is native-only; the web host
+  re-instantiates the module). It is not reachable as `Module._gameplay_update` off the generated `.js`, which
+  is a program rather than a library (`tests/expose_basic.kama`).
 
 **Rules** (checked at compile time — a clear error, never a silent no-op):
 - **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected. <!-- xfail: expose_on_method -->
@@ -2718,8 +2727,8 @@ expose fn int32 version() { return 3; }
   refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead. A struct
   passed by value must be a `type extern value` — see *A struct crossing by value* under *FFI*. <!-- xfail: crossing_plain_value_expose -->
 - **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **exported symbols are
-  unique** across the program, whether a symbol is the kama name or a `@linkName` (they share the C <!-- xfail: linkname_dup_expose -->
-  namespace — clashes with libc are yours to avoid, as with `extern`).
+  unique** across the program, whether kama derived the symbol or a `@linkName` fixed it — and since the `_` <!-- xfail: linkname_dup_expose -->
+  join is not injective (`a_b::c` and `a::b_c` meet), two names that produce one symbol are refused, naming both.
 
 `expose` is distinct from `export` (module public-surface visibility) and `public`/`private` (member
 access): three boundaries, three keywords. *(The full 2.0 `expose` — richer wasm module exports and the
@@ -3866,13 +3875,14 @@ existing `@name(args)` mechanism, extended from serialization to functions + sta
 ```kama
 @section(".isr_vector") static hardware UnsafePtr<uint32> vtor;   // -> __attribute__((section(".isr_vector")))
 
-@interrupt expose fn void on_systick() { … }                // -> __attribute__((interrupt, used))
+@linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { … }   // -> __attribute__((interrupt, used))
 ```
 
 - **`@interrupt`** binds a function to an interrupt vector: it emits `__attribute__((interrupt, used))`,
   the ISR calling convention on **Cortex-M / RISC-V / classic ARM** (`used` keeps it past `--gc-sections`).
-  The handler must be `void h()` (no params, no return path) and must be **`expose`d** so the vector table
-  can reference it by its bare symbol. AVR's `ISR(VECTOR)` macro form (`@interrupt("VECTOR")`) is a later step.
+  The handler must be `void h()` (no params, no return path) and must be **`expose`d** so it has an exported
+  symbol the vector table can reference — which the startup code usually fixes (`SysTick_Handler`), so an ISR
+  normally carries `@linkName` too; without it the symbol is module-qualified like any exposed name. AVR's `ISR(VECTOR)` macro form (`@interrupt("VECTOR")`) is a later step.
 - **`@section(".name")`** places a module static *or* a function in a named linker section — the ISR vector
   table, a flash const table, a `.ramfunc`, or a DMA RAM bank. The board's linker script owns the addresses.
 

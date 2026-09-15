@@ -2,10 +2,11 @@
 // `@interrupt` lowers to `__attribute__((interrupt))` — the Cortex-M/RISC-V/classic-ARM ISR calling
 // convention. The CI host (x86) REJECTS that attribute on a `void(void)` (x86 ISRs need a frame-pointer
 // param), so this is verified by transpile-grep of the emitted C shape, not a host compile/run. `expose`
-// gives the handler a bare symbol the vector table can name; `used` (added automatically) survives --gc-sections.
+// gives the handler an exported symbol and `@linkName` fixes it to the name the startup code's vector table
+// declares; `used` (added automatically) survives --gc-sections.
 @section(".isr_vector") static hardware UnsafePtr<uint32> vtor;   // vector-table base pinned to a fixed section
 
-@interrupt expose unsafe fn void on_systick() {
+@linkName("SysTick_Handler") @interrupt expose unsafe fn void onSysTick() {
     vtor[0] = vtor[0] + 1;   // service the tick through the MMIO handle
 }
 

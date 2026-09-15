@@ -1136,7 +1136,7 @@ private:
     // (one trampoline per distinct entry fn, even if spawned from several sites).
     std::vector<std::string> _fileScopeHelpers;
     std::set<std::string>    _isolateTrampolines;   // entry cNames whose trampoline is already emitted
-    std::set<std::string> _exposedNames;       // bare C-ABI symbols of `expose fn`s — collision check
+    std::map<std::string, std::string> _exposedNames;   // exported C symbol -> "module::name (file:line)" — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
@@ -2589,6 +2589,7 @@ private:
     std::map<std::string, std::vector<ParamSig>> _instParamSigs;
     static bool isExtern(FunctionDeclarationNode* fn);
     static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary
+    std::string exposedSymbol(const std::string& name) const;   // its host symbol: module path + name
 
     // Inheritance/vtable resolution
     std::vector<ClassInfo*> topoOrderClasses();

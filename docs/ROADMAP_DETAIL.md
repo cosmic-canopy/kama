@@ -304,6 +304,27 @@ host). Measured facts to start from: struct names never reach the linker, so kam
 costs the ABI nothing and the header can spell the bare `Vec2`; an `expose fn` returning a callback is already
 refused (`foreign_callback_expose_return`); ⛔ the maintainer requires `expose` for types to be revisited here.
 
+**Ruled 2026-09-14 (maintainer), with the reasoning that decided each:**
+- **`type expose value` is ADOPTED.** The marker answers who owns a C layout, exactly as `extern fn`/`expose fn`
+  answer who owns a body: `type extern value` is a layout a C header states, `type expose value` one kama states
+  and the generated header publishes. Binding a kama-owned layout through a hand-written header instead is two
+  sources of truth, and drift between them is silent (measured: see the field check below). Unmarked value types
+  never enter the header by layout — freezing a layout is an ABI promise and must be greppable (GOALS 5), and it
+  keeps KR-22's elision free for every other type. A C-owned type may cross either function kind; a kama-owned
+  one only an `expose fn` (an `extern fn`'s prototype is the header's). Its fields are C-representable and all
+  visible to the host (no `private`), it is not generic, and it is built by ctors only.
+- **`type extern value` fields are checked against the header** — SHIPPED `0.9.341`: size and arithmetic kind
+  per field, a C11 `_Static_assert` (`tests/xfail/extern_value_layout.d`).
+- **The header is always written** beside the output when a program has an `expose fn` — no flag, since a host
+  that forgot one falls back to hand-written prototypes — and the project's own `csources` get it on their
+  include path.
+- **Exposed C names are QUALIFIED by module path**, joined with `_` — SHIPPED `0.9.342`. Bare names threw away the
+  scoping modules exist for at exactly the boundary where a collision is hardest to see: two modules exposing
+  `tick` were refused (and two of the three refusals were bugs), and an `expose fn open` broke any host
+  translation unit that included `<fcntl.h>`. `@linkName` is the one override, on functions and on `type expose
+  value`; two kama names meeting at one C name are refused. Deferred from this row: whether an enum crossing a
+  boundary must spell its discriminants (implicit numbering renumbers silently when a variant is inserted).
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

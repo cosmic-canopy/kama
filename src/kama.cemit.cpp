@@ -8048,9 +8048,9 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 {
     std::string name = (fn->name && fn->name->value) ? *fn->name->value : "anon";
     isEntryPoint = (name == "main");
-    if (isExposed(fn)) {   // kama→host boundary: bare, unmangled C-ABI symbol (mirrors extern) — or the `@linkName`
-        auto it = _funcs.find(name);
-        return (it != _funcs.end() && !it->second.linkName.empty()) ? it->second.linkName : name;
+    if (isExposed(fn)) {   // kama→host boundary: the qualified host symbol, or the `@linkName` (collectSignatures)
+        auto it = _funcs.find(qualify(name));
+        if (it != _funcs.end()) return symbolOf(it->second);
     }
     return qualify(name);   // scope-prefixed (main -> kama_main); _nsCtx set per file
 }
@@ -8261,10 +8261,13 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             if (fn->isRef)
                 unsupported("`expose` cannot mark a `fn ref T` place-returning function — its "
                             "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn->line);
-            const std::string& exported = link.empty() ? *fn->name->value : link;
-            if (!_exposedNames.insert(exported).second)
-                unsupported(("`expose`d symbol '" + exported + "' is already exposed — "
-                             "the bare C-ABI symbol must be unique").c_str(), fn->line);
+            const std::string exported = link.empty() ? exposedSymbol(*fn->name->value) : link;
+            const std::string who = (_nsCtx.module.empty() ? std::string() : _nsCtx.module + "::") + *fn->name->value;
+            auto prev = _exposedNames.emplace(exported, who + " (" + _collectingUnitPath + ":" + std::to_string(fn->line) + ")");
+            if (!prev.second)
+                unsupported(("`expose fn " + who + "` exports the C symbol `" + exported + "`, which `"
+                             + prev.first->second + "` already exports — a host links against one symbol "
+                             "per name; rename one, or give it `@linkName(\"…\")`").c_str(), fn->line);
         }
 
         // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
@@ -8287,10 +8290,11 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         }
 
         FuncSig sig;
-        // extern (host->kama FFI) and expose (kama->host) both keep their literal, unmangled
-        // C name — the boundary symbol must be predictable. Others are scope-prefixed (main -> kama_main).
-        sig.cName   = (isExtern(fn) || isExposed(fn)) ? *fn->name->value : qualify(*fn->name->value);
-        sig.linkName = link;             // the symbol, when `@linkName` renamed it — see FuncSig
+        // An extern (host->kama FFI) keeps its literal C name: the symbol belongs to C. Everything else is
+        // scope-prefixed (main -> kama_main) — an `expose fn` included, because its kama identity is its
+        // module's like any function's; only its SYMBOL is the host's, and that lives in `linkName`.
+        sig.cName   = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
+        sig.linkName = isExposed(fn) && link.empty() ? exposedSymbol(*fn->name->value) : link;   // see FuncSig
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
@@ -18988,11 +18992,32 @@ bool CEmitter::isExtern(FunctionDeclarationNode* fn)
     return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "extern";
 }
 
-// `expose fn` — the kama→host boundary. Like `extern`, an exposed function keeps its
-// bare (unmangled) C name; unlike `extern` it HAS a body and gets `KAMA_EXPORT` linkage.
+// `expose fn` — the kama→host boundary. It HAS a body and gets `KAMA_EXPORT` linkage, under the symbol
+// `exposedSymbol` names (or its `@linkName`).
 bool CEmitter::isExposed(FunctionDeclarationNode* fn)
 {
     return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "expose";
+}
+
+// The C symbol a host links an exposed name against: its module path joined with `_`, then the name —
+// `twomodname::alpha::tick` is `twomodname_alpha_tick`. C has one flat namespace and kama's modules exist to
+// keep names apart, so the module travels into the symbol; a bare `tick` collided across modules and with
+// libc (`open`, measured). A loose file is in no module, so its file name stands in, as it does for the
+// file-private scope. `_` rather than kama's internal `__`, which C++ reserves; the join is not injective
+// (`a_b::c` and `a::b_c`), so collectSignatures refuses two names that meet. `@linkName` overrides it.
+std::string CEmitter::exposedSymbol(const std::string& name) const
+{
+    std::string prefix;
+    if (!_nsCtx.module.empty()) {
+        for (size_t i = 0; i < _nsCtx.module.size(); ++i) {
+            if (_nsCtx.module.compare(i, 2, "::") == 0) { prefix += '_'; ++i; continue; }
+            char c = _nsCtx.module[i];
+            prefix += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
+        }
+    } else {
+        prefix = privateScopeFor(_nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath).substr(2);
+    }
+    return prefix.empty() ? name : prefix + "_" + name;
 }
 
 // `@linkName("sym")` on an `extern fn` or an `expose fn`: the C symbol, validated — Rust's `#[link_name]`
@@ -23957,11 +23982,11 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // being dropped by `--gc-sections`; the vector table references it by symbol.
             if (!fn) {
                 // A member is rejected for a reason of its own, not for being "not a function": an ISR is
-                // reachable only under its BARE symbol (the vector table has no other way to name it), and
+                // reachable only under an exported symbol (the vector table has no other way to name it), and
                 // a method's C name is mangled and carries a leading `self` the hardware will not supply.
                 unsupported(onMember
                     ? "`@interrupt` applies only to a free function, not to a member — a vector table "
-                      "reaches its handler by bare symbol name, and a member's C name is mangled and takes "
+                      "reaches its handler by an exported symbol, and a member's C name is mangled and takes "
                       "a receiver. Make the ISR an `expose fn` that calls the member"
                     : "`@interrupt` applies only to a function, not a `static`", line);
                 continue;   // every check below is about the function; `fn` is the null just rejected
@@ -23973,8 +23998,9 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (fn->parameters && !fn->parameters->empty())
                 unsupported("`@interrupt` handler must take no parameters (an ISR is `void f(void)`)", line);
             if (!isExposed(fn))
-                unsupported("`@interrupt` requires `expose` so the vector table can reference the handler "
-                            "by its bare symbol name (a mangled ISR is unreachable from the vector table)", line);
+                unsupported("`@interrupt` requires `expose` so the vector table can reference the handler by an "
+                            "exported symbol (an internal kama function has none) — and `@linkName(\"…\")` when "
+                            "the startup code fixes the handler's name", line);
             parts.push_back("interrupt");
             parts.push_back("used");
         } else if (an == "section") {

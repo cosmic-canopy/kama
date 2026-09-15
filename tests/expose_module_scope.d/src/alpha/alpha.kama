@@ -1,0 +1,3 @@
+export { tick };
+
+expose fn int32 tick() { return 1; }   // the host links `exposemods_alpha_tick`

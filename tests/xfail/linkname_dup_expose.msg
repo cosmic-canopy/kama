@@ -1,1 +1,1 @@
-is already exposed
+already exports

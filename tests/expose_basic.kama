@@ -1,10 +1,10 @@
-// `expose fn` gives a function a bare, unmangled, exported C-ABI symbol (KAMA_EXPORT) so a
-// host can resolve it: `dlsym` on a --shared lib, and on wasm a real export in the module —
-// `WebAssembly.Module.exports()` lists `add`, and an embedder that instantiates the .wasm
-// directly can call it without running `main` at all. It stays an ordinary function to kama
-// callers too, so the call below still resolves to the bare symbol.
+// `expose fn` gives a function an exported C-ABI symbol (KAMA_EXPORT) so a host can resolve it:
+// `dlsym` on a --shared lib, and on wasm a real export in the module — `WebAssembly.Module.exports()`
+// lists `expose_basic_add` (a loose file's symbols are qualified by its file name, as a module's are
+// by its module path), and an embedder that instantiates the .wasm directly can call it without
+// running `main` at all. It stays an ordinary function to kama callers, called by its kama name.
 //
-// ⚠️ It is NOT reachable as `Module._add` off the generated JS, which an earlier version of this
+// ⚠️ It is NOT reachable as `Module._expose_basic_add` off the generated JS, which an earlier version of this
 // comment claimed. Measured 2026-08-23: that needs -sEXPORTED_FUNCTIONS/-sMODULARIZE, which kama
 // does not emit — the generated .js is a PROGRAM (shebang, runs main, exits), not a library. The
 // richer module-export surface is ROADMAP §7 (2.0) work.
