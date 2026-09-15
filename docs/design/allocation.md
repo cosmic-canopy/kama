@@ -1,6 +1,6 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
-**Status:** design, not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`; §2–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -12,38 +12,31 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-14, Linux).** `dev` at `0.9.345`: `origin/dev` plus this handoff, nothing else unpushed. Gate
-green on every leg at that HEAD: native 1913/0, san 1914/0, wasm 1884/0, 69 guards, analysis agreement
-860 + 1024. Since
-this campaign was opened, KR-46 (name resolution and visibility at every type position) shipped at `0.9.340`
-— its record is `SPEC.md` § Modules, the `tests/xfail/reach_*` fixtures and the git log — and KR-52 (the
-generated host header, `type expose value`) at `0.9.341`–`0.9.345`. Rows filed since: **KR-54** (a
-`@compileFor`-dropped declaration is never checked) and **KR-55** (an enum's values are an ABI promise) — ⚠️ **KR-55 is being worked on on the
-maintainer's Mac: do not pick it up here**, and expect its commits in the next rebase (it may touch the
-emitter this campaign reads). Nothing in this campaign has started. A new
-roadmap row takes the `Next id:` counter at the top of `docs/ROADMAP.md`, and bumps it.
+**State (2026-09-15, Linux).** `dev` at `0.9.348`, unpushed: KR-57 filed (a binding may take a function's
+name), then `0.9.347` (the no-heap call graph read from the emitted C, a pre-existing `@noheap` fix), then
+`0.9.348` (KR-47: reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate
+figures are in each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
+`0.9.341`–`0.9.345` and KR-55 (`type extern enum`/`type expose enum`) at `0.9.346`. Filed along the way:
+**KR-57** (shadowing a function) and **KR-58** (the Windows seam allocates a wide path per file-system call, so
+eighteen externs, eleven of them `std::fs`, are `@heap` on every target though some platforms allocate nothing there). A new roadmap row takes the `Next id:` counter
+at the top of `docs/ROADMAP.md`, and bumps it.
 
 **First steps next session:**
 
-1. `git fetch && git rebase origin/dev`, `./dev build`. Other work lands between sessions (15 commits did
-   during KR-46): if the rebase brings emitter changes, re-run the matrix on the rebased HEAD before building
-   on it.
-2. Re-verify **What is true today** below before designing against it — it was measured by reading at
-   `0.9.318`. Re-run at `0.9.340` and again at `0.9.345` (2026-09-14), the behaviour held and the function
-   anchors exist; only the line numbers moved. The three probes, each `fn int32 main() { return 0; }` behind one import and built with
-   `kama build --no-heap`, calling nothing: `std::uuid::Uuid` is refused 4 times (error boxes at
-   `uuid.kama:209`/`215`/`218`, an interpolation at `:51`); `std::serialization::text::json::deserializeJsonBuffer`
-   28 times (error boxes at `json.kama:71` and `prelude/global.kama:429`–`456`, a `substring` at `json.kama:308`);
-   `std::encoding::hex::DecodeError` once, at the interpolation in its `message()` (`hex.kama:27`). (`hex::decode` itself is `@compileFor(!NOHEAP)` and correctly absent
-   — not a probe.) A different answer means the compiler moved — record it here first.
-3. KR-47's design pass, with KR-39 in view (below): the roots, the ungated sites, how an extern declares that
-   it allocates, and the diagnostic's chain. Settle it in §1 of this doc before code; a fork against what is
-   written here goes to the maintainer with measured costs.
-4. Then fixtures RED first: the three probes above as positive fixtures that must BUILD under `--no-heap`,
-   and every existing `noheap_*` xfail re-read to confirm it still fails through a reached chain.
+1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
+   on the rebased HEAD before building on it.
+2. **KR-39**, agreed to land right after KR-47 on the same walk. The walk now reads edges from the emitted C,
+   and a contract call is an indirect `(r).vtbl->m(...)`, so an indirect site is still a FACT, not an edge. KR-39
+   is "when the backend is statically known, the site is a direct edge to that body instead". The design question
+   is where the proof lives. Devirtualizing in emission (tier 1 of KR-23) makes it a plain call in the C, and the
+   graph then needs nothing new. That is the candidate to measure first.
+3. **KR-51** (`Handle.deserialize` checks `failed()`), which the flag no longer blocks: probe
+   `tests/noheap_flag_unreached_dispatch.d` still builds after adding the error box.
+4. Then KR-48. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
+   KR-48 the prelude's `kama_alloc`/`kama_free` are the heap symbols.
 
-**The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-47** reach-based `--no-heap` →
-**KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable global allocator → **KR-50**
+**The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
+**KR-39** on its walk → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable global allocator → **KR-50**
 allocator-aware errors. **KR-47 is designed with KR-39 in view** (a provable callee behind a contract slot)
 and tier 1 of the devirtualization ladder (KR-23): all three ask "what does this program actually reach",
 and they should share ONE reach walk — so KR-47's walk must be able to answer which concrete body a call
@@ -176,7 +169,7 @@ already follows. `@noheap` is unchanged: an attribute proves its own body, eager
 - `SPEC.md` *No-heap subset* changes its sentence "the flag rejects a *direct* allocation in every body";
   every existing `noheap_*` xfail must still fail, each through a reached chain.
 
-#### §1 settled (2026-09-15, maintainer), with what was measured
+#### §1 settled (2026-09-15, maintainer), with what was measured — SHIPPED `0.9.347`–`0.9.348`
 
 **Probes re-run at `0.9.345`** after a no-op rebase: uuid 4, json 28, hex 1, as recorded above.
 
@@ -216,13 +209,14 @@ linker's `--gc-sections` reads relocations. The rules:
 
 This ships as its own commit, before the flag change, with red-first fixtures.
 
-**Roots under the flag:**
-- `kama_main`
-- every `expose fn`, which covers `@callerThread` and `@interrupt` because both must be `expose`
-- `@foreignEntry` bodies
-- `@onPanic` handlers
+**Roots under the flag**, read off the C like the edges:
+- the C `main` (the synthesized wrapper, which calls `kama_main`)
+- every `KAMA_EXPORT` body: every `expose fn`, which covers `@callerThread` and `@interrupt` because both must be
+  `expose`
+- `@foreignEntry` bodies, which C calls by a route no edge shows
 
-Module statics are compile-time constants. A pointer handed to C is reached through its address-take edge. A
+An `@onPanic` handler is an ordinary function reached by an ordinary call, so it needs no root. Module statics
+are compile-time constants. A pointer handed to C is reached through its address-take edge. A
 reached user body with its own direct site reports at that site, and the flag's chain diagnostics keep today's
 rule: the innermost user frame whose first hop leaves user code.
 
@@ -233,11 +227,27 @@ no-heap objects reference none. The object may still NAME `malloc` in unreached 
 board link's `--gc-sections` drops the unreached code; `docs/targets.md` says so. Stubbing allocation to a trap
 (needs KR-48 first) and pruning unreached bodies from emission (L, overlaps KR-4) were the rejected alternatives.
 
-**Extern allocation: an attribute, alone.** `@allocates extern fn UnsafePtr kama_channel_new(…);` seeds
-`_allocSites` with the C symbol, which a call already reaches as an edge. It is marked on the prelude and stdlib
-externs that allocate (`malloc`, `kama_channel_new`, `kama_argv_new`, …). An unmarked user extern is unchecked C,
-as today. A table of libc names was rejected as a second mechanism, and after KR-48 libc allocation lives in
-exactly one place anyway.
+**Extern allocation: an attribute, alone, spelled `@heap`** because it marks frees as well: `@heap extern fn
+UnsafePtr kama_channel_new(…);`. Its C symbol joins `_heapSymbols`, and a CALL to it found in a body's C is an
+allocation fact for that body, read by the same scan as the edges. That also covers the "ungated sites" by
+construction. The isolate handle, serde `Owned` reads and graph shells emit raw `malloc(` in compiler-written
+functions with no `_currentFunc`, and the prelude's `malloc` is `@heap`, so no new gate was needed. A gate's fact
+keeps precedence where one exists, because it names the construct.
+
+A runtime extern is marked when kama's C for it touches the heap on ANY target, so a verdict is the same on
+every target. The audit read every variant in `include/`, following `kama_*` helpers and counting
+`malloc`/`calloc`/`realloc`/`free`/`strdup`/`_strdup`/`kama_alloc`/`kama_free`/`LocalFree`/`HeapAlloc`, ….
+44 symbols, 59 declarations. 23 touch the heap on every target, and 18 on some targets only, which is KR-58.
+An unmarked user extern is unchecked C, as today. A table of libc names was rejected as a second mechanism.
+
+**A consequence to know:** `Arena.make` mallocs its region through a `@heap` extern, so a `--no-heap` PROGRAM
+that makes an `Arena` is refused. It had passed only because the extern was invisible. A `@noheap` region using
+an arena built outside it is unchanged (`tests/noheap_arena.kama`). Under the flag a `BumpAllocator` is backed by
+storage the program owns, and `tools/check-noheap.sh` cases 6c/6d pin both halves.
+
+**A walk fact may now be unreported.** `AllocSite.reported` is true only when the `@noheap` gate refused the site
+where it was written. Every other own-body fact (a flag site, a text fact) is reported by the walk at the site,
+in the gate's own sentence plus why it is judged.
 
 ### 2. Two primitives: `kama_alloc` and `kama_free` (decided)
 

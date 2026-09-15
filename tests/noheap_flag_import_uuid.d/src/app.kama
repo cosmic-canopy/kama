@@ -1,0 +1,9 @@
+// `--no-heap` proves the PROGRAM, and a program is what its entry points reach (KR-47). Importing a stdlib
+// module whose error paths allocate is not reaching them: `Uuid`'s `Deserializable` boxes an error, its
+// `format` interpolates, and none of that runs here. Until KR-47 the flag rejected every direct allocation
+// in every emitted body, so this import alone was refused four times at stdlib lines the author never wrote.
+//
+// ⚠️ The import is the test and must not be tidied away as unused. The json and hex siblings are
+// tests/noheap_flag_import_json.d and tests/noheap_flag_import_hex.d.
+import { std::uuid::Uuid };
+fn int32 main() { return 42; }

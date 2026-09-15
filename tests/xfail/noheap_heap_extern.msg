@@ -1,0 +1,1 @@
+`tick` is `@noheap`, but this call reaches heap allocation (calls `calloc`, which is `@heap`

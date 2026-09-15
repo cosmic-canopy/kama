@@ -1,0 +1,1 @@
+heap allocation (new) is forbidden here — this build is `--no-heap`, and the program reaches `nhhelper2::used`

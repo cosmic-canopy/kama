@@ -1576,7 +1576,9 @@ private:
     // `GlobalAllocator` one are different functions, and an arena-backed container stays legal inside a
     // `@noheap` region while a heap-backed one does not. Monomorphization is doing the work a
     // whole-program analysis would otherwise have to approximate.
-    struct AllocSite { std::string what; int line = 0; std::string file; bool indirect = false; };
+    // `reported`: the gate already refused this site where it was written (only a `@noheap` body does), so the
+    // walk must not say it again. Every other fact is the walk's to report — if a root reaches it.
+    struct AllocSite { std::string what; int line = 0; std::string file; bool indirect = false; bool reported = false; };
     struct CallEdge  { int line = 0; };
     // `fromFlag` distinguishes a body the AUTHOR annotated from one `--no-heap` seeded. Both are roots of
     // the same walk, but they are two different claims and must not borrow each other's sentence: telling
@@ -1594,9 +1596,11 @@ private:
     // makes an edge exist exactly when a call does.
     std::string _emittedC;
     void buildCallGraph();
-    // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER
-    // body as well (`isUserBody` — the prelude and the stdlib are excluded, or the flag would report a
-    // defect against code the author never wrote and cannot change).
+    std::set<std::string> _heapSymbols;   // C symbols of every `@heap extern fn` — see collectSignatures
+    std::set<std::string> _entryBodies;   // `main` and every `KAMA_EXPORT` body, read off the C — `--no-heap`'s roots
+    // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER body
+    // as a CANDIDATE, judged only if an entry point reaches it (`isUserBody` — the prelude and the stdlib are
+    // never candidates, or the flag would report a defect against code the author cannot change).
     std::map<std::string, NoHeapFn>  _noHeapFns;
     bool _spawnsThreads = false;
     void noteThreadSpawn();

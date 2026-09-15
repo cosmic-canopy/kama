@@ -1,7 +1,7 @@
 export { Shared };
 
 extern "<stdlib.h>";
-extern fn void free(UnsafePtr p);
+@heap extern fn void free(UnsafePtr p);
 
 // M6.2: the refcount seam. Every strong/weak count mutation routes through kama_ctrl.h so the two flavors
 // (plain `Rc` vs Arc-correct atomic for `Shared<immutable T>`) live in one audited place. `atomic` is the

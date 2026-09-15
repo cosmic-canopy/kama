@@ -3,8 +3,8 @@ import { std::ptr::nonNull };
 export { Arena, BumpAllocator };
 
 extern "<stdlib.h>";
-extern fn UnsafePtr malloc(usize n);
-extern fn void free(UnsafePtr p);
+@heap extern fn UnsafePtr malloc(usize n);
+@heap extern fn void free(UnsafePtr p);
 
 // The `Allocator` contract + the default `GlobalAllocator` are FOUNDATIONAL and live in the global
 // prelude (`prelude/global.kama`, beside the other core capability contracts), so both `Owned<T, A>`

@@ -32,7 +32,7 @@ export { JsonSerializer, JsonDeserializer,
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
 // (SPEC; the file rung). Every declaration of it in a program must agree, which is checked.
-extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+@heap extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
 // Serializes JSON tokens straight into an owned `W: Writer` sink — a file, socket, buffered writer, or the
 // in-memory `StringWriter` behind `serializeJsonBuffer -> string`. Owns its sink by value (kama forbids stored borrows,

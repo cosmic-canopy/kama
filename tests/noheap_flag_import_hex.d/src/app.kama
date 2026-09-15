@@ -1,0 +1,4 @@
+// The smallest of the three import probes (KR-47): `hex::DecodeError` is a plain value whose `message()`
+// interpolates. Importing the type does not call `message()`, so the interpolation is not reached.
+import { std::encoding::hex::DecodeError };
+fn int32 main() { return 42; }

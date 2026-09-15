@@ -1,0 +1,7 @@
+// The xfail twin of tests/noheap_flag_unreached_helper.d: the same allocating helper, now REACHED from `main`.
+// A direct allocation under `--no-heap` is no longer refused where it is written (KR-47) — the reachability
+// walk refuses it, at the allocation, because an entry point reaches the body that holds it.
+import { std::memory::Owned };
+type resource Cell { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 used() { Owned<Cell> c = new Cell.make(v: 1); return c.get(); }
+fn int32 main() { return used(); }

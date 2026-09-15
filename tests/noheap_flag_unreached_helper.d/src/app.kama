@@ -1,0 +1,8 @@
+// An allocating helper nobody calls is not part of the program (KR-47). The flag used to seed its walk with
+// EVERY user body, so `unused` was refused although no entry point reaches it; the entry points are the roots
+// now — `main`, every `expose fn`, every `@foreignEntry` body — and a body is judged only if one reaches it.
+// Its xfail twin, tests/xfail/noheap_flag_reached_helper.d, calls the same helper and is refused.
+import { std::memory::Owned };
+type resource Cell { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 unused() { Owned<Cell> c = new Cell.make(v: 1); return c.get(); }
+fn int32 main() { return 42; }

@@ -1,0 +1,12 @@
+// An `extern fn`'s body is C, so no gate inside it can speak; `@heap` is how its declaration says the C touches
+// the heap (KR-47). The call is then a fact like any allocation the compiler writes, and a `@noheap` region
+// that reaches it is refused through the chain. Before `@heap`, a C function that allocated was invisible to
+// the proof, however directly it was called.
+//
+// `calloc` rather than `malloc`: the prelude's own `extern fn malloc` is `@heap` already, and this fixture is
+// about the attribute on a declaration the author wrote.
+extern "<stdlib.h>";
+@heap extern fn UnsafePtr calloc(usize n, usize size);
+unsafe fn int32 grab() { UnsafePtr p = calloc(n: 1, size: 4); return 0; }
+@noheap fn int32 tick() { return grab(); }
+fn int32 main() { return tick(); }

@@ -140,6 +140,14 @@ build simply succeeds with allocation allowed, and a bare-metal target quietly g
 for. Saying it once in the manifest makes it a property of the project instead of something every
 invocation has to remember.
 
+What the rule proves is that the program never REACHES an allocation. `main`, every `expose fn` and every
+`@foreignEntry` body are the roots (SPEC *No-heap subset*). It does not prove that the object never NAMES
+`malloc`: a stdlib body that came in with an import and is never called may still reference it. So every no-heap
+and bare-metal compile gets `-ffunction-sections -fdata-sections`, in debug as well as release, and **the board's
+link step should pass `--gc-sections`**, which drops the unreached code. Measured on a `--release --target
+embedded --no-heap` object importing `std::uuid`: `ld --gc-sections -e main` links it with no libc, and the same
+link without `--gc-sections` fails on undefined references from bodies nothing calls.
+
 **`webgpu`** is the `--webgpu` flag as a project property. It is also a *linking* decision, which is the
 class `link` exists for.
 

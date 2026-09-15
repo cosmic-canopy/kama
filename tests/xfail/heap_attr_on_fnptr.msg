@@ -1,0 +1,1 @@
+`@heap` marks an `extern fn`

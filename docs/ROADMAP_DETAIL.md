@@ -300,7 +300,7 @@ target's flags active, and a diagnostic says which target it came from. Open que
 cost (N analyses — the pass is seconds, not minutes), how a loose build (no manifest, no declared targets)
 answers, and whether `kama build` should warn when a manifest declares targets the build did not check.
 
-### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building KR-47, `0.9.345`
+### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
 says kama has no shadowing. It does: a binding may take the name of a FUNCTION, and the function stays callable
@@ -323,7 +323,7 @@ stdlib binds `args` twice in `lib/std/process/process.kama` (`buildArgv`'s param
 a FIELD counts (it is reached as `this.args`, never bare) is part of the design, as is which functions are "in
 scope" (imported, prelude, same module). The `tests/xfail/shadow_*` family is where the refusal lands.
 
-Why KR-47 found it: KR-47's call graph is read from the emitted C, and a C local named like a bare prelude
+Why the reach-based `--no-heap` found it: its call graph is read from the emitted C, and a C local named like a bare prelude
 function is the one identifier the scan cannot tell from a reference without seeing declarations.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
@@ -1507,9 +1507,9 @@ asking the reader whether a read failed, so `deserializeJsonBuffer::<Handle>` on
 back a garbage handle as success — and the JSON/KBIN entry points do not consult the sticky flag after an
 `Ok`, so nothing downstream catches it. The fix is the one every other `deserialize` already makes: check
 `failed()` and return `Err(errorCode())`. **Not a boundary-level safety net** that converts an `Ok` from a
-failed reader: a type that fails returns `Err`, and nothing papers over one that does not. It waits for
-reach-based `--no-heap` (KR-47): the new error box would otherwise fail every `--no-heap` build that merely
-imports `SlotMap`, which `0.9.295` relaxed on purpose.
+failed reader: a type that fails returns `Err`, and nothing papers over one that does not. It waited for
+reach-based `--no-heap`, which shipped at `0.9.348`: before it, the new error box would have failed every
+`--no-heap` build that merely imports `SlotMap`.
 
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
@@ -1851,7 +1851,7 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-### The allocation campaign (KR-47 – KR-50) — opened 2026-09-12
+### The allocation campaign (KR-48 – KR-50, KR-58) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1862,6 +1862,19 @@ another (correct today only because every family is libc); error boxing draws fr
 other box; and `--no-heap` judges what the program REACHES, consistently, rather than every imported body.
 It meets KR-39 (a provable callee behind a contract slot) and tier 1 of the devirtualization ladder (KR-23):
 both are "judge what is actually reached", and they should share one reach walk.
+
+**Step 1 shipped** (`0.9.347`–`0.9.348`). `--no-heap` judges what the entry points reach, over a call graph
+read from the emitted C, and C the compiler cannot read declares itself with `@heap extern fn`. Its record is
+SPEC *No-heap subset*, docs/targets.md (the section-GC contract) and the design doc's §1.
+
+**The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
+when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
+rule is permanent. What is not is eleven `std::fs` externs being heap at all: `kama__wpath` converts every UTF-8 path
+to a heap UTF-16 string on Windows, where POSIX passes the bytes straight through. A stack buffer for the common
+case removes the heap from those calls and the marks come off. The long-path (`\\?\`, >`MAX_PATH`) fallback is the
+design question. Seven more are heap on one platform only, measured per variant: `kama_proc_spawn` on Windows,
+`kama_proc_detach` on POSIX, and `kama_args_at`, `kama_program_*` and `kama_env_lookup`
+natively but not on wasm. Whether each can stop allocating, or honestly cannot, is part of the row.
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.

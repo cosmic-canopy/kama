@@ -1,7 +1,7 @@
 export { Weak };
 
 extern "<stdlib.h>";
-extern fn void free(UnsafePtr p);
+@heap extern fn void free(UnsafePtr p);
 
 // M6.2: the shared refcount seam (see shared.kama) — `Weak` mutates the SAME `Ctrl` counters, so it uses
 // the same flavor-selected ops. `atomic` is the per-instance compile-time constant `__kama_ctrl_atomic()`.

@@ -13,7 +13,7 @@ export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines,
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
 // (SPEC; the file rung). Every declaration of it in a program must agree, which is checked.
-extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+@heap extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
 // A byte SINK. `write` is the partial-write PRIMITIVE: it writes UP TO bytes.length() bytes and returns the
 // count actually taken (may be `< length` when the sink is full/slow — this is how backpressure is expressed;

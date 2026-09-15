@@ -8344,6 +8344,9 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.isConstPlace  = fn->isConstRef;   // `fn const ref T …` — and may only read through it
         sig.isUnsafe = fn->isUnsafe;     // `unsafe fn …` — the body may touch raw memory
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
+        // `@heap extern fn`: C that touches the heap, by the SYMBOL — every declaration of it names the same C,
+        // so one marked declaration marks every call, including one through an unmarked redeclaration.
+        if (isExtern(fn) && hasAttr(fn->attributes, "heap")) _heapSymbols.insert(symbolOf(sig));
 
         // kama has no overloading, so a name is declared once per namespace — but this was a bare
         // assignment, so a second declaration silently REPLACED the first. For a plain function clang
@@ -24580,6 +24583,10 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
         // field, but a general declaration marker (a use-site warning, on a method as readily as a field)
         // is already scheduled — baking "field-only" into a diagnostic we plan to contradict is worse than
         // letting a misplaced one fall to the catch-all unknown-attribute message.
+        } else if (an == "heap") {
+            unsupported("`@heap` marks an `extern fn` — it says C the compiler cannot read touches the heap. A kama "
+                        "body's allocations are seen without it, so on a body it would be a second, unchecked claim "
+                        "about the same thing", line);
         } else if (onMember && (an == "field" || an == "skip")) {
             unsupported(("`@" + an + "` marks a FIELD (it is serialization metadata), not a method, `ctor`, "
                          "destructor or operator").c_str(), line);
@@ -24651,10 +24658,14 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
     // First site per function wins; a function that allocates twice is no more allocating than one that
     // allocates once, and the first is the one the diagnostic should point at.
     if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
-        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile() };
-    if (!_noHeapProgram && !_noHeapActive) return;
+        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/false, /*reported=*/_noHeapActive };
+    // ⚠️ `@noheap` REFUSES HERE; `--no-heap` does NOT — the same asymmetry rejectNoHeapIndirect states below, and
+    // for the same reason. The attribute proves THIS body; the flag proves the PROGRAM, which is what its entry
+    // points reach, so its verdict comes from checkNoHeapTransitive. Refusing here under the flag as well made
+    // `import { std::uuid::Uuid };` alone fail a `--no-heap` build four times, at stdlib lines nothing calls.
+    if (!_noHeapActive) return;
     unsupported((std::string("heap allocation (") + what + ") is forbidden here — this code is "
-                 "`@noheap`/`--no-heap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
+                 "`@noheap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
                  "with no dynamic growth").c_str(), line);
 }
 
@@ -24674,7 +24685,7 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 {
     if (_probingTemplate) return;
     if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
-        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/true };
+        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/true, /*reported=*/_noHeapActive };
     // ⚠️ `@noheap` REJECTS HERE; `--no-heap` does NOT, and the asymmetry is the point. An attribute says
     // "prove THIS body", so the body is the unit and an unprovable call in it is an error wherever it sits.
     // A BUILD FLAG says "prove the PROGRAM", and a program is what `main` reaches — so the flag's answer
@@ -24704,22 +24715,11 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
     // in C, and the leaf is wherever the C is known to allocate.
     auto ci = _classes.find(cls);
     if (ci != _classes.end() && ci->second.isIntrinsicColl && ownsByValue(cls)) {
-        // ⚠️ Gated on the ATTRIBUTE, not the program flag, and this is measured rather than cautious: the
-        // PRELUDE deep-copies a string in `Template.part`/`Template.hole` (`return copy this._parts[at]`),
-        // which is the honest implementation of "hand back an owned copy of a borrowed byte range". Those
-        // bodies are emitted into every build, so rejecting under `--no-heap` failed a program that sorts
-        // three integers, pointing at a prelude line the author never wrote — and the stdlib's escape for
-        // exactly this (`@compileFor(!NOHEAP)`, as on `sort`) cannot be spelled on a MEMBER.
-        //
-        // So the fact is still recorded, which is what `@noheap` transitivity reads, and the immediate
-        // rejection is limited to a body whose author asked for it. That leaves the whole-program flag
-        // where it already was on the `GlobalAllocator` leaf — see the roadmap entry, which is the same
-        // open question and now has a second, concrete instance of why it is not a one-line change.
-        if (_noHeapActive) rejectIfNoHeap((std::string("a deep `copy` of `") + demangleForDisplay(cls)
-                                           + "` allocates a new buffer").c_str(), _curLine);
-        else if (!_probingTemplate && !_currentFunc.empty() && !_allocSites.count(_currentFunc))
-            _allocSites[_currentFunc] = AllocSite{ "a deep `copy` of `" + demangleForDisplay(cls)
-                                                   + "` allocates a new buffer", _curLine, diagFile() };
+        // Recorded for every body and refused only in a `@noheap` one, like every other site (rejectIfNoHeap).
+        // The prelude deep-copies a string in `Template.part` (`return copy this._parts[at]`), and that body is
+        // emitted into every build — which is why the flag could never refuse this where it is written.
+        rejectIfNoHeap((std::string("a deep `copy` of `") + demangleForDisplay(cls) + "` allocates a new buffer").c_str(),
+                       _curLine);
     }
     // `__copy` READS its source, and every copy ctor takes a plain `T*` (`const ref` is ABI-neutral — see
     // paramListC), while a read-only place addresses as `T const*`: `copy this.data[p]` in `ViewIter.next()`
@@ -24796,6 +24796,10 @@ void CEmitter::buildCallGraph()
                         size_t nb = ne; while (nb > 0 && identChar(seg[nb - 1])) --nb;
                         if (nb < ne && identStart(seg[nb])) {
                             cur.name = seg.substr(nb, ne - nb);
+                            // A program's entry points, as the C says them: the one `main`, and every body the
+                            // host can call by symbol (`expose fn`, which `@interrupt`/`@callerThread` require).
+                            if (cur.name == "main" || seg.find("KAMA_EXPORT") != std::string::npos)
+                                _entryBodies.insert(cur.name);
                             cur.params = seg.substr(p, e - p + 1);
                             cur.open = i;
                         }
@@ -24821,11 +24825,20 @@ void CEmitter::buildCallGraph()
     static const std::set<std::string> kNotAType = { "return", "case", "goto", "sizeof", "else", "do", "typedef" };
     _callEdges.clear();
     int line = 0;
+    std::string file;
+    // `#line N "path"` at `d` — the path as `line()` wrote it, with its `\` and `"` escapes undone.
+    auto readDirective = [&](size_t d) {
+        line = atoi(s.c_str() + d + 6);
+        size_t q = s.find('"', d + 6), eol = s.find('\n', d);
+        file.clear();
+        if (q == std::string::npos || q > eol) return;
+        for (size_t k = q + 1; k < eol && s[k] != '"'; ++k) { if (s[k] == '\\' && k + 1 < eol) ++k; file += s[k]; }
+    };
     size_t prevClose = 0;
     for (const Body& b : bodies) {
         // The directive in force when the body opens: scan the gap since the previous body for the latest one.
         for (size_t d = s.find("#line ", prevClose); d != std::string::npos && d < b.open; d = s.find("#line ", d + 6))
-            line = atoi(s.c_str() + d + 6);
+            readDirective(d);
         prevClose = b.close;
         struct Ref { std::string name; int line; bool call; };
         std::vector<Ref> refs;
@@ -24846,7 +24859,7 @@ void CEmitter::buildCallGraph()
             if (c == '\n') { lineStart = true; ++i; continue; }
             if (c == ' ' || c == '\t' || c == '\r') { ++i; continue; }
             if (lineStart && c == '#') {
-                if (s.compare(i, 6, "#line ") == 0) line = atoi(s.c_str() + i + 6);
+                if (s.compare(i, 6, "#line ") == 0) readDirective(i);
                 i = skipDirective(i); continue;
             }
             lineStart = false;
@@ -24867,6 +24880,10 @@ void CEmitter::buildCallGraph()
             if (!member && afterType && (next == '=' || next == ';' || next == ',' || next == '['))
                 declared.insert(id);
             if (!member && id != b.name && defined.count(id)) refs.push_back(Ref{ id, line, next == '(' });
+            // A call to C marked `@heap` is an allocation fact for this body — the first one, unless emission
+            // already recorded one with a better sentence (the gate names the construct; this names the symbol).
+            if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
+                _allocSites[b.name] = AllocSite{ "calls `" + id + "`, which is `@heap`", line, file };
             prevTok = id;
             i = e;
         }
@@ -24878,7 +24895,7 @@ void CEmitter::buildCallGraph()
             if (drops != _dropSiteLines.end()) { auto d = drops->second.find(r.name); if (d != drops->second.end()) at = d->second; }
             out.emplace(r.name, CallEdge{ at });
         }
-        line = 0;   // a following body with no directive of its own must not inherit this one's
+        line = 0; file.clear();   // a following body with no directive of its own must not inherit this one's
     }
 }
 
@@ -24921,14 +24938,26 @@ bool CEmitter::isUserBody(const std::string& declFile, const std::string& displa
 // points, one order, asserted by a guard.)
 //
 // BOTH gates walk here, and for different reasons. The ATTRIBUTE needs propagation because the annotated
-// body is almost never the allocating one. The FLAG gates every body, so a DIRECT allocation is rejected
-// where it is written and needs none — but the `GlobalAllocator` leaf is recorded and never rejected (a
-// prelude body would otherwise fail a build the author never wrote), so the one thing the flag cannot see
-// on its own is exactly the thing that matters: a container reaching `malloc` through its allocator. That
-// is what the flag seeds this walk for, and why `--no-heap` under-delivered on its own name until it did.
+// body is almost never the allocating one. The FLAG proves the PROGRAM, which is what its entry points reach
+// (KR-47): every user body is a candidate, and a candidate is judged only if `main`, an `expose fn` or a
+// `@foreignEntry` body reaches it. An allocating helper nobody calls is not part of the program, and neither
+// is a stdlib body that merely came in with an import.
 void CEmitter::checkNoHeapTransitive()
 {
     if (_noHeapFns.empty()) return;
+
+    // What the entry points reach — forward, over the same graph. Only the flag asks.
+    std::set<std::string> reached;
+    if (_noHeapProgram) {
+        std::vector<std::string> todo(_entryBodies.begin(), _entryBodies.end());
+        for (auto& fe : _foreignEntryFns) todo.push_back(fe.first);   // called by C, by a route no edge shows
+        while (!todo.empty()) {
+            const std::string f = todo.back(); todo.pop_back();
+            if (!reached.insert(f).second) continue;
+            auto it = _callEdges.find(f);
+            if (it != _callEdges.end()) for (auto& e : it->second) todo.push_back(e.first);
+        }
+    }
 
     // Which functions allocate, transitively. Seed with the ones that allocate DIRECTLY and walk the call
     // graph BACKWARDS to every caller — a reverse-reachability fixpoint, the same shape computeDestructible
@@ -24951,24 +24980,27 @@ void CEmitter::checkNoHeapTransitive()
     for (auto& kv : _noHeapFns) {
         const std::string& root = kv.first;
         if (!allocates.count(root)) continue;
-        // A body that allocates DIRECTLY already has its diagnostic, issued by the gate as the allocation
-        // was emitted — and that one is better, because it names the construct and points at the line.
-        // Reporting it again here as a zero-hop chain would be a second rendering of a defect the reader
-        // has already been told about, which is the mistake `unsupported`'s own header warns against.
+        if (kv.second.fromFlag && !reached.count(root)) continue;   // not part of the program
+        // A body that allocates DIRECTLY is reported at the allocation, with no chain — the fault is in this
+        // body, not one hop away. Unless the gate already said so where it was written (`reported`: only a
+        // `@noheap` body refuses eagerly), which names the construct at the same line; a second rendering of
+        // one defect is the mistake `unsupported`'s own header warns against.
         auto own = _allocSites.find(root);
         if (own != _allocSites.end()) {
-            // …EXCEPT an INDIRECT site under the FLAG, which nobody has reported. `rejectNoHeapIndirect`
-            // records rather than rejects for `--no-heap` on purpose — the flag proves the PROGRAM, so
-            // reachability has to decide, and at emission time the call graph does not exist yet. Being a
-            // seeded root IS the reachability answer (only user bodies are seeded), so this is where it
-            // gets said. No chain: the unprovable call is in this body, not one hop away.
-            if (own->second.indirect && kv.second.fromFlag) {
-                ScopedStr _f(_emitDeclFile, own->second.file.empty() ? kv.second.file : own->second.file);
-                unsupported(("this build is `--no-heap`, but `" + kv.second.display + "` dispatches "
-                             + own->second.what + ", so what it allocates cannot be proven — call a named "
-                             "function instead, or move the dispatch outside the no-heap region").c_str(),
-                            own->second.line);
-            }
+            if (own->second.reported) continue;
+            const AllocSite& site = own->second;
+            ScopedStr _f(_emitDeclFile, site.file.empty() ? kv.second.file : site.file);
+            // The gate's own sentences, with the reason the site is judged in place of "this code is `@noheap`".
+            const std::string why = kv.second.fromFlag
+                ? ("this build is `--no-heap`, and the program reaches `" + kv.second.display + "`")
+                : ("`" + kv.second.display + "` is `@noheap`");
+            unsupported((site.indirect
+                             ? ("this build is `--no-heap`, but `" + kv.second.display + "` dispatches " + site.what
+                                + ", so what it allocates cannot be proven — call a named function instead, or move "
+                                  "the dispatch outside the no-heap region")
+                             : ("heap allocation (" + site.what + ") is forbidden here — " + why + "; use a stack "
+                                "value, a fixed buffer, or a fixed-capacity arena with no dynamic growth")).c_str(),
+                        site.line ? site.line : kv.second.line, kv.second.display);
             continue;
         }
 
@@ -32091,6 +32123,16 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                     if (!what || (!isFnPtr && !dynamic_cast<IncludeNode*>(decl.get()))) continue;
                     unsupported(("`@linkName` names the symbol of an `extern fn` or an `expose fn`, and "
                                  + std::string(what) + " has no symbol to rename").c_str(), decl->line);
+                    continue;
+                }
+                if (*at->name == "heap") {
+                    // States that the C behind a symbol touches the heap — so it belongs on the one bodyless
+                    // form that HAS a symbol and C behind it, and nowhere else (KR-47).
+                    if (at->args && !at->args->empty())
+                        unsupported("`@heap` takes no arguments", decl->line);
+                    if (what && (isFnPtr || dynamic_cast<IncludeNode*>(decl.get())))
+                        unsupported(("`@heap` marks an `extern fn` — it says C the compiler cannot read touches "
+                                     "the heap — and " + std::string(what) + " has no C of its own").c_str(), decl->line);
                     continue;
                 }
                 if (isFnPtr && (*at->name == "noheap" || *at->name == "foreignEntry"

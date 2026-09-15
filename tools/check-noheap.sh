@@ -216,27 +216,48 @@ if grep -qE 'but `(std::|GlobalAllocator|Template)' "$tmp/leaf.err"; then
     sed 's/^/  /' "$tmp/leaf.err" >&2; exit 1
 fi
 
-# 6c. THE FLAG STAYS USABLE — the same container over an ARENA still builds and runs. `A` is a type
+# 6c. THE FLAG STAYS USABLE — the same container over a BUMP allocator still builds and runs. `A` is a type
 #     parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching a different
 #     `allocate`; a rule that rejected this one too would have banned the idiom real-time code uses.
+#     The region is storage the program owns without the heap (a local buffer). It used to be an `Arena`,
+#     whose constructor mallocs the region: that passed only because a call to `malloc` through an `extern fn`
+#     was invisible to the flag, and `@heap` made it visible (KR-47). Case 6d pins the other half.
 arenasrc="$tmp/nharena.kama"
 cat > "$arenasrc" <<'EOF'
-import { std::collections::DynamicArray, std::collections::Arena, std::collections::BumpAllocator };
+import { std::collections::DynamicArray, std::collections::BumpAllocator };
 fn int32 grow(DynamicArray<int32, BumpAllocator> l, int32 n) { l.add(item: n); return cast<int32>(l.length()) + n; }
-fn int32 main() {
-    Arena arena = Arena.make(capacity: 65536);
-    DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: arena.handle());
+unsafe fn int32 run() {
+    InlineArray<uint8>#(4096) store = [0ui8; 4096];
+    isize used = 0;
+    BumpAllocator bump = BumpAllocator.make(buffer: addr(of: store[0]), offset: addr(of: used), capacity: 4096);
+    DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: bump);
     return grow(l: a, n: 41);   // 1 + 41
 }
+fn int32 main() { return run(); }
 EOF
 if ! "$KAMA" build --no-heap "$arenasrc" -o "$tmp/ar.out" >/dev/null 2>"$tmp/ar.err"; then
-    echo "check-noheap: FAIL — an ARENA-backed container must still build under '--no-heap':" >&2
+    echo "check-noheap: FAIL — a bump-allocated container over owned storage must still build under '--no-heap':" >&2
     sed 's/^/  /' "$tmp/ar.err" >&2; exit 1
 fi
 rc=0
 "$tmp/ar.out" >/dev/null 2>&1 || rc=$?
 if [ "$rc" != "42" ]; then
-    echo "check-noheap: FAIL — the arena-backed container under '--no-heap' did not run (expected 42, got $rc)" >&2; exit 1
+    echo "check-noheap: FAIL — the bump-allocated container under '--no-heap' did not run (expected 42, got $rc)" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while an arena-backed container still builds and runs)"
+# 6d. …and an `Arena` IS heap under the flag: `Arena.make` mallocs its region and `~Arena` frees it, through
+#     `@heap extern fn`s. A whole-program no-heap build that makes one is refused, through the chain.
+heaparena="$tmp/nhheaparena.kama"
+cat > "$heaparena" <<'EOF'
+import { std::collections::Arena };
+fn int32 main() { Arena arena = Arena.make(capacity: 64); return 0; }
+EOF
+if "$KAMA" build --no-heap "$heaparena" -o "$tmp/ha.out" >/dev/null 2>"$tmp/ha.err"; then
+    echo "check-noheap: FAIL — an Arena (a malloc'd region) built under '--no-heap'" >&2; exit 1
+fi
+if ! grep -qF 'which is `@heap`' "$tmp/ha.err"; then
+    echo "check-noheap: FAIL — the Arena was refused, but not through its @heap extern:" >&2
+    sed 's/^/  /' "$tmp/ha.err" >&2; exit 1
+fi
+
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while a bump-allocated container over owned storage still builds and runs, and a malloc'd Arena does not)"

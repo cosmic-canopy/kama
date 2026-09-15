@@ -615,6 +615,14 @@ emitter-visible heap allocation a **compile error** — `new`/`try new`, `parall
 boxing, error-boxing into `Owned<Error>`, and string interpolation's `Formatter` buffer all funnel through
 one gate. Target-independent (composes with `--target embedded`).
 
+**The two answer different questions.** `@noheap` proves a BODY, so it refuses an allocation where it is
+written. `--no-heap` proves the PROGRAM, and a program is what its **entry points reach**: `main`, every <!-- xfail: noheap_flag_reached_helper -->
+`expose fn`, and every `@foreignEntry` body. A body nothing reaches is not part of it. An allocating helper
+nobody calls builds, and so does a stdlib module whose error paths allocate, merely imported. <!-- test: noheap_flag_unreached_helper, noheap_flag_import_uuid, noheap_flag_import_json, noheap_flag_import_hex -->
+What a no-heap object promises follows: the reached program never allocates. It does not promise that the
+object never names `malloc`, since an unreached stdlib body may. Every no-heap and bare-metal compile gets one
+section per function, so the board's link drops unreached code with `--gc-sections` (*docs/targets.md*).
+
 **`@noheap` is transitive**, which is what makes it a proof rather than a lint: a `@noheap` body may not <!-- xfail: noheap_transitive_new, noheap_transitive_deep, noheap_transitive_method -->
 call anything that allocates, however many calls away it is, and the diagnostic names the chain
 (`tick -> mix -> grow`). Nothing has to be annotated for this — where the compiler can see the callee it
@@ -628,13 +636,23 @@ whether or not any source line spells it.
 The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop, noheap_flag_container -->
 rejected inside a no-heap region, including merely *owning* one (dropping it frees; `free` can block on the
 allocator's lock exactly as `malloc` can). **The whole-program `--no-heap` flag applies the same leaf**, so
-a no-heap build cannot reach `malloc` through a container either — the flag rejects a *direct* allocation
-in every body, and the leaf is what closes the indirect path a container takes. Its diagnostic anchors on
-the innermost function **you** wrote — the frame holding the call you can change — and never on a prelude
-or `std::` body, which would name code the author did not write and cannot edit. The same container over an **arena** is fine and needs no
+a no-heap build cannot reach `malloc` through a container either. A reached allocation is reported where it is
+written when that is in a body you wrote. Otherwise the diagnostic anchors on the innermost function **you**
+wrote, the frame holding the call you can change, and never on a prelude or `std::` body, which would name code
+the author did not write and cannot edit. The same container over a **bump allocator** is fine and needs no
 annotation: `A` is a type parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching
 a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) — which is the idiom a
-real-time region is expected to use.
+real-time region is expected to use. Under the whole-program flag the region itself must not come from the heap
+either: `Arena.make` mallocs its buffer, so a `--no-heap` program backs a `BumpAllocator` with storage it owns.
+
+**C the compiler cannot read declares itself.** An `extern fn` whose C touches the heap is marked `@heap`, <!-- xfail: noheap_heap_extern -->
+and a call to it is then an allocation fact like any the compiler writes: `@heap extern fn UnsafePtr
+calloc(usize n, usize size);`. The mark is on the SYMBOL, so a redeclaration without it does not unmark the
+call. The runtime's own externs are marked when kama's C for them allocates or frees on ANY target (the
+prelude's `malloc`/`free`, `std::fs` paths, which Windows converts on the heap, `std::process`, channels, the
+number formatters). A no-heap verdict is therefore the same on every target. An unmarked user extern is
+unchecked C, as it always was. `@heap` is refused on anything but an `extern fn`: a body's allocations are seen <!-- xfail: heap_attr_on_body, heap_attr_on_fnptr -->
+without it, and a `fnptr` has no C of its own.
 
 `string` is the one **intrinsic** that mints heap, and it is immutable, so every method that "changes" one <!-- xfail: noheap_string_concat, noheap_string_method, noheap_string_copy, noheap_foreach_copy -->
 returns a NEW owned string: `a + b`, `concat`, `substring`, `trim*`, `replace`, `toLower`/`toUpper`,

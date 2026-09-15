@@ -10345,6 +10345,13 @@ int main(int argc, char** argv)
                 else                    linkGc = "-Wl,--gc-sections -s ";
             }
         } else {
+            // A no-heap or bare-metal DEBUG object gets the release tier's sections too. `--no-heap` proves the
+            // program never REACHES an allocation (KR-47), not that the object never NAMES `malloc`: a stdlib
+            // body that came in with an import and is never called still does. One section per function is what
+            // lets the board's link (`--gc-sections`, or the default link's) drop it, so an unreached `malloc`
+            // never becomes an undefined symbol on a target with no libc. Measured: a `--release --target
+            // embedded` object importing `std::uuid` carries `U malloc` from bodies nothing reaches.
+            if (embedded || g_noHeap) cmd << "-ffunction-sections -fdata-sections ";
             // Debug: faithful stepping + breakpoints in .kama via #line (DWARF `-g`). We intentionally do
             // NOT pass `-gsource-map` on wasm: it makes the generated JS load a `.wasm.map` at startup via a
             // chain of runtime symbols (`addRunDependency`, `UTF8ArrayToString`, …) that newer emcc (≥6) does

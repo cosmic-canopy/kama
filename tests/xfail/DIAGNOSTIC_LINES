@@ -417,6 +417,8 @@ graph_owned_of_shared	graph_owned_of_shared.kama:16
 graph_read_by_value	graph_read_by_value.kama:16
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
+heap_attr_on_body	heap_attr_on_body.kama:4
+heap_attr_on_fnptr	heap_attr_on_fnptr.kama:4
 heap_handle_bare_value	heap_handle_bare_value.kama:7
 identity_char_constref_argument	identity_char_constref_argument.kama:10
 identity_char_literal	identity_char_literal.kama:12 identity_char_literal.kama:13
@@ -632,10 +634,12 @@ noheap_error_box	noheap_error_box.kama:10
 noheap_field_dtor	noheap_field_dtor.kama:15
 noheap_flag_container	app.kama:14 app.kama:16
 noheap_flag_reached_dispatch	app.kama:24
+noheap_flag_reached_helper	app.kama:6
 noheap_fnptr_bind	noheap_fnptr_bind.kama:7
 noheap_fnptr_bind_arg	noheap_fnptr_bind_arg.kama:9
 noheap_fnptr_call	noheap_fnptr_call.kama:5
 noheap_foreach_copy	noheap_foreach_copy.kama:8
+noheap_heap_extern	noheap_heap_extern.kama:11
 noheap_interp	noheap_interp.kama:2
 noheap_method_new	noheap_method_new.kama:8
 noheap_new	noheap_new.kama:4

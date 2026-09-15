@@ -45,7 +45,7 @@ import {
 export { KbinNumberedSerializer, KbinNumberedDeserializer, serializeKbinNumberedBuffer,
          serializeKbinNumberedStream, deserializeKbinNumberedBuffer, deserializeKbinNumberedStream };
 
-extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+@heap extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 extern fn uint32 kama_f32_bits(float32 v);
 extern fn float32 kama_f32_from_bits(uint32 b);
 extern fn uint64 kama_f64_bits(float64 v);

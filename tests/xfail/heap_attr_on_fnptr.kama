@@ -1,0 +1,6 @@
+// `@heap` says the C behind a SYMBOL touches the heap, so it belongs on an `extern fn` only (KR-47). A `fnptr`
+// is a type, not a symbol with C behind it: whether a call through it allocates is decided by what is bound,
+// and `@noheap` on the signature is the promise that governs that — so `@heap` here is refused by name.
+@heap fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+fn int32 main() { Op f = dbl; return f(x: 21) - 42; }
