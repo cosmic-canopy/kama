@@ -1,8 +1,8 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** in progress. Plan step 1 (fixtures) and step 2 slice 1 (nested type arguments + hints, `0.9.322`)
-are DONE; **next is step 2 slice 2, the declaration positions not walked today**. Found building KR-12 at
-`0.9.320`. This is the working doc for the campaign: the probe grid, the
+**Status:** in progress. Plan step 1 (fixtures) and step 2 slices 1 and 2 (type arguments + hints, `0.9.337`;
+declaration positions, `0.9.339`) are DONE; **next is step 2 slice 3, the body positions**. Found building
+KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
 results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
 the `tests/xfail/` fixtures carry the record.
 
@@ -12,17 +12,14 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc, [allocation.md](allocation.md), and the rows in `docs/ROADMAP.md`. Nothing depends on an
 assistant's local memory or on a scratch directory.
 
-**State at handoff (2026-09-13, Linux).** `dev` at `0.9.321` (`fa77056f`), gate green on every leg: native
-1703/0, san 1704/0, wasm 1674/0, 68 guards. Since the Windows handoff at `0.9.320`:
+**State at handoff (2026-09-14, Linux).** `dev` at `0.9.339`, rebased onto `origin/dev` at `0.9.336` (15 commits
+of other work: KR-38, KR-21, KR-42, KR-43, KR-44, KR-45, KR-53 — among them the extern model change below). Gate
+green on every leg at each KR-46 commit. The KR-46 commits so far, oldest first:
 
-- `12b14faa` — a Linux host runs the san/tsan/msan/wasm/linux legs natively (the container would build into
-  the same `out/Linux-<arch>/` and replace the host binary). First san/wasm run of `0.9.318`–`0.9.320`: green.
-- `b26d5e36` — the grid re-measured on Linux: no cell moved.
-- `01eec6e8` (`0.9.321`) — found building KR-46: nested checked arithmetic emitted C that doubled per level
-  (a 38-term sum crashed clang). Fixed at the emitter; not part of KR-46's scope.
-- `fa77056f` — the KR-46 fixtures: generated, every template proven legal, **119 of 162 red**. They are NOT
-  in the tree — each lands with the fix slice that turns it green, so every commit keeps the gate green.
-  Their generator is `genfix.py` in the appendix; the **Fixtures** section says what they found.
+- slice 1 (`0.9.337`) — a type's arguments are judged like its head; the hint names a real import.
+- `0.9.338` — a qualified module constant sizes an `InlineArray`; a local's `#(K)` is judged for reach.
+- slice 2 (`0.9.339`) — statics, `implements` and its arguments, base types, bounds, qualified names in an
+  `extern fn` signature; the stdlib gains the sibling imports those positions had never been asked for.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
 reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
@@ -43,29 +40,24 @@ global allocator → **KR-50** allocator-aware errors.
 **First steps next session:**
 
 1. `git fetch && git rebase origin/dev`, `./dev build`.
-2. Recreate the scratch tools: extract `genfix.py` from the appendix into `.scratch/imports/`
-   (`awk '/^### \`genfix.py\`/{f=1} f&&/^\`\`\`python/{b=1;next} b&&/^\`\`\`$/{exit} b' docs/design/name-resolution.md > .scratch/imports/genfix.py`),
-   then `python3 .scratch/imports/genfix.py .` writes all 162 fixtures + the two controls into `tests/`.
-3. Classify them on the current compiler with `classify.sh` (appendix) — expect, at `0.9.322`, **12 ACCEPTED,
-   12 C, 30 MSG, 108 green**. A different count means the compiler moved; record it here before changing
-   anything. (`genfix.py` overwrites the 107 fixtures already in the tree with identical content.)
-4. Before a gate run, delete every generated fixture that is not green (`classify.sh | grep -v ^green`), and
-   `tests/reach_controls_qualified.d` until it builds. Then the plan below, step 2, slice 2.
+2. Recreate the scratch tools: extract `genfix.py` and `classify.sh` from the appendix into `.scratch/imports/`
+   (`awk '/^### \`genfix.py\`/{f=1} f&&/^\`\`\`python/{b=1;next} b&&/^\`\`\`$/{exit} b' docs/design/name-resolution.md > .scratch/imports/genfix.py`,
+   the same with `classify.sh` and `bash`), then `python3 .scratch/imports/genfix.py .` writes all 162 fixtures
+   and both controls into `tests/` — the 127 already in the tree are rewritten with identical content.
+3. Classify on the current compiler — expect, at `0.9.339`, **5 ACCEPTED, 9 C, 21 MSG, 127 green**. A different
+   count means the compiler moved; record it here before changing anything.
+4. Before a gate run, delete every generated fixture that is not green (`classify.sh | grep -v ^green`). Both
+   controls build and run, and stay. Then the plan below, step 2, slice 3.
 
-**Slice 1 landed at `0.9.322`.** In the tree: 107 reach fixtures and `tests/reach_controls_imported.d`. Held
-back although green: `reach_bound_type_unknown` — its diagnostic points at line 1 (the comment), and a bound
-is slice 2's position; it lands there with the right line. `reach_controls_qualified.d` is still refused at
-`implements geo::ShownC` (slice 2). Behind that, `#(geo::SHOWNK)` — a LEGAL qualified module constant —
-failed in C because `constArgN` read every qualified size as `Type::NAME`; fixed at `0.9.323`
-(`tests/const_generic_qualified_module.d`), together with the reach judgment of a local's `#(K)` that the
-fold would otherwise have bypassed (`tests/xfail/const_generic_qualified_private_local.d`).
+**What is left** — every one a BODY position (slices 3–4): `cast_arg`, `cast_direct`, `sizeof` (C);
+`as_downcast`, `ctor_call`, `static_call`, `variant_expr`, `turbofish`, `turbofish_deser`, `fn_call`,
+`const_read` (MSG); `turbofish`, `turbofish_deser`, `variant_expr`, `generic_body`, `generic_body_called` with a
+private qualified name (ACCEPTED).
 
-**Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
-leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`). Windows VM:
-`./dev matrix` cannot pass there (no containers, and it skips the guards when the container leg fails), so
-the gate is `./dev test` then `./dev check`, each into its own log, and the san/wasm legs are reported as
-not run. See `docs/platforms/windows.md` for driving that shell. Iterate with `./dev fixture <name>…` — it
-runs `tests/xfail/<name>` too, but NOT a `.d` directory; `classify.sh` is the inner loop for those.
+**The extern template changed at `0.9.339`.** Upstream's `0.9.327` refuses a plain `type value` crossing into C
+by value, which fired before reach could be asked, so `extern_sig` now spells `UnsafePtr<@X@>` (the generator
+and the qualified control both). The decision below still holds: a bare name there is a C spelling, a qualified
+one is judged.
 
 ## The rule, and where it breaks
 
@@ -294,7 +286,7 @@ still fails in C behind it).
 2. **One walk**, grown out of `checkDeclaredTypes` — it already visits every declaration once, before
    emission (called at the tail of `collectProgram`), sets `_nsCtx` per unit and binds type/const params, so
    it is the single visit; nothing new goes beside it. In commit slices, each gated green:
-   1. **DONE (`0.9.322`) — 43 → 108 green, C 36 → 12, MSG 71 → 30, no fixture regressed.** What landed:
+   1. **DONE (`0.9.337`) — 43 → 108 green, C 36 → 12, MSG 71 → 30, no fixture regressed.** What landed:
       `check` became the recursive `checkTypeNode` over `forEachTypeArg` (a spelling's `<…>` and qualifier
       `::<…>` entries, never its `#(…)` values); the local-declaration site in `emitStatement` walks the same
       arguments. The head is still judged by `checkTypeResolves` — an unknown generic HEAD (`Zork<int32>`)
@@ -314,7 +306,21 @@ still fails in C behind it).
       `_exported`): no instance keys, never a private name. One message per case (the **Fixtures** table).
       Turns green: the param/return/field/local/static/`Owned`/`InlineArray`/user-generic C cells, the
       `Optional`/`Result`/`DynamicArray` MSG cells, all hint cells, `const_generic_arg`.
-   2. **Declaration positions not walked today:** `static` declarations; `implements` contract AND its type
+   2. **DONE (`0.9.339`) — 108 → 127 green, ACCEPTED 12 → 5, C 12 → 9, MSG 30 → 21, no fixture regressed; both
+      controls build and run.** What landed: `checkTypeNode` takes a noun, and `checkContracts` walks every
+      `implements` entry and every type-parameter bound (functions, types, enums, `type intrinsic`) as
+      "contract" positions, which also refuse a name that resolves to a TYPE (`bound_names_a_type`,
+      `implements_names_a_type` — an uncalled generic with a type as its bound used to compile). Module
+      `static`/`comptime` types and class base types join the walk; an `extern fn` signature has its QUALIFIED
+      names judged. `resolveInterfaceNames` resolves through the node's qualifier (legal `implements
+      geo::ShownC` was refused) and drops a source-spelled non-contract, so the late "unknown contract in
+      implements" no longer repeats the walk's report; `checkBounds` stays quiet for a USER template's bound for
+      the same reason. The corpus net caught real violations: `map`, `set`, `slot_map` and `fixed` named
+      sibling-file contracts in `implements`/bounds without importing them — the stdlib now imports them (a
+      program importing every std export checks clean: 61 units). `fnptr` needed nothing (a bodiless
+      `FunctionDeclarationNode` was already walked). The original slice text follows.
+
+      Declaration positions not walked today: `static` declarations; `implements` contract AND its type
       arguments (the contract-name check is at ~24360, and names nothing); class base types; bounds on
       function, type and method type params, before any instantiation (~18245 today, instantiation-time
       only; `bound_fn` a/b/c's "`X` has no bound providing `cm`" is ~13307 firing first); `fnptr`
@@ -758,7 +764,7 @@ POS = [
     ("const_read",            "K", [], "a constant read", "fn int32 main() { isize k = @X@; return 0; }"),
     ("const_generic_arg",     "K", [], "a const-generic `#(K)` argument", "fn int32 f(InlineArray<int32>#(@X@) a) { return 0; }\nfn int32 main() { return 0; }"),
     ("cast_direct",           "T", [], "a `cast<X>` target", "fn int32 main() { int32 k = cast<int32>(cast<@X@>(0)); return 0; }"),
-    ("extern_sig",            "R", [], "an `extern fn` signature", "extern fn int32 kama_probe_nope(@X@ x);\nfn int32 main() { return 0; }"),
+    ("extern_sig",            "R", [], "an `extern fn` signature", "extern fn int32 kama_probe_nope(UnsafePtr<@X@> x);\nfn int32 main() { return 0; }"),
 ]
 # The reported repro: a Result instance geo already builds, named with an unimported error type.
 SHOWN = "type value Shown {\n    public int32 v;\n    public ctor make() { this.v = 1; }\n    public ctor Result<Shown, ShownErr> parse(int32 n) {\n        if (n < 0) { return Result::Err(error: ShownErr::Bad); }\n        return Result::Ok(value: Shown.make());\n    }\n}"
@@ -857,7 +863,7 @@ if CONTROLS:
         d = os.path.join(CONTROLS, stem)
         name = SHOWN_T[kind]
         body = tmpl.replace("@V@", variant(kind, name)).replace("@X@", name)
-        if stem == "extern_sig": body = body.replace("kama_probe_nope(ShownVal x)", "kama_probe_nope(int32 x)")
+        if stem == "extern_sig": body = body.replace("kama_probe_nope(UnsafePtr<ShownVal> x)", "kama_probe_nope(int32 x)")
         imps = list(dict.fromkeys(imports + ["geo::" + name]))
         shown, hid = DECLS[kind]
         exports = [name] + (["Shown"] if stem == "existing_instance" else [])

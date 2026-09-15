@@ -1,0 +1,3 @@
+// KR-46: a generic type's bound, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+type value G<X: ShownC> { X x; }
+fn int32 main() { return 0; }

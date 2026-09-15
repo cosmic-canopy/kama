@@ -1,0 +1,4 @@
+// KR-46: a type argument of an `implements` contract, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+type contract Holds<X> for value { fn int32 cm(); }
+type value W implements Holds<geo::HidVal> { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
+fn int32 main() { W w = W.make(); return w.cm() - 1; }

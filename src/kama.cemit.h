@@ -2688,7 +2688,7 @@ private:
     // of the body, so the identifier arm defers (probe) or stays silent (cascade) instead of rejecting.
     bool isComptimeParamHere(const std::string& nm) const;
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
-                           const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
+                           const char* what, int line, const char* noun = "type");  // unresolved type name -> missing-import / unknown-type diagnostic
     static void forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     static void forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     bool constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile);

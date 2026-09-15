@@ -1,0 +1,1 @@
+`V` is a type, not a contract, so an `implements` clause cannot name it

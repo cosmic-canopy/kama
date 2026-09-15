@@ -2378,7 +2378,7 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
 // known one through, and only an unresolved head comes back as its own bare spelling. So this judges ONE
 // node: each caller walks the type arguments under it (`forEachTypeArg`) and calls this per node.
 void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
-                                 const char* what, int line)
+                                 const char* what, int line, const char* noun)
 {
     if (!type || !type->value || type->builtInVal != 0) return;
     const std::string& name = *type->value;
@@ -2403,12 +2403,13 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
                      "allocation, an `extern fn`)").c_str(), line);
         return;
     }
-    const bool reported = reportDeclaredElsewhere("type", name, [&](const std::string& k) {
-        return _classes.count(k) || _enums.count(k) || _interfaces.count(k) || _genericTypes.count(k);
+    const bool reported = reportDeclaredElsewhere(noun, name, [&](const std::string& k) {
+        return _classes.count(k) || _enums.count(k) || _interfaces.count(k) || _genericTypes.count(k)
+            || _genericContracts.count(k);
     }, what, line);
     if (!reported)
-        unsupported((std::string("unknown type `") + name + "` in " + what
-                     + " — no such type is declared or imported").c_str(), line, name);
+        unsupported((std::string("unknown ") + noun + " `" + name + "` in " + what
+                     + " — no such " + noun + " is declared or imported").c_str(), line, name);
 }
 
 // The TYPE arguments a spelling writes — its `<…>` entries and a qualifier's `::<…>` — never a `#(…)` value,
@@ -2984,8 +2985,12 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // used to stop at the head, and `cType` maps any generic instance to SOME mangled name, so a bad name
     // nested as an argument — `Result<Uuid, UuidError>` without importing `UuidError` — passed and failed in
     // clang. A name is judged by the same rules wherever in the spelling it sits.
-    std::function<void(const SharedIdentifier&, const char*)> checkTypeNode =
-        [&](const SharedIdentifier& t, const char* what) {
+    //
+    // `noun` is "contract" for an `implements` clause or a bound, whose HEAD names a contract rather than a
+    // value's type — so the mint-protocol rule, which is about values, does not apply to it. Its type
+    // arguments are types again.
+    std::function<void(const SharedIdentifier&, const char*, const char*)> checkTypeNode =
+        [&](const SharedIdentifier& t, const char* what, const char* noun) {
         if (!t || !t->value) return;
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
         // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
@@ -3003,9 +3008,17 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (tp.count(*t->value)) return;
         checkQualifiedExport(t, what);
         checkNoLeak(t, what);
-        checkTypeResolves(t, cType(t), what, t->line);
-        rejectMintProtocolValue(t, what, t->line);
-        forEachTypeArg(t, [&](const SharedIdentifier& a) { checkTypeNode(a, what); });
+        checkTypeResolves(t, cType(t), what, t->line, noun);
+        if (std::string(noun) == "type") rejectMintProtocolValue(t, what, t->line);
+        else {
+            // A contract position naming something that RESOLVES but is not a contract — a type. The late
+            // checks only ever said "unknown contract", and only when something was instantiated or emitted.
+            const std::string k = resolveUserNameImpl(*t->value, t->qualifier);
+            if ((_classes.count(k) || _enums.count(k) || _genericTypes.count(k)) && !_interfaces.count(k))
+                unsupported(("`" + *t->value + "` is a type, not a contract, so " + what
+                             + " cannot name it").c_str(), t->line);
+        }
+        forEachTypeArg(t, [&](const SharedIdentifier& a) { checkTypeNode(a, what, "type"); });
         // A `#(K)` argument names a VALUE, so it is judged as one: a module constant must be in reach of this
         // file like any other name. It was never looked at, so an unimported, private or unknown `K` emitted
         // a bare `K` into the instance's C name and failed in clang. A literal needs nothing; the declaration's
@@ -3028,7 +3041,17 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     auto check = [&](const SharedIdentifier& t, const char* what) {
         if (!t || !t->value) return;
         if (rejectBareCChar(t, what, t->line)) return;   // a C `char` element outside a raw pointer (scans the whole spelling)
-        checkTypeNode(t, what);
+        checkTypeNode(t, what, "type");
+    };
+    // Every contract a declaration names: its `implements` list and its type parameters' bounds. Judged
+    // here, before any instantiation, because a bound or a conformance is not EMITTED as a name — a bound on
+    // an uncalled generic and a private qualified contract were never judged at all, and a type argument of
+    // `implements Holds<X>` was never resolved.
+    auto checkContracts = [&](const SharedClassBaseDeclaration& bases, const SharedBoundsList& bounds) {
+        if (bases && bases->interfaces)
+            for (auto& itf : *bases->interfaces) checkTypeNode(itf, "an `implements` clause", "contract");
+        if (bounds) for (auto& list : *bounds) if (list)
+            for (auto& b : *list) checkTypeNode(b, "a bound", "contract");
     };
     // Every LOCAL declared type in a body, checked for module privacy ONLY. `collectBindings` is the
     // statement walker (kama.query.cpp) the position index already uses; `stmtOnly` drops its `match`-arm
@@ -3119,11 +3142,26 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             if (!paramByRef(p.get()))
                                 rejectPlainCrossing(p->type, "a parameter", fname, ext, p->line ? p->line : fn->line);
                         }
-                    if (ext) continue;
+                    if (ext) {
+                        // ...and a QUALIFIED name, which is never a C spelling: `geo::HidVal` names a kama
+                        // declaration, so it is held to the same rules as anywhere else. The bare-name skip
+                        // above stays — `UnsafePtr<CFoo>` is the header's `CFoo`.
+                        tp.clear(); cp.clear(); ownerExported = false;
+                        std::function<void(const SharedIdentifier&, const char*)> qualifiedOnly =
+                            [&](const SharedIdentifier& t, const char* what) {
+                            if (!t || !t->value) return;
+                            if (t->qualifier && !t->qualifier->empty()) checkTypeNode(t, what, "type");
+                            else forEachTypeArg(t, [&](const SharedIdentifier& a) { qualifiedOnly(a, what); });
+                        };
+                        qualifiedOnly(fn->returnType, "a return type");
+                        if (fn->parameters) for (auto& p : *fn->parameters) if (p) qualifiedOnly(p->type, "a parameter");
+                        continue;
+                    }
                 }
                 ownerExported = fn->name && fn->name->value && _exported.count(qualify(*fn->name->value));
                 bindTypeParams(fn->typeParams, fn->comptimeParams,
                                fn->name ? fn->name->line : fn->line, "a function");
+                checkContracts(nullptr, fn->typeBounds);
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
                 checkReturns(fn, nullptr, "function");
@@ -3134,6 +3172,8 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 ownerExported = false;
                 bindTypeParams(cd->typeParams, cd->comptimeParams,
                                cd->name ? cd->name->line : cd->line, "a type");
+                checkContracts(cd->baseTypes, cd->typeBounds);
+                if (cd->baseTypes) check(cd->baseTypes->base, "a base type");
                 if (cd->members) for (auto& m : *cd->members) {
                     if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
                         // A `private` field's type is not part of what the export offers, so it is not a
@@ -3178,11 +3218,13 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                              && _exported.count(qualify(*ed->identifier->value));
                 bindTypeParams(ed->typeParams, ed->comptimeParams,
                                ed->identifier ? ed->identifier->line : ed->line, "an enum");
+                checkContracts(ed->baseTypes, ed->typeBounds);
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
                 tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
+                checkContracts(ii->baseTypes, nullptr);
                 if (ii->targets) for (auto& tgt : *ii->targets) if (tgt) rejectBareCChar(tgt, "a `type intrinsic` target", tgt->line);
                 if (ii->members) for (auto& m : *ii->members)
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
@@ -3197,6 +3239,14 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             checkParams(md->params, "a parameter");
                             checkNoSelfParam(md->params);
                         }
+            } else if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+                // A module `static` / `comptime`: its type is a declared type like a field's. It was never in
+                // this walk, so `static Optional<Zork> gs;` reached clang as `Optional_Zork`.
+                ownerExported = false;
+                if (mv->variables) for (auto& d : *mv->variables)
+                    if (d && d->name && d->name->value && _exported.count(qualify(*d->name->value))) ownerExported = true;
+                tp.clear(); cp.clear();
+                check(mv->type, mv->isComptime ? "a constant" : "a static");
             }
         }
     }
@@ -15875,9 +15925,12 @@ void CEmitter::linkContracts()
 // `nodes` may be null or shorter than `names` (a conformance recorded without a declaration site).
 void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIdentifierList nodes)
 {
+    std::vector<std::string> kept;
     for (size_t i = 0; i < names.size(); ++i) {
-        std::string base = resolveUserName(names[i], nullptr);
         SharedIdentifier itfNode = (nodes && i < nodes->size()) ? (*nodes)[i] : nullptr;
+        // Through the node's QUALIFIER when there is one: `names` holds bare strings, so `implements
+        // geo::ShownC` resolved as a bare `ShownC` and was refused unless that was imported too.
+        std::string base = resolveUserName(names[i], itfNode ? itfNode->qualifier : SharedStringList());
         // A PINNED contract's argument is DETERMINED — it can only be the implementing type — so there is
         // exactly one always-correct spelling, `This`, and it is also the only one the intrinsic SET form
         // can write (`<int8, …, uint64>` is eight types sharing one block). Naming the type concretely is
@@ -15893,10 +15946,16 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
                              + (itfNode->genericArgs && itfNode->genericArgs->size() > 1 ? ", …" : "")
                              + ">`").c_str(), itfNode->line);
         }
+        // A source-spelled name that is not a contract was reported where it is written, by
+        // `checkDeclaredTypes`. Recording it anyway filed a conformance to nothing, which the vtable emit then
+        // reported a second time as "unknown contract in implements", naming no name.
+        // `nodes` is the AST's own list and stays whole; only the resolved names drop the entry.
+        if (itfNode && !_interfaces.count(base) && !_genericContracts.count(base)) continue;
         if (itfNode && itfNode->genericArg && _genericContracts.count(base))
             base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
-        names[i] = base;
+        kept.push_back(base);
     }
+    names = std::move(kept);
 }
 
 void CEmitter::linkBases()
@@ -18765,8 +18824,14 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         std::string contract;
         { BoundCtxScope bc(this, templateKey); contract = resolveUserName(*b->value, b->qualifier); }
         if (!contractMethods(contract)) {   // a plain contract OR a generic-contract template (`Iterator<T>`)
-            unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
-                         + paramName + "`").c_str(), line);
+            // A bound in a USER declaration was already judged where it is written, once, by
+            // `checkDeclaredTypes` — with the import hint, before any instantiation. Repeating it here, at
+            // the use site's line, said the same thing twice about two different lines. Only a
+            // compiler-owned template can still arrive unjudged, and that is a compiler defect worth naming.
+            const std::string tf = declFileOf(templateKey);
+            if (tf.empty() || tf[0] == '<')
+                unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
+                             + paramName + "`").c_str(), line);
             ok = false;                     // an unspellable bound is unsatisfiable — poison it too
             continue;
         }

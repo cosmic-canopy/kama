@@ -1,4 +1,4 @@
-import { Map, MapKeyIter };
+import { Map, MapKeyIter, Hasher };
 export { Set };
 
 // A hash set over `K: Hashable + Equatable` — a thin wrapper on `Map<K, Unit>` (the value carries no

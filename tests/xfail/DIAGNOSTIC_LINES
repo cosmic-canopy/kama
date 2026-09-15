@@ -75,6 +75,7 @@ borrow_nested_same_place	borrow_nested_same_place.kama:13
 borrow_not_viewable	borrow_not_viewable.kama:18 borrow_not_viewable.kama:19
 borrow_two_bindings_overlap	borrow_two_bindings_overlap.kama:13
 bound_generic_contract_arg_mismatch	bound_generic_contract_arg_mismatch.kama:10
+bound_names_a_type	bound_names_a_type.kama:5
 bound_nominal	bound_nominal.kama:15
 box_iface_nonimpl	box_iface_nonimpl.kama:13
 box_use_after_move	box_use_after_move.kama:14
@@ -417,6 +418,7 @@ immutable_mutable_field	immutable_mutable_field.kama:5
 immutable_on_field	immutable_on_field.kama:13
 immutable_on_method	immutable_on_method.kama:10
 impl_conflict	impl_conflict.kama:7
+implements_names_a_type	implements_names_a_type.kama:4
 import_alias_claims_global	import_alias_claims_global.kama:6
 import_alias_shadows_project	import_alias_shadows_project.kama:6
 import_empty_braces	import_empty_braces.kama:3
@@ -683,6 +685,14 @@ public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
 rc_bare_handoff	rc_bare_handoff.kama:6
 reach_as_downcast_private_qualified	main.kama:2
+reach_bound_fn_private	main.kama:2
+reach_bound_fn_private_qualified	main.kama:2
+reach_bound_fn_unimported	main.kama:2
+reach_bound_fn_unknown	reach_bound_fn_unknown.kama:2
+reach_bound_type_private	main.kama:2
+reach_bound_type_private_qualified	main.kama:2
+reach_bound_type_unimported	main.kama:2
+reach_bound_type_unknown	reach_bound_type_unknown.kama:2
 reach_cast_arg_private_qualified	main.kama:2
 reach_cast_direct_private_qualified	main.kama:2
 reach_const_generic_arg_private	main.kama:2
@@ -701,6 +711,7 @@ reach_existing_instance_private	main.kama:3
 reach_existing_instance_private_qualified	main.kama:3
 reach_existing_instance_unimported	main.kama:3
 reach_existing_instance_unknown	main.kama:3
+reach_extern_sig_private_qualified	main.kama:2
 reach_field_private	main.kama:2
 reach_field_private_qualified	main.kama:2
 reach_field_unimported	main.kama:2
@@ -721,6 +732,14 @@ reach_generic_body_private	main.kama:2
 reach_generic_body_unimported	main.kama:2
 reach_generic_body_unknown	reach_generic_body_unknown.kama:2
 reach_hex_decode_std_unimported	reach_hex_decode_std_unimported.kama:3
+reach_implements_arg_private	main.kama:3
+reach_implements_arg_private_qualified	main.kama:3
+reach_implements_arg_unimported	main.kama:3
+reach_implements_arg_unknown	reach_implements_arg_unknown.kama:3
+reach_implements_private	main.kama:2
+reach_implements_private_qualified	main.kama:2
+reach_implements_unimported	main.kama:2
+reach_implements_unknown	reach_implements_unknown.kama:2
 reach_inline_array_param_private	main.kama:2
 reach_inline_array_param_private_qualified	main.kama:2
 reach_inline_array_param_unimported	main.kama:2
@@ -783,7 +802,10 @@ reach_result_param_std_unimported	reach_result_param_std_unimported.kama:3
 reach_result_return_std_unimported	reach_result_return_std_unimported.kama:3
 reach_sizeof_private_qualified	main.kama:2
 reach_static_call_private_qualified	main.kama:2
+reach_static_decl_private	main.kama:2
 reach_static_decl_private_qualified	main.kama:2
+reach_static_decl_unimported	main.kama:2
+reach_static_decl_unknown	reach_static_decl_unknown.kama:2
 reach_user_generic_arg_private	main.kama:3
 reach_user_generic_arg_private_qualified	main.kama:3
 reach_user_generic_arg_unimported	main.kama:3

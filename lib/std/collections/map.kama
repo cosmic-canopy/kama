@@ -1,4 +1,4 @@
-import { std::ptr::relocate };
+import { std::ptr::relocate, Hasher, ValuesIterable, ValuesIterableMut, EntriesIterable };
 export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`

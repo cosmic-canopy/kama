@@ -23,6 +23,7 @@
 // Overflow follows the language default: the base `+ - * /` operators TRAP on overflow in debug builds (a
 // fixed-point overflow is a real bug in value math). The `sat*` methods are the explicit never-trap
 // alternative (they clamp to the representable range). Model twin: std::time::Duration.
+import { FixedBacking };
 export { Fixed };
 
 type value Fixed<B: FixedBacking<B>> comptime(int32 F) implements Equatable<This>, Comparable<This> {

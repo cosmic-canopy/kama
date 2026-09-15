@@ -1,0 +1,6 @@
+// A bound names a contract. Naming a TYPE there was only ever noticed at an instantiation, as "unknown
+// contract", so a generic nobody called compiled with a bound nothing could satisfy. Judged at the
+// declaration now (KR-46), whether or not the generic is used.
+type value V { public int32 a; }
+fn int32 g<X: V>(X x) { return 0; }
+fn int32 main() { return 0; }

@@ -1,0 +1,5 @@
+// `implements` names a contract. Naming a TYPE there was reported late, as "unknown contract in
+// implements", with no name in the message. Judged where it is written now (KR-46).
+type value V { public int32 a; }
+type value W implements V { public int32 b; }
+fn int32 main() { return 0; }

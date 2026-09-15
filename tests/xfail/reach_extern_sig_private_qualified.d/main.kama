@@ -1,0 +1,3 @@
+// KR-46: an `extern fn` signature, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
+extern fn int32 kama_probe_nope(UnsafePtr<geo::HidVal> x);
+fn int32 main() { return 0; }

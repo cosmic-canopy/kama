@@ -1,0 +1,3 @@
+// KR-46: a generic type's bound, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+type value G<X: HidC> { X x; }
+fn int32 main() { return 0; }

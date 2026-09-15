@@ -1,0 +1,3 @@
+// KR-46: a `static`'s type argument, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+static Optional<ShownErr> gs;
+fn int32 main() { return 0; }

@@ -1,0 +1,3 @@
+// KR-46: a `static`'s type argument, naming a name declared nowhere. Must be rejected, naming it.
+static Optional<Zork> gs;
+fn int32 main() { return 0; }
