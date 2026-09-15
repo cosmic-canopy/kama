@@ -16,8 +16,8 @@ permanent doc (see the table below) and its section is deleted from here.
 >
 > ⚠️ **Deleting a row does NOT renumber anything.** `KR-<n>` is a permanent id — assigned once, never
 > reused, never renumbered — so a shipped row's id simply retires and leaves a gap, and every `KR-` written
-> anywhere (here, in a commit message, in someone's notes) keeps meaning what it meant. A new row takes one
-> more than the highest id present. This replaced position numbering, which silently re-pointed every
+> anywhere (here, in a commit message, in someone's notes) keeps meaning what it meant. A new row takes the id
+> on ROADMAP.md's **Next id** counter and bumps it in the same edit. This replaced position numbering, which silently re-pointed every
 > `row N` in prose each time a row was deleted; `tools/check-roadmap.sh` now checks that ids are unique and
 > that every `KR-` citation resolves, which is a check position numbering could not support.
 >

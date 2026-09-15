@@ -72,8 +72,7 @@ done
 # `KR-<n>` is a PERMANENT id: assigned once, never reused, never renumbered, so a row keeps it wherever it
 # moves and a shipped row's id retires with it, leaving a gap. Gaps are therefore CORRECT and are not
 # checked — what would be a defect is two rows answering to the same name, because every citation of that
-# id then means two things at once. A new row takes one more than the highest id present, which is safe
-# precisely because none is ever reused.
+# id then means two things at once. A new row takes the `Next id:` counter (check 6).
 #
 # This replaced position numbering, where deleting a shipped row renumbered every row below it and silently
 # re-pointed every `row N` written in prose — in this file, in the detail, in a commit message, in someone's
@@ -102,7 +101,7 @@ fi
 # ---- 5. every `KR-<n>` citation names a row that exists ----------------------------------------
 #
 # Checked across BOTH files: the detail cites rows too, and so does prose above the tables.
-bad=$(LC_ALL=C grep -ohE 'KR-[0-9]+' "$RM" "$RD" | sort -u | while read -r ref; do
+bad=$(LC_ALL=C grep -vhE '^\*\*Next id: KR-' "$RM" "$RD" | grep -oE 'KR-[0-9]+' | sort -u | while read -r ref; do
     printf '%s\n' "$ids" | grep -qx "$ref" || echo "    $ref is cited but no row has that id"
 done)
 if [ -n "$bad" ]; then
@@ -113,6 +112,28 @@ if [ -n "$bad" ]; then
     exit 1
 fi
 
+# ---- 6. the `Next id:` counter is above every id ever issued ----------------------------------------
+#
+# "One more than the highest id present" is wrong the moment a newer row ships: its row and section are
+# deleted, its number looks free, and it is issued again — KR-41 and KR-53 nearly were, and two machines each
+# filed a KR-54 on 2026-09-14. So ROADMAP.md carries the next id as ONE line, which also makes two concurrent
+# issues a merge conflict. What the counter must exceed is every id ISSUED, and a deleted row survives in
+# three places: the tracked tree (code comments, fixtures, the docs), and every commit message that cited it.
+next=$(LC_ALL=C sed -nE 's/^\*\*Next id: KR-([0-9]+)\*\*$/\1/p' "$RM")
+[ -n "$next" ] || fail "ROADMAP.md has no \`**Next id: KR-<n>**\` line — the counter a new row takes its id from"
+[ "$(printf '%s\n' "$next" | grep -c .)" -eq 1 ] || fail "ROADMAP.md has more than one \`Next id:\` line"
+highest=$( {
+    LC_ALL=C grep -vhE '^\*\*Next id: KR-' "$RM"
+    git -C "$ROOT" grep -hoE 'KR-[0-9]+' -- . ':!docs/ROADMAP.md' 2>/dev/null
+    git -C "$ROOT" log --format=%B 2>/dev/null
+} | LC_ALL=C grep -oE 'KR-[0-9]+' | sed 's/KR-//' | sort -n | tail -1)
+if [ -n "$highest" ] && [ "$next" -le "$highest" ]; then
+    echo "check-roadmap: FAIL — \`Next id: KR-$next\` is not above KR-$highest, which is already issued." >&2
+    echo "  Set it to KR-$((highest + 1)). If a row in this change took KR-$next, it collides with an id issued" >&2
+    echo "  elsewhere (another machine's row, or one that shipped and was deleted) — renumber the row too." >&2
+    exit 1
+fi
+
 n=$(printf '%s\n' "$want" | grep -c . )
 echo "check-roadmap: OK (ROADMAP.md $lines/$MAX_LINES lines; $rows rows, ids unique; $n detail sections,"
-echo "                   all linked, none orphaned; every \`KR-\` citation resolves)"
+echo "                   all linked, none orphaned; every \`KR-\` citation resolves; next id KR-$next is unissued)"

@@ -11,8 +11,14 @@
 
 > ⚠️ **`KR-<n>` is a PERMANENT id, not a position.** It is assigned once, never reused, and never
 > renumbered: a row keeps its id wherever it moves in the list, and a shipped row's id retires with it,
-> leaving a gap. A new row takes **one more than the highest id ever used** — which is the highest id
-> present, since none is ever reused. `tools/check-roadmap.sh` holds uniqueness and format down.
+> leaving a gap. **A new row takes the id on the counter below, and bumps the counter in the same edit.**
+> `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
+>
+> **Why a counter, and not "one more than the highest id present".** The highest id PRESENT is not the highest
+> id ever ISSUED: once a newer row ships and is deleted, its number looks free again. Two ids were nearly
+> reissued that way, and on 2026-09-14 two machines each filed the same id for different rows. The counter is
+> one line, so two concurrent issues edit the same line and the second rebase CONFLICTS — the collision is loud
+> instead of two rows silently sharing a name.
 >
 > **Why, because the old scheme cost real work.** Rows used to be numbered by POSITION, so deleting a
 > shipped row renumbered every row below it and silently re-pointed every `row N` written in prose
@@ -20,6 +26,8 @@
 > happened twice, and closing two rows in one sitting broke two more references. Position numbering also
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
+
+**Next id: KR-56**
 
 ## The shape
 
