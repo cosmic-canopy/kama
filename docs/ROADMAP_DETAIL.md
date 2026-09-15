@@ -252,6 +252,51 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### A payload-less enum is always a C integer (KR-59) — ruled 2026-09-15 (maintainer), found shipping `type extern enum`
+
+**The defect.** A payload-less enum lowers to an integer — until it declares a method, `implements` a contract or
+carries `@generate`. Then `collectEnumConformances` PROMOTES it: a `buildVariantClassInfo` struct `{ tag }`, its
+`EnumInfo` moved from `_enums` to `_promotedEnums`, its methods taking `E* self`. Adding one method changes what the
+enum IS in C — its `sizeof`, its type, its ABI — with nothing in the source saying so (GOALS 5), and a payload-less
+enum becomes two things depending on whether it has a method (GOALS 4). The cost is measured, not hypothetical:
+`93d88a52` (`0.9.234`) fixed SIX scalar operations promotion had silently broken — `==` demanding `Equatable`,
+`cast<int32>` reaching clang as a struct cast, `try cast` claiming it could not fail, `Green = 5` dropped,
+`Color::Red == c` comparing structs, `Promoted::A` unfoldable — each patched separately, leaving `_promotedEnums`,
+`isUnitEnum` and a `.tag` read on every scalar rule behind. `0.9.346` hit it a seventh time: a `type extern enum` or
+`type expose enum` must stay the integer C expects, so members/`implements`/`@generate` on one are REFUSED today
+(`tests/xfail/enum_boundary_members`), while a `type extern value` may declare methods.
+
+**Ruled:** every payload-less enum lowers to its integer, always, and its methods are free functions scoped to its
+name — which is already how a method's C name is spelled:
+
+```c
+typedef int32_t Color;                       /* members or not */
+enum { Color_Red = 0, Color_Green = 5 };
+bool Color__isWarm(Color self);              /* `fn bool isWarm()` on the enum */
+```
+
+**The mechanism exists.** `type intrinsic <int32> implements Hashable` gives a primitive methods that take `this` BY
+VALUE (`ClassInfo::isScalarRecv`), and binds it to a contract through per-slot thunks (`renderIntrinsicContractVtbl`,
+`__dtor` null). A payload-less enum with members reuses that path; the promotion path is deleted rather than a second
+path added. An enum WITH payloads stays a struct — it genuinely is a tag plus a union.
+
+**Measure first, before code** (each an open question, not an assumption):
+1. **Derives.** 24 enums in the corpus carry `@generate`; `Serializable`/`Deserializable`/`Formattable`/`Equatable`/
+   `Hashable`/`of`/`zero` bodies for a payload-less enum are emitted through the variant path
+   (`emitVariantSynthBodies`, the `.tag` reads). Each needs a scalar form — expected to be most of the work.
+2. **Generic payload-less enums** (`type enum E<T> { A, B }`) instantiate through the class-based generic machinery
+   (`registerGenericTypeInst`); whether an instance can be an integer is unmeasured.
+3. **Boxing.** Calls through a contract VALUE are covered by the scalar thunks; boxing into `Owned<Contract>` /
+   `Shared<Contract>` and the heap spelling `new E::A` (the `0.9.310`–`0.9.317` ruling) are not yet confirmed for a
+   scalar receiver.
+4. **Reach.** ~127 files declare an enum with members or `implements`; their emitted C changes, their kama does
+   not. `tests/enum_promoted_scalar_ops.kama` and `tests/enum_map_key.kama` are the existing guards of the scalar
+   operations and the contract half.
+
+**Done when:** `_promotedEnums` and the promotion branch are gone; a payload-less enum's `sizeof` is its integer with
+or without members; the six `0.9.234` operations still hold; methods, contracts and `@generate` work on `type extern
+enum` and `type expose enum` (the `0.9.346` refusal and its xfail flip to a passing fixture, SPEC's rule rewritten).
+
 ### A named C constant (KR-56) — found 2026-09-15, converting the WebGPU example to `type extern enum`
 
 `type extern enum` (SPEC *FFI*) binds a C enum's constants by name, so no number is written in kama. Converting
