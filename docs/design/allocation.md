@@ -12,7 +12,7 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-15, Linux).** `dev` at `0.9.348`, unpushed: KR-57 filed (a binding may take a function's
+**State (2026-09-15, Linux).** `dev` at `0.9.348`, pushed (`origin/dev` = `db8d5313`): KR-57 filed (a binding may take a function's
 name), then `0.9.347` (the no-heap call graph read from the emitted C, a pre-existing `@noheap` fix), then
 `0.9.348` (KR-47: reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate
 figures are in each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
