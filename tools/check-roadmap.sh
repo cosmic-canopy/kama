@@ -117,15 +117,18 @@ fi
 # "One more than the highest id present" is wrong the moment a newer row ships: its row and section are
 # deleted, its number looks free, and it is issued again — KR-41 and KR-53 nearly were, and two machines each
 # filed a KR-54 on 2026-09-14. So ROADMAP.md carries the next id as ONE line, which also makes two concurrent
-# issues a merge conflict. What the counter must exceed is every id ISSUED, and a deleted row survives in
-# three places: the tracked tree (code comments, fixtures, the docs), and every commit message that cited it.
+# issues a merge conflict. What the counter must exceed is every id ISSUED — every id that has EVER been a row
+# of this file: the rows present now, and every row line ROADMAP.md's own history added or deleted.
+#
+# ⚠️ Not every `KR-<n>` MENTIONED anywhere. That was the first version, and it failed on its own commit message:
+# "counter to KR-58" made 58 look issued, so writing about the counter moved the counter. A citation in prose,
+# a comment or a commit message can name a number that was never a row; only the file's history cannot.
 next=$(LC_ALL=C sed -nE 's/^\*\*Next id: KR-([0-9]+)\*\*$/\1/p' "$RM")
 [ -n "$next" ] || fail "ROADMAP.md has no \`**Next id: KR-<n>**\` line — the counter a new row takes its id from"
 [ "$(printf '%s\n' "$next" | grep -c .)" -eq 1 ] || fail "ROADMAP.md has more than one \`Next id:\` line"
 highest=$( {
-    LC_ALL=C grep -vhE '^\*\*Next id: KR-' "$RM"
-    git -C "$ROOT" grep -hoE 'KR-[0-9]+' -- . ':!docs/ROADMAP.md' 2>/dev/null
-    git -C "$ROOT" log --format=%B 2>/dev/null
+    printf '%s\n' "$ids"
+    git -C "$ROOT" log -p --format= -- docs/ROADMAP.md 2>/dev/null | LC_ALL=C grep -E '^[-+]\| KR-[0-9]+ \|'
 } | LC_ALL=C grep -oE 'KR-[0-9]+' | sed 's/KR-//' | sort -n | tail -1)
 if [ -n "$highest" ] && [ "$next" -le "$highest" ]; then
     echo "check-roadmap: FAIL — \`Next id: KR-$next\` is not above KR-$highest, which is already issued." >&2
