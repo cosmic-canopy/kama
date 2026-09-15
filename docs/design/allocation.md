@@ -8,9 +8,44 @@ for `docs/design/` says.
 
 ## Picking this up
 
-This work follows KR-46; the handoff state, the agreed order, the per-host gate and the maintainer's
-working constraints are written once, in [name-resolution.md § Picking this up](name-resolution.md#picking-this-up--on-any-machine),
-and apply here unchanged. The decisions that are specific to this campaign, made by the maintainer on
+This campaign spans several sessions and may move between hosts, so everything a fresh session needs is in
+git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
+scratch directory.
+
+**State (2026-09-14, Linux).** KR-46 (name resolution and visibility at every type position) shipped at
+`0.9.340`; its record is `SPEC.md` § Modules, the `tests/xfail/reach_*` fixtures and the git log. `dev` is
+ahead of `origin/dev`, unpushed. Nothing in this campaign has started.
+
+**The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-47** reach-based `--no-heap` →
+**KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable global allocator → **KR-50**
+allocator-aware errors. **KR-47 is designed with KR-39 in view** (a provable callee behind a contract slot)
+and tier 1 of the devirtualization ladder (KR-23): all three ask "what does this program actually reach",
+and they should share ONE reach walk — so KR-47's walk must be able to answer which concrete body a call
+reaches, including through a slot whose backend is statically known. KR-39 lands right after KR-47, on that
+walk, as its own commit (agreed 2026-09-14).
+
+**How the maintainer wants this done** — the constraints, not suggestions:
+
+- **Production grade. Root cause, never a workaround.** A defect found along the way is fixed where it
+  lives, in its own commit, with its own `VERSION` bump and a regression fixture that fails on the previous
+  compiler, and the commit cites where it was found (`— found building KR-47`). If it is too big for that,
+  it becomes a KR row with its reasoning, not a library-side dodge.
+- **Consistent principles.** A rule that holds in some positions and not others is the defect — `--no-heap`
+  judged by reach for dispatch but per body for a direct allocation is exactly that.
+- **Fixtures land RED first**, and a doc claim that something is rejected carries its `tests/xfail/` marker.
+- **A design fork against a written plan goes to the maintainer** with the measured cost of each side and a
+  recommendation grounded in `docs/GOALS.md`, before code.
+- **The user pushes.** Commit on `dev`; do not push. Fetch and rebase onto `origin/dev` at the start of a
+  session — other work lands in between.
+
+**Gate per host.** macOS/Linux: `./dev matrix > /tmp/m.log 2>&1` once, then read the file (on Linux the wasm
+leg needs emsdk's `emcc` on PATH — `. ~/emsdk/emsdk_env.sh`; a Linux host runs the san/wasm legs natively).
+Windows VM: `./dev matrix` cannot pass there (no containers, and it skips the guards when the container leg
+fails), so the gate is `./dev test` then `./dev check`, each into its own log, and the san/wasm legs are
+reported as not run — see `docs/platforms/windows.md`. Iterate with `./dev fixture <name>…`; it does not run
+a `.d` directory, so build one directly (`kama build $(find tests/xfail/<name>.d -name '*.kama' | sort)`).
+
+The decisions that are specific to this campaign, made by the maintainer on
 2026-09-12:
 
 - `kama_alloc` and `kama_free` are the ONLY allocation primitives. They delegate to the program's global

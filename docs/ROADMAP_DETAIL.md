@@ -252,60 +252,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### Name resolution and visibility stop at the outer type (KR-46) — measured 2026-09-12, `0.9.320`
-
-**Working doc: [docs/design/name-resolution.md](design/name-resolution.md)** — the probe module, every
-position template, the full results grid, the root causes with line numbers, and the plan. What follows is
-the summary.
-
-Found building `std::uuid`: `Result<Uuid, UuidError> r = Uuid.parse(…)` with only `Uuid` imported is not a
-kama error — clang reports `use of undeclared identifier 'Result_std__uuid__Uuid_UuidError'`. A kama program
-must never fail in C, so the whole class was probed: ~300 programs, every position a type or value name can
-take, each with the name unknown, exported-but-not-imported, private, and private-but-qualified, under both
-`kama check` and `kama build`.
-
-**The rule holds only when the name IS the whole type.** A local, parameter, field, fnptr parameter or
-`@generate` field naming a bad type gets the right diagnostic. Everywhere else:
-
-- **Leaks to C:** any type ARGUMENT — `Result<…, X>` as local, parameter, return or field; `Owned<X>` and
-  `InlineArray<X>#(2)` and a user `Box<X>` as parameter or field; `static Optional<X>`; the operand of
-  `cast<X>`, `cast<UnsafePtr<X>>` and `sizeof(X)`; a const-generic `#(K)` argument (even a legal qualified
-  constant).
-- **An unrelated kama message:** `Optional<X>` → *"`Optional` has no variant `None`"*;
-  `Result<int32, X> r = Result::Ok(…)` → *"resolves to no known function"*; `DynamicArray<X>` → *"cannot
-  tell which `DynamicArray` to construct"*; a turbofish `f::<X>()` → *"only valid on a generic function"*;
-  `e.as<X>()` in a match → *"subject's type could not be resolved"*.
-- ⚠️ **ACCEPTED — visibility is not enforced:** `implements Holds<X>` with `X` unknown, unimported or
-  private compiles; a private type through a qualified turbofish (`z::<geo::HidVal>()`) runs; a private
-  enum's variant built qualified (`geo::HidErr::Worse(at: 7)`) runs; a generic function bounded by a private
-  qualified contract compiles when never called; `Optional<geo::HidErr>` inside a generic body is refused by
-  `kama check` and ACCEPTED by `kama build` — the two disagree.
-- **Wrong advice:** the "add `import { … }`" hint is built from mangled instance keys
-  (*"it lives in `Result_std::uuid::Uuid_std::uuid`"*), and suggests importing a PRIVATE name.
-
-**Root patterns** (`src/kama.cemit.cpp` at `0.9.320`):
-
-1. `checkTypeResolves` (2268) inspects only the outer type and returns early when `cType(t) != name` — a
-   generic instance always mangles to SOME name, so it passes whatever its arguments are; its own comment
-   says the argument "is still not walked here". `checkDeclaredTypes` (2707) and `checkBodyLocals` (2791)
-   check the outer name only.
-2. `checkReach` (2589) is reached from the RESOLVER during emission, not from a declaration walk — so a
-   name that is never emitted (a bound, a turbofish argument, a qualified variant, an unused declaration) is
-   never judged, and inside a generic instance it is skipped (`_nsCtx.unitPath != refFile`, 2663), which is
-   the check/build disagreement.
-3. No check at all: `static` declarations, `sizeof`/`cast` operands, `#(K)` arguments, a contract's type
-   arguments in `implements` (24317 checks the contract name only), generic-function bounds before
-   instantiation (18202).
-4. A turbofish whose type argument fails falls through to an unrelated message (22743).
-5. `namespaceOfType` (660) splits every `_classes` key on its last `__`, instance keys included, and does
-   not filter unexported keys.
-
-**Wanted:** ONE walk over every type position of every declaration and expression — recursing into type
-arguments, bounds, `implements` arguments, turbofish, `cast`/`sizeof`, `#(…)` — that resolves each name
-and judges its reach from the file that wrote it, independent of what gets emitted, so `check` and `build`
-cannot disagree. Every cell of the grid above becomes a `tests/xfail/` fixture landed RED first, the
-ACCEPTED ones before anything else.
-
 ### A declaration `@compileFor` drops is never checked (KR-54) — measured 2026-09-14, `0.9.340`
 
 `pruneInactiveDecls` removes an inactive declaration from its unit before name pre-registration and
@@ -324,7 +270,7 @@ rule, not only names: a gated body is never type-checked, ownership-checked or e
 language whose moat is portable C, that is the platform seam rotting on the targets a developer does not build
 every day, and the first report arrives from the one who does.
 
-Found while deciding where KR-46's body checks live: a separate pre-emission walk was proposed partly to judge
+Found while deciding where the name-resolution campaign's body checks live (`0.9.340`): a separate pre-emission walk was proposed partly to judge
 code the compiler never emits, and measuring showed it would not have — pruning runs before either walk.
 
 **Not the answer: judging names before pruning.** Names legitimately differ per target — an `extern fn`, an
