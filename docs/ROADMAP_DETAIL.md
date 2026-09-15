@@ -306,6 +306,35 @@ and judges its reach from the file that wrote it, independent of what gets emitt
 cannot disagree. Every cell of the grid above becomes a `tests/xfail/` fixture landed RED first, the
 ACCEPTED ones before anything else.
 
+### A declaration `@compileFor` drops is never checked (KR-54) — measured 2026-09-14, `0.9.340`
+
+`pruneInactiveDecls` removes an inactive declaration from its unit before name pre-registration and
+collection (SPEC *Conditional compilation*), so nothing downstream knows it existed — by design, and it is why
+a gated-out declaration's symbols cannot leak. The cost is that NO rule reaches it. Measured on a loose file,
+native host:
+
+```kama
+@compileFor(ARCH_WASM32)
+fn int32 f(Zork z) { Optional<Zork> o = Optional::None; return 0; }
+fn int32 main() { return 0; }
+```
+
+builds clean — the unknown `Zork` in the signature and the body are never resolved. The same holds for every
+rule, not only names: a gated body is never type-checked, ownership-checked or emitted on this host. For a
+language whose moat is portable C, that is the platform seam rotting on the targets a developer does not build
+every day, and the first report arrives from the one who does.
+
+Found while deciding where KR-46's body checks live: a separate pre-emission walk was proposed partly to judge
+code the compiler never emits, and measuring showed it would not have — pruning runs before either walk.
+
+**Not the answer: judging names before pruning.** Names legitimately differ per target — an `extern fn`, an
+`extern "<header.h>"` or a `type extern value` may exist on one target only, and a gated declaration may name
+exactly those — so a pre-prune resolution pass would refuse correct code. **The likely answer** is running the
+existing analysis once per declared target: a manifest names its targets, `kama check` walks each with that
+target's flags active, and a diagnostic says which target it came from. Open questions for the design pass:
+cost (N analyses — the pass is seconds, not minutes), how a loose build (no manifest, no declared targets)
+answers, and whether `kama build` should warn when a manifest declares targets the build did not check.
+
 ### A generated host header, and `type expose value` (KR-52) — measured 2026-09-13
 
 **Where it came from.** The by-value crossing rule (SPEC *FFI*, shipped `0.9.327`) was ruled as a PAIR — `type extern value` (a C header owns the layout) and
