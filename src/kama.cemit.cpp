@@ -2931,14 +2931,35 @@ void CEmitter::rejectPlainCrossing(const SharedIdentifier& t, const char* where,
                                    bool isExternFn, int line)
 {
     if (!t || !t->value) return;
-    const std::string cty = cType(t);
+    rejectPlainCrossingC(cType(t), where, fname, isExternFn, line);
+}
+
+void CEmitter::rejectPlainCrossingC(const std::string& cty, const char* where, const std::string& fname,
+                                   bool isExternFn, int line)
+{
     if (cty.empty() || cty.back() == '*' || isSigType(cty)) return;
     auto it = _classes.find(cty);
     if (it == _classes.end()) return;                     // a primitive, a C enum, or the header's own name
     const ClassInfo& ci = it->second;
     if (ci.isExternStruct) return;
+    if (ci.isExposeStruct) {
+        if (!isExternFn) return;   // kama states the layout and the host header publishes it
+        unsupported(("`" + demangleForDisplay(cty) + "` crosses into C by value as " + where + " of `extern fn "
+                     + fname + "`, but it is a `type expose value` — a layout KAMA owns, and an `extern fn`'s "
+                     "prototype comes from a C header that declares its own struct, so kama's would be a second, "
+                     "incompatible type. A C-owned layout is a `type extern value`").c_str(), line);
+        return;
+    }
     if (ci.isIntrinsicColl) {
-        if (ci.collKind == CollKind::Fixed || isValueVectorKind(ci.collKind)) return;
+        if (ci.collKind == CollKind::Fixed || isValueVectorKind(ci.collKind)) {
+            // An intrinsic array's own layout is kama's ABI, but its ELEMENTS are laid out inline: an
+            // `InlineArray<Vec2>` publishes `Vec2`'s layout exactly as a bare `Vec2` would, so the element
+            // answers the same question.
+            auto co = _collections.find(cty);
+            if (co != _collections.end())
+                rejectPlainCrossingC(co->second.elemCType, where, fname, isExternFn, line);
+            return;
+        }
         if (ci.collKind == CollKind::String || !isExternFn) return;   // expose: emitFunction's owning refusal
     }
     auto gi = _genericTypeInsts.find(cty);
@@ -2954,8 +2975,9 @@ void CEmitter::rejectPlainCrossing(const SharedIdentifier& t, const char* where,
                  + ", and kama promises no C layout for it" + (isExternFn
                      ? " — the C header's prototype declares its own struct, so kama's would be a second, "
                        "incompatible type. Bind the header's struct with `type extern value`"
-                     : " — the host would be matching a layout nothing states. Declare the struct in a C header "
-                       "both sides include and bind it with `type extern value`, or pass an `UnsafePtr`")).c_str(),
+                     : " — the host would be matching a layout nothing states. Declare it `type expose value` "
+                       "(kama states the layout and the generated host header publishes it), bind a C header's "
+                       "struct with `type extern value`, or pass an `UnsafePtr`")).c_str(),
                 line);
 }
 
@@ -9273,10 +9295,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 
         // FFI: an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
-        bool isExt = false;
+        bool isExt = false, isExpose = false;
         if (cd->modifiers)
-            for (auto& mod : *cd->modifiers)
+            for (auto& mod : *cd->modifiers) {
                 if (mod->value && *mod->value == "extern") isExt = true;
+                if (mod->value && *mod->value == "expose") isExpose = true;
+            }
 
         ClassInfo ci;
         ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // scope-mangle / FFI literal name
@@ -9292,6 +9316,23 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.symbolAliases = _nsCtx.symbolAliases;
         ci.declFile = unit && unit->name ? *unit->name : std::string();   // for a late whole-program check
         ci.isExternStruct = isExt;
+        ci.isExposeStruct = isExpose;
+        if (isExpose) {
+            // WHO OWNS THE LAYOUT, answered once: a C header (`extern`) or kama (`expose`), never both.
+            if (isExt)
+                unsupported(("`" + *cd->name->value + "` is both `extern` and `expose` — `extern` binds a layout a "
+                             "C header states, `expose` publishes one kama states, and one side owns a layout"
+                             ).c_str(), cd->line);
+            else if (kind != TypeKind::Value || ci.isBorrow)
+                unsupported(("`expose` on a type publishes its C layout to a host, and only a `type value` has "
+                             "one to publish — a `" + (cd->typeKind ? *cd->typeKind : std::string("?"))
+                             + "` owns, borrows or dispatches, which C cannot honor; pass it by `UnsafePtr`, "
+                               "where the host header names it opaquely").c_str(), cd->line);
+            else if (cd->typeParams && !cd->typeParams->empty())
+                unsupported(("`type expose value " + *cd->name->value + "` cannot be generic — a host needs one "
+                             "concrete C struct; expose a concrete value instead").c_str(), cd->line);
+            ci.hostName = linkNameOf(cd->attributes, cd->line);
+        }
         if (isExt) {
             _externNames.insert(ci.name);
             if (!ci.declFile.empty()) _externDeclSites[ci.name].insert(ci.declFile);   // rung, FFI side
@@ -9315,6 +9356,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                  + (cd->typeKind ? *cd->typeKind : std::string("?")) + "` — minting is a "
                                  "capability the VIEWED type declares by implementing a marked contract, "
                                  "so put the mark on that contract").c_str(), cd->line);
+                } else if (*at->name == "linkName" && isExpose) {
+                    // The host header's name for the struct (validated in linkNameOf above) — the same one
+                    // override an `expose fn`'s symbol has, for a name someone else chose.
                 } else if (*at->name == "align" || *at->name == "packed") {
                     // LAYOUT CONTROL — passthrough, the shape `@section` already has for functions and
                     // statics. kama can KNOW a layout (`sizeof`/`alignof` fold, `comptime assert` hands the
@@ -9325,7 +9369,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     readLayoutAttr(*at, ci.alignN, ci.packed, cd->line);
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name
-                                 + "` (expected `@generate`, `@align(N)` or `@packed`)").c_str(), cd->line);
+                                 + (*at->name == "linkName" ? "` here — `@linkName` names a C symbol, and only a "
+                                    "`type expose value` has a host-visible name to fix"
+                                    : "` (expected `@generate`, `@align(N)` or `@packed`)")).c_str(), cd->line);
                 }
             }
 
@@ -9377,8 +9423,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "final")    ci.isFinalClass = true;
                 if ((mv == "abstract" || mv == "virtual") && mod->args) ci.maxDepth = readMaxDepth(mod, cd->line);
                 else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
-                else if (mv == "expose")
-                    unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
                 else if (mv == "unsafe")
                     unsupported("`unsafe` marks a function BODY, and a type has none — mark the members that "
                                 "touch raw memory instead", cd->line);
@@ -19037,10 +19081,11 @@ std::string CEmitter::hostQualified(const std::string& module, const std::string
 // use. So every type an exposed signature reaches is re-spelled for the host —
 //   - a C primitive stays itself, and `kama_cchar` is `char`;
 //   - a `type extern value` keeps its C name, and the header includes what its declaring file `extern`s;
-//   - a kama type of a module takes the same qualification as a symbol (`geo::Vec2` -> `geo_Vec2`), and one
-//     reached only through a pointer is OPAQUE, so kama stays free to change it;
-//   - a layout kama owns and promises — `View`/`ConstView`, and an intrinsic `InlineArray`/`Simd` value —
-//     is written out from its real fields; an intrinsic has no module, so it is prefixed `kama_`;
+//   - a kama type of a module takes the same qualification as a symbol (`geo::Vec2` -> `geo_Vec2`), and is
+//     OPAQUE — kama stays free to change it — unless it is a layout kama promises: a `type expose value`
+//     (its marker IS the promise), `View`/`ConstView`, or an intrinsic `InlineArray`/`Simd`, each written out
+//     from its real fields. The crossing rule already keeps any other type from crossing by value, so opaque
+//     only ever meets a pointer. An intrinsic has no module, so it is prefixed `kama_`;
 //   - a payload-less enum and a `fnptr` are re-declared in host terms.
 // Struct TAGS never reach the linker, which is what makes a different spelling of the same layout sound.
 namespace {
@@ -19086,18 +19131,15 @@ std::string CEmitter::hostTypeName(HostHeader& h, const std::string& internal, c
     return n;
 }
 
-// `byRef`: a `ref`/`out` parameter, whose C type is the pointee's spelling with the `*` added by the caller —
-// it reaches its type through a pointer exactly as an `UnsafePtr<T>` does, so it must not publish a layout.
-std::string CEmitter::hostCType(HostHeader& h, const std::string& ct, bool byRef)
+std::string CEmitter::hostCType(HostHeader& h, const std::string& ct)
 {
     size_t cut = ct.find_first_of(" *");
     const std::string base = ct.substr(0, cut);
     const std::string rest = cut == std::string::npos ? std::string() : ct.substr(cut);
-    const bool viaPointer = byRef || rest.find('*') != std::string::npos;
-    return hostBaseType(h, base, viaPointer) + rest;
+    return hostBaseType(h, base) + rest;
 }
 
-std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base, bool viaPointer)
+std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base)
 {
     if (isHostPrimitiveCType(base)) return base;
     if (base == "kama_cchar") return "char";
@@ -19123,7 +19165,7 @@ std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base, bool 
             for (size_t i = 0; i < si.params.size(); ++i) {
                 const ParamSig& p = si.params[i];
                 bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
-                line += std::string(i ? ", " : "") + (constPtr ? "const " : "") + hostCType(h, p.className, p.byRef)
+                line += std::string(i ? ", " : "") + (constPtr ? "const " : "") + hostCType(h, p.className)
                       + (p.byRef ? "*" : "") + (p.name.empty() ? "" : " " + p.name);
             }
             h.decls << line << ");\n";
@@ -19154,6 +19196,22 @@ std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base, bool 
     const ClassInfo& ci = cit->second;
     if (ci.isExternStruct) { addIncludes(ci.declFile); return base; }
 
+    if (ci.isExposeStruct) {
+        const std::string name = ci.hostName.empty() ? hostTypeName(h, base, ci.declFile) : ci.hostName;
+        if (!ci.hostName.empty()) {
+            auto claimed = h.owner.emplace(name, base);
+            if (!claimed.second && claimed.first->second != base && h.err.empty())
+                h.err = "`" + demangleForDisplay(base) + "` and `" + demangleForDisplay(claimed.first->second)
+                      + "` would both be `" + name + "` in the host header — rename one";
+        }
+        if (h.declared.insert(base).second) {
+            // Published even when reached through a pointer: the layout is the promise the marker makes.
+            std::string body;
+            for (const FieldInfo& f : ci.fields) body += " " + hostCType(h, fieldCType(ci.name, f)) + " " + f.name + ";";
+            h.decls << "typedef struct " << name << " {" << body << " }" << layoutAttrSuffix(ci) << " " << name << ";\n";
+        }
+        return name;
+    }
     auto gi = _genericTypeInsts.find(base);
     std::string declFile = ci.declFile;
     if (gi != _genericTypeInsts.end()) {   // an instance is named in its TEMPLATE's module: `std_collections_View_int32`
@@ -19178,7 +19236,7 @@ std::string CEmitter::hostBaseType(HostHeader& h, const std::string& base, bool 
     }
     const bool isView = gi != _genericTypeInsts.end()
         && (gi->second.templateKey == "std__collections__View" || gi->second.templateKey == "std__collections__ConstView");
-    if (isView || !viaPointer) {
+    if (isView) {
         // A layout kama promises: written from the struct's own fields, each re-spelled for the host.
         std::string body;
         for (const FieldInfo& f : ci.fields) body += " " + hostCType(h, fieldCType(ci.name, f)) + " " + f.name + ";";
@@ -19207,7 +19265,7 @@ std::string CEmitter::writeHostHeader(std::ostream& out, const std::string& file
             bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
             bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
             protos << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "")
-                   << hostCType(h, p.className, p.byRef) << (p.byRef ? "*" : "") << (p.name.empty() ? "" : " " + p.name);
+                   << hostCType(h, p.className) << (p.byRef ? "*" : "") << (p.name.empty() ? "" : " " + p.name);
         }
         protos << ");\n";
     }
@@ -19238,8 +19296,13 @@ std::string CEmitter::writeHostHeader(std::ostream& out, const std::string& file
 // diagnostic has been emitted); read once, at collection, so an invalid name is reported once.
 std::string CEmitter::linkNameOf(FunctionDeclarationNode* fn)
 {
-    if (!fn || !fn->attributes) return "";
-    for (auto& at : *fn->attributes) {
+    return fn ? linkNameOf(fn->attributes, fn->line) : std::string();
+}
+
+std::string CEmitter::linkNameOf(const SharedAttributeList& attrs, int line)
+{
+    if (!attrs) return "";
+    for (auto& at : *attrs) {
         if (!at || !at->name || *at->name != "linkName") continue;
         std::string sym;
         if (at->args && at->args->size() == 1) {
@@ -19249,19 +19312,19 @@ std::string CEmitter::linkNameOf(FunctionDeclarationNode* fn)
                     if (s->value) sym = *s->value;
         }
         if (sym.empty()) {
-            unsupported("`@linkName(\"...\")` requires exactly one string-literal symbol name", fn->line);
+            unsupported("`@linkName(\"...\")` requires exactly one string-literal symbol name", line);
             return "";
         }
         bool shape = isalpha((unsigned char)sym[0]) || sym[0] == '_';
         for (char ch : sym) if (!(isalnum((unsigned char)ch) || ch == '_')) shape = false;
         if (!shape) {
             unsupported(("`@linkName(\"" + sym + "\")` is not a C symbol — a symbol is letters, digits and "
-                         "`_`, and does not start with a digit").c_str(), fn->line);
+                         "`_`, and does not start with a digit").c_str(), line);
             return "";
         }
         if (cIsReservedWord(sym.c_str())) {
             unsupported(("`@linkName(\"" + sym + "\")` names a C keyword, and no C symbol can be spelled as "
-                         "one").c_str(), fn->line);
+                         "one").c_str(), line);
             return "";
         }
         return sym;
@@ -22048,6 +22111,47 @@ void CEmitter::mapCVisibleSigs()
             std::string ft = fieldCType(ci.name, f);
             if (!isSigType(ft) || _cVisibleSigs.count(ft)) continue;   // first field to name it wins
             _cVisibleSigs[ft] = demangleForDisplay(ci.name) + "." + f.name;
+        }
+    }
+}
+
+// A `type expose value` publishes its layout to a host, so every field is part of that promise and must be
+// something C can hold and read: a primitive, a pointer (whose pointee the host header names opaquely), a
+// `fnptr`, a payload-less enum, another C layout (`extern` or `expose`), or an intrinsic array of those. And
+// every field is PUBLIC: the host header shows the whole struct, and C has no `private` — a hidden field in
+// a published layout is a claim the language cannot keep.
+void CEmitter::checkExposeValues()
+{
+    for (auto& kv : _classes) {
+        const ClassInfo& ci = kv.second;
+        if (!ci.isExposeStruct) continue;
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);
+        const std::string shown = demangleForDisplay(ci.name);
+        for (const FieldInfo& f : ci.fields) {
+            const int ln = f.nameId ? f.nameId->line : ci.node ? ci.node->line : 0;
+            if (f.visibility != Visibility::Public)
+                unsupported(("`" + shown + "." + f.name + "` is not `public`, but `" + shown + "` is a `type expose "
+                             "value` — its host header shows every field, and C has no `private`. Mark the field "
+                             "`public`, or keep the value unexposed and pass it by `UnsafePtr`").c_str(), ln);
+            std::string ct = fieldCType(ci.name, f);
+            for (;;) {   // peel intrinsic arrays down to their element: the element is laid out inline
+                auto co = _collections.find(ct);
+                if (co == _collections.end() || !(co->second.kind == CollKind::Fixed || isValueVectorKind(co->second.kind))) break;
+                ct = co->second.elemCType;
+            }
+            if (ct.empty() || ct.back() == '*' || isSigType(ct) || ct == "kama_cchar" || _enums.count(ct)) continue;
+            auto c = _classes.find(ct);
+            if (c == _classes.end()) {
+                static const std::set<std::string> prims = { "bool", "float", "double", "size_t", "ptrdiff_t",
+                    "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t" };
+                if (prims.count(ct)) continue;
+            } else if (c->second.isExternStruct || c->second.isExposeStruct) {
+                continue;
+            }
+            unsupported(("`" + shown + "." + f.name + "` is `" + (f.type && f.type->value ? *f.type->value : ct)
+                         + "`, which has no C layout a host can hold — a `type expose value` field is a primitive, "
+                           "a pointer, a `fnptr`, a payload-less enum, a `type extern value` or `type expose value`, "
+                           "or an `InlineArray` of those").c_str(), ln);
         }
     }
 }
@@ -32092,6 +32196,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     bakeFieldCTypes();     // ...and resolve every field's type in its OWN class's scope, before any body
                            // walk can resolve it in a reader's. computeDestructible installs the same
                            // context immediately below; this is that answer, kept.
+    checkExposeValues();   // KR-52 — reads baked field C types, so after bakeFieldCTypes like the next line
     mapCVisibleSigs();     // ...which is what lets this read a callback field's type: every `fnptr` a
                            // C-layout struct exposes, for the crossing check at each bind.
     computeDestructible();

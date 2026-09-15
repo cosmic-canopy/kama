@@ -281,50 +281,20 @@ target's flags active, and a diagnostic says which target it came from. Open que
 cost (N analyses — the pass is seconds, not minutes), how a loose build (no manifest, no declared targets)
 answers, and whether `kama build` should warn when a manifest declares targets the build did not check.
 
-### A generated host header, and `type expose value` (KR-52) — measured 2026-09-13
+### An enum's values at the C boundary (KR-55) — found 2026-09-14, shipping the host header
 
-**Where it came from.** The by-value crossing rule (SPEC *FFI*, shipped `0.9.327`) was ruled as a PAIR — `type extern value` (a C header owns the layout) and
-`type expose value` (kama owns and emits it) — and then measured across both function kinds before building:
+The host header (SPEC *Exposing to a host*) prints a payload-less enum as its integer typedef plus one constant
+per variant, `Kind_Square = 4`, so those numbers are now an ABI promise to C in the same way a `type expose value`
+layout is. A kama enum numbers an unvalued variant one past its predecessor, so inserting a variant silently
+renumbers every later one: a host compiled against the old header passes the wrong value and nothing fails. The
+struct side of the same question was answered with a marker (`type expose value`) and a check (`type extern value`
+fields against their header, `0.9.341`); the enum side has neither.
 
-| by value | `extern fn` (prototype from the C header) | `expose fn` (C calls kama) |
-|---|---|---|
-| plain `type value` | clang: *"incompatible type 'Pair'"* | builds; the host guesses a layout |
-| `type extern value` | works (measured) | works (measured) |
-| `type expose value` | **cannot work** — the header declares its own struct, so kama's is a second C type (mangled name) or a redefinition (bare name) | works; the host writes a matching typedef |
-
-So `type extern value` covers every cell that can compile, and `expose` adds exactly one thing: kama as the
-source of truth for a layout NO C header states, usable only by an `expose fn`. Without a generated header the
-host has to hand-write that struct anyway, which is what `extern` already asks — so the rule shipped with one
-marker (maintainer, 2026-09-13), and the two markers are not "extern and/or expose" on one type: each answers
-WHO owns the layout, and only one side can.
-
-**Wanted here:** `kama build` emits a host-includable header — every `expose fn` prototype and every by-value
-type it names — and with it, decide `type expose value` (the header is what makes a kama-owned layout real for a
-host). Measured facts to start from: struct names never reach the linker, so kama's scoped C name (`geo__Vec2`)
-costs the ABI nothing and the header can spell the bare `Vec2`; an `expose fn` returning a callback is already
-refused (`foreign_callback_expose_return`); ⛔ the maintainer requires `expose` for types to be revisited here.
-
-**Ruled 2026-09-14 (maintainer), with the reasoning that decided each:**
-- **`type expose value` is ADOPTED.** The marker answers who owns a C layout, exactly as `extern fn`/`expose fn`
-  answer who owns a body: `type extern value` is a layout a C header states, `type expose value` one kama states
-  and the generated header publishes. Binding a kama-owned layout through a hand-written header instead is two
-  sources of truth, and drift between them is silent (measured: see the field check below). Unmarked value types
-  never enter the header by layout — freezing a layout is an ABI promise and must be greppable (GOALS 5), and it
-  keeps KR-22's elision free for every other type. A C-owned type may cross either function kind; a kama-owned
-  one only an `expose fn` (an `extern fn`'s prototype is the header's). Its fields are C-representable and all
-  visible to the host (no `private`), it is not generic, and it is built by ctors only.
-- **`type extern value` fields are checked against the header** — SHIPPED `0.9.341`: size and arithmetic kind
-  per field, a C11 `_Static_assert` (`tests/xfail/extern_value_layout.d`).
-- **The header is always written** beside the output when a program has an `expose fn` — no flag, since a host
-  that forgot one falls back to hand-written prototypes — and the project's own `csources` get it on their
-  include path. SHIPPED `0.9.343`, named for the PROJECT rather than `-o` (a `csources` file includes it by a
-  name the build operator does not choose), `tests/expose_host_header.d` + `tools/check-host-header.sh`.
-- **Exposed C names are QUALIFIED by module path**, joined with `_` — SHIPPED `0.9.342`. Bare names threw away the
-  scoping modules exist for at exactly the boundary where a collision is hardest to see: two modules exposing
-  `tick` were refused (and two of the three refusals were bugs), and an `expose fn open` broke any host
-  translation unit that included `<fcntl.h>`. `@linkName` is the one override, on functions and on `type expose
-  value`; two kama names meeting at one C name are refused. Deferred from this row: whether an enum crossing a
-  boundary must spell its discriminants (implicit numbering renumbers silently when a variant is inserted).
+**To decide, with an example and the header bytes before any code:** (a) an enum that crosses an `extern fn` or
+an `expose fn` must spell every value explicitly (no new syntax — the explicitness moves to the declaration), or
+(b) the marker pair reaches enums, `type expose enum` publishing kama's numbering and `type extern enum` binding a
+C enum's constants with each value checked against the header, as struct fields now are. The C-to-kama direction
+is the one with no answer at all today: a kama enum mirroring a C enum is a hand copy of its values.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 

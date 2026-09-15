@@ -1,0 +1,8 @@
+// The host header shows every field of a `type expose value`, and C has no `private`: a hidden field in a
+// published layout is a claim the language cannot keep, so every field must say `public`.
+type expose value Account {
+    public int32 id;
+    int32 balance;
+    public ctor of(int32 id, int32 balance) { this.id = id; this.balance = balance; }
+}
+fn int32 main() { return 0; }

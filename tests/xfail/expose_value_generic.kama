@@ -1,0 +1,4 @@
+// A host needs one concrete C struct; a generic value has none until it is instantiated, and each instance
+// would be a different struct under a different name.
+type expose value Pair<T> { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 main() { return 0; }

@@ -834,6 +834,16 @@ marked_type_declaration
     {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7); }
   | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
     {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8); }   /* `@generate(...) type …` */
+  /* `type expose value V` — a C layout kama OWNS and the generated host header publishes (KR-52), the
+     pair of `type extern value`. `expose` is spelled only HERE, directly after `type`, rather than joining the
+     member `modifier` set: that set is shared with fields and methods, where `expose` is a parse error
+     (tests/xfail/expose_on_method), and one position keeps a type's spelling to one. */
+  | TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+    {      $3->insert($3->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $2));
+           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $3, $4, $5, $6, $7, $8); }
+  | attribute_list TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+    {      $4->insert($4->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3));
+           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $5, $6, $7, $8, $9); }
   ;
 
 /* `type intrinsic <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a

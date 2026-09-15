@@ -46,6 +46,38 @@ type immutable value Config
           (identifier))))))
 
 ================================================================================
+expose sits directly after type and publishes a C layout
+================================================================================
+
+@linkName("FrameStats")
+type expose value Stats
+{
+    public int32 frames;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (string_literal
+            (string_content)))))
+    (function_modifier)
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (modifier)
+        (primitive_type)
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
 A contract declares which kinds it is for
 ================================================================================
 

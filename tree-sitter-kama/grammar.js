@@ -192,6 +192,9 @@ module.exports = grammar({
       seq(
         optional($.attribute_list),
         'type',
+        // kama.y marked_type_declaration: `type expose value V` — a C layout kama owns (KR-52). `expose` is only
+        // ever directly after `type`, never in the member `modifier` set, where it stays a parse error.
+        optional($.function_modifier),
         repeat($.modifier),
         field('kind', $.type_kind),
         field('name', $.type_declaration_head),

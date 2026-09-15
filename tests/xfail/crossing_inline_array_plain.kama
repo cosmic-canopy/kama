@@ -1,0 +1,6 @@
+// An `InlineArray` crossing by value lays its ELEMENTS out inline, so an array of a plain `type value` publishes
+// that value's layout exactly as passing the value bare would — and is refused for the same reason. Before,
+// the array's own layout was accepted without looking at what it held.
+type value Sample { public int32 a; public ctor of(int32 a) { this.a = a; } }
+expose fn int32 total(InlineArray<Sample>#(2) xs) { return 0; }
+fn int32 main() { return 0; }

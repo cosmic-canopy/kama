@@ -538,6 +538,11 @@ struct ClassInfo {
     // fields for access but never emits it (a header/linked code provides it),
     // keeps its literal C name, and never manages its lifetime.
     bool                              isExternStruct = false;
+    // KR-52: `type expose value` — a C layout kama OWNS and the generated host header publishes. Emitted like any
+    // value type (under kama's own C name; struct tags never reach the linker), but its layout is a promise:
+    // fields in declared order, all public, each C-representable. `hostName` is its `@linkName`, or "".
+    bool                              isExposeStruct = false;
+    std::string                       hostName;
 };
 
 // A monomorphized collection instantiation (e.g. Array<int32> -> Array_int32).
@@ -1686,6 +1691,8 @@ private:
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
+    std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one
+    void checkExposeValues();   // KR-52: every `type expose value` field is public and C-representable
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
@@ -1908,6 +1915,8 @@ private:
     std::string missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method);
     void rejectPlainCrossing(const SharedIdentifier& t, const char* where, const std::string& fname,
                              bool isExternFn, int line);
+    void rejectPlainCrossingC(const std::string& cty, const char* where, const std::string& fname,
+                              bool isExternFn, int line);   // ...once the C type is known
     std::string whenGateReason(const std::string& inst, const std::string& method);
     static const char* const kCompileForOnMember;
     bool _inferSawOpenArg = false;   // an inference argument still names the enclosing template's parameter
@@ -2597,8 +2606,8 @@ private:
     static std::string hostQualified(const std::string& module, const std::string& unitPath, const std::string& name);
     struct HostHeader;   // the host header under construction — see writeHostHeader
     std::string hostTypeName(HostHeader& h, const std::string& internal, const std::string& declFile);
-    std::string hostCType(HostHeader& h, const std::string& ct, bool byRef = false);
-    std::string hostBaseType(HostHeader& h, const std::string& base, bool viaPointer);
+    std::string hostCType(HostHeader& h, const std::string& ct);
+    std::string hostBaseType(HostHeader& h, const std::string& base);
 
     // Inheritance/vtable resolution
     std::vector<ClassInfo*> topoOrderClasses();

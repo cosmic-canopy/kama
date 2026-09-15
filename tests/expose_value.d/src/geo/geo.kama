@@ -1,0 +1,13 @@
+export { Vec2, Kind, lengthSq };
+
+type enum Kind : int32 { Point = 1, Segment = 2 }
+
+// A layout kama owns, published to the host as `exposeval_geo_Vec2`: named for its module like a symbol.
+type expose value Vec2 {
+    public float32 x;
+    public float32 y;
+    public ctor of(float32 x, float32 y) { this.x = x; this.y = y; }
+    public fn float32 dot(Vec2 o) { return x * o.x + y * o.y; }
+}
+
+expose fn float32 lengthSq(Vec2 v) { return v.dot(o: v); }

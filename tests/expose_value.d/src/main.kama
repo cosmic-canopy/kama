@@ -1,0 +1,37 @@
+// `type expose value` — a C layout KAMA owns, the pair of `type extern value` (a layout a C header owns). The
+// generated host header (`exposeval.h`) publishes the struct from the kama declaration, so csrc/host.c builds,
+// reads and passes these values with no hand-written struct at all — there is one source of truth, and a
+// field change here is a field change in the host's build. Exercised from C:
+//   - a value returned by value and passed back by value, its methods callable from kama on the way;
+//   - `@linkName` fixing the host's name for a struct (`FrameStats`), as it fixes a symbol;
+//   - a nested exposed value, an enum, an `InlineArray` and a pointer as fields;
+//   - `@packed` reproduced in the header, so both sides agree on the size.
+import { exposeval::geo::Vec2, exposeval::geo::Kind, exposeval::geo::lengthSq };
+extern "host.h";
+
+@linkName("FrameStats")
+type expose value Stats {
+    public int32 frames;
+    public Vec2 origin;
+    public Kind kind;
+    public InlineArray<uint8>#(3) tag;
+    public UnsafePtr<int32> counter = null;
+    public ctor of(int32 frames, Vec2 origin) {
+        this.frames = frames; this.origin = origin; this.kind = Kind::Segment; this.tag = [1, 2, 3];
+    }
+}
+
+@packed
+type expose value Wire { public uint8 op; public uint32 arg; public ctor of(uint8 op, uint32 arg) { this.op = op; this.arg = arg; } }
+
+extern fn int32 host_run();
+
+expose fn Stats makeStats(int32 frames) { return Stats.of(frames: frames, origin: Vec2.of(x: 3.0, y: 4.0)); }
+expose fn int32 readStats(Stats s) {
+    return s.frames + cast<int32>(lengthSq(v: s.origin)) + cast<int32>(s.kind) + cast<int32>(s.tag[2]);
+}
+expose fn uint32 wireArg(Wire w) { return w.arg + cast<uint32>(w.op); }
+
+unsafe fn int32 viaHost() { return host_run(); }
+
+fn int32 main() { return viaHost(); }

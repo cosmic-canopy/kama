@@ -1,0 +1,9 @@
+// Every field of a published layout must be something C can hold: a `string` owns a heap buffer kama frees,
+// and a plain `type value` has a layout kama never promised. (A pointer to either would be fine — the host
+// header names the pointee opaquely.)
+type value Inner { public int32 a; public ctor of(int32 a) { this.a = a; } }
+type expose value Outer {
+    public Inner inner;
+    public ctor of(Inner inner) { this.inner = inner; }
+}
+fn int32 main() { return 0; }

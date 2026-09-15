@@ -1,0 +1,4 @@
+// A C layout has ONE owner: a C header (`type extern value`) or kama (`type expose value`). Both on one type
+// would be two sources of truth for the same bytes, which is the drift the pair exists to prevent.
+type expose extern value Both { public int32 a; }
+fn int32 main() { return 0; }

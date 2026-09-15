@@ -306,6 +306,14 @@ marked_type_declaration
 
   | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
        /* `@generate(...) type …` */
+  /* `type expose value V` — a C layout kama OWNS and the generated host header publishes (KR-52), the
+     pair of `type extern value`. `expose` is spelled only HERE, directly after `type`, rather than joining the
+     member `modifier` set: that set is shared with fields and methods, where `expose` is a parse error
+     (tests/xfail/expose_on_method), and one position keeps a type's spelling to one. */
+  | TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+
+  | attribute_list TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+
   ;
 
 /* `type intrinsic <int8, int16, …> implements C ` — conformance for a

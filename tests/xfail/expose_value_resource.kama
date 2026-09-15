@@ -1,0 +1,5 @@
+// `expose` on a type publishes its C layout to a host, and only a `type value` has one to publish: a resource
+// owns something and is destroyed by kama, which C cannot honor. A host holds one through a pointer instead,
+// where the generated header names it opaquely.
+type expose resource Handle { public ctor make() { } }
+fn int32 main() { return 0; }

@@ -1,0 +1,6 @@
+// A `type expose value` is a layout KAMA owns, so it crosses only where kama owns the function. An `extern fn`
+// belongs to C: its prototype comes from a C header that declares its own struct, so kama's would be a second,
+// incompatible type. A C-owned layout crossing into C is a `type extern value`.
+type expose value Point { public int32 x; public ctor of(int32 x) { this.x = x; } }
+extern fn int32 c_takes_point(Point p);
+fn int32 main() { return 0; }
