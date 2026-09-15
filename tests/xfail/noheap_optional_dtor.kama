@@ -1,0 +1,8 @@
+// The compiler-synthesized half of tests/xfail/noheap_field_dtor.kama: `Optional<T>`'s destructor is written by
+// the emitter, not by any library source, and dropping a `Some` drops its payload. A `None` is enough to make
+// the region OWN one, and owning is dropping — the same rule `noheap_container_local` pins for a bare array.
+//
+// ⚠️ Compiled clean until the no-heap call graph was read from the emitted C (found building KR-47).
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(int32 n) { Optional<DynamicArray<int32>> o = Optional::None; return n; }
+fn int32 main() { return tick(n: 7); }

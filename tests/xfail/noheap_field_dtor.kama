@@ -1,0 +1,16 @@
+// Owning a value is dropping it, and dropping a type is dropping its FIELDS — which no source line spells.
+// `Box` has no destructor the author wrote; the compiler synthesizes `~Box` to drop `items`, and that drop
+// returns the array's buffer to `GlobalAllocator`. `tick` never names the array, so the only path from the
+// region to `free` runs through a call the emitter wrote on its own.
+//
+// ⚠️ This compiled clean until the no-heap call graph was read from the emitted C (found building KR-47):
+// the graph was recorded per call site, and an owned LOCAL's destructor was an edge while the synthesized
+// field drop inside that destructor was not — about a thousand such edges were missing across the corpus.
+// The sibling for a compiler-synthesized `Optional` destructor is tests/xfail/noheap_optional_dtor.kama.
+import { std::collections::DynamicArray };
+type resource Box {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+}
+@noheap fn int32 tick(int32 n) { Box b = Box.make(); return n; }
+fn int32 main() { return tick(n: 7); }

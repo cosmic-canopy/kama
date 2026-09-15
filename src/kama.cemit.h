@@ -706,6 +706,31 @@ struct EnumInfo   {
     int         line = 0;
 };
 
+// The emitted-C capture: every byte the emitter writes to a FINAL output stream goes to that stream and into
+// `copy`, which is what the call graph is read from (CEmitter::buildCallGraph). Installed only over the streams
+// a build keeps — a probe or scratch buffer that is thrown away never reaches one, so code nobody emits makes
+// no edge. `#line` is always in the copy, because a call site's line is read from it; under `--no-line` the
+// directive is dropped from the real stream on the way through, which is why `line()` no longer asks.
+class EmitCapture : public std::streambuf {
+public:
+    EmitCapture(std::ostream& dst, std::string& copy, bool keepLineDirectives)
+        : _dst(*dst.rdbuf()), _copy(copy), _keepLines(keepLineDirectives) {}
+    ~EmitCapture() override { flushHeld(); }
+protected:
+    int_type overflow(int_type c) override { if (c != traits_type::eof()) put((char)c); return c; }
+    std::streamsize xsputn(const char* s, std::streamsize n) override { for (std::streamsize i = 0; i < n; ++i) put(s[i]); return n; }
+    int sync() override { flushHeld(); return _dst.pubsync(); }
+private:
+    void put(char c);
+    void flushHeld();
+    std::streambuf& _dst;
+    std::string&    _copy;
+    bool _keepLines;
+    bool _atLineStart = true;   // a directive is recognised only at the start of a line
+    bool _dropping = false;     // inside a `#line` being withheld from the real stream
+    int  _held = 0;             // how many chars of "#line " are held back, undecided
+};
+
 // True for a name the BUILD CONFIGURATION owns (DEBUG/RELEASE/HOSTED and the OS_/ARCH_/ABI_ namespaces
 // derived from the target triple) rather than a project's own `flags` entry. Shared by the emitter's
 // strict `@compileFor` validation and the driver's manifest check, so the rule has one definition.
@@ -1562,16 +1587,20 @@ private:
     // helper fifty times contributes one edge, and so iteration order is the callee name — the walk below
     // reports a chain, and a chain that changed between builds would be a diagnostic nobody could pin.
     std::map<std::string, std::map<std::string, CallEdge>> _callEdges;
+    // Every byte of C this build keeps (see EmitCapture), and the call graph read out of it once emission is
+    // done. The graph is NOT recorded where calls are emitted: it was, and 1,354 edges that changed a verdict
+    // were missing across the corpus (synthesized destructors, serde and graph helpers, bound fn pointers),
+    // because a call the emitter spells by hand records nothing. Reading the C the build actually produced
+    // makes an edge exist exactly when a call does.
+    std::string _emittedC;
+    void buildCallGraph();
     // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER
     // body as well (`isUserBody` — the prelude and the stdlib are excluded, or the flag would report a
     // defect against code the author never wrote and cannot change).
     std::map<std::string, NoHeapFn>  _noHeapFns;
-    // Record one call edge out of the body being emitted. A no-op outside a body, and self-edges are
-    // dropped (direct recursion cannot make a function allocate that did not already).
-    void recordCallEdge(const std::string& callee, int line);
     bool _spawnsThreads = false;
     void noteThreadSpawn();
-    // The ONE spelling of a deep copy (`T__copy(&(x))`), so its call edge is recorded in one place.
+    // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.
     std::string copyCall(const std::string& cls, const std::string& lvalue);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
@@ -1620,6 +1649,7 @@ private:
     struct DestructibleSite { std::string name; std::string className; int line = 0; std::string file; };
     std::map<std::string, OnPanicFn>        _onPanicFns;          // C name -> root of the walk
     std::map<std::string, DestructibleSite> _destructibleOwners;  // fn -> the first destructible local it owns
+    std::map<std::string, std::map<std::string, int>> _dropSiteLines;  // fn -> `T__dtor` -> the owner's declaration line
     bool        _usesOnPanic   = false;   // any unit declares a region: the TU includes <setjmp.h> and defines KAMA_ONPANIC
     bool        _onPanicArmed  = false;   // the body being emitted is a region (prologue + disarm on every exit)
     std::string _onPanicRecover;          // the literal the landing pad returns ("" for a `void` region)
@@ -3000,8 +3030,6 @@ private:
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className);
-    // The no-heap fact a destructible local carries — shared with the by-value smart-ptr PARAMETER path.
-    void noteDestructibleOwner(const std::string& className);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     static bool bodyDiverges(SharedStatement s);               // body ends in return/break/continue
     void emitDtorDefinition(ClassInfo& ci);

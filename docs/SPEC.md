@@ -620,7 +620,10 @@ call anything that allocates, however many calls away it is, and the diagnostic 
 (`tick -> mix -> grow`). Nothing has to be annotated for this — where the compiler can see the callee it
 **infers**, so an ordinary un-annotated helper is fine exactly when it is allocation-free
 ([tests/noheap_chain.kama](../tests/noheap_chain.kama)). Reachability includes **destructors**: owning a <!-- xfail: noheap_dtor_of_local -->
-local whose `~T()` allocates allocates, even though the body contains no call.
+local whose `~T()` allocates allocates, even though the body contains no call. That holds for the drops the <!-- xfail: noheap_field_dtor, noheap_optional_dtor -->
+compiler writes itself as well: owning a type whose FIELD frees, or an `Optional` whose payload does, reaches
+that free. The call graph is read from the C the build emits, so every call the compiler writes is an edge,
+whether or not any source line spells it.
 
 The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop, noheap_flag_container -->
 rejected inside a no-heap region, including merely *owning* one (dropping it frees; `free` can block on the

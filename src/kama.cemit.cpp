@@ -80,10 +80,37 @@ void CEmitter::indent(int depth)
     for (int i = 0; i < depth; ++i) *_out << "    ";
 }
 
+void EmitCapture::put(char c)
+{
+    _copy.push_back(c);
+    if (_keepLines) { _dst.sputc(c); return; }
+    static const char kDirective[] = "#line ";
+    if (_dropping) {
+        if (c == '\n') { _dropping = false; _atLineStart = true; }
+        return;
+    }
+    if (_held > 0 || (_atLineStart && c == '#')) {
+        if (c == kDirective[_held]) {
+            if (++_held == 6) { _held = 0; _dropping = true; }
+            return;
+        }
+        flushHeld();   // not a directive after all — release what was held, then this char
+    }
+    _dst.sputc(c);
+    _atLineStart = (c == '\n');
+}
+
+void EmitCapture::flushHeld()
+{
+    if (_held > 0) { _dst.sputn("#line ", _held); _held = 0; _atLineStart = false; }
+}
+
 void CEmitter::line(int srcLine)
 {
     if (srcLine > 0) _curLine = srcLine;   // track for conditional-drop diagnostics
-    if (!_lines || srcLine <= 0) return;
+    // Written whether or not the build wants `#line` — the call graph reads a call site's line from it, and
+    // `--no-line` is honoured by EmitCapture, which drops the directive on its way to the real stream.
+    if (srcLine <= 0) return;
     // `diagFile()`, not `_sourcePath` — a `#line` is a DIAGNOSTIC, routed through the C compiler and the
     // debugger instead of through `unsupported()`, and it wants the same answer: the file that owns the
     // code being written. Reading `_sourcePath` gave it "whatever the emitter was constructed with", so
@@ -5336,6 +5363,10 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
     if (ci == _classes.end() || !ci->second.destructible) return;   // owns nothing: no dtor to skip
     if (!_destructibleOwners.count(_currentFunc))
         _destructibleOwners[_currentFunc] = DestructibleSite{ cVar, className, _curLine, diagFile() };
+    // Where the call graph should POINT for this owner's drop. The edge itself comes from the C, but the C
+    // runs the destructor at scope exit, and `return n;` is not the line an author changes — the declaration
+    // that takes ownership is. First owner of each type wins, like every other first-site record.
+    _dropSiteLines[_currentFunc].emplace(className + "__dtor", _curLine);
 }
 
 // Pop the innermost scope, first erasing move-state for the locals it owned. A name going out of
@@ -5403,35 +5434,8 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
     // suppresses the source's scope-drop, and a use-after-move is caught). A never-`give`n collection/
     // string stays NotMoved → drops normally, exactly as before.
     if (ownsByValue(className)) _moveState[cVar] = MoveState::NotMoved;
-    // The DESTRUCTOR edge for the no-heap proof. RAII is what runs at the end of a real-time scope — SPEC
-    // says so in the sentence that motivates `@noheap` on a destructor — so a body owning a local whose
-    // dtor allocates allocates, even though its own source contains no call at all.
-    //
-    // Recorded from the OWNERSHIP, not from the ~20 places a `T__dtor(&x)` is emitted. Those are scattered
-    // across scope cleanup, condition-temp drops, assignment drops, match-subject drops and unwind paths,
-    // and an edge duplicated across twenty sites fails open the moment one is missed — which is precisely
-    // how this hole existed in the first place. Declaring a destructible local IS the fact; where the
-    // compiler chooses to run the destructor is a lowering detail the proof does not need to model.
-    noteDestructibleOwner(className);
-}
-
-// The no-heap fact that a destructible local carries, shared by the two ways one is registered: an
-// ordinary declaration (above) and a by-value smart-pointer PARAMETER, which the callee owns and drops at
-// function exit. The parameter path pushes straight onto the root scope through `_pendingParamDtors` and
-// so never reached `recordDestructibleLocal` — which is how `@noheap fn consume(Owned<Node> o)` kept
-// compiling while a `DynamicArray` local one line away did not.
-void CEmitter::noteDestructibleOwner(const std::string& className)
-{
-    auto ci = _classes.find(className);
-    if (ci == _classes.end() || !ci->second.destructible) return;
-    // NOTE what is deliberately NOT special-cased here. A smart pointer's destructor looks like runtime C,
-    // and an earlier version of this recorded its free as a direct fact on that assumption. It is not:
-    // `Owned<T>__dtor` is an EMITTED function that calls `GlobalAllocator.deallocate`, so the ordinary edge
-    // already reaches the leaf and produces the better diagnostic — it names the chain instead of asserting
-    // the conclusion. The special case was dead code and is gone. (`string` is the genuine exception, and
-    // it is handled at the COPY rather than the drop: `kama_string__dtor` frees only when `cap != 0`, and a
-    // string literal is a borrowed view with `cap == 0`, so `string tag = "voice";` allocates nothing.)
-    recordCallEdge(className + "__dtor", _curLine);
+    // (The no-heap DESTRUCTOR edge is not recorded here: the emitted `T__dtor(&x)` is in the C, and the call
+    // graph is read from the C — see buildCallGraph.)
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -5450,7 +5454,6 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     if (functionRoot && !_pendingParamDtors.empty()) {
         for (auto& l : _pendingParamDtors) {
             _scopes.back().locals.push_back(l);
-            noteDestructibleOwner(l.className);   // the callee OWNS it and drops it — see the helper
             recordDestructibleOwner(l.cVar, l.className);   // ...and a `@onPanic` region may not (the parameter hole)
         }
         _pendingParamDtors.clear();
@@ -14972,7 +14975,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             if (!requirePlaceOperand()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-            recordCallEdge(iterMi->cName, fe->line);
             iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
         } else {   // the operand IS the mutable iterator (used by value — an rvalue materializes into `__it`)
             iterCType = container; ic = cc;
@@ -14988,12 +14990,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
                          "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
         }
-        // The `foreach` protocol calls are emitted straight to C here, not through
-        // emitReorderedCall, so they need their own edges — an allocating `next()` (a
-        // `DynamicArray<string>` iterator deep-copies each element it yields) is otherwise
-        // invisible to the no-heap walk.
-        recordCallEdge(hasNextMi->cName, fe->line);
-        recordCallEdge(nextMi->cName, fe->line);
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
         actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `ref T next()` -> T
@@ -15004,7 +15000,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (iterMi) { if (!requirePlaceOperand()) return;
                       iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-                      recordCallEdge(iterMi->cName, fe->line);
                       iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
@@ -15022,7 +15017,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                          "in a `foreach`").c_str(), fe->line); *_out << "\n"; return;
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
-        recordCallEdge(nextMi->cName, fe->line);
         nextCall = nextMi->cName + "(&" + it + ")";
         // `Optional<T> next()` -> T, read off the monomorphized Optional's `Some` payload rather than
         // re-deriving it from the return type's generic argument: this is the very field the binding is
@@ -19537,18 +19531,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                         SharedArgumentList args, int srcLine,
                                         const std::string& trailingArg)
 {
-    // THE call-graph hook. Every resolved call in the language funnels through this one function, which
-    // is why the edge is recorded here rather than at the fifteen sites that reach it — the same argument
-    // the member-attribute handling makes one screen up in emitMethodOrCtorBody: a check duplicated per
-    // site fails OPEN when one site is missed, and a missed call edge reads exactly like a callee that
-    // legitimately allocates nothing.
-    //
     // `cName` is a plain C identifier for a STATICALLY resolved callee, and an expression for the four
-    // indirect forms (`(*f)`, a bindable's `((T)x.fn)`, `(r).vtbl->m`, `vptr->m`). Those are the calls
-    // whose target is not knowable here, so they are not edges; each is gated at its own site, where the
-    // member being dispatched is still in hand. Telling them apart by shape is exact, not a heuristic:
-    // an identifier is precisely what a direct C call is.
-    recordCallEdge(cName, srcLine);
+    // indirect forms (`(*f)`, a bindable's `((T)x.fn)`, `(r).vtbl->m`, `vptr->m`). The direct ones become
+    // call-graph edges because they are in the C (buildCallGraph); the indirect ones are gated at their own
+    // sites, where the member being dispatched is still in hand.
     std::map<std::string, ArgumentNode*> byName;
     size_t named = 0;
     if (args)
@@ -20839,7 +20825,6 @@ std::string CEmitter::narrowViewValue(const std::string& dstCType, SharedExpress
                      "by-value narrowing this conversion is spelled with").c_str(), line);
         return emitted;
     }
-    recordCallEdge(mi->cName, line);
     return mi->cName + "(" + emitted + ")";
 }
 
@@ -24708,12 +24693,8 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 }
 
 // `T__copy(&(x))` — a DEEP copy, and the ONE way the emitter is allowed to spell one. It used to be
-// written out at twelve sites; they are all this call now, for the reason the destructor edge is taken
-// from ownership rather than from its ~20 emission sites: a deep copy of an owning type allocates by
-// definition, and a fact duplicated across twelve sites fails open the moment the thirteenth is written.
-// Routing it through one function means a copy site added later records its edge without anyone
-// remembering to. The generated C is unchanged — asserted by diffing every fixture's emitted `.c` across
-// the refactor, byte for byte.
+// written out at twelve sites; they are all this call now, so the intrinsic copy's allocation FACT below is
+// recorded in one place. (A non-intrinsic copy is an ordinary call in the C, and so an ordinary edge.)
 std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue)
 {
     // An INTRINSIC owning collection's `__copy` is a runtime C function, not an emitted kama body, so it
@@ -24739,8 +24720,6 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
         else if (!_probingTemplate && !_currentFunc.empty() && !_allocSites.count(_currentFunc))
             _allocSites[_currentFunc] = AllocSite{ "a deep `copy` of `" + demangleForDisplay(cls)
                                                    + "` allocates a new buffer", _curLine, diagFile() };
-    } else {
-        recordCallEdge(cls + "__copy", _curLine);
     }
     // `__copy` READS its source, and every copy ctor takes a plain `T*` (`const ref` is ABI-neutral — see
     // paramListC), while a read-only place addresses as `T const*`: `copy this.data[p]` in `ViewIter.next()`
@@ -24749,8 +24728,6 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
     return cls + "__copy((" + cls + "*)&(" + lvalue + "))";
 }
 
-// One call edge out of the body being emitted. Only a plain C identifier is an edge: see the hook in
-// emitReorderedCall for why an indirect call is not one, and where each is gated instead.
 // A thread is created ONLY by the compiler's own lowering of `spawn`/`isolate` and `parallel_for` — no library
 // source calls the seam's spawn — so this is the precise answer to "does this program need a threaded
 // runtime". The driver reads it for wasm, where the answer is a HOSTING MODEL (`-pthread`, PROXY_TO_PTHREAD,
@@ -24762,14 +24739,147 @@ void CEmitter::noteThreadSpawn()
     if (!_probingTemplate) _spawnsThreads = true;   // a probe emits no code
 }
 
-void CEmitter::recordCallEdge(const std::string& callee, int srcLine)
+// Read the call graph out of the C this build produced (`_emittedC`, see EmitCapture). A function is a
+// top-level `…name(…) {`; inside its body, an identifier naming another emitted function is an edge, keyed by
+// the first site. Two identifiers are not references: a member (`.x`, `->x`, a field that shares a function's
+// name) and a name the body declares — a parameter, or a local — unless it is CALLED, which a C local that
+// shadows a function cannot be (KR-57 is the kama rule that would make the shadowing impossible). A call site's
+// line is the `#line` above it; a body with no directive (the prelude, which has no file) carries line 0.
+//
+// What it cannot see is what is not in the text: a function a runtime MACRO defines (`KAMA_OWNED_IFACE_FUNCS`)
+// and the runtime's own C. Those are leaf facts recorded by name, as `GlobalAllocator` is.
+void CEmitter::buildCallGraph()
 {
-    if (_probingTemplate) return;                     // a probe emits no code, so it makes no edges
-    if (_currentFunc.empty() || callee.empty()) return;
-    if (callee == _currentFunc) return;               // direct recursion adds nothing to reachability
-    for (char c : callee)
-        if (!(isalnum((unsigned char)c) || c == '_')) return;   // an expression, not a callee
-    _callEdges[_currentFunc].emplace(callee, CallEdge{ srcLine });
+    const std::string& s = _emittedC;
+    const size_t n = s.size();
+    auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
+    auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
+    // A `#`-directive starts at a line's first non-blank char and runs to an unescaped newline.
+    auto skipDirective = [&](size_t i) { while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) ++i; ++i; } return i; };
+    auto skipLiteral = [&](size_t i) {   // i at the opening quote; returns one past the closing one
+        const char q = s[i++];
+        while (i < n && s[i] != q) { if (s[i] == '\\') ++i; ++i; }
+        return i + 1;
+    };
+    auto skipComment = [&](size_t i) {   // i at `/`, which starts `//` or `/*`
+        if (s[i + 1] == '/') { while (i < n && s[i] != '\n') ++i; return i; }
+        size_t e = s.find("*/", i + 2);
+        return e == std::string::npos ? n : e + 2;
+    };
+
+    // Pass 1 — the function bodies. At depth 0 the text since the last `;`/`}` is the would-be header, kept
+    // free of directives and comments; a `{` after one ending in `)` opens a body named by the identifier
+    // before the matching `(`. Anything else (`struct X {`, `= {`) is braces, not a function.
+    struct Body { std::string name; size_t open, close; std::string params; };
+    std::vector<Body> bodies;
+    {
+        int depth = 0;
+        bool lineStart = true;
+        std::string seg;
+        Body cur;
+        for (size_t i = 0; i < n; ) {
+            const char c = s[i];
+            if (c == '\n') { lineStart = true; if (depth == 0) seg += ' '; ++i; continue; }
+            if (c == ' ' || c == '\t' || c == '\r') { if (depth == 0) seg += ' '; ++i; continue; }
+            if (lineStart && c == '#') { i = skipDirective(i); continue; }
+            lineStart = false;
+            if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
+            if (c == '"' || c == '\'') { size_t e = skipLiteral(i); if (depth == 0) seg.append(s, i, e - i); i = e; continue; }
+            if (c == '{') {
+                if (depth == 0) {
+                    cur = Body();
+                    size_t e = seg.find_last_not_of(' ');
+                    if (e != std::string::npos && seg[e] == ')') {
+                        int pd = 0; size_t p = e;
+                        for (;; --p) { if (seg[p] == ')') ++pd; else if (seg[p] == '(' && --pd == 0) break; if (p == 0) break; }
+                        size_t ne = p; while (ne > 0 && seg[ne - 1] == ' ') --ne;
+                        size_t nb = ne; while (nb > 0 && identChar(seg[nb - 1])) --nb;
+                        if (nb < ne && identStart(seg[nb])) {
+                            cur.name = seg.substr(nb, ne - nb);
+                            cur.params = seg.substr(p, e - p + 1);
+                            cur.open = i;
+                        }
+                    }
+                }
+                ++depth; ++i; continue;
+            }
+            if (c == '}') {
+                if (--depth == 0) {
+                    if (!cur.name.empty()) { cur.close = i; bodies.push_back(cur); }
+                    cur = Body(); seg.clear();
+                }
+                if (depth < 0) depth = 0;
+                ++i; continue;
+            }
+            if (depth == 0) { if (c == ';') seg.clear(); else seg += c; }
+            ++i;
+        }
+    }
+    std::set<std::string> defined;
+    for (const Body& b : bodies) defined.insert(b.name);
+
+    static const std::set<std::string> kNotAType = { "return", "case", "goto", "sizeof", "else", "do", "typedef" };
+    _callEdges.clear();
+    int line = 0;
+    size_t prevClose = 0;
+    for (const Body& b : bodies) {
+        // The directive in force when the body opens: scan the gap since the previous body for the latest one.
+        for (size_t d = s.find("#line ", prevClose); d != std::string::npos && d < b.open; d = s.find("#line ", d + 6))
+            line = atoi(s.c_str() + d + 6);
+        prevClose = b.close;
+        struct Ref { std::string name; int line; bool call; };
+        std::vector<Ref> refs;
+        std::set<std::string> declared;
+        // A parameter is an identifier followed by `,` `)` or `[` in the header's parameter list.
+        for (size_t i = 0; i < b.params.size(); ) {
+            if (!identStart(b.params[i])) { ++i; continue; }
+            size_t e = i; while (e < b.params.size() && identChar(b.params[e])) ++e;
+            size_t f = e; while (f < b.params.size() && b.params[f] == ' ') ++f;
+            if (f < b.params.size() && (b.params[f] == ',' || b.params[f] == ')' || b.params[f] == '['))
+                declared.insert(b.params.substr(i, e - i));
+            i = e;
+        }
+        std::string prevTok;   // the previous significant token: an identifier, or one punctuation char
+        bool lineStart = false;
+        for (size_t i = b.open + 1; i < b.close; ) {
+            const char c = s[i];
+            if (c == '\n') { lineStart = true; ++i; continue; }
+            if (c == ' ' || c == '\t' || c == '\r') { ++i; continue; }
+            if (lineStart && c == '#') {
+                if (s.compare(i, 6, "#line ") == 0) line = atoi(s.c_str() + i + 6);
+                i = skipDirective(i); continue;
+            }
+            lineStart = false;
+            if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
+            if (c == '"' || c == '\'') { i = skipLiteral(i); prevTok = "\""; continue; }
+            if (!identStart(c)) {
+                // `->` is one token for the member test below.
+                if (c == '-' && i + 1 < n && s[i + 1] == '>') { prevTok = "->"; i += 2; continue; }
+                prevTok = std::string(1, c); ++i; continue;
+            }
+            size_t e = i; while (e < b.close && identChar(s[e])) ++e;
+            const std::string id = s.substr(i, e - i);
+            size_t f = e; while (f < b.close && (s[f] == ' ' || s[f] == '\t' || s[f] == '\r' || s[f] == '\n')) ++f;
+            const char next = f < b.close ? s[f] : '\0';
+            const bool member = prevTok == "." || prevTok == "->";
+            // A local declaration: `T name =`, `T* name;`, `T name[` — a type token (or `*`) then the name.
+            const bool afterType = prevTok == "*" || (!prevTok.empty() && identStart(prevTok[0]) && !kNotAType.count(prevTok));
+            if (!member && afterType && (next == '=' || next == ';' || next == ',' || next == '['))
+                declared.insert(id);
+            if (!member && id != b.name && defined.count(id)) refs.push_back(Ref{ id, line, next == '(' });
+            prevTok = id;
+            i = e;
+        }
+        auto& out = _callEdges[b.name];
+        const auto drops = _dropSiteLines.find(b.name);
+        for (const Ref& r : refs) {
+            if (!r.call && declared.count(r.name)) continue;
+            int at = r.line;
+            if (drops != _dropSiteLines.end()) { auto d = drops->second.find(r.name); if (d != drops->second.end()) at = d->second; }
+            out.emplace(r.name, CallEdge{ at });
+        }
+        line = 0;   // a following body with no directive of its own must not inherit this one's
+    }
 }
 
 // Is this body one the AUTHOR wrote? Asked only by `--no-heap`, which seeds the transitive walk with
@@ -33320,6 +33430,13 @@ void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
 // module definitions in one stream.
 int CEmitter::emit(SharedCompilationUnit unit)
 {
+    // Everything written from here on is the TU this build keeps — see EmitCapture. Restored on every return,
+    // so `_out` never outlives the capture that wraps it.
+    EmitCapture capture(*_out, _emittedC, _lines);
+    std::ostream captured(&capture);
+    std::ostream* const finalOut = _out;
+    _out = &captured;
+    struct RestoreOut { std::ostream*& o; std::ostream* v; ~RestoreOut() { o = v; } } _ro{ _out, finalOut };
     *_out << "/* Generated by kama. Do not edit. */\n";
     // A program with a `@onPanic` region defines KAMA_ONPANIC BEFORE the runtime header, which builds its
     // recovery path on that macro and includes `<setjmp.h>` itself. ⚠️ NOT here: a standard header read before
@@ -33343,6 +33460,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     emitModuleContent(unit);
     if (_sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU — see the definition
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
@@ -33363,24 +33481,34 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
 {
     collectProgram(units);
 
+    // Every stream this build keeps is captured — see EmitCapture. Scoped to this call, like emit()'s.
+    EmitCapture headerCapture(header, _emittedC, _lines);
+    std::ostream capturedHeader(&headerCapture);
+    std::vector<std::unique_ptr<EmitCapture>>  moduleCaptures;
+    std::vector<std::unique_ptr<std::ostream>> capturedModules;
+    for (std::ostream* m : moduleStreams) {
+        moduleCaptures.emplace_back(new EmitCapture(*m, _emittedC, _lines));
+        capturedModules.emplace_back(new std::ostream(moduleCaptures.back().get()));
+    }
+
     std::string guard = "KAMA_GEN_";
     for (char c : headerName) guard += (isalnum((unsigned char)c) ? (char)toupper(c) : '_');
 
-    _out = &header;
-    header << "/* Generated by kama. Do not edit. */\n";
-    header << "#ifndef " << guard << "\n#define " << guard << "\n";
+    _out = &capturedHeader;
+    *_out << "/* Generated by kama. Do not edit. */\n";
+    *_out << "#ifndef " << guard << "\n#define " << guard << "\n";
     if (unitsUseOnPanic(units))   // see emit(): program-wide, since every TU includes this header
-        header << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h> (KB-25)
-    header << "#include \"kama_runtime.h\"\n";
+        *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h> (KB-25)
+    *_out << "#include \"kama_runtime.h\"\n";
     emitIncludes(units);        // FFI #include directives (before any type decls)
     // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
     // `#line` directives with an EMPTY file name, because the emitter is constructed with no path.
     _discoveryClosed = true;
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent(units); }
-    header << "#endif /* " << guard << " */\n";
+    *_out << "#endif /* " << guard << " */\n";
 
     for (size_t i = 0; i < units.size(); ++i) {
-        _out = moduleStreams[i];
+        _out = capturedModules[i].get();
         _sourcePath = sourcePaths[i];   // #line in this module points to its own source
         *_out << "/* Generated by kama. Do not edit. */\n";
         *_out << "#include \"" << headerName << "\"\n\n";
@@ -33388,6 +33516,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
         if (i == 0 && _sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU
     }
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
@@ -33396,5 +33525,6 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
+    _out = moduleStreams.empty() ? &header : moduleStreams.back();   // the captures die with this call
     return _unsupported;
 }

@@ -176,6 +176,69 @@ already follows. `@noheap` is unchanged: an attribute proves its own body, eager
 - `SPEC.md` *No-heap subset* changes its sentence "the flag rejects a *direct* allocation in every body";
   every existing `noheap_*` xfail must still fail, each through a reached chain.
 
+#### §1 settled (2026-09-15, maintainer), with what was measured
+
+**Probes re-run at `0.9.345`** after a no-op rebase: uuid 4, json 28, hex 1, as recorded above.
+
+**The call graph is read from the emitted C, not recorded per call site.** A reach rule is exactly as sound as
+its edges, so the recorded graph was audited first. Method: 819 single-file fixtures transpiled with the edge
+table dumped, then diffed against the calls and function references in the generated C. **1,354 missing edges
+changed a verdict**, meaning the recorded graph called a function allocation-free when its C reaches an
+allocation. By class:
+- synthesized destructors, about 1,000: field drops inside `T__dtor`, and `Optional`/`Result` dtors. Only an
+  owned LOCAL's dtor was an edge.
+- graph serde helpers (`__kama_graph_readShell`/`dropBox`, `writeNode`, `visitEdges`, `__readInto`), which have
+  no `_currentFunc`.
+- serde calls spelled as raw strings (`serialize` → `serializeInto`, `deserialize` → `deserializeFrom`).
+- the `Optional<T>.format` thunk.
+- tagged templates in user code (`main` → `std::fmt::html`).
+- fnptr and bindable targets (`g.fn = …__read`, `g.elemdtor = …__dtor`), including a pointer handed to C as a
+  callback.
+
+That is a pre-existing `@noheap` defect, not only a KR-47 prerequisite. `@noheap fn int32 tick(int32 n) { Box b =
+Box.make(); return n; }`, where `Box` owns a `DynamicArray`, builds clean today. Recording each site through a
+funnel was rejected: it is discipline around roughly 60 hand-spelled dtor calls, and it holds only while a guard
+catches the next one. Reading the edges from the generated text makes them complete by construction, the way a
+linker's `--gc-sections` reads relocations. The rules:
+- **Capture:** the FINAL output is teed into memory as it is written. Text that only ever reaches a scratch or
+  probe buffer is never an edge, which is also correct.
+- **Scan:** a function is a top-level `…name(…) {`. Inside its body, every identifier that names another emitted
+  function is an edge, except a member (`.x`/`->x`) and a name the body itself declares (parameter or local).
+  The declaration exclusion exists because of KR-57: a C local named like a bare prelude function (`args`, 13
+  corpus hits) is indistinguishable from a reference otherwise.
+- **Lines:** a call site's line is the `#line` above it. `line()` always writes its directive, and the tee
+  strips directives from the real stream under `--no-line`. The emitter buffers module bodies and flushes them
+  later, so a line sampled at write time would be wrong.
+- **What it cannot see:** functions defined by runtime MACROS (`KAMA_OWNED_IFACE_FUNCS`) and runtime C. These
+  stay named leaf facts, as `GlobalAllocator` already is.
+- **Scope:** the per-site `recordCallEdge` calls are deleted. All three walks over the graph gain the edges:
+  no-heap, the foreign-entry static reads and `@onPanic`.
+
+This ships as its own commit, before the flag change, with red-first fixtures.
+
+**Roots under the flag:**
+- `kama_main`
+- every `expose fn`, which covers `@callerThread` and `@interrupt` because both must be `expose`
+- `@foreignEntry` bodies
+- `@onPanic` handlers
+
+Module statics are compile-time constants. A pointer handed to C is reached through its address-take edge. A
+reached user body with its own direct site reports at that site, and the flag's chain diagnostics keep today's
+rule: the innermost user frame whose first hop leaves user code.
+
+**What a `--no-heap` object promises: the reached program never allocates.** Measured: a `--release --target
+embedded` object importing `std::uuid` carries `U malloc`/`U free` from bodies nothing reaches, while today's
+no-heap objects reference none. The object may still NAME `malloc` in unreached code. `-ffunction-sections
+-fdata-sections` go on every embedded and no-heap compile, debug included (today they are release-only), and the
+board link's `--gc-sections` drops the unreached code; `docs/targets.md` says so. Stubbing allocation to a trap
+(needs KR-48 first) and pruning unreached bodies from emission (L, overlaps KR-4) were the rejected alternatives.
+
+**Extern allocation: an attribute, alone.** `@allocates extern fn UnsafePtr kama_channel_new(…);` seeds
+`_allocSites` with the C symbol, which a call already reaches as an edge. It is marked on the prelude and stdlib
+externs that allocate (`malloc`, `kama_channel_new`, `kama_argv_new`, …). An unmarked user extern is unchecked C,
+as today. A table of libc names was rejected as a second mechanism, and after KR-48 libc allocation lives in
+exactly one place anyway.
+
 ### 2. Two primitives: `kama_alloc` and `kama_free` (decided)
 
 **`kama_alloc` and `kama_free` are the only two things in a kama program that obtain or release heap
