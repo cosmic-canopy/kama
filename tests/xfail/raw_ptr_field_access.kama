@@ -1,0 +1,7 @@
+// A raw pointer has no fields — its POINTEE does, and kama reaches a pointee by indexing: `p[0].x`. `p.x` used
+// to fall through to the C member access `(p).x`, which clang rejected as "member reference type … is a
+// pointer; did you mean to use '->'?" against a mangled struct name nobody wrote. kama refuses it and names
+// the spelling instead.
+type value Point { public int32 x; public ctor of(int32 x) { this.x = x; } }
+unsafe fn int32 readX(UnsafePtr<Point> p) { return p.x; }
+fn int32 main() { return 0; }

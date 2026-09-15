@@ -29746,6 +29746,16 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             unsupported(("`" + rk + "` has no field `" + field + "` — a primitive has no members").c_str(), ma->line, field);
             return "0";
         }
+        // A raw pointer has no fields either — its POINTEE does, and kama reaches a pointee by indexing. This
+        // fell through to `(p).x`, a C member access on a pointer, and surfaced as clang's "did you mean
+        // `->`?" against a struct name nobody wrote.
+        if (!rct.empty() && rct.back() == '*') {
+            const std::string place = unparseExpr(ma->expression);
+            unsupported(("`" + place + "` is a raw pointer, which has no field `" + field + "` — its pointee does; "
+                         "read or write it through the pointer as `" + place + "[0]." + field + "`").c_str(),
+                        ma->line, field);
+            return "0";
+        }
         const std::string et = exprEnumType(ma->expression);
         if (!et.empty()) {
             unsupported(("`" + et + "` is a plain enum — a variant value has no field `" + field + "`").c_str(), ma->line, field);

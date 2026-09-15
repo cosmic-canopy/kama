@@ -2102,6 +2102,9 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
+A pointer to a struct is read the same way, through its element: `p[0].x`. The pointer itself has no fields, so
+`p.x` is refused with that spelling — there is no `->`, since `[0]` already is the one way to reach a pointee. <!-- xfail: raw_ptr_field_access -->
+
 **The raw seam is a seam, not a second ownership system.** An element `p[i]` of a raw `UnsafePtr<T>` is
 **untyped to ownership**: `p[i] = v` is a plain store (the old bytes are overwritten, no destructor runs),
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
