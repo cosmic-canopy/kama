@@ -281,7 +281,7 @@ target's flags active, and a diagnostic says which target it came from. Open que
 cost (N analyses — the pass is seconds, not minutes), how a loose build (no manifest, no declared targets)
 answers, and whether `kama build` should warn when a manifest declares targets the build did not check.
 
-### An enum's values at the C boundary (KR-55) — found 2026-09-14, shipping the host header
+### An enum at the C boundary: `type extern enum` / `type expose enum` (KR-55) — found and ruled 2026-09-14
 
 The host header (SPEC *Exposing to a host*) prints a payload-less enum as its integer typedef plus one constant
 per variant, `Kind_Square = 4`, so those numbers are now an ABI promise to C in the same way a `type expose value`
@@ -290,11 +290,35 @@ renumbers every later one: a host compiled against the old header passes the wro
 struct side of the same question was answered with a marker (`type expose value`) and a check (`type extern value`
 fields against their header, `0.9.341`); the enum side has neither.
 
-**To decide, with an example and the header bytes before any code:** (a) an enum that crosses an `extern fn` or
-an `expose fn` must spell every value explicitly (no new syntax — the explicitness moves to the declaration), or
-(b) the marker pair reaches enums, `type expose enum` publishing kama's numbering and `type extern enum` binding a
-C enum's constants with each value checked against the header, as struct fields now are. The C-to-kama direction
-is the one with no answer at all today: a kama enum mirroring a C enum is a hand copy of its values.
+Measured while asking: **`type extern enum` is ACCEPTED AND INERT today.** `extern` parses (it is in the member
+modifier list) and is silently dropped, so `type extern enum WGPUTextureFormat : uint32 { Undefined, BGRA8Unorm }`
+numbers its variants itself and hands C `1` where the header says `27` — no diagnostic. And the C-to-kama direction
+has no answer at all: `examples/webgpu/triangle.kama` writes `cfg.format = 27; // WGPUTextureFormat_BGRA8Unorm`.
+
+**RULED 2026-09-14 (maintainer): the marker pair reaches enums — explicit, no magic, symmetric with every other
+`extern`/`expose` form.** `extern` is a thing C defines that kama uses; `expose` is a thing kama defines and
+publishes to C. The enum rules are the value rules, row for row, and the value rules are the measured behaviour:
+
+| | `extern` (C owns it, kama uses it) | `expose` (kama owns it, publishes it) |
+|---|---|---|
+| fn | the C symbol, verbatim | module-qualified symbol, `@linkName` override |
+| value | C's struct and field names verbatim; fields checked against the header | layout published; module-qualified name, `@linkName` override |
+| **enum** | **C's enum and constant names verbatim, NO values written; width and every constant checked against the header** | **width and every value REQUIRED; published with module-qualified names, `@linkName` override** |
+| kama-side scope | a module symbol (`export`/`import`) | a module symbol |
+| declared in two modules | legal when IDENTICAL, members once; a disagreement is refused naming both | two names meeting at one C name refused |
+| crosses | `extern fn` and `expose fn` | `expose fn` only |
+
+- **Variants of a `type extern enum` ARE the C constant names**, verbatim — `type extern enum VkFormat : int32
+  { VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM }`, used as `VkFormat::VK_FORMAT_R8G8B8A8_UNORM` and emitted as
+  `VK_FORMAT_R8G8B8A8_UNORM`. Chosen over a derived prefix (`<Type>_<Variant>` or a declared `@variantPrefix`) as
+  the explicit answer with no rule between the source and the C: it is the rule `type extern value` fields already
+  follow, and `grep` finds the kama use and the C definition together. The stutter is the accepted cost. A C
+  constant that is a kama reserved word cannot be a variant and is refused by name. No values may be written (C
+  owns them); a payload variant is refused.
+- **A plain enum at the boundary is refused** — a signature, an `extern`/`expose` value field, an `InlineArray`
+  element — as a plain value is: mark it `extern` or `expose`. Both markers on one enum are refused.
+- The enum then answers the numbering question itself: an exposed enum spells every value, so inserting a variant
+  cannot renumber one a host compiled against.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
