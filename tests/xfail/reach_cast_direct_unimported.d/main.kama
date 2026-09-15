@@ -1,0 +1,2 @@
+// KR-46: a `cast<X>` target, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { int32 k = cast<int32>(cast<ShownErr>(0)); return 0; }

@@ -1,0 +1,3 @@
+// KR-46: a `cast<UnsafePtr<X>>` type argument, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+unsafe fn int32 f(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<HidVal>>(p)); return 0; }
+fn int32 main() { return 0; }

@@ -1,0 +1,5 @@
+export { shownFn };
+
+fn int32 shownFn() { return 1; }
+
+fn int32 hidFn() { return 2; }

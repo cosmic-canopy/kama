@@ -1,0 +1,3 @@
+// KR-46: a turbofish type argument, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 z<X>() { return 0; }
+fn int32 main() { return z::<HidErr>(); }

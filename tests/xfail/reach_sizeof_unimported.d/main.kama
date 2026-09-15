@@ -1,0 +1,2 @@
+// KR-46: a `sizeof` operand, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { usize n = sizeof(ShownVal); return 0; }

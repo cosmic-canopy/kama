@@ -1,0 +1,2 @@
+// KR-46: a variant expression, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: HidErr::Bad); return 0; }

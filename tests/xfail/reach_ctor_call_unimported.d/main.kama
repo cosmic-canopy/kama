@@ -1,0 +1,2 @@
+// KR-46: a construction, naming a name `geo` exports that this file does not import. Must be rejected with the import that fixes it.
+fn int32 main() { int32 n = ShownVal.make().v; return n - 1; }

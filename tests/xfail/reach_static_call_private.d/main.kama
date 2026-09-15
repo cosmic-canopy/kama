@@ -1,0 +1,2 @@
+// KR-46: a static call, naming a name private to `geo/lib.kama`, spelled bare. Must be rejected, naming it.
+fn int32 main() { int32 n = HidVal::stat(); return 0; }

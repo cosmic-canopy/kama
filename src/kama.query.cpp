@@ -461,10 +461,10 @@ void CEmitter::addDefSite(const std::string& key, SymKind kind, const Compilatio
 // before buildDefSites. collectProgram calls this after pruneInactiveDecls, which is the one real ordering
 // constraint: pruning rewrites the decl list in place, so a dropped decl must never get an entry here.
 // Idempotent, so buildDefSites still calls it and stays self-sufficient.
-void CEmitter::buildDeclUnits()
+void CEmitter::buildDeclUnits(const std::vector<SharedCompilationUnit>& units)
 {
     _declUnit.clear();
-    for (auto& u : _units) {
+    for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         for (auto& decl : *u->codeDeclarationList)
             if (decl) _declUnit[decl.get()] = u.get();
@@ -517,7 +517,7 @@ void CEmitter::addBuiltinDefSites()
 void CEmitter::buildDefSites()
 {
     _defSites.clear();
-    buildDeclUnits();
+    buildDeclUnits(_units);
     addBuiltinDefSites();
 
     auto bareOf = [](const SharedIdentifier& id, const std::string& key) -> std::string {

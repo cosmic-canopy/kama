@@ -2403,13 +2403,43 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
                      "allocation, an `extern fn`)").c_str(), line);
         return;
     }
-    const bool reported = reportDeclaredElsewhere(noun, name, [&](const std::string& k) {
-        return _classes.count(k) || _enums.count(k) || _interfaces.count(k) || _genericTypes.count(k)
-            || _genericContracts.count(k);
-    }, what, line);
+    const bool reported = reportDeclaredElsewhere(noun, name, [&](const std::string& k) { return isTypeKey(k); },
+                                                  what, line);
     if (!reported)
         unsupported((std::string("unknown ") + noun + " `" + name + "` in " + what
                      + " — no such " + noun + " is declared or imported").c_str(), line, name);
+}
+
+bool CEmitter::isTypeKey(const std::string& k) const
+{
+    return _classes.count(k) || _enums.count(k) || _interfaces.count(k) || _genericTypes.count(k)
+        || _genericContracts.count(k);
+}
+
+// A type written in a BODY — a cast target, a `sizeof` operand, a turbofish argument, a local's type —
+// held to the rules a declared type meets in `checkDeclaredTypes`, over the whole spelling: every name
+// resolves (or is reported with the import that fixes it), every name is in reach of this file, and a
+// `#(K)` constant is too.
+//
+// Judged HERE, where the emitter resolves the type, rather than by a second walk over bodies: in this
+// compiler analysis IS emission, every other body rule lives in this walk, and an uncalled generic's body
+// is re-emitted by the template probe, so it is judged as well (KR-46, decided 2026-09-14). A declaration
+// that `@compileFor` drops is judged by neither walk — its own open question, not this one.
+void CEmitter::checkBodyType(const SharedIdentifier& t, const char* what, int line)
+{
+    if (!t || !t->value) return;
+    // A C spelling this file's own `extern fn` introduced (see `_externCSpellings`) is the header's to judge.
+    if (!t->qualifier || t->qualifier->empty()) {
+        auto cs = _externCSpellings.find(refFilePath());
+        if (cs != _externCSpellings.end() && cs->second.count(*t->value)) return;
+    }
+    checkTypeResolves(t, cType(t), what, line);
+    // A substituted node names no source text, so no file wrote it (see `resolveUserName`).
+    if (!t->synthesized)
+        checkReach(resolveUserNameImpl(*t->value, t->qualifier), *t->value, what, line, refFilePath(),
+                   t->qualifier && !t->qualifier->empty());
+    forEachTypeArg(t, [&](const SharedIdentifier& a) { checkBodyType(a, what, line); });
+    forEachConstArgName(t, [&](const SharedIdentifier& k) { constArgReaches(k, what, refFilePath()); });
 }
 
 // The TYPE arguments a spelling writes — its `<…>` entries and a qualifier's `::<…>` — never a `#(…)` value,
@@ -2512,6 +2542,10 @@ void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
         // `Natural<T>::compare` under a probe names an instance that does not exist yet — the existing
         // bucket for that shape.
         if (_probeTypeParams.count(head) || _probeTypeParams.count(last)) { deferUnknownWhileProbing(DK_ScopeQual); return; }
+        if (v->qualifier->size() == 1
+            && reportDeclaredElsewhere("type", head, [&](const std::string& k) { return isTypeKey(k); },
+                                       "this reference", line))
+            return;
         unsupported(("cannot resolve `" + path + "` — `" + head + "` is not a type or module in reach here").c_str(),
                     line, head);
         return;
@@ -2549,6 +2583,9 @@ void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
                              + "`").c_str(), line);
                 return;
             }
+    if (reportDeclaredElsewhere("constant", nm, [&](const std::string& k) { return _moduleStatics.count(k) > 0; },
+                                "this reference", line))
+        return;
     unsupported(("cannot resolve `" + nm + "` — no local, parameter, field, function, module `static`/`comptime` "
                  "or type of that name is in reach here").c_str(), line, nm);
 }
@@ -4643,6 +4680,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             auto enumQual = std::make_shared<StringList>();
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
+            // The enum is a name this file spells, so it is judged for reach like any other — without a site
+            // above, `geo::HidErr::Bad` named a PRIVATE enum and compiled (KR-46). Directly, not by passing
+            // `v` as the site: that would also record the reference on the MEMBER's span.
+            if (!v->synthesized)
+                checkReach(en, *v->qualifier->back(), "this reference", v->line, refFilePath(), !enumQual->empty());
             // `v`'s span is just the MEMBER name (qualified_identifier reuses the basic_identifier node),
             // so recording the use here points find-references/rename at `Member`, not at `Enum::Member`.
             // Only a MEMBER of the enum resolves here; `K::ZZZ` used to be emitted as `K_ZZZ` for the C
@@ -5027,6 +5069,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
         if (rejectBareCChar(v->type, "a cast target", v->line)) return "0";
+        checkBodyType(v->type, "a cast target", v->line);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
         // `try cast` is a STATEMENT form (see emitTryCast) — the declaration path and the value-position
         // hoist (tryHoistInlineValue) intercept it before the expression walk. Arriving here means it was
@@ -5148,6 +5191,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     // `Vec<T>` monomorphizes to the concrete size. `_Alignof` is C11 (kama emits strict ISO C11).
     if (auto* v = dynamic_cast<SizeofNode*>(n)) {
         if (rejectBareCChar(v->type, v->isAlign ? "an `alignof` operand" : "a `sizeof` operand", v->line)) return "0";
+        checkBodyType(v->type, v->isAlign ? "an `alignof` operand" : "a `sizeof` operand", v->line);
         return std::string(v->isAlign ? "_Alignof(" : "sizeof(") + cType(v->type) + ")";
     }
 
@@ -6390,21 +6434,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     declType = ph;   // this walk only — the AST node stays: the query index holds raw pointers into it
                 }
             std::string ty = cType(declType);
-            checkTypeResolves(declType, ty, "a local declaration", n->line);
-            // ...and every type argument under it, as `checkDeclaredTypes` does for a signature: the head
-            // alone waves `Optional<Zork>` through, because the instance mangles to some name regardless.
-            // A `#(K)` naming a module constant is judged for reach here too: `constArgN` folds a qualified
-            // private one, so without this `#(geo::HIDK)` in a body compiled. An unresolved `K` is left to
-            // the fold's own diagnostic.
-            std::function<void(const SharedIdentifier&)> argsResolve = [&](const SharedIdentifier& a) {
-                checkTypeResolves(a, cType(a), "a local declaration", n->line);
-                forEachTypeArg(a, argsResolve);
-                forEachConstArgName(a, [&](const SharedIdentifier& k) {
-                    constArgReaches(k, "a local declaration", refFilePath()); });
-            };
-            forEachTypeArg(declType, argsResolve);
-            forEachConstArgName(declType, [&](const SharedIdentifier& k) {
-                constArgReaches(k, "a local declaration", refFilePath()); });
+            // Every name in the spelling — the head alone waves `Optional<Zork>` through, because the instance
+            // mangles to some name regardless — and a `#(K)` constant's reach (`constArgN` folds a qualified
+            // private one, so `#(geo::HIDK)` compiled). An unresolved `K` is left to the fold's diagnostic.
+            checkBodyType(declType, "a local declaration", n->line);
             if (_typeSubst.empty()) rejectBareCChar(declType, "a local", n->line);   // not during a poisoned instance's re-walk
             rejectMintProtocolValue(declType, "a local", n->line);
             // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal
@@ -8385,8 +8418,19 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.declFile = _collectingUnitPath;   // the file rung's key, and the duplicate diagnostic's
         // An extern's `declFile` is whichever file was collected LAST, so it cannot answer the rung on its
         // own — the set can. Recorded before the table write, which overwrites the previous declaration.
-        if (isExtern(fn) && !_collectingUnitPath.empty())
+        if (isExtern(fn) && !_collectingUnitPath.empty()) {
             _externDeclSites[sig.cName].insert(_collectingUnitPath);
+            // Every BARE name the signature spells, as a C spelling this file introduced: `CompareFn` in
+            // `extern fn void qsort(…, CompareFn compar)` is the header's typedef, and the file bridges to
+            // it with `cast<CompareFn>(…)`. `checkBodyType` admits exactly these, and only in this file.
+            std::function<void(const SharedIdentifier&)> spell = [&](const SharedIdentifier& t) {
+                if (!t || !t->value) return;
+                if (!t->qualifier || t->qualifier->empty()) _externCSpellings[_collectingUnitPath].insert(*t->value);
+                forEachTypeArg(t, spell);
+            };
+            spell(fn->returnType);
+            if (fn->parameters) for (auto& p : *fn->parameters) if (p) spell(p->type);
+        }
         // ONE C SYMBOL, ONE KAMA BINDING. `@linkName` lets two kama names reach one symbol, and the
         // agreement rule above is keyed on the kama name, so `extern fn add` in one file and
         // `@linkName("add") extern fn plus` in another would never be compared — the silent last-wins
@@ -22198,9 +22242,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         else if (!subjCls.empty())
             unsupported(("`match` subject has type `" + subjCls + "`, which is neither an enum nor a "
                          "tagged union").c_str(), m->line);
-        else
-            unsupported("`match` subject's type could not be resolved — bind it to a typed local first "
-                        "(a nested value-producing `match` or a variant-producing ternary needs one)", m->line);
+        else {
+            // A downcast whose TARGET does not resolve is why its type is unknown — name that name, not the
+            // shape of the `match`.
+            const auto before = _unsupported;
+            if (auto* ad = dynamic_cast<AsDowncastNode*>(m->subject.get()))
+                checkBodyType(ad->type, "an `.as<T>()` target", ad->type ? ad->type->line : m->line);
+            if (_unsupported == before)
+                unsupported("`match` subject's type could not be resolved — bind it to a typed local first "
+                            "(a nested value-producing `match` or a variant-producing ternary needs one)", m->line);
+        }
         return;
     }
     ClassInfo& ci = cit->second;
@@ -23356,6 +23407,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
     std::string name = *call->identifier->value;
 
+    // A turbofish's type arguments are types written in a body, judged like any other (KR-46) — on the
+    // routed path too, where a private qualified argument used to instantiate and run.
+    const auto unsupportedBefore = _unsupported;
+    forEachTypeArg(call->identifier, [&](const SharedIdentifier& a) {
+        checkBodyType(a, "a turbofish type argument", call->line); });
+    const bool badTypeArg = _unsupported != unsupportedBefore;
+
     // a call to a generic function was resolved to a concrete instantiation at discovery.
     // Route it to that specialized C name; reorder named args off the template's param list.
     {
@@ -23399,6 +23457,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // A turbofish inside an uninstantiated template forwards the enclosing `T` (`sortWith::<T, C>`), so
         // `explicitGenericInst` deferred it and there is no instantiation to route to — absence, not error.
         if (deferUnknownWhileProbing(DK_Turbofish)) return "0";
+        // An argument that failed above is why no instantiation resolved; the callee may well be generic.
+        if (badTypeArg) return "0";
         // Name the group the reader actually wrote. `genericArgs` now merges both, so a call that only
         // ever carried `#(…)` would otherwise be told about a turbofish it never typed.
         unsupported((call->identifier->nTypeArgs == 0
@@ -23732,7 +23792,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         // `Natural<T>::compare(...)` — the qualifier names a generic instance that has none yet.
         if (deferUnknownWhileProbing(DK_ScopeQual)) return "0";
-        unsupported(("`" + *qual->back() + "::" + name + "` — scope-qualified call resolves to no known "
+        // A one-segment qualifier that is neither a type nor a module in reach is the likelier mistake —
+        // name IT, with the import when another file declares it.
+        const std::string& head = *qual->back();
+        if (qual->size() == 1 && !isNamespace(head) && !isTypeKey(resolveUserNameImpl(head, nullptr))) {
+            if (!reportDeclaredElsewhere("type", head, [&](const std::string& k) { return isTypeKey(k); },
+                                         "this call", call->line))
+                unsupported(("`" + head + "::" + name + "` — `" + head + "` is not a type or module in reach "
+                             "here").c_str(), call->line, head);
+            return "0";
+        }
+        unsupported(("`" + head + "::" + name + "` — scope-qualified call resolves to no known "
                      "function").c_str(), call->line);
         return "0";
     }
@@ -23750,7 +23820,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         // The SUBJECT, so an editor can offer the import: a free `fn` is an importable name like any
         // other, and "unknown function" is what a missing import looks like from here.
-        unsupported("call to unknown function (args kept in source order)", call->line, name);
+        if (!call->identifier->qualifier || call->identifier->qualifier->empty()) {
+            if (!reportDeclaredElsewhere("function", name, [&](const std::string& k) { return _funcs.count(k) > 0; },
+                                         "this call", call->line))
+                unsupported(("call to unknown function `" + name + "` — no function of that name is declared or "
+                             "imported").c_str(), call->line, name);
+        } else
+            unsupported("call to unknown function (args kept in source order)", call->line, name);
         std::string s = cFunctionName(name) + "(";
         bool first = true;
         if (call->args) for (auto& a : *call->args) {
@@ -30216,6 +30292,7 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
 // be a non-destructible enum implementing the contract (a value copy-out of an owned payload would alias).
 std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
 {
+    checkBodyType(ad->type, "an `.as<T>()` target", ad->type ? ad->type->line : 0);
     std::string opCls = exprClass(ad->operand);
     std::string contract;
     if (isSmartPtrClass(opCls))   contract = _classes[opCls].collElemClass;   // Owned<Error>/Shared<Error>
@@ -30976,6 +31053,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);
         const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
+        if (rk.empty() && !who.empty()
+            && reportDeclaredElsewhere("type", who, [&](const std::string& k) { return isTypeKey(k); },
+                                       "this call", call->line))
+            return "0";
         if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "
@@ -31444,9 +31525,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 
     // Decl -> owning unit, needed DURING emission (M6 B3): a generic instance's body is emitted from the
     // header pass, and its use-sites belong to the TEMPLATE's unit, which only unitOfDecl can name. Must
-    // come after pruning, which rewrites the decl lists in place. buildDefSites rebuilds this later anyway;
-    // analysis-only, so a build pays nothing.
-    if (_analysis) buildDeclUnits();
+    // come after pruning, which rewrites the decl lists in place. buildDefSites rebuilds this later anyway.
+    //
+    // ⚠️ In EVERY mode, not only analysis. It was analysis-only ("so a build pays nothing"), and the same map
+    // is what names the file a generic body's reference is written in (`_refUnit`, `checkReach`) — so under
+    // `kama build` every name inside a generic instance or an uncalled template went unjudged, and a private
+    // `Optional<geo::HidErr>` in a generic body was refused by `kama check` and COMPILED by `kama build`.
+    buildDeclUnits(userUnits);
 
     // Assign each file its namespace context (public module scope, or a `_F<file>` file-private one)
     // and register public namespaces, before any name resolution.

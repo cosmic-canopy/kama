@@ -999,7 +999,7 @@ private:
     // Attribute every top-level decl to its owning USER unit (_declUnit). Split out of buildDefSites and
     // ALSO called from collectProgram, because generic-instance emission needs unitOfDecl while it runs —
     // long before buildDefSites. Depends on nothing but _units, and is idempotent.
-    void buildDeclUnits();
+    void buildDeclUnits(const std::vector<SharedCompilationUnit>& units);
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
     void addBuiltinDefSites();                   // ...plus the C++-registered names, from prelude/builtin.kama
     void buildRenameGroups();                    // contract method <-> its implementations (M6 B3c)
@@ -1671,6 +1671,7 @@ private:
     // idiom SPEC prescribes, so the answer is a SET of declaring files per C name rather than one
     // `declFile`, and `checkReach` asks whether the referencing file is in it.
     std::map<std::string, std::set<std::string>> _externDeclSites;   // literal C name -> files declaring it
+    std::map<std::string, std::set<std::string>> _externCSpellings;  // file -> bare type names its extern signatures spell
     std::map<std::string, std::set<std::string>> _externExportedBy;   // extern key -> files whose `export` lists it
     bool externExportedFrom(const std::string& name, const std::string& modScope) const;
     std::string importedExtern(const std::string& target) const;
@@ -2689,6 +2690,8 @@ private:
     bool isComptimeParamHere(const std::string& nm) const;
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line, const char* noun = "type");  // unresolved type name -> missing-import / unknown-type diagnostic
+    bool isTypeKey(const std::string& k) const;   // a class/enum/contract/generic table holds `k`
+    void checkBodyType(const SharedIdentifier& t, const char* what, int line);   // a type written in a body, whole spelling
     static void forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     static void forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     bool constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile);

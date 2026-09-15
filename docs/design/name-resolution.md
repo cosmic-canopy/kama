@@ -1,8 +1,9 @@
 # Name resolution and visibility at every type position (KR-46)
 
-**Status:** in progress. Plan step 1 (fixtures) and step 2 slices 1 and 2 (type arguments + hints, `0.9.337`;
-declaration positions, `0.9.339`) are DONE; **next is step 2 slice 3, the body positions**. Found building
-KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
+**Status:** in progress. Every fixture is green at `0.9.340`: plan step 1 (fixtures) and step 2 slices 1–3
+(type arguments + hints, declaration positions, body positions) are DONE. **Next is the remainder of step 2
+slice 4 (the analysis-agreement leg over `.d` fixtures), then plan steps 3 and 4 (SPEC, final grid, delete this
+doc and the row).** Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
 results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
 the `tests/xfail/` fixtures carry the record.
 
@@ -12,7 +13,7 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc, [allocation.md](allocation.md), and the rows in `docs/ROADMAP.md`. Nothing depends on an
 assistant's local memory or on a scratch directory.
 
-**State at handoff (2026-09-14, Linux).** `dev` at `0.9.339`, rebased onto `origin/dev` at `0.9.336` (15 commits
+**State at handoff (2026-09-14, Linux).** `dev` at `0.9.340`, rebased onto `origin/dev` at `0.9.336` (15 commits
 of other work: KR-38, KR-21, KR-42, KR-43, KR-44, KR-45, KR-53 — among them the extern model change below). Gate
 green on every leg at each KR-46 commit. The KR-46 commits so far, oldest first:
 
@@ -20,6 +21,8 @@ green on every leg at each KR-46 commit. The KR-46 commits so far, oldest first:
 - `0.9.338` — a qualified module constant sizes an `InlineArray`; a local's `#(K)` is judged for reach.
 - slice 2 (`0.9.339`) — statics, `implements` and its arguments, base types, bounds, qualified names in an
   `extern fn` signature; the stdlib gains the sibling imports those positions had never been asked for.
+- slice 3 (`0.9.340`) — body positions, judged where the emitter resolves them; `kama build` judges names
+  inside generic bodies (it never had the decl→unit map `kama check` had).
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: **KR-46** (this doc) → **KR-47**
 reach-based `--no-heap` → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable
@@ -42,18 +45,10 @@ global allocator → **KR-50** allocator-aware errors.
 1. `git fetch && git rebase origin/dev`, `./dev build`.
 2. Recreate the scratch tools: extract `genfix.py` and `classify.sh` from the appendix into `.scratch/imports/`
    (`awk '/^### \`genfix.py\`/{f=1} f&&/^\`\`\`python/{b=1;next} b&&/^\`\`\`$/{exit} b' docs/design/name-resolution.md > .scratch/imports/genfix.py`,
-   the same with `classify.sh` and `bash`), then `python3 .scratch/imports/genfix.py .` writes all 162 fixtures
-   and both controls into `tests/` — the 127 already in the tree are rewritten with identical content.
-3. Classify on the current compiler — expect, at `0.9.339`, **5 ACCEPTED, 9 C, 21 MSG, 127 green**. A different
-   count means the compiler moved; record it here before changing anything.
-4. Before a gate run, delete every generated fixture that is not green (`classify.sh | grep -v ^green`). Both
-   controls build and run, and stay. Then the plan below, step 2, slice 3.
-
-**What is left** — every one a BODY position (slices 3–4): `cast_arg`, `cast_direct`, `sizeof` (C);
-`as_downcast`, `ctor_call`, `static_call`, `variant_expr`, `turbofish`, `turbofish_deser`, `fn_call`,
-`const_read` (MSG); `turbofish`, `turbofish_deser`, `variant_expr`, `generic_body`, `generic_body_called` with a
-private qualified name (ACCEPTED).
-
+   the same with `classify.sh` and `bash`). Run `python3 .scratch/imports/genfix.py .` only to re-measure: all
+   162 fixtures and both controls are already in the tree, and it rewrites them with identical content.
+3. Classify on the current compiler — expect, at `0.9.340`, **162 green**. A different count means the compiler
+   moved; record it here before changing anything.
 **The extern template changed at `0.9.339`.** Upstream's `0.9.327` refuses a plain `type value` crossing into C
 by value, which fired before reach could be asked, so `extern_sig` now spells `UnsafePtr<@X@>` (the generator
 and the qualified control both). The decision below still holds: a bare name there is a C spelling, a qualified
@@ -325,22 +320,38 @@ still fails in C behind it).
       function, type and method type params, before any instantiation (~18245 today, instantiation-time
       only; `bound_fn` a/b/c's "`X` has no bound providing `cm`" is ~13307 firing first); `fnptr`
       signatures. Keep the walk in step with `buildPositions` step (2) in `kama.query.cpp`.
-   3. **Body positions.** Replace `checkBodyLocals` (export-only, over `collectBindings`) with a full statement
-      + expression walk — `collectBindingsExpr` (~1681 in `kama.query.cpp`) is NOT exhaustive (no
-      `SizeofNode`, `BitcastNode`, turbofish args, `ObjectCreationNode::type`), so it cannot be reused as is.
-      Judge: local declared types (full `checkTypeNode`), `Cast`/`Bitcast`/`Sizeof`/`AsDowncast` types,
-      `new`, turbofish args, and the qualified head of a value expression (`geo::HidErr::Bad`, `X::stat()`,
-      `X.make()`) via `checkReach(qualified=true)`. A generic METHOD's own type params must be bound here —
-      their absence is why `checkBodyLocals` stayed export-only. Turbofish (~22787) then reports the failing
-      argument, not "only valid on a generic function".
-   4. **Generic bodies once, at the template** — remove the instance skips in `checkReach` (~2653 and
-      ~2685) only once slice 3 covers those positions; then delete each emission-time `checkReach` caller
-      (~577, ~3015, ~4442, ~22697, ~23029) whose positions the walk provably covers (its fixtures stay green
-      with the call removed). A bare function call or constant read needs local-scope knowledge the walk
-      does not have: a caller kept for that stays with a comment saying so, and this doc records it.
-   Also, in the slice that first needs it: extend the analysis-agreement leg of `run_tests.sh` (~1071) to
-   `.d` fixtures (`kama check` over all their files, or their `kama.json`) — measured: all 24 existing
-   `tests/xfail/*.d` are already refused by it.
+   3. **DONE (`0.9.340`) — 127 → 162 green: every fixture, no regression, both controls run.** Not the walk
+      this slice first proposed. **Decided 2026-09-14 with the maintainer: body positions are judged where
+      the emitter resolves them.** Measured first: no statement/expression visitor exists to reuse (~70 node
+      kinds, 123 identifier fields), so a names-only walk would have been a third structure beside the emitter
+      and `buildPositions`, to keep in step with every expression form — while every OTHER body rule (kinds,
+      ownership, null, raw pointers) lives in the emitter's walk, because analysis IS emission here. The one
+      thing a separate walk was meant to buy, judging code the compiler never emits, it does not: a
+      declaration `@compileFor` drops is removed before EITHER walk (`@compileFor(ARCH_WASM32) fn int32
+      f(Zork z)` builds clean on native, signature included) — its own row, not this campaign. An uncalled
+      generic body is covered: the template probe re-emits it. GOALS #10 (a front end proven once, many
+      backends) is answered by the IR refactor (ROADMAP_DETAIL §7), which moves every body rule together.
+
+      What landed: `checkBodyType` — the declaration rules over a body type's whole spelling (resolution,
+      reach, `#(K)`) — at the local declaration, cast, bitcast, `sizeof`/`alignof`, `.as<T>()` (and a `match`
+      whose downcast subject fails on its target), and turbofish arguments, whose failure no longer falls
+      through to "only valid on a generic function". `reportDeclaredElsewhere` now also answers a bare
+      constant read, an unknown function call, an unresolved `X::…` head, a receiver type and a static call's
+      qualifier. A qualified enum in a variant expression is judged for reach (`geo::HidErr::Bad` compiled).
+
+      **Found on the way — the `check`/`build` disagreement's root cause:** `buildDeclUnits` ran in analysis
+      mode only ("so a build pays nothing"), so under `kama build` `unitOfDecl` answered null, `_refUnit` was
+      null inside every generic instance and probe, and `checkReach` — told nobody knew the file — judged
+      nothing there. It runs in every mode now, over `collectProgram`'s own user units.
+
+      **The FFI seam, made exact:** `cast<CompareFn>(c)` (`tests/callback_qsort.d`) names a header typedef.
+      A bare name the file's own `extern fn` signatures spell is recorded as a C spelling that file
+      introduced (`_externCSpellings`), and a body type may name exactly those; `cast<CompareFnX>` is refused.
+   4. **Mostly absorbed by slice 3.** The emission-time `checkReach` callers STAY — they are where body names
+      are judged, by the decision above — and the instance guards in `checkReach` stay: with the decl→unit
+      map built in every mode, they judge correctly rather than skip. What remains: extend the
+      analysis-agreement leg of `run_tests.sh` (~1071) to `.d` fixtures (`kama check` over all their files, or
+      their `kama.json`) — measured: all 24 pre-KR-46 `tests/xfail/*.d` are already refused by it.
 3. **`SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
    `<!-- xfail: … -->` marker (check-doc-claims).
 4. Re-run the grid at the end (every a/b/c/cq/bs cell KD, every bq/bsq/d cell runs), paste the table into

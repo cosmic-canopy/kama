@@ -1,0 +1,2 @@
+// KR-46: a function call, naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { int32 n = zorkFn(); return n - 1; }

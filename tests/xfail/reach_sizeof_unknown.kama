@@ -1,0 +1,2 @@
+// KR-46: a `sizeof` operand, naming a name declared nowhere. Must be rejected, naming it.
+fn int32 main() { usize n = sizeof(ZorkVal); return 0; }

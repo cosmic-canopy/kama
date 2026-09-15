@@ -1,0 +1,11 @@
+export { ShownErr };
+
+type enum ShownErr implements Error {
+    Bad, Worse(isize at);
+    public const fn string message() { return "shown"; }
+}
+
+type enum HidErr implements Error {
+    Bad, Worse(isize at);
+    public const fn string message() { return "hid"; }
+}
