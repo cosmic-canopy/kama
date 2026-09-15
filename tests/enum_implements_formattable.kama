@@ -2,7 +2,7 @@
 // could implement `Hashable` and `Equatable` (both of which name it) but not the one contract that makes
 // a value printable — `${shape}` on an enum had no legal spelling at all, hand-written or derived.
 //
-// Nothing about an enum made this hard: a promoted enum is a variant ClassInfo like any other, and the
+// Nothing about an enum made this hard: an enum with members has a ClassInfo like any other type, and the
 // contract-kind gate was simply not told it qualified. The derive (`@generate(Formattable)` on an enum)
 // rides on the same one-word fix; this fixture pins the hand-written half, which is what the gate governs.
 type enum Shape implements Formattable {
@@ -17,7 +17,7 @@ type enum Shape implements Formattable {
     }
 }
 
-// A payload-less enum reaches the same gate through promotion.
+// A payload-less enum reaches the same gate, and stays its integer.
 type enum Color implements Formattable {
     Red,
     Green;

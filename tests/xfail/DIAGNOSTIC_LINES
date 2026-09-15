@@ -266,7 +266,6 @@ elem_method_const	elem_method_const.kama:12
 empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
 enum_attribute_unknown	enum_attribute_unknown.kama:3
 enum_bare_spelling	enum_bare_spelling.kama:4
-enum_boundary_members	enum_boundary_members.kama:3
 enum_boundary_no_width	enum_boundary_no_width.kama:2
 enum_boundary_payload	enum_boundary_payload.kama:2
 enum_contract_method_not_public	enum_contract_method_not_public.kama:5
@@ -312,6 +311,7 @@ extern_c_spelling_other_file	main.kama:8
 extern_disagree	main.kama:4 main.kama:6
 extern_enum_comptime	extern_enum_comptime.kama:5
 extern_enum_disagree	main.kama:6
+extern_enum_members_twice	main.kama:5
 extern_enum_missing_constant	main.kama:7
 extern_enum_value	extern_enum_value.kama:4
 extern_enum_width	-

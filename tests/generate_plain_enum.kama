@@ -1,10 +1,10 @@
 // `@generate(...)` on a PAYLOAD-LESS enum. It used to be refused — "has nothing to synthesize on the
 // payload-less enum `Color` (it is a bare integer, not a struct)" — which was true of the enum as it
 // stood and false as a conclusion: an enum that writes `implements Hashable` by hand has exactly the
-// same problem and is not refused. `collectEnumConformances` PROMOTES it to a variant ClassInfo, which
-// is where a conformance and a method can live. `@generate` asks for the same thing in fewer words, so
-// it takes the same road. (The promotion is lossless — 0.9.234 is the commit that made sure of it, and
-// the four lines below re-prove it here: `==`, `cast<int32>`, an explicit member value, and `match`.)
+// same problem and is not refused. `collectEnumConformances` gives it a member ClassInfo, which is where a
+// conformance and a method live, while the enum stays its integer (KR-59). `@generate` asks for the same
+// thing in fewer words, so it takes the same road; the four lines below prove the integer is untouched:
+// `==`, `cast<int32>`, an explicit member value, and `match`.
 //
 // Closes the second half of consumer bug KB-19: `Deserializable` on an enum used to register only for
 // the MIXED shape — some variants with payloads, some without. All-payload was the `hasUnit` gate
@@ -18,8 +18,8 @@ fn int32 main() {
     Color g = Color::Green;
     Color r = Color::Red;
 
-    // The integer nature, kept: `==` still lowers to a raw tag compare (the derived `equals` exists and
-    // is what a Map key uses, but `==` does not pay for a call), and the member VALUE survives promotion.
+    // The integer nature, kept: `==` lowers to a raw integer compare (the derived `equals` exists and
+    // is what a Map key uses, but `==` does not pay for a call), and the member VALUE is the one written.
     if (g != Color::Green) { return 91; }
     if (g == r)            { return 92; }
     if (cast<int32>(g) != 5) { return 93; }

@@ -3,8 +3,8 @@
 // such clause at all, which is the only reason the retroactive `implements C for E` block existed. That
 // block is gone; this is the one spelling.
 //
-// Covers both halves that used to need the lazy "Model C" promotion: a payload-less enum gains a real
-// ClassInfo so it can carry a method, and it gains an `<E>__as_Error` vtbl so ONE `Error`-typed call site
+// Covers both halves that used to need the lazy "Model C" promotion: a payload-less enum gains a member
+// ClassInfo so it can carry a method (it stays its integer; the method takes it by value), and it gains an `<E>__as_Error` vtbl so ONE `Error`-typed call site
 // dispatches to the right impl at runtime. Distinct message lengths prove the dispatch is dynamic rather
 // than a static collapse. Kept < 256 so the exit code isn't truncated.
 //

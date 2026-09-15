@@ -1765,9 +1765,11 @@ as a field of a `type extern value` or `type expose value`, or as an `InlineArra
   Every value is written out, so a variant cannot be renumbered under a host that compiled against it. <!-- xfail: expose_enum_missing_value -->
 
 Either marker requires the width (`: int32`) and a payload-less enum: a tagged union has no C spelling. Neither <!-- xfail: enum_boundary_no_width, enum_boundary_payload -->
-takes both markers — one side owns the values. And neither may declare methods, a contract or `@generate`, <!-- xfail: enum_extern_and_expose -->
-because kama gives an enum those by lowering it to a struct, and the enum C sees is an integer; write a free <!-- xfail: enum_boundary_members -->
-function over it instead. A `type expose enum` crosses an `expose fn` only, as a `type expose value` does. <!-- xfail: expose_enum_on_extern_fn -->
+takes both markers — one side owns the values. <!-- xfail: enum_extern_and_expose --> Either may declare methods, a contract
+and `@generate` like any enum: a payload-less enum is its integer whatever it declares, so what crosses is
+unchanged. <!-- test: enum_boundary_members --> A C enum declared in several files takes its members on one of
+those declarations. <!-- xfail: extern_enum_members_twice --> A `type expose enum` crosses an `expose fn` only, as a
+`type expose value` does. <!-- xfail: expose_enum_on_extern_fn -->
 
 ### Time (`std::time`) ✅
 
@@ -3205,9 +3207,9 @@ does not qualify is refused at the **use** site, naming the field that disqualif
 For an enum it names the variant too — "`Put`'s field `v` (`Plain`)" — because a sum type gives the
 reader two places to look.
 
-A payload-less `enum` has no struct to walk, so a derive **promotes** it to the same tagged representation
-that `implements` on such an enum has always produced — losslessly: `==`, `cast<IntType>`, `try cast`, its
-explicit member values and `match` all survive. <!-- test: enum_promoted_scalar_ops -->
+A payload-less `enum` derives over its members: it serializes as the bare variant name, formats as it, and
+compares and hashes as its integer — which it still is, with a derive or without: `==`, `cast<IntType>`,
+`try cast`, its explicit member values and `match` are unchanged. <!-- test: enum_promoted_scalar_ops -->
 
 `of`/`zero` on an `enum` is a **non-goal**, not a gap: a variant is already its own memberwise constructor
 (`Shape::Circle(r: 2)`), and `zero` names no variant. So is `Serializable` on the prelude's `Optional`,
@@ -4377,9 +4379,10 @@ The `;` separating variants from members is **mandatory**, and it is what makes 
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->
 they satisfy a contract — but **not a field or a destructor** — its layout is its tag plus its
-variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Declaring a method-carrying contract gives a
-payload-less enum a tagged representation so it can hold the method and a dispatch vtable; that is
-transparent to its by-value uses.
+variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Members never change
+what an enum IS in C: a payload-less enum stays its integer (`typedef int32_t Color`), and its methods take it
+by value (`bool Color__isWarm(Color self)`), the way a `type intrinsic` method takes a primitive; a contract
+reaches them through the ordinary vtable. An enum with payloads is a tag plus a union either way.
 
 A **generic** enum declares members and contracts the same way, and — like a generic `value` — each
 instance takes them **per instance**: a `when [...]` gate on a method or on an `implements` entry is judged

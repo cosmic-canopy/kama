@@ -1,0 +1,6 @@
+// A C enum may be declared again where it is used, but it is ONE type, so its members belong to one of those
+// declarations. Here both declarations hang a method on `Level`, and neither file would see the other's.
+import { gfx::lowOf };
+extern "stdio.h";
+type extern enum Level : int32 { LEVEL_LOW, LEVEL_HIGH; public fn bool isHigh() { return this == Level::LEVEL_HIGH; } }
+fn int32 main() { return 0; }

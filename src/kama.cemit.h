@@ -408,7 +408,7 @@ struct ClassInfo {
     CtorInfo*       ctorByName(const std::string& n)       { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
     const CtorInfo* ctorByName(const std::string& n) const { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
     ClassDeclarationNode*             node    = nullptr;
-    // An enum promoted to a variant ClassInfo has NO `ClassDeclarationNode` — its declaration site is an
+    // An enum's ClassInfo has NO `ClassDeclarationNode` — its declaration site is an
     // `EnumDeclarationNode`. Anything reaching for a line number or a member list must consult this when
     // `node` is null, or it dereferences null (which `emitClassInterfaceVtables` did for an unknown
     // contract on an enum).
@@ -1367,9 +1367,9 @@ private:
     // table (kama.query.cpp), which is the ONLY place either kind of enum gets a def-site: a tagged enum
     // is lowered to a variant ClassInfo and never reaches `_enums`, and the `_classes` loop skips variant
     // backings. (It also fed the lazy Model-C promotion, which is gone — an enum now declares its
-    // conformance, so it is promoted at its declaration and needs no rebuild.)
+    // conformance at its declaration and needs no rebuild.)
     std::map<std::string, EnumDeclarationNode*> _enumDeclNodes;
-    std::set<std::string>                       _preludeEnums;   // enums declared in the prelude (a promoted one's vtbl/serde is header-static, no home module)
+    std::set<std::string>                       _preludeEnums;   // enums declared in the prelude (one with members has a header-static vtbl/serde, no home module)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info
     std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a
                                                              // collection's dtor calls its element's,
@@ -1884,27 +1884,13 @@ private:
     // at the use site: without it the author is told to add the attribute they already wrote.
     std::string derivedUnmetNote(const std::string& cty, const std::string& bound);
     void emitEnum(EnumInfo& ei);
+    std::string enumKey(EnumDeclarationNode* ed);
+    EnumInfo scalarEnumInfo(EnumDeclarationNode* ed, const std::string& name, const std::string& declFile);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
-    // A PROMOTED payload-less enum: a variant ClassInfo whose every variant carries no payload, so it
-    // lowers to `struct { Tag tag; }` — the same information a bare C enum holds, in a wrapper that
-    // exists only so the type has somewhere to hang its methods. SPEC says a payload-less enum "lowers
-    // to an integer", and every scalar operation the language grants one (`==`/`!=`, `cast<intN>`,
-    // `try cast<E>`, a member value) must therefore keep working after promotion — each reads `.tag`.
-    // Not the same question as `isEnum`, which asks whether the name is still a bare C integer.
     // A payload-less enum's member list and values, or nullptr. Members or not, it is always in `_enums`.
     EnumInfo* enumInfo(const std::string& name) {
         auto it = _enums.find(name);
         return it == _enums.end() ? nullptr : &it->second;
-    }
-    // One payload-less-enum operand's tag, spelled for how that operand EMITS: `this` inside the enum's
-    // own method is already `self`, a pointer (addrOfOperand says the same), and everything else is a
-    // value. Emits the operand exactly once; call it after the operand has been classified.
-    std::string unitEnumTag(SharedExpression e);
-    bool isUnitEnum(const std::string& cty) const {
-        auto it = _classes.find(cty);
-        if (it == _classes.end() || !it->second.isVariant || it->second.variants.empty()) return false;
-        for (auto& v : it->second.variants) if (!v.payload.empty()) return false;
-        return true;
     }
     void collectClasses(SharedCompilationUnit unit);
 
@@ -1915,7 +1901,7 @@ private:
     // A recorded conformance dispatches STATICALLY (it lands in `staticOnlyInterfaces`, so no fat-pointer
     // vtable is emitted for it). `isPrimitive` gates the serde-return collection scan: a primitive's
     // `Result<scalar, Owned<Error>>` monomorph only matters when serde is used.
-    // `type enum E implements C { A, B; …members… }` — promote, inject, record, check. Between
+    // `type enum E implements C { A, B; …members… }` — member ClassInfo, inject, record, check. Between
     // linkContracts() (needs contractMethods) and buildVtables().
     void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
 
@@ -3070,6 +3056,7 @@ private:
                                  const char* what, int line);
     // The variant type named by a `::` qualifier — a non-generic union directly, or a generic
     // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
+    std::string scalarEnumInstanceOf(const std::string& qualResolved);
     ClassInfo* resolveVariantType(const std::string& qualResolved);
     // The value-producing `match`. `emitMatch` lifts an expression-position match to a temp
     // (strict ISO C11 — no statement-expression); `emitMatchStatement` emits a statement-position

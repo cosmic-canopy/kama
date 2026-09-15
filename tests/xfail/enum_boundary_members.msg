@@ -1,1 +1,0 @@
-cannot declare members

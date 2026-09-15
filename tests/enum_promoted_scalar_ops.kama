@@ -1,19 +1,20 @@
-// A payload-less enum that declares a method or a contract is PROMOTED to a variant ClassInfo — it needs
-// somewhere to hang the method — and that promotion used to change what the enum IS. SPEC says a
+// A payload-less enum that declares a method or a contract used to be PROMOTED to a tagged struct — it
+// needed somewhere to hang the method — and that promotion changed what the enum IS. SPEC says a
 // payload-less enum "lowers to an integer", and lists exactly which scalar operations one keeps: `==`/`!=`
 // between two values of the same enum, the total `cast<intN>` out of it, `try cast` back in, and member
-// values written by hand. Every one of those broke on promotion: `==` demanded `implements Equatable`,
+// values written by hand. Every one of those broke on promotion (0.9.234), and KR-59 then deleted the
+// promotion: the enum stays its integer and its methods take it by value. What promotion broke: `==` demanded `implements Equatable`,
 // `cast<int32>` reached clang as a cast of a struct, `try cast` was told a `Color` conversion cannot fail,
 // and `Green = 5` was silently emitted as 1.
 //
-// The counterpart is tests/enum_map_key.kama, which covers the CONTRACT half of the same promotion.
+// The counterpart is tests/enum_map_key.kama, which covers the CONTRACT half.
 
 type enum Color implements Hashable {
     Red, Green = 5, Blue;                      // explicit value: the run is 0, 5, 6 — not 0, 1, 2
     public const fn uint64 hash() { return cast<uint64>(cast<int32>(this)); }
 }
 
-// A promoted enum's member is still a compile-time integer, so another enum's initializer may read it.
+// A member of an enum with methods is still a compile-time integer, so another enum's initializer may read it.
 type enum Next { After = Color::Green + 1 }    // 6
 
 // The tag comparison is a FALLBACK, not an override: a declared `Equatable` still wins, so an enum that
@@ -42,7 +43,7 @@ fn int32 main() {
     int32 missN = match (miss) { case Some(value: v): 0; case None: 20; };
 
     n = n + hitN + missN;
-    n = n + cast<int32>(Next::After);          // 6 — folded from the promoted enum's member
+    n = n + cast<int32>(Next::After);          // 6 — folded from a member of an enum with methods
 
     if (Grade::Low == Grade::High) { n = n + 8; }   // the declared `equals`, not the tags
 

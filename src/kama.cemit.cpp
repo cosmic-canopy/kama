@@ -1356,20 +1356,19 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                     for (size_t i = 0; i + 1 < id->qualifier->size(); ++i)
                         enumQual->push_back((*id->qualifier)[i]);
                     std::string en = resolveUserName(*id->qualifier->back(), enumQual);
-                    // …in ALL THREE spellings an enum has. `_enums` is a bare C integer; a payload-less
-                    // enum PROMOTED for declaring a method has left it for `_classes`; and a tagged enum
-                    // was never in it. Answering "" for the last two left every rule that asks this
-                    // question unable to see that `E::B` is an `E` at all: the comparison lowering fell
-                    // through to a raw C operator (`==` between two structs, refused by clang, and for a
-                    // payload enum reported as "no operator '==' — define `operator==`", which kama does
-                    // not have), and the enum -> integer cast emitted a cast of a struct. The member NAME
+                    // …in EVERY spelling an enum has. `_enums` is a payload-less enum (members or not, and a
+                    // generic one's instance, pinned by the target type); a tagged enum was never in it.
+                    // Answering "" for a tagged one left every rule that asks this question unable to see
+                    // that `E::B` is an `E` at all: the comparison lowering fell through to a raw C
+                    // operator, reported as "no operator '==' — define `operator==`", which kama does not
+                    // have. The member NAME
                     // is checked, so `Color::NotAVariant` still resolves to nothing and reaches the
                     // unresolved-name diagnostic that names the enum.
                     //
                     // A GENERIC enum's variant (`Optional::None`) deliberately misses: its template is in
                     // `_genericTypes`, never `_classes`, and the instance a literal belongs to comes from
                     // the target-type context, which this function does not have.
-                    if (isEnum(en)) ct = en;
+                    if (isEnum(scalarEnumInstanceOf(en))) ct = scalarEnumInstanceOf(en);
                     else {
                         auto cit = _classes.find(en);
                         if (cit != _classes.end() && cit->second.isVariant)
@@ -4123,24 +4122,16 @@ MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const
 // primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched). The
 // method form passes `self` by pointer (an rvalue is wrapped by addrOfOperand); the free form passes
 // both operands by value.
-std::string CEmitter::unitEnumTag(SharedExpression e)
-{
-    const bool thisRecv = dynamic_cast<ThisAccessNode*>(e.get()) != nullptr;
-    const std::string t = emitExpression(e);
-    return thisRecv ? t + "->tag" : "(" + t + ").tag";
-}
-
 std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line)
 {
     std::string lc = exprClass(lhs);
     std::string rc = exprClass(rhs);
     // An enum VALUE (`Color::Red`, `WsOpcode::Text`) is not a class expression, so `exprClass` — which
-    // answers for class-typed operands only — leaves it blank. For an UNPROMOTED payload-less enum that is
-    // right: it is a bare C integer and the all-primitive path below gives it the raw operator. For the
-    // other two spellings it was a hole, and the same one twice:
+    // answers for class-typed operands only — leaves it blank. For a payload-less enum without members that
+    // is right: it is a bare C integer and the all-primitive path below gives it the raw operator. Two
+    // spellings need the enum's class instead:
     //
-    //   - a PROMOTED payload-less enum is a `struct { Tag tag; }`, so `Color::Red == c` reached the raw
-    //     operator and emitted `==` between two structs for clang to refuse;
+    //   - a payload-less enum WITH members must reach its hand-written `equals`, when it declares one;
     //   - a TAGGED enum that declares `Equatable<This>` — the hand-written conformance, which is the
     //     sanctioned answer until the derive ships — compared fine against a named local and was refused
     //     against a variant literal, with a message naming `operator==`, a thing kama does not have and
@@ -4148,13 +4139,16 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     //
     // `typeOfExpr` answers for an enum value in every spelling, so both are one rule. Accepting only a
     // variant class from it widens the classifier for nothing else.
-    auto enumOperandClass = [&](SharedExpression e) {
+    // `s == Side::R` on a GENERIC integer enum: the bare member names only the template, and the other
+    // operand's instance is what pins it — the same target-type context a declaration supplies.
+    auto enumOperandClass = [&](SharedExpression e, const std::string& other) {
+        ScopedStr _vt(_variantTargetType, other.empty() ? _variantTargetType : other);
         std::string t = typeOfExpr(e);
         auto it = _classes.find(t);
         return (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) ? t : std::string();
     };
-    if (lc.empty()) lc = enumOperandClass(lhs);
-    if (rc.empty()) rc = enumOperandClass(rhs);
+    if (lc.empty()) lc = enumOperandClass(lhs, rc);
+    if (rc.empty()) rc = enumOperandClass(rhs, lc);
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
     // `string` is a primitive (kama_string), not a user-operator type, so `+`/`==`/`!=` are compiler
@@ -4354,18 +4348,18 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             if (m != ci->second.methods.end()) cm = &m->second;
         }
         // `==`/`!=` between two values of the SAME payload-less enum is the one comparison an enum keeps
-        // without declaring anything (SPEC § *Enums*: everything else goes through `match`). An unpromoted
-        // one never reaches here — it is a bare C integer, so the all-primitive path above already
-        // answered it with the raw operator — and a PROMOTED one (it declared a method or a contract, so
-        // it is a `struct { Tag tag; }`) must not lose the operator merely for having done so. Comparing
-        // the tags is what the integer form compiles to. Ordering is NOT included: `<` on an enum needs
-        // `Comparable`, which the message below still says.
+        // without declaring anything (SPEC § *Enums*: everything else goes through `match`). One without
+        // members never reaches here — the all-primitive path above already answered it with the raw
+        // operator — and one WITH members is the same integer, so it must not lose the operator merely for
+        // having declared them. Ordering is NOT included: `<` on an enum needs `Comparable`, which the
+        // message below still says.
         // ...and the same shortcut when the `equals` in hand is the SYNTHESIZED one: a derived
-        // `Color__equals` on a unit-only enum is `self->tag == other->tag` wearing a function call, so
+        // `Color__equals` on a payload-less enum is `self == *other` wearing a function call, so
         // taking the call would make `@generate(Equatable)` cost something that `implements Equatable`
         // does not. A HAND-WRITTEN `equals` still wins — the author meant it — and the derived body is
         // still emitted and still used wherever the conformance is (a `Map` key, a `<T: Equatable>` bound).
         if ((!cm || cm->isSynthCmp) && eq && ci != _classes.end() && ci->second.isScalarEnum()) {
+            ScopedStr _vt(_variantTargetType, lc);   // pins a generic enum's bare member (see enumOperandClass)
             const std::string l = emitExpression(lhs), r = emitExpression(rhs);
             return "(" + l + (token == EQEQ ? " == " : " != ") + r + ")";
         }
@@ -4766,9 +4760,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             // Only a MEMBER of the enum resolves here; `K::ZZZ` used to be emitted as `K_ZZZ` for the C
             // compiler to refuse. A miss falls through (an enum can carry `Type::NAME` constants and
             // contract methods, resolved below) and ends in rejectUnresolvedName, which names the enum.
-            if (_enums.count(en))
-                for (auto& m : _enums[en].members)
-                    if (m.name == nm) { recordRef(enumMemberKey(en, nm), v); return en + "_" + nm; }
+            // A generic payload-less enum names its TEMPLATE (`Side::R`); the instance is the target's.
+            const std::string een = scalarEnumInstanceOf(en);
+            if (_enums.count(een))
+                for (auto& m : _enums[een].members)
+                    if (m.name == nm) { recordRef(enumMemberKey(een, nm), v); return een + "_" + nm; }
             // `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
             // (`Optional<int32>::None` resolves the instance via the target-type context).
             if (ClassInfo* vt = resolveVariantType(en))
@@ -5183,11 +5179,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          "by passing the object where a `" + nm + "` is expected").c_str(), v->line);
             return "0";
         }
-        // A PROMOTED payload-less enum is in `_classes` (it is a `struct { Tag tag; }`), so it would take
-        // the aggregate message below and be told to use `bitcast` — which is not the answer for an enum.
-        // Judged with the unpromoted form, one rule down, so both spellings of the same type say the same
-        // thing: an integer becomes an enum only through `try cast`.
-        if (_classes.count(target) && !isUnitEnum(target)) {
+        // An enum with members has a `_classes` entry too, but it is an integer, not an aggregate: it takes
+        // the enum message one rule down (an integer becomes an enum only through `try cast`), not `bitcast`.
+        if (_classes.count(target) && !isEnum(target)) {
             if (opaqueScalarUnknown(target)) return "0";   // an opaque param — see the header
             unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
                          "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
@@ -5206,7 +5200,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         //
         // `truncate` is excluded so its own message wins below: it keeps low bits, and pointing its
         // reader at `try cast` would answer a question they did not ask.
-        if (!v->isTruncate && (isEnum(target) || isUnitEnum(target))) {
+        if (!v->isTruncate && isEnum(target)) {
             unsupported(("`" + verb + "<" + nm + ">(…)` — an integer is not a `" + nm + "` until it has "
                          "been checked against the variants. Name the variant when you know it "
                          "(`" + nm + "::…`), or use `try cast<" + nm + ">(…)` for a value from outside, "
@@ -5249,12 +5243,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             const std::string checked = narrowCheck(target, v->unaryExpression);
             if (!checked.empty()) return checked;   // (declines for an enum source — a kind crossing, not a narrowing)
         }
-        // Enum -> integer is TOTAL and stays legal (SPEC § *Enums*). When the source is a PROMOTED
-        // payload-less enum the value is its tag, so that is what converts: without this the emitted C is
-        // `((int32_t)(c))` over a struct, which kama accepted and clang rejected — a promoted enum lost
-        // the one cast direction the language grants every enum, for having declared a method.
-        const bool unitEnumSrc = isUnitEnum(typeOfExpr(v->unaryExpression));   // classify BEFORE emitting
-        if (unitEnumSrc) return "((" + target + ")(" + unitEnumTag(v->unaryExpression) + "))";
+        // Enum -> integer is TOTAL and stays legal (SPEC § *Enums*): every payload-less enum is its integer.
         return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
@@ -8785,7 +8774,7 @@ static bool enumIsTagged(EnumDeclarationNode* ed)
 // per-variant payloads. Reuses ClassInfo so monomorphization, RAII, and move analysis all apply.
 // A variant is flagged `isVariant`; its move-only-ness follows destructibility (owns a resource →
 // moves), not the `kind` (which stays the neutral `Intrinsic`).
-// The line of whichever declaration produced this ClassInfo. A promoted enum has an `enumNode` and a NULL
+// The line of whichever declaration produced this ClassInfo. An enum's ClassInfo has an `enumNode` and a NULL
 // `node` (that one is a ClassDeclarationNode), so anything reporting a diagnostic against a type must come
 // through here rather than dereferencing `node`.
 int ClassInfo::declLine() const { return node ? node->line : (enumNode ? enumNode->line : 0); }
@@ -8822,6 +8811,38 @@ ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::st
             ci.variants.push_back(vc);
         }
     return ci;
+}
+
+// An enum's key in `_enums`/`_classes`: its module-qualified name, except a `type extern enum`, which keeps its
+// literal C name.
+std::string CEmitter::enumKey(EnumDeclarationNode* ed)
+{
+    const std::string& bare = *ed->identifier->value;
+    return enumHasModifier(ed, "extern") ? bare : qualify(bare);
+}
+
+// The integer form of a payload-less enum, under the current name-resolution context: its members in
+// declaration order (values folded later, by foldEnumMembers) and its `: IntType` width.
+EnumInfo CEmitter::scalarEnumInfo(EnumDeclarationNode* ed, const std::string& name, const std::string& declFile)
+{
+    EnumInfo ei;
+    ei.name  = name;
+    ei.line = ed->line;
+    ei.scope = _nsCtx.scope;
+    ei.usings = _nsCtx.usings;
+    ei.symbolAliases = _nsCtx.symbolAliases;
+    ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // `: IntType`
+    if (ed->body)
+        for (auto& m : *ed->body)
+            if (m->identifier && m->identifier->value) {
+                EnumMember em;
+                em.name  = *m->identifier->value;
+                em.value = m->constantExpression;   // folded later, by foldEnumMembers
+                em.line  = m->line;
+                ei.members.push_back(em);
+            }
+    ei.declFile = declFile;
+    return ei;
 }
 
 void CEmitter::collectEnums(SharedCompilationUnit unit)
@@ -8862,7 +8883,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                                        "against").c_str(), m->line);
                 }
         }
-        std::string name = isExtern ? bare : qualify(bare);   // an extern enum keeps its literal C name
+        std::string name = enumKey(ed);
         _enumDeclNodes[name] = ed;   // the LSP def-site table's only source for enums
         if (unit == _preludeUnit) _preludeEnums.insert(name);
 
@@ -8941,34 +8962,14 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             continue;
         }
 
-        // A payload-less enum carrying `@generate` is NOT handled here. It is a bare C integer at this
-        // point, with no ClassInfo to synthesize into — which is what the refusal that used to stand here
-        // said. But an enum that declares `implements` has exactly the same problem and is not refused:
-        // collectEnumConformances PROMOTES it to a variant ClassInfo, which is where a conformance and a
-        // method can live. `@generate` asks for the same thing by a shorter spelling, so it takes the same
-        // road; the promotion is lossless (0.9.234 made sure `==`, `cast<int32>`, `try cast` and the
-        // member values all survive it). See collectEnumConformances, which reads the attribute itself.
+        // A payload-less enum carrying `@generate` is NOT derived here: collectEnumConformances gives it the
+        // member ClassInfo a conformance and a method live on — as it does for one that declares
+        // `implements` — and reads the attribute itself. The enum stays this bare C integer either way.
         // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
-        EnumInfo ei;
-        ei.name  = name;
+        EnumInfo ei = scalarEnumInfo(ed, name, _collectingUnitPath);
         ei.isExtern = isExtern;
         ei.isExpose = isExpose;
-        ei.line = ed->line;
         if (isExpose) ei.hostName = linkNameOf(ed->attributes, ed->line);
-        ei.scope = _nsCtx.scope;
-        ei.usings = _nsCtx.usings;
-        ei.symbolAliases = _nsCtx.symbolAliases;
-        ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // `: IntType`
-        if (ed->body)
-            for (auto& m : *ed->body)
-                if (m->identifier && m->identifier->value) {
-                    EnumMember em;
-                    em.name  = *m->identifier->value;
-                    em.value = m->constantExpression;   // folded later, by foldEnumMembers
-                    em.line  = m->line;
-                    ei.members.push_back(em);
-                }
-        ei.declFile = _collectingUnitPath;
         if (isExtern) {
             if (!ei.declFile.empty()) _externDeclSites[name].insert(ei.declFile);
             // ONE C enum, so every declaration of it in a program must agree — the rule a repeated
@@ -9183,7 +9184,7 @@ void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int l
 }
 
 // True when this declaration carries a `@generate(...)` at all — asked by collectEnumConformances, which
-// has to decide whether a payload-less enum needs promoting BEFORE anything has parsed its attributes.
+// has to decide whether a payload-less enum needs a member ClassInfo BEFORE anything has parsed its attributes.
 bool CEmitter::hasGenerateAttr(const SharedAttributeList& attrs)
 {
     if (attrs)
@@ -9251,7 +9252,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // Wire keys must be unique before anything is emitted from them. Here rather than in the attribute
     // loop because that loop runs per DECLARATION and cannot see a sibling's key; here rather than at the
     // one call site because this is the funnel every path reaches — a plain type, a generic INSTANCE
-    // (registerGenericTypeInst), and a promoted enum. A no-op for a type that serializes nothing.
+    // (registerGenericTypeInst), and an enum with members. A no-op for a type that serializes nothing.
     if (ci.genSerialize || ci.genDeserialize) validateSerFieldKeys(ci, line);
     if (ci.genSerialize) {
         addItf("Serializable");
@@ -12202,6 +12203,17 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     ClassInfo ci = _genericTypes[tmpl];                         // copy the template shape
     ci.name = mangled;
     ci.isGenericInst = true;
+    // A PAYLOAD-LESS generic enum's instance is its integer, exactly as a non-generic one is (KR-59): the
+    // type parameter can reach only its members, never its layout. `_enums` carries the constants; the
+    // ClassInfo is the scalar receiver its members hang on.
+    if (ci.enumNode && ci.isVariant && !ci.variants.empty()
+        && std::all_of(ci.variants.begin(), ci.variants.end(), [](const VariantCase& v) { return v.payload.empty(); })) {
+        ci.isVariant = false;
+        ci.tagCType.clear();
+        ci.kind = TypeKind::Value;
+        ci.isScalarRecv = true;
+        _enums[mangled] = scalarEnumInfo(ci.enumNode, mangled, ci.declFile);
+    }
     // Conditional Copyable (`implements Copyable(bare: …) when T: Bound`): this instance is Copyable
     // only when its gated type-param satisfies the bound. If not, drop the capability AND its `copy()`
     // method so it is never emitted for this instance — this is what lets `List<Owned>` compile even
@@ -12889,8 +12901,8 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // an enum could not carry a generic contract until `type enum E implements C` (M1) and could
             // not carry a PINNED one until now, where `implements Equatable<This>` is the ordinary form.
             if (ed->baseTypes && ed->baseTypes->interfaces && ed->identifier && ed->identifier->value) {
-                ScopedStr  _ts(_thisType, qualify(*ed->identifier->value));
-                ScopedThis _tt(_typeSubst, synthId(qualify(*ed->identifier->value)));
+                ScopedStr  _ts(_thisType, enumKey(ed));
+                ScopedThis _tt(_typeSubst, synthId(enumKey(ed)));
                 for (auto& itf : *ed->baseTypes->interfaces) scanTypeForGenericContracts(itf);
             }
             if (ed->body) for (auto& m : *ed->body)
@@ -18066,28 +18078,30 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             bool hasMembers = ed->members && !ed->members->empty();
             SharedIdentifierList ifaceNodes = ed->baseTypes ? ed->baseTypes->interfaces : SharedIdentifierList();
             bool hasIfaces = ifaceNodes && !ifaceNodes->empty();
-            // `@generate` is a third reason to promote, and the same reason as the other two: a
-            // conformance and a method need somewhere to live, and a bare C integer has nowhere. An enum
+            // `@generate` is a third reason for a member ClassInfo, and the same reason as the other two: a
+            // conformance and a method need somewhere to live, and an EnumInfo has nowhere. An enum
             // that spells the conformance out (`implements Hashable` + a hand-written `hash`) has always
             // come through here; one that asks for the derived version is asking for the same thing.
             bool hasGen = hasGenerateAttr(ed->attributes);
             if (!hasMembers && !hasIfaces && !hasGen) continue;   // an ordinary enum — the lightweight path, untouched
 
             const std::string& bare = *ed->identifier->value;
-            if (enumHasModifier(ed, "extern") || enumHasModifier(ed, "expose")) {
-                // Members, a contract or `@generate` PROMOTE an enum to a tagged struct, which is exactly the
-                // representation a C integer constant is not — so on an enum that crosses to C they would
-                // silently change what crosses.
-                unsupported(("`type " + std::string(enumHasModifier(ed, "extern") ? "extern" : "expose") + " enum "
-                             + bare + "` cannot declare members, `implements` or `@generate` — kama gives an enum "
-                               "those by lowering it to a struct, and a C enum is an integer. Write a free function "
-                               "over the enum instead").c_str(), ed->line);
-                continue;
-            }
             if (ed->baseTypes && ed->baseTypes->base)
                 unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
                              "a contract is declared with `implements`").c_str(), ed->line);
-            std::string name = qualify(bare);
+            std::string name = enumKey(ed);
+            // A C enum may be declared again where it is used, but it is ONE type: its members belong to one of
+            // those declarations, or two files could each hang methods on it and neither would see the other's.
+            {
+                auto prior = _classes.find(name);
+                const std::string here = u && u->name ? *u->name : std::string();
+                if (enumHasModifier(ed, "extern") && prior != _classes.end() && prior->second.declFile != here) {
+                    unsupported(("`type extern enum " + bare + "` declares members, `implements` or `@generate` in `"
+                                 + prior->second.declFile + "` too — a C enum is one type, so declare them on one of "
+                                   "its declarations and import it where it is used").c_str(), ed->line);
+                    continue;
+                }
+            }
 
             // An enum's layout is its tag plus its variant payloads — there is no struct to add a field
             // to, and nothing else it could own, so a field or a destructor is a mistake worth naming
@@ -18181,7 +18195,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             // hand-written `equals`/`hash`/`format` must win registerDerives' `!methods.count` guard, and
             // because checkImplCompleteness above must not be asked about a method that has not been
             // synthesized yet. A tagged enum has already been through this in collectEnums, so only a
-            // PROMOTED (payload-less) one reaches it here — `hasGen` is what brought it.
+            // payload-less one reaches it here — `hasGen` is what brought it.
             if (hasGen && !eci.genSerialize && !eci.genDeserialize && !eci.genFormat
                 && !eci.genEquatable && !eci.genHashable && !eci.genOf && !eci.genZero) {
                 for (auto& at : *ed->attributes)
@@ -19941,6 +19955,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                         "or contract borrow", srcLine);
         if (isInterface(p.className)) {
             std::string c = exprClass(argExpr);
+            if (c.empty() && isEnumConstant(argExpr)) c = exprEnumType(argExpr);   // `Level::Low` into a contract
             if (p.byRef) {
                 // `ref`/`out` interface: the callee may reseat the caller's handle, so the
                 // argument must be an actual interface variable (pass its address). A
@@ -19965,7 +19980,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
                 // the borrow the callee reads, exactly as a `const ref` class rvalue is (the `ref` arm below).
                 if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(argExpr.get())))
-                    && !valHoisted && !isNamedValue(argExpr.get())) {
+                    && !valHoisted && (!isNamedValue(argExpr.get()) || isEnumConstant(argExpr))) {
                     if (_hoistOK) {
                         std::string t = "__ifcarg" + std::to_string(_tempCounter++);
                         _hoisted.push_back(c + " " + t + " = " + val + ";");
@@ -19983,7 +19998,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 } else if (!c.empty() && isClass(c)) {
                     // `this` already IS the object pointer (`self`), so wrap it without taking its
                     // address — `&self` would be a `C**` (same reason a by-ref `this` passes `self`).
-                    if (dynamic_cast<ThisAccessNode*>(argExpr.get()))
+                    if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !_classes[c].isScalarRecv)
                         s += "(" + p.className + "){ (void*)(" + val + "), &" + contractVtblOf(c, p.className) + " }";
                     else
                         s += fatPointer(p.className, c, val);
@@ -23606,6 +23621,17 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
 // resolve the variant type a `::` qualifier names. A non-generic union is in _classes
 // directly; a generic union names its bare template (`Optional`, in _genericTypes) — resolve it to
 // the target instance set by the enclosing typed position (`_variantTargetType`, e.g. Optional_int32).
+// The integer enum a qualifier names: itself, or — for a generic payload-less template (`Side::R`) — the
+// instance the target type pins (`Side<bool>`), exactly as resolveVariantType pins a tagged one.
+std::string CEmitter::scalarEnumInstanceOf(const std::string& qualResolved)
+{
+    if (_enums.count(qualResolved) || !_genericTypeParams.count(qualResolved) || _variantTargetType.empty())
+        return qualResolved;
+    auto of = _genericTypeInstOf.find(_variantTargetType);
+    return (of != _genericTypeInstOf.end() && of->second == qualResolved && _enums.count(_variantTargetType))
+               ? _variantTargetType : qualResolved;
+}
+
 ClassInfo* CEmitter::resolveVariantType(const std::string& qualResolved)
 {
     auto direct = _classes.find(qualResolved);
@@ -25468,6 +25494,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
 void CEmitter::emitStruct(ClassInfo& ci)
 {
+    if (ci.isScalarEnum()) return;       // a payload-less enum is its integer — `emitEnum` wrote it
     ScopedStr _ts(_thisType, ci.name);   // `This` -> this class while emitting its struct
     // Struct layout is emitted from the HEADER pass, where no module is current and `_sourcePath` is "" in
     // a multi-file build — so a field-level rejection here named no file at all. See diagFile().
@@ -27405,7 +27432,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
-// ---- The derived bodies for a VARIANT (a tagged enum, and a promoted payload-less one) ---------------
+// ---- The derived bodies for an ENUM (a tagged one, and a payload-less one — see `isScalarEnum`) --------
 //
 // A `value`/`resource` derives by walking `ci.fields`; a variant has none — its data lives per tag, in
 // `ci.variants[i].payload`, reached as `self->u.<Variant>.<field>`. So each of the three class-side
@@ -28501,7 +28528,7 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
                             "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
         indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
     };
-    const bool unit = ci.isScalarEnum() || isUnitEnum(ci.name);
+    const bool unit = ci.isScalarEnum();
     if (!unit) {
         indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
         indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
@@ -30852,12 +30879,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     // unrepresentable in safe kama. It cannot share the numeric path: an enum's valid values are a SET of
     // named constants, not a range, so the test is membership. `None` is where a byte off a wire gets
     // handled, which keeps `match` the one construct that reads an enum.
-    // …in EITHER of its two spellings: a PROMOTED payload-less enum (one that declared a method or a
-    // contract, so it is a `struct { Tag tag; }`) is the same set of named constants and gets the same
-    // door. Without this it fell to the message below and was told a `Color` conversion cannot fail —
-    // leaving a promoted enum with no way in from an integer at all.
-    const bool enumDst  = isEnum(dst) || isUnitEnum(dst);
-    const bool unitDst  = isUnitEnum(dst);
+    const bool enumDst  = isEnum(dst);
     std::string lo, hi;
     if (!enumDst && !cNumRangeText(dst, lo, hi)) {
         unsupported(("`try cast<" + disp + ">(…)` — only a NUMERIC or `enum` conversion can fail, and `"
@@ -30905,20 +30927,11 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
         // `--keep-c` output. One explicit `= <expr>` anywhere breaks the run (`{ Ok, Warn = 5, Bad }` is
         // 0,5,6), and then the only honest test is membership, written against the emitted constants so
         // it stays correct whatever the author wrote. clang folds either shape back into a jump table.
-        // The member NAMES come from whichever form this enum is in — `_enums` for a bare C integer,
-        // `ci.variants` for a generic payload-less instance (whose tag constants carry the same names).
-        // Whether any member has an EXPLICIT value is asked of the EnumInfo;
-        // a generic payload-less enum instance (`type enum E<T> { A, B }` at `E<int32>`) has no EnumInfo at
-        // all and no way to write one, so it is contiguous by construction — which is why this reads the
-        // two facts separately instead of dereferencing a lookup that can legitimately miss.
+        const EnumInfo& ei = _enums[dst];
         std::vector<std::string> names;
-        if (unitDst) { for (auto& v : _classes[dst].variants) names.push_back(v.name); }
-        else         { for (auto& m : _enums[dst].members)    names.push_back(m.name); }
-        bool contiguous = !names.empty();
-        if (const EnumInfo* ei = enumInfo(dst)) {
-            for (auto& m : ei->members) if (m.value) { contiguous = false; break; }
-            if (ei->isExtern) contiguous = false;   // C owns the values: test membership by constant name
-        }
+        for (auto& m : ei.members) names.push_back(m.name);
+        bool contiguous = !names.empty() && !ei.isExtern;   // an extern enum's values are C's: test membership
+        for (auto& m : ei.members) if (m.value) { contiguous = false; break; }
         if (contiguous) {
             const std::string top = std::to_string((long long)names.size() - 1);
             test = unsignedSrc ? (t + " > " + top + "ULL")
@@ -30938,12 +30951,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     std::string s;
     s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";
     s += "if (" + test + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
-    // The checked value, as the destination spells it: a C cast for a bare enum or a number, a tag-field
-    // initializer for a PROMOTED one (`(Color)__t` over a struct is not a C conversion).
-    const std::string tagTy = unitDst ? (_classes[dst].tagCType.empty() ? dst + "_Tag" : _classes[dst].tagCType)
-                                      : std::string();
-    const std::string val = unitDst ? "(" + dst + "){ .tag = (" + tagTy + ")" + t + " }"
-                                    : "(" + dst + ")" + t;
+    const std::string val = "(" + dst + ")" + t;
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
              + val + " } }; }";
     return s;
@@ -30996,7 +31004,7 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
 
 // Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`,
 // yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table — and then, when
-// the pointers differ, the vtbl's `__type` name. The pointer alone is not an identity: a PROMOTED PRELUDE
+// the pointers differ, the vtbl's `__type` name. The pointer alone is not an identity: a PRELUDE
 // enum (`DeError`, `SerError`) has no home module, so its vtbl is `static` in the shared header and every
 // unit holds its own copy. A `DeError` boxed in `std::uuid` (or any library's `deserialize`) carried that
 // unit's address, and `.as<DeError>()` in the caller's unit answered `None` for exactly the error serde
@@ -32472,7 +32480,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     linkBases();
     linkContracts();    // merge refined-parent methods into each contract before vtables are built
     // `type enum E implements C` — after linkContracts (completeness needs the merged contract methods),
-    // before buildVtables, so a promoted enum's conformance is in place when vtables are built.
+    // before buildVtables, so an enum's conformance is in place when vtables are built.
     collectEnumConformances(units);
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
@@ -32799,7 +32807,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // Every DECLARED type name resolves (params / returns / fields / variant payloads). Must be LAST: the
     // check consults `_sigs`, which `collectSignatures` fills in FILE order, so a parameter typed by a
     // `sig` declared in a later file is not yet registered mid-collect; enum conformance collection has
-    // finished promoting enums into `_classes`; and `pruneInactiveDecls` has already rewritten the decl
+    // finished giving enums their member ClassInfos; and `pruneInactiveDecls` has already rewritten the decl
     // lists, so `@compileFor`-dropped declarations are simply absent here rather than needing a guard.
     // Running inside `collectProgram` (rather than at emit) is also what makes `kama build`, `kama check`
     // and the language server agree — all three take this path, which is the whole point of the check.
@@ -32910,7 +32918,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     for (ClassInfo* ci : classes) {
         if (ci->isIntrinsicColl || ci->isExternStruct) continue;
         if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
-        if (_preludeEnums.count(ci->name)) continue;   // a promoted prelude enum's vtbl is header-static (emitted below), no extern
+        if (_preludeEnums.count(ci->name)) continue;   // a prelude enum's vtbl is header-static (emitted below), no extern
         for (auto& ifn : contractsToEmitFor(*ci)) {
             bool staticOnly = contractIsStaticOnlyFor(*ci, ifn);
             if (staticOnly && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
@@ -33121,7 +33129,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         *_out << "\n";
     }
 
-    // A PROMOTED PRELUDE ENUM's `<Enum>__as_<C>` VTABLE, ahead of every generic instantiation below.
+    // A PRELUDE ENUM's `<Enum>__as_<C>` VTABLE, ahead of every generic instantiation below.
     // The vtables used to go out with the rest of the prelude-enum block further down, which is after the
     // generic bodies — and a generic instance that serializes boxes a `SerError` into `Owned<Error>`
     // through `&SerError__as_Error`, so it referenced a `static const` that C had not seen yet. It never
@@ -33161,7 +33169,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // bodies — emit prototype + definition static-inline here (struct went out above with the others).
     for (auto& kv : _classes) {
         if (!kv.second.preludeStatic || kv.second.methods.empty()) continue;
-        // A promoted prelude ENUM is `preludeStatic` too — for the PROTOTYPE linkage, which must match its
+        // A prelude ENUM with members is `preludeStatic` too — for the PROTOTYPE linkage, which must match its
         // static-inline bodies — but its definitions are class-shaped here (ctors, fields, a vtbl loop) and
         // an enum has none of that. The dedicated block just below emits its bodies instead.
         if (kv.second.isVariant || kv.second.isScalarEnum()) continue;
@@ -33173,7 +33181,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = false;
     }
 
-    // A PROMOTED PRELUDE ENUM (e.g. `DeError implements Error`) has no home module, so — like the prelude
+    // A PRELUDE ENUM with members (e.g. `DeError implements Error`) has no home module, so — like the prelude
     // types/impl blocks — emit its `<Enum>__as_C` vtbl (+ dtor / synth serde) `static inline` in the header
     // (the module-content enum pass only covers user units; its `extern` decl is skipped above). Placed
     // BEFORE the impl bodies below, which reference the vtbl when boxing an error into `Owned<Error>`.
@@ -33456,7 +33464,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // a non-generic tagged union's dtor DEFINITION lives in its home module (its struct +
             // prototype are in the header). Generic-enum instances are emitted static-inline in the header.
             if (ed->identifier && ed->identifier->value) {
-                auto it = _classes.find(qualify(*ed->identifier->value));
+                auto it = _classes.find(enumKey(ed));
                 if (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) {
                     ClassInfo& eci = it->second;
                     if (eci.destructible) emitDtorDefinition(eci);

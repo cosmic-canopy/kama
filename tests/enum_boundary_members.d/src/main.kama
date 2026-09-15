@@ -1,0 +1,49 @@
+// A `type extern enum` and a `type expose enum` with methods, a contract and `@generate` (KR-59). Members used
+// to promote an enum to a tagged struct, so an enum crossing to C — which must stay the integer C expects —
+// could declare none of them. A payload-less enum is now its integer whatever it declares, and its methods take
+// it by value, so both boundary forms take members like any other enum. Exercised:
+//   - the header's value reaching kama unchanged through a method-carrying enum (`mode_raw` sees 9);
+//   - a method, a contract value (a binding and a constant argument) and a derived `Hashable` Map key;
+//   - a derived `Formattable` naming the C constant;
+//   - C calling an `expose fn` whose body calls the enum's method, through the generated header.
+import { std::collections::Map };
+extern "level.h";
+
+type contract Weighted for value, enum { fn int32 weight(); }
+
+@generate(Equatable, Hashable, Formattable)
+type extern enum Mode : int32 implements Weighted {
+    MODE_OFF, MODE_ON;
+    public fn int32 weight() { return match (this) { case MODE_OFF: 1; case MODE_ON: 2; }; }
+    public fn Mode flipped() { return this == Mode::MODE_ON ? Mode::MODE_OFF : Mode::MODE_ON; }
+}
+
+@generate(Equatable, Hashable)
+type expose enum Level : int32 implements Weighted {
+    Low = 1, High = 2;
+    public fn int32 weight() { return cast<int32>(this) * 10; }
+}
+
+extern fn int32 mode_raw(Mode m);
+extern fn int32 host_run();
+
+expose fn int32 weigh(Level l) { return l.weight(); }
+expose fn Mode flip(Mode m) { return m.flipped(); }
+
+fn int32 total(Weighted w) { return w.weight(); }
+
+unsafe fn int32 run() {
+    Mode on = Mode::MODE_ON;
+    string shown = "${on}";
+    if (!shown.equals(other: "MODE_ON")) { return 200; }
+    Map<Mode, int32> m = Map.empty();
+    m.put(key: Mode::MODE_ON, value: 4);
+    int32 hit = match (m.get(key: on)) { case Some(value: v): v; case None: 0; };
+    return mode_raw(m: on)            //  9: the header's value
+         + total(w: on)               //  2
+         + total(w: Level::Low)       // 10
+         + hit                        //  4
+         + host_run();                // 23
+}
+
+fn int32 main() { return run(); }   // 48

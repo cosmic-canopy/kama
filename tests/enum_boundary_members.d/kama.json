@@ -1,0 +1,7 @@
+{
+  "name": "boundenum", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "csources": ["csrc/level.c"],
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

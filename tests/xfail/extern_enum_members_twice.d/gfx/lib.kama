@@ -1,0 +1,4 @@
+export { lowOf, Level };
+extern "stdio.h";
+type extern enum Level : int32 { LEVEL_LOW, LEVEL_HIGH; public fn bool isLow() { return this == Level::LEVEL_LOW; } }
+fn Level lowOf() { return Level::LEVEL_LOW; }
