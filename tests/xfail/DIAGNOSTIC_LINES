@@ -292,6 +292,7 @@ expose_generic	expose_generic.kama:2
 expose_on_method	expose_on_method.kama:3
 extend_final	extend_final.kama:11
 extend_sealed	extend_sealed.kama:3
+extern_c_spelling_other_file	main.kama:8
 extern_disagree	main.kama:4 main.kama:6
 extern_members_twice	b.kama:2
 extern_type_leak	lib.kama:7

@@ -4441,6 +4441,22 @@ that same file, so a directory-module's files each state their own surface. **A 
 further than an `import` would** — `a::b::X` naming a non-exported `X` is the same error, in **every**
 position: a call, a construction, a static call, a field, a parameter, a return type, a local declaration.
 
+**Every name in a type is held to this, at any depth — not only the name that IS the type.** A type argument <!-- xfail: reach_optional_param_private_qualified, reach_nested_local_private -->
+(`Result<Uuid, geo::HidErr>`, `Optional<Result<int32, X>>`), a `#(K)` constant, a bound and an `implements` <!-- xfail: reach_const_generic_arg_private_qualified, reach_bound_fn_private_qualified, reach_implements_private_qualified, reach_implements_arg_private_qualified -->
+entry with its own type arguments, a module `static`'s type, and every type a body writes — a `cast<…>`, <!-- xfail: reach_static_decl_private, reach_cast_arg_private, reach_sizeof_private, reach_as_downcast_private -->
+`sizeof(…)`, an `.as<…>()` target, a turbofish argument, a variant expression's enum — is refused the same <!-- xfail: reach_turbofish_private_qualified, reach_variant_expr_private_qualified -->
+way, and inside a generic body whether or not anything instantiates it. A name that is not in reach is <!-- xfail: reach_generic_body_private_qualified -->
+reported by kama, never left for the C compiler, and a name another module EXPORTS is reported with the <!-- xfail: reach_result_local_std_unimported, reach_local_private -->
+import that fixes it (`add import { std::uuid::UuidError };`); a private one says which file keeps it,
+because no import can reach it. A bound or an `implements` entry must name a contract: a type there is <!-- xfail: bound_names_a_type, implements_names_a_type -->
+refused at the declaration, even on a generic nobody calls.
+
+**The FFI seam keeps its C spellings, and only those.** An `extern fn` signature names types its header owns,
+so a BARE name there is the header's literal C spelling and is not resolved; a qualified name is never a C <!-- xfail: reach_extern_sig_private_qualified -->
+spelling and is held to the rule. A body may name the C spellings its own file's `extern fn` signatures
+introduced — `cast<CompareFn>(c)` beside `extern fn void qsort(…, CompareFn compar)` — and no other <!-- xfail: extern_c_spelling_other_file -->
+unresolved name: another file's extern does not introduce it here (`tests/callback_qsort.d`).
+
 **A sibling in the same module is imported like anything else**, and needs no path to do it, because there
 is exactly one candidate: `import { DynamicArray };`, then the bare name at every use. A module's files
 share their **exported** names but not a scope, so `export` offers a name and `import` accepts it — which is <!-- test: mod_private_perfile -->

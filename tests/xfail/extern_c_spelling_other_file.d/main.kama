@@ -1,0 +1,11 @@
+// A body may name the C spellings its OWN file's `extern fn` signatures introduce — and this file declares
+// none, so `CompareFn` here is an unknown name, refused by kama rather than handed to clang. The seam is
+// per file, like the extern it comes from (SPEC § Modules, KR-46).
+@callerThread fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);
+unsafe fn int32 cmp(UnsafePtr<int32> a, UnsafePtr<int32> b) { return a[0] - b[0]; }
+unsafe fn int32 run() {
+    Comparator c = cmp;
+    UnsafePtr p = cast<UnsafePtr>(cast<CompareFn>(c));
+    return 0;
+}
+fn int32 main() { return run(); }

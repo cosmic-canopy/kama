@@ -1,0 +1,3 @@
+// Declares the extern: `CompareFn` is a C spelling THIS file introduces.
+extern "<stdlib.h>";
+extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);

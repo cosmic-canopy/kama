@@ -2,7 +2,8 @@
 
 **Status:** in progress. Every fixture is green at `0.9.340`: plan steps 1 and 2 (fixtures; slices 1–4 — type
 arguments + hints, declaration positions, body positions, the analysis-agreement leg over `.d` fixtures) are
-DONE. **Next is plan step 3 (`SPEC.md` § Modules) and step 4 (final grid, delete this doc and the row).** Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
+DONE, and so is step 3 (`SPEC.md` § Modules). **Next is step 4: the final grid, then delete this doc and the
+row.** Found building KR-12 at `0.9.320`. This is the working doc for the campaign: the probe grid, the
 results, the root causes, the fixtures and the plan. Deleted when KR-46 ships, once `SPEC.md` § Modules and
 the `tests/xfail/` fixtures carry the record.
 
@@ -356,8 +357,10 @@ still fails in C behind it).
       the change: all 146 xfail `.d` refused by `check`, all 44 positive `.d` accepted — 813 + 868 became
       857 + 1014. Proven able to fail: a throwaway xfail `.d` whose `extern "<missing.h>"` only clang rejects
       reported `MISMATCH … kama check accepts it` and failed the leg.
-3. **`SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
-   `<!-- xfail: … -->` marker (check-doc-claims).
+3. **DONE — `SPEC.md` § Modules** states the rule for nested positions explicitly, each claim with its
+   `<!-- xfail: … -->` marker (check-doc-claims), plus the FFI seam: a bare name in an `extern fn` signature is
+   the header's C spelling, and a body may name only the ones its own file introduced
+   (`tests/xfail/extern_c_spelling_other_file.d`, new with it).
 4. Re-run the grid at the end (every a/b/c/cq/bs cell KD, every bq/bsq/d cell runs), paste the table into
    the commit that deletes this doc, and delete KR-46 from `ROADMAP.md` and `ROADMAP_DETAIL.md` §2.
 
