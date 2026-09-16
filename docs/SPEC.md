@@ -642,7 +642,9 @@ wrote, the frame holding the call you can change, and never on a prelude or `std
 the author did not write and cannot edit. The same container over a **bump allocator** is fine and needs no
 annotation: `A` is a type parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching
 a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) — which is the idiom a
-real-time region is expected to use. Under the whole-program flag the region itself must not come from the heap
+real-time region is expected to use. A **`new` is judged the same way, by the allocator it draws from**: a
+placement `new(allocator: a)` takes its block from `a`, so it is legal exactly when `a` is, while a bare
+`new` is refused as the libc allocation it is ([tests/noheap_new_bump.kama](../tests/noheap_new_bump.kama)). <!-- xfail: noheap_new --> Under the whole-program flag the region itself must not come from the heap
 either: `Arena.make` mallocs its buffer, so a `--no-heap` program backs a `BumpAllocator` with storage it owns.
 
 **C the compiler cannot read declares itself.** An `extern fn` whose C touches the heap is marked `@heap`, <!-- xfail: noheap_heap_extern -->

@@ -2190,6 +2190,9 @@ private:
     // for a bare `new`. Diagnoses a missing/ill-typed `allocator:` slot. `emit` gates side-effecting emission
     // of the expression (false = just resolve the class, for a pre-flight check).
     std::pair<std::string,std::string> placementAllocator(ObjectCreationNode* oc, int line, bool emit);
+    // Does this `new` reach the system heap, or storage the program already owns? The no-heap gate asks
+    // before refusing the verb — see the definition for why the verb was the wrong question.
+    bool newDrawsFromHeap(ObjectCreationNode* oc) const;
     // The allocator type-arg of an `Owned<T, A>` box instance (its last generic arg); "" if `ty` is not an
     // `Owned` instance. Used to reject a bare `new` into a STATEFUL-allocator box (which would leak — the
     // block is malloc'd but the box's no-op `deallocate` never frees it).

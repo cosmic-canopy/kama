@@ -1,0 +1,26 @@
+// A `new` is judged by the ALLOCATOR it draws from, not by the word. `new(allocator: bump)` takes its block
+// from storage the program owns — the same `BumpAllocator::allocate` a `DynamicArray<int32, BumpAllocator>`
+// reaches, which a no-heap region has always been allowed to call (tests/noheap_arena.kama). The gate used to
+// refuse the verb, so the box form was rejected while the container form beside it was not; the rule held in
+// one position and not its sibling. A bare `new` is still refused (tests/xfail/noheap_new.kama): it is libc
+// malloc under the box's default `GlobalAllocator`, one edge further along the same walk.
+import { std::memory::Owned, std::collections::BumpAllocator, std::collections::DynamicArray };
+type contract Shape for value { @noheap fn int32 area(); }
+type value Dot implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    @noheap public fn int32 area() { return this.r; }
+}
+@noheap fn int32 tick(BumpAllocator bump, int32 n) {
+    Owned<Shape, BumpAllocator> a = new(allocator: bump) Dot.make(r: 3);
+    DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: bump);
+    xs.add(item: n);
+    return a.area() + xs[0];             // 3 + 39; both drawn from the caller's buffer
+}
+unsafe fn int32 run() {
+    InlineArray<uint8>#(4096) store = [0ui8; 4096];
+    isize used = 0;
+    BumpAllocator bump = BumpAllocator.make(buffer: addr(of: store[0]), offset: addr(of: used), capacity: 4096);
+    return tick(bump: bump, n: 39);
+}
+fn int32 main() { return run(); }

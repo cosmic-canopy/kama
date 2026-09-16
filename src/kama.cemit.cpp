@@ -6762,7 +6762,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
                     checkNamelessNewBanned(oc, n->line);   // M8 Phase E: no nameless `new Type(...)`
-                    rejectIfNoHeap(oc->isTry ? "try new" : "new", n->line);   // no-heap gate (covers try/fallible new below)
+                    // no-heap gate (covers try/fallible new below) — a placement `new` into an allocator
+                    // the program owns is judged by what that allocator reaches, see newDrawsFromHeap.
+                    if (newDrawsFromHeap(oc)) rejectIfNoHeap(oc->isTry ? "try new" : "new", n->line);
                     // `new` is the HEAP operator — it boxes a value into a smart
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
@@ -18906,6 +18908,29 @@ std::string CEmitter::derefFnName(const std::string& cls, bool wantMut)
     return cls + "__deref";
 }
 
+// Does this `new` draw from the HEAP? A bare `new` does — it is libc malloc under the box's default
+// `GlobalAllocator`. A placement `new(allocator: a)` draws from `a`, and the block it hands back is the
+// caller's storage: a `BumpAllocator` over an `InlineArray` the program owns reaches no allocator of the
+// system's. The no-heap gate asked neither question and refused the VERB, which made the rule hold in one
+// position and not its sibling — `DynamicArray<int32, BumpAllocator>` has always been legal in a `@noheap`
+// region (SPEC *No-heap subset*), while `new(allocator: bump) Circle.make()` was not, though both reach
+// exactly the same `BumpAllocator::allocate`. Nothing is waved through: the emitted C calls `A__allocate`,
+// which is an ordinary edge, so an `A` that does reach the heap is caught by the walk, one hop later and
+// with the chain to prove it — the same way a container is.
+//
+// Answered quietly (no diagnostics): a malformed placement list is diagnosed by placementAllocator itself,
+// at emission, and saying it twice helps no one.
+bool CEmitter::newDrawsFromHeap(ObjectCreationNode* oc) const
+{
+    if (!oc || !oc->placement || oc->placement->empty()) return true;
+    for (auto& a : *oc->placement)
+        if (a && a->name && a->name->value && *a->name->value == "allocator" && a->expression) {
+            const std::string ty = const_cast<CEmitter*>(this)->exprClass(a->expression);
+            return ty.empty() || ty == "GlobalAllocator";
+        }
+    return true;
+}
+
 // Placement `new(allocator: a) T(...)`: extract the `allocator:` arg's C expression + its allocator class.
 // Returns {"",""} for a bare `new` (no placement list). `emit=false` resolves the class only (no emission),
 // for the pre-flight target-kind check; `emit=true` materializes the C expression (evaluated once by the
@@ -23672,7 +23697,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
     if (cit == _classes.end()) return "";
     // no-heap gate — value-position `new` (return/arg/payload). `try new` still ALLOCATES (it reports OOM
     // as `None` rather than trapping), so it is gated too — under the name the user wrote.
-    rejectIfNoHeap(oc->isTry ? "try new" : "new", srcLine);
+    if (newDrawsFromHeap(oc)) rejectIfNoHeap(oc->isTry ? "try new" : "new", srcLine);   // see the statement arm
     std::string octy = cType(oc->type);
     { std::string ve = newVariantEnum(oc, heapOwnerTarget(targetCType)); if (!ve.empty()) octy = ve; }
     // one precise diagnostic + a declared degenerate temp (see header) — suppresses the caller's gate.
