@@ -637,7 +637,11 @@ noheap_container_growth	noheap_container_growth.kama:5
 noheap_container_local	noheap_container_local.kama:7
 noheap_contract_impl	noheap_contract_impl.kama:6
 noheap_contract_member	noheap_contract_member.kama:8
+noheap_drop_contract_box	noheap_drop_contract_box.kama:13
+noheap_drop_contract_box_heap	noheap_drop_contract_box_heap.kama:12
+noheap_drop_virtual_box	noheap_drop_virtual_box.kama:16
 noheap_dtor_of_local	noheap_dtor_of_local.kama:9
+noheap_dtor_override	noheap_dtor_override.kama:12
 noheap_error_box	noheap_error_box.kama:10
 noheap_field_dtor	noheap_field_dtor.kama:15
 noheap_flag_container	app.kama:14 app.kama:16

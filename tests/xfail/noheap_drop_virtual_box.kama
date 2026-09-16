@@ -1,0 +1,21 @@
+// Dropping a box through a virtual BASE runs the most-derived destructor, read off the object's vtable at run
+// time: `~Square` frees its `DynamicArray` here. `~Shape` promises nothing, so the drop cannot be proven. This
+// built clean until 0.9.353 — `Shape__vdrop` was read, but the slot call inside it was not a fact. The escape
+// hatch is `@noheap ~Shape()`, checked against every subclass (tests/noheap_drop_box_ok.kama).
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator, std::collections::DynamicArray };
+type virtual(maxDepth: 1) resource Shape {
+    public ctor make() { }
+    ~Shape() { }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    DynamicArray<int32> parts;
+    public ctor make(int32 s) { this.base = Base.make(); this.parts.add(item: s); }
+    ~Square() { }
+}
+@noheap fn int32 finish(Owned<Shape, BumpAllocator> o) { return 0; }
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);
+    Owned<Shape, BumpAllocator> o = new(allocator: arena.handle()) Square.make(s: 5);
+    return finish(o: give o);
+}

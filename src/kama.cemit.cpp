@@ -14710,22 +14710,111 @@ void CEmitter::emitIfaceAllocType(const CollectionInfo& info)
           << info.allocType << ")\n";
 }
 
-// Emit the `_IFACE_ALLOC_FUNCS` half. Deferred until AFTER class prototypes (unlike the plain collection
+// Can anything a `NAME` handle drops have a destructor? Only a kind that OWNS something can, and the
+// contract's `for` clause says which kinds may implement it: a `for value` contract admits only values,
+// which own nothing (`type value` cannot declare a `~dtor` at all), so its vtable's `__dtor` slot is NULL
+// in every implementation and the drop has nothing to dispatch. The call is then omitted outright rather
+// than marked proven — the most honest form of "the compiler can see through this slot" is C that does not
+// contain the call. Any wider clause (`for resource`, `for value, resource`) keeps the dispatch, and with
+// it the allocation fact that makes a no-heap region refuse the drop.
+bool CEmitter::ifaceDropCanDispatch(const std::string& iface) const
+{
+    auto it = _interfaces.find(iface);
+    if (it == _interfaces.end()) return true;              // unknown: assume it can
+    const unsigned k = it->second.implKinds;
+    return k == 0 || (k & ~(unsigned)IK_Value) != 0;       // 0 is "already diagnosed" — say nothing new
+}
+
+// The drop (and the handle ops beside it) for a smart pointer over a CONTRACT — `Owned<I>`, `Shared<I>`,
+// `Weak<I>`, and their allocator-aware twins. `alloc` picks the twin: it frees through the handle's own
+// `A` copy instead of `kama_free`.
+//
+// WRITTEN HERE RATHER THAN BY A RUNTIME MACRO, which is what `KAMA_OWNED_IFACE_FUNCS` and its five
+// siblings used to do. The no-heap call graph is read back out of the emitted C (buildCallGraph), and a
+// macro's body is not in it: the C says `KAMA_OWNED_IFACE_FUNCS(Owned_Shape)`, one token, with no `free`
+// to see and no `vtbl->__dtor` to see. So dropping a polymorphic box in a `@noheap` region was provably
+// safe according to an analysis that could not read the drop — `~Circle` freed a `DynamicArray` behind the
+// slot and the build passed (tests/xfail/noheap_drop_contract_box*.kama, found planning KR-39). Emitting
+// the same C makes the calls visible to the analysis by construction, which is the same reason the graph
+// stopped being recorded per call site in 0.9.347. The macros are deleted; the runtime keeps the `_TYPE`
+// halves, which declare structs and call nothing.
+void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
+{
+    const std::string& N = info.cName;
+    const std::string A = info.allocType;
+    // `obj`, sized by the handle's own `objsize`, through the allocator it carries — or libc's free.
+    auto release = [&](const char* what, const char* size) {
+        return alloc ? (A + "__deallocate(&self->alloc, (void*)self->" + what + ", " + size + ")")
+                     : ("kama_free(self->" + std::string(what) + ")");
+    };
+    const bool dispatches = ifaceDropCanDispatch(info.elemClass);
+    auto dropObj = [&](int d) {
+        if (dispatches) {
+            indent(d); *_out << "if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);\n";
+        }
+        indent(d); *_out << release("obj", "self->objsize") << ";\n";
+    };
+
+    if (info.kind == CollKind::Owned) {
+        *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
+        indent(1); *_out << "if (self->obj) {\n";
+        dropObj(2);
+        indent(2); *_out << "self->obj = NULL;\n";
+        indent(1); *_out << "}\n}\n";
+        return;
+    }
+    if (info.kind == CollKind::Shared) {
+        // The last strong drop keeps `strong` at 1 while the pointee dtor runs, then releases it: dropping
+        // the pointee can free a `Weak` back-edge into THIS same ctrl (a cycle), which would free the ctrl
+        // early and leave the `weak == 0` test reading freed memory. See prelude shared.kama.
+        *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
+        indent(1); *_out << "if (self->ctrl) {\n";
+        indent(2); *_out << "if (self->ctrl->strong == 1) {\n";
+        dropObj(3);
+        indent(3); *_out << "self->ctrl->strong = 0;\n";
+        indent(3); *_out << "if (self->ctrl->weak == 0) " << release("ctrl", "sizeof(kama_ctrl)") << ";\n";
+        indent(2); *_out << "} else { self->ctrl->strong--; }\n";
+        indent(2); *_out << "self->obj = NULL; self->ctrl = NULL;\n";
+        indent(1); *_out << "}\n}\n";
+        *_out << "static inline bool " << N << "__valid(" << N << "* self) { return self->obj != NULL; }\n";
+        // `copy h` — a retained duplicate (strong++). The emitter spells every deep copy `NAME__copy(&x)`;
+        // a fat handle's copy is a retain, exactly what the library `Shared<T>::copy` does for a thin one.
+        *_out << "static inline " << N << " " << N << "__copy(" << N << "* self) { if (self->ctrl) "
+              << "self->ctrl->strong++; return *self; }\n";
+        if (!info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
+        return;
+    }
+    // Weak<I> — counts `weak`, never touches the concrete object. `__upgrade` must propagate `alloc`
+    // and `objsize` into the Shared it returns, so the upgraded strong handle frees through the right
+    // allocator (the `= {0}` init leaves them zeroed on the expired path).
+    *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
+    indent(1); *_out << "if (self->ctrl) {\n";
+    indent(2); *_out << "if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) "
+                     << release("ctrl", "sizeof(kama_ctrl)") << ";\n";
+    indent(2); *_out << "self->obj = NULL; self->ctrl = NULL;\n";
+    indent(1); *_out << "}\n}\n";
+    *_out << "static inline bool " << N << "__expired(" << N << "* self) {\n";
+    indent(1); *_out << "return self->ctrl == NULL || self->ctrl->strong == 0;\n}\n";
+    const std::string& S = info.ifacePartner;
+    *_out << "static inline " << S << " " << N << "__upgrade(" << N << "* self) {\n";
+    indent(1); *_out << S << " s = {0};\n";
+    indent(1); *_out << "if (self->ctrl && self->ctrl->strong > 0) {\n";
+    indent(2); *_out << "self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl;\n";
+    if (alloc) { indent(2); *_out << "s.alloc = self->alloc; s.objsize = self->objsize;\n"; }
+    indent(1); *_out << "} else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }\n";
+    indent(1); *_out << "return s;\n}\n";
+    *_out << "static inline " << N << " " << N << "__copy(" << N << "* self) { if (self->ctrl) "
+          << "self->ctrl->weak++; return *self; }\n";
+    emitWeakTryUpgrade(info);
+}
+
+// Emit the allocator-aware half. Deferred until AFTER class prototypes (unlike the plain collection
 // FUNCS at emitCollectionDefs) because the dtor calls `A__deallocate` — the allocator's method prototype
 // isn't emitted until the prelude/class-prototype pass. (A library collection holding one of these frees
 // its elements from a real function in the late body pass, so no ordering hazard there.)
 void CEmitter::emitIfaceAllocFuncs(CollectionInfo& info)
 {
-    if (info.kind == CollKind::Owned)
-        *_out << "KAMA_OWNED_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ")\n";
-    else if (info.kind == CollKind::Shared) {
-        *_out << "KAMA_SHARED_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ")\n";
-        if (!info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
-    } else {   // Weak
-        *_out << "KAMA_WEAK_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ", "
-              << info.ifacePartner << ")\n";
-        emitWeakTryUpgrade(info);
-    }
+    emitIfaceHandleFuncs(info, /*alloc=*/true);
 }
 
 // `typesOnly` picks the struct-typedef half (emitted before class struct bodies so a
@@ -14746,43 +14835,55 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "KAMA_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
-        // A stateful allocator on the intrinsic INTERFACE box selects the `_ALLOC_` macro variant (fat handle
-        // carries `A alloc`+`objsize`, frees through `A`); a default/absent GlobalAllocator keeps the plain
-        // macros (byte-identical). `A` is spelled after the vtbl (TYPE) / alone (FUNCS).
-        bool ifaceAlloc = info.elemIsInterface && !info.allocType.empty() && info.allocType != "GlobalAllocator";
-        if (info.kind == CollKind::Owned && info.elemIsInterface)
-            // fat-element `Owned<I>` — TYPE takes the vtbl type, FUNCS drops via the vtbl slot.
-            *_out << (ifaceAlloc ? "KAMA_OWNED_IFACE_ALLOC_" : "KAMA_OWNED_IFACE_") << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
-                               : (ifaceAlloc ? ", " + info.allocType + ")\n" : ")\n"));
+        // (A stateful allocator on an interface box — the fat handle carrying `A alloc`+`objsize` and
+        // freeing through `A` — never reaches here: `isIfaceAllocColl` skipped it above, so its halves can
+        // be ordered after the allocator's struct and prototypes. See emitIfaceAllocType/Funcs.)
+        if (info.kind == CollKind::Owned && info.elemIsInterface) {
+            // fat-element `Owned<I>` — the TYPE is the runtime's struct; the FUNCS half is written out
+            // here so the drop's `vtbl->__dtor` and its free are C the call graph can read.
+            if (typesOnly) *_out << "KAMA_OWNED_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
+            else           emitIfaceHandleFuncs(info, /*alloc=*/false);
+        }
         else if (info.kind == CollKind::Owned)
             *_out << "KAMA_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Shared && info.elemIsInterface) {
-            *_out << (ifaceAlloc ? "KAMA_SHARED_IFACE_ALLOC_" : "KAMA_SHARED_IFACE_") << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
-                               : (ifaceAlloc ? ", " + info.allocType + ")\n" : ")\n"));
-            // a library `Rc<Shape>` (Shared IFACE with a weak partner) gets a `downgrade()` that
-            // field-copies {obj,vtbl,ctrl} into its Weak partner + bumps `weak`.
-            if (!typesOnly && !info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
+            // (a library `Rc<Shape>` — a Shared IFACE with a weak partner — also gets its `downgrade()`,
+            // emitted by emitIfaceHandleFuncs beside the drop.)
+            if (typesOnly) *_out << "KAMA_SHARED_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
+            else           emitIfaceHandleFuncs(info, /*alloc=*/false);
         }
         else if (info.kind == CollKind::Shared)
             *_out << "KAMA_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Weak && info.elemIsInterface) {
             // The C `__upgrade` (-> the Shared partner) stays an internal helper; `tryUpgrade` wraps it.
-            *_out << (ifaceAlloc ? "KAMA_WEAK_IFACE_ALLOC_" : "KAMA_WEAK_IFACE_") << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
-                               : (ifaceAlloc ? (", " + info.allocType + ", " + info.ifacePartner + ")\n")
-                                             : (", " + info.ifacePartner + ")\n")));
-            if (!typesOnly) emitWeakTryUpgrade(info);
+            if (typesOnly) *_out << "KAMA_WEAK_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
+            else           emitIfaceHandleFuncs(info, /*alloc=*/false);
         }
         else if (info.kind == CollKind::Weak) {
             *_out << "KAMA_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
                  << (typesOnly ? ")\n" : (", " + info.ifacePartner + ")\n"));
             if (!typesOnly) emitWeakTryUpgrade(info);
         }
-        else if (info.kind == CollKind::Bindable)
-            // Fully type-erased — the signature drives only the invoke, not the layout.
-            *_out << "KAMA_BINDABLE_" << suf << "(" << info.cName << ")\n";
+        else if (info.kind == CollKind::Bindable) {
+            // Fully type-erased — the signature drives only the invoke, not the layout. The drop is
+            // written out (not a macro) for the reason emitIfaceHandleFuncs gives: it calls the bound
+            // object's destructor through the `elemdtor` pointer, which the call graph must see.
+            if (typesOnly) *_out << "KAMA_BINDABLE_TYPE(" << info.cName << ")\n";
+            else {
+                const std::string& N = info.cName;
+                *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
+                indent(1); *_out << "if (self->ctrl) {                       /* Shared: refcount */\n";
+                indent(2); *_out << "if (--self->ctrl->strong == 0) {\n";
+                indent(3); *_out << "if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj);\n";
+                indent(3); *_out << "if (self->ctrl->weak == 0) kama_free(self->ctrl);\n";
+                indent(2); *_out << "}\n";
+                indent(1); *_out << "} else if (self->obj) {               /* Owned: sole owner */\n";
+                indent(2); *_out << "if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj);\n";
+                indent(1); *_out << "}                                      /* free fn: nothing to drop */\n";
+                indent(1); *_out << "self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->elemdtor = NULL;\n";
+                *_out << "}\n";
+            }
+        }
         else if (info.kind == CollKind::Fixed) {
             // Value array: `struct { T v[N]; }` + bounds-checked get/set/at/length/fill. It embeds T
             // by value, so its `_TYPE` is emitted in the by-value struct-body order (emitHeaderContent),
@@ -17872,6 +17973,22 @@ void CEmitter::checkOverrideSignatures()
                               "`" + ci.name + "` overrides `" + baseOwner->name + "." + mkv.first
                                   + "`, but its `" + mkv.first + "` ",
                               "the base", "an override must match the signature it overrides", at);
+        }
+        // THE DESTRUCTOR IS A SLOT LIKE ANY OTHER, and the rule above was never applied to it: dropping a
+        // `Owned<Base>` runs the most-derived `~T` through the vtable, so `@noheap ~Base()` is a promise
+        // about every object the handle can hold. A subclass that frees in its own teardown — or merely
+        // owns a field that does, which needs no `~Square()` in the source at all — broke that promise
+        // silently (tests/xfail/noheap_dtor_override.kama, found planning KR-39). A class that drops
+        // NOTHING needs no mark: there is no teardown to prove.
+        for (ClassInfo* a = ci.base; a; a = a->base) {
+            if (!(a->dtorNode && hasNoHeapAttr(a->dtorNode->attributes))) continue;
+            if (!ci.destructible) break;
+            if (ci.dtorNode && hasNoHeapAttr(ci.dtorNode->attributes)) break;
+            unsupported(("`~" + ci.name + "` runs in place of `~" + a->name + "`, which is `@noheap` — mark "
+                         "it `@noheap` too (`@noheap ~" + ci.name + "() { }`), or a no-heap caller dropping "
+                         "through the base loses the guarantee").c_str(),
+                        ci.dtorNode ? ci.dtorNode->line : ci.declLine());
+            break;
         }
     }
 }
@@ -22731,10 +22848,14 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
         plist += (i ? ", " : "") + sig.params[i].className + (sig.params[i].byRef ? "*" : "");
     std::string boundT = sig.retCType + " (*)(void*" + (sig.params.empty() ? "" : ", " + plist) + ")";
     std::string freeT  = sig.retCType + " (*)(" + (sig.params.empty() ? std::string("void") : plist) + ")";
-    std::string boundCall = emitReorderedCall("((" + boundT + ")" + recv + ".fn)", recv + ".obj",
-                                              sig.params, args, line);
-    std::string freeCall  = emitReorderedCall("((" + freeT + ")" + recv + ".fn)", "",
-                                              sig.params, args, line);
+    // A `@noheap` signature is proven (every bind was checked), so the type-erased `fn` read carries the
+    // marker the call graph reads; unmarked, it is a fact for the calling body like any other slot call.
+    auto slot = [&](const std::string& t) {
+        const std::string f = "((" + t + ")" + recv + ".fn)";
+        return sig.noHeap ? ("KAMA_NOHEAP_SLOT(" + f + ")") : f;
+    };
+    std::string boundCall = emitReorderedCall(slot(boundT), recv + ".obj", sig.params, args, line);
+    std::string freeCall  = emitReorderedCall(slot(freeT), "", sig.params, args, line);
     return "(" + recv + ".obj ? " + boundCall + " : " + freeCall + ")";
 }
 
@@ -24989,6 +25110,10 @@ void CEmitter::buildCallGraph()
         }
         std::string prevTok;   // the previous significant token: an identifier, or one punctuation char
         bool lineStart = false;
+        // Parenthesis depth, and the depth INSIDE the innermost `KAMA_NOHEAP_SLOT(` still open (0 = none).
+        // A slot call is an allocation fact unless the emitter proved it from a declaration and wrapped it
+        // in that marker — see kama_runtime.h for why the unmarked case is the one that must be sound.
+        int pdepth = 0, provenAt = 0;
         for (size_t i = b.open + 1; i < b.close; ) {
             const char c = s[i];
             if (c == '\n') { lineStart = true; ++i; continue; }
@@ -25003,6 +25128,8 @@ void CEmitter::buildCallGraph()
             if (!identStart(c)) {
                 // `->` is one token for the member test below.
                 if (c == '-' && i + 1 < n && s[i + 1] == '>') { prevTok = "->"; i += 2; continue; }
+                if (c == '(') ++pdepth;
+                if (c == ')') { if (provenAt && pdepth == provenAt) provenAt = 0; if (pdepth) --pdepth; }
                 prevTok = std::string(1, c); ++i; continue;
             }
             size_t e = i; while (e < b.close && identChar(s[e])) ++e;
@@ -25019,6 +25146,25 @@ void CEmitter::buildCallGraph()
             // already recorded one with a better sentence (the gate names the construct; this names the symbol).
             if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
                 _allocSites[b.name] = AllocSite{ "calls `" + id + "`, which is `@heap`", line, file };
+            if (!member && next == '(' && id == "KAMA_NOHEAP_SLOT" && !provenAt) provenAt = pdepth + 1;
+            // A CALL THROUGH A MEMBER is a call the compiler cannot see the target of. C has no methods, so
+            // `x->m(…)` / `x.m(…)` is always a function pointer read out of a struct: a contract or virtual
+            // slot, a `fnptr` field, a vtable's `__dtor`. Read here rather than recorded at the sites that
+            // emit one, because the compiler writes slot calls in bodies no source line spells — the
+            // synthesized `serialize`/`deserialize`, `__vdrop`, and the smart-pointer drops — and every one
+            // of those was missing, so dropping a polymorphic box whose object frees heap memory passed a
+            // `@noheap` region (found planning KR-39). A proven slot says so with the marker.
+            //
+            // `(x->m)(…)` — a member behind parentheses, which is how a bindable's type-erased `fn` is cast
+            // before it is called — counts too. A cast `(T)(x)` never has a member before its `)`.
+            if (member && !provenAt && !_allocSites.count(b.name)) {
+                size_t g = f;
+                if (next == ')') { ++g; while (g < b.close && isspace((unsigned char)s[g])) ++g; }
+                if ((next == '(' || (next == ')' && g < b.close && s[g] == '(')))
+                    _allocSites[b.name] = AllocSite{ id == "__dtor"
+                        ? "the destructor of the object behind a contract or base-class handle"
+                        : ("`" + id + "` through a dispatch slot"), line, file, /*indirect=*/true };
+            }
             prevTok = id;
             i = e;
         }
@@ -26068,12 +26214,16 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
         if (!m.noHeap)
             rejectNoHeapIndirect(("`" + iface + "." + method + "`, a contract member not declared "
                                   "`@noheap`").c_str(), srcLine);
+        // A member that IS `@noheap` is proven, so the call carries the marker the call graph reads back
+        // out of the C — without it the slot call would be a fact like any other (see buildCallGraph).
+        const std::string slot = m.noHeap ? ("KAMA_NOHEAP_SLOT((" + recv + ").vtbl->" + method + ")")
+                                          : ("(" + recv + ").vtbl->" + method);
         std::vector<ParamSig> params = paramSigsOf(m.params);
         // A place-returning slot (`fn ref T m()` / `fn const ref T m()`) yields a `T*` / `T const*`; deref it
         // so the call is an lvalue everywhere, exactly as the class and free-function paths do — a contract
         // place call used to come back as a bare pointer, so `x.at(i: 0).value()` fed a `T const*` to a
         // method expecting a `T`.
-        return placeWrap(emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
+        return placeWrap(emitReorderedCall(slot, "(" + recv + ").obj",
                                            params, args, srcLine), m.isPlaceReturn);
     }
     unsupported("unknown contract method", srcLine);
@@ -26098,9 +26248,14 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // reference no linker can satisfy. The body needs only the vtable STRUCT TYPE and the object
         // layout — both complete by this point in the header — and dispatches through the vptr rather
         // than naming the module-local vtable instance, so nothing here is unit-specific.
+        // A `@noheap ~T()` is a promise every subclass destructor is held to (checkOverrideSignatures), so
+        // the slot is proven and carries the marker the call graph reads; unmarked, dropping a base handle
+        // is an allocation fact, because the derived destructor that actually runs may free.
+        const bool provenDrop = ci.dtorNode && hasNoHeapAttr(ci.dtorNode->attributes);
         *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self) {\n";
         indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
-        indent(1); *_out << "if (__vt && __vt->__dtor) __vt->__dtor(self);\n";
+        indent(1); *_out << "if (__vt && __vt->__dtor) "
+                         << (provenDrop ? "KAMA_NOHEAP_SLOT(__vt->__dtor)" : "__vt->__dtor") << "(self);\n";
         *_out << "}\n";
     }
 #endif
@@ -30302,7 +30457,8 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             canAccess(fo, f.visibility, method, srcLine);
                             const SigInfo& sig = _sigs.at(fc);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
-                            return emitReorderedCall("(" + recvPtr + ")->" + method, "", sig.params,
+                            return emitReorderedCall(sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + method + ")")
+                                                                : ("(" + recvPtr + ")->" + method), "", sig.params,
                                                      args, srcLine);
                         }
                         // ...and its bound twin: a `BindableFunctionPtr` FIELD, invoked. The local arm
@@ -30391,7 +30547,11 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                 for (auto& s : rit->second) if (s.name == method) { slotOwner = s.owner; break; }
             std::string self = "(" + slotOwner + "*)" + recvPtr;
             std::string vptr = "((" + root + "*)" + recvPtr + ")->__vptr";
-            return emitReorderedCall(vptr + "->" + method, self, mi->params, args, srcLine);
+            // A `@noheap` virtual method is proven — every override is checked against it — so the slot
+            // call is marked for the call graph, exactly as a `@noheap` contract member's is.
+            std::string slot = vptr + "->" + method;
+            if (mi->noHeap) slot = "KAMA_NOHEAP_SLOT(" + slot + ")";
+            return emitReorderedCall(slot, self, mi->params, args, srcLine);
         }
     }
 #endif

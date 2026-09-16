@@ -134,6 +134,16 @@ static inline float    kama_f32_from_bits(uint32_t b){ float v;    kama_copy(&v,
 static inline uint64_t kama_f64_bits(double v)       { uint64_t b; kama_copy(&b, &v, 8); return b; }
 static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v, &b, 8); return v; }
 
+// A call through a function pointer the no-heap analysis has PROVEN from a declaration — a contract or
+// virtual member declared `@noheap` (every implementation is checked against it), a `@noheap fnptr`
+// signature, or a destructor slot that cannot run anything allocating. It expands to its argument and
+// changes no code: it exists so the call graph, which is read back out of this C, can tell a proven slot
+// from an unproven one. EVERY OTHER call through a member (`x->m(…)`, `x.m(…)`) is an allocation fact for
+// the body containing it, because nothing says which function runs — see buildCallGraph. Soundness is
+// therefore the DEFAULT and the marker is the exception, which is the way round that fails safe: forget it
+// and a provable call is refused with a diagnostic, rather than an unprovable one passing silently.
+#define KAMA_NOHEAP_SLOT(f) (f)
+
 // ---- Collections ----------------------------------------------------------
 // Generic collections are monomorphized per element type from these templates.
 // The kama surface stays pointer-free and safe. Indexing is bounds-checked.
@@ -165,29 +175,21 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 // Owned<I> over a CONTRACT — a unique-owning fat pointer: the handle IS the contract
 // fat pointer {obj, vtbl}, with `obj` the heap-owned CONCRETE object. Drop dispatches the concrete
 // destructor through the vtable's `__dtor` slot (NULL for a non-destructible impl), then frees obj.
+//
+// ⚠️ ONLY THE STRUCT IS HERE. The drop and the handle ops for every contract smart pointer (and for
+// BindableFunctionPtr) are written out by the COMPILER — CEmitter::emitIfaceHandleFuncs — because the
+// no-heap call graph is read back out of the emitted C, and a macro body is not in it: the slot call and
+// the free were invisible, so dropping a polymorphic box whose object frees passed a `@noheap` region
+// (0.9.353). Put a body back in here and it stops being analysed. The `_TYPE` halves stay: a struct
+// declaration calls nothing.
 #define KAMA_OWNED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; } NAME;
-#define KAMA_OWNED_IFACE_FUNCS(NAME)                                          \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->obj) {                                                           \
-        if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);   \
-        kama_free(self->obj); self->obj = NULL;                              \
-    }                                                                          \
-}
 
 // Allocator-aware Owned<I> (M11d): the fat handle carries its own copy of the caller's allocator value
 // `alloc` (a lightweight value handle over externally-owned state, e.g. an arena) + the concrete pointee's
 // `objsize`, so the drop frees `obj` through THAT allocator instead of libc. Selected only for a stateful
-// allocator; a default GlobalAllocator box keeps the plain macros above (byte-identical).
+// allocator; a default GlobalAllocator box keeps the plain layout above (byte-identical).
 #define KAMA_OWNED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
     typedef struct NAME { void* obj; const VTBL* vtbl; ATYPE alloc; size_t objsize; } NAME;
-#define KAMA_OWNED_IFACE_ALLOC_FUNCS(NAME, ATYPE)                             \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->obj) {                                                           \
-        if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);   \
-        ATYPE##__deallocate(&self->alloc, self->obj, self->objsize);           \
-        self->obj = NULL;                                                      \
-    }                                                                          \
-}
 
 // Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
 // drop releases; the pointee is destroyed + freed when the last strong handle
@@ -219,45 +221,14 @@ static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 // Shared<I> over a CONTRACT — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
 // on the shared count; the last strong handle drops the concrete object via the vtable's `__dtor`.
 #define KAMA_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; } NAME;
-#define KAMA_SHARED_IFACE_FUNCS(NAME)                                         \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->ctrl) {                                                          \
-        if (self->ctrl->strong == 1) {   /* last strong: release AFTER the drop (cycle-safe, see above) */ \
-            if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj); \
-            kama_free(self->obj);                                            \
-            self->ctrl->strong = 0;                                           \
-            if (self->ctrl->weak == 0) kama_free(self->ctrl);                     \
-        } else { self->ctrl->strong--; }                                     \
-        self->obj = NULL; self->ctrl = NULL;                                  \
-    }                                                                          \
-}                                                                              \
-static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }    \
-/* `copy h` — a retained duplicate (strong++). The emitter spells every deep copy `NAME__copy(&x)`; a */ \
-/* fat handle's copy is a retain, exactly what the library `Shared<T>::copy` does for a thin one.   */ \
-static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->strong++; return *self; }
 
 // Allocator-aware Shared<I> (M11d): fat handle carries its own `alloc` value copy + pointee `objsize`.
 // Both the pointee AND the ctrl block are drawn from `alloc` at the new-site, so the last strong drop frees
 // both through it (cycle-safe order preserved: release AFTER the pointee dtor). A Weak that outlives the
 // Shared frees the ctrl through its OWN equal `alloc` copy (all copies are equal — a value handle over
-// externally-owned state). Default GlobalAllocator boxes keep the plain macros above (byte-identical).
+// externally-owned state). Default GlobalAllocator boxes keep the plain layout above (byte-identical).
 #define KAMA_SHARED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
     typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
-#define KAMA_SHARED_IFACE_ALLOC_FUNCS(NAME, ATYPE)                            \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->ctrl) {                                                          \
-        if (self->ctrl->strong == 1) {                                        \
-            if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj); \
-            ATYPE##__deallocate(&self->alloc, self->obj, self->objsize);       \
-            self->ctrl->strong = 0;                                           \
-            if (self->ctrl->weak == 0)                                        \
-                ATYPE##__deallocate(&self->alloc, (void*)self->ctrl, sizeof(kama_ctrl)); \
-        } else { self->ctrl->strong--; }                                     \
-        self->obj = NULL; self->ctrl = NULL;                                  \
-    }                                                                          \
-}                                                                              \
-static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }    \
-static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->strong++; return *self; }
 
 // Weak<T> — a non-owning reference to a Shared<T>'s pointee. Counts `weak`, not
 // `strong`, so it does NOT keep the pointee alive (it breaks Shared cycles). You
@@ -287,51 +258,14 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
 // Weak<I> over a CONTRACT — same fat layout as Shared<I>; counts `weak`, never touches
 // the concrete object. `upgrade()` yields a live Shared<I> (obj/vtbl/ctrl) or an empty one.
 #define KAMA_WEAK_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; } NAME;
-#define KAMA_WEAK_IFACE_FUNCS(NAME, SHARED_NAME)                              \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->ctrl) {                                                          \
-        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) kama_free(self->ctrl); \
-        self->obj = NULL; self->ctrl = NULL;                                  \
-    }                                                                          \
-}                                                                              \
-static inline bool NAME##__expired(NAME* self) {                              \
-    return self->ctrl == NULL || self->ctrl->strong == 0;                     \
-}                                                                              \
-static inline SHARED_NAME NAME##__upgrade(NAME* self) {                          \
-    SHARED_NAME s;                                                            \
-    if (self->ctrl && self->ctrl->strong > 0) {                              \
-        self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl; \
-    } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
-    return s;                                                                 \
-}                                                                              \
-static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->weak++; return *self; }
 
 // Allocator-aware Weak<I> (M11d): same fat layout as Shared + `alloc`/`objsize`; counts `weak`, never
 // touches the concrete object. Frees the ctrl (through its own `alloc` copy) when BOTH counts reach 0.
 // `__upgrade` MUST propagate `alloc`+`objsize` into the returned Shared so the upgraded strong handle frees
-// through the right allocator (init `= {0}` so the empty/expired case leaves them zeroed).
+// through the right allocator (init `= {0}` so the empty/expired case leaves them zeroed) — emitted by the
+// compiler beside the drop, see the Owned<I> note above.
 #define KAMA_WEAK_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
     typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
-#define KAMA_WEAK_IFACE_ALLOC_FUNCS(NAME, ATYPE, SHARED_NAME)                 \
-static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->ctrl) {                                                          \
-        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0)              \
-            ATYPE##__deallocate(&self->alloc, (void*)self->ctrl, sizeof(kama_ctrl)); \
-        self->obj = NULL; self->ctrl = NULL;                                  \
-    }                                                                          \
-}                                                                              \
-static inline bool NAME##__expired(NAME* self) {                              \
-    return self->ctrl == NULL || self->ctrl->strong == 0;                     \
-}                                                                              \
-static inline SHARED_NAME NAME##__upgrade(NAME* self) {                        \
-    SHARED_NAME s = {0};                                                      \
-    if (self->ctrl && self->ctrl->strong > 0) {                              \
-        self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl;         \
-        s.ctrl = self->ctrl; s.alloc = self->alloc; s.objsize = self->objsize; \
-    } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
-    return s;                                                                 \
-}                                                                              \
-static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->weak++; return *self; }
 
 // BindableFunctionPtr<Sig> — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:
@@ -340,23 +274,11 @@ static inline NAME NAME##__copy(NAME* self) { if (self->ctrl) self->ctrl->weak++
 //   fn       — the callable, stored type-erased; invoked as ret(void*,P…) when
 //              obj!=NULL (a bound method, object passed first) else ret(P…) (free)
 //   elemdtor — the bound object's destructor (NULL if trivially destructible/free)
-// Move-only (it may uniquely own the object). Drop releases per ownership kind.
+// Move-only (it may uniquely own the object). Drop releases per ownership kind — and the drop, which calls
+// the bound object's destructor through `elemdtor`, is emitted by the compiler (see the Owned<I> note).
 #define KAMA_BINDABLE_TYPE(NAME)                                              \
 typedef struct NAME { void* obj; kama_ctrl* ctrl;                            \
                       void (*fn)(void); void (*elemdtor)(void*); } NAME;
-#define KAMA_BINDABLE_FUNCS(NAME)                                            \
-static inline void NAME##__dtor(NAME* self) {                                 \
-    if (self->ctrl) {                          /* Shared: refcount */         \
-        if (--self->ctrl->strong == 0) {                                      \
-            if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj); \
-            if (self->ctrl->weak == 0) kama_free(self->ctrl);                \
-        }                                                                     \
-    } else if (self->obj) {                    /* Owned: sole owner */        \
-        if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj); \
-    }                                          /* free fn: nothing to drop */ \
-    self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->elemdtor = NULL; \
-}
-#define KAMA_BINDABLE_DEFINE(NAME) KAMA_BINDABLE_TYPE(NAME) KAMA_BINDABLE_FUNCS(NAME)
 
 // Raw byte write to a standard fd with NO <stdio.h> — the one place that spells the platform's
 // write syscall. Everything below (bounds trap, panic, assert, print/log floor) goes through here.

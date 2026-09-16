@@ -1,0 +1,18 @@
+// Dropping a box through a CONTRACT runs whatever destructor the object behind it has, and the compiler cannot
+// see which one that is: `~Circle` frees a `DynamicArray` buffer here, through the handle's vtable `__dtor`
+// slot. The box itself comes from an arena, so it is not the heap — the destructor is. This built clean until
+// 0.9.353: the drop function was defined by a runtime macro the call graph could not read, and the slot call
+// inside it was never a fact. Found planning KR-39.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator, std::collections::DynamicArray };
+type contract Shape for resource { fn int32 area(); }
+type resource Circle implements Shape {
+    DynamicArray<int32> parts;
+    public ctor make(int32 r) { this.parts.add(item: r); }
+    public fn int32 area() { return 1; }
+}
+@noheap fn int32 finish(Owned<Shape, BumpAllocator> o) { return 0; }
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);
+    Owned<Shape, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 5);
+    return finish(o: give a);
+}

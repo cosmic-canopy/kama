@@ -1,0 +1,1 @@
+`~Square` runs in place of `~Shape`, which is `@noheap`

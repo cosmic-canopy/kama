@@ -1,0 +1,35 @@
+// What a no-heap region MAY drop through a polymorphic box, and why each is provable without seeing the object:
+//   * a `for value` contract holds only values, which own nothing, so there is no destructor behind the slot;
+//   * a virtual base whose destructor is `@noheap`, a promise every subclass destructor is held to.
+// The boxes come from an arena, so releasing them is the bump allocator's `deallocate`, not `free`.
+// The refused siblings: tests/xfail/noheap_drop_contract_box*.kama, tests/xfail/noheap_drop_virtual_box.kama.
+import { std::memory::Owned, std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
+type contract Sink for value { fn int32 area(); }
+type value Dot implements Sink {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r; }
+}
+type virtual(maxDepth: 1) resource Shape {
+    public ctor make() { }
+    @noheap ~Shape() { }
+    public fn int32 area() { return this.compute(); }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    int32 side;
+    public ctor make(int32 s) { this.base = Base.make(); this.side = s; }
+    @noheap ~Square() { }
+    protected override fn int32 compute() { return this.side * this.side; }
+}
+@noheap fn int32 dropSink(Owned<Sink, BumpAllocator> o) { return 1; }
+@noheap fn int32 dropShared(Shared<Sink, BumpAllocator> o) { return 2; }
+@noheap fn int32 dropShape(Owned<Shape, BumpAllocator> o) { return 4; }
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);
+    Owned<Sink, BumpAllocator> a = new(allocator: arena.handle()) Dot.make(r: 3);
+    Shared<Sink, BumpAllocator> b = new(allocator: arena.handle()) Dot.make(r: 3);
+    Owned<Shape, BumpAllocator> c = new(allocator: arena.handle()) Square.make(s: 5);
+    int32 got = c.area();                                                 // 25
+    return got + dropSink(o: give a) + dropShared(o: give b) + dropShape(o: give c);   // 25 + 7
+}

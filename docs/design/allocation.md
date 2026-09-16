@@ -1,6 +1,6 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
-**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`; §2–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, and the recording gap it exposed at `0.9.353`; §2–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -12,7 +12,8 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-15, Linux).** `dev` at `0.9.348`, pushed (`origin/dev` = `db8d5313`): KR-57 filed (a binding may take a function's
+**State (2026-09-16, Linux).** `dev` at `0.9.353` (the recording gap — UNPUSHED, one commit on top of `origin/dev` =
+`59e2395e`, which brought KR-56 `extern const` and KR-59). Before it, `0.9.348`, pushed: KR-57 filed (a binding may take a function's
 name), then `0.9.347` (the no-heap call graph read from the emitted C, a pre-existing `@noheap` fix), then
 `0.9.348` (KR-47: reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate
 figures are in each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
@@ -21,27 +22,54 @@ figures are in each commit message. Since this campaign opened: KR-46 shipped at
 eighteen externs, eleven of them `std::fs`, are `@heap` on every target though some platforms allocate nothing there). A new roadmap row takes the `Next id:` counter
 at the top of `docs/ROADMAP.md`, and bumps it.
 
+**The order changed on 2026-09-15/16 (maintainer), and KR-39 is no longer next.** Reading the emitter for
+KR-39 answered its own question: devirtualizing in emission cannot reach serde, because the slot calls live in
+`X__serialize(X*, Serializer* w)` — written once per program, with no backend type in sight — so the row's
+premise ("`serializeJsonBuffer` constructs its backend, so the callee is knowable") holds at the ENTRY POINT and
+nowhere the proof is needed. It also does not matter yet: no serde path is heap-free even with a proven callee
+(every backend ctor allocates a `FixedArray` scratch or frame stacks, readers take an owned buffer, there is no
+fixed-buffer writer, and every `Err` boxes). **What answers serde is this campaign's own arc:** after KR-48 every
+allocation funnels through `kama_alloc`/`kama_free`, and after KR-49 those delegate to a global allocator the
+program DECLARES — whose body `--no-heap` can then check like any other code, so a pool over program-owned
+storage is provably not the system heap and the whole serde chain (scratch, buffers, error boxes) lands in it.
+
+That settles §3's open question in favour of **the declaration**, not the weak symbol: a declaration has a body
+the flag can read, where a weak symbol could only be trusted. And it raises one for the maintainer, written here
+because it changes what the flag MEANS: `@noheap` = *never allocates* (an ISR / audio callback: deterministic,
+nothing can run out) and `--no-heap` = *never reaches the system heap* (an MCU with no `malloc`, where a fixed
+pool the program owns is exactly right). The two audiences want different guarantees; the split above gives each
+one its own word and keeps today's behaviour for the attribute.
+
+**The recording gap (`0.9.353`), found planning KR-39.** The no-heap call graph could not see a call the
+COMPILER writes through a vtable, and four holes fell out of that, each with a fixture that built clean at
+`0.9.352`: dropping an `Owned`/`Shared`/`Weak` over a contract (the drop was a runtime MACRO, invisible to the
+scanner), the same over a virtual base (`__vdrop`'s `__vt->__dtor(self)` was read but skipped as a member),
+`kama_free` counting as `@heap` only when `std::process` happened to be imported, and `@noheap ~Base()` never
+being enforced on subclass destructors. The fix is by construction, not per site: **a call through a struct
+member in the emitted C is an allocation fact** — C has no methods, so it is always a function pointer — and a
+call the emitter PROVED from a declaration says so with `KAMA_NOHEAP_SLOT`, which expands to its argument. Sound
+by default, and forgetting the marker refuses a legal program instead of passing an illegal one. The six
+smart-pointer `_FUNCS` macros moved into the emitter so their bodies are C the scanner reads; a `for value`
+contract emits no dispatch at all (its implementations own nothing, so the slot is NULL everywhere).
+
 **First steps next session:**
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
    on the rebased HEAD before building on it.
-2. **KR-39**, agreed to land right after KR-47 on the same walk. The walk now reads edges from the emitted C,
-   and a contract call is an indirect `(r).vtbl->m(...)`, so an indirect site is still a FACT, not an edge. KR-39
-   is "when the backend is statically known, the site is a direct edge to that body instead". The design question
-   is where the proof lives. Devirtualizing in emission (tier 1 of KR-23) makes it a plain call in the C, and the
-   graph then needs nothing new. That is the candidate to measure first.
-3. **KR-51** (`Handle.deserialize` checks `failed()`), which the flag no longer blocks: probe
+2. **KR-51** (`Handle.deserialize` checks `failed()`), which the flag no longer blocks: probe
    `tests/noheap_flag_unreached_dispatch.d` still builds after adding the error box.
-4. Then KR-48. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
+3. Then KR-48. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
    KR-48 the prelude's `kama_alloc`/`kama_free` are the heap symbols.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
-**KR-39** on its walk → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49** replaceable global allocator → **KR-50**
-allocator-aware errors. **KR-47 is designed with KR-39 in view** (a provable callee behind a contract slot)
-and tier 1 of the devirtualization ladder (KR-23): all three ask "what does this program actually reach",
-and they should share ONE reach walk — so KR-47's walk must be able to answer which concrete body a call
-reaches, including through a slot whose backend is statically known. KR-39 lands right after KR-47, on that
-walk, as its own commit (agreed 2026-09-14).
+~~the recording gap~~ (shipped `0.9.353`) → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49**
+replaceable global allocator → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
+land right after KR-47 "on the same walk", in view of tier 1 of the devirtualization ladder (KR-23); reading the
+emitter retired that plan, for the reasons at the top of this doc. One half of the premise survives and is worth
+keeping: the proof of "which body does this slot reach" belongs to ONE mechanism, not two. Note that the walk now
+runs AFTER emission, over the C text, so it can prove what a slot reaches but cannot rewrite the call —
+devirtualization must decide BEFORE emitting. KR-23 and a future KR-39 can share the RULE; they cannot share the
+machinery unless the proof moves ahead of emission.
 
 **How the maintainer wants this done** — the constraints, not suggestions:
 

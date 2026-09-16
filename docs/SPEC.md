@@ -673,6 +673,16 @@ against that promise, exactly as `const fn` already works on a contract
 ([tests/noheap_contract.kama](../tests/noheap_contract.kama)). A virtual call the compiler devirtualizes
 (a `final` class, a `final fn`, or a method nobody overrides) is a direct call and needs no annotation.
 
+**A destructor is a slot like any other.** Dropping an `Owned`/`Shared`/`Weak` handle over a **contract** or
+a **virtual base** runs the concrete object's `~T()` through the vtable, and which one that is is a runtime
+fact, so the drop is rejected in a no-heap region like any other slot call, even when the handle's own storage is an arena. <!-- xfail: noheap_drop_contract_box, noheap_drop_contract_box_heap, noheap_drop_virtual_box -->
+Two things prove it, and both are declarations rather than inference:
+`@noheap ~Base()`, which **every subclass destructor is then held to** — a subclass that owns a field which
+frees must say so, and is refused when it cannot — and a contract declared **`for value`**, whose <!-- xfail: noheap_dtor_override -->
+implementations own nothing and therefore have no destructor to dispatch
+([tests/noheap_drop_box_ok.kama](../tests/noheap_drop_box_ok.kama)). A handle over a **concrete** type is
+unaffected: its destructor is a direct call the analysis already reads.
+
 The **`fnptr` seam has the same escape, spelled on the signature**: `@noheap fnptr int32 Op(int32 x);` <!-- test: noheap_fnptr -->
 makes the promise part of the named type, so every function bound to it must itself be `@noheap` — in <!-- xfail: noheap_fnptr_bind, noheap_fnptr_bind_arg -->
 **every** bind position, a local initializer, an assignment, a call argument, a field and a module

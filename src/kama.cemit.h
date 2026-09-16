@@ -1591,7 +1591,13 @@ private:
     // makes an edge exist exactly when a call does.
     std::string _emittedC;
     void buildCallGraph();
-    std::set<std::string> _heapSymbols;   // C symbols of every `@heap extern fn` — see collectSignatures
+    // C symbols of every `@heap extern fn` (see collectSignatures), SEEDED with the runtime's own four
+    // allocation primitives. Those are the funnel every emitted heap operation goes through — a smart
+    // pointer's drop, a string's buffer, a control block — so their names are heap wherever they appear,
+    // not only in a program that happens to import the one module declaring `kama_free` (`std::process`,
+    // which is where a kama declaration of it exists at all). Without the seed a `--no-heap` program could
+    // drop a heap-owned contract box and never reach a fact.
+    std::set<std::string> _heapSymbols{ "kama_alloc", "kama_calloc", "kama_realloc", "kama_free" };
     std::set<std::string> _entryBodies;   // `main` and every `KAMA_EXPORT` body, read off the C — `--no-heap`'s roots
     // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER body
     // as a CANDIDATE, judged only if an entry point reaches it (`isUserBody` — the prelude and the stdlib are
@@ -2078,6 +2084,12 @@ private:
     bool isIfaceAllocColl(const CollectionInfo& info) const;   // M11d: fat handle embeds `A alloc` by value
     void emitIfaceAllocType(const CollectionInfo& info);       // its TYPE, laid out after the allocator struct
     void emitIfaceAllocFuncs(CollectionInfo& info);            // its FUNCS, deferred past the allocator's protos
+    // The drop + handle ops for a smart pointer over a CONTRACT, written as C rather than left to a runtime
+    // macro so the no-heap call graph can read the slot call and the free inside them — see the definition.
+    void emitIfaceHandleFuncs(CollectionInfo& info, bool alloc);
+    // Can a `NAME` handle's drop dispatch anything? A `for value` contract admits only kinds that own
+    // nothing, so its `__dtor` slot is NULL everywhere and the call is not emitted at all.
+    bool ifaceDropCanDispatch(const std::string& iface) const;
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);

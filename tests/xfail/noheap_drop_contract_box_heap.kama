@@ -1,0 +1,13 @@
+// The other half of tests/xfail/noheap_drop_contract_box.kama: here nothing behind the contract has a destructor
+// (a `for value` contract cannot hold one), but the box is on the HEAP, so dropping it frees. Owning a concrete
+// `Owned<Node>` in a no-heap region was already refused (tests/xfail/noheap_owned_drop.kama); the contract box
+// built clean until 0.9.353, because its drop function came from a runtime macro the call graph could not read.
+import { std::memory::Owned };
+type contract Shape for value { fn int32 area(); }
+type value Circle implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r; }
+}
+@noheap fn int32 finish(Owned<Shape> o) { return 0; }
+fn int32 main() { Owned<Shape> a = new Circle.make(r: 5); return finish(o: give a); }

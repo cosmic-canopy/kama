@@ -1,0 +1,15 @@
+// `@noheap ~Shape()` is a promise about every object a `Shape` handle can drop, so a subclass destructor must keep
+// it — the rule a `@noheap` virtual METHOD already has (an override must be `@noheap` too). It was not applied to
+// destructors, so `~Square` broke the promise silently until 0.9.353.
+import { std::collections::DynamicArray };
+type virtual(maxDepth: 1) resource Shape {
+    public ctor make() { }
+    @noheap ~Shape() { }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    DynamicArray<int32> parts;
+    public ctor make(int32 s) { this.base = Base.make(); this.parts.add(item: s); }
+    ~Square() { }
+}
+fn int32 main() { Square s = Square.make(s: 5); return 0; }

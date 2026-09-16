@@ -1,0 +1,1 @@
+dispatches the destructor of the object behind a contract or base-class handle
