@@ -77,12 +77,12 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
     unsafe fn void growTo(isize nc) {
         UnsafePtr<T> nd = null;
-        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))));
+        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
         UnsafePtr<T> od = this.data;
         isize i = 0;
         while (i < this.len) { nd[i] = od[i]; i = i + 1; }   // relocate the live prefix (raw move)
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }
         this.data = nd; this.cap = nc;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
@@ -287,7 +287,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         isize i = 0;
         while (i < this.len) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }
     }
 }

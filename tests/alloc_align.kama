@@ -1,0 +1,43 @@
+import { std::memory::Owned, std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator, std::collections::DynamicArray };
+
+// A block is ALIGNED, not just sized: `Allocator.allocate(bytes, align)`. Before the contract carried `align`
+// (measured at 0.9.366), an arena bumped every block to 8, so a `Simd<float32>#(4)` field (`alignof` 16) landed
+// at an address ≡ 8 mod 16 — misaligned storage an SSE load may fault on. And nothing asked for more than
+// `malloc`'s 16, so an `@align(64)` type boxed with a bare `new` was aligned only by luck.
+//
+// Every check below is an address modulo the alignment the type asks for. Exit 0, or the number of the first
+// misaligned check.
+
+type value Pad { int8 b; public ctor make() { this.b = 1; } }
+type value V { Simd<float32>#(4) v; public ctor make() { this.v = [1.0f32; 4]; } }
+@align(64) type value Wide { public int32 x; public ctor make() { this.x = 7; } }
+
+unsafe fn bool alignedV(Owned<V, BumpAllocator> o) {
+    Owned<V, BumpAllocator> k = give o;
+    return cast<usize>(k.release()) % alignof(V) == 0;   // the arena reclaims the block; nothing to free
+}
+unsafe fn bool alignedWide(Owned<Wide> o) {
+    Owned<Wide> k = give o;
+    UnsafePtr<Wide> raw = k.release();
+    bool ok = cast<usize>(raw) % alignof(Wide) == 0;
+    Owned<Wide> back = Owned.adopt(raw: raw);             // dropped once, through the funnel, with its layout
+    return ok;
+}
+unsafe fn bool alignedArray(ref DynamicArray<Wide> xs) { return cast<usize>(xs.dataPtr()) % alignof(Wide) == 0; }
+
+fn int32 main() {
+    if (alignof(V) != 16 || alignof(Wide) != 64) { return 90; }
+    Arena arena = Arena.make(capacity: 1024);
+    Owned<Pad, BumpAllocator> pad = new(allocator: arena.handle()) Pad.make();   // leave the bump at an odd offset
+    Owned<V, BumpAllocator> v = new(allocator: arena.handle()) V.make();
+    if (!alignedV(o: give v)) { return 1; }
+    Owned<Wide> w = new Wide.make();                                            // over-aligned, default allocator
+    if (!alignedWide(o: give w)) { return 2; }
+    DynamicArray<Wide> xs = DynamicArray.empty();
+    xs.add(item: Wide.make());
+    if (!alignedArray(xs: ref xs)) { return 3; }
+    Shared<Wide> s = new Wide.make();
+    Shared<Wide> t = copy s;
+    if (t.x != 7) { return 4; }
+    return 0;
+}

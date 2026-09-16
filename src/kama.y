@@ -1965,13 +1965,18 @@ sizeof_expression
      (`type` self-manages its own `<…>` genericDepth, so `sizeof(InlineArray<int32,4>)` parses too). */
   : SIZEOF LPAREN type RPAREN   { $$ = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); }
   | ALIGNOF LPAREN type RPAREN   { auto s = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); s->isAlign = true; $$ = s; }
-  /* `sizeof(ptr: p)` — the byte size of the object `p` really points at (a derived behind a base pointer):
-     a RUNTIME value, so it is an intrinsic call like `drop(ptr: p)`, not a SizeofNode, and every pass that
-     walks a call's arguments sees `p`. The emitter lowers it (and refuses any label but `ptr`). */
+  /* `sizeof(ptr: p)` / `alignof(ptr: p)` — the layout of the object `p` really points at (a derived behind a
+     base pointer): a RUNTIME value, so an intrinsic call like `drop(ptr: p)`, not a SizeofNode, and every pass
+     that walks a call's arguments sees `p`. The emitter lowers it (and refuses any label but `ptr`). */
   | SIZEOF LPAREN IDENTIFIER COLON expression RPAREN   {
         auto args = std::make_shared<ArgumentList>();
         args->push_back(std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), SharedModifier(), $5));
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, std::make_shared<std::string>("sizeof")), args);
+    }
+  | ALIGNOF LPAREN IDENTIFIER COLON expression RPAREN   {
+        auto args = std::make_shared<ArgumentList>();
+        args->push_back(std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), SharedModifier(), $5));
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, std::make_shared<std::string>("alignof")), args);
     }
   ;
 constant_expression

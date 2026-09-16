@@ -1,7 +1,9 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
 **Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
-§5 (`Handle`, KR-51) at `0.9.355`, and **sizes that tell the truth** (§2's prerequisite) at `0.9.361`. §2–§4 not started — **KR-48 is next**. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+§5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth** (§2's prerequisite) at `0.9.366`, and **the layout
+funnel + an aligned `Allocator`** (§2's first half, and KR-61) at `0.9.367`. **KR-48's second half is next** —
+see "What KR-48 still has to move" in §2; §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -332,27 +334,43 @@ contract already PROMISES `deallocate(pointer, bytes)`, and a size-class or head
 to trust it (Rust's `GlobalAlloc::dealloc(ptr, layout)`, Zig's `free(slice)`). With §3's decision the global
 allocator IS an `Allocator`, so an unsized funnel would break that promise at the seam every allocation passes.
 
-**Its prerequisite shipped first, at `0.9.361`: the sizes were already lying.** Measured by a header-checking
+**Its prerequisite shipped first, at `0.9.366`: the sizes were already lying.** Measured by a header-checking
 allocator (`tests/alloc_size_truth.kama`): `Owned<Base, A>`/`Shared<Base, A>` holding a derived object gave
 `deallocate` `sizeof(Base)`, as did the contract upcast's `objsize`; and a `BindableFunctionPtr` bound from a
 custom-allocator box released it with libc `free` (a crash). The fix is by construction — the size lives with
 the dynamic type: a `__size` slot in every class vtable, **`sizeof(ptr: p)`** (SPEC) for library code, and a
 bindable that releases through the box it was bound from (refused for a stateful allocator).
 
-**What KR-48 must still carry a size through** (both sweeps at `0.9.359`; every other free already knows it):
-- **contract handles on the default allocator** (`Owned<I>`/`Shared<I>`, so every `Owned<Error>`) — no size on
-  the handle; add `__size` to every CONTRACT vtbl (`<C>__as_<I>`, `intrinsicContractVtbl`, enum vtbls, graph
-  targets) and free with `vtbl->__size`. The allocator variant's `objsize` field then becomes redundant.
-- **`kama_os.h`**: `kama__wpath`/`kama__wide`/`kama__wfree` results (size is local, never returned);
-  `kama__win_cmdline` and `proc_spawn`'s `wcmd`/`wenv`/`wcwd` (`wenv` has embedded NULs — keep the size, do not
-  recompute); argv/envp vectors (slot count not stored); `kama_capture2` buffers crossing into
-  `process.kama:292` (only `len` leaves; return `cap`); the `kama_args_init` failure path; `strdup`/`_strdup`
-  (hidden allocators — replace with a funnel helper).
-- `kama_realloc` has NO callers in the tree; every raw `realloc` knows its old size.
-- Probe first: the sweep reports `KAMA_OWNED_FUNCS`/`KAMA_SHARED_FUNCS`/`KAMA_WEAK_FUNCS` unreachable — delete
-  rather than convert if so.
-- **Proof for the whole corpus:** under the san leg, make the default `kama_alloc` store the size in a header and
-  `kama_free` panic on a mismatch, so a green `./dev test san` means every free passed the right size.
+**The funnel carries ALIGNMENT too — shipped at `0.9.367` (was KR-61).** Measured at `0.9.366`: an arena bumped every
+block to 8, so a `Simd<float32>#(4)` field (`alignof` 16) landed at an address ≡ 8 mod 16. Size and alignment are
+one promise, so the contract became `allocate(bytes, align)` / `deallocate(pointer, bytes, align)` BEFORE the
+funnel was built, and the funnel is `kama_alloc(n, align)` / `kama_free(p, n, align)` (plus `kama_alloc_zeroed`),
+not a sized-only pair rewritten later. Beyond the fundamental alignment the default goes to the platform's aligned
+allocator, whose release differs on Windows (`_aligned_free`) — which is why the FREE takes `align` as well.
+`kama_calloc`/`kama_realloc` are gone. What `0.9.367` moved onto the funnel, each with its layout:
+- every allocation the EMITTER writes (bare/fallible/`try` `new`, prim/enum/error boxes, `parallel_for`/`spawn`/
+  `isolate` bundles and their trampolines, serde `Owned` reads, graph shells — `__kama_graph_dropBox` frees per
+  node type) and every `A__allocate`/`A__deallocate` it writes;
+- contract handles on either allocator free with the layout their VTABLE reports (`__size`/`__align`, and
+  `__vsize`/`__valign` for a virtual-class implementer holding a derived object — whose `__dtor` is now `__vdrop`,
+  fixing a slicing drop); the handles' `objsize` field is gone;
+- all of `kama_runtime.h` (strings free with `cap`; the Windows argv failure path frees each slot while its
+  size is known), `GlobalAllocator`, `Arena` (its buffer comes from `GlobalAllocator`, so under `--no-heap` it is
+  refused through that leaf), every stdlib collection and box, and `kama_capture2` (which now returns each
+  buffer's capacity to `process.kama`);
+- the dead concrete `KAMA_OWNED/SHARED/WEAK_{TYPE,FUNCS}` macros (a smart-pointer class is only ever over a
+  contract — measured: 0 of 826 fixtures emitted them) and the emitter arms that wrote them are deleted.
+
+**What KR-48 still has to move** (the sweep at `0.9.359`, less what `0.9.367` did):
+- **`kama_os.h`** raw `malloc`/`free`/`realloc` — `kama__wpath`/`kama__wide`/`kama__wfree` results (size is local,
+  never returned); `kama__win_cmdline` and `proc_spawn`'s `wcmd`/`wenv`/`wcwd` (`wenv` has embedded NULs — keep
+  the size, do not recompute); argv/envp vectors (slot count not stored); `strdup`/`_strdup` (hidden allocators —
+  a funnel helper); the poller, `diropen` cursor, Windows `kama__utf8`; `kama_channel.h` (4), `kama_isolate.h`
+  (2), `kama_app.h` (1). Every raw `realloc` there knows its old size.
+- **The guard** `tools/check-alloc-funnel.sh`, and the **proof for the whole corpus**: under the san leg, the
+  default `kama_alloc` stores the layout in a header and `kama_free` panics on a mismatch, so a green
+  `./dev test san` means every free passed the right layout. (Not before the OS seam moves: a raw `malloc`
+  block freed through the funnel would trip it.)
 
 ### 3. Replacing the default implementation
 

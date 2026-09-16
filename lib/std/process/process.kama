@@ -36,12 +36,13 @@ extern fn int32 kama_kill(isize handle, int32 sig);
 // CloseHandle. One platform-neutral verb so the dtor stays identical (POSIX has no handle to close).
 @heap extern fn void  kama_proc_detach(isize handle);
 // Concurrent stdout+stderr drain to EOF (POSIX: poll; Windows: two threads) — see kama_os.h. Fills two heap
-// buffers the caller copies out then frees with kama_free. Keeps run()'s kama one platform-neutral path.
+// buffers the caller copies out then frees with kama_free, giving back each one's capacity. Keeps run()'s kama
+// one platform-neutral path.
 // `UnsafePtr<UnsafePtr<uint8>>`, not `UnsafePtr<UnsafePtr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
 // `void**` — a real -Wincompatible-pointer-types on every `run()` build. An FFI declaration has to
 // name the C type exactly; nothing else checks it.
-@heap extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen);
-@heap extern fn void  kama_free(UnsafePtr p);
+@heap extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<usize> outCap, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen, UnsafePtr<usize> errCap);
+@heap extern fn void  kama_free(UnsafePtr p, usize n, usize align);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
 extern fn int32 kama_SIGTERM();
@@ -281,16 +282,16 @@ type resource Command {
             case Ok(value: pr): { := give pr; }
             case Err(error: e): { return Result::Err(error: e); }
         };
-        UnsafePtr<uint8> outRaw = null; usize outLen = 0;
-        UnsafePtr<uint8> errRaw = null; usize errLen = 0;
+        UnsafePtr<uint8> outRaw = null; usize outLen = 0; usize outCap = 0;
+        UnsafePtr<uint8> errRaw = null; usize errLen = 0; usize errCap = 0;
         int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
-                                 outBuf: addr(of: outRaw), outLen: addr(of: outLen),
-                                 errBuf: addr(of: errRaw), errLen: addr(of: errLen));
+                                 outBuf: addr(of: outRaw), outLen: addr(of: outLen), outCap: addr(of: outCap),
+                                 errBuf: addr(of: errRaw), errLen: addr(of: errLen), errCap: addr(of: errCap));
         if (rc != 0) { return Result::Err(error: lastError()); }
         DynamicArray<uint8> outBuf = bytesFromRaw(raw: outRaw, n: outLen);
         DynamicArray<uint8> errBuf = bytesFromRaw(raw: errRaw, n: errLen);
-        if (outRaw != null) { kama_free(p: outRaw); }
-        if (errRaw != null) { kama_free(p: errRaw); }
+        if (outRaw != null) { kama_free(p: outRaw, n: outCap, align: 1); }
+        if (errRaw != null) { kama_free(p: errRaw, n: errCap, align: 1); }
 
         Result<ExitStatus, IoError> stR = p.wait();
         ExitStatus status = match (stR) {

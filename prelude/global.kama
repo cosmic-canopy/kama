@@ -113,9 +113,14 @@ type contract Comparable<T is This> for value, resource, intrinsic { const fn Or
 // behavior; the ONE non-panic construction entry is `try new` (yields `None`). A no-heap region
 // (`@noheap`/`--no-heap`) rejects this whole path at the allocation-emission site.
 // The concrete STRATEGY types (`Arena`/`BumpAllocator`) stay in `std::collections` (opt-in, not core).
+// A block has a LAYOUT — `bytes` and `align` (a power of two) — and both halves carry it: `allocate` must return
+// storage aligned to `align` (a `Simd` field needs 16), and `deallocate` is handed back exactly the layout the
+// block was allocated with, so an allocator may trust it (a size-class pool keeps no per-block header). The
+// compiler and the stdlib always pass `sizeof`/`alignof` of what they place, and for a pointer that may hold a
+// derived object, `sizeof(ptr:)`/`alignof(ptr:)`.
 type contract Allocator for value {
-    fn Optional<UnsafePtr> allocate(usize bytes);
-    fn void deallocate(UnsafePtr pointer, usize bytes);
+    fn Optional<UnsafePtr> allocate(usize bytes, usize align);
+    fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
 // every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `type enum` that
@@ -646,29 +651,29 @@ unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len
 unsafe fn void println(string s)  { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); }
 unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); }
 
-// The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
+// The default allocator (satisfies `Allocator`): a zero-size handle onto the runtime allocation funnel. The
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty
 // struct). Concrete impls live at the end of the prelude, after the contracts they satisfy.
-extern "<stdlib.h>";
 // `@heap`: this C touches the heap, so a call to it is an allocation fact for `@noheap` and `--no-heap`
 // (SPEC *No-heap subset*). A runtime extern is marked if kama's C for it allocates or frees on ANY target, so
-// a no-heap verdict is the same on every target.
-@heap extern fn UnsafePtr malloc(usize n);
-@heap extern fn void free(UnsafePtr p);
+// a no-heap verdict is the same on every target. They are the runtime's allocation funnel (kama_runtime.h),
+// the only place a kama program's C obtains or releases heap memory.
+@heap extern fn UnsafePtr kama_alloc(usize n, usize align);
+@heap extern fn void kama_free(UnsafePtr p, usize n, usize align);
 type value GlobalAllocator implements Allocator, Sendable {   // stateless: a container over it may cross an isolate
     // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
     // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
     // the nameless primary until M8d removes it.
     public default ctor make() { return this; }
-    public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
         UnsafePtr p = null;
-        p = malloc(n: bytes);
+        p = kama_alloc(n: bytes, align: align);
         if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
         return Optional::Some(value: p);
     }
-    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes) { free(p: pointer); }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { kama_free(p: pointer, n: bytes, align: align); }
 }
 
 // Infallible-allocation adapter (MCU step 5): unwrap a fallible allocation, panicking on OOM. This

@@ -1,10 +1,5 @@
-import { std::ptr::nonNull };
 
 export { Arena, BumpAllocator };
-
-extern "<stdlib.h>";
-@heap extern fn UnsafePtr malloc(usize n);
-@heap extern fn void free(UnsafePtr p);
 
 // The `Allocator` contract + the default `GlobalAllocator` are FOUNDATIONAL and live in the global
 // prelude (`prelude/global.kama`, beside the other core capability contracts), so both `Owned<T, A>`
@@ -12,7 +7,7 @@ extern "<stdlib.h>";
 // concrete opt-in STRATEGY types (`Arena` + its `BumpAllocator` handle) — not needed by the core, so
 // they stay in the library.
 
-// A caller-owned bump/arena region: one malloc'd byte buffer, allocations bump `offset` forward, an
+// A caller-owned bump/arena region: one heap byte buffer (from `GlobalAllocator`), allocations bump `offset` forward, an
 // individual `deallocate` is a no-op, and `reset()` bulk-frees the whole region in O(1). The Arena
 // OWNS the buffer (frees it in its dtor); a `BumpAllocator` handle is a cheap VALUE pointing back
 // into this Arena's mutable `offset`, so N containers can draw from ONE arena. The Arena must
@@ -21,7 +16,7 @@ type resource Arena {
     UnsafePtr<uint8> buffer = null; isize capacity = 0; isize offset = 0;
 
     public unsafe ctor make(isize capacity) {
-        match (nonNull(p: malloc(n: cast<usize>(capacity)))) {
+        match (GlobalAllocator.make().allocate(bytes: cast<usize>(capacity), align: 1)) {
             case Some(value: p): { this.buffer = cast<UnsafePtr<uint8>>(p); }
             case None: { panic(msg: "Arena: out of memory"); }
         };
@@ -40,12 +35,13 @@ type resource Arena {
     // containers living in it — the caller drops those first, then resets.
     public fn void reset() { this.offset = 0; }
 
-    unsafe ~Arena() { free(p: cast<UnsafePtr>(this.buffer)); }
+    unsafe ~Arena() { GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.buffer), bytes: cast<usize>(this.capacity), align: 1); }
 }
 
 // A copyable value handle onto an `Arena`. Stores the buffer base + a raw pointer to the arena's
-// `offset` cell + the capacity, so a by-value copy still bumps the SAME arena. `allocate` bumps
-// (8-byte aligned) and returns `None` on exhaustion (fallible seam — a `try new` into this arena
+// `offset` cell + the capacity, so a by-value copy still bumps the SAME arena. `allocate` bumps to the
+// requested alignment — of the ADDRESS, not the offset, so it holds whatever the buffer's own alignment is
+// — and returns `None` on exhaustion (fallible seam — a `try new` into this arena
 // yields `None`); `deallocate` is a no-op (the Arena bulk-frees via `reset()` / its dtor). It NEVER
 // frees the arena buffer.
 type value BumpAllocator implements Allocator {
@@ -55,13 +51,15 @@ type value BumpAllocator implements Allocator {
         this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
-    public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
         isize b = cast<isize>(bytes);
-        isize o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
+        usize start = cast<usize>(this.buffer);
+        usize at = (start + cast<usize>(this.offset[0]) + align - 1) & ~(align - 1);   // `align` is a power of two
+        isize o = cast<isize>(at - start);
         if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
         this.offset[0] = o + b;
         return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
     }
 
-    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes) { }           // no-op: the Arena owns the region
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }   // no-op: the Arena owns the region
 }

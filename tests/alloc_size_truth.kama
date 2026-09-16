@@ -1,8 +1,8 @@
 import { std::memory::Owned, std::memory::Shared };
 
-// `Allocator.deallocate(pointer, bytes)` promises the size the block was ALLOCATED with. A size-class pool or a
-// header-free MCU pool trusts it, so a wrong `bytes` is memory corruption, not a missed optimization. This
-// allocator stores each block's size in a header and counts every `deallocate` that disagrees.
+// `Allocator.deallocate(pointer, bytes, align)` promises the layout the block was ALLOCATED with. A size-class pool
+// or a header-free MCU pool trusts it, so a wrong `bytes` is memory corruption, not a missed optimization. This
+// allocator stores each block's size and alignment in a header and counts every `deallocate` that disagrees.
 //
 // Every box below once got it wrong (measured at 0.9.359): a base handle holding a derived object handed back
 // `sizeof(Base)` (`Owned`, `Shared`, and the contract upcast's `objsize`), and a `BindableFunctionPtr` bound
@@ -18,24 +18,26 @@ static int32 frees = 0;
 type value Check implements Allocator {
     int32 unused = 0;
     public default ctor make() { return this; }
-    public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
+    // The header is two words (16 bytes on a 64-bit target) and the block starts right after it, aligned by
+    // aligning the whole allocation: every alignment this fixture asks for is at most 16.
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
         GlobalAllocator g = GlobalAllocator.make();
-        match (g.allocate(bytes: bytes + sizeof(usize))) {
+        match (g.allocate(bytes: bytes + 2 * sizeof(usize), align: 16)) {
             case Some(value: p): {
                 UnsafePtr<usize> h = cast<UnsafePtr<usize>>(p);
-                h[0] = bytes;
-                return Optional::Some(value: cast<UnsafePtr>(addr(of: h[1])));
+                h[0] = bytes; h[1] = align;
+                return Optional::Some(value: cast<UnsafePtr>(addr(of: h[2])));
             }
             case None: { return Optional::None; }
         };
     }
-    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes) {
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
         UnsafePtr<usize> h = cast<UnsafePtr<usize>>(pointer);
-        UnsafePtr<usize> hdr = cast<UnsafePtr<usize>>(addr(of: h[-1]));
+        UnsafePtr<usize> hdr = cast<UnsafePtr<usize>>(addr(of: h[-2]));
         frees = frees + 1;
-        if (hdr[0] != bytes) { mismatches = mismatches + 1; }
+        if (hdr[0] != bytes || hdr[1] != align) { mismatches = mismatches + 1; }
         GlobalAllocator g = GlobalAllocator.make();
-        g.deallocate(pointer: cast<UnsafePtr>(hdr), bytes: bytes + sizeof(usize));
+        g.deallocate(pointer: cast<UnsafePtr>(hdr), bytes: bytes + 2 * sizeof(usize), align: 16);
     }
 }
 

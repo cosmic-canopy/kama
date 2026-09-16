@@ -348,9 +348,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
     unsafe fn void growTo(isize nc) {
         UnsafePtr<K> nk = null; UnsafePtr<V> nv = null; UnsafePtr<uint8> ns = null;
-        nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
-        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
-        ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
+        nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K), align: alignof(K))));
+        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
+        ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8), align: alignof(uint8))));
         memset(p: cast<UnsafePtr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         isize i = 0;
         while (i < this.cap) {
@@ -364,9 +364,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             i = i + 1;
         }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K), align: alignof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8), align: alignof(uint8));
         }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
@@ -426,9 +426,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             i = i + 1;
         }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K), align: alignof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8), align: alignof(uint8));
         }
     }
 }

@@ -1,0 +1,1 @@
+the pointer form is `alignof(ptr: p)`

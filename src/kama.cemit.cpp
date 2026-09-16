@@ -472,6 +472,10 @@ std::string CEmitter::mangleNs(const std::string& ns)
 
 // A module name is written `a::b`; every manglable path in this file is dotted before `mangleNs` folds it
 // to `a__b` (see the import paths below, and `qualifiedName` above). One spelling in, one mangler.
+// The two arguments every allocation and release takes — a block's size and alignment — for C type `cty`.
+// Every `kama_alloc`/`kama_free`/`A__allocate`/`A__deallocate` the emitter writes spells a layout through here.
+static std::string layoutOf(const std::string& cty) { return "sizeof(" + cty + "), _Alignof(" + cty + ")"; }
+
 static std::string dottedModule(const std::string& mod)
 {
     std::string r = mod;
@@ -1404,7 +1408,8 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return classifierCType(optionalTypeNode(ad->type));
     if (dynamic_cast<SizeofNode*>(n)) return "size_t";   // `sizeof`/`alignof` are a `usize`
     if (auto* inv = dynamic_cast<InvocationNode*>(n))    // `sizeof(ptr: p)`, the intrinsic call form
-        if (inv->identifier && inv->identifier->value && *inv->identifier->value == "sizeof") return "size_t";
+        if (inv->identifier && inv->identifier->value
+            && (*inv->identifier->value == "sizeof" || *inv->identifier->value == "alignof")) return "size_t";
 
     // --- operators ----------------------------------------------------------------------------------
     // A comparison or a logical connective yields `bool` WHATEVER its operands are, so this arm is
@@ -6077,7 +6082,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     helper << "    " << argTy << "* __a = (" << argTy << "*)__p;\n";
     helper << "    " << bodyFn << "(__a->slice";
     for (size_t i = 0; i < caps.size(); ++i) helper << ", __a->c" << i;
-    helper << ");\n    free(__p);\n    return (void*)0;\n}\n";
+    helper << ");\n    kama_free(__p, " << layoutOf(argTy) << ");\n    return (void*)0;\n}\n";
     _fileScopeHelpers.push_back(helper.str());
 
     // ── (f) Call site: split into K disjoint slices, spawn K workers, join ALL at the brace. ──────────
@@ -6112,7 +6117,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         indent(d); *_out << "kama_isolate_t " << H << "[" << K << " > 0 ? " << K << " : 1];\n";
         indent(d); *_out << "int " << SP << " = 0;\n";
         indent(d); *_out << "for (int " << W << " = 0; " << W << " < " << K << "; ++" << W << ") {\n";
-        indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
+        indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)kama_alloc(" << layoutOf(argTy) << ");\n";
         indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         // A one-element slice, so the synthesized worker body — a `foreach` over its slice — runs the
         // body exactly once, for this element. Identical machinery to parallel_for, chunk size 1.
@@ -6147,7 +6152,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     indent(d+1); *_out << "if (" << F << " >= " << LEN << ") break;\n";
     indent(d+1); *_out << "int32_t " << C << " = " << LEN << " - " << F << "; if (" << C << " > " << CH
                        << ") " << C << " = " << CH << ";\n";
-    indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
+    indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)kama_alloc(" << layoutOf(argTy) << ");\n";
     indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
     indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C << ");\n";
     for (size_t i = 0; i < caps.size(); ++i) {
@@ -6837,9 +6842,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     auto pa = placementAllocator(oc, n->line, /*emit=*/true);
                                     ap = "__alloc" + std::to_string(_tempCounter++);
                                     *_out << pa.second << " " << ap << " = " << pa.first << ";\n"; indent(depth);
-                                    *_out << nm << ".obj = (void*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", sizeof(" << octy << ")));\n";
+                                    *_out << nm << ".obj = (void*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(octy) << "));\n";
                                 } else {
-                                    *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
+                                    *_out << nm << ".obj = kama_alloc(" << layoutOf(octy) << ");\n";
                                 }
                                 indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (newBuildsValue(octy, oc))
@@ -6847,33 +6852,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
                                 if (useAlloc) {
                                     indent(depth); *_out << nm << ".alloc = " << ap << ";\n";
-                                    indent(depth); *_out << nm << ".objsize = sizeof(" << octy << ");\n";
                                 }
                                 if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
                                     indent(depth);
                                     if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
                                         *_out << nm << ".ctrl = (kama_ctrl*)unwrapPtr(" << _collections[ty].allocType
-                                              << "__allocate(&" << ap << ", sizeof(kama_ctrl))); "
+                                              << "__allocate(&" << ap << ", " << layoutOf("kama_ctrl") << ")); "
                                               << nm << ".ctrl->strong = 1; " << nm << ".ctrl->weak = 0;\n";
                                     else
                                         *_out << nm << ".ctrl = kama_ctrl_new();\n";
                                 }
                             }
                         }
-                        else if (octy != T)
-                            unsupported(("`" + ty + "` boxes `" + T + "`, but got `new " + octy + "(...)`").c_str(), n->line);
-                        else {
-                            if (isClass(T) && _classes[T].isAbstractClass)
-                                unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
-                            line(n->line); indent(depth);
-                            *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
-                            indent(depth); *_out << "if (!" << nm << ".ptr) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                            if (newBuildsValue(T, oc))
-                                emitNewFactoryMove(T, nm + ".ptr", oc, n->line, depth);
-                            if (smartKind(ty) == CollKind::Shared) {
-                                indent(depth); *_out << nm << ".ctrl = kama_ctrl_new();\n";
-                            }
-                        }
+                        // (No concrete-element arm: a smart-pointer class is only ever registered over a
+                        // CONTRACT element — registerGenericTypeInst — so `Owned<T>` is the library type.)
                     } else if (!heapOwnerTarget(ty).empty()) {
                         // a LIBRARY heap owner (`Box<T> implements HeapOwner<T>`): `new T(args)`
                         // placement-constructs T on the heap and adopts the raw ptr — ZERO copies, same
@@ -6928,9 +6920,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 }
                                 line(n->line); indent(depth);
                                 if (placed)
-                                    *_out << C << "* " << hp << " = (" << C << "*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", sizeof(" << C << ")));\n";
+                                    *_out << C << "* " << hp << " = (" << C << "*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(C) << "));\n";
                                 else
-                                    *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
+                                    *_out << C << "* " << hp << " = (" << C << "*)kama_alloc(" << layoutOf(C) << ");\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (newBuildsValue(C, oc))
                                     emitNewFactoryMove(C, hp, oc, n->line, depth);
@@ -6977,12 +6969,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (isInterface(_classes[ty].collElemClass)) {
                         *_out << nm << ".obj = (" << src << ").obj; " << nm << ".vtbl = (" << src << ").vtbl; "
                              << nm << ".ctrl = (" << src << ").ctrl;\n";
-                        // stateful-A iface Weak (M11d): carry the allocator + pointee size so it frees the ctrl
-                        // through the right A even after its Shared is gone.
+                        // stateful-A iface Weak (M11d): carry the allocator so it frees the ctrl through the
+                        // right A even after its Shared is gone.
                         std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
                         if (!wa.empty() && wa != "GlobalAllocator") {
-                            indent(depth); *_out << nm << ".alloc = (" << src << ").alloc; "
-                                                 << nm << ".objsize = (" << src << ").objsize;\n";
+                            indent(depth); *_out << nm << ".alloc = (" << src << ").alloc;\n";
                         }
                     }
                     else
@@ -7723,8 +7714,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                          << b << ".ctrl = (" << src << ").ctrl;\n";
                     std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
                     if (!wa.empty() && wa != "GlobalAllocator") {   // stateful-A iface Weak reseat (M11d)
-                        indent(d2); *_out << b << ".alloc = (" << src << ").alloc; "
-                                          << b << ".objsize = (" << src << ").objsize;\n";
+                        indent(d2); *_out << b << ".alloc = (" << src << ").alloc;\n";
                     }
                 }
                 else
@@ -12749,6 +12739,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
         indent(1);
         if (pci->isScalarRecv) *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
         else                   *_out << ".__dtor = (void(*)(void*))&" << pci->name << "__dtor,\n";
+        indent(1); *_out << ".__size = sizeof(" << pci->name << "), .__align = _Alignof(" << pci->name << "),\n";
         if (isPolyDispatchContract(cn)) { indent(1); *_out << ".__type = \"" << pci->name << "\",\n"; }
         *_out << "};\n\n";
     }
@@ -14637,8 +14628,8 @@ void CEmitter::emitSharedToWeakDowngrade(const CollectionInfo& info)
           << "(" << info.cName << "* self) {\n"
           << "    " << wk << " w;\n"
           << "    w.obj = self->obj; w.vtbl = self->vtbl; w.ctrl = self->ctrl;\n";
-    if (ifaceAlloc)   // carry the allocator + pointee size so the Weak frees the ctrl through the right A
-        *_out << "    w.alloc = self->alloc; w.objsize = self->objsize;\n";
+    if (ifaceAlloc)   // carry the allocator so the Weak frees the ctrl through the right A
+        *_out << "    w.alloc = self->alloc;\n";
     *_out << "    if (w.ctrl) w.ctrl->weak++;\n"
           << "    return w;\n"
           << "}\n";
@@ -14746,18 +14737,24 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
 {
     const std::string& N = info.cName;
     const std::string A = info.allocType;
-    // `obj`, sized by the handle's own `objsize`, through the allocator it carries — or libc's free.
-    auto release = [&](const char* what, const char* size) {
-        return alloc ? (A + "__deallocate(&self->alloc, (void*)self->" + what + ", " + size + ")")
-                     : ("kama_free(self->" + std::string(what) + ")");
+    // A block goes back with the layout it was allocated with — through the allocator the handle carries, or
+    // the funnel. The object's layout comes from its vtable, and is read BEFORE the destructor ends its life.
+    auto release = [&](const std::string& what, const std::string& size, const std::string& align) {
+        return alloc ? (A + "__deallocate(&self->alloc, (void*)self->" + what + ", " + size + ", " + align + ")")
+                     : ("kama_free(self->" + what + ", " + size + ", " + align + ")");
     };
     const bool dispatches = ifaceDropCanDispatch(info.elemClass);
     auto dropObj = [&](int d) {
+        // `__vsize`/`__valign` are PROVEN slots: every one the compiler installs is a class's own `__vsize`/`__valign`,
+        // which reads a field of the object's vtable and calls nothing — so they carry the marker the call graph reads.
+        indent(d); *_out << "size_t __n = self->vtbl->__vsize ? KAMA_NOHEAP_SLOT(self->vtbl->__vsize)(self->obj) : self->vtbl->__size;\n";
+        indent(d); *_out << "size_t __a = self->vtbl->__valign ? KAMA_NOHEAP_SLOT(self->vtbl->__valign)(self->obj) : self->vtbl->__align;\n";
         if (dispatches) {
-            indent(d); *_out << "if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);\n";
+            indent(d); *_out << "if (self->vtbl->__dtor) self->vtbl->__dtor(self->obj);\n";
         }
-        indent(d); *_out << release("obj", "self->objsize") << ";\n";
+        indent(d); *_out << release("obj", "__n", "__a") << ";\n";
     };
+    const std::string ctrlSize = "sizeof(kama_ctrl)", ctrlAlign = "_Alignof(kama_ctrl)";
 
     if (info.kind == CollKind::Owned) {
         *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
@@ -14776,7 +14773,7 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
         indent(2); *_out << "if (self->ctrl->strong == 1) {\n";
         dropObj(3);
         indent(3); *_out << "self->ctrl->strong = 0;\n";
-        indent(3); *_out << "if (self->ctrl->weak == 0) " << release("ctrl", "sizeof(kama_ctrl)") << ";\n";
+        indent(3); *_out << "if (self->ctrl->weak == 0) " << release("ctrl", ctrlSize, ctrlAlign) << ";\n";
         indent(2); *_out << "} else { self->ctrl->strong--; }\n";
         indent(2); *_out << "self->obj = NULL; self->ctrl = NULL;\n";
         indent(1); *_out << "}\n}\n";
@@ -14789,12 +14786,12 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
         return;
     }
     // Weak<I> — counts `weak`, never touches the concrete object. `__upgrade` must propagate `alloc`
-    // and `objsize` into the Shared it returns, so the upgraded strong handle frees through the right
+    // into the Shared it returns, so the upgraded strong handle frees through the right
     // allocator (the `= {0}` init leaves them zeroed on the expired path).
     *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
     indent(1); *_out << "if (self->ctrl) {\n";
     indent(2); *_out << "if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) "
-                     << release("ctrl", "sizeof(kama_ctrl)") << ";\n";
+                     << release("ctrl", ctrlSize, ctrlAlign) << ";\n";
     indent(2); *_out << "self->obj = NULL; self->ctrl = NULL;\n";
     indent(1); *_out << "}\n}\n";
     *_out << "static inline bool " << N << "__expired(" << N << "* self) {\n";
@@ -14804,7 +14801,7 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
     indent(1); *_out << S << " s = {0};\n";
     indent(1); *_out << "if (self->ctrl && self->ctrl->strong > 0) {\n";
     indent(2); *_out << "self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl;\n";
-    if (alloc) { indent(2); *_out << "s.alloc = self->alloc; s.objsize = self->objsize;\n"; }
+    if (alloc) { indent(2); *_out << "s.alloc = self->alloc;\n"; }
     indent(1); *_out << "} else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }\n";
     indent(1); *_out << "return s;\n}\n";
     *_out << "static inline " << N << " " << N << "__copy(" << N << "* self) { if (self->ctrl) "
@@ -14826,7 +14823,6 @@ void CEmitter::emitIfaceAllocFuncs(CollectionInfo& info)
 // prototypes, where element dtors are declared).
 void CEmitter::emitCollectionDefs(bool typesOnly)
 {
-    const char* suf = typesOnly ? "TYPE" : "FUNCS";
     // Iterate in registration (inner-first) order, not the map's alphabetical order: a collection's
     // dtor calls its element's dtor (`List<Shared<I>>` -> `Shared_I__dtor`), so the element's FUNCS
     // must be emitted first. Alphabetical order breaks e.g. `List_...` (emitted before `Shared_...`).
@@ -14836,9 +14832,6 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         // deferred: the TYPE to unifiedStructOrder (after A's struct), the FUNCS to after class prototypes
         // (after A's method protos). See emitIfaceAllocType / emitIfaceAllocFuncs.
         if (isIfaceAllocColl(info)) continue;
-        std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "KAMA_ELEM_NODTOR";
-        std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
-                                     : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
         // (A stateful allocator on an interface box — the fat handle carrying `A alloc`+`objsize` and
         // freeing through `A` — never reaches here: `isIfaceAllocColl` skipped it above, so its halves can
         // be ordered after the allocator's struct and prototypes. See emitIfaceAllocType/Funcs.)
@@ -14848,25 +14841,16 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             if (typesOnly) *_out << "KAMA_OWNED_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
             else           emitIfaceHandleFuncs(info, /*alloc=*/false);
         }
-        else if (info.kind == CollKind::Owned)
-            *_out << "KAMA_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Shared && info.elemIsInterface) {
             // (a library `Rc<Shape>` — a Shared IFACE with a weak partner — also gets its `downgrade()`,
             // emitted by emitIfaceHandleFuncs beside the drop.)
             if (typesOnly) *_out << "KAMA_SHARED_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
             else           emitIfaceHandleFuncs(info, /*alloc=*/false);
         }
-        else if (info.kind == CollKind::Shared)
-            *_out << "KAMA_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Weak && info.elemIsInterface) {
             // The C `__upgrade` (-> the Shared partner) stays an internal helper; `tryUpgrade` wraps it.
             if (typesOnly) *_out << "KAMA_WEAK_IFACE_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl)\n";
             else           emitIfaceHandleFuncs(info, /*alloc=*/false);
-        }
-        else if (info.kind == CollKind::Weak) {
-            *_out << "KAMA_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
-                 << (typesOnly ? ")\n" : (", " + info.ifacePartner + ")\n"));
-            if (!typesOnly) emitWeakTryUpgrade(info);
         }
         else if (info.kind == CollKind::Bindable) {
             // Fully type-erased — the signature drives only the invoke, not the layout. The drop is
@@ -15545,21 +15529,12 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
         if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
                                             << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n"; }
     }
-    // A stateful-allocator dst (M11d): carry the concrete source's own `alloc` value into the fat handle, and
-    // the pointee's `objsize`, so the iface box frees obj/ctrl through the SAME allocator the source used.
+    // A stateful-allocator dst (M11d): carry the concrete source's own `alloc` value into the fat handle, so
+    // the iface box frees obj/ctrl through the SAME allocator the source used. (The object's layout needs no
+    // carrying: the vtable reports it, a derived object's included.)
     std::string dstAlloc = _collections.count(dstTy) ? _collections[dstTy].allocType : "";
     if (!dstAlloc.empty() && dstAlloc != "GlobalAllocator") {
         indent(depth); *_out << nm << ".alloc = (" << srcE << ").alloc;\n";
-        // The pointee's OWN size: a `Owned<Base, A>` source may hold a derived object (`__vsize`).
-        indent(depth); *_out << nm << ".objsize = "
-#if KAMA_INHERITANCE
-                             << ((_classes.count(libT) && _classes[libT].hasVtable)
-                                     ? libT + "__vsize((" + libT + "*)" + nm + ".obj)"
-                                     : "sizeof(" + libT + ")")
-#else
-                             << "sizeof(" << libT << ")"
-#endif
-                             << ";\n";
     }
     // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
     // the destination handle now owns the ref (it shares the same ctrl without an increment).
@@ -16149,7 +16124,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         std::ostringstream tr;
         tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
            << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of the heap box */\n"
-           << "    free(__p);\n"
+           << "    kama_free(__p, " << layoutOf(cls) << ");\n"
            << "    " << symbolOf(sig) << "(__v);                   /* callee owns __v and drops it at fn-end */\n"
            << "    return (void*)0;\n"
            << "}\n";
@@ -16210,7 +16185,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
         rejectIfNoHeap("spawn heaps the moved argument bundle", iso->line);   // no-heap gate
         std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
         indent(depth);     *_out << "{\n";
-        indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
+        indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << ");\n";
         indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
         noteThreadSpawn();
@@ -16237,7 +16212,7 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
     std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
     std::ostringstream e;
     noteThreadSpawn();
-    e << "({ " << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << ")); "
+    e << "({ " << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << "); "
       << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
       << "*" << arg << " = (" << val << "); "
       << iso_t << "__fromRaw(kama_isolate_spawn_boxed(&__kama_iso_" << cName << ", " << arg << ")); })";
@@ -23804,8 +23779,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         std::string ap = placed ? "__alloc" + std::to_string(_tempCounter++) : "";
         std::string box;
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
-                         + C + "* " + hp + " = (" + C + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + ")));";
-        else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
+                         + C + "* " + hp + " = (" + C + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(C) + "));";
+        else        box  = C + "* " + hp + " = (" + C + "*)kama_alloc(" + layoutOf(C) + ");";
         if (newBuildsValue(C, oc)) {
             std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
             if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
@@ -23847,9 +23822,9 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             box += " " + pa.second + " " + ap + " = " + pa.first + "; "
-                 + t + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + octy + ")));";
+                 + t + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(octy) + "));";
         } else {
-            box += " " + t + ".obj = malloc(sizeof(" + octy + "));";
+            box += " " + t + ".obj = kama_alloc(" + layoutOf(octy) + ");";
         }
         if (newBuildsValue(octy, oc)) {
             std::string cc = newFactoryCall(octy, oc, srcLine);
@@ -23857,28 +23832,17 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         }
         box += " " + t + ".vtbl = &" + octy + "__as_" + T + ";";
         if (useAlloc)
-            box += " " + t + ".alloc = " + ap + "; " + t + ".objsize = sizeof(" + octy + ");";
+            box += " " + t + ".alloc = " + ap + ";";
         if (smartKind(targetCType) == CollKind::Shared)
             box += useAlloc
-                 ? " " + t + ".ctrl = (kama_ctrl*)unwrapPtr(" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl))); "
+                 ? " " + t + ".ctrl = (kama_ctrl*)unwrapPtr(" + aTy + "__allocate(&" + ap + ", " + layoutOf("kama_ctrl") + ")); "
                    + t + ".ctrl->strong = 1; " + t + ".ctrl->weak = 0;"
                  : " " + t + ".ctrl = kama_ctrl_new();";
         _hoisted.push_back(box);
         return t;
     }
 
-    if (octy != T) return "";                                  // element mismatch — let the caller diagnose
-    if (isClass(T) && _classes[T].isAbstractClass)
-        return reject("cannot instantiate abstract class '" + T + "'");
-    std::string t = "__newarg" + std::to_string(_tempCounter++);
-    std::string box = targetCType + " " + t + " = {0}; " + t + ".ptr = (" + T + "*)malloc(sizeof(" + T + "));";
-    if (newBuildsValue(T, oc)) {
-        std::string cc = newFactoryCall(T, oc, srcLine);
-        if (!cc.empty()) box += " *(" + t + ".ptr) = " + cc + ";";
-    }
-    if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = kama_ctrl_new();";
-    _hoisted.push_back(box);
-    return t;
+    return "";   // a smart-pointer class is only ever over a CONTRACT element (registerGenericTypeInst)
 }
 
 // resolve the variant type a `::` qualifier names. A non-generic union is in _classes
@@ -24422,30 +24386,33 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "((" + emitExpression(cond) + ") ? (void)0 : kama_assert_fail(\""
              + cEscapeStringBody(condText) + "\", " + emitExpression(msg) + ", " + fileLit + ", " + lineLit + "))";
     }
-    // `sizeof(ptr: p)` — the byte size of the object `p` points at, which is what `Allocator.deallocate` must be
-    // given back. For a class with a vtable that is the MOST-DERIVED size, read through the vptr: a base pointer
-    // can hold a derived object, and `sizeof(T)` would hand the allocator a smaller block than it gave out. For
-    // anything else the static type is the whole story. Only the grammar builds this call, and always with one
-    // argument. It must be read BEFORE `drop(ptr:)`, which ends the object's life.
-    if (name == "sizeof" && bareCall && call->args && call->args->size() == 1) {
+    // `sizeof(ptr: p)` / `alignof(ptr: p)` — the layout of the object `p` points at, which is what
+    // `Allocator.deallocate` must be given back. For a class with a vtable that is the MOST-DERIVED layout, read
+    // through the vptr: a base pointer can hold a derived object, and `sizeof(T)` would hand the allocator a
+    // smaller block than it gave out. For anything else the static type is the whole story. Only the grammar
+    // builds these calls, always with one argument. Read them BEFORE `drop(ptr:)`, which ends the object's life.
+    if ((name == "sizeof" || name == "alignof") && bareCall && call->args && call->args->size() == 1) {
+        const bool isSize = name == "sizeof";
         ArgumentNode* a0 = (*call->args)[0].get();
         const std::string label = (a0->name && a0->name->value) ? *a0->name->value : "";
         if (label != "ptr") {
-            unsupported(("`sizeof(" + label + ": …)` — the pointer form is `sizeof(ptr: p)`, the size of the "
-                         "object `p` points at; the size of a type is `sizeof(T)`").c_str(), call->line);
+            unsupported(("`" + name + "(" + label + ": …)` — the pointer form is `" + name + "(ptr: p)`, the "
+                         + (isSize ? "size" : "alignment") + " of the object `p` points at; the "
+                         + (isSize ? "size" : "alignment") + " of a type is `" + name + "(T)`").c_str(), call->line);
             return "0";
         }
         std::string pc = rawPointeeCType(a0->expression);
         if (pc.empty()) {
-            unsupported("`sizeof(ptr:)` takes an `UnsafePtr<T>` — it measures the POINTEE. "
-                        "The size of a type is `sizeof(T)`", call->line);
+            unsupported(("`" + name + "(ptr:)` takes an `UnsafePtr<T>` — it measures the POINTEE. The "
+                         + std::string(isSize ? "size" : "alignment") + " of a type is `" + name + "(T)`").c_str(),
+                        call->line);
             return "0";
         }
 #if KAMA_INHERITANCE
         if (_classes.count(pc) && _classes[pc].hasVtable)
-            return pc + "__vsize((" + pc + "*)(" + emitExpression(a0->expression) + "))";
+            return pc + (isSize ? "__vsize(" : "__valign(") + emitExpression(a0->expression) + ")";
 #endif
-        return "sizeof(" + pc + ")";
+        return (isSize ? "sizeof(" : "_Alignof(") + pc + ")";
     }
     // `drop(place)` — run the destructor of a place's value (for a library owner over `UnsafePtr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
@@ -25929,9 +25896,10 @@ void CEmitter::emitVtableType(ClassInfo& ci)
     // owning a `Derived`) dispatches here, so the MOST-DERIVED dtor runs (no slicing). NULL
     // for a non-destructible impl — a base whose derived owns nothing.
     indent(1); *_out << "void (*__dtor)(void*);\n";
-    // The most-derived object's byte size, so a base handle returns its block to an allocator with the
-    // size that block was ALLOCATED with — `Allocator.deallocate` promises `bytes`. Read by `__vsize`.
+    // The most-derived object's LAYOUT, so a base handle returns its block to an allocator with the size and
+    // alignment that block was ALLOCATED with — `Allocator.deallocate` promises both. Read by `__vsize`/`__valign`.
     indent(1); *_out << "size_t __size;\n";
+    indent(1); *_out << "size_t __align;\n";
     *_out << "};\n\n";
 }
 #else
@@ -25963,6 +25931,7 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     if (ci.destructible)
         *_out << "    .__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
     *_out << "    .__size = sizeof(" << ci.name << "),\n";
+    *_out << "    .__align = _Alignof(" << ci.name << "),\n";
     *_out << "};\n\n";
     // `__vdrop` used to be defined here, in the OWNING MODULE's translation unit, while its `static inline`
     // prototype went into the shared header — so any OTHER unit that dropped a base handle got a static
@@ -26039,6 +26008,13 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
     // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
     indent(1); *_out << "void (*__dtor)(void*);\n";
+    // The implementer's LAYOUT, so a box releases its object with the size and alignment it was allocated
+    // with (`Allocator.deallocate` promises both). A virtual-class implementer may be holding a DERIVED
+    // object, so it also points at its `__vsize`/`__valign`, which read the object's own vtable; NULL otherwise.
+    indent(1); *_out << "size_t __size;\n";
+    indent(1); *_out << "size_t __align;\n";
+    indent(1); *_out << "size_t (*__vsize)(void*);\n";
+    indent(1); *_out << "size_t (*__valign)(void*);\n";
     // The implementer's C name, for `.as<T>()` — see emitAsDowncast for why a pointer compare alone is wrong.
     if (isPolyDispatchContract(ii.name)) { indent(1); *_out << "const char* __type;\n"; }
     *_out << "};\n";
@@ -26140,11 +26116,21 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                 *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
                      << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
         }
-        // the virtual-destructor slot — the concrete dtor (cast to the erased signature),
-        // or NULL when this impl owns nothing to free.
+        // the virtual-destructor slot — the concrete dtor (cast to the erased signature), or NULL when this
+        // impl owns nothing to free. A class with a vtable drops through `__vdrop`, and reports its layout through
+        // `__vsize`/`__valign`: the box may hold a DERIVED object (upcast from an `Owned<Base>`), whose own
+        // destructor must run and whose own size must go back to the allocator.
         indent(1);
-        if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
-        else                 *_out << ".__dtor = (void(*)(void*))0,\n";
+#if KAMA_INHERITANCE
+        const bool virt = ci.hasVtable;
+#else
+        const bool virt = false;
+#endif
+        if (virt)                 *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__vdrop,\n";
+        else if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
+        else                      *_out << ".__dtor = (void(*)(void*))0,\n";
+        indent(1); *_out << ".__size = sizeof(" << ci.name << "), .__align = _Alignof(" << ci.name << "),\n";
+        if (virt) { indent(1); *_out << ".__vsize = &" << ci.name << "__vsize, .__valign = &" << ci.name << "__valign,\n"; }
         if (isPolyDispatchContract(ii.name)) { indent(1); *_out << ".__type = \"" << ci.name << "\",\n"; }
         *_out << "};\n\n";
     }
@@ -26347,12 +26333,18 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         indent(1); *_out << "if (__vt && __vt->__dtor) "
                          << (provenDrop ? "KAMA_NOHEAP_SLOT(__vt->__dtor)" : "__vt->__dtor") << "(self);\n";
         *_out << "}\n";
-        // `sizeof(ptr: p)` on a base pointer: the size of the object it really holds (the vptr names the
-        // most-derived vtable). A vptr is never null on a constructed object; the fallback covers a zeroed one.
-        *_out << "static inline size_t " << ci.name << "__vsize(" << ci.name << "* self) {\n";
-        indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
-        indent(1); *_out << "return __vt ? __vt->__size : sizeof(" << ci.name << ");\n";
-        *_out << "}\n";
+        // `sizeof(ptr: p)` / `alignof(ptr: p)` on a base pointer: the layout of the object it really holds (the
+        // vptr names the most-derived vtable). A constructed object's vptr is never null; the fallback covers a
+        // zeroed one. They take `void*` so a contract vtable can point at them too (see emitClassInterfaceVtables).
+        for (const char* f : {"size", "align"}) {
+            const std::string field = f;
+            *_out << "static inline size_t " << ci.name << "__v" << field << "(void* obj) {\n";
+            indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = ((" << ci.name << "*)obj)->"
+                             << vptrPrefix(&ci) << "__vptr;\n";
+            indent(1); *_out << "return __vt ? __vt->__" << field << " : "
+                             << (field == "size" ? "sizeof(" : "_Alignof(") << ci.name << ");\n";
+            *_out << "}\n";
+        }
     }
 #endif
     const std::string selfC = ci.name + (ci.isScalarRecv ? " self" : "* self");   // a payload-less enum passes its value
@@ -26608,8 +26600,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // is available. It is still not taken: this position renders INSIDE the message text, on a
         // sentence whose chain already ends at `GlobalAllocator::allocate`, and a prelude line the author
         // cannot act on adds nothing to it. Keep the behaviour; do not restore the old reason for it.
-        _allocSites[cName] = AllocSite{ "a container or box drawing from `GlobalAllocator`, which is libc "
-                                        "malloc/free", 0, std::string() };
+        _allocSites[cName] = AllocSite{ "a container or box drawing from `GlobalAllocator`, which is the "
+                                        "system heap", 0, std::string() };
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _inUnsafe = isUnsafe;         // `unsafe` is the FUNCTION now — the whole body is the relaxed region
     // THE MINT GRANT. A `type view`'s ctor is private (see collectClasses), so the one way an outside type
@@ -27447,7 +27439,7 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
         std::string b = "__ob" + std::to_string(_tempCounter++);
         indent(depth); *_out << pc << " " << v << ";\n";
         emitDeFieldRead(pointee, v, depth, resultCType, cleanup);
-        indent(depth); *_out << pc << "* " << b << " = (" << pc << "*)malloc(sizeof(" << pc << "));\n";
+        indent(depth); *_out << pc << "* " << b << " = (" << pc << "*)kama_alloc(" << layoutOf(pc) << ");\n";
         indent(depth); *_out << "if (!" << b << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(depth); *_out << "*" << b << " = " << v << ";\n";
         indent(depth); *_out << dst << " = " << adoptM->cName << "(" << b << ");\n";
@@ -27496,7 +27488,7 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << innC << " __or = " << pc << "__deserialize(r);\n";
     indent(1); *_out << "if (__or.tag == " << innC << "_Err) return (" << resC << "){ .tag = " << resC
                      << "_Err, .u.Err = { .error = __or.u.Err.error } };\n";
-    indent(1); *_out << pc << "* __ob = (" << pc << "*)malloc(sizeof(" << pc << "));\n";
+    indent(1); *_out << pc << "* __ob = (" << pc << "*)kama_alloc(" << layoutOf(pc) << ");\n";
     indent(1); *_out << "if (!__ob) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
     indent(1); *_out << "*__ob = __or.u.Ok.value;\n";
     indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = "
@@ -28504,10 +28496,10 @@ void CEmitter::emitPolyContractResolvers()
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeReads(_classes[K])) continue;
         indent(1); *_out << "case " << _classes[K].graphTypeId << ": {\n";
-        indent(2); *_out << K << "* __obj = (" << K << "*)kama_calloc(1, sizeof(" << K << "));\n";
+        indent(2); *_out << K << "* __obj = (" << K << "*)kama_alloc_zeroed(" << layoutOf(K) << ");\n";
         indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(2); *_out << K << "____readInto(__obj, r, g);\n";
-        indent(2); *_out << "__b = (kama_de_box*)kama_alloc(sizeof(kama_de_box));\n";
+        indent(2); *_out << "__b = (kama_de_box*)kama_alloc(" << layoutOf("kama_de_box") << ");\n";
         indent(2); *_out << "if (!__b) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(2); *_out << "__b->ptr = (void*)__obj; __b->ctrl = kama_ctrl_new(); __b->type_id = " << _classes[K].graphTypeId << "u;\n";
         indent(2); *_out << "break;\n";
@@ -28524,18 +28516,20 @@ void CEmitter::emitPolyContractResolvers()
     indent(1); *_out << "if (!__b) return;\n";
     indent(1); *_out << "if (__b->ctrl && --__b->ctrl->strong == 0) {\n";
     indent(2); *_out << "if (__b->ptr) {\n";
+    // Each node type is freed in its own case: the block goes back with the layout readShell allocated it with.
     indent(3); *_out << "switch (__b->type_id) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!graphNodeReads(_classes[K]) || !_classes[K].destructible) continue;
-        indent(3); *_out << "case " << _classes[K].graphTypeId << "u: " << K << "__dtor((" << K << "*)__b->ptr); break;\n";
+        if (!graphNodeReads(_classes[K])) continue;
+        indent(3); *_out << "case " << _classes[K].graphTypeId << "u: ";
+        if (_classes[K].destructible) *_out << K << "__dtor((" << K << "*)__b->ptr); ";
+        *_out << "kama_free(__b->ptr, " << layoutOf(K) << "); break;\n";
     }
     indent(3); *_out << "default: break;\n";
     indent(3); *_out << "}\n";
-    indent(3); *_out << "kama_free(__b->ptr);\n";
     indent(2); *_out << "}\n";
-    indent(2); *_out << "if (__b->ctrl->weak == 0) kama_free(__b->ctrl);\n";
+    indent(2); *_out << "if (__b->ctrl->weak == 0) kama_free(__b->ctrl, " << layoutOf("kama_ctrl") << ");\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "kama_free(__b);\n";
+    indent(1); *_out << "kama_free(__b, " << layoutOf("kama_de_box") << ");\n";
     *_out << "}\n\n";
 }
 
@@ -28734,7 +28728,7 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             return;
         }
         if (nest.first == "owned") {
-            indent(depth); *_out << "(" << dst << ").p = (" << nest.second << "*)kama_calloc(1, sizeof(" << nest.second << "));\n";
+            indent(depth); *_out << "(" << dst << ").p = (" << nest.second << "*)kama_alloc_zeroed(" << layoutOf(nest.second) << ");\n";
             indent(depth); *_out << nest.second << "____readInto((" << dst << ").p, r, g);\n";
         } else {
             indent(depth); *_out << nest.second << "____readInto(&(" << dst << "), r, g);\n";
@@ -30928,21 +30922,20 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s += pa.second + " " + ap + " = " + pa.first + "; ";
-            s += box + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + "))); ";
+            s += box + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(cls) + ")); ";
         } else {
-            s += box + ".obj = malloc(sizeof(" + cls + ")); ";
+            s += box + ".obj = kama_alloc(" + layoutOf(cls) + "); ";
         }
         s += "if (!" + box + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
         s += "*(" + cls + "*)" + box + ".obj = " + tmp + ".u.Ok." + okName + "; ";
         s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
         if (useAlloc) {
             s += box + ".alloc = " + ap + "; ";
-            s += box + ".objsize = sizeof(" + cls + "); ";
         }
         if (smartKind(S) == CollKind::Shared) {
             if (useAlloc)
                 s += box + ".ctrl = (kama_ctrl*)unwrapPtr(" + _collections[S].allocType + "__allocate(&" + ap
-                   + ", sizeof(kama_ctrl))); " + box + ".ctrl->strong = 1; " + box + ".ctrl->weak = 0; ";
+                   + ", " + layoutOf("kama_ctrl") + ")); " + box + ".ctrl->strong = 1; " + box + ".ctrl->weak = 0; ";
             else
                 s += box + ".ctrl = kama_ctrl_new(); ";
         }
@@ -31014,9 +31007,9 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     s += "} else { ";
     if (placed) {
         s += pa.second + " " + ap + " = " + pa.first + "; ";
-        s += T + "* " + hp + " = (" + T + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + T + "))); ";
+        s += T + "* " + hp + " = (" + T + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(T) + ")); ";
     } else {
-        s += T + "* " + hp + " = (" + T + "*)malloc(sizeof(" + T + ")); ";
+        s += T + "* " + hp + " = (" + T + "*)kama_alloc(" + layoutOf(T) + "); ";
     }
     s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s +=   "*(" + hp + ") = " + tmp + ".u.Ok." + okName + "; ";
@@ -31105,28 +31098,28 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s  = pa.second + " " + ap + " = " + pa.first + "; ";
-            s += "void* " + obj + " = ptrOrNull(" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + "))); ";
+            s += "void* " + obj + " = ptrOrNull(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(cls) + ")); ";
         } else {
-            s  = "void* " + obj + " = malloc(sizeof(" + cls + ")); ";
+            s  = "void* " + obj + " = kama_alloc(" + layoutOf(cls) + "); ";
         }
         s += "if (!" + obj + ") { " + none + "} else { ";
         if (shared) {
             const std::string aTy = _collections[S].allocType;   // ctrl from the SAME allocator (validated)
             s += useAlloc
-               ? "kama_ctrl* " + ctl + " = (kama_ctrl*)ptrOrNull(" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl))); "
-               : "kama_ctrl* " + ctl + " = (kama_ctrl*)malloc(sizeof(kama_ctrl)); ";
+               ? "kama_ctrl* " + ctl + " = (kama_ctrl*)ptrOrNull(" + aTy + "__allocate(&" + ap + ", " + layoutOf("kama_ctrl") + ")); "
+               : "kama_ctrl* " + ctl + " = (kama_ctrl*)kama_alloc(" + layoutOf("kama_ctrl") + "); ";
             // The pointee is already taken, so a failed ctrl releases it — through the SAME route it came
             // from, which for an arena is the no-op `deallocate` that keeps the region's own accounting.
             s += "if (!" + ctl + ") { ";
-            s += useAlloc ? aTy + "__deallocate(&" + ap + ", " + obj + ", sizeof(" + cls + ")); "
-                          : "free(" + obj + "); ";
+            s += useAlloc ? aTy + "__deallocate(&" + ap + ", " + obj + ", " + layoutOf(cls) + "); "
+                          : "kama_free(" + obj + ", " + layoutOf(cls) + "); ";
             s += none + "} else { ";
             s += ctl + "->strong = 1; " + ctl + "->weak = 0; ";
         }
         s += ctorStmt;
         s += S + " " + box + "; " + box + ".obj = " + obj + "; ";
         s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
-        if (useAlloc) s += box + ".alloc = " + ap + "; " + box + ".objsize = sizeof(" + cls + "); ";
+        if (useAlloc) s += box + ".alloc = " + ap + "; ";
         if (shared) s += box + ".ctrl = " + ctl + "; ";
         s += lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
            + box + " } }; ";
@@ -31185,9 +31178,9 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     if (placed) {   // `ptrOrNull`, not `unwrapPtr` — see the interface branch above
         s  = pa.second + " " + ap + " = " + pa.first + "; ";
         s += cls + "* " + hp + " = (" + cls + "*)ptrOrNull(" + pa.second + "__allocate(&" + ap
-           + ", sizeof(" + cls + "))); ";
+           + ", " + layoutOf(cls) + ")); ";
     } else {
-        s  = cls + "* " + hp + " = (" + cls + "*)malloc(sizeof(" + cls + ")); ";
+        s  = cls + "* " + hp + " = (" + cls + "*)kama_alloc(" + layoutOf(cls) + "); ";
     }
     s += "if (!" + hp + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
     s += ctorStmt;
@@ -31312,7 +31305,7 @@ std::string CEmitter::emitPrimBoxIntoContract(const std::string& ownedCType, con
     ClassInfo* pci = implTargetInfo(primKey_);
     std::string t = "__kama_pbox" + std::to_string(_tempCounter++);
     std::string s = ownedCType + " " + t + " = {0}; ";
-    s += t + ".obj = malloc(sizeof(" + pci->name + ")); ";
+    s += t + ".obj = kama_alloc(" + layoutOf(pci->name) + "); ";
     s += "if (!" + t + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s += "*(" + pci->name + "*)" + t + ".obj = (" + valExpr + "); ";
     s += t + ".vtbl = &" + intrinsicContractVtbl(primKey_, contract) + ";";
@@ -31329,7 +31322,7 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
     const std::string& contract = _classes[ownedCType].collElemClass;
     std::string t = "__kama_ebox" + std::to_string(_tempCounter++);
     std::string s = ownedCType + " " + t + " = {0}; ";
-    s += t + ".obj = malloc(sizeof(" + enumCType + ")); ";
+    s += t + ".obj = kama_alloc(" + layoutOf(enumCType) + "); ";
     s += "if (!" + t + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s += "*(" + enumCType + "*)" + t + ".obj = (" + enumValExpr + "); ";
     s += t + ".vtbl = &" + enumCType + "__as_" + contract + ";";

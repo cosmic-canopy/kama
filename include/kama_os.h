@@ -656,15 +656,17 @@ static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL"
 
 // Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
 // reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own
-// malloc/realloc buffer (freed by the caller via kama_free) — same contract as the POSIX poll version.
+// funnel buffer (the caller frees it with kama_free and the capacity returned) — same contract as the POSIX version.
 typedef struct kama__cap { int fd; uint8_t* buf; size_t len; size_t cap; int err; } kama__cap;
 static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
     kama__cap* c = (kama__cap*)arg;
     for (;;) {
         if (c->len == c->cap) {
             size_t nc = c->cap ? c->cap * 2 : 65536;
-            uint8_t* nb = (uint8_t*)realloc(c->buf, nc);
+            uint8_t* nb = (uint8_t*)kama_alloc(nc, 1);
             if (!nb) { c->err = 1; return 0; }
+            if (c->len) kama_copy(nb, c->buf, c->len);
+            if (c->buf) kama_free(c->buf, c->cap, 1);
             c->buf = nb; c->cap = nc;
         }
         int r = _read(c->fd, c->buf + c->len, (unsigned int)(c->cap - c->len));
@@ -675,18 +677,22 @@ static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
     return 0;
 }
 static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
-                                    uint8_t** outBuf, size_t* outLen,
-                                    uint8_t** errBuf, size_t* errLen) {
+                                    uint8_t** outBuf, size_t* outLen, size_t* outCap,
+                                    uint8_t** errBuf, size_t* errLen, size_t* errCap) {
     kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.len = 0; co.cap = 0; co.err = 0;
     kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.len = 0; ce.cap = 0; ce.err = 0;
     HANDLE th = CreateThread(NULL, 0, kama__cap_thread, &ce, 0, NULL);
-    if (!th) { errno = EAGAIN; free(co.buf); return -1; }
+    if (!th) { errno = EAGAIN; return -1; }   // nothing drained yet: co.buf is still NULL
     kama__cap_thread(&co);                                 // drain stdout on this thread
     WaitForSingleObject(th, INFINITE);
     CloseHandle(th);
-    if (co.err || ce.err) { free(co.buf); free(ce.buf); errno = EIO; return -1; }
-    *outBuf = co.buf; *outLen = co.len;
-    *errBuf = ce.buf; *errLen = ce.len;
+    if (co.err || ce.err) {
+        if (co.buf) kama_free(co.buf, co.cap, 1);
+        if (ce.buf) kama_free(ce.buf, ce.cap, 1);
+        errno = EIO; return -1;
+    }
+    *outBuf = co.buf; *outLen = co.len; *outCap = co.cap;
+    *errBuf = ce.buf; *errLen = ce.len; *errCap = ce.cap;
     return 0;
 }
 
@@ -984,16 +990,16 @@ static inline int32_t kama_SIGTERM(void) { return (int32_t)SIGTERM; }
 // the `poll(NULL, 0, ms)` idiom — no extra include beyond <poll.h>, already pulled in above.
 static inline void kama_sleep_ms(int32_t ms) { poll((struct pollfd*)0, 0, (int)ms); }
 
-// Concurrent dual-drain of two pipe read-fds to EOF, each into its own malloc/realloc growable buffer. This
+// Concurrent dual-drain of two pipe read-fds to EOF, each into its own growable funnel buffer. This
 // is what `run()` uses to capture a child's stdout+stderr without deadlocking (reading one to EOF then the
 // other would block once the child fills the second pipe). POSIX drains via `poll` (works on pipe fds); the
 // Windows branch uses two reader threads (`select` there is sockets-only). On success returns 0 and fills
-// *outBuf/*outLen and *errBuf/*errLen — each a heap buffer the caller copies out then frees with kama_free()
-// (a NULL buffer with len 0 when a stream produced no bytes). Returns -1 on a hard poll/read error (both
+// *outBuf/*outLen/*outCap and *errBuf/*errLen/*errCap — each a heap buffer the caller copies out then frees
+// with kama_free(buf, cap, 1) (a NULL buffer with len 0 when a stream produced no bytes). Returns -1 on a hard poll/read error (both
 // buffers freed). `poll` ignores a negative fd, so a finished stream is masked by setting its pollfd.fd to -1.
 static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
-                                    uint8_t** outBuf, size_t* outLen,
-                                    uint8_t** errBuf, size_t* errLen) {
+                                    uint8_t** outBuf, size_t* outLen, size_t* outCap,
+                                    uint8_t** errBuf, size_t* errLen, size_t* errCap) {
     int    fds[2]  = { (int)outFd, (int)errFd };
     uint8_t* buf[2] = { NULL, NULL };
     size_t len[2]  = { 0, 0 }, cap[2] = { 0, 0 };
@@ -1005,24 +1011,29 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
             pfd[i].events = POLLIN; pfd[i].revents = 0;
         }
         int pr = poll(pfd, 2, -1);
-        if (pr < 0) { if (errno == EINTR) continue; free(buf[0]); free(buf[1]); return -1; }
+        if (pr < 0) { if (errno == EINTR) continue; goto fail; }
         for (int i = 0; i < 2; i++) {
             if (done[i] || !(pfd[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
             if (len[i] == cap[i]) {
                 size_t ncap = cap[i] ? cap[i] * 2 : 65536;
-                uint8_t* nb = (uint8_t*)realloc(buf[i], ncap);
-                if (!nb) { free(buf[0]); free(buf[1]); return -1; }
+                uint8_t* nb = (uint8_t*)kama_alloc(ncap, 1);
+                if (!nb) goto fail;
+                if (len[i]) kama_copy(nb, buf[i], len[i]);
+                if (buf[i]) kama_free(buf[i], cap[i], 1);
                 buf[i] = nb; cap[i] = ncap;
             }
             ptrdiff_t r = read(fds[i], buf[i] + len[i], cap[i] - len[i]);
             if (r > 0)       { len[i] += (size_t)r; }
             else if (r == 0) { done[i] = 1; }               // EOF: child closed this end
-            else { if (errno == EINTR || errno == EAGAIN) continue; free(buf[0]); free(buf[1]); return -1; }
+            else { if (errno == EINTR || errno == EAGAIN) continue; goto fail; }
         }
     }
-    *outBuf = buf[0]; *outLen = len[0];
-    *errBuf = buf[1]; *errLen = len[1];
+    *outBuf = buf[0]; *outLen = len[0]; *outCap = cap[0];
+    *errBuf = buf[1]; *errLen = len[1]; *errCap = cap[1];
     return 0;
+fail:
+    for (int i = 0; i < 2; i++) if (buf[i]) kama_free(buf[i], cap[i], 1);
+    return -1;
 }
 
 // ---- TCP sockets -----------------------------------------------------------

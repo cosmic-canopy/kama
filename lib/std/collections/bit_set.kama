@@ -193,19 +193,19 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
     unsafe fn void growTo(isize nc) {
         UnsafePtr<uint64> nw = null;
-        nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
+        nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64), align: alignof(uint64))));
         memset(p: cast<UnsafePtr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
         isize i = 0;
         while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; }
         if (this.wordCount > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64), align: alignof(uint64));
         }
         this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
     }
 
     unsafe ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator
         if (this.wordCount > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64), align: alignof(uint64));
         }
     }
 }

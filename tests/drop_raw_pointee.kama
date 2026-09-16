@@ -24,7 +24,7 @@ unsafe fn int32 run() {
     GlobalAllocator ga = GlobalAllocator.make();
 
     // allocate -> place -> read -> drop -> deallocate
-    UnsafePtr<Big> p = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big))));
+    UnsafePtr<Big> p = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big), align: alignof(Big))));
     p[0] = Big.sized(n: 14);
     if (gLive != 1) { return 80; }
     if (p[0].first() != 14) { return 81; }
@@ -32,14 +32,14 @@ unsafe fn int32 run() {
     drop(ptr: p);                        // destroys the Big — including its own heap buffer
     if (gLive != 0) { return 82; }       // the destructor really ran
 
-    ga.deallocate(pointer: cast<UnsafePtr>(p), bytes: sizeof(Big));
+    ga.deallocate(pointer: cast<UnsafePtr>(p), bytes: sizeof(Big), align: alignof(Big));
 
     // A second block, dropped through a pointer bound in a LOCAL rather than used inline.
-    UnsafePtr<Big> q = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big))));
+    UnsafePtr<Big> q = cast<UnsafePtr<Big>>(unwrapPtr(o: ga.allocate(bytes: sizeof(Big), align: alignof(Big))));
     q[0] = Big.sized(n: 28);
     if (gLive != 1) { return 83; }
     drop(ptr: q);
-    ga.deallocate(pointer: cast<UnsafePtr>(q), bytes: sizeof(Big));
+    ga.deallocate(pointer: cast<UnsafePtr>(q), bytes: sizeof(Big), align: alignof(Big));
     if (gLive != 0) { return 84; }
 
     return 14;

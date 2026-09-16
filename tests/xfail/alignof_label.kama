@@ -1,0 +1,3 @@
+// The pointer form of `alignof` is spelled `alignof(ptr: p)`, like `sizeof(ptr: p)` — any other label is refused.
+unsafe fn usize measure(UnsafePtr<int32> p) { return alignof(of: p); }
+fn int32 main() { return 0; }

@@ -245,19 +245,19 @@ if [ "$rc" != "42" ]; then
     echo "check-noheap: FAIL — the bump-allocated container under '--no-heap' did not run (expected 42, got $rc)" >&2; exit 1
 fi
 
-# 6d. …and an `Arena` IS heap under the flag: `Arena.make` mallocs its region and `~Arena` frees it, through
-#     `@heap extern fn`s. A whole-program no-heap build that makes one is refused, through the chain.
+# 6d. …and an `Arena` IS heap under the flag: `Arena.make` draws its region from `GlobalAllocator` and `~Arena`
+#     returns it there. A whole-program no-heap build that makes one is refused, through the chain.
 heaparena="$tmp/nhheaparena.kama"
 cat > "$heaparena" <<'EOF'
 import { std::collections::Arena };
 fn int32 main() { Arena arena = Arena.make(capacity: 64); return 0; }
 EOF
 if "$KAMA" build --no-heap "$heaparena" -o "$tmp/ha.out" >/dev/null 2>"$tmp/ha.err"; then
-    echo "check-noheap: FAIL — an Arena (a malloc'd region) built under '--no-heap'" >&2; exit 1
+    echo "check-noheap: FAIL — an Arena (a heap region) built under '--no-heap'" >&2; exit 1
 fi
-if ! grep -qF 'which is `@heap`' "$tmp/ha.err"; then
-    echo "check-noheap: FAIL — the Arena was refused, but not through its @heap extern:" >&2
+if ! grep -qF -- '-> `GlobalAllocator::' "$tmp/ha.err"; then
+    echo "check-noheap: FAIL — the Arena was refused, but not through GlobalAllocator:" >&2
     sed 's/^/  /' "$tmp/ha.err" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while a bump-allocated container over owned storage still builds and runs, and a malloc'd Arena does not)"
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while a bump-allocated container over owned storage still builds and runs, and a heap-backed Arena does not)"

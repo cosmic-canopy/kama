@@ -1,8 +1,5 @@
 export { Weak };
 
-extern "<stdlib.h>";
-@heap extern fn void free(UnsafePtr p);
-
 // M6.2: the shared refcount seam (see shared.kama) — `Weak` mutates the SAME `Ctrl` counters, so it uses
 // the same flavor-selected ops. `atomic` is the per-instance compile-time constant `__kama_ctrl_atomic()`.
 extern "kama_ctrl.h";
@@ -40,7 +37,7 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable<This>(
     unsafe ~Weak() {
         if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
             if (kama_ctrl_release_weak(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl), align: alignof(Ctrl));
             }
         }
     }

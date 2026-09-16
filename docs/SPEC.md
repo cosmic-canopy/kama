@@ -545,14 +545,20 @@ stay in `std::collections`.
 
 ```kama
 type contract Allocator for value {
-    fn Optional<UnsafePtr> allocate(usize bytes);  // None on OOM/exhaustion — fallible seam (never panics)
-    fn void deallocate(UnsafePtr pointer, usize bytes);
+    fn Optional<UnsafePtr> allocate(usize bytes, usize align);  // None on OOM/exhaustion — fallible seam (never panics)
+    fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
 ```
 
-The container stores `A alloc` by value and routes every buffer through `this.alloc.allocate/deallocate`;
-dispatch is a **direct monomorphized call** (no vtable), so a `GlobalAllocator` (a zero-size handle straight
-onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small handle pointing into a
+**Both halves carry the block's layout** — its size and its alignment (a power of two) — the model Rust's <!-- test: alloc_size_truth, alloc_align -->
+`Layout` and Zig's aligned allocation use. `allocate` must return storage aligned to `align`, since a type holding a `Simd` field
+needs 16 and an `@align(64)` type needs 64; `deallocate` is handed back **exactly** the layout the block was
+allocated with, so an allocator may trust it (a size-class pool keeps no per-block header). The compiler and
+the stdlib always pass `sizeof`/`alignof` of what they place, and the object's own layout
+(`sizeof(ptr:)`/`alignof(ptr:)`) when a base handle may hold a derived one. The container stores `A alloc` by
+value and routes every buffer through `this.alloc.allocate/deallocate`; dispatch is a **direct monomorphized
+call** (no vtable), so a `GlobalAllocator` (a zero-size handle onto the runtime's allocation funnel, the system
+heap) costs nothing. A **stateful** allocator is a small handle pointing into a
 **caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
 **outlive** the container — a documented contract, not a borrow-checked one (a raw `UnsafePtr` isn't escape-checked
 and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
@@ -2660,19 +2666,21 @@ be written **in the language** rather than baked into the compiler. Three builti
   its destructor explicitly would run it *again* at scope exit. That is why `drop` takes a pointer and not a
   place: the double drop is **unspellable** rather than diagnosed. The old `drop(value: place)` form allowed <!-- xfail: drop_value_form -->
   it, and shipped that double free in six stdlib sites until `0.9.290`.
-- **`sizeof(ptr: p)`** — the byte size of the object an `UnsafePtr<T>` points at: the pointer form of <!-- test: alloc_size_truth -->
-  `sizeof`, labelled like `drop(ptr:)`. It is what the triad's last leg must be given: `deallocate(pointer,
-  bytes)` promises the size the block was **allocated** with, and a base pointer can hold a derived object,
-  so `sizeof(T)` would hand back a smaller block than was given out, and a pool that trusts `bytes` would be corrupted.
-  For a class with virtual members it reads the most-derived size through the object's vtable; for every
-  other `T` it is exactly `sizeof(T)`. Read it **before** `drop(ptr:)`, which ends the object's life:
+- **`sizeof(ptr: p)` / `alignof(ptr: p)`** — the size and alignment of the object an `UnsafePtr<T>` points at: <!-- test: alloc_size_truth -->
+  the pointer forms of `sizeof`/`alignof`, labelled like `drop(ptr:)`. They are what the triad's last leg must
+  be given: `deallocate(pointer, bytes, align)` promises the layout the block was **allocated** with, and a
+  base pointer can hold a derived object, so `sizeof(T)` would hand back a smaller block than was given out,
+  and a pool that trusts `bytes` would be corrupted. For a class with virtual members they read the
+  most-derived layout through the object's vtable; for every other `T` they are exactly `sizeof(T)`/`alignof(T)`.
+  Read them **before** `drop(ptr:)`, which ends the object's life:
   ```kama
   usize bytes = sizeof(ptr: this.p);
+  usize align = alignof(ptr: this.p);
   drop(ptr: this.p);
-  this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes);
+  this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes, align: align);
   ```
-  That is `Owned`/`Shared`'s destructor. It takes a pointer and nothing else, and never folds, since the
-  answer is the object's, not the type's: `sizeof(ptr: x)` on a value is an error, as is any label but `ptr`. <!-- xfail: sizeof_ptr_not_pointer, sizeof_label -->
+  That is `Owned`/`Shared`'s destructor. They take a pointer and nothing else, and never fold, since the
+  answer is the object's, not the type's: `sizeof(ptr: x)` on a value is an error, as is any label but `ptr`. <!-- xfail: sizeof_ptr_not_pointer, sizeof_label, alignof_label -->
 - **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`, or as an
   `UnsafeConstPtr<T>` when the place roots in a `const` binding (a const local or parameter, `this` inside
   a `const fn`). Taking an address is safe (either pointer is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live

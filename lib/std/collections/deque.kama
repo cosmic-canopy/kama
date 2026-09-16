@@ -68,12 +68,12 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
     unsafe fn void growTo(isize nc) {
         UnsafePtr<T> nd = null;
-        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))));
+        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
         UnsafePtr<T> od = this.data;
         isize i = 0;
         while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }
         this.data = nd; this.head = 0; this.cap = nc;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
@@ -210,7 +210,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         isize i = 0;
         while (i < this.len) { drop(ptr: addr(of: this[i])); i = i + 1; }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }
     }
 }

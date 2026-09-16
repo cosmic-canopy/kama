@@ -1,8 +1,5 @@
 export { Shared };
 
-extern "<stdlib.h>";
-@heap extern fn void free(UnsafePtr p);
-
 // M6.2: the refcount seam. Every strong/weak count mutation routes through kama_ctrl.h so the two flavors
 // (plain `Rc` vs Arc-correct atomic for `Shared<immutable T>`) live in one audited place. `atomic` is the
 // per-instance compile-time constant `__kama_ctrl_atomic()` (0 for an ordinary Shared -> zero overhead).
@@ -56,14 +53,14 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
         // so an OOM is the same `unwrapPtr` panic `adoptIn` gets — not a write through a null block. (This
         // file is embedded in the compiler as a prelude module and imports nothing from disk.)
         UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: GlobalAllocator.make().allocate(bytes: sizeof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
+        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: GlobalAllocator.make().allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
         this.p = raw; this.c = ctrl;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
     // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
     public unsafe ctor adoptIn(UnsafePtr<T> raw, A allocator) {
         UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
+        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
     public unsafe const fn const ref T deref() { return this.p[0]; }   // the read-only half (prelude `Deref`)
@@ -84,11 +81,12 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
             // reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
             // fetch_subs with a release store + acquire fence. A non-last release already decremented.
             if (kama_ctrl_release_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                usize bytes = sizeof(ptr: this.p);                // the pointee's own size — may be a derived
+                usize bytes = sizeof(ptr: this.p);                // the pointee's own layout — may be a derived
+                usize align = alignof(ptr: this.p);
                 drop(ptr: this.p);                                // run the pointee's dtor once
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes);
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes, align: align);
                 if (kama_ctrl_finish_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                    this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));
+                    this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl), align: alignof(Ctrl));
                 }
             }
         }

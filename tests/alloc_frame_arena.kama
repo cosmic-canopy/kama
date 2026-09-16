@@ -22,7 +22,7 @@ unsafe fn int32 run() {
     int32 spawned = 0;
     bool full = false;
     while (!full) {
-        Optional<UnsafePtr> block = a.allocate(bytes: 32ui64);
+        Optional<UnsafePtr> block = a.allocate(bytes: 32ui64, align: 8ui64);
         bool none = match (block) { case Some(value: p): false; case None: true; };
         if (none) { full = true; } else { spawned = spawned + 1; }
     }

@@ -1619,7 +1619,7 @@ private:
     // not only in a program that happens to import the one module declaring `kama_free` (`std::process`,
     // which is where a kama declaration of it exists at all). Without the seed a `--no-heap` program could
     // drop a heap-owned contract box and never reach a fact.
-    std::set<std::string> _heapSymbols{ "kama_alloc", "kama_calloc", "kama_realloc", "kama_free" };
+    std::set<std::string> _heapSymbols{ "kama_alloc", "kama_alloc_zeroed", "kama_free" };
     std::set<std::string> _entryBodies;   // `main` and every `KAMA_EXPORT` body, read off the C — `--no-heap`'s roots
     // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER body
     // as a CANDIDATE, judged only if an entry point reaches it (`isUserBody` — the prelude and the stdlib are

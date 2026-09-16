@@ -41,7 +41,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // leaves a null buffer so the dtor's guard skips a deallocate.
     unsafe fn void allocBuffer(isize size) {
         if (size > 0) {
-            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
+            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T), align: alignof(T))));
             memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
         } else {
             this.data = cast<UnsafePtr<T>>(cast<usize>(0));
@@ -134,7 +134,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         isize i = 0;
         while (i < this.size) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
         if (this.size > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T), align: alignof(T));
         }
     }
 }

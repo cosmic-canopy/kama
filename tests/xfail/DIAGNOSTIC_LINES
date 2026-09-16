@@ -17,6 +17,7 @@ addr_of_temporary	addr_of_temporary.kama:7
 addr_of_temporary_element	addr_of_temporary_element.kama:7
 align_no_argument	align_no_argument.kama:4
 align_not_power_of_two	align_not_power_of_two.kama:5
+alignof_label	alignof_label.kama:2
 alignof_not_foldable	alignof_not_foldable.kama:9
 arg_duplicate	arg_duplicate.kama:3
 arg_kind_intrinsic_inline_array	arg_kind_intrinsic_inline_array.kama:5

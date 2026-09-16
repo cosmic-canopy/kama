@@ -333,17 +333,17 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
     unsafe fn void growTo(isize nc) {
         UnsafePtr<V> nv = null; UnsafePtr<uint32> ng = null; UnsafePtr<isize> nf = null;
-        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
-        ng = cast<UnsafePtr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));
-        nf = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(isize))));
+        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
+        ng = cast<UnsafePtr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32), align: alignof(uint32))));
+        nf = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(isize), align: alignof(isize))));
         isize i = 0;
         while (i < this.slotCount) { nv[i] = this.values[i]; ng[i] = this.gens[i]; i = i + 1; }  // bitwise relocate
         i = 0;
         while (i < this.freeLen) { nf[i] = this.freeList[i]; i = i + 1; }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32), align: alignof(uint32));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize), align: alignof(isize));
         }
         this.values = nv; this.gens = ng; this.freeList = nf; this.cap = nc;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
@@ -359,9 +359,9 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
             i = i + 1;
         }
         if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32), align: alignof(uint32));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize), align: alignof(isize));
         }
     }
 }
