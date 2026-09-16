@@ -1,0 +1,11 @@
+// One worker spawned from TWO modules. Each spawn site calls the worker through a `static` trampoline in its
+// own translation unit, and the emitter used to dedupe those across the whole PROGRAM: the first module got
+// the definition, the second referenced it and clang refused (`use of undeclared identifier
+// '__kama_iso_lib__bump'`). kama accepted it. Both children bump the counter: 2 * 10 + 1 = 21.
+import { std::concurrent::Isolate, std::concurrent::Atomic, lib::bump, lib::runInLib };
+fn int32 main() {
+    Atomic<int32> c = Atomic.make(value: 0);
+    scope { spawn bump(c: ref c); }
+    int32 k = runInLib(c: ref c);
+    return c.load() * 10 + k;
+}

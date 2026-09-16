@@ -1198,11 +1198,13 @@ private:
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
     // `isolate` lowering: per-module file-scope helper definitions (thread trampolines) to emit BEFORE a
     // module's bodies (a body takes the address of a trampoline, which C requires defined earlier in the
-    // TU). Drained per module in emitModuleContent; deduped across the whole program by _isolateTrampolines
-    // (one trampoline per distinct entry fn, even if spawned from several sites).
+    // TU). Drained per module in emitModuleContent; deduped per module by _moduleHelperKeys (one trampoline per
+    // distinct entry fn in each module that spawns it, however many sites do).
     std::vector<std::string> _fileScopeHelpers;
-    std::set<std::string>    _isolateTrampolines;   // entry cNames whose trampoline is already emitted
-    std::set<std::string>    _bindReleaseThunks;    // owner C types whose bindable release thunk THIS module has (cleared per module)
+    // What `_fileScopeHelpers` already holds for THIS module — an isolate trampoline (`iso:<entry>`), a bindable
+    // release thunk (`bind:<owner>`). Every helper is `static`, so it is deduped PER MODULE and cleared with the
+    // drain: a program-wide set once left the second module that spawned a worker without its trampoline.
+    std::set<std::string>    _moduleHelperKeys;
     std::map<std::string, std::string> _exposedNames;   // exported C symbol -> "module::name (file:line)" — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only

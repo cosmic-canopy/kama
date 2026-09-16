@@ -1,0 +1,4 @@
+import { std::concurrent::Isolate, std::concurrent::Atomic };
+export { bump, runInLib };
+fn void bump(ref Atomic<int32> c) { c.fetchAdd(delta: 1i32); }
+fn int32 runInLib(ref Atomic<int32> c) { scope { spawn bump(c: ref c); } return 1; }

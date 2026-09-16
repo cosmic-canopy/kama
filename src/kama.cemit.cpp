@@ -16092,7 +16092,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
         // No heap box, no free, no move (the caller keeps the local and drops it after the join).
-        if (_isolateTrampolines.insert(symbolOf(sig)).second) {
+        if (_moduleHelperKeys.insert("iso:" + symbolOf(sig)).second) {
             std::ostringstream tr;
             tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
                << "    " << symbolOf(sig) << "((" << cls << "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
@@ -16120,7 +16120,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     SharedExpression src = h->value;
 
     // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
-    if (_isolateTrampolines.insert(symbolOf(sig)).second) {
+    if (_moduleHelperKeys.insert("iso:" + symbolOf(sig)).second) {
         std::ostringstream tr;
         tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
            << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of the heap box */\n"
@@ -22783,7 +22783,7 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
                     if (kv.second.isDefaultCtor) { allocInit = "    h.alloc = " + kv.second.cName + "();\n"; break; }
         }
         releaseFn = "__kama_bind_release_" + objCls;
-        if (_bindReleaseThunks.insert(objCls).second) {
+        if (_moduleHelperKeys.insert("bind:" + objCls).second) {
             std::ostringstream th;
             th << "static void " << releaseFn << "(void* obj, kama_ctrl* ctrl) {\n"
                << "    " << objCls << " h = {0};\n"
@@ -33850,7 +33850,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();
-    _bindReleaseThunks.clear();   // a thunk is `static`: the next module's TU needs its own definition
+    _moduleHelperKeys.clear();   // every helper is `static`: the next module's TU needs its own definitions
     *_out << moduleBody.str();
 }
 
