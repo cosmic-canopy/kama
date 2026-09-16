@@ -1434,20 +1434,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
-<a id="s3"></a>
-
-## 3. Open design questions (settle before the work they gate)
-
-- **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
-  (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
-  types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
-  pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large stdlib
-  grows. (`std::math`/`std::io` already ship as directory modules under this mechanism — the open question is
-  whether pruning scales, not whether the packaging shape works.)
-*(The `Slot<T>`/`MaybeUninit` spike that sat here is answered and shipped: the shape is a `slot`
-DECLARATION, not a wrapper type — no new type, no `.assume_init()`, and an unassigned slot simply has no
-drop emitted. See SPEC § *Uninitialized storage*.)*
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -2166,6 +2152,47 @@ rather than here, so there is one number to keep current. Forward work:
     not re-measured.** Serializing the AST and re-running collect leaves that untouched either way, which
     is the point that still stands. Whether the floor needs *incremental or cached analysis* is now an
     open question rather than a settled one — see §10.
+  - **Modular / opt-in stdlib — ANSWERED 2026-09-16 at `0.9.359`: per-module opt-in is a NON-GOAL** (maintainer
+    ruling on the measurement below; the row is deleted from ROADMAP.md, and the stdlib is cleared to grow).
+    The question was whether emit-on-instantiation + `--gc-sections` suffices, or explicit per-module opt-in is
+    warranted before the stdlib grows. The answer splits in two, and only one half was ever a packaging question.
+
+    A ladder of release builds, native, each in its own directory (`.scratch/kr4/measure.sh`; `analyze` is the median of five `KAMA_TIMING=1` runs):
+
+    | program | imports | closure units | analyze | fns emitted | binary |
+    |---|---|---|---|---|---|
+    | `fn int32 main() { return 0; }` | 0 | 2 | 9.0 ms | 268 | 16,944 B |
+    | + `println` (prelude, no import) | 0 | 2 | 8.5 ms | 268 | 33,520 B |
+    | + `DynamicArray`, used | 1 | 18 | 17.1 ms | 388 | 33,512 B |
+    | 14 stdlib imports, **one used** | 14 | 35 | **302 ms** | 855 | **33,512 B** |
+    | the same 14, **all used** | 14 | 35 | 320 ms | 1,209 | 34,368 B |
+
+    **SIZE: pruning holds completely, so opt-in packaging buys nothing.** Importing fourteen modules and using
+    one produces a binary *byte-identical* to importing none (33,512 vs 33,520 — noise), because the emitter's
+    855 functions are compiled and then dropped by `-dead_strip`/`--gc-sections`. Actually using all fourteen
+    costs +856 B, which is the real work. No per-module opt-in switch could improve on "zero".
+
+    **TIME: the cost is the IMPORT, not the use** — +294 ms for imports a program does not use, and only
+    +18 ms (6 %) for using them all. Measured per import, each costs 10–79 ms on its own
+    (`SortedSet` 79, `PriorityQueue` 33, `path::join` 11) and they are roughly ADDITIVE even though the unit
+    sets overlap heavily (18 units each, 35 in union): the cost tracks declarations analyzed, not files opened.
+
+    **Growth is safe, which is what the row actually asked.** A program that imports nothing analyzes 2 units
+    in 8.5 ms no matter how large `lib/std` becomes — closure pruning (shipped, §9) means a new stdlib module
+    costs every non-importer exactly nothing, and nothing new goes in the prelude. So the stdlib may grow.
+
+    **What is left is not a packaging question** — it is the build-speed one this section owns, which is why
+    the verdict was moved here when the row was deleted and §3 (*open design questions*) retired with it.
+    `analyze` dominates, and the lever is to emit only what is REACHED; see the bullet below.
+  - **The floor is ANALYSIS, and it is paid per IMPORT rather than per use — measured 2026-09-16 at
+    `0.9.359`** (the ladder and the table are in the modular-stdlib verdict just above). A program importing
+    fourteen stdlib modules and calling one function from one of them analyzes 35 closure units in **302 ms**
+    against a 8.5 ms floor, emits 855 C functions for the one it calls, and links a binary byte-identical to
+    importing nothing. Using all fourteen adds 18 ms. So the lever is **emit (and analyze) only what is
+    REACHED**, not a smaller stdlib or a packaging switch — and the reach-based call graph shipped for
+    `--no-heap` at `0.9.348` is the same analysis pointed at a different question. Unrowed deliberately: it is one lever
+    on the build-speed question this section already owns, and it wants its own measurement of where the
+    302 ms goes (collect vs emit) before anyone designs it.
   - **Declined: `kama build --each`** (batch the fixture builds in one process). Priced at ~9-10 s off a
     129 s suite for a 377-line refactor plus a harness restructure, and it gives users nothing. Not worth
     it; recorded so it is not re-derived.
@@ -2423,7 +2450,7 @@ rather than here, so there is one number to keep current. Forward work:
     `csources`/`cincludes`, six modules, proven native (debug/release), wasm and through a file-registry
     publish→install round trip. What it forced in-tree: `kama seed --license`, the `cincludes` key,
     the move-only propagation fix, `csources` as gnu11, `std::digest`; what it rowed: the four rows above
-    NOW and the member-visibility question in §3. Its AGENTS.md § "This package" is the first draft of
+    NOW and the member-visibility question that is now KR-8. Its AGENTS.md § "This package" is the first draft of
     the library-kind guidance addendum.
 
       **Decided direction:** follow where the ecosystem landed rather than per-developer signing keys.
