@@ -1,0 +1,104 @@
+// std::time — RFC 3339 text for `Timestamp` and `Date`: the printed form, the round trip, an offset
+// applied and dropped (TIMESTAMPTZ semantics), and every refusal at the byte it names. The eight flags sum
+// to 255.
+import { std::time::Date, std::time::Timestamp, std::time::TimeError, std::num::int64Min, std::num::int64Max };
+
+fn string show(const ref string text) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): "${t}";
+        case Err(error: e): "error";
+    };
+}
+
+fn bool failsAt(const ref string text, isize want) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): a == want; case OutOfRange: false; };
+    };
+}
+
+fn bool outOfRange(const ref string text) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; };
+    };
+}
+
+fn bool dateFailsAt(const ref string text, isize want) {
+    return match (Date.parse(text: text)) {
+        case Ok(value: d): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): a == want; case OutOfRange: false; };
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Printing: UTC, `Z`, and a fraction only when there is one, in the fewest exact digits of 3/6/9.
+    Timestamp t = Timestamp.fromUnixSecs(s: 1789567387i64);
+    string a = "${t}";
+    Timestamp milli = Timestamp.fromUnixNanos(n: 1789567387120000000i64);
+    Timestamp micro = Timestamp.fromUnixNanos(n: 1789567387123456000i64);
+    Timestamp nano = Timestamp.fromUnixNanos(n: 1789567387000000001i64);
+    Timestamp epoch = Timestamp.epoch();
+    string b = "${milli}";
+    string c = "${micro}";
+    string d = "${nano}";
+    string e = "${epoch}";
+    if (a == "2026-09-16T14:03:07Z" && b == "2026-09-16T14:03:07.120Z" && c == "2026-09-16T14:03:07.123456Z"
+        && d == "2026-09-16T14:03:07.000000001Z" && e == "1970-01-01T00:00:00Z") { r = r + 1; }
+
+    // Both ends of int64 nanoseconds print, and every printed form parses back to the same instant.
+    Timestamp lo = Timestamp.fromUnixNanos(n: int64Min());
+    Timestamp hi = Timestamp.fromUnixNanos(n: int64Max());
+    string los = "${lo}";
+    string his = "${hi}";
+    bool back = match (Timestamp.parse(text: los)) { case Ok(value: x): x == lo; case Err(error: er): false; }
+             && match (Timestamp.parse(text: his)) { case Ok(value: x): x == hi; case Err(error: er): false; }
+             && show(text: c) == c && show(text: d) == d;
+    if (los == "1677-09-21T00:12:43.145224192Z" && his == "2262-04-11T23:47:16.854775807Z" && back) { r = r + 2; }
+
+    // An offset is applied and dropped: every spelling of one instant prints the same.
+    if (show(text: "2026-09-16T16:03:07+02:00") == a && show(text: "2026-09-16T09:33:07-04:30") == a
+        && show(text: "2026-09-17T00:03:07+10:00") == a && show(text: "2026-09-16t14:03:07z") == a
+        && show(text: "2026-09-16T14:03:07-00:00") == a
+        && show(text: "2026-01-01T00:30:00+01:00") == "2025-12-31T23:30:00Z") { r = r + 4; }
+
+    // A fraction of 1 to 9 digits, read as the fraction it is.
+    if (show(text: "2026-09-16T14:03:07.5Z") == "2026-09-16T14:03:07.500Z"
+        && show(text: "2026-09-16T14:03:07.12345Z") == "2026-09-16T14:03:07.123450Z"
+        && show(text: "2026-09-16T14:03:07.000Z") == a
+        && failsAt(text: "2026-09-16T14:03:07.1234567891Z", want: 29)
+        && failsAt(text: "2026-09-16T14:03:07.Z", want: 20)) { r = r + 8; }
+
+    // Syntax refusals name the byte: a wrong separator, a letter in a number, the end of the text,
+    // a space for `T`, trailing bytes, a missing zone, the ISO forms RFC 3339 leaves out.
+    if (failsAt(text: "2026-09-16 14:03:07Z", want: 10) && failsAt(text: "2026-09-1xT14:03:07Z", want: 9)
+        && failsAt(text: "2026-09-16T14:03", want: 16) && failsAt(text: "2026-09-16T14:03:07Z ", want: 20)
+        && failsAt(text: "2026-09-16T14:03:07", want: 19) && failsAt(text: "2026-W38-3", want: 5)
+        && failsAt(text: "20260916T140307Z", want: 4) && failsAt(text: "2026-09-16T14:03:07+0200", want: 22)
+        && failsAt(text: "", want: 0) && failsAt(text: " 2026-09-16T14:03:07Z", want: 0)) { r = r + 16; }
+
+    // Fields that do not exist, and instants int64 nanoseconds cannot hold.
+    if (outOfRange(text: "2026-02-30T00:00:00Z") && outOfRange(text: "2026-13-01T00:00:00Z")
+        && outOfRange(text: "2026-09-16T24:00:00Z") && outOfRange(text: "2016-12-31T23:59:60Z")
+        && outOfRange(text: "2026-09-16T14:03:07+24:00") && outOfRange(text: "1677-09-21T00:12:43.145224191Z")
+        && outOfRange(text: "2262-04-11T23:47:16.854775808Z")
+        && show(text: "2262-04-12T01:47:16.854775807+02:00") == his) { r = r + 32; }
+
+    // `Date`: printed zero-padded, parsed exactly, nothing more.
+    Date day = Timestamp.fromUnixSecs(s: 1789567387i64).date();
+    string ds = "${day}";
+    string early = match (Date.make(year: 7, month: 3ui8, day: 1ui8)) { case Ok(value: x): "${x}"; case Err(error: er): "error"; };
+    bool dateBack = match (Date.parse(text: "2026-09-16")) { case Ok(value: x): x == day; case Err(error: er): false; };
+    if (ds == "2026-09-16" && early == "0007-03-01" && dateBack
+        && dateFailsAt(text: "2026-09-16T00:00:00Z", want: 10) && dateFailsAt(text: "2026-9-16", want: 6)
+        && dateFailsAt(text: "2026-09", want: 7)) { r = r + 64; }
+
+    // A parse failure is an `Error` with a message.
+    string msg = match (Timestamp.parse(text: "nope")) { case Ok(value: x): ""; case Err(error: er): er.message(); };
+    string msg2 = match (Date.parse(text: "2026-02-30")) { case Ok(value: x): ""; case Err(error: er): er.message(); };
+    if (msg == "invalid date or time character at byte 0" && msg2 == "date or time field out of range") { r = r + 128; }
+
+    return r;   // 255
+}

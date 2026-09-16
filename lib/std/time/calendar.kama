@@ -42,11 +42,13 @@ type enum Weekday implements Equatable<This> {
 // A calendar day with no time and no zone: a birthday, a due date, a Postgres DATE. Years 0000 through
 // 9999 — exactly what the RFC 3339 text form can write, so every `Date` formats and parses back. The fields
 // are private so that a `Date` is always a real day; `make` is the one door in, and it checks.
-type value Date implements Equatable<This>, Comparable<This>, Hashable, Sendable {
+type value Date implements Equatable<This>, Comparable<This>, Hashable, Formattable, Sendable {
     int32 y;
     uint8 m;
     uint8 d;
-    friend Timestamp[fromDays];
+    // `Timestamp` reads its own day through the day-number pair and parses its date half with the same
+    // code a `Date` does, so the two text forms cannot drift apart.
+    friend Timestamp[fromDays, days, parsePrefix, digits];
 
     ctor fields(int32 y, uint8 m, uint8 d) {
         this.y = y;
@@ -132,14 +134,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Sendable
             return Result::Err(error: TimeError::OutOfRange);
         }
         int64 secs = this.days() * 86400i64 + cast<int64>(hour) * 3600i64 + cast<int64>(minute) * 60i64 + cast<int64>(second);
-        int64 ns = cast<int64>(nanosecond);
-        // The stamp is secs * 1e9 + ns, which must land inside int64 without the multiply overflowing first.
-        if (secs >= 0i64) {
-            if (secs > 9223372036i64 || (secs == 9223372036i64 && ns > 854775807i64)) { return Result::Err(error: TimeError::OutOfRange); }
-            return Result::Ok(value: Timestamp.of(nanos: secs * 1000000000i64 + ns));
-        }
-        if (secs < -9223372037i64 || (secs == -9223372037i64 && ns < 145224192i64)) { return Result::Err(error: TimeError::OutOfRange); }
-        return Result::Ok(value: Timestamp.of(nanos: (secs + 1i64) * 1000000000i64 + (ns - 1000000000i64)));
+        return Timestamp.fromParts(secs: secs, ns: cast<int64>(nanosecond));
     }
 
     public const fn bool equals(const ref Date other) {
@@ -152,4 +147,50 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Sendable
         return Ordering::Equal;
     }
     public const fn uint64 hash() { return cast<uint64>(this.days()); }
+
+    // `YYYY-MM-DD`, the RFC 3339 `full-date`.
+    public const fn void format(ref Formatter f) {
+        f.writeU64Radix(v: cast<uint64>(this.y), radix: 10, width: 32, upper: 0, prefix: 0, pad: 4, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: cast<uint64>(this.m), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+        f.writeStr(s: "-");
+        f.writeU64Radix(v: cast<uint64>(this.d), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+    }
+
+    // Exactly `YYYY-MM-DD` — no time, no whitespace, nothing after it. A malformed byte is
+    // `InvalidCharacter` at its offset (the length, when the text ends early); a day that does not exist,
+    // `OutOfRange`.
+    public ctor Result<Date, TimeError> parse(const ref string text) {
+        if (text.length() > 10) { return Result::Err(error: TimeError::InvalidCharacter(at: 10)); }
+        return Date.parsePrefix(text: text);
+    }
+
+    // The date half of both text forms: the first ten bytes of `text`, whatever follows them.
+    ctor Result<Date, TimeError> parsePrefix(const ref string text) {
+        Result<int64, TimeError> yr = Date::digits(text: text, at: 0, count: 4);
+        int64 y = match (yr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (text.length() <= 4 || text[4] != 45ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 4)); }  // '-'
+        Result<int64, TimeError> mr = Date::digits(text: text, at: 5, count: 2);
+        int64 mo = match (mr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (text.length() <= 7 || text[7] != 45ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 7)); }
+        Result<int64, TimeError> dr = Date::digits(text: text, at: 8, count: 2);
+        int64 dd = match (dr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (mo > 12i64 || dd > 31i64) { return Result::Err(error: TimeError::OutOfRange); }
+        return Date.make(year: truncate<int32>(y), month: truncate<uint8>(mo), day: truncate<uint8>(dd));
+    }
+
+    // `count` ASCII digits starting at `at`, as a number. The first byte that is not a digit — or the
+    // end of the text — is `InvalidCharacter` at that offset.
+    static fn Result<int64, TimeError> digits(const ref string text, isize at, isize count) {
+        int64 v = 0i64;
+        isize i = at;
+        while (i < at + count) {
+            if (i >= text.length()) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
+            uint8 c = text[i];
+            if (c < 48ui8 || c > 57ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
+            v = v * 10i64 + cast<int64>(c - 48ui8);
+            i = i + 1;
+        }
+        return Result::Ok(value: v);
+    }
 }

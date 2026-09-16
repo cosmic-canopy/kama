@@ -1,5 +1,5 @@
 
-import { Date, Weekday };
+import { Date, Weekday, TimeError };
 export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep };
 
 // TWO clocks, and choosing between them is the only thing this module asks of a caller:
@@ -78,19 +78,23 @@ type value Instant implements Equatable<This>, Comparable<This>, Hashable, Senda
 }
 
 // A point on the WALL clock, as signed nanoseconds from the UNIX epoch (1970-01-01T00:00:00Z). Signed, so
-// a date before 1970 is representable rather than wrapping; int64 nanoseconds reach from 1678 to 2262,
+// a date before 1970 is representable rather than wrapping; int64 nanoseconds reach from 1677-09-21 to 2262-04-11,
 // which is the same window Go's `time.Time` monotonic range and Rust's `Duration`-from-epoch idiom cover.
 //
 // ⚠️ It is NOT monotonic. Two readings can come back in either order, and `durationSince` can therefore be
 // negative — that is the wall clock being honest, not an error. Time a span with `Instant`.
 //
-// There is deliberately no calendar here: no year/month/day, no formatting, no time zones. That is a
-// separate module's worth of work (civil-from-days, a zone database, a parser), the comparator draws the
-// same line — Rust's `SystemTime` is a bare epoch offset and `chrono` is a package — and a half-calendar
-// is worse than none — which means whole, not never: a calendar module is a ROADMAP row (the audit, 2026-09-07).
+// It is Postgres TIMESTAMPTZ: an INSTANT, holding no zone and no offset. It reads its UTC calendar fields
+// (`date()`, `hour()`, …; `calendar.kama` has `Date`) and it is RFC 3339 text both ways — `"${t}"` prints
+// `2026-09-16T14:03:07Z`, and `Timestamp.parse` applies whatever offset the text carries and keeps the
+// instant, as TIMESTAMPTZ does on input. It is also the one timestamp type: there is no second, field-holding
+// DateTime for the same instant (Rust has both `SystemTime` and chrono's `DateTime<Utc>`, and a program must
+// pick which to store). Local time needs a zone database, which is a package, as `chrono-tz` is.
 @generate(of)
-type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Sendable {
+type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Formattable, Sendable {
     public int64 nanos;
+    // `Date.at` builds a stamp through the same range check `parse` does.
+    friend Date[fromParts];
 
     public ctor epoch()                    { return Timestamp.of(nanos: 0i64); }
     public ctor fromUnixNanos(int64 n)     { return Timestamp.of(nanos: n); }
@@ -139,6 +143,99 @@ type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Sen
     const fn int64 nanosOfDay() {
         int64 rem = this.nanos % NANOS_PER_DAY;
         return rem < 0i64 ? rem + NANOS_PER_DAY : rem;
+    }
+
+    // `secs` seconds and `ns` (in [0, 1e9)) nanoseconds from the epoch, or `OutOfRange` outside int64
+    // nanoseconds. `secs * 1e9 + ns` is checked BEFORE the multiply, which would overflow first.
+    ctor Result<Timestamp, TimeError> fromParts(int64 secs, int64 ns) {
+        if (secs >= 0i64) {
+            if (secs > 9223372036i64 || (secs == 9223372036i64 && ns > 854775807i64)) { return Result::Err(error: TimeError::OutOfRange); }
+            return Result::Ok(value: Timestamp.of(nanos: secs * 1000000000i64 + ns));
+        }
+        if (secs < -9223372037i64 || (secs == -9223372037i64 && ns < 145224192i64)) { return Result::Err(error: TimeError::OutOfRange); }
+        return Result::Ok(value: Timestamp.of(nanos: (secs + 1i64) * 1000000000i64 + (ns - 1000000000i64)));
+    }
+
+    // RFC 3339 in UTC: `YYYY-MM-DDTHH:MM:SS`, then a fraction only when there is one — 3, 6 or 9 digits,
+    // the fewest that are exact, so a millisecond stamp reads as one and every stamp parses back to itself
+    // — then `Z`. A stamp prints in UTC whatever offset it was parsed with; it never kept one.
+    public const fn void format(ref Formatter f) {
+        this.date().format(f: ref f);
+        f.writeStr(s: "T");
+        f.writeU64Radix(v: cast<uint64>(this.hour()), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+        f.writeStr(s: ":");
+        f.writeU64Radix(v: cast<uint64>(this.minute()), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+        f.writeStr(s: ":");
+        f.writeU64Radix(v: cast<uint64>(this.second()), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+        uint32 ns = this.nanosecond();
+        if (ns != 0ui32) {
+            f.writeStr(s: ".");
+            if (ns % 1000000ui32 == 0ui32)  { f.writeU64Radix(v: cast<uint64>(ns / 1000000ui32), radix: 10, width: 32, upper: 0, prefix: 0, pad: 3, flags: 1); }
+            else if (ns % 1000ui32 == 0ui32) { f.writeU64Radix(v: cast<uint64>(ns / 1000ui32), radix: 10, width: 32, upper: 0, prefix: 0, pad: 6, flags: 1); }
+            else                             { f.writeU64Radix(v: cast<uint64>(ns), radix: 10, width: 32, upper: 0, prefix: 0, pad: 9, flags: 1); }
+        }
+        f.writeStr(s: "Z");
+    }
+
+    // The RFC 3339 `date-time`: `YYYY-MM-DDTHH:MM:SS`, an optional `.` and 1-9 fraction digits, then `Z` or
+    // `+HH:MM` / `-HH:MM`. `T` and `Z` may be lowercase (RFC 3339 §5.6). The offset is APPLIED and dropped
+    // — the result is the instant, as Postgres TIMESTAMPTZ stores it. Strict otherwise: no whitespace, no
+    // space for `T`, no week or ordinal dates, no compact form, nothing trailing. A malformed byte is
+    // `InvalidCharacter` at its offset (the length, when the text ends early); a field that does not exist
+    // — Feb 30, hour 24, second 60 (POSIX time has no leap second), an offset past 23:59 — or an instant
+    // outside int64 nanoseconds is `OutOfRange`.
+    public ctor Result<Timestamp, TimeError> parse(const ref string text) {
+        Result<Date, TimeError> dr = Date.parsePrefix(text: text);
+        Date d = match (dr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        isize n = text.length();
+        if (n <= 10 || (text[10] != 84ui8 && text[10] != 116ui8)) { return Result::Err(error: TimeError::InvalidCharacter(at: 10)); }  // T t
+        Result<int64, TimeError> hr = Date::digits(text: text, at: 11, count: 2);
+        int64 hh = match (hr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (n <= 13 || text[13] != 58ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 13)); }  // ':'
+        Result<int64, TimeError> mr = Date::digits(text: text, at: 14, count: 2);
+        int64 mm = match (mr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (n <= 16 || text[16] != 58ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 16)); }
+        Result<int64, TimeError> sr = Date::digits(text: text, at: 17, count: 2);
+        int64 ss = match (sr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+
+        isize i = 19;
+        int64 ns = 0i64;
+        if (i < n && text[i] == 46ui8) {                                   // '.'
+            i = i + 1;
+            isize first = i;
+            int64 scale = 1000000000i64;
+            while (i < n && text[i] >= 48ui8 && text[i] <= 57ui8) {
+                if (i - first == 9) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }  // a 10th digit
+                scale = scale / 10i64;
+                ns = ns + cast<int64>(text[i] - 48ui8) * scale;
+                i = i + 1;
+            }
+            if (i == first) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
+        }
+
+        if (i >= n) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
+        int64 offset = 0i64;
+        uint8 z = text[i];
+        if (z == 90ui8 || z == 122ui8) {                                   // Z z
+            i = i + 1;
+        } else if (z == 43ui8 || z == 45ui8) {                             // + -
+            Result<int64, TimeError> ohr = Date::digits(text: text, at: i + 1, count: 2);
+            int64 oh = match (ohr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+            if (i + 3 >= n || text[i + 3] != 58ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: i + 3)); }
+            Result<int64, TimeError> omr = Date::digits(text: text, at: i + 4, count: 2);
+            int64 om = match (omr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+            if (oh > 23i64 || om > 59i64) { return Result::Err(error: TimeError::OutOfRange); }
+            offset = (oh * 60i64 + om) * 60i64;
+            if (z == 45ui8) { offset = -offset; }
+            i = i + 6;
+        } else {
+            return Result::Err(error: TimeError::InvalidCharacter(at: i));
+        }
+        if (i != n) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
+
+        if (hh > 23i64 || mm > 59i64 || ss > 59i64) { return Result::Err(error: TimeError::OutOfRange); }
+        // Local wall time minus its offset is UTC: 16:00+02:00 is 14:00Z.
+        return Timestamp.fromParts(secs: d.days() * 86400i64 + hh * 3600i64 + mm * 60i64 + ss - offset, ns: ns);
     }
 }
 
