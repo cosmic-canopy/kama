@@ -1,6 +1,7 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
-**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, and the recording gap it exposed at `0.9.353`; §2–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`, and
+§5 (`Handle`, KR-51) at `0.9.355`. §2–§4 not started — **KR-48 is next**. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -12,11 +13,13 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-16, Linux).** `dev` at `0.9.353` (the recording gap — UNPUSHED, one commit on top of `origin/dev` =
-`59e2395e`, which brought KR-56 `extern const` and KR-59). Before it, `0.9.348`, pushed: KR-57 filed (a binding may take a function's
-name), then `0.9.347` (the no-heap call graph read from the emitted C, a pre-existing `@noheap` fix), then
-`0.9.348` (KR-47: reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate
-figures are in each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
+**State (2026-09-16, Linux).** `dev` = `origin/dev` at `0.9.359`, everything below PUSHED. This campaign's three
+commits — `0.9.353` (the recording gap: a slot call the compiler writes is a no-heap fact), `0.9.354` (a `new` is
+judged by the allocator it draws from, not the verb) and `0.9.355` (KR-51, `Handle` asks the reader) — then the
+other machine's KR-54 work on top, `0.9.356`–`0.9.359` (`kama check` analyzes every configuration a gate needs;
+a gate that can never be active is refused; the LSP half). Before all of it, `0.9.347`–`0.9.348` (KR-47:
+reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate figures are in
+each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
 `0.9.341`–`0.9.345` and KR-55 (`type extern enum`/`type expose enum`) at `0.9.346`. Filed along the way:
 **KR-57** (shadowing a function) and **KR-58** (the Windows seam allocates a wide path per file-system call, so
 eighteen externs, eleven of them `std::fs`, are `@heap` on every target though some platforms allocate nothing there). A new roadmap row takes the `Next id:` counter
@@ -55,9 +58,24 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 **First steps next session:**
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
-   on the rebased HEAD before building on it.
-2. **KR-48** — next. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
-   KR-48 the prelude's `kama_alloc`/`kama_free` are the heap symbols.
+   on the rebased HEAD before building on it. The other machine is on KR-54 and its neighbours — coordinate
+   before touching the driver or `kama check`.
+2. **KR-48 is next**, and §2 below is its design. The inventory there was taken at `0.9.318` and its LINE numbers
+   are stale; find a site by its function name. **Re-measured at `0.9.359`**, the shape is:
+   - **21 raw `malloc` sites** in the emitted C (`src/kama.cemit.cpp` string literals) plus their frees;
+   - **`include/kama_os.h` 50**, `kama_channel.h` 4, `kama_isolate.h` 2, `kama_app.h` 1;
+   - **`include/kama_runtime.h` 4** — `kama_alloc`/`kama_calloc`/`kama_realloc`/`kama_free` themselves
+     (`:123`-`:126`), already `static inline` over a block-scope `extern`, so the funnel EXISTS and the work is
+     moving callers onto it, not building it;
+   - **6 libc `extern fn` declarations** across `prelude/`+`lib/` (the prelude's `GlobalAllocator` pair, and
+     `std::process`'s `kama_free`).
+   Two decisions belong to this step, both open: **a sized `kama_free(p, n)`** (§2 — `Allocator.deallocate`
+   already takes `bytes`, a size-class allocator wants it, and most runtime frees know the size already; confirm
+   the rest before deciding), and which externs keep `@heap` afterwards. ⚠️ The four funnel names are now SEEDED
+   into `_heapSymbols` (`src/kama.cemit.h`) — after KR-48 that seed is the whole heap surface, so check it still
+   says what it should rather than leaving it beside a new mechanism.
+3. **Then KR-49**, where §3's open question is already answered — **a declaration**, because the flag can check
+   its body. It needs the maintainer's call on the meaning split first (see above).
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
@@ -103,8 +121,19 @@ The decisions that are specific to this campaign, made by the maintainer on
 - **No workaround in serde's error path**: a failing `deserialize` returns `Err`; a placeholder `Ok` plus the
   reader's sticky flag, or a boundary net that converts one, were both considered and rejected.
 
-Still open, to be decided here and written down: declaration vs weak symbol for the replacement (§3), a
-sized `kama_free` (§2), and a per-call error allocator (§4).
+Still open, to be decided and written down — in this order, because each one narrows the next:
+
+1. **What `--no-heap` PROMISES** (maintainer, needed before KR-49). `@noheap` = *never allocates* — an ISR or an
+   audio callback wants determinism, and a pool that can run out does not qualify. `--no-heap` = *never reaches
+   the SYSTEM heap* — an MCU with no `malloc` is served exactly by a fixed pool the program owns. Today the flag
+   means the first. The second is what makes a replaced global allocator worth having, and it already has a
+   precedent: a `BumpAllocator` over owned storage is legal under the flag (`check-noheap.sh` 6c/6d).
+2. ~~declaration vs weak symbol for the replacement (§3)~~ — **decided: a DECLARATION**, because the flag can
+   read its body and check it, where a weak link-time symbol could only be trusted. Recorded in §3.
+3. **A sized `kama_free(p, n)`** (§2) — belongs to KR-48, which is next.
+4. **A per-call error allocator** (§4) — likely UNNECESSARY once 1–2 land: with every allocation funnelled and
+   the global allocator replaceable, errors already follow the replacement, and the per-call form is the
+   source-breaking option (it changes `Serializable`/`Deserializable`). Decide it last, on evidence.
 
 ## What is wanted
 
@@ -303,13 +332,17 @@ size-class allocator (TLSF, a slab) wants it; most runtime frees know it already
 
 ### 3. Replacing the default implementation
 
-A program replaces the two primitives, not the eleven families that used to call libc. How it names the
-replacement is the one surface decision left, to make here rather than in code:
+A program replaces the two primitives, not the eleven families that used to call libc.
 
-- **A declaration** — e.g. `@globalAllocator type value Tlsf implements Allocator { … }`, at most one per
-  program; the compiler emits `kama_alloc`/`kama_free` against it. Explicit and greppable (GOALS #5); the
-  compiler can refuse two, and refuse a stateful one with no way to reach its state.
-- **A weak link-time symbol**, as `kama_panic_handler` already is. Zero language surface, but invisible in source.
+**DECIDED (2026-09-16): a declaration** — e.g. `@globalAllocator type value Tlsf implements Allocator { … }`, at
+most one per program; the compiler emits `kama_alloc`/`kama_free` against it. Explicit and greppable (GOALS #5);
+the compiler can refuse two, and refuse a stateful one with no way to reach its state. **The reason it wins is
+`--no-heap`:** a declaration has a BODY the flag can walk, so a pool over storage the program owns is *proven*
+allocation-free the same way any other code is — no annotation, no trust. The alternative, **a weak link-time
+symbol** (as `kama_panic_handler` is), has zero language surface but is invisible in source and to the analysis,
+so the flag could only take it on faith. That turns the campaign's own rule — judge what the program reaches —
+into an exception at the one seam where every allocation now funnels. This is also what makes the meaning split
+above (`--no-heap` = never reaches the SYSTEM heap) buildable rather than a promise on paper.
 
 `GlobalAllocator` stays the name of the default `A`; with §2 it is already a handle onto `kama_alloc`, so it
 follows the replacement for free. `Shared.adopt`'s hard-coded control block and the `SortedMap` root move
