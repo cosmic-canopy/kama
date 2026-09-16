@@ -1694,12 +1694,16 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
 //
 // OPT-IN, enabled only by `kama lsp`, for two reasons that are not caution:
 //   * build/check/transpile parse each file exactly once, so a cache is pure overhead there;
-//   * a cached unit is DESTRUCTIVELY REWRITTEN by CEmitter::pruneInactiveDecls (kama.cemit.cpp:17129)
-//     — `@compileFor`-inactive decls are dropped from codeDeclarationList in place. Reuse is therefore
-//     sound only while the build-flag set is fixed, which one `kama lsp` process guarantees and a
-//     future multi-configuration caller would not. Opt-in makes that a decision, not an accident.
+//   * a cached unit is DESTRUCTIVELY REWRITTEN by CEmitter::pruneInactiveDecls — `@compileFor`-inactive
+//     decls are dropped from codeDeclarationList in place, and a kept decl loses its gate. Opt-in makes
+//     reuse a decision, not an accident.
 //
-// The key is the path SPELLING, not the absolute path. A unit is NAMED by the string parseFile was
+// Which is why the key leads with the CONFIGURATION: a unit pruned under one flag set is never served
+// to an analysis under another. One process used to have exactly one flag set and relied on that; the
+// covering `kama check` (KR-54) analyzes several in one process, `--each` included, and each gets its
+// own entries. `configKeyOfParse` is the flag set that decides what pruning keeps.
+//
+// After the configuration, the key is the path SPELLING, not the absolute path. A unit is NAMED by the string parseFile was
 // handed, and CEmitter::unitForUri matches unit names EXACTLY — while one file is reachable here by
 // two spellings (the URI-derived absolute path the LSP passes as an input, vs `dir + "/" + name` built
 // by module resolution). Serving one spelling's unit for the other would silently rewrite every query's
@@ -1708,7 +1712,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
 struct CachedUnit { SharedCompilationUnit unit; std::string abs; time_t mtime; off_t size; };
 const size_t kParseCacheMax = 2000;   // a runaway backstop, far above any real workspace — see below
 bool g_parseCache = false;
-std::map<std::string, CachedUnit> g_parseCacheMap;
+std::map<std::string, CachedUnit> g_parseCacheMap;   // "<configuration>\n<spelling>" -> unit
+static std::string configKeyOfParse();                 // beside the build-flag globals it reads
 
 // Parse one kama file into a CompilationUnit. Returns nullptr on failure.
 SharedCompilationUnit parseFile(const std::string& inputFile)
@@ -1728,7 +1733,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     if (g_parseCache && stat(osp(inputFile).c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
         cacheable = (st.st_mtime + 1 < time(nullptr));
         if (cacheable) {
-            auto it = g_parseCacheMap.find(inputFile);
+            auto it = g_parseCacheMap.find(configKeyOfParse() + "\n" + inputFile);
             if (it != g_parseCacheMap.end() && it->second.mtime == st.st_mtime
                                             && it->second.size  == st.st_size) {
                 ++timing().cachedUnits;
@@ -1768,7 +1773,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
         // Wholesale clear rather than an LRU: this can only trip on a tree far larger than the
         // workspace indexer will index at all, and recovery costs one cold analysis.
         if (g_parseCacheMap.size() >= kParseCacheMax) g_parseCacheMap.clear();
-        g_parseCacheMap[inputFile] = CachedUnit{ extra.compilationUnit, absolutePath(inputFile),
+        g_parseCacheMap[configKeyOfParse() + "\n" + inputFile] = CachedUnit{ extra.compilationUnit, absolutePath(inputFile),
                                                  st.st_mtime, st.st_size };
     }
     return extra.compilationUnit;
@@ -1854,12 +1859,21 @@ ParseResult parseForQuery(const char* src, const std::string& name)
 // _preludeEnums, ClassInfo, the `unit == _preludeUnit` identity tests), so two emitters never see each
 // other's state. The one pass that writes THROUGH to the AST is CEmitter::pruneInactiveDecls, which
 // rewrites codeDeclarationList and each kept decl's attribute list in place and runs over the prelude
-// too (kama.cemit.cpp:17129 / :17182) — safe here twice over: the prelude carries no `@compileFor`, so
-// the prune drops nothing, and the pass is idempotent under a fixed build-flag set, which one process
-// always has. Re-check both claims if the emitter grows another in-place AST rewrite.
+// too — safe because the prelude carries no `@compileFor`, so the prune drops nothing and strips nothing,
+// under EVERY configuration. That is load-bearing now that one process analyzes several (KR-54), so it is
+// asserted below rather than only stated. Re-check if the emitter grows another in-place AST rewrite.
+static SharedCompilationUnit requireUngated(SharedCompilationUnit u)
+{
+    if (u && (!u->declGates.empty() || u->fileGate)) {
+        fprintf(stderr, "kama: internal error: embedded %s carries a `@compileFor` gate, and one shared AST "
+                        "cannot serve two configurations (see preludeUnit)\n", u->name ? u->name->c_str() : "?");
+        exit(3);
+    }
+    return u;
+}
 SharedCompilationUnit preludeUnit()
 {
-    static SharedCompilationUnit u = parseString(KAMA_PRELUDE_SRC, "<prelude>");
+    static SharedCompilationUnit u = requireUngated(parseString(KAMA_PRELUDE_SRC, "<prelude>"));
     return u;
 }
 
@@ -1874,8 +1888,8 @@ const std::vector<SharedCompilationUnit>& preludeModuleUnits()
     static const std::vector<SharedCompilationUnit> units = [] {
         std::vector<SharedCompilationUnit> v;
         for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
-            SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src,
-                                                  KAMA_PRELUDE_MODULES[i].name);
+            SharedCompilationUnit u = requireUngated(parseString(KAMA_PRELUDE_MODULES[i].src,
+                                                                 KAMA_PRELUDE_MODULES[i].name));
             if (u) v.push_back(u);
         }
         return v;
@@ -1918,6 +1932,16 @@ static bool g_verifySignatures = false;
 static std::set<std::string> g_activeFlags;
 static std::set<std::string> g_declaredFlags;
 static bool g_strictFlags = false;
+
+// The part of the configuration that decides what CEmitter::pruneInactiveDecls keeps — the parse cache's
+// key prefix (see parseFile). The active set alone: the declared universe and strictness change which
+// DIAGNOSTICS a gate draws, never which declarations survive.
+static std::string configKeyOfParse()
+{
+    std::string k;
+    for (const auto& f : g_activeFlags) { k += f; k += ' '; }
+    return k;
+}
 
 // ---- the FILE GATE: `file @compileFor(!ARCH_WASM32);` ------------------------------------------
 //
@@ -9581,8 +9605,9 @@ int main(int argc, char** argv)
         // per-emitter member keyed by node pointer, so two programs never see each other's analysis (the
         // argument written out in full at `preludeUnit()` above, which has shared one prelude AST between
         // emitters since M5.1). The one pass that writes THROUGH to a shared AST is
-        // CEmitter::pruneInactiveDecls, which is idempotent under a fixed build-flag set — and one process
-        // has exactly one, since the flags come from argv and the manifest, not from the input.
+        // CEmitter::pruneInactiveDecls, which is idempotent under a fixed build-flag set — and the parse
+        // cache is keyed by that set, so the covering check's other configurations never share a unit with
+        // this one (see parseFile).
         //
         // Verdicts go to STDOUT, one `<rc> <path>` line per input, FLUSHED as each program finishes.
         // Non-`--json` `check` writes nothing to stdout, so this is a free channel — and flushing per file

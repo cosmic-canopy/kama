@@ -89,7 +89,7 @@ public:
     // emitter over the same unit (a cached unit reused across analyses: `kama lsp` per keystroke, `kama
     // check --each` per program) finds the decls already gone and would rebuild an EMPTY pruned set —
     // and then report a phantom "export list names `sort` but there is no such top-level declaration"
-    // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set; this makes its
+    // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set (the cache key); this makes its
     // by-product idempotent too.
     std::set<std::string> prunedNames;
     // THE FILE GATE — `file @compileFor(FLAG);` on the unit's first line, or null for the usual file
@@ -98,6 +98,12 @@ public:
     // whole point (its declarations may name types that do not exist on this target). The unit is still
     // PARSED — that is how the gate is read — so a syntax error in it is an error on every target.
     SharedAttributeList fileGate;
+    // Every top-level declaration's attribute list that carries a `@compileFor`, as PARSED. Read by the
+    // covering `kama check` (KR-54), which must see each gate the program contains — and must see it even
+    // after pruneInactiveDecls ran, since that pass drops a gated-out decl from the list and REPLACES a kept
+    // decl's attribute list with one that has no `@compileFor`. Holding the original list is what survives
+    // both: the pass never mutates a list object, it only reassigns the pointer.
+    std::vector<SharedAttributeList> declGates;
     // ---- closure-pruning facts, harvested at PARSE time (kama.y `compilation_unit`) ----------------
     // A directory-module import loads only the files needed to satisfy its `{…}` symbol list, plus their
     // transitive intra-directory closure (closureOfModule, kama.driver.cpp). These three fields are what
@@ -1336,8 +1342,20 @@ public:
 inline void harvestUnitFacts(const SharedCompilationUnit& unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
+    auto gate = [&](const SharedAttributeList& attrs) {                     // see CompilationUnit::declGates
+        if (!attrs) return;
+        for (auto& at : *attrs)
+            if (at && at->name && *at->name == "compileFor") { unit->declGates.push_back(attrs); return; }
+    };
     for (auto& decl : *unit->codeDeclarationList) {
         ASTNode* d = decl.get();
+        // The same six gatable kinds CEmitter::pruneInactiveDecls's `attrsOf` reads.
+        if      (auto* f = dynamic_cast<FunctionDeclarationNode*>(d))   gate(f->attributes);
+        else if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))      gate(c->attributes);
+        else if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))       gate(e->attributes);
+        else if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) gate(m->attributes);
+        else if (auto* i = dynamic_cast<IncludeNode*>(d))               gate(i->attributes);
+        else if (auto* x = dynamic_cast<ExternConstNode*>(d))           gate(x->attributes);
         if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d)) {          // fn / extern fn / comptime fn
             if (f->name && f->name->value) unit->topLevelNames.insert(*f->name->value);
         } else if (auto* c = dynamic_cast<ClassDeclarationNode*>(d)) {      // type <kind> Name — the kind

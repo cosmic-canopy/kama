@@ -32368,9 +32368,9 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
     if (!unit || !unit->codeDeclarationList) return;
 
     // A unit already pruned by an EARLIER emitter (a cached unit reused across analyses) has nothing left
-    // to drop, so this pass would record nothing — inherit what that pass dropped instead. Sound only
-    // because pruning is idempotent under a fixed build-flag set, which is the same precondition the
-    // parse cache already carries (kama.driver.cpp, parseFile).
+    // to drop, so this pass would record nothing — inherit what that pass dropped instead. Sound
+    // because pruning is idempotent under a fixed build-flag set, and the parse cache is keyed by that
+    // set (kama.driver.cpp, parseFile).
     _prunedNames.insert(unit->prunedNames.begin(), unit->prunedNames.end());
 
     // The `attributes` member lives on each concrete top-level decl kind; return a pointer so the

@@ -103,7 +103,7 @@ std::string lspRealPath(const std::string& path);
 //
 // Enabled for the lifetime of the server ONLY. A build parses each file once, so it would gain nothing,
 // and a cached unit is rewritten in place by CEmitter::pruneInactiveDecls, which makes reuse sound only
-// under a fixed build-flag set — see parseFile in kama.driver.cpp for the full invariant.
+// under a fixed build-flag set — so entries are keyed by that set; see parseFile in kama.driver.cpp.
 //
 // `lspEvictParsedFile("")` drops everything, which is what workspace/didChangeWatchedFiles does: the
 // notification may name a directory, and over-evicting costs one re-parse while under-evicting serves a
@@ -170,9 +170,11 @@ struct LspBuildConfig {
 // put a member package's own flag names outside the declared universe and manufacture "undeclared flag"
 // errors on correct code.
 //
-// PER PROCESS, and that is load-bearing: the M5 parse cache holds units that `pruneInactiveDecls`
-// rewrote IN PLACE, so reuse is sound only under a fixed flag set (see parseFile in kama.driver.cpp).
-// Any re-resolve MUST be followed by `lspEvictParsedFile("")` and a re-analysis of every open document.
+// PER PROCESS. The M5 parse cache holds units that `pruneInactiveDecls` rewrote IN PLACE, and keys them
+// by the flag set they were pruned under (see parseFile in kama.driver.cpp), so a re-resolve cannot be
+// served a stale unit — but every open document still describes the old configuration, so a re-resolve
+// is followed by `lspEvictParsedFile("")` (dropping entries no analysis will ask for again) and a
+// re-analysis of every open document.
 //
 // Returns false + `err` on a malformed manifest / unknown target / undeclared flag. On failure the
 // configuration is left PERMISSIVE rather than half-applied, so the server keeps answering.

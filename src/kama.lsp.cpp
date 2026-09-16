@@ -455,16 +455,16 @@ struct Server {
     bool           wsDirty = true;      // a buffer or watched file changed since wsIndex was built
 
     // ---- build configuration (M6 A1) -----------------------------------------------------------
-    // ONE configuration per process, pinned by the first opened document that resolves a manifest. It has
-    // to be per-process rather than per-file: the M5 parse cache holds units `pruneInactiveDecls` rewrote
-    // IN PLACE under the flag set in force, so two configurations cannot share it.
+    // ONE configuration per process, pinned by the first opened document that resolves a manifest. (The M5
+    // parse cache holds units `pruneInactiveDecls` rewrote IN PLACE, and is keyed by the flag set they were
+    // pruned under, so the cache no longer forces this — the pin is a policy, see the limit below.)
     //
     // KNOWN LIMIT, documented rather than papered over: in a monorepo whose packages declare DIFFERENT
     // flag universes, packages other than the pinned one get the pinned one's configuration — their
     // `@compileFor`-gated declarations may be dropped, and their own flag names may read as undeclared
     // under strict validation. Workarounds, in order: declare the shared flag universe in the ROOT
     // manifest (strict validation then accepts every member's names), or one editor window per package.
-    // The real fix is per-project configuration, which needs per-configuration parse caches.
+    // The real fix is per-project configuration; the per-configuration parse cache it needed exists now.
     //
     // Re-pinning on tab switch is deliberately NOT done: it would evict the cache and re-analyze every
     // open closure on every switch between packages — the 86 ms path, repeatedly — to solve a case one
@@ -640,9 +640,9 @@ struct Server {
     // Resolve and install the build configuration, and if it CHANGED, make every open document agree with
     // it. Returns true when it re-analyzed, so a caller that was about to analyze does not do it twice.
     //
-    // The eviction is not caution. `pruneInactiveDecls` already rewrote every cached unit in place under
-    // the OLD flag set, deleting declarations that the new set may want back — and a dropped declaration
-    // cannot be recovered from the pruned AST. The cache must go.
+    // The eviction is housekeeping, not soundness: cache entries are keyed by the flag set they were
+    // pruned under, so the new configuration could never be served one — but nothing will ask for the
+    // old configuration's entries again.
     bool applyConfig(const std::string& hintPath) {
         LspBuildConfig cfg;
         std::string err;
