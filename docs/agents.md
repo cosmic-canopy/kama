@@ -251,6 +251,31 @@ missed, and failed the day it started being caught; they then asserted a WIDTH m
 failed the day *that* started being caught — which is what forced this section to be rewritten rather
 than left stale.
 
+## `kama stats` — what the project IS, in numbers
+
+`kama query` answers about one file; `kama stats` answers about the whole project, from the same
+analysis. It takes the operand rule `build`/`check` use (a `kama.json` is the project, `.kama` files are
+just those) and prints a human table, or `--json` for a machine:
+
+```sh
+kama stats kama.json          # the report
+kama stats kama.json --json   # {lines,types,functions,generics,ffi,gates,modules,largest}
+```
+
+Reach for it before reading a codebase you do not know, and instead of `wc -l`/`cloc` — the numbers come
+from the compiler, so they are exact where a text tool guesses (a `//` inside a string is not a comment, a
+blank line inside a multi-line string is code) and include facts no text tool has at all:
+
+| it reports | why it matters |
+|---|---|
+| lines: total / code / comment / blank | classified by the LEXER, per file and per module |
+| types per kind, functions per kind, constants, fields | `value`/`resource`/`contract`/`enum`, free/method/`ctor`/dtor/operator |
+| generic **templates vs instantiations** | how many monomorphs the program actually produced — nowhere in the source text |
+| the unsafe + FFI surface | `unsafe fn` count, `extern` headers/fns in, `expose fn` out (that list *is* the ABI) |
+| gates | `@compileFor` sites, how many configurations cover them, and what is out of THIS build |
+| per-module lines + **export counts** | which module is quietly becoming the API |
+| the largest declarations | where the weight is, by real line span |
+
 ## Cost
 
 Every invocation re-parses and re-analyzes the prelude and every imported `std::` module, so there

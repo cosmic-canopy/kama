@@ -7977,6 +7977,12 @@ void usage()
         "                   active is an error. Any configuration flag of `build` (--target, --select,\n"
         "                   --define, --undefine, --release/--debug, --no-heap, --shared) checks exactly\n"
         "                   that one configuration instead)\n"
+        "  kama stats     <in.kama>... | <kama.json> [--json] [<configuration flags>]\n"
+        "                  what this project IS, counted by the compiler that resolved it: lines (total /\n"
+        "                   code / comment / blank, classified by the LEXER — a `//` inside a string is not\n"
+        "                   a comment), declarations by kind, generic templates vs the monomorphs actually\n"
+        "                   emitted, the unsafe and FFI surfaces, what `@compileFor` leaves out of THIS\n"
+        "                   build, per-module lines + exports, dependencies, and the largest declarations\n"
         "  kama query     <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
@@ -9595,9 +9601,11 @@ int main(int argc, char** argv)
     // directory. `kama run` used to mean "read ./kama.json", which is the same implicit gesture the
     // operand rule removes everywhere else — so it goes too.
     if (manifestOperand.empty() && inputs.empty()) {
+        // `stats` is a noun, so "name what to stats" is not English — every other subcommand here is a verb.
+        const char* verbPhrase = (subcommand == "stats") ? "report on" : subcommand.c_str();
         fprintf(stderr, "kama %s: name what to %s — one or more .kama files, `kama.json` for a project, "
                         "or `kama_workspace.json` for every project in a workspace\n",
-                subcommand.c_str(), subcommand.c_str());
+                subcommand.c_str(), verbPhrase);
         return 2;
     }
     if (!manifestOperand.empty() && !fileExists(manifestOperand)) {
@@ -9872,6 +9880,343 @@ int main(int argc, char** argv)
     // Where kama_runtime.h lives — resolved so an installed binary works from any
     // cwd (exe-relative: <exe>/../include, else <exe>, else <exe>/../.., else ".").
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
+
+    if (subcommand == "stats") {
+        // THE PROJECT REPORT (KR-60). What a line counter cannot answer, answered by the compiler that
+        // resolved the program: lines classified by the LEXER (a `//` inside a string is not a comment),
+        // declarations by kind, generic templates against the monomorphs actually PRODUCED, the unsafe and
+        // FFI surfaces, what `@compileFor` leaves out of this build, the per-module public surface, and the
+        // dependency inventory. One analysis — the same `check` runs — so every number is what the
+        // compiler saw, not what a regex guessed.
+        //
+        // ⚠️ The declaration walk runs BEFORE analyze(), because `pruneInactiveDecls` drops gated-out
+        // declarations from the unit in place: after it, "declared" and "in this build" are the same
+        // number and the difference between them — the thing worth reporting — is gone.
+        struct Counts {
+            size_t types = 0, values = 0, resources = 0, contracts = 0, enums = 0, views = 0;
+            size_t genericTypes = 0, enumVariants = 0, fields = 0, constants = 0;
+            size_t fns = 0, methods = 0, ctors = 0, dtors = 0, operators = 0;
+            size_t unsafeFns = 0, externFns = 0, exposeFns = 0, fnPtrs = 0, comptimeFns = 0, headers = 0;
+            size_t gateSites = 0, gatedOutDecls = 0, gatedOutLines = 0, gatedFiles = 0;
+            size_t total = 0, code = 0, comment = 0, blank = 0;
+            size_t decls() const { return types + genericTypes + fns + constants; }
+        };
+        struct ModuleRow { std::string name; Counts c; size_t exports = 0, files = 0; };
+        struct BigDecl { size_t lines; std::string kind, name, where; };
+
+        Counts all;
+        std::map<std::string, ModuleRow> modules;
+        std::vector<BigDecl> biggest;
+        std::vector<std::vector<GateLit>> gates;
+
+        // The project's OWN files — a dependency's or the stdlib's counts are that package's business.
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+        std::set<std::string> own;
+        for (const auto& r : inputs) own.insert(absolutePath(r));
+
+        for (const auto& r : inputs) {
+            SharedCompilationUnit u = parseFile(r);     // unpruned: a gated-out decl still exists here
+            if (!u) continue;
+            Counts c;
+            // ---- lines. The lexer marked every line it saw (kama.ast.h lineFlags); the total comes from the
+            // bytes, so trailing blank lines — which produce no token and no comment — are counted too.
+            {
+                std::ifstream in(osp(r), std::ios::binary);
+                std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                c.total = (size_t)std::count(text.begin(), text.end(), '\n');
+                if (!text.empty() && text.back() != '\n') ++c.total;
+                for (size_t i = 1; i <= c.total; ++i) {
+                    unsigned char f = i < u->lineFlags.size() ? u->lineFlags[i] : 0;
+                    if      (f & 1) ++c.code;          // a line with code AND a trailing comment is CODE
+                    else if (f & 2) ++c.comment;
+                    else            ++c.blank;
+                }
+            }
+            // ---- the file gate, and every declaration gate (recorded at parse time, KR-54).
+            if (u->fileGate) {
+                std::vector<GateLit> lits = gateLiterals(u->fileGate);
+                if (!lits.empty()) {
+                    gates.push_back(lits);
+                    ++c.gateSites;
+                    if (!gateActiveIn(lits, g_activeFlags)) { ++c.gatedFiles; c.gatedOutLines += c.code; }
+                }
+            }
+            // ---- declarations.
+            // ⚠️ A declaration's own `endLine` is the LEXER POSITION AT REDUCTION (kama.ast.h says so), and
+            // for a `fn` that is its signature, not its body — every function measured 1 line before this.
+            // The body's block, and a type's last member, reduce after their closing brace, so they carry
+            // the real end. Take the furthest of the three.
+            auto endOf = [](ASTNode* d) -> int {
+                int e = d->endLine;
+                if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d)) {
+                    if (f->block) e = std::max(e, f->block->endLine);
+                } else if (auto* cl = dynamic_cast<ClassDeclarationNode*>(d)) {
+                    if (cl->members) for (auto& m : *cl->members) if (m) e = std::max(e, m->endLine);
+                } else if (auto* en = dynamic_cast<EnumDeclarationNode*>(d)) {
+                    e = std::max(e, en->endLine);
+                }
+                return e;
+            };
+            auto span = [&](ASTNode* d) -> size_t {
+                const int e = endOf(d);
+                return (e > d->line) ? (size_t)(e - d->line + 1) : 1;
+            };
+            auto note = [&](ASTNode* d, const char* kind, const std::string& name) {
+                biggest.push_back({ span(d), kind, name, r + ":" + std::to_string(d->line) });
+            };
+            if (u->codeDeclarationList) for (auto& decl : *u->codeDeclarationList) {
+                ASTNode* d = decl.get();
+                if (!d) continue;
+                SharedAttributeList* ap = nullptr;
+                if      (auto* f = dynamic_cast<FunctionDeclarationNode*>(d))   ap = &f->attributes;
+                else if (auto* cl = dynamic_cast<ClassDeclarationNode*>(d))     ap = &cl->attributes;
+                else if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))       ap = &e->attributes;
+                else if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) ap = &m->attributes;
+                else if (auto* i = dynamic_cast<IncludeNode*>(d))               ap = &i->attributes;
+                else if (auto* x = dynamic_cast<ExternConstNode*>(d))           ap = &x->attributes;
+                bool gatedOut = false;
+                if (ap && *ap) {
+                    std::vector<GateLit> lits = gateLiterals(*ap);
+                    if (!lits.empty()) {
+                        gates.push_back(lits);
+                        ++c.gateSites;
+                        gatedOut = !gateActiveIn(lits, g_activeFlags);
+                        if (gatedOut) {
+                            ++c.gatedOutDecls;
+                            // From the GATE's own line, not the declaration's: the `@compileFor` line is as
+                            // absent from this build as the body under it, and a reader counting the lines
+                            // that are not being compiled counts it.
+                            int from = d->line;
+                            for (auto& at : **ap) if (at && at->line > 0) from = std::min(from, at->line);
+                            const int e = endOf(d);
+                            c.gatedOutLines += (e > from) ? (size_t)(e - from + 1) : 1;
+                        }
+                    }
+                }
+                if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d)) {
+                    const std::string nm = (f->name && f->name->value) ? *f->name->value : std::string("?");
+                    const bool ext = f->modifier && f->modifier->value && *f->modifier->value == "extern";
+                    const bool exp = f->modifier && f->modifier->value && *f->modifier->value == "expose";
+                    if (!f->block && !ext) ++c.fnPtrs;          // a bodyless non-extern fn IS a `fnptr`
+                    else                   ++c.fns;
+                    if (f->isUnsafe)   ++c.unsafeFns;
+                    if (f->isComptime) ++c.comptimeFns;
+                    if (ext) ++c.externFns;
+                    if (exp) ++c.exposeFns;
+                    if (f->block) note(d, "fn", nm);
+                } else if (auto* cl = dynamic_cast<ClassDeclarationNode*>(d)) {
+                    const std::string nm = (cl->name && cl->name->value) ? *cl->name->value : std::string("?");
+                    const std::string kind = (cl->typeKind && !cl->typeKind->empty()) ? *cl->typeKind : "value";
+                    // Every type counts once under its KIND; `generic` is a subset of them, not a kind of
+                    // its own — `type value Box<T>` is a value that happens to be a template, and counting
+                    // it in two places made the kind column not add up.
+                    ++c.types;
+                    if (cl->typeParams && !cl->typeParams->empty()) ++c.genericTypes;
+                    if      (kind == "value")    ++c.values;
+                    else if (kind == "resource") ++c.resources;
+                    else if (kind == "contract") ++c.contracts;
+                    else if (kind == "view")     ++c.views;
+                    // The member kinds are separate NODE types (kama.ast.h), not flags on one — so this
+                    // list is exhaustive by construction rather than by remembering a bool.
+                    if (cl->members) for (auto& m : *cl->members) {
+                        ASTNode* mn = m.get();
+                        if      (dynamic_cast<ClassFieldDeclarationNode*>(mn))       ++c.fields;
+                        else if (dynamic_cast<ClassConstDeclarationNode*>(mn))       ++c.constants;
+                        else if (dynamic_cast<ClassConstructorDeclarationNode*>(mn)) ++c.ctors;
+                        else if (dynamic_cast<ClassDestructorDeclarationNode*>(mn))  ++c.dtors;
+                        else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn))    ++c.operators;
+                        // ⚠️ A NAMED constructor (`ctor make(…)`) is a method node carrying `isCtor`, not a
+                        // ClassConstructorDeclarationNode — it reuses the method pipeline (kama.ast.h). Ask
+                        // the flag, or every `ctor` in the stdlib counts as a method.
+                        else if (auto* me = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                            if (me->isCtor) ++c.ctors; else ++c.methods;
+                        }
+                    }
+                    note(d, kind.c_str(), nm);
+                } else if (auto* e = dynamic_cast<EnumDeclarationNode*>(d)) {
+                    ++c.types; ++c.enums;
+                    const std::string nm = (e->identifier && e->identifier->value) ? *e->identifier->value : std::string("?");
+                    note(d, "enum", nm);
+                } else if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) {
+                    if (m->variables) c.constants += m->variables->size(); else ++c.constants;
+                } else if (dynamic_cast<ExternConstNode*>(d)) {
+                    ++c.constants;
+                } else if (dynamic_cast<IncludeNode*>(d)) {
+                    ++c.headers;
+                }
+            }
+            // ---- roll up, per module and program-wide.
+            const std::string mod = moduleIdForFile(absolutePath(r)).full();
+            ModuleRow& mr = modules[mod.empty() ? std::string("(no module)") : mod];
+            mr.name = mod.empty() ? std::string("(no module)") : mod;
+            ++mr.files;
+            mr.exports += u->exportList ? u->exportList->size() : 0;
+            #define KAMA_STATS_ROLL(field) do { mr.c.field += c.field; all.field += c.field; } while (0)
+            KAMA_STATS_ROLL(total); KAMA_STATS_ROLL(code); KAMA_STATS_ROLL(comment); KAMA_STATS_ROLL(blank);
+            KAMA_STATS_ROLL(types); KAMA_STATS_ROLL(values); KAMA_STATS_ROLL(resources);
+            KAMA_STATS_ROLL(contracts); KAMA_STATS_ROLL(enums); KAMA_STATS_ROLL(views);
+            KAMA_STATS_ROLL(genericTypes); KAMA_STATS_ROLL(fields); KAMA_STATS_ROLL(constants);
+            KAMA_STATS_ROLL(fns); KAMA_STATS_ROLL(methods); KAMA_STATS_ROLL(ctors); KAMA_STATS_ROLL(dtors);
+            KAMA_STATS_ROLL(operators); KAMA_STATS_ROLL(unsafeFns); KAMA_STATS_ROLL(externFns);
+            KAMA_STATS_ROLL(exposeFns); KAMA_STATS_ROLL(fnPtrs); KAMA_STATS_ROLL(comptimeFns);
+            KAMA_STATS_ROLL(headers); KAMA_STATS_ROLL(gateSites); KAMA_STATS_ROLL(gatedOutDecls);
+            KAMA_STATS_ROLL(gatedOutLines); KAMA_STATS_ROLL(gatedFiles);
+            #undef KAMA_STATS_ROLL
+        }
+
+        // ---- what only the ANALYSIS knows: monomorphs produced, conformance edges.
+        CEmitter idx(input);
+        configureEmitter(idx);
+        { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+        // Scoped to this project's own files: the prelude's `Optional` is not the project's generic.
+        // `declFile` is the unit path the emitter recorded, which is what loadProgramUnits handed it.
+        std::set<std::string> ownDecl(own.begin(), own.end());
+        for (const auto& r : inputs) ownDecl.insert(r);          // both spellings — the operand's and its absolute
+        CEmitter::ProgramStats ps = idx.programStats(ownDecl);
+        size_t errs = 0;
+        for (const auto& d : idx.diagnostics()) if (d.severity == DiagSeverity::Error) ++errs;
+
+        // ...and how many configurations it takes to reach every gate (the covering check's solver).
+        size_t configs = 1;
+        if (!gates.empty()) {
+            configs += coverGates(gates, bcReq, g_noHeap).size();
+            installCoverConfig(bcReq, g_noHeap, CoverConfig());      // put this build's own back
+        }
+
+        std::sort(biggest.begin(), biggest.end(),
+                  [](const BigDecl& a, const BigDecl& b) { return a.lines > b.lines; });
+        const size_t kTop = 5;
+        if (biggest.size() > kTop) biggest.resize(kTop);
+
+        if (jsonOut) {
+            Json j = jsonEnvelope("stats", input);
+            Json lines = Json::object();
+            lines.set("total", (long)all.total); lines.set("code", (long)all.code);
+            lines.set("comment", (long)all.comment); lines.set("blank", (long)all.blank);
+            j.set("lines", std::move(lines));
+            Json ty = Json::object();
+            ty.set("value", (long)all.values); ty.set("resource", (long)all.resources);
+            ty.set("contract", (long)all.contracts); ty.set("enum", (long)all.enums);
+            ty.set("view", (long)all.views);
+            ty.set("total", (long)all.types);        // every type, once, under its kind above
+            ty.set("generic", (long)all.genericTypes);   // ...of which this many are templates (a SUBSET)
+            ty.set("fields", (long)all.fields);
+            j.set("types", std::move(ty));
+            Json fn = Json::object();
+            fn.set("free", (long)all.fns); fn.set("method", (long)all.methods);
+            fn.set("ctor", (long)all.ctors); fn.set("dtor", (long)all.dtors);
+            fn.set("operator", (long)all.operators); fn.set("comptime", (long)all.comptimeFns);
+            fn.set("fnptr", (long)all.fnPtrs);
+            j.set("functions", std::move(fn));
+            Json gen = Json::object();
+            gen.set("templates", (long)ps.genericTemplates);
+            gen.set("instances", (long)ps.genericInstances);
+            gen.set("conformances", (long)ps.conformances);
+            j.set("generics", std::move(gen));
+            Json uns = Json::object();
+            uns.set("unsafeFns", (long)all.unsafeFns);
+            uns.set("externFns", (long)all.externFns);
+            uns.set("externHeaders", (long)all.headers);
+            uns.set("exposeFns", (long)all.exposeFns);
+            j.set("ffi", std::move(uns));
+            Json g = Json::object();
+            g.set("sites", (long)all.gateSites);
+            g.set("configurations", (long)configs);
+            g.set("gatedOutDecls", (long)all.gatedOutDecls);
+            g.set("gatedOutFiles", (long)all.gatedFiles);
+            g.set("gatedOutLines", (long)all.gatedOutLines);
+            j.set("gates", std::move(g));
+            Json ms = Json::array();
+            for (const auto& kv : modules) {
+                Json m = Json::object();
+                m.set("module", kv.second.name);   m.set("files", (long)kv.second.files);
+                m.set("lines", (long)kv.second.c.total); m.set("code", (long)kv.second.c.code);
+                m.set("declarations", (long)kv.second.c.decls()); m.set("exports", (long)kv.second.exports);
+                ms.push(std::move(m));
+            }
+            j.set("modules", std::move(ms));
+            Json big = Json::array();
+            for (const auto& b : biggest) {
+                Json e = Json::object();
+                e.set("lines", (long)b.lines); e.set("kind", b.kind);
+                e.set("name", b.name); e.set("at", b.where);
+                big.push(std::move(e));
+            }
+            j.set("largest", std::move(big));
+            j.set("errors", (long)errs);
+            jsonPrint(j);
+            return 0;
+        }
+
+        // ---- the human report. Numbers right-aligned in a fixed column so a diff between two runs reads.
+        auto pct = [&](size_t n) { return all.total ? (int)((n * 100 + all.total / 2) / all.total) : 0; };
+        printf("%s — %zu file%s, %zu module%s, %s\n",
+               manifestOperand.empty() ? input.c_str() : manifestOperand.c_str(),
+               inputs.size(), inputs.size() == 1 ? "" : "s",
+               modules.size(), modules.size() == 1 ? "" : "s",
+               g_target.triple().c_str());
+        printf("\nlines      %8zu total   %8zu code (%d%%)   %8zu comment   %8zu blank\n",
+               all.total, all.code, pct(all.code), all.comment, all.blank);
+        printf("types      %8zu         value %zu, resource %zu, enum %zu, contract %zu%s\n",
+               all.types, all.values, all.resources, all.enums, all.contracts,
+               all.views ? (", view " + std::to_string(all.views)).c_str() : "");
+        printf("  generic  %8zu template%s -> %zu instantiation%s, %zu conformance%s\n",
+               ps.genericTemplates, ps.genericTemplates == 1 ? "" : "s",
+               ps.genericInstances, ps.genericInstances == 1 ? "" : "s",
+               ps.conformances, ps.conformances == 1 ? "" : "s");
+        printf("functions  %8zu         free %zu, method %zu, ctor %zu, dtor %zu, operator %zu\n",
+               all.fns + all.methods + all.ctors + all.dtors + all.operators,
+               all.fns, all.methods, all.ctors, all.dtors, all.operators);
+        printf("  unsafe   %8zu         extern fn %zu, extern header %zu, expose fn %zu, fnptr %zu\n",
+               all.unsafeFns, all.externFns, all.headers, all.exposeFns, all.fnPtrs);
+        printf("constants  %8zu         fields %zu\n", all.constants, all.fields);
+        if (all.gateSites) {
+            printf("gates      %8zu site%s    %zu configuration%s; %zu decl%s and %zu file%s "
+                   "are out of THIS build (%zu line%s)\n",
+                   all.gateSites, all.gateSites == 1 ? "" : "s", configs, configs == 1 ? " covers them" : "s cover them",
+                   all.gatedOutDecls, all.gatedOutDecls == 1 ? "" : "s",
+                   all.gatedFiles, all.gatedFiles == 1 ? "" : "s",
+                   all.gatedOutLines, all.gatedOutLines == 1 ? "" : "s");
+        }
+        if (modules.size() > 1) {
+            printf("\nmodules\n");
+            for (const auto& kv : modules)
+                printf("  %-24s %6zu lines  %4zu code-decl%s  %3zu export%s  (%zu file%s)\n",
+                       kv.second.name.c_str(), kv.second.c.total, kv.second.c.decls(),
+                       kv.second.c.decls() == 1 ? " " : "s", kv.second.exports,
+                       kv.second.exports == 1 ? " " : "s", kv.second.files, kv.second.files == 1 ? "" : "s");
+        }
+        // The dependency inventory comes from the same tables the BUILD uses, so it cannot drift from what
+        // would actually be compiled and linked.
+        if (!g_csources.empty() || !g_target.link.empty()) {
+            printf("\nforeign\n");
+            if (!g_csources.empty()) printf("  csources  %zu\n", g_csources.size());
+            if (!g_target.link.empty()) {
+                printf("  link     ");
+                for (const auto& l : g_target.link) printf(" %s", l.c_str());
+                printf("\n");
+            }
+        }
+        if (!manifestOperand.empty()) {
+            std::vector<std::string> deps = listDir(dirName(manifestOperand) + "/.kama/deps");
+            std::sort(deps.begin(), deps.end());
+            if (!deps.empty()) {
+                printf("\ndependencies\n");
+                for (const auto& d : deps) printf("  %s\n", d.c_str());
+            }
+        }
+        if (!biggest.empty()) {
+            printf("\nlargest\n");
+            for (const auto& b : biggest)
+                printf("  %5zu  %-9s %-28s %s\n", b.lines, b.kind.c_str(), b.name.c_str(), b.where.c_str());
+        }
+        if (errs) printf("\n⚠️  %zu error%s — the program does not analyze cleanly, so the resolved numbers "
+                         "(instantiations, conformances) are partial. Run `kama check`.\n",
+                         errs, errs == 1 ? "" : "s");
+        return 0;
+    }
 
     if (subcommand == "check") {
         // Semantic check only: parse + resolve + type-check + ownership/serde analysis, WITHOUT emitting C

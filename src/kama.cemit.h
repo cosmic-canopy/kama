@@ -905,6 +905,20 @@ public:
     // CodeGenContext (a syntax error stops the parse before emission); the LSP merges both streams.
     const std::vector<Diagnostic>& diagnostics() const { return _diagnostics; }
 
+    // What the ANALYSIS knows and no line counter can: how many generic templates the program declares
+    // against how many monomorphs it actually produced, and how many conformance edges exist. Read off the
+    // tables analyze() built, for `kama stats` (KR-60). Counting from the emitter is the whole point —
+    // `_classes` holds an entry per INSTANCE, so the second number exists nowhere in the source text.
+    struct ProgramStats {
+        size_t genericTemplates = 0;   // `_genericTypes`: a shape awaiting specialization
+        size_t genericInstances = 0;   // `_classes` entries that came from one (a monomorph)
+        size_t plainTypes       = 0;   // `_classes` entries that did not
+        size_t contracts        = 0;   // `_interfaces`
+        size_t conformances     = 0;   // `implements` edges, over instances and plain types alike
+    };
+    // `ownFiles` (unit paths as the emitter knows them) scopes it to a project; empty = the whole program.
+    ProgramStats programStats(const std::set<std::string>& ownFiles = {}) const;
+
     // ---- Query facade (T5) — read off the index built by analyze() ---------------------------------------
     // All framework-free (kama.query.h types); the driver / `kama lsp` server maps them to protocol JSON.
     // `uri` is a source path matching a unit passed to analyze() (== *unit->name).

@@ -118,6 +118,12 @@ public:
     std::set<std::string> topLevelNames;   // every top-level DECLARED name — not just the `export` list,
                                            // because the files of one MODULE reach each other's
                                            // unexported names through the scope they share.
+    // Per-line source classification, harvested by the LEXER (kama.l MARK_LINE) and moved here at
+    // reduction: bit 0 = a real token was produced on this line, bit 1 = a comment covered it. Indexed by
+    // 1-based line. A line with both is CODE (the usual convention); a line with neither is blank. This is
+    // what makes `kama stats` exact where a line counter guesses — a `//` inside a string never reaches
+    // the comment rule, and a multi-line string's every line is marked code.
+    std::vector<unsigned char> lineFlags;
     std::set<std::string> identTokens;     // every identifier-token spelling in this file, straight from
                                            // the lexer: a sound SUPERSET of the names it references.
                                            // Over-pulling costs pruning; under-pulling would emit calls

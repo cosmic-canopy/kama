@@ -1390,6 +1390,32 @@ SrcRange CEmitter::renameRangeAt(const std::string& uri, int line, int col) cons
 // Document outline: every user-unit def-site in this file, sorted by declaration order. Function-scoped
 // bindings are indexed (for go-to-def / references / rename) but deliberately NOT outlined — an outline
 // listing every local is noise, and no editor expects one.
+// The counts only the analysis has (KR-60, `kama stats`). Read straight off the tables, with no walk of
+// its own: `_genericTypes` holds one entry per TEMPLATE, `_classes` one per emitted type — and an instance
+// is marked `isGenericInst`, which is what separates "declared" from "produced". Conformance edges are
+// counted over every type, so a template's `implements` is counted once per monomorph that exists, which is
+// the honest number: that is how many vtables the program has.
+CEmitter::ProgramStats CEmitter::programStats(const std::set<std::string>& ownFiles) const
+{
+    // `ownFiles` empty means "the whole program"; otherwise only types DECLARED in those files count, which
+    // is what makes this a report about a project rather than about the prelude it inherited. An INSTANCE
+    // is attributed to the file that declared its template — `Optional<MyType>` is the prelude's `Optional`,
+    // and counting it as the project's would say the project has generics it never wrote.
+    auto mine = [&](const std::string& declFile) {
+        return ownFiles.empty() || ownFiles.count(declFile) != 0;
+    };
+    ProgramStats st;
+    for (const auto& kv : _genericTypes) if (mine(kv.second.declFile)) ++st.genericTemplates;
+    for (const auto& kv : _interfaces)   if (mine(kv.second.declFile)) ++st.contracts;
+    for (const auto& kv : _classes) {
+        if (!mine(kv.second.declFile)) continue;
+        if (kv.second.isGenericInst) ++st.genericInstances;
+        else                         ++st.plainTypes;
+        st.conformances += kv.second.interfaces.size();
+    }
+    return st;
+}
+
 std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
 {
     const CompilationUnit* unit = unitForUri(uri);

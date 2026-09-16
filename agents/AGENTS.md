@@ -14,6 +14,7 @@ Prefer it to searching the tree — it is one process, one file, no editor and n
 ```sh
 kama query <kama.json> <file> --search Widget # find a symbol BY NAME, across the package
 kama query <file> --symbols                   # outline of one file
+kama stats <kama.json>                        # what the whole project IS, in numbers (--json too)
 kama query <file> --complete L:C              # candidates + FULL signatures with parameter names
 kama query <file> --type L:C                  # what is this, exactly
 kama query <file> --def L:C                   # where is it declared

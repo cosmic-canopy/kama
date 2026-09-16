@@ -2267,40 +2267,29 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-- **`kama stats <op>` — the project report (KR-60), filed 2026-09-16.** Asked for as "kama diagnostics";
-  ⚠️ **that name is taken** — *diagnostics* means compiler errors and warnings everywhere in this repo, and
-  `kama query --diagnostics` is a shipped mode, so a second meaning would collide exactly where people look.
-  `kama stats` is the spelling (maintainer ruling), with the operand rule `build`/`check` already use: a
-  `kama.json` means the project, `.kama` files mean just those.
+- **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
+  "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
+  everywhere in this repo, and `kama query --diagnostics` is a shipped mode. `kama stats` it is. The record
+  is `kama --help` and [agents.md](agents.md) § *`kama stats`*; the guard is `tools/check-stats.sh`, whose
+  every line count is verified by hand against a fixture built out of the traps.
 
-  **Why the compiler rather than `cloc`/`tokei`:** the interesting numbers are ones a line counter cannot
-  produce. A lexer knows a `//` inside a string is not a comment; only the emitter knows how many
-  monomorphs a template actually produced; only the resolver knows the conformance edges; and only kama
-  knows which lines its own gates exclude. The report is **one analysis** — the same `check` runs
-  (maintainer ruling: full analysis, not parse-only) — so every number is what the compiler resolved.
+  ⚠️ **Two things the implementation measured, both of which had been asserted wrongly first.**
+  1. **A declaration's `endLine` is its SIGNATURE, not its end.** kama.ast.h says the span is "approximate
+     for multi-token nodes (bison lookahead skew)", and the cost is concrete: every function ranked as ONE
+     line. The body's `block` — and a type's last member — reduce after the closing brace and carry the
+     real end, so the span is the furthest of the three. Anything else reading these spans wants the same
+     treatment.
+  2. **A string's start line was not where the lexer thought it was.** `SAVE_TOKEN_FROM_BUFFER` marked the
+     range from `codeGenContext->line`, which the string-start rules never set — so it held the line of
+     some EARLIER token, and every blank line between was counted as code. The string openers now mark
+     their own line and each in-string newline marks its own, which is also what makes a blank line inside
+     a multi-line string correctly CODE.
 
-  **What v1 reports** (all four groups chosen by the maintainer, plus the three the request named):
-  - **Lines** — total / code / comment / blank, classified in the lexer. A line with code and a trailing
-    comment is CODE (the usual convention); the classification is exact by construction.
-  - **Declarations by kind** — types per `value`/`resource`/`contract`/`enum` (`generic-type` separately,
-    since the index already distinguishes it), functions per free / method / `ctor` / operator / `extern fn`
-    / `expose fn` / `fnptr`, enum variants, module `static`/`comptime` constants, fields.
-  - **Generics + unsafe + FFI** — templates vs **emitted instantiations**; `unsafe fn` count and how many
-    types hold an `UnsafePtr` (the audit question for a systems language); `extern` headers and functions
-    in, `expose fn` out — that last list *is* the project's ABI.
-  - **Gated-out code** — `@compileFor` and file-gate sites, how many configurations the cover needs
-    (the cover solver shipped at `0.9.357` answers this already), and how many lines sit in NO configuration this build.
-  - **Module + dependency shape** — per-module lines and declarations, `export` counts (the public surface,
-    so a module quietly becoming the API is visible), dependencies with versions, `csources`, `link`.
-  - **Top-N largest declarations** — by line span, from the AST. `ASTNode` already carries `endLine`, so
-    this needs no new position plumbing (⚠️ that span is the lexer position at reduction and is documented
-    as approximate for multi-token nodes — verify it on real declarations before trusting the ranking).
-
-  **What it needs that does not exist yet:** per-line classification in `kama.l` (two rules to instrument,
-  carried on `CompilationUnit` beside the other parse-time facts), one or two `CEmitter` accessors for the
-  instantiation and conformance counts, and a guard over a fixture project whose numbers are hand-verified.
-  Everything else is a walk of the units the driver already has. Human table by default, `--json` through
-  the existing envelope. Sized **M** — about a session.
+  Classification lives in the lexer (`kama.l` MARK_LINE -> `CompilationUnit::lineFlags`, one byte per line,
+  because this is the per-token path the language server walks on every keystroke). A type counts once
+  under its KIND with `generic` as a SUBSET — counting a `type value Box<T>` as both a value and a generic
+  made the kind column not add up. Named constructors are method nodes carrying `isCtor`, not
+  `ClassConstructorDeclarationNode`, and a `contract`'s members are methods like any other.
 
 - **tree-sitter accepts 78 of kama's 84 reserved words as a binding name; the compiler accepts 6 (the contextual ones).**
   Measured 2026-09-02 across the full keyword table, in both type positions:

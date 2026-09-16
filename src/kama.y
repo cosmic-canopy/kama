@@ -235,6 +235,14 @@ struct LexerInstanceData {
    /* Nesting depth of open generic `<…>` (type contexts only). The grammar bumps it on each
       generic `<` and drops it on the matching `>`; while >0 the lexer splits a `>>` into two `>`
       (so `DynamicArray<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
+   /* Per-line source classification, for `kama stats` (KR-60): bit 0 = a real TOKEN was produced on this
+      line, bit 1 = a comment covered it. Indexed by 1-based line, so [0] is unused. A VECTOR and not a
+      set because this is the per-token path the language server walks on every keystroke: one byte per
+      line, O(1) per mark, no allocation per token. Blank lines are the ones with neither bit, so they
+      need no marking at all — which is what makes "code, comment, blank" exact rather than a guess about
+      a `//` inside a string (the lexer is already inside the string state there and marks CODE). */
+   std::vector<unsigned char> lineFlags;
+
    int genericDepth = 0;
 
    /* Set true when a `${` interpolation hole is seen inside the current string literal, so its closing
@@ -517,7 +525,8 @@ compilation_unit
          a destination may still claim one, so their report is the emitter's (see makeUnsuffixedInt). */
       (SCANNER_CODEGENCONTEXT).reportPendingWideLits();
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
-                                                                yyget_extra(scanner)->identTokens.end()); }
+                                                                yyget_extra(scanner)->identTokens.end());
+      yyget_extra(scanner)->compilationUnit->lineFlags = std::move(yyget_extra(scanner)->lineFlags); }
   ;
 
 /* THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, a unit's FIRST line, before `import { … };`.

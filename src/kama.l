@@ -14,14 +14,16 @@
                       yylloc->last_line    = yyextra->codeGenContext->endLine; \
                       yylloc->last_column  = yyextra->codeGenContext->endCol;
 
-#define SAVE_TOKEN_FROM_BUFFER(l)  yyextra->next_column_number += l; \
+#define SAVE_TOKEN_FROM_BUFFER(l)  MARK_CODE; \
+                                   yyextra->next_column_number += l; \
                                    yyextra->codeGenContext->endLine = yyextra->next_line_number; \
                                    yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
                                    STAMP_YYLLOC \
                                    yylval->string = yyextra->workString; \
                                    yyextra->workString = NULL;
 
-#define SAVE_TOKEN(src, leng, l)  yyextra->codeGenContext->line = yyextra->next_line_number; \
+#define SAVE_TOKEN(src, leng, l)  MARK_CODE; \
+                                  yyextra->codeGenContext->line = yyextra->next_line_number; \
                                   yyextra->codeGenContext->col = yyextra->next_column_number; \
                                   yyextra->next_column_number += l; \
                                   yyextra->codeGenContext->endLine = yyextra->next_line_number; \
@@ -29,7 +31,8 @@
                                   STAMP_YYLLOC \
                                   yylval->string = std::make_shared<std::string>(src, leng);
 
-#define RETURN_TOKEN(t, l)   yyextra->codeGenContext->line = yyextra->next_line_number; \
+#define RETURN_TOKEN(t, l)   MARK_CODE; \
+                             yyextra->codeGenContext->line = yyextra->next_line_number; \
                              yyextra->codeGenContext->col = yyextra->next_column_number; \
                              yyextra->next_column_number += l; \
                              yyextra->codeGenContext->endLine = yyextra->next_line_number; \
@@ -58,6 +61,14 @@
  * in the module being pruned, and the requirement is program-wide, so no per-import closure can see it.
  * The provider is marked unprunable instead; see harvestUnitFacts in kama.ast.h. */
 #define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng)
+
+/* Mark line L with `bit` (1 = code, 2 = comment) — see LexerInstanceData::lineFlags. */
+#define MARK_LINE(L, bit)  do { int _l = (L); \
+                                if (_l > 0) { \
+                                    if ((int)yyextra->lineFlags.size() <= _l) yyextra->lineFlags.resize(_l + 64, 0); \
+                                    yyextra->lineFlags[_l] |= (bit); \
+                                } } while (0)
+#define MARK_CODE          MARK_LINE(yyextra->next_line_number, 1)
 
 /* kama reserves every C keyword (SPEC.md § Modules), so a spelling that would lex as an
  * identifier but IS one is rejected here, at the single point where a spelling becomes a name.
@@ -180,11 +191,12 @@ identifier                  ({letter_char}|"_"){ident_char}*
 {white_space_2}                                { yyextra->next_column_number += 2; }
 {new_line}                                     { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
 
-{single_line_comment}                          { ; /* ignore */ }
+{single_line_comment}                          { MARK_LINE(yyextra->next_line_number, 2); /* ignored, but counted */ }
 
-{multi_line_comment_start}                     { yy_push_state(IN_COMMENT, yyscanner); yyextra->next_column_number += 2; }
+{multi_line_comment_start}                     { MARK_LINE(yyextra->next_line_number, 2); yy_push_state(IN_COMMENT, yyscanner); yyextra->next_column_number += 2; }
 <IN_COMMENT>.                                  { ++(yyextra->next_column_number); }
-<IN_COMMENT>{new_line}                         { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
+<IN_COMMENT>{new_line}                         { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE;
+                                                 MARK_LINE(yyextra->next_line_number, 2); }
 <IN_COMMENT>{multi_line_comment_end}           { yy_pop_state(yyscanner); yyextra->next_column_number += 2; }
 <IN_COMMENT><<EOF>>                            { 
                                                  error("unexpected end of file lexing multi-line comment", yyscanner);
@@ -192,6 +204,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                }
 
 {verbatim_string_start}                        { 
+                                                 MARK_CODE;   /* the OPENING line; each further line marks its own */
                                                  yy_push_state(IN_VERBATIM_STRING, yyscanner); 
                                                  yyextra->codeGenContext->col = yyextra->next_column_number;
                                                  yyextra->next_column_number += 2; 
@@ -200,6 +213,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_VERBATIM_STRING>{new_line}                 { 
                                                  ++(yyextra->next_line_number); 
                                                  yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; 
+                                                 MARK_CODE;   /* inside a string: content, not a blank line */
                                                  yyextra->workString->append("\n");
                                                }
 <IN_VERBATIM_STRING>{single_verbatim_char}     { 
@@ -243,6 +257,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 {multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); if (cp == 0xFFFFFFFFu) { error("invalid multibyte char literal (overlong, surrogate, or out of range)", yyscanner); } else { std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; } }
 
 {regular_string_start}                         {
+                                                 MARK_CODE;   /* see the verbatim opener */
                                                  yy_push_state(IN_REGULAR_STRING, yyscanner);
                                                  yyextra->codeGenContext->col = yyextra->next_column_number;
                                                  yyextra->next_column_number += 1;
@@ -273,6 +288,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_REGULAR_STRING>{new_line}                  {
                                                  ++(yyextra->next_line_number);
                                                  yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE;
+                                                 MARK_CODE;   /* inside a string: content, not a blank line */
                                                  yyextra->workString->append(yytext);
                                                }
 <IN_REGULAR_STRING>{single_string_char}        {
