@@ -1812,19 +1812,64 @@ bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;   // C: `bd.usage 
 
 ### Time (`std::time`) ✅
 
-`import { std::time::Duration, std::time::Instant, std::time::Timestamp, std::time::monotonicNow,
-std::time::unixNow, std::time::sleep };` — **two clocks, and choosing between them is the only thing
-the module asks of a caller.**
+`import { std::time::Duration, std::time::Instant, std::time::Timestamp, std::time::Date,
+std::time::Weekday, std::time::TimeError, std::time::monotonicNow, std::time::unixNow, std::time::sleep };` —
+**two clocks, and choosing between them is the only thing the module asks of a caller**, plus the calendar
+the wall clock reads in.
 
 | | type | read with | for |
 |---|---|---|---|
 | **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. |
-| **wall** | `Timestamp` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1678..2262). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
+| **wall** | `Timestamp` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1677-09-21..2262-04-11). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
 
 `Duration` is the signed span both produce (`fromMillis`/`asSecsF`/… and `+ - <`); all three implement
-`Equatable`/`Comparable`, so a stamp is a `SortedMap` key without a comparator. There is deliberately no
-calendar — no year/month/day, formatting or zones; Rust's `SystemTime` is the same bare epoch offset and
-`chrono` is a package, and a half-calendar is worse than none.
+`Equatable`/`Comparable`/`Hashable`/`Sendable`, so a stamp is a `SortedMap` key without a comparator and
+crosses an isolate.
+
+**The calendar is the Postgres split: an instant and a day.** <!-- test: time_calendar -->
+
+| kama | Postgres | is |
+|---|---|---|
+| `Timestamp` | `TIMESTAMPTZ` | an **instant**. It holds no zone and no offset; it reads its fields in UTC. |
+| `Date` | `DATE` | a **day** with no time: a birthday, a due date. Years 0000–9999, the range RFC 3339 text can write. |
+
+```kama
+Date due = match (Date.make(year: 2026, month: 9ui8, day: 16ui8)) { case Ok(value: d): d; case Err(error: e): { return 1; } };
+Timestamp t = unixNow();
+Date today = t.date();                       // plus hour() minute() second() nanosecond() weekday(), in UTC
+int64 left = due.daysSince(earlier: today);
+string text = "${t}";                        // 2026-09-16T14:03:07.123Z
+```
+
+- **One timestamp type.** There is no field-holding `DateTime` beside `Timestamp`: two types for one
+  instant is what Rust has in `SystemTime` and chrono's `DateTime<Utc>`, and it makes every program pick
+  which to store. `Date.at(hour:, minute:, second:, nanosecond:)` goes from a day to its instant.
+- **No local time, and no zoneless wall time** (Postgres `TIMESTAMP`, Java `LocalDateTime`). A wall time
+  names no moment until a zone pins it, and zones are a database — a package, as `chrono-tz` is, and so
+  is locale-aware formatting.
+- **`Date` is always a real day.** Its fields are private and `Date.make` is the one door: a month outside
+  1–12, a day past the month's length (Feb 29 only in a leap year) or a year outside 0000–9999 is
+  `Err(TimeError::OutOfRange)`, and so is an `addDays` that leaves the range. `Date::isLeapYear` and
+  `Date::daysInMonth` answer the rules directly; `Weekday` runs Monday–Sunday, ISO order.
+- **Proleptic Gregorian, POSIX seconds.** Every day is 86,400 seconds, so there is no leap second: second 60
+  is `OutOfRange`. A stamp before 1970 reads the day it falls on — one nanosecond before the epoch is
+  1969-12-31T23:59:59.999999999Z.
+
+**Text is RFC 3339, the strict profile of ISO 8601.** `"${t}"` prints `YYYY-MM-DDTHH:MM:SS`, a fraction only <!-- test: time_rfc3339 -->
+when there is one (3, 6 or 9 digits, the fewest that are exact, so every stamp parses back to itself), then
+`Z`; a `Date` prints `YYYY-MM-DD`. `Timestamp.parse(text:)` and `Date.parse(text:)` return
+`Result<_, TimeError>`, the `Uuid.parse` shape (`Parseable` is a primitive-only contract):
+
+- the zone is `Z` or `±HH:MM`, and the offset is **applied and dropped** — `2026-09-16T16:03:07+02:00` parses
+  to the instant that prints `2026-09-16T14:03:07Z`, which is what Postgres does with TIMESTAMPTZ input;
+- `T` and `Z` may be lowercase (RFC 3339 §5.6), and the fraction has 1–9 digits;
+- nothing else parses: no space for `T`, no week or ordinal dates, no compact `20260916T140307Z`, no
+  surrounding whitespace, nothing trailing. A malformed byte is `TimeError::InvalidCharacter(at:)` at its
+  offset (the text's length when it ends early); a field that does not exist, an offset past 23:59, or an
+  instant outside int64 nanoseconds is `TimeError::OutOfRange`.
+
+Both types serialize as that text on every backend, as a `Uuid` does, and text that does not parse is <!-- test: time_serde -->
+`DeError::Malformed`.
 
 `sleep(d: Duration)` blocks the calling thread for **at least** `d`: POSIX resumes `nanosleep` across a
 signal (without which any program that also uses `std::process` wakes early when a child exits), Windows

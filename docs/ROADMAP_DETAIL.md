@@ -222,11 +222,6 @@ near-native and toolchain-free, but **not** as fast as native kama today (LLVM's
 keep `C→emcc -O3` ahead on heavy numeric loops), so the **release tier remains the max-performance path for both
 native and web**. Don't conflate "can emit WASM directly" with "the fast web path."
 
-- **`std::time` calendar — scheduled, unsized.** `time.kama` says "deliberately no calendar … a half-calendar is
-  worse than none", which means WHOLE, not never: a general-purpose stdlib needs civil dates. Scope: civil-from-days
-  (Hinnant's algorithms), ISO-8601 format/parse of a `SystemTime`, leap-year and weekday arithmetic; no zone
-  database (a package, as `chrono-tz` is), no locale.
-
 **Fixture hygiene — the retired-syntax `tests/xfail` sweep, DONE 2026-09-08 (tests only).** The row said 23;
 the class was **25**, measured on `0.9.253` by running all 758 xfails and reading their errors rather than
 grepping for `public Name(`: 23 carried the class-named constructor (two of them without `public`, which the
