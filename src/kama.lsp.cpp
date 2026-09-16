@@ -459,6 +459,11 @@ struct Server {
     // parse cache holds units `pruneInactiveDecls` rewrote IN PLACE, and is keyed by the flag set they were
     // pruned under, so the cache no longer forces this — the pin is a policy, see the limit below.)
     //
+    // The one document that does NOT get the pinned configuration is one the pin GATES OUT: a file
+    // excluded by its own `file @compileFor(...)` is analyzed under a configuration that admits it and its
+    // diagnostics say so (lspAnalyze / installConfigAdmitting, KR-54). Without that it had no import
+    // closure at all — correct code, three false squiggles, measured.
+    //
     // KNOWN LIMIT, documented rather than papered over: in a monorepo whose packages declare DIFFERENT
     // flag universes, packages other than the pinned one get the pinned one's configuration — their
     // `@compileFor`-gated declarations may be dropped, and their own flag names may read as undeclared

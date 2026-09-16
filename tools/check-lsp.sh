@@ -1134,6 +1134,37 @@ else
     echo "  FAIL: a manifest change did not re-announce — saw ${cfgbcn:-0} kama/buildConfig notification(s)" >&2; fail=1
 fi
 
+# J. A file the editor's configuration GATES OUT is still a file you are editing (KR-54). It is not part of
+#    this build, so loadProgramUnits skips it and the open buffer used to fall back to being its own whole
+#    program — with no import closure, no module siblings, and therefore a squiggle under every name it
+#    legitimately uses. Measured before the fix on the CORRECT file below: three false errors, where the
+#    identical non-gated file had none. The server now analyzes such a buffer under a configuration that
+#    ADMITS it (the covering check's solver) and says which one, because that is not the configuration the
+#    status bar reports.
+GATE="$tmp/gated"
+mkdir -p "$GATE/src"
+printf '{"name":"probe","version":"0.1.0","kind":"executable","entry":"src/app.kama","modules":{".":{"visibility":"internal"}}}' > "$GATE/kama.json"
+printf 'import { Helper };\nfn int32 main() { Helper h = Helper.make(n: 1); return h.n; }\n' > "$GATE/src/app.kama"
+printf 'export { Helper };\ntype value Helper { public int32 n; public ctor make(int32 n) { this.n = n; } }\n' > "$GATE/src/shared.kama"
+# Correct, and excluded from a host build by its own gate.
+printf 'file @compileFor(ARCH_WASM32);\nimport { Helper };\nexport { platformValue };\nfn int32 platformValue() { Helper h = Helper.make(n: 3); return h.n; }\n' > "$GATE/src/impl_wasm.kama"
+GATEOUT=$(cfgsession "$tmp/cfgJ" "$GATE" "$GATE/src/impl_wasm.kama")
+cfgexpect "$GATEOUT" '"diagnostics":[]' "a correct file this configuration gates out publishes NO squiggles"
+cfgreject "$GATEOUT" 'no such type'      "...and in particular not the false 'unknown type' its lost closure used to produce"
+
+# ...while a REAL error in that same file is still reported, tagged with the configuration that judged it.
+printf 'file @compileFor(ARCH_WASM32);\nimport { Helper };\nexport { platformValue };\nfn int32 platformValue() { Helper h = Helper.make(n: 3); return h.nope; }\n' > "$GATE/src/impl_wasm.kama"
+GATEBAD=$(cfgsession "$tmp/cfgJ2" "$GATE" "$GATE/src/impl_wasm.kama")
+cfgexpect "$GATEBAD" 'has no field `nope`'  "a real error in a gated-out file is still reported"
+cfgexpect "$GATEBAD" '[--target WASM]'      "...and names the configuration that judged it"
+
+# ...and the pinned configuration is RESTORED: the active half of the pair is analyzed as it always was,
+# with no tag, in the same process that just switched configurations for its sibling.
+printf 'file @compileFor(!ARCH_WASM32);\nimport { Helper };\nexport { platformValue };\nfn int32 platformValue() { Helper h = Helper.make(n: 3); return h.nope; }\n' > "$GATE/src/impl_host.kama"
+GATEHOST=$(cfgsession "$tmp/cfgJ3" "$GATE" "$GATE/src/impl_host.kama")
+cfgexpect "$GATEHOST" 'has no field `nope`' "the ACTIVE half of the pair still reports its own error"
+cfgreject "$GATEHOST" '[--target'           "...untagged, because it was judged by the pinned configuration"
+
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2
     printf '%s\n' "$out" | sed 's/^/      /' >&2

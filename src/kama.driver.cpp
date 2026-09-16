@@ -4642,6 +4642,11 @@ struct BuildConfigResult {
 
 // Resolve `req` into the eight file-scope configuration globals. Returns false + `err` (no printing) on
 // a malformed manifest, an unknown target, a bad --select or an undeclared flag.
+// The request the installed configuration came from. Kept so a CONFIGURATION SWITCH can be spelled as a
+// deviation from it wherever one is needed — the covering check's, and `kama lsp`'s for an open file this
+// configuration gates out — without every caller threading its own copy of what `main` parsed.
+static BuildConfigRequest g_buildConfigRequest;
+
 static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult& out, std::string& err)
 {
     // RESET first. Four of these accumulate (`insert` / `operator[]`), which never mattered while `main`
@@ -4660,6 +4665,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_target  = TargetSpec();
     g_release = false;
 
+    g_buildConfigRequest = req;
     bool        release = req.release;
     std::string selTarget = req.target;
 
@@ -5176,6 +5182,9 @@ static bool installCoverConfig(const BuildConfigRequest& base, bool baseNoHeap, 
     BuildConfigResult res;
     std::string err;
     if (!resolveBuildConfig(req, res, err)) return false;
+    // The RECORD keeps naming `base`, not this deviation: a cover configuration is transient, and what
+    // `restoreBuildConfig` must put back is the one the CLI parsed or the editor pinned.
+    g_buildConfigRequest = base;
     g_outputShared = g_activeFlags.count("SHARED") != 0;
     return true;
 }
@@ -5278,6 +5287,40 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
         chosen.push_back(best);
     }
     return chosen;
+}
+
+// A configuration that ADMITS `fileGate`, installed; "" when the pinned one already admits it or nothing
+// known can. For `kama lsp`: a file the editor's configuration gates out is not part of that build, so it
+// used to be analyzed with no import closure at all — loadProgramUnits skips a gated-out unit, the single
+// open buffer falls back to itself, and every name it imports or shares with its module reads as missing.
+// Measured on a CORRECT wasm-only file in a project that passes `kama check`: three false errors, where
+// the identical non-gated file has none. Analyzing it where it IS active is the same answer the covering
+// check gives, from the same solver — and the parse cache being keyed by configuration is what lets one
+// process hold both.
+//
+// The caller restores the pinned configuration with `restoreBuildConfig()`.
+static std::string installConfigAdmitting(const SharedAttributeList& fileGate)
+{
+    if (!fileGate) return std::string();
+    std::vector<GateLit> lits = gateLiterals(fileGate);
+    if (lits.empty() || gateActiveIn(lits, g_activeFlags)) return std::string();
+    const BuildConfigRequest base = g_buildConfigRequest;
+    const bool baseNoHeap = g_noHeap;
+    std::vector<CoverConfig> cover = coverGates({ lits }, base, baseNoHeap);
+    if (cover.empty()) { installCoverConfig(base, baseNoHeap, CoverConfig()); return std::string(); }
+    if (!installCoverConfig(base, baseNoHeap, cover[0])) {
+        installCoverConfig(base, baseNoHeap, CoverConfig());
+        return std::string();
+    }
+    return cover[0].label();
+}
+
+// Put back the configuration `g_buildConfigRequest` names — the one the CLI parsed or `kama lsp` pinned.
+static void restoreBuildConfig()
+{
+    BuildConfigResult res;
+    std::string err;
+    resolveBuildConfig(g_buildConfigRequest, res, err);
 }
 
 // One resolved package in `kama.lock`. The lock is what the build's view is materialized from — the
@@ -8364,6 +8407,11 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     // every `import`ed type reads as "not exported" — a cascade of false diagnostics. Falls back to
     // single-file if the file isn't on disk yet (a fresh unsaved buffer) or a module can't be resolved:
     // best-effort diagnostics then, but hover/def/outline for the open file still work.
+    // A file THIS configuration gates out is still a file you are editing, so analyze it under one that
+    // admits it (KR-54) — otherwise its closure never loads and correct code fills with false squiggles.
+    // Restored before returning, so every other document keeps the pinned configuration.
+    const std::string gatedUnder = installConfigAdmitting(pr.unit->fileGate);
+
     std::vector<SharedCompilationUnit> units;
     std::vector<std::string> paths;
     // M6 A3: manifest findings (an import this package uses but never declared) come back as structured
@@ -8415,6 +8463,12 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     // diagnostics always publish — reporting many errors instead of one is the point of M5.3.
     if (pr.droppedTopLevelDecl == 0)
         for (const auto& d : emitter->diagnostics()) if (d.file == path) diags.push_back(d);
+    if (!gatedUnder.empty()) {
+        // Say which configuration judged this file — it is not the one the status bar reports, and a
+        // squiggle that does not say so reads as a claim about the build the editor is configured for.
+        for (auto& d : diags) d.message += "  [" + gatedUnder + "]";
+        restoreBuildConfig();
+    }
     auto h = std::make_shared<LspIndex>();
     h->idx = emitter;
     h->path = path;
