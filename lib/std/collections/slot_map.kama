@@ -23,6 +23,9 @@ type value Handle implements Sendable, Serializable, Deserializable<This> {
         w.field(name: "index", id: 0ui32);      w.writeI64(v: cast<int64>(this.index));
         w.field(name: "generation", id: 1ui32); w.writeU32(v: this.generation);
         w.endObject();
+        // The boundary every other `serialize` has — the generated bodies' and the prelude's alike: the
+        // writes are STICKY, so a value the format cannot represent shows up here and nowhere earlier.
+        if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); }
         return Result::Ok(value: Unit::Unit);
     }
     public ctor Result<Handle, Owned<Error>> deserialize(Deserializer r) {
@@ -31,6 +34,12 @@ type value Handle implements Sendable, Serializable, Deserializable<This> {
         bool __f2 = r.moreFields(); FieldKey __n2 = r.field(); uint32 gn = r.readU32();
         bool __f3 = r.moreFields();
         r.endObject();
+        // ⚠️ ASK THE READER, like every other `deserialize` does. A failed read is STICKY and returns a zero,
+        // so without this the reads above silently produce `Handle.of(index: 0, generation: 0)` and hand it
+        // back as `Ok` — malformed input decoded as a plausible live slot, in the one type whose whole job is
+        // to reject a reference that is no longer valid. Being hand-written is what let it drift: a generated
+        // body gets this boundary from the emitter (KR-51).
+        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
         return Result::Ok(value: Handle.of(index: cast<isize>(ix), generation: gn));
     }
 }

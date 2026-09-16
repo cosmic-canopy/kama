@@ -1,0 +1,35 @@
+// KR-51: `Handle`'s deserialize is HAND-WRITTEN (an `isize` index has no wire format, so no body can be
+// generated for it), and it was the one `Deserializable` in the tree that never asked the reader whether its
+// reads worked: it returned `Ok` built from whatever the failed reads left behind — zeros — so malformed input
+// decoded to a VALID-LOOKING handle. A handle is a generation-checked reference, so the damage is precisely
+// what the type exists to prevent: `index` and `generation` are the fields a `SlotMap` trusts to reject a
+// stale reference, and a zeroed pair is a plausible live slot.
+//
+// Every other `Deserializable` checks (prelude: read, then `if (r.failed())` -> `Err`), and a generated body
+// does too. This fixture is the one that proves the hand-written one does. The good half must keep
+// round-tripping: a handle on the wire is what makes `SlotMap`'s serde promise usable (tests/ser_graph_slotmap.kama).
+import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+         std::collections::Handle };
+fn int32 main() {
+    // good input -> Ok, and the fields survive the round trip
+    Handle h = Handle.of(index: 7, generation: 3ui32);
+    Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: h);
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
+    Result<Handle, Owned<Error>> good = deserializeJsonBuffer::<Handle>(src: give j);
+    int32 okv = match (good) {
+        case Ok(value: g): cast<int32>(g.index) + cast<int32>(g.generation);   // 7 + 3
+        case Err(error: e): 0 - 1;
+    };
+
+    // malformed input (a letter where the index should be) -> Err, not a zeroed handle
+    string bad = "{\"index\":!,\"generation\":3}";
+    Result<Handle, Owned<Error>> fail = deserializeJsonBuffer::<Handle>(src: give bad);
+    int32 errv = match (fail) {
+        case Ok(value: g): 0 - 2;                        // decoded garbage as a handle — the defect
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: de): 32;                    // a concrete deserialize error surfaced
+            case None: 0 - 3;
+        };
+    };
+    return okv + errv;   // 10 + 32 = 42
+}

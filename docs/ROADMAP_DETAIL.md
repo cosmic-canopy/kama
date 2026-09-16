@@ -1481,17 +1481,6 @@ drop emitted. See SPEC § *Uninitialized storage*.)*
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-### `Handle` decodes malformed input as `Ok` (KR-51) — found 2026-09-12
-
-`Handle.deserialize` (`lib/std/collections/slot_map.kama:28`) reads its two fields and returns `Ok` without
-asking the reader whether a read failed, so `deserializeJsonBuffer::<Handle>` on a malformed document hands
-back a garbage handle as success — and the JSON/KBIN entry points do not consult the sticky flag after an
-`Ok`, so nothing downstream catches it. The fix is the one every other `deserialize` already makes: check
-`failed()` and return `Err(errorCode())`. **Not a boundary-level safety net** that converts an `Ok` from a
-failed reader: a type that fails returns `Err`, and nothing papers over one that does not. It waited for
-reach-based `--no-heap`, which shipped at `0.9.348`: before it, the new error box would have failed every
-`--no-heap` build that merely imports `SlotMap`.
-
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on

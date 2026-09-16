@@ -56,13 +56,12 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
    on the rebased HEAD before building on it.
-2. **KR-51** (`Handle.deserialize` checks `failed()`), which the flag no longer blocks: probe
-   `tests/noheap_flag_unreached_dispatch.d` still builds after adding the error box.
-3. Then KR-48. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
+2. **KR-48** — next. Its inventory below predates `@heap`, and the funnel will change which externs carry it: after
    KR-48 the prelude's `kama_alloc`/`kama_free` are the heap symbols.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
-~~the recording gap~~ (shipped `0.9.353`) → **KR-51** `Handle` → **KR-48** `kama_alloc`/`kama_free` → **KR-49**
+~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
+(shipped `0.9.355`) → **KR-48** `kama_alloc`/`kama_free` → **KR-49**
 replaceable global allocator → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
 land right after KR-47 "on the same walk", in view of tier 1 of the devirtualization ladder (KR-23); reading the
 emitter retired that plan, for the reasons at the top of this doc. One half of the premise survives and is worth
@@ -120,7 +119,9 @@ sized `kama_free` (§2), and a per-call error allocator (§4).
 4. **Errors are allocator-aware.** Boxing an error into `Owned<Error>` draws from an allocator like every
    other box, instead of calling `malloc` directly.
 5. **No workaround in serde's error path.** A `deserialize` that fails returns `Err`; it never smuggles a
-   failure through the reader's sticky flag with a placeholder `Ok` to dodge an allocation.
+   failure through the reader's sticky flag with a placeholder `Ok` to dodge an allocation. ✅ `Handle` was the
+   one type doing exactly that (KR-51, shipped `0.9.355`): it asks `r.failed()` now, and `serialize` asks
+   `w.failed()`, the boundary every generated body already had.
 
 ## What is true today (measured by reading, `0.9.318`; behaviour re-verified at `0.9.345`)
 
@@ -350,7 +351,7 @@ after §1, because under today's eager rule its new box would fail any `--no-hea
 
 ## Order
 
-1. §1 reach-based `--no-heap` (KR-47), then the `Handle` fix (KR-51).
+1. ~~§1 reach-based `--no-heap` (KR-47), then the `Handle` fix~~ — both shipped (`0.9.348`, `0.9.355`).
 2. §2 `kama_alloc`/`kama_free` as the only primitives, and the guard (KR-48; no behaviour change; mixed pairs gone).
 3. §3 replacing the default implementation (KR-49; + `Shared.adopt`, `SortedMap` root).
 4. §4 allocator-aware error boxing; decide the per-call question (KR-50).
