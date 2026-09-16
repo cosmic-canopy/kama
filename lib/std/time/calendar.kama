@@ -42,7 +42,8 @@ type enum Weekday implements Equatable<This> {
 // A calendar day with no time and no zone: a birthday, a due date, a Postgres DATE. Years 0000 through
 // 9999 — exactly what the RFC 3339 text form can write, so every `Date` formats and parses back. The fields
 // are private so that a `Date` is always a real day; `make` is the one door in, and it checks.
-type value Date implements Equatable<This>, Comparable<This>, Hashable, Formattable, Sendable {
+type value Date implements Equatable<This>, Comparable<This>, Hashable, Formattable,
+                           Serializable, Deserializable<This>, Sendable {
     int32 y;
     uint8 m;
     uint8 d;
@@ -155,6 +156,26 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
         f.writeU64Radix(v: cast<uint64>(this.m), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
         f.writeStr(s: "-");
         f.writeU64Radix(v: cast<uint64>(this.d), radix: 10, width: 8, upper: 0, prefix: 0, pad: 2, flags: 1);
+    }
+
+    // On the wire it is its RFC 3339 text, on every backend: a date is serialized to meet a database or an
+    // HTTP API, and a second, binary, form would make the bytes a program writes depend on its backend.
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        Formatter f = Formatter.make();
+        this.format(f: ref f);
+        string text = f.finish();
+        w.writeString(v: ref text);
+        if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Date, Owned<Error>> deserialize(Deserializer r) {
+        string text = r.readString();
+        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        return match (Date.parse(text: text)) {
+            case Ok(value: v): Result::Ok(value: v);
+            case Err(error: pe): { r.failWith(e: DeError::Malformed); return Result::Err(error: DeError::Malformed); }
+        };
     }
 
     // Exactly `YYYY-MM-DD` — no time, no whitespace, nothing after it. A malformed byte is

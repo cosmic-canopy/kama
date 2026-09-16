@@ -1,0 +1,60 @@
+// std::time — a `Timestamp` or `Date` field on the wire is its RFC 3339 text, on every backend: JSON (what a
+// database row or an HTTP body carries) and the positional KBIN round trip (no names, no delimiters). An
+// offset in the incoming text is applied, so the value read back is the instant. Text that is not a
+// timestamp is `DeError::Malformed`. Six flags sum to 63.
+import { std::time::Timestamp, std::time::Date,
+         std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::collections::DynamicArray };
+
+@generate(Serializable, Deserializable)
+type value Booking {
+    @field public Timestamp at;
+    @field public Date checkIn;
+    public ctor make(Timestamp at, Date checkIn) { this.at = at; this.checkIn = checkIn; }
+}
+
+fn bool malformed(Result<Booking, Owned<Error>> res) {
+    return match (res) {
+        case Ok(value: x): false;
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: de): de == DeError::Malformed;
+            case None: false;
+        };
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Timestamp at = Timestamp.fromUnixNanos(n: 1789567387123000000i64);
+    Booking o = Booking.make(at: at, checkIn: at.date());
+
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: o);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 101; } };
+    if (j == "{\"at\":\"2026-09-16T14:03:07.123Z\",\"checkIn\":\"2026-09-16\"}") { r = r + 1; }
+
+    Result<Booking, Owned<Error>> jb = deserializeJsonBuffer::<Booking>(src: give j);
+    Booking back = match (jb) { case Ok(value: x): x; case Err(error: e): { return 102; } };
+    if (back.at == at && back.checkIn == at.date()) { r = r + 2; }
+
+    // What another system wrote, with its own offset: read as the instant.
+    string foreign = "{\"at\":\"2026-09-16T16:03:07.123+02:00\",\"checkIn\":\"2026-09-16\"}";
+    Result<Booking, Owned<Error>> fb = deserializeJsonBuffer::<Booking>(src: give foreign);
+    bool same = match (fb) { case Ok(value: x): x.at == at; case Err(error: e): false; };
+    if (same) { r = r + 4; }
+
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: o);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 103; } };
+    Result<Booking, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Booking>(src: give bytes);
+    Booking pback = match (pb) { case Ok(value: x): x; case Err(error: e): { return 104; } };
+    if (pback.at == at && pback.checkIn == at.date()) { r = r + 8; }
+
+    string badStamp = "{\"at\":\"2026-09-16 14:03:07Z\",\"checkIn\":\"2026-09-16\"}";
+    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badStamp))) { r = r + 16; }
+    string badDate = "{\"at\":\"2026-09-16T14:03:07Z\",\"checkIn\":\"2026-02-30\"}";
+    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badDate))) { r = r + 32; }
+
+    return r;   // 63
+}

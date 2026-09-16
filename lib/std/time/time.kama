@@ -91,7 +91,8 @@ type value Instant implements Equatable<This>, Comparable<This>, Hashable, Senda
 // DateTime for the same instant (Rust has both `SystemTime` and chrono's `DateTime<Utc>`, and a program must
 // pick which to store). Local time needs a zone database, which is a package, as `chrono-tz` is.
 @generate(of)
-type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Formattable, Sendable {
+type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Formattable,
+                                Serializable, Deserializable<This>, Sendable {
     public int64 nanos;
     // `Date.at` builds a stamp through the same range check `parse` does.
     friend Date[fromParts];
@@ -175,6 +176,26 @@ type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, For
             else                             { f.writeU64Radix(v: cast<uint64>(ns), radix: 10, width: 32, upper: 0, prefix: 0, pad: 9, flags: 1); }
         }
         f.writeStr(s: "Z");
+    }
+
+    // On the wire it is its RFC 3339 text, on every backend: a stamp is serialized to meet a database or an
+    // HTTP API, and a second, binary, form would make the bytes a program writes depend on its backend.
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        Formatter f = Formatter.make();
+        this.format(f: ref f);
+        string text = f.finish();
+        w.writeString(v: ref text);
+        if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public ctor Result<Timestamp, Owned<Error>> deserialize(Deserializer r) {
+        string text = r.readString();
+        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        return match (Timestamp.parse(text: text)) {
+            case Ok(value: v): Result::Ok(value: v);
+            case Err(error: pe): { r.failWith(e: DeError::Malformed); return Result::Err(error: DeError::Malformed); }
+        };
     }
 
     // The RFC 3339 `date-time`: `YYYY-MM-DDTHH:MM:SS`, an optional `.` and 1-9 fraction digits, then `Z` or
