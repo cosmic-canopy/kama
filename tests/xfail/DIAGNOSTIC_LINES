@@ -52,6 +52,7 @@ bind_match_narrow	bind_match_narrow.kama:4
 bind_match_operand	bind_match_operand.kama:3
 bindable_bind_not_local	bindable_bind_not_local.kama:8
 bindable_new	bindable_new.kama:8
+bindable_stateful_allocator	bindable_stateful_allocator.kama:10
 binder_shadow_for_local	binder_shadow_for_local.kama:10
 binder_shadow_foreach_field	binder_shadow_foreach_field.kama:14
 binder_shadow_foreach_local	binder_shadow_foreach_local.kama:16
@@ -958,6 +959,8 @@ simd_shuffle_oob	simd_shuffle_oob.kama:5
 simd_shuffle_runtime	simd_shuffle_runtime.kama:9
 sizeof_clong_not_foldable	sizeof_clong_not_foldable.kama:2
 sizeof_const_generic_unfoldable	sizeof_const_generic_unfoldable.kama:13
+sizeof_label	sizeof_label.kama:2
+sizeof_ptr_not_pointer	sizeof_ptr_not_pointer.kama:4
 sizeof_usize_not_foldable	sizeof_usize_not_foldable.kama:9
 slot_assignment_fill	slot_assignment_fill.kama:8
 slot_conditional_fill	slot_conditional_fill.kama:10

@@ -1,0 +1,1 @@
+the pointer form is `sizeof(ptr: p)`

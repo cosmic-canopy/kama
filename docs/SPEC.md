@@ -2660,6 +2660,19 @@ be written **in the language** rather than baked into the compiler. Three builti
   its destructor explicitly would run it *again* at scope exit. That is why `drop` takes a pointer and not a
   place: the double drop is **unspellable** rather than diagnosed. The old `drop(value: place)` form allowed <!-- xfail: drop_value_form -->
   it, and shipped that double free in six stdlib sites until `0.9.290`.
+- **`sizeof(ptr: p)`** — the byte size of the object an `UnsafePtr<T>` points at: the pointer form of <!-- test: alloc_size_truth -->
+  `sizeof`, labelled like `drop(ptr:)`. It is what the triad's last leg must be given: `deallocate(pointer,
+  bytes)` promises the size the block was **allocated** with, and a base pointer can hold a derived object,
+  so `sizeof(T)` would hand back a smaller block than was given out, and a pool that trusts `bytes` would be corrupted.
+  For a class with virtual members it reads the most-derived size through the object's vtable; for every
+  other `T` it is exactly `sizeof(T)`. Read it **before** `drop(ptr:)`, which ends the object's life:
+  ```kama
+  usize bytes = sizeof(ptr: this.p);
+  drop(ptr: this.p);
+  this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes);
+  ```
+  That is `Owned`/`Shared`'s destructor. It takes a pointer and nothing else, and never folds, since the
+  answer is the object's, not the type's: `sizeof(ptr: x)` on a value is an error, as is any label but `ptr`. <!-- xfail: sizeof_ptr_not_pointer, sizeof_label -->
 - **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`, or as an
   `UnsafeConstPtr<T>` when the place roots in a `const` binding (a const local or parameter, `this` inside
   a `const fn`). Taking an address is safe (either pointer is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
@@ -2864,8 +2877,13 @@ BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) 
 int32 r = c(a: 9, b: 2);                 // -> Scaler::apply(boundObj, 9, 2) = (9-2)*3 = 21
 ```
 
-An `Owned` `obj:` **moves in** (the bindable becomes the sole owner, drops it via the element dtor); a
-`Shared` `obj:` is **retained** (refcount; the object lives while any owner holds it). A bare `fnptr` / free
+An `Owned` `obj:` **moves in** (the bindable becomes the sole owner); a `Shared` `obj:` is **retained**
+(refcount; the object lives while any owner holds it). Either way the object is released **by the box it
+came from**: the bindable rebuilds that `Owned`/`Shared` and runs its destructor, so the object's own drop, its
+allocator and its size are decided in one place. That rebuild uses the allocator's `default` value, so the
+box must draw from a stateless allocator (`GlobalAllocator`, or any `Allocator` with a `default ctor`) — a box <!-- test: alloc_size_truth -->
+in an arena (`BumpAllocator`) is refused, since a default one would point at no arena. The `obj:` is a box <!-- xfail: bindable_stateful_allocator -->
+over a **concrete** type, because the method is named `T::method`. A bare `fnptr` / free
 function **promotes** in with a null object — so a `BindableFunctionPtr<Sig>` parameter accepts both free and
 bound callables, while `fnptr` stays the zero-cost free-only form. It is **move-only** (it may uniquely own
 its object): returning one from a factory transfers ownership; the captured object's destructor runs

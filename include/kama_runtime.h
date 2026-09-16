@@ -273,12 +273,14 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
 //   ctrl     — refcount block, set only when the object was bound from a Shared<T>
 //   fn       — the callable, stored type-erased; invoked as ret(void*,P…) when
 //              obj!=NULL (a bound method, object passed first) else ret(P…) (free)
-//   elemdtor — the bound object's destructor (NULL if trivially destructible/free)
-// Move-only (it may uniquely own the object). Drop releases per ownership kind — and the drop, which calls
-// the bound object's destructor through `elemdtor`, is emitted by the compiler (see the Owned<I> note).
+//   release  — gives the object back to the handle it was bound from: rebuilds that `Owned`/`Shared` from
+//              (obj, ctrl) and runs its destructor, so the drop, the refcount, the allocator and the block
+//              size are the owner's (NULL for a free function)
+// Move-only (it may uniquely own the object). The drop, which calls through `release`, is emitted by the
+// compiler (see the Owned<I> note).
 #define KAMA_BINDABLE_TYPE(NAME)                                              \
 typedef struct NAME { void* obj; kama_ctrl* ctrl;                            \
-                      void (*fn)(void); void (*elemdtor)(void*); } NAME;
+                      void (*fn)(void); void (*release)(void*, kama_ctrl*); } NAME;
 
 // Raw byte write to a standard fd with NO <stdio.h> — the one place that spells the platform's
 // write syscall. Everything below (bounds trap, panic, assert, print/log floor) goes through here.

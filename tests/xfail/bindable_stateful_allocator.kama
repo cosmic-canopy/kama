@@ -1,0 +1,12 @@
+// A bindable releases its object by rebuilding the box it was bound from, with the allocator's DEFAULT value.
+// An arena's `BumpAllocator` is stateful — a zero one points nowhere — so binding a box drawn from it is refused
+// rather than released through a garbage handle (it used to be `free`d, whatever allocator made it).
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+fnptr int32 Get(int32 d);
+type final resource Probe { int32 id; public ctor make(int32 id) { this.id = id; } fn int32 read(int32 d) { return this.id + d; } }
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 256);
+    Owned<Probe, BumpAllocator> p = new(allocator: arena.handle()) Probe.make(id: 1);
+    BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
+    return g(d: 41);
+}

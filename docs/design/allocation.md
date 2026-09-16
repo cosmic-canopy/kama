@@ -1,7 +1,7 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
-**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`, and
-§5 (`Handle`, KR-51) at `0.9.355`. §2–§4 not started — **KR-48 is next**. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
+§5 (`Handle`, KR-51) at `0.9.355`, and **sizes that tell the truth** (§2's prerequisite) at `0.9.361`. §2–§4 not started — **KR-48 is next**. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -130,7 +130,7 @@ Still open, to be decided and written down — in this order, because each one n
    precedent: a `BumpAllocator` over owned storage is legal under the flag (`check-noheap.sh` 6c/6d).
 2. ~~declaration vs weak symbol for the replacement (§3)~~ — **decided: a DECLARATION**, because the flag can
    read its body and check it, where a weak link-time symbol could only be trusted. Recorded in §3.
-3. **A sized `kama_free(p, n)`** (§2) — belongs to KR-48, which is next.
+3. ~~A sized `kama_free(p, n)`~~ — **decided: SIZED** (2026-09-16), recorded in §2.
 4. **A per-call error allocator** (§4) — likely UNNECESSARY once 1–2 land: with every allocation funnelled and
    the global allocator replaceable, errors already follow the replacement, and the per-call form is the
    source-breaking option (it changes `Serializable`/`Deserializable`). Decide it last, on evidence.
@@ -326,9 +326,33 @@ that down (`tools/check-alloc-funnel.sh`: no `malloc`/`calloc`/`realloc`/`free`/
 implementation, across `src/` emitted strings, `include/`, `lib/` and `prelude/`; foreign-owned releases
 such as `freeaddrinfo` are not those names and pass).
 
-Open: whether `kama_free` is **sized** (`kama_free(p, n)`). `Allocator.deallocate` takes `bytes`, and a
-size-class allocator (TLSF, a slab) wants it; most runtime frees know it already (a string's `cap`,
-`sizeof(kama_ctrl)`, a buffer's tracked capacity), and the triage must confirm the rest before it is decided.
+**DECIDED (2026-09-16): `kama_free(p, n)` is SIZED — because for kama the size is CORRECTNESS, not an
+optimization.** A `malloc`-shaped allocator keeps a header and only saves a lookup, but kama's `Allocator`
+contract already PROMISES `deallocate(pointer, bytes)`, and a size-class or header-free MCU pool is entitled
+to trust it (Rust's `GlobalAlloc::dealloc(ptr, layout)`, Zig's `free(slice)`). With §3's decision the global
+allocator IS an `Allocator`, so an unsized funnel would break that promise at the seam every allocation passes.
+
+**Its prerequisite shipped first, at `0.9.361`: the sizes were already lying.** Measured by a header-checking
+allocator (`tests/alloc_size_truth.kama`): `Owned<Base, A>`/`Shared<Base, A>` holding a derived object gave
+`deallocate` `sizeof(Base)`, as did the contract upcast's `objsize`; and a `BindableFunctionPtr` bound from a
+custom-allocator box released it with libc `free` (a crash). The fix is by construction — the size lives with
+the dynamic type: a `__size` slot in every class vtable, **`sizeof(ptr: p)`** (SPEC) for library code, and a
+bindable that releases through the box it was bound from (refused for a stateful allocator).
+
+**What KR-48 must still carry a size through** (both sweeps at `0.9.359`; every other free already knows it):
+- **contract handles on the default allocator** (`Owned<I>`/`Shared<I>`, so every `Owned<Error>`) — no size on
+  the handle; add `__size` to every CONTRACT vtbl (`<C>__as_<I>`, `intrinsicContractVtbl`, enum vtbls, graph
+  targets) and free with `vtbl->__size`. The allocator variant's `objsize` field then becomes redundant.
+- **`kama_os.h`**: `kama__wpath`/`kama__wide`/`kama__wfree` results (size is local, never returned);
+  `kama__win_cmdline` and `proc_spawn`'s `wcmd`/`wenv`/`wcwd` (`wenv` has embedded NULs — keep the size, do not
+  recompute); argv/envp vectors (slot count not stored); `kama_capture2` buffers crossing into
+  `process.kama:292` (only `len` leaves; return `cap`); the `kama_args_init` failure path; `strdup`/`_strdup`
+  (hidden allocators — replace with a funnel helper).
+- `kama_realloc` has NO callers in the tree; every raw `realloc` knows its old size.
+- Probe first: the sweep reports `KAMA_OWNED_FUNCS`/`KAMA_SHARED_FUNCS`/`KAMA_WEAK_FUNCS` unreachable — delete
+  rather than convert if so.
+- **Proof for the whole corpus:** under the san leg, make the default `kama_alloc` store the size in a header and
+  `kama_free` panic on a mismatch, so a green `./dev test san` means every free passed the right size.
 
 ### 3. Replacing the default implementation
 

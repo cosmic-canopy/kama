@@ -1,0 +1,6 @@
+// `sizeof(ptr: p)` measures the object a pointer points at; the size of a TYPE is `sizeof(T)`. A value is refused.
+fn int32 main() {
+    int32 x = 4;
+    usize n = sizeof(ptr: x);
+    return cast<int32>(n);
+}

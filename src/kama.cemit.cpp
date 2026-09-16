@@ -1403,6 +1403,8 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     if (auto* bc = dynamic_cast<BitcastNode*>(n)) return classifierCType(bc->type);
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return classifierCType(optionalTypeNode(ad->type));
     if (dynamic_cast<SizeofNode*>(n)) return "size_t";   // `sizeof`/`alignof` are a `usize`
+    if (auto* inv = dynamic_cast<InvocationNode*>(n))    // `sizeof(ptr: p)`, the intrinsic call form
+        if (inv->identifier && inv->identifier->value && *inv->identifier->value == "sizeof") return "size_t";
 
     // --- operators ----------------------------------------------------------------------------------
     // A comparison or a logical connective yields `bool` WHATEVER its operands are, so this arm is
@@ -14868,21 +14870,18 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         }
         else if (info.kind == CollKind::Bindable) {
             // Fully type-erased — the signature drives only the invoke, not the layout. The drop is
-            // written out (not a macro) for the reason emitIfaceHandleFuncs gives: it calls the bound
-            // object's destructor through the `elemdtor` pointer, which the call graph must see.
+            // written out (not a macro) for the reason emitIfaceHandleFuncs gives: it calls through the
+            // `release` pointer, which the call graph must see. `release` rebuilds the SOURCE handle the
+            // object was bound from and runs that handle's own destructor (emitBindableBind), so the
+            // refcount, the virtual drop, the allocator and the block's size are each decided in exactly
+            // one place — the owner — instead of being re-derived here, which is how this used to `free`
+            // an arena block and hand a base-sized drop to a derived object.
             if (typesOnly) *_out << "KAMA_BINDABLE_TYPE(" << info.cName << ")\n";
             else {
                 const std::string& N = info.cName;
                 *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
-                indent(1); *_out << "if (self->ctrl) {                       /* Shared: refcount */\n";
-                indent(2); *_out << "if (--self->ctrl->strong == 0) {\n";
-                indent(3); *_out << "if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj);\n";
-                indent(3); *_out << "if (self->ctrl->weak == 0) kama_free(self->ctrl);\n";
-                indent(2); *_out << "}\n";
-                indent(1); *_out << "} else if (self->obj) {               /* Owned: sole owner */\n";
-                indent(2); *_out << "if (self->elemdtor) self->elemdtor(self->obj); kama_free(self->obj);\n";
-                indent(1); *_out << "}                                      /* free fn: nothing to drop */\n";
-                indent(1); *_out << "self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->elemdtor = NULL;\n";
+                indent(1); *_out << "if (self->release) self->release(self->obj, self->ctrl);   /* free fn: NULL, nothing to drop */\n";
+                indent(1); *_out << "self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->release = NULL;\n";
                 *_out << "}\n";
             }
         }
@@ -15551,7 +15550,16 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     std::string dstAlloc = _collections.count(dstTy) ? _collections[dstTy].allocType : "";
     if (!dstAlloc.empty() && dstAlloc != "GlobalAllocator") {
         indent(depth); *_out << nm << ".alloc = (" << srcE << ").alloc;\n";
-        indent(depth); *_out << nm << ".objsize = sizeof(" << libT << ");\n";
+        // The pointee's OWN size: a `Owned<Base, A>` source may hold a derived object (`__vsize`).
+        indent(depth); *_out << nm << ".objsize = "
+#if KAMA_INHERITANCE
+                             << ((_classes.count(libT) && _classes[libT].hasVtable)
+                                     ? libT + "__vsize((" + libT + "*)" + nm + ".obj)"
+                                     : "sizeof(" + libT + ")")
+#else
+                             << "sizeof(" << libT << ")"
+#endif
+                             << ";\n";
     }
     // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
     // the destination handle now owns the ref (it shares the same ctrl without an increment).
@@ -15639,7 +15647,7 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind,
 
 // After `give` relocates an intrinsic collection's struct, the SOURCE must read as empty so its scope-drop
 // is a no-op. The reset is the struct's own shape, and there are two: a `string`/buffer is `{data, len}`,
-// a `BindableFunctionPtr` is `{obj, ctrl, fn, elemdtor}` (kama_runtime.h, KAMA_BINDABLE_TYPE). Every
+// a `BindableFunctionPtr` is `{obj, ctrl, fn, release}` (kama_runtime.h, KAMA_BINDABLE_TYPE). Every
 // hand-off site spelled the first shape inline, so `give`-ing a named bindable into a field or a by-value
 // parameter emitted `.data = NULL` against a struct that has no `data` and died in clang — a bindable
 // could be built and called, and never stored anywhere. One helper, five sites, dispatched on the class.
@@ -15647,7 +15655,7 @@ std::string CEmitter::moveNullStmt(const std::string& cls, const std::string& ex
 {
     if (isBindableClass(cls))
         return "(" + expr + ").obj = NULL; (" + expr + ").ctrl = NULL; (" + expr + ").fn = NULL; ("
-             + expr + ").elemdtor = NULL;";
+             + expr + ").release = NULL;";
     return "(" + expr + ").data = NULL; (" + expr + ").len = 0;";
 }
 
@@ -22734,18 +22742,16 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
         unsupported("BindableFunctionPtr needs obj: <Owned/Shared> and method: <Type::method>", ln); return;
     }
 
-    // The object: an owning smart-pointer lvalue — a library `Owned`/`Shared` (heap-owner over a
-    // concrete class) or a polymorphic IFACE owner (still intrinsic). A `Weak` doesn't keep the
-    // object alive, so it can't be bound. `retain` = shared ownership (bump the count); else MOVE.
+    // The object: a library `Owned`/`Shared` over a CONCRETE type — the method is `Type::method` on that
+    // type, so a contract handle (`Owned<I>`) has no method to name. A `Weak` doesn't keep the object alive,
+    // so it can't be bound. `retain` = shared ownership (bump the count); else MOVE.
     std::string objCls = exprClass(objArg);
-    std::string libT   = heapOwnerTarget(objCls);               // library heap-owner pointee ("" otherwise)
-    bool isLibOwner    = !libT.empty();
-    bool isIntrinOwner = isSmartPtrClass(objCls) && smartKind(objCls) != CollKind::Weak;
-    if (!isLibOwner && !isIntrinOwner) {
-        unsupported("BindableFunctionPtr obj: must be an Owned<T> or Shared<T>", ln); return;
+    std::string T      = heapOwnerTarget(objCls);               // library heap-owner pointee ("" otherwise)
+    if (T.empty()) {
+        unsupported("BindableFunctionPtr obj: must be an Owned<T> or Shared<T> over a concrete type (the "
+                    "method is `T::method`)", ln); return;
     }
-    bool retain = isLibOwner ? isCopyable(objCls) : (smartKind(objCls) == CollKind::Shared);
-    std::string T = isLibOwner ? libT : _classes[objCls].collElemClass;
+    bool retain = isCopyable(objCls);
     std::string objE = emitExpression(objArg);
 
     // The method: a `Type::method` unbound reference.
@@ -22777,24 +22783,54 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
                      + "`, which is `@noheap` — declare `" + cls + "::" + *mid->value + "` `@noheap` too, "
                        "so a no-heap caller calling through the slot still gets the guarantee").c_str(), ln);
 
-    bool destr = _classes.count(T) && _classes[T].destructible;
-    // The receiver pointer: a library owner exposes it via `deref()` (T*); an intrinsic owner's
-    // struct carries it in `.ptr`. The refcount block: library `.c`, intrinsic `.ctrl` (both a
-    // `kama_ctrl`-compatible layout — the library `Ctrl` uses `usize` counts for this).
-    if (isLibOwner) { indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(objCls, true) << "(&(" << objE << "));\n"; }
-    else            { indent(depth); *_out << nm << ".obj = (void*)(" << objE << ").ptr;\n"; }
-    if (retain) {
-        indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << objE << ")." << (isLibOwner ? "c" : "ctrl") << ";\n";
+    // The release: give the object back to the handle it came from. A thunk rebuilds that library owner from
+    // (obj, ctrl) and runs ITS destructor, so the bindable never re-derives how the object is dropped (a
+    // virtual drop for a base holding a derived), which allocator the block goes back to, or its size. The
+    // rebuilt handle's `alloc` is the allocator's DEFAULT value — so a bind needs one: a stateful allocator
+    // (an arena's `BumpAllocator`) cannot be recreated from nothing, and would otherwise be released through
+    // a zero handle. The same `when [A: default]` rule that gates `Owned.adopt`.
+    std::string releaseFn;
+    {
+        std::string allocInit;
+        for (auto& f : _classes[objCls].fields) {
+            if (f.name != "alloc") continue;
+            std::string act = fieldCType(objCls, f);
+            if (!isDefaultFillable(act)) {
+                unsupported(("BindableFunctionPtr obj: `" + demangleForDisplay(objCls) + "` draws from `"
+                             + demangleForDisplay(act) + "`, which has no `default` ctor — a bindable releases "
+                               "its object through a default allocator value, so bind a box whose allocator "
+                               "is stateless (`GlobalAllocator`, or a type with a `default ctor`)").c_str(), ln);
+                return;
+            }
+            auto ait = _classes.find(act);
+            if (ait != _classes.end())
+                for (auto& kv : ait->second.methods)
+                    if (kv.second.isDefaultCtor) { allocInit = "    h.alloc = " + kv.second.cName + "();\n"; break; }
+        }
+        releaseFn = "__kama_bind_release_" + objCls;
+        if (_bindReleaseThunks.insert(objCls).second) {
+            std::ostringstream th;
+            th << "static void " << releaseFn << "(void* obj, kama_ctrl* ctrl) {\n"
+               << "    " << objCls << " h = {0};\n"
+               << "    h.p = (" << T << "*)obj;\n";
+            if (retain) th << "    h.c = (void*)ctrl;\n";
+            else        th << "    (void)ctrl;\n";
+            th << allocInit
+               << "    " << objCls << "__dtor(&h);\n"
+               << "}\n";
+            _fileScopeHelpers.push_back(th.str());
+        }
     }
+    // The receiver pointer comes from `deref()` (T*); the refcount block is the library `.c`, whose `Ctrl`
+    // layout is `kama_ctrl`-compatible (`usize` counts for this).
+    indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(objCls, true) << "(&(" << objE << "));\n";
+    if (retain) { indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << objE << ").c;\n"; }
     indent(depth); *_out << nm << ".fn = (void (*)(void))" << mi->cName << ";\n";
-    indent(depth); *_out << nm << ".elemdtor = "
-                         << (destr ? ("(void (*)(void*))" + T + "__dtor") : "0") << ";\n";
-    // Ownership transfer: a shared owner RETAINS (bump strong); a unique owner MOVES — for a library
-    // Owned, consume the source at COMPILE time so its dtor is skipped (the bindable now owns and frees
-    // the pointee); an intrinsic Owned nulls its `.ptr` at runtime (its dtor guards a null pointer).
+    indent(depth); *_out << nm << ".release = " << releaseFn << ";\n";
+    // Ownership transfer: a shared owner RETAINS (bump strong); a unique owner MOVES — consume the source at
+    // COMPILE time so its dtor is skipped (the bindable now owns the pointee and releases it).
     if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->strong++;\n"; }
-    else if (isLibOwner) { std::string mv = moveOnlySource(objArg, ln); if (!mv.empty()) markMoved(mv); }
-    else { indent(depth); *_out << "(" << objE << ").ptr = NULL;\n"; }
+    else { std::string mv = moveOnlySource(objArg, ln); if (!mv.empty()) markMoved(mv); }
 }
 
 // `BindableFunctionPtr.bind(…)` — the dot-on-type constructor call, or null. The receiver is the bare type
@@ -22830,7 +22866,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
                 indent(depth); *_out << nm << " = " << src << ";\n";
                 indent(depth);
                 *_out << "(" << src << ").obj = NULL; (" << src << ").ctrl = NULL; ("
-                      << src << ").fn = NULL; (" << src << ").elemdtor = NULL;\n";
+                      << src << ").fn = NULL; (" << src << ").release = NULL;\n";
                 return;
             }
             // A free function -> promote (obj = NULL; no RAII).
@@ -22845,7 +22881,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
                                 init->line);
                 indent(depth);
                 *_out << nm << ".obj = NULL; " << nm << ".ctrl = NULL; " << nm << ".fn = (void (*)(void))"
-                      << fit->second.cName << "; " << nm << ".elemdtor = NULL;\n";
+                      << fit->second.cName << "; " << nm << ".release = NULL;\n";
                 return;
             }
             unsupported("a BindableFunctionPtr binds via `BindableFunctionPtr.bind(obj:, method:)`, "
@@ -22969,7 +23005,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             std::string e = emitExpression(v);
             indent(depth);
             *_out << "(" << e << ").obj = NULL; (" << e << ").ctrl = NULL; ("
-                  << e << ").fn = NULL; (" << e << ").elemdtor = NULL;\n";
+                  << e << ").fn = NULL; (" << e << ").release = NULL;\n";
         }
     }
 }
@@ -24385,6 +24421,31 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         std::string condText = unparseExpr(cond);
         return "((" + emitExpression(cond) + ") ? (void)0 : kama_assert_fail(\""
              + cEscapeStringBody(condText) + "\", " + emitExpression(msg) + ", " + fileLit + ", " + lineLit + "))";
+    }
+    // `sizeof(ptr: p)` — the byte size of the object `p` points at, which is what `Allocator.deallocate` must be
+    // given back. For a class with a vtable that is the MOST-DERIVED size, read through the vptr: a base pointer
+    // can hold a derived object, and `sizeof(T)` would hand the allocator a smaller block than it gave out. For
+    // anything else the static type is the whole story. Only the grammar builds this call, and always with one
+    // argument. It must be read BEFORE `drop(ptr:)`, which ends the object's life.
+    if (name == "sizeof" && bareCall && call->args && call->args->size() == 1) {
+        ArgumentNode* a0 = (*call->args)[0].get();
+        const std::string label = (a0->name && a0->name->value) ? *a0->name->value : "";
+        if (label != "ptr") {
+            unsupported(("`sizeof(" + label + ": …)` — the pointer form is `sizeof(ptr: p)`, the size of the "
+                         "object `p` points at; the size of a type is `sizeof(T)`").c_str(), call->line);
+            return "0";
+        }
+        std::string pc = rawPointeeCType(a0->expression);
+        if (pc.empty()) {
+            unsupported("`sizeof(ptr:)` takes an `UnsafePtr<T>` — it measures the POINTEE. "
+                        "The size of a type is `sizeof(T)`", call->line);
+            return "0";
+        }
+#if KAMA_INHERITANCE
+        if (_classes.count(pc) && _classes[pc].hasVtable)
+            return pc + "__vsize((" + pc + "*)(" + emitExpression(a0->expression) + "))";
+#endif
+        return "sizeof(" + pc + ")";
     }
     // `drop(place)` — run the destructor of a place's value (for a library owner over `UnsafePtr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
@@ -25868,6 +25929,9 @@ void CEmitter::emitVtableType(ClassInfo& ci)
     // owning a `Derived`) dispatches here, so the MOST-DERIVED dtor runs (no slicing). NULL
     // for a non-destructible impl — a base whose derived owns nothing.
     indent(1); *_out << "void (*__dtor)(void*);\n";
+    // The most-derived object's byte size, so a base handle returns its block to an allocator with the
+    // size that block was ALLOCATED with — `Allocator.deallocate` promises `bytes`. Read by `__vsize`.
+    indent(1); *_out << "size_t __size;\n";
     *_out << "};\n\n";
 }
 #else
@@ -25898,6 +25962,7 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     // this class's own destructor drives polymorphic drop (`__vdrop`); NULL if it frees nothing.
     if (ci.destructible)
         *_out << "    .__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
+    *_out << "    .__size = sizeof(" << ci.name << "),\n";
     *_out << "};\n\n";
     // `__vdrop` used to be defined here, in the OWNING MODULE's translation unit, while its `static inline`
     // prototype went into the shared header — so any OTHER unit that dropped a base handle got a static
@@ -26281,6 +26346,12 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
         indent(1); *_out << "if (__vt && __vt->__dtor) "
                          << (provenDrop ? "KAMA_NOHEAP_SLOT(__vt->__dtor)" : "__vt->__dtor") << "(self);\n";
+        *_out << "}\n";
+        // `sizeof(ptr: p)` on a base pointer: the size of the object it really holds (the vptr names the
+        // most-derived vtable). A vptr is never null on a constructed object; the fallback covers a zeroed one.
+        *_out << "static inline size_t " << ci.name << "__vsize(" << ci.name << "* self) {\n";
+        indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
+        indent(1); *_out << "return __vt ? __vt->__size : sizeof(" << ci.name << ");\n";
         *_out << "}\n";
     }
 #endif
@@ -33786,6 +33857,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();
+    _bindReleaseThunks.clear();   // a thunk is `static`: the next module's TU needs its own definition
     *_out << moduleBody.str();
 }
 

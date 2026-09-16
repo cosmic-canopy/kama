@@ -1202,6 +1202,7 @@ private:
     // (one trampoline per distinct entry fn, even if spawned from several sites).
     std::vector<std::string> _fileScopeHelpers;
     std::set<std::string>    _isolateTrampolines;   // entry cNames whose trampoline is already emitted
+    std::set<std::string>    _bindReleaseThunks;    // owner C types whose bindable release thunk THIS module has (cleared per module)
     std::map<std::string, std::string> _exposedNames;   // exported C symbol -> "module::name (file:line)" — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only

@@ -40,6 +40,14 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Dere
     // the same block; the host must return it to `adoptIn` with that allocator, or free it as `A` would.
     public unsafe fn UnsafePtr<T> release() { UnsafePtr<T> raw = this.p; this.p = null; return raw; }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
-    // zero-initialized/moved-from handle).
-    unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(ptr: this.p); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
+    // zero-initialized/moved-from handle). The size is the POINTEE's (`sizeof(ptr:)`, read before the drop
+    // ends its life), not `sizeof(T)`: an `Owned<Base>` may hold a derived object, and `deallocate` must be
+    // given the size the block was allocated with.
+    unsafe ~Owned() {
+        if (cast<usize>(this.p) != 0) {
+            usize bytes = sizeof(ptr: this.p);
+            drop(ptr: this.p);
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes);
+        }
+    }
 }
