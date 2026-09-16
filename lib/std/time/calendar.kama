@@ -1,0 +1,155 @@
+import { Timestamp };
+export { Date, Weekday, TimeError };
+
+// ---------------------------------------------------------------------------------------------------
+// The calendar. Proleptic Gregorian, UTC, no zone database and no locale — the Postgres split, where
+// `Timestamp` is TIMESTAMPTZ (an instant) and `Date` is DATE (a day with no time). A wall-clock time with no
+// zone (Postgres TIMESTAMP) is not offered: it names no moment until a zone pins it, and zones are a package.
+// The day-number conversions are Howard Hinnant's `days_from_civil` / `civil_from_days`, which are exact
+// over the whole range with integer arithmetic alone.
+// ---------------------------------------------------------------------------------------------------
+
+// Days from 1970-01-01 to the ends of `Date`'s range.
+comptime int64 MIN_DAYS = -719528i64;       // 0000-01-01
+comptime int64 MAX_DAYS = 2932896i64;       // 9999-12-31
+
+type enum TimeError implements Error {
+    InvalidCharacter(isize at), OutOfRange;
+
+    public const fn string message() {
+        return match (this) {
+            case InvalidCharacter(at: a): "invalid date or time character at byte ${a}";
+            case OutOfRange:              "date or time field out of range";
+        };
+    }
+}
+
+// ISO 8601 order: the week starts on Monday.
+type enum Weekday implements Equatable<This> {
+    Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday;
+
+    // 1 for Monday through 7 for Sunday, as ISO 8601 numbers them.
+    public const fn uint8 isoNumber() {
+        return match (this) {
+            case Monday: 1ui8; case Tuesday: 2ui8; case Wednesday: 3ui8; case Thursday: 4ui8;
+            case Friday: 5ui8; case Saturday: 6ui8; case Sunday: 7ui8;
+        };
+    }
+
+    public const fn bool equals(const ref Weekday other) { return this.isoNumber() == other.isoNumber(); }
+}
+
+// A calendar day with no time and no zone: a birthday, a due date, a Postgres DATE. Years 0000 through
+// 9999 — exactly what the RFC 3339 text form can write, so every `Date` formats and parses back. The fields
+// are private so that a `Date` is always a real day; `make` is the one door in, and it checks.
+type value Date implements Equatable<This>, Comparable<This>, Hashable, Sendable {
+    int32 y;
+    uint8 m;
+    uint8 d;
+    friend Timestamp[fromDays];
+
+    ctor fields(int32 y, uint8 m, uint8 d) {
+        this.y = y;
+        this.m = m;
+        this.d = d;
+    }
+
+    // A day from its parts: month 1-12, day 1 through the month's length. Anything else is `OutOfRange`.
+    public ctor Result<Date, TimeError> make(int32 year, uint8 month, uint8 day) {
+        if (year < 0 || year > 9999 || month < 1ui8 || month > 12ui8) { return Result::Err(error: TimeError::OutOfRange); }
+        if (day < 1ui8 || day > Date::daysInMonth(year: year, month: month)) { return Result::Err(error: TimeError::OutOfRange); }
+        return Result::Ok(value: Date.fields(y: year, m: month, d: day));
+    }
+
+    // Hinnant's `civil_from_days`. `days` counts from 1970-01-01 and is inside [MIN_DAYS, MAX_DAYS] at every call.
+    ctor fromDays(int64 days) {
+        int64 z = days + 719468i64;
+        int64 era = (z >= 0i64 ? z : z - 146096i64) / 146097i64;
+        int64 doe = z - era * 146097i64;                                           // [0, 146096]
+        int64 yoe = (doe - doe / 1460i64 + doe / 36524i64 - doe / 146096i64) / 365i64;  // [0, 399]
+        int64 doy = doe - (365i64 * yoe + yoe / 4i64 - yoe / 100i64);              // [0, 365]
+        int64 mp = (5i64 * doy + 2i64) / 153i64;                                   // [0, 11], March first
+        int64 dd = doy - (153i64 * mp + 2i64) / 5i64 + 1i64;
+        int64 mm = mp < 10i64 ? mp + 3i64 : mp - 9i64;
+        int64 yy = yoe + era * 400i64 + (mm <= 2i64 ? 1i64 : 0i64);
+        return Date.fields(y: truncate<int32>(yy), m: truncate<uint8>(mm), d: truncate<uint8>(dd));
+    }
+
+    public const fn int32 year()  { return this.y; }
+    public const fn uint8 month() { return this.m; }
+    public const fn uint8 day()   { return this.d; }
+
+    public static fn bool isLeapYear(int32 year) {
+        return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    }
+
+    public static fn uint8 daysInMonth(int32 year, uint8 month) {
+        if (month == 2ui8) { return Date::isLeapYear(year: year) ? 29ui8 : 28ui8; }
+        if (month == 4ui8 || month == 6ui8 || month == 9ui8 || month == 11ui8) { return 30ui8; }
+        return 31ui8;
+    }
+
+    // Hinnant's `days_from_civil`: days from 1970-01-01, negative before it.
+    const fn int64 days() {
+        int64 yy = cast<int64>(this.y) - (this.m <= 2ui8 ? 1i64 : 0i64);
+        int64 era = (yy >= 0i64 ? yy : yy - 399i64) / 400i64;
+        int64 yoe = yy - era * 400i64;                                             // [0, 399]
+        int64 mm = cast<int64>(this.m);
+        int64 doy = (153i64 * (mm > 2i64 ? mm - 3i64 : mm + 9i64) + 2i64) / 5i64 + cast<int64>(this.d) - 1i64;
+        int64 doe = yoe * 365i64 + yoe / 4i64 - yoe / 100i64 + doy;                // [0, 146096]
+        return era * 146097i64 + doe - 719468i64;
+    }
+
+    // 1970-01-01 was a Thursday.
+    public const fn Weekday weekday() {
+        int64 k = ((this.days() + 3i64) % 7i64 + 7i64) % 7i64;                     // 0 = Monday
+        if (k == 0i64) { return Weekday::Monday; }
+        if (k == 1i64) { return Weekday::Tuesday; }
+        if (k == 2i64) { return Weekday::Wednesday; }
+        if (k == 3i64) { return Weekday::Thursday; }
+        if (k == 4i64) { return Weekday::Friday; }
+        if (k == 5i64) { return Weekday::Saturday; }
+        return Weekday::Sunday;
+    }
+
+    // The day `n` days later (earlier when negative). Leaving years 0000-9999 is `OutOfRange`.
+    public const fn Result<Date, TimeError> addDays(int64 n) {
+        int64 now = this.days();
+        if ((n > 0i64 && n > MAX_DAYS - now) || (n < 0i64 && n < MIN_DAYS - now)) {
+            return Result::Err(error: TimeError::OutOfRange);
+        }
+        return Result::Ok(value: Date.fromDays(days: now + n));
+    }
+
+    // The number of days from `earlier` to this day; negative when `earlier` is later.
+    public const fn int64 daysSince(const ref Date earlier) { return this.days() - earlier.days(); }
+
+    // The instant this day's clock reads the given UTC time. Hour 0-23, minute and second 0-59 (no leap
+    // second: POSIX time has none), nanosecond below one second; a day outside `Timestamp`'s
+    // 1677-09-21..2262-04-11 window is `OutOfRange` too.
+    public const fn Result<Timestamp, TimeError> at(uint8 hour, uint8 minute, uint8 second, uint32 nanosecond) {
+        if (hour > 23ui8 || minute > 59ui8 || second > 59ui8 || nanosecond > 999999999ui32) {
+            return Result::Err(error: TimeError::OutOfRange);
+        }
+        int64 secs = this.days() * 86400i64 + cast<int64>(hour) * 3600i64 + cast<int64>(minute) * 60i64 + cast<int64>(second);
+        int64 ns = cast<int64>(nanosecond);
+        // The stamp is secs * 1e9 + ns, which must land inside int64 without the multiply overflowing first.
+        if (secs >= 0i64) {
+            if (secs > 9223372036i64 || (secs == 9223372036i64 && ns > 854775807i64)) { return Result::Err(error: TimeError::OutOfRange); }
+            return Result::Ok(value: Timestamp.of(nanos: secs * 1000000000i64 + ns));
+        }
+        if (secs < -9223372037i64 || (secs == -9223372037i64 && ns < 145224192i64)) { return Result::Err(error: TimeError::OutOfRange); }
+        return Result::Ok(value: Timestamp.of(nanos: (secs + 1i64) * 1000000000i64 + (ns - 1000000000i64)));
+    }
+
+    public const fn bool equals(const ref Date other) {
+        return this.y == other.y && this.m == other.m && this.d == other.d;
+    }
+    public const fn Ordering compareTo(const ref Date other) {
+        if (this.y != other.y) { return this.y < other.y ? Ordering::Less : Ordering::Greater; }
+        if (this.m != other.m) { return this.m < other.m ? Ordering::Less : Ordering::Greater; }
+        if (this.d != other.d) { return this.d < other.d ? Ordering::Less : Ordering::Greater; }
+        return Ordering::Equal;
+    }
+    public const fn uint64 hash() { return cast<uint64>(this.days()); }
+}

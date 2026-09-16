@@ -36,7 +36,9 @@ units_of() { "$KAMA" check "$1" 2>&1 | sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p'; 
 # A RANGE, deliberately not an equality. The derived closure is smaller than the hand-prune the design
 # brief measured (it reached 17; this reaches 10), and it will move again as the stdlib changes. The
 # ceiling catches pruning silently regressing to a no-op; the floor catches a resolver that drops
-# everything and only appears to work because the fixture needs little.
+# everything and only appears to work because the fixture needs little. Raised 17 -> 20 at `0.9.362`, when
+# httpd sat exactly at 17 and `std::time`'s calendar became a second file that `Timestamp.date()` reaches
+# (39 hatched, so the headroom is nowhere near a no-op).
 HTTPD="$ROOT/examples/httpd/httpd.kama"
 if [ ! -f "$HTTPD" ]; then
     bad "examples/httpd/httpd.kama is gone — pick another multi-module program"
@@ -47,8 +49,8 @@ else
         bad "httpd did not analyze cleanly (pruned='${n_pruned:-}' hatched='${n_full:-}')"
     elif [ "$n_pruned" -ge "$n_full" ]; then
         bad "httpd: $n_pruned units pruned vs $n_full hatched — pruning is a no-op"
-    elif [ "$n_pruned" -gt 17 ] || [ "$n_pruned" -lt 5 ]; then
-        bad "httpd: $n_pruned units, expected 5..17 (was $n_full unpruned)"
+    elif [ "$n_pruned" -gt 20 ] || [ "$n_pruned" -lt 5 ]; then
+        bad "httpd: $n_pruned units, expected 5..20 (was $n_full unpruned)"
     else
         ok "httpd resolves to $n_pruned units, not $n_full"
     fi

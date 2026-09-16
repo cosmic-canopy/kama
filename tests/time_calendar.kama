@@ -1,0 +1,109 @@
+// std::time — the calendar: `Date` and the UTC fields of a `Timestamp`. Pinned against facts that do not
+// come from this module (1970-01-01 was a Thursday; `date -u -r 1789567387` is 2026-09-16 14:03:07; int64
+// nanoseconds end at 1677-09-21T00:12:43.145224192Z and 2262-04-11T23:47:16.854775807Z), then swept: every
+// day from 1600 to 2500 against a naive month-by-month walk. The eight flags sum to 255.
+import { std::time::Date, std::time::Timestamp, std::time::Weekday, std::time::TimeError,
+         std::num::int64Min, std::num::int64Max };
+
+fn bool refused(Result<Date, TimeError> r) {
+    return match (r) { case Ok(value: d): false; case Err(error: e): true; };
+}
+
+fn bool stampRefused(Result<Timestamp, TimeError> r) {
+    return match (r) { case Ok(value: t): false; case Err(error: e): true; };
+}
+
+fn Date day(int32 y, uint8 m, uint8 d) {
+    return match (Date.make(year: y, month: m, day: d)) {
+        case Ok(value: x): x;
+        case Err(error: e): Timestamp.epoch().date();
+    };
+}
+
+fn Timestamp stamp(Date d, uint8 h, uint8 mi, uint8 s, uint32 ns) {
+    return match (d.at(hour: h, minute: mi, second: s, nanosecond: ns)) {
+        case Ok(value: t): t;
+        case Err(error: e): Timestamp.fromUnixNanos(n: 1i64);
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // The epoch, a known instant, and the weekday both give.
+    Date epoch = Timestamp.epoch().date();
+    Timestamp t = stamp(d: day(y: 2026, m: 9ui8, d: 16ui8), h: 14ui8, mi: 3ui8, s: 7ui8, ns: 0ui32);
+    if (epoch.year() == 1970 && epoch.month() == 1ui8 && epoch.day() == 1ui8
+        && epoch.weekday() == Weekday::Thursday
+        && t.asUnixSecs() == 1789567387i64 && t.weekday() == Weekday::Wednesday
+        && t.hour() == 14ui8 && t.minute() == 3ui8 && t.second() == 7ui8) { r = r + 1; }
+
+    // Leap years: every 4th, not every 100th, every 400th.
+    if (Date::isLeapYear(year: 2000) && !Date::isLeapYear(year: 1900) && Date::isLeapYear(year: 2400)
+        && Date::isLeapYear(year: 2024) && !Date::isLeapYear(year: 2023)
+        && !refused(r: Date.make(year: 2000, month: 2ui8, day: 29ui8))
+        && refused(r: Date.make(year: 1900, month: 2ui8, day: 29ui8))
+        && Date::daysInMonth(year: 2023, month: 2ui8) == 28ui8 && Date::daysInMonth(year: 2023, month: 4ui8) == 30ui8) { r = r + 2; }
+
+    // Only real days get in, and only years 0000-9999.
+    if (refused(r: Date.make(year: 2026, month: 0ui8, day: 1ui8)) && refused(r: Date.make(year: 2026, month: 13ui8, day: 1ui8))
+        && refused(r: Date.make(year: 2026, month: 4ui8, day: 31ui8)) && refused(r: Date.make(year: 2026, month: 1ui8, day: 0ui8))
+        && refused(r: Date.make(year: -1, month: 1ui8, day: 1ui8)) && refused(r: Date.make(year: 10000, month: 1ui8, day: 1ui8))
+        && refused(r: day(y: 9999, m: 12ui8, d: 31ui8).addDays(n: 1i64))
+        && refused(r: day(y: 0, m: 1ui8, d: 1ui8).addDays(n: -1i64))
+        && !refused(r: day(y: 0, m: 1ui8, d: 1ui8).addDays(n: 3652058i64))) { r = r + 4; }
+
+    // Before 1970 the day is FLOORED: one nanosecond before the epoch is the last instant of 1969-12-31.
+    Timestamp before = Timestamp.fromUnixNanos(n: -1i64);
+    if (before.date() == day(y: 1969, m: 12ui8, d: 31ui8) && before.hour() == 23ui8 && before.minute() == 59ui8
+        && before.second() == 59ui8 && before.nanosecond() == 999999999ui32
+        && before.weekday() == Weekday::Wednesday) { r = r + 8; }
+
+    // Both ends of the int64 window, reached exactly and refused one nanosecond past.
+    Date lo = day(y: 1677, m: 9ui8, d: 21ui8);
+    Date hi = day(y: 2262, m: 4ui8, d: 11ui8);
+    Timestamp minT = Timestamp.fromUnixNanos(n: int64Min());
+    Timestamp maxT = Timestamp.fromUnixNanos(n: int64Max());
+    if (stamp(d: lo, h: 0ui8, mi: 12ui8, s: 43ui8, ns: 145224192ui32) == minT
+        && stampRefused(r: lo.at(hour: 0ui8, minute: 12ui8, second: 43ui8, nanosecond: 145224191ui32))
+        && stamp(d: hi, h: 23ui8, mi: 47ui8, s: 16ui8, ns: 854775807ui32) == maxT
+        && stampRefused(r: hi.at(hour: 23ui8, minute: 47ui8, second: 16ui8, nanosecond: 854775808ui32))
+        && minT.date() == lo && minT.minute() == 12ui8 && minT.nanosecond() == 145224192ui32
+        && maxT.date() == hi && maxT.hour() == 23ui8) { r = r + 16; }
+
+    // A time of day that does not exist, and no leap second.
+    Date any = day(y: 2026, m: 9ui8, d: 16ui8);
+    if (stampRefused(r: any.at(hour: 24ui8, minute: 0ui8, second: 0ui8, nanosecond: 0ui32))
+        && stampRefused(r: any.at(hour: 0ui8, minute: 60ui8, second: 0ui8, nanosecond: 0ui32))
+        && stampRefused(r: any.at(hour: 23ui8, minute: 59ui8, second: 60ui8, nanosecond: 0ui32))
+        && stampRefused(r: any.at(hour: 0ui8, minute: 0ui8, second: 0ui8, nanosecond: 1000000000ui32))) { r = r + 32; }
+
+    // Ordering, difference, hashing.
+    Date a = day(y: 2000, m: 2ui8, d: 28ui8);
+    Date b = day(y: 2000, m: 3ui8, d: 1ui8);
+    if (a < b && b > a && a != b && b.daysSince(earlier: a) == 2i64 && a.daysSince(earlier: b) == -2i64
+        && a.hash() != b.hash() && day(y: 1999, m: 12ui8, d: 31ui8) < a) { r = r + 64; }
+
+    // The sweep: 1600-01-01 to 2500-12-31, one day at a time, against a naive walk of the calendar.
+    Date start = day(y: 1600, m: 1ui8, d: 1ui8);
+    Date cur = start;
+    int32 y = 1600;
+    uint8 m = 1ui8;
+    uint8 dd = 1ui8;
+    int64 n = 0i64;
+    uint8 wd = start.weekday().isoNumber();
+    bool ok = start.weekday() == Weekday::Saturday;          // 1600-01-01 was a Saturday
+    while (ok && y <= 2500) {
+        if (cur.year() != y || cur.month() != m || cur.day() != dd || cur.daysSince(earlier: start) != n
+            || cur.weekday().isoNumber() != wd) { ok = false; }
+        dd = dd + 1ui8;
+        if (dd > Date::daysInMonth(year: y, month: m)) { dd = 1ui8; m = m + 1ui8; }
+        if (m > 12ui8) { m = 1ui8; y = y + 1; }
+        wd = wd == 7ui8 ? 1ui8 : wd + 1ui8;
+        n = n + 1i64;
+        cur = match (cur.addDays(n: 1i64)) { case Ok(value: x): x; case Err(error: e): { return 0; } };
+    }
+    if (ok && n == 329084i64) { r = r + 128; }
+
+    return r;   // 255
+}

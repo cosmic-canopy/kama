@@ -1,4 +1,5 @@
 
+import { Date, Weekday };
 export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep };
 
 // TWO clocks, and choosing between them is the only thing this module asks of a caller:
@@ -21,7 +22,7 @@ extern fn void kama_sleep_ns(uint64 ns);
 // A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
 // Instants, or a countdown, may be negative.
 @generate(of)
-type value Duration implements Equatable<This>, Comparable<This> {
+type value Duration implements Equatable<This>, Comparable<This>, Hashable, Sendable {
     public int64 nanos;
 
     public ctor zero()               { return Duration.of(nanos: 0i64); }
@@ -42,6 +43,7 @@ type value Duration implements Equatable<This>, Comparable<This> {
     public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
     // `==`/`<`/`>`/`<=`/`>=` come from these two contracts; conforming also makes a Duration usable as a
     // `SortedMap`/`SortedSet` key and a `PriorityQueue` element — a timeout wheel is now expressible.
+    public const fn uint64 hash() { return cast<uint64>(this.nanos); }
     public const fn bool equals(const ref Duration other) { return this.nanos == other.nanos; }
     public const fn Ordering compareTo(const ref Duration other) {
         if (this.nanos < other.nanos) { return Ordering::Less; }
@@ -52,7 +54,7 @@ type value Duration implements Equatable<This>, Comparable<This> {
 
 // A monotonic timestamp — an opaque counter, meaningful only relative to another Instant. A `value`.
 @generate(of)
-type value Instant implements Equatable<This>, Comparable<This> {
+type value Instant implements Equatable<This>, Comparable<This>, Hashable, Sendable {
     public uint64 rawNanos;
 
     // Time elapsed from an earlier Instant to this one (non-negative when `earlier` truly precedes this).
@@ -66,6 +68,7 @@ type value Instant implements Equatable<This>, Comparable<This> {
     public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
     // As for Duration: comparison is the contract, and it also makes an Instant orderable in a container
     // (a deadline queue). `<=`/`>=` now work too — the raw operators only ever covered `==`/`<`/`>`.
+    public const fn uint64 hash() { return cast<uint64>(this.rawNanos); }
     public const fn bool equals(const ref Instant other) { return this.rawNanos == other.rawNanos; }
     public const fn Ordering compareTo(const ref Instant other) {
         if (this.rawNanos < other.rawNanos) { return Ordering::Less; }
@@ -86,7 +89,7 @@ type value Instant implements Equatable<This>, Comparable<This> {
 // same line — Rust's `SystemTime` is a bare epoch offset and `chrono` is a package — and a half-calendar
 // is worse than none — which means whole, not never: a calendar module is a ROADMAP row (the audit, 2026-09-07).
 @generate(of)
-type value Timestamp implements Equatable<This>, Comparable<This> {
+type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, Sendable {
     public int64 nanos;
 
     public ctor epoch()                    { return Timestamp.of(nanos: 0i64); }
@@ -108,13 +111,38 @@ type value Timestamp implements Equatable<This>, Comparable<This> {
     public Timestamp operator+(Duration d)        { return Timestamp.of(nanos: this.nanos + d.nanos); }
     // As for the other two: the contracts give `==`/`<`/`>`/`<=`/`>=` and make a stamp usable as a
     // `SortedMap` key — an events-by-time index is expressible without writing a comparator.
+    public const fn uint64 hash() { return cast<uint64>(this.nanos); }
     public const fn bool equals(const ref Timestamp other) { return this.nanos == other.nanos; }
     public const fn Ordering compareTo(const ref Timestamp other) {
         if (this.nanos < other.nanos) { return Ordering::Less; }
         if (this.nanos > other.nanos) { return Ordering::Greater; }
         return Ordering::Equal;
     }
+
+    // The calendar, read in UTC. Every stamp has one: 1677-09-21 to 2262-04-11 is inside `Date`'s range.
+    public const fn Date date()          { return Date.fromDays(days: this.dayNumber()); }
+    public const fn Weekday weekday()    { return this.date().weekday(); }
+    public const fn uint8 hour()         { return truncate<uint8>(this.nanosOfDay() / 3600000000000i64); }
+    public const fn uint8 minute()       { return truncate<uint8>(this.nanosOfDay() / 60000000000i64 % 60i64); }
+    public const fn uint8 second()       { return truncate<uint8>(this.nanosOfDay() / 1000000000i64 % 60i64); }
+    public const fn uint32 nanosecond()  { return truncate<uint32>(this.nanosOfDay() % 1000000000i64); }
+
+    // Days from 1970-01-01, FLOORED: division truncates toward zero, which would put 1969-12-31T23:59:59Z
+    // on 1970-01-01.
+    const fn int64 dayNumber() {
+        int64 q = this.nanos / NANOS_PER_DAY;
+        if (this.nanos % NANOS_PER_DAY < 0i64) { q = q - 1i64; }
+        return q;
+    }
+    // Nanoseconds since this stamp's UTC midnight, always in [0, NANOS_PER_DAY). A remainder rather than
+    // `nanos - day * NANOS_PER_DAY`: at the earliest stamp that product is below int64's minimum.
+    const fn int64 nanosOfDay() {
+        int64 rem = this.nanos % NANOS_PER_DAY;
+        return rem < 0i64 ? rem + NANOS_PER_DAY : rem;
+    }
 }
+
+comptime int64 NANOS_PER_DAY = 86400000000000i64;
 
 // The current monotonic instant. Never runs backward; only differences are meaningful (not a wall clock).
 unsafe fn Instant monotonicNow() {
