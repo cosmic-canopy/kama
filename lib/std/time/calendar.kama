@@ -49,7 +49,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
     uint8 d;
     // `Timestamp` reads its own day through the day-number pair and parses its date half with the same
     // code a `Date` does, so the two text forms cannot drift apart.
-    friend Timestamp[fromDays, days, parsePrefix, digits];
+    friend Timestamp[fromDays, parsePrefix, digits, bcSuffixAt];
 
     ctor fields(int32 y, uint8 m, uint8 d) {
         this.y = y;
@@ -92,8 +92,16 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
         return 31ui8;
     }
 
-    // Hinnant's `days_from_civil`: days from 1970-01-01, negative before it.
-    const fn int64 days() {
+    // The day with this number, counting days from 1970-01-01 (negative before it) — the date form of
+    // Arrow `date32`, Parquet and Avro `date`, and BigQuery; Postgres's binary DATE is this minus 10957, its
+    // epoch being 2000-01-01. A number outside years 0000-9999 is `OutOfRange`.
+    public ctor Result<Date, TimeError> fromUnixDays(int64 days) {
+        if (days < MIN_DAYS || days > MAX_DAYS) { return Result::Err(error: TimeError::OutOfRange); }
+        return Result::Ok(value: Date.fromDays(days: days));
+    }
+
+    // Hinnant's `days_from_civil`: this day's number, counting days from 1970-01-01, negative before it.
+    public const fn int64 unixDays() {
         int64 yy = cast<int64>(this.y) - (this.m <= 2ui8 ? 1i64 : 0i64);
         int64 era = (yy >= 0i64 ? yy : yy - 399i64) / 400i64;
         int64 yoe = yy - era * 400i64;                                             // [0, 399]
@@ -105,7 +113,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     // 1970-01-01 was a Thursday.
     public const fn Weekday weekday() {
-        int64 k = ((this.days() + 3i64) % 7i64 + 7i64) % 7i64;                     // 0 = Monday
+        int64 k = ((this.unixDays() + 3i64) % 7i64 + 7i64) % 7i64;                     // 0 = Monday
         if (k == 0i64) { return Weekday::Monday; }
         if (k == 1i64) { return Weekday::Tuesday; }
         if (k == 2i64) { return Weekday::Wednesday; }
@@ -117,7 +125,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     // The day `n` days later (earlier when negative). Leaving years 0000-9999 is `OutOfRange`.
     public const fn Result<Date, TimeError> addDays(int64 n) {
-        int64 now = this.days();
+        int64 now = this.unixDays();
         if ((n > 0i64 && n > MAX_DAYS - now) || (n < 0i64 && n < MIN_DAYS - now)) {
             return Result::Err(error: TimeError::OutOfRange);
         }
@@ -125,7 +133,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
     }
 
     // The number of days from `earlier` to this day; negative when `earlier` is later.
-    public const fn int64 daysSince(const ref Date earlier) { return this.days() - earlier.days(); }
+    public const fn int64 daysSince(const ref Date earlier) { return this.unixDays() - earlier.unixDays(); }
 
     // The instant this day's clock reads the given UTC time. Hour 0-23, minute and second 0-59 (no leap
     // second: POSIX time has none), nanosecond below one second; a day outside `Timestamp`'s
@@ -134,7 +142,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
         if (hour > 23ui8 || minute > 59ui8 || second > 59ui8 || nanosecond > 999999999ui32) {
             return Result::Err(error: TimeError::OutOfRange);
         }
-        int64 secs = this.days() * 86400i64 + cast<int64>(hour) * 3600i64 + cast<int64>(minute) * 60i64 + cast<int64>(second);
+        int64 secs = this.unixDays() * 86400i64 + cast<int64>(hour) * 3600i64 + cast<int64>(minute) * 60i64 + cast<int64>(second);
         return Timestamp.fromParts(secs: secs, ns: cast<int64>(nanosecond));
     }
 
@@ -147,7 +155,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
         if (this.d != other.d) { return this.d < other.d ? Ordering::Less : Ordering::Greater; }
         return Ordering::Equal;
     }
-    public const fn uint64 hash() { return cast<uint64>(this.days()); }
+    public const fn uint64 hash() { return cast<uint64>(this.unixDays()); }
 
     // `YYYY-MM-DD`, the RFC 3339 `full-date`.
     public const fn void format(ref Formatter f) {
@@ -180,17 +188,33 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     // Exactly `YYYY-MM-DD` — no time, no whitespace, nothing after it. A malformed byte is
     // `InvalidCharacter` at its offset (the length, when the text ends early); a day that does not exist,
-    // `OutOfRange`.
+    // `OutOfRange` — and so is a date PostgreSQL can hold and a `Date` cannot: `infinity`, `-infinity`, a
+    // ` BC` date, a year past 9999.
     public ctor Result<Date, TimeError> parse(const ref string text) {
+        if (text == "infinity" || text == "-infinity") { return Result::Err(error: TimeError::OutOfRange); }
+        Result<Date, TimeError> dr = Date.parsePrefix(text: text);
+        Date d = match (dr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+        if (Date::bcSuffixAt(text: text, at: 10)) { return Result::Err(error: TimeError::OutOfRange); }
         if (text.length() > 10) { return Result::Err(error: TimeError::InvalidCharacter(at: 10)); }
-        return Date.parsePrefix(text: text);
+        return Result::Ok(value: d);
+    }
+
+    // Whether `text` ends with PostgreSQL's era marker ` BC` exactly at `at`.
+    static fn bool bcSuffixAt(const ref string text, isize at) {
+        return text.length() == at + 3 && text[at] == 32ui8 && text[at + 1] == 66ui8 && text[at + 2] == 67ui8;
     }
 
     // The date half of both text forms: the first ten bytes of `text`, whatever follows them.
     ctor Result<Date, TimeError> parsePrefix(const ref string text) {
         Result<int64, TimeError> yr = Date::digits(text: text, at: 0, count: 4);
         int64 y = match (yr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
-        if (text.length() <= 4 || text[4] != 45ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 4)); }  // '-'
+        if (text.length() <= 4 || text[4] != 45ui8) {                                                     // '-'
+            // A fifth year digit and then a hyphen is a year past 9999 (PostgreSQL writes `10000-01-01`).
+            isize k = 4;
+            while (k < text.length() && text[k] >= 48ui8 && text[k] <= 57ui8) { k = k + 1; }
+            if (k > 4 && k < text.length() && text[k] == 45ui8) { return Result::Err(error: TimeError::OutOfRange); }
+            return Result::Err(error: TimeError::InvalidCharacter(at: 4));
+        }
         Result<int64, TimeError> mr = Date::digits(text: text, at: 5, count: 2);
         int64 mo = match (mr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
         if (text.length() <= 7 || text[7] != 45ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 7)); }

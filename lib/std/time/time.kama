@@ -198,18 +198,23 @@ type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, For
         };
     }
 
-    // The RFC 3339 `date-time`: `YYYY-MM-DDTHH:MM:SS`, an optional `.` and 1-9 fraction digits, then `Z` or
-    // `+HH:MM` / `-HH:MM`. `T` and `Z` may be lowercase (RFC 3339 §5.6). The offset is APPLIED and dropped
-    // — the result is the instant, as Postgres TIMESTAMPTZ stores it. Strict otherwise: no whitespace, no
-    // space for `T`, no week or ordinal dates, no compact form, nothing trailing. A malformed byte is
-    // `InvalidCharacter` at its offset (the length, when the text ends early); a field that does not exist
-    // — Feb 30, hour 24, second 60 (POSIX time has no leap second), an offset past 23:59 — or an instant
-    // outside int64 nanoseconds is `OutOfRange`.
+    // The RFC 3339 `date-time` and what PostgreSQL writes for a TIMESTAMPTZ — one parser, because a
+    // Postgres text column and a JSON API are where a stamp comes from. `YYYY-MM-DD`, then `T` or a space
+    // (RFC 3339 §5.6 allows the space; Postgres writes it), `HH:MM:SS`, an optional `.` and 1-9 fraction
+    // digits, then `Z` or an offset: `±HH:MM`, or Postgres's `±HH` and `±HH:MM:SS` (seconds appear for a
+    // historical local mean time — `1900-01-01 00:19:32+00:19:32` in Amsterdam, measured). `T` and `Z` may
+    // be lowercase. The offset is APPLIED and dropped — the result is the instant, as TIMESTAMPTZ stores it.
+    // Strict otherwise: no week or ordinal dates, no compact form, no surrounding whitespace, nothing
+    // trailing. A malformed byte is `InvalidCharacter` at its offset (the length, when the text ends early);
+    // a field that does not exist — Feb 30, hour 24, second 60 (POSIX time has no leap second), an offset
+    // past 23:59:59 — or an instant this type cannot hold is `OutOfRange`: outside int64 nanoseconds, and
+    // Postgres's `infinity`, `-infinity` and ` BC` stamps.
     public ctor Result<Timestamp, TimeError> parse(const ref string text) {
+        if (text == "infinity" || text == "-infinity") { return Result::Err(error: TimeError::OutOfRange); }
         Result<Date, TimeError> dr = Date.parsePrefix(text: text);
         Date d = match (dr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
         isize n = text.length();
-        if (n <= 10 || (text[10] != 84ui8 && text[10] != 116ui8)) { return Result::Err(error: TimeError::InvalidCharacter(at: 10)); }  // T t
+        if (n <= 10 || (text[10] != 84ui8 && text[10] != 116ui8 && text[10] != 32ui8)) { return Result::Err(error: TimeError::InvalidCharacter(at: 10)); }  // T t ' '
         Result<int64, TimeError> hr = Date::digits(text: text, at: 11, count: 2);
         int64 hh = match (hr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
         if (n <= 13 || text[13] != 58ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: 13)); }  // ':'
@@ -242,21 +247,31 @@ type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, For
         } else if (z == 43ui8 || z == 45ui8) {                             // + -
             Result<int64, TimeError> ohr = Date::digits(text: text, at: i + 1, count: 2);
             int64 oh = match (ohr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
-            if (i + 3 >= n || text[i + 3] != 58ui8) { return Result::Err(error: TimeError::InvalidCharacter(at: i + 3)); }
-            Result<int64, TimeError> omr = Date::digits(text: text, at: i + 4, count: 2);
-            int64 om = match (omr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
-            if (oh > 23i64 || om > 59i64) { return Result::Err(error: TimeError::OutOfRange); }
-            offset = (oh * 60i64 + om) * 60i64;
+            i = i + 3;
+            int64 om = 0i64;
+            int64 os = 0i64;
+            if (i < n && text[i] == 58ui8) {                               // `:MM`
+                Result<int64, TimeError> omr = Date::digits(text: text, at: i + 1, count: 2);
+                om = match (omr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+                i = i + 3;
+                if (i < n && text[i] == 58ui8) {                           // `:SS`
+                    Result<int64, TimeError> osr = Date::digits(text: text, at: i + 1, count: 2);
+                    os = match (osr) { case Ok(value: v): v; case Err(error: e): { return Result::Err(error: e); } };
+                    i = i + 3;
+                }
+            }
+            if (oh > 23i64 || om > 59i64 || os > 59i64) { return Result::Err(error: TimeError::OutOfRange); }
+            offset = (oh * 60i64 + om) * 60i64 + os;
             if (z == 45ui8) { offset = -offset; }
-            i = i + 6;
         } else {
             return Result::Err(error: TimeError::InvalidCharacter(at: i));
         }
+        if (Date::bcSuffixAt(text: text, at: i)) { return Result::Err(error: TimeError::OutOfRange); }
         if (i != n) { return Result::Err(error: TimeError::InvalidCharacter(at: i)); }
 
         if (hh > 23i64 || mm > 59i64 || ss > 59i64) { return Result::Err(error: TimeError::OutOfRange); }
         // Local wall time minus its offset is UTC: 16:00+02:00 is 14:00Z.
-        return Timestamp.fromParts(secs: d.days() * 86400i64 + hh * 3600i64 + mm * 60i64 + ss - offset, ns: ns);
+        return Timestamp.fromParts(secs: d.unixDays() * 86400i64 + hh * 3600i64 + mm * 60i64 + ss - offset, ns: ns);
     }
 }
 

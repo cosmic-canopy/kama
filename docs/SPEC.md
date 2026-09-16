@@ -1855,18 +1855,27 @@ string text = "${t}";                        // 2026-09-16T14:03:07.123Z
   is `OutOfRange`. A stamp before 1970 reads the day it falls on — one nanosecond before the epoch is
   1969-12-31T23:59:59.999999999Z.
 
-**Text is RFC 3339, the strict profile of ISO 8601.** `"${t}"` prints `YYYY-MM-DDTHH:MM:SS`, a fraction only <!-- test: time_rfc3339 -->
+**Text is RFC 3339, the strict profile of ISO 8601, plus exactly what PostgreSQL writes.** `"${t}"` prints `YYYY-MM-DDTHH:MM:SS`, a fraction only <!-- test: time_rfc3339 -->
 when there is one (3, 6 or 9 digits, the fewest that are exact, so every stamp parses back to itself), then
 `Z`; a `Date` prints `YYYY-MM-DD`. `Timestamp.parse(text:)` and `Date.parse(text:)` return
 `Result<_, TimeError>`, the `Uuid.parse` shape (`Parseable` is a primitive-only contract):
 
-- the zone is `Z` or `±HH:MM`, and the offset is **applied and dropped** — `2026-09-16T16:03:07+02:00` parses
+- the zone is `Z` or an offset, and the offset is **applied and dropped** — `2026-09-16T16:03:07+02:00` parses
   to the instant that prints `2026-09-16T14:03:07Z`, which is what Postgres does with TIMESTAMPTZ input;
-- `T` and `Z` may be lowercase (RFC 3339 §5.6), and the fraction has 1–9 digits;
-- nothing else parses: no space for `T`, no week or ordinal dates, no compact `20260916T140307Z`, no
-  surrounding whitespace, nothing trailing. A malformed byte is `TimeError::InvalidCharacter(at:)` at its
-  offset (the text's length when it ends early); a field that does not exist, an offset past 23:59, or an
-  instant outside int64 nanoseconds is `TimeError::OutOfRange`.
+- **a Postgres text column reads directly**: a space may stand for `T` (RFC 3339 §5.6 allows it), and an
+  offset may be Postgres's `±HH` or `±HH:MM:SS` as well as `±HH:MM` — so `2026-09-16 16:03:07+02` and a
+  historical `1900-01-01 00:19:32+00:19:32` both parse (every form measured against PostgreSQL 17); <!-- test: time_postgres -->
+- `T` and `Z` may be lowercase, and the fraction has 1–9 digits;
+- nothing else parses: no week or ordinal dates, no compact `20260916T140307Z` or `+0200`, no surrounding
+  whitespace, nothing trailing. A malformed byte is `TimeError::InvalidCharacter(at:)` at its offset (the
+  text's length when it ends early); a field that does not exist, an offset past 23:59:59, or a value these
+  types cannot hold is `TimeError::OutOfRange` — outside int64 nanoseconds, and Postgres's `infinity`,
+  `-infinity`, ` BC` dates and years past 9999.
+
+Postgres keeps **microseconds**, so a stamp written with finer digits comes back rounded and no longer
+compares equal. For a binary format, `Date.fromUnixDays(days:)` and `date.unixDays()` are the day number
+Arrow, Parquet, Avro and BigQuery store; Postgres's binary DATE is that minus 10957, and its TIMESTAMPTZ is
+microseconds from 2000-01-01 — `Timestamp.fromUnixMicros` plus a constant.
 
 Both types serialize as that text on every backend, as a `Uuid` does, and text that does not parse is <!-- test: time_serde -->
 `DeError::Malformed`.

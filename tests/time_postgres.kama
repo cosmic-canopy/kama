@@ -1,0 +1,86 @@
+// std::time — PostgreSQL's own output reads back. Every string below was produced by PostgreSQL 17.11
+// (`DateStyle` ISO, the default) on 2026-09-16, not written from its documentation: a TIMESTAMPTZ as text in
+// four session zones, its `to_json` form, a DATE, and the values Postgres can hold that kama's types cannot.
+// A stamp's binary wire form is microseconds from 2000-01-01 and a DATE's is days from it, so both
+// reach the `Unix` constructors by one constant. The eight flags sum to 255.
+import { std::time::Date, std::time::Timestamp, std::time::TimeError };
+
+fn string show(const ref string text) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): "${t}";
+        case Err(error: e): "error";
+    };
+}
+
+fn bool stampOutOfRange(const ref string text) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; };
+    };
+}
+
+fn bool dateOutOfRange(const ref string text) {
+    return match (Date.parse(text: text)) {
+        case Ok(value: d): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; };
+    };
+}
+
+fn bool stampFailsAt(const ref string text, isize want) {
+    return match (Timestamp.parse(text: text)) {
+        case Ok(value: t): false;
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): a == want; case OutOfRange: false; };
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // `SET TimeZone` UTC / Europe/Berlin / Asia/Kolkata / America/St_Johns; `SELECT '2026-09-16T14:03:07Z'::timestamptz`.
+    if (show(text: "2026-09-16 14:03:07+00") == "2026-09-16T14:03:07Z"
+        && show(text: "2026-09-16 16:03:07+02") == "2026-09-16T14:03:07Z"
+        && show(text: "2026-09-16 19:33:07+05:30") == "2026-09-16T14:03:07Z"
+        && show(text: "2026-09-16 11:33:07-02:30") == "2026-09-16T14:03:07Z") { r = r + 1; }
+
+    // The fraction as Postgres trims it (microseconds at most).
+    if (show(text: "2026-09-16 14:03:07.123456+00") == "2026-09-16T14:03:07.123456Z"
+        && show(text: "2026-09-16 14:03:07.12+00") == "2026-09-16T14:03:07.120Z") { r = r + 2; }
+
+    // A historical local mean time carries SECONDS in its offset: Europe/Amsterdam, 1900-01-01T00:00:00Z.
+    if (show(text: "1900-01-01 00:19:32+00:19:32") == "1900-01-01T00:00:00Z"
+        && show(text: "1900-01-01 00:00:00-00:19:32") == "1900-01-01T00:19:32Z") { r = r + 4; }
+
+    // `to_json(timestamptz)` — already RFC 3339.
+    if (show(text: "2026-09-16T14:03:07.5+00:00") == "2026-09-16T14:03:07.500Z"
+        && show(text: "2026-09-16T16:03:07.5+02:00") == "2026-09-16T14:03:07.500Z") { r = r + 8; }
+
+    // What Postgres holds and kama cannot: `OutOfRange`, not a byte position.
+    if (stampOutOfRange(text: "infinity") && stampOutOfRange(text: "-infinity")
+        && stampOutOfRange(text: "0044-03-15 12:00:00+00 BC") && stampOutOfRange(text: "1677-09-21 00:12:43+00")
+        && dateOutOfRange(text: "infinity") && dateOutOfRange(text: "-infinity")
+        && dateOutOfRange(text: "0044-03-15 BC") && dateOutOfRange(text: "0001-01-01 BC")
+        && dateOutOfRange(text: "10000-01-01")) { r = r + 16; }
+
+    // Still strict about everything else: an offset past its seconds, a basic-form offset, a lone space.
+    if (stampFailsAt(text: "2026-09-16 14:03:07+00:00:00:00", want: 28) && stampFailsAt(text: "2026-09-16 14:03:07+0200", want: 22)
+        && stampFailsAt(text: "2026-09-16 14:03:07 +00", want: 19) && stampFailsAt(text: "2026-09-16 14:03:07+00 AD", want: 22)
+        && stampOutOfRange(text: "2026-09-16 14:03:07+00:00:60")) { r = r + 32; }
+
+    // A DATE's text, and its day number: the Unix form, and Postgres's binary form 10957 days behind it.
+    bool date = match (Date.parse(text: "2026-09-16")) {
+        case Ok(value: d): d.unixDays() == 20712i64 && d.unixDays() - 10957i64 == 9755i64;
+        case Err(error: e): false;
+    };
+    bool back = match (Date.fromUnixDays(days: 20712i64)) { case Ok(value: d): "${d}" == "2026-09-16"; case Err(error: e): false; }
+             && match (Date.fromUnixDays(days: 0i64)) { case Ok(value: d): "${d}" == "1970-01-01"; case Err(error: e): false; };
+    if (date && back) { r = r + 64; }
+
+    // Day numbers reach exactly years 0000-9999.
+    bool lo = match (Date.fromUnixDays(days: -719528i64)) { case Ok(value: d): "${d}" == "0000-01-01"; case Err(error: e): false; };
+    bool hi = match (Date.fromUnixDays(days: 2932896i64)) { case Ok(value: d): "${d}" == "9999-12-31"; case Err(error: e): false; };
+    bool past = match (Date.fromUnixDays(days: 2932897i64)) { case Ok(value: d): false; case Err(error: e): true; }
+             && match (Date.fromUnixDays(days: -719529i64)) { case Ok(value: d): false; case Err(error: e): true; };
+    if (lo && hi && past) { r = r + 128; }
+
+    return r;   // 255
+}

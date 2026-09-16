@@ -72,8 +72,8 @@ fn int32 main() {
         && failsAt(text: "2026-09-16T14:03:07.Z", want: 20)) { r = r + 8; }
 
     // Syntax refusals name the byte: a wrong separator, a letter in a number, the end of the text,
-    // a space for `T`, trailing bytes, a missing zone, the ISO forms RFC 3339 leaves out.
-    if (failsAt(text: "2026-09-16 14:03:07Z", want: 10) && failsAt(text: "2026-09-1xT14:03:07Z", want: 9)
+    // trailing bytes, a missing zone, the ISO forms RFC 3339 leaves out.
+    if (failsAt(text: "2026-09-16_14:03:07Z", want: 10) && failsAt(text: "2026-09-1xT14:03:07Z", want: 9)
         && failsAt(text: "2026-09-16T14:03", want: 16) && failsAt(text: "2026-09-16T14:03:07Z ", want: 20)
         && failsAt(text: "2026-09-16T14:03:07", want: 19) && failsAt(text: "2026-W38-3", want: 5)
         && failsAt(text: "20260916T140307Z", want: 4) && failsAt(text: "2026-09-16T14:03:07+0200", want: 22)

@@ -51,7 +51,7 @@ fn int32 main() {
     Booking pback = match (pb) { case Ok(value: x): x; case Err(error: e): { return 104; } };
     if (pback.at == at && pback.checkIn == at.date()) { r = r + 8; }
 
-    string badStamp = "{\"at\":\"2026-09-16 14:03:07Z\",\"checkIn\":\"2026-09-16\"}";
+    string badStamp = "{\"at\":\"2026-09-16_14:03:07Z\",\"checkIn\":\"2026-09-16\"}";
     if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badStamp))) { r = r + 16; }
     string badDate = "{\"at\":\"2026-09-16T14:03:07Z\",\"checkIn\":\"2026-02-30\"}";
     if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badDate))) { r = r + 32; }
