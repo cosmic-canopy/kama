@@ -247,6 +247,14 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### A generic instance named only in `sizeof`/`alignof` is never instantiated (KR-62) — found 2026-09-16, `0.9.366`
+
+`fn int32 main() { usize s = sizeof(DynamicArray<int64>); return cast<int32>(s); }` passes kama and fails in
+clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_GlobalAllocator'`. The same with
+`Simd<float32>#(4)`; adding a local of the type anywhere makes it build. The `SizeofNode` arm emits
+`sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
+a generic type would hit it too.
+
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
@@ -1773,7 +1781,7 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-### The allocation campaign (KR-48 – KR-50, KR-58) — opened 2026-09-12
+### The allocation campaign (KR-48 – KR-50, KR-58, KR-61) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1797,6 +1805,16 @@ case removes the heap from those calls and the marks come off. The long-path (`\
 design question. Seven more are heap on one platform only, measured per variant: `kama_proc_spawn` on Windows,
 `kama_proc_detach` on POSIX, and `kama_args_at`, `kama_program_*` and `kama_env_lookup`
 natively but not on wasm. Whether each can stop allocating, or honestly cannot, is part of the row.
+
+**`allocate(bytes)` carries no alignment (KR-61)**, measured 2026-09-16 at `0.9.366` while making `deallocate`'s
+size honest. `type value V { Simd<float32>#(4) v; }` has `alignof(V) == 16`; boxed into an `Arena` after one
+small box, `new(allocator: arena.handle()) V.make()` returned an address ≡ 8 (mod 16), because `BumpAllocator`
+rounds to 8 — the only choice an allocator told nothing can make. `GlobalAllocator` happens to be safe (glibc
+`malloc` aligns to 16 on x86_64) and is not on MCU targets. The size promise and the alignment promise are the
+same kind of contract, so decide it before KR-49 fixes what a replacement global allocator implements: an
+`align` parameter on both `allocate` and `deallocate` (Rust `Layout`, Zig `alignedAlloc`), fed by `alignof(T)`
+at every `new`/container growth site, is the obvious shape. It touches every `Allocator` implementation, so it is
+source-breaking for user allocators.
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
