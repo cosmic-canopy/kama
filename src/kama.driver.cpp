@@ -5018,6 +5018,245 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     return true;
 }
 
+// ---- the covering check (KR-54) ------------------------------------------------------------------
+//
+// A declaration or file `@compileFor` drops is never analyzed, so code for a configuration nobody builds
+// daily rots until somebody does. `kama check` therefore owes every GATE the project contains one
+// analysis in which it is active. Not every configuration: the space is a product (TARGET x BUILD_TYPE x
+// OUTPUT x each user group x the powerset of `flags`) and cannot be enumerated — but a gate is a
+// conjunction of possibly-negated flag names with no `||`, so a small set of configurations covers them.
+//
+// The rules, each a maintainer ruling:
+//   * Explicit configuration flags on the command line mean exactly that one configuration.
+//   * A gate no known target can activate (an arch no built-in or declared target has) is NOT checked and
+//     NOT an error — declaring the target, which building it needs anyway, brings it into the cover.
+//   * A gate that can NEVER be active (`DEBUG, RELEASE`; `X, !X`) is an error: it is always a typo.
+//   * Only the project's own units owe this; a dependency's gates are that package's obligation.
+
+struct GateLit { std::string name; bool neg = false; };
+
+// A gate's literals — every `@compileFor` in the list, ANDed. Malformed arguments are skipped: the default
+// configuration's analysis already reports them, through kamaCompileForActive.
+static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs)
+{
+    std::vector<GateLit> out;
+    if (!attrs) return out;
+    for (auto& at : *attrs) {
+        if (!at || !at->name || *at->name != "compileFor" || !at->args) continue;
+        for (auto& arg : *at->args) {
+            if (!arg) continue;
+            if (arg->name && arg->name->value && !arg->expression) { out.push_back({ *arg->name->value, false }); continue; }
+            auto* su = arg->expression ? dynamic_cast<SimpleUnaryExpressionNode*>(arg->expression.get()) : nullptr;
+            auto* id = (su && su->token == EXCLAMATION && su->expression)
+                     ? dynamic_cast<IdentifierNode*>(su->expression.get()) : nullptr;
+            if (id && id->value) out.push_back({ *id->value, true });
+        }
+    }
+    return out;
+}
+
+static std::string renderGateLits(const std::vector<GateLit>& lits)
+{
+    std::string s = "@compileFor(";
+    for (size_t i = 0; i < lits.size(); ++i) s += (i ? ", " : "") + std::string(lits[i].neg ? "!" : "") + lits[i].name;
+    return s + ")";
+}
+
+// Why a gate can never be active under ANY configuration, or "" when some configuration could activate
+// it. Reads the select groups the default resolve installed. Exact for a single-select group (some one
+// value, with what it inherits, must supply every positive and no negative) and for a triple component
+// (one arch, one os, one abi).
+static std::string gateContradiction(const std::vector<GateLit>& lits)
+{
+    std::map<std::string, bool> seen;
+    for (const auto& l : lits) {
+        auto it = seen.find(l.name);
+        if (it != seen.end() && it->second != l.neg)
+            return "it requires both `" + l.name + "` and `!" + l.name + "`";
+        seen[l.name] = l.neg;
+    }
+    for (const char* prefix : { "ARCH_", "OS_", "ABI_" }) {
+        std::string first;
+        for (const auto& l : lits)
+            if (!l.neg && l.name.compare(0, strlen(prefix), prefix) == 0) {
+                if (first.empty()) first = l.name;
+                else if (first != l.name)
+                    return "`" + first + "` and `" + l.name + "` are two values of one triple component";
+            }
+    }
+    const bool hosted = seen.count("HOSTED") != 0, notHosted = hosted && seen["HOSTED"];
+    for (const auto& l : lits)
+        if (l.name.compare(0, 3, "OS_") == 0 && !l.neg && hosted) {
+            if (!notHosted && l.name == "OS_NONE") return "`HOSTED` means an OS, and `OS_NONE` means none";
+            if (notHosted && l.name != "OS_NONE")  return "`!HOSTED` means no OS, and `" + l.name + "` names one";
+        }
+    for (const auto& g : g_selectGroups) {
+        std::vector<GateLit> mine;
+        std::set<std::string> space;
+        for (const auto& v : g.second.values) collectInherited(g.second, v, space);
+        for (const auto& l : lits) if (space.count(l.name)) mine.push_back(l);
+        if (mine.empty()) continue;
+        bool some = false;
+        for (const auto& v : g.second.values) {
+            std::set<std::string> chain;
+            collectInherited(g.second, v, chain);
+            bool ok = true;
+            for (const auto& l : mine) if (chain.count(l.name) == (l.neg ? 1u : 0u)) { ok = false; break; }
+            if (ok) { some = true; break; }
+        }
+        if (some) continue;
+        std::string names;
+        for (const auto& l : mine) names += (names.empty() ? "`" : ", `") + std::string(l.neg ? "!" : "") + l.name + "`";
+        return names + " are values of " + g.first + ", and a single-select group has one value per build";
+    }
+    return "";
+}
+
+// One configuration of the cover, as the DEVIATIONS from the check's own configuration — which is what
+// makes its label the command that reproduces it (`--target WASM`) rather than a flag soup.
+struct CoverConfig {
+    std::string target;                              // "" = the default's
+    std::map<std::string, std::string> selects;      // group -> value, only where it differs
+    bool noHeap = false;                             // turn `--no-heap` on
+    std::vector<std::string> defines, undefines;
+    int deviations() const {
+        return (target.empty() ? 0 : 1) + (int)selects.size() + (noHeap ? 1 : 0)
+             + (int)defines.size() + (int)undefines.size();
+    }
+    std::string label() const {
+        std::string s;
+        auto add = [&](const std::string& a) { s += (s.empty() ? "" : " ") + a; };
+        if (!target.empty()) add("--target " + target);
+        for (const auto& kv : selects) {
+            if (kv.first == "BUILD_TYPE" && kv.second == "RELEASE") add("--release");
+            else if (kv.first == "BUILD_TYPE" && kv.second == "DEBUG") add("--debug");
+            else add("--select " + kv.first + "=" + kv.second);
+        }
+        if (noHeap) add("--no-heap");
+        for (const auto& d : defines)   add("--define " + d);
+        for (const auto& u : undefines) add("--undefine " + u);
+        return s;
+    }
+};
+
+// Install `c` over the check's own request. False when the combination does not resolve (a bag flag the
+// manifest never declared, say) — such a candidate simply does not exist.
+static bool installCoverConfig(const BuildConfigRequest& base, bool baseNoHeap, const CoverConfig& c)
+{
+    BuildConfigRequest req = base;
+    if (!c.target.empty()) { req.target = c.target; req.targetExplicit = true; }
+    for (const auto& kv : c.selects) req.selects.push_back(kv.first + "=" + kv.second);
+    req.defines.insert(req.defines.end(), c.defines.begin(), c.defines.end());
+    req.undefines.insert(req.undefines.end(), c.undefines.begin(), c.undefines.end());
+    g_noHeap = baseNoHeap || c.noHeap;
+    BuildConfigResult res;
+    std::string err;
+    if (!resolveBuildConfig(req, res, err)) return false;
+    g_outputShared = g_activeFlags.count("SHARED") != 0;
+    return true;
+}
+
+static bool gateActiveIn(const std::vector<GateLit>& lits, const std::set<std::string>& active)
+{
+    for (const auto& l : lits) if ((active.count(l.name) != 0) == l.neg) return false;
+    return true;
+}
+
+// Pick the configurations that activate every gate in `gates` the default leaves inactive. Returns them in
+// order; `contradictions` receives the index of each gate no configuration could EVER activate, with why.
+// Leaves the globals holding whatever resolved last — the caller reinstalls what it needs.
+static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit>>& gates,
+                                           const BuildConfigRequest& base, bool baseNoHeap,
+                                           std::map<size_t, std::string>& contradictions)
+{
+    std::vector<CoverConfig> chosen;
+    if (!installCoverConfig(base, baseNoHeap, CoverConfig())) return chosen;
+    const std::set<std::string>                   defaultActive = g_activeFlags;
+    const std::map<std::string, SelectGroup>      groups        = g_selectGroups;
+    const std::map<std::string, TargetSpec>       declaredTargets = g_manifestTargets;
+
+    std::vector<bool> covered(gates.size(), false);
+    for (size_t i = 0; i < gates.size(); ++i) {
+        if (gateActiveIn(gates[i], defaultActive)) { covered[i] = true; continue; }
+        std::string why = gateContradiction(gates[i]);
+        if (!why.empty()) { contradictions[i] = why; covered[i] = true; }
+    }
+
+    for (size_t gi = 0; gi < gates.size(); ++gi) {
+        if (covered[gi]) continue;
+        const auto& lits = gates[gi];
+
+        // Only the axes this gate's literals name vary; everything else stays the default's. That keeps
+        // the search a handful of resolves, and the chosen configuration no wider than it needs to be.
+        bool varyTarget = false, varyNoHeap = false;
+        std::map<std::string, std::vector<std::string>> varyGroups;
+        CoverConfig bag;                                  // the `flags` literals, set the way the gate wants
+        for (const auto& l : lits) {
+            const std::string& n = l.name;
+            bool placed = false;
+            if (n.compare(0, 5, "ARCH_") == 0 || n.compare(0, 3, "OS_") == 0 || n.compare(0, 4, "ABI_") == 0
+                || n == "HOSTED" || n == "SIMD128" || declaredTargets.count(n)) { varyTarget = true; placed = true; }
+            if (n == "NOHEAP") { varyNoHeap = true; placed = true; }
+            for (const auto& g : groups) {
+                std::set<std::string> space;
+                for (const auto& v : g.second.values) collectInherited(g.second, v, space);
+                if (space.count(n)) { varyGroups[g.first] = g.second.values; placed = true; }
+            }
+            if (placed) continue;
+            if (!l.neg && !defaultActive.count(n)) bag.defines.push_back(n);
+            if (l.neg && defaultActive.count(n))   bag.undefines.push_back(n);
+        }
+
+        std::vector<std::string> targets{ "" };
+        if (varyTarget) {
+            for (const auto& kv : declaredTargets) targets.push_back(kv.first);
+            for (const auto& kv : builtinTargets()) if (!declaredTargets.count(kv.first)) targets.push_back(kv.first);
+        }
+        std::vector<std::pair<std::string, std::vector<std::string>>> axes(varyGroups.begin(), varyGroups.end());
+
+        // Every combination of the varied axes; keep the fewest-deviation ones that activate the gate, and
+        // of those the one activating the most other uncovered gates. Ties go to enumeration order, which
+        // is deterministic: declared targets before built-ins, a group's values in declaration order.
+        bool found = false;
+        CoverConfig best;
+        int bestDev = 0, bestHits = 0;
+        std::function<void(size_t, CoverConfig)> walk = [&](size_t ax, CoverConfig c) {
+            if (ax < axes.size()) {
+                walk(ax + 1, c);                                          // the default's value
+                for (const auto& v : axes[ax].second) {
+                    CoverConfig d = c;
+                    d.selects[axes[ax].first] = v;
+                    walk(ax + 1, d);
+                }
+                return;
+            }
+            for (const auto& t : targets)
+                for (int nh = 0; nh < (varyNoHeap && !baseNoHeap ? 2 : 1); ++nh) {
+                    CoverConfig d = c;
+                    d.target = t;
+                    d.noHeap = nh != 0;
+                    if (found && d.deviations() > bestDev) continue;
+                    if (!installCoverConfig(base, baseNoHeap, d)) continue;
+                    if (!gateActiveIn(lits, g_activeFlags)) continue;
+                    int hits = 0;
+                    for (size_t j = 0; j < gates.size(); ++j)
+                        if (!covered[j] && gateActiveIn(gates[j], g_activeFlags)) ++hits;
+                    if (!found || d.deviations() < bestDev || hits > bestHits) {
+                        found = true; best = d; bestDev = d.deviations(); bestHits = hits;
+                    }
+                }
+        };
+        walk(0, bag);
+        if (!found) { covered[gi] = true; continue; }   // no known configuration: not checked, not an error
+
+        installCoverConfig(base, baseNoHeap, best);
+        for (size_t j = 0; j < gates.size(); ++j)
+            if (!covered[j] && gateActiveIn(gates[j], g_activeFlags)) covered[j] = true;
+        chosen.push_back(best);
+    }
+    return chosen;
+}
+
 // One resolved package in `kama.lock`. The lock is what the build's view is materialized from — the
 // reproducibility record: (source, pinned identity, integrity, transitive deps).
 struct LockEntry {
@@ -7637,6 +7876,8 @@ void usage()
         "  kama build     <in.kama>... [-o out] [--target <name-or-triple>] [--release|--debug] [--shared]\n"
         "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
         "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
+        "                             [--select GROUP=VALUE]... [--define NAME]... [--undefine NAME]...\n"
+        "                              (the `@compileFor` configuration: a single-select group's value, a `flags` entry)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                              (`no-heap`, `link` and `webgpu` are also kama.json keys, per-target overridable)\n"
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
@@ -7652,7 +7893,8 @@ void usage()
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"entry\" — and run it; native-only)\n"
-        "  kama check     <in.kama>... [--each] [--json]   analyze without emitting C or invoking a C compiler\n"
+        "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
+        "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
         "                   checking by KIND — a `string` cannot initialize an `int32` — and by WIDTH:\n"
         "                   there is no implicit numeric conversion, so `int8 a = big` is an error and\n"
@@ -7660,7 +7902,15 @@ void usage()
         "                   `int8 a = 100` is not a conversion at all.\n"
         "                   Several inputs are ONE program; --each makes each input its own program and\n"
         "                   checks them all in one process, reusing the parsed prelude and import closure —\n"
-        "                   it then prints one `<exit-code> <path>` verdict line per input on stdout)\n"
+        "                   it then prints one `<exit-code> <path>` verdict line per input on stdout.\n"
+        "                   EVERY CONFIGURATION: code a `@compileFor` gate leaves out of this build is\n"
+        "                   code too, so check also analyzes whatever further configurations make each\n"
+        "                   gate in your own files active once — no cross toolchain needed — and tags a\n"
+        "                   diagnostic from one with the flags that reproduce it: `[--target WASM]`.\n"
+        "                   A gate no known target can activate is skipped; one that can never be\n"
+        "                   active is an error. Any configuration flag of `build` (--target, --select,\n"
+        "                   --define, --undefine, --release/--debug, --no-heap, --shared) checks exactly\n"
+        "                   that one configuration instead)\n"
         "  kama query     <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
@@ -9323,6 +9573,7 @@ int main(int argc, char** argv)
     // point and so could never reach it — which is exactly why the server used to analyze with an empty
     // `@compileFor` set (M6 A1). DISCOVERY stays here: the CLI looks next to the input file then in CWD,
     // while the editor walks up from the open buffer bounded by its workspace folder.
+    const bool cliNoHeap = g_noHeap;   // before the manifest can OR its own in — the cover's "explicit?" test
     BuildConfigRequest bcReq;
     // The operand, and nothing else. A LOOSE build therefore inherits no project's configuration — not
     // its flag universe, not its target catalog, not its `out` root — which is what makes mode 1 mean
@@ -9553,43 +9804,135 @@ int main(int argc, char** argv)
         //
         // One program per process by default. `--each` instead treats every input as its OWN program and
         // runs them all here — see the loop below.
+        //
+        // THE COVER (KR-54). With no configuration flag on the command line, one analysis is not the whole
+        // check: a declaration or file its gate leaves out of this configuration was never looked at. So
+        // after the default analysis, `coverGates` picks further configurations until every gate in the
+        // program's OWN files is active in one, and each is analyzed the same way. A diagnostic only another
+        // configuration produced is tagged with the flags that reproduce it. Explicit configuration flags
+        // mean exactly that configuration — which is what the tag tells you to type.
+        const bool coverMode = !targetExplicit && !releaseExplicit && selects.empty() && defines.empty()
+                            && undefines.empty() && !cliNoHeap && !shared;
+        const bool baseNoHeap = g_noHeap;
+        const bool baseShared = g_outputShared;
         auto checkOne = [&](const std::string& src) -> int {
-            std::vector<SharedCompilationUnit> units;
-            std::vector<std::string> unitPaths;
             const std::vector<std::string> roots = eachMode ? std::vector<std::string>{ src } : inputs;
-            if (!loadProgramUnits(roots, argv[0], units, unitPaths, devBuild)) return 1;
-
-            CEmitter idx(src);                   // analysis mode: no output stream
-            configureEmitter(idx);
-            { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+            struct Tagged { Diagnostic d; std::string config; };
+            std::vector<Tagged> diags;
+            std::set<std::string> seenDiag, unitNames;
+            size_t configs = 0, unloaded = 0;
+            auto key = [](const Diagnostic& d) {
+                return d.file + "\n" + std::to_string(d.line) + ":" + std::to_string(d.column) + "\n"
+                     + diagSeverityName(d.severity) + "\n" + d.message;
+            };
+            // One configuration's analysis, into `diags`. False when the program did not even load, which
+            // loadProgramUnits has already said on stderr.
+            auto analyzeUnder = [&](const std::string& config) -> bool {
+                std::vector<SharedCompilationUnit> units;
+                std::vector<std::string> unitPaths;
+                if (!loadProgramUnits(roots, argv[0], units, unitPaths, devBuild)) {
+                    // Whatever stopped it is already on stderr — say which configuration that was.
+                    if (!config.empty())
+                        fprintf(stderr, "kama: %s did not load under [%s] (above)\n", src.c_str(), config.c_str());
+                    return false;
+                }
+                CEmitter idx(src);                   // analysis mode: no output stream
+                configureEmitter(idx);
+                { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+                ++configs;
+                for (const auto& p : unitPaths) unitNames.insert(p);
+                for (const auto& d : idx.diagnostics())
+                    if (seenDiag.insert(key(d)).second) diags.push_back({ d, config });
+                return true;
+            };
+            if (!analyzeUnder("")) return 1;
+            std::vector<CoverConfig> cover;
+            if (coverMode) {
+                // Every gate the program's own files contain, as parsed — a file's gate and each gated
+                // declaration's (CompilationUnit::declGates survives pruning; see there).
+                std::vector<std::vector<GateLit>> gates;
+                struct Site { std::string file; int line; };
+                std::vector<Site> sites;
+                for (const auto& r : roots) {
+                    SharedCompilationUnit u = parseFile(r);
+                    if (!u) continue;
+                    auto add = [&](const SharedAttributeList& attrs) {
+                        std::vector<GateLit> lits = gateLiterals(attrs);
+                        if (lits.empty()) return;
+                        int line = 1;                                // the `@compileFor` entry's own line
+                        for (auto& at : *attrs)
+                            if (at && at->name && *at->name == "compileFor") { line = at->line; break; }
+                        gates.push_back(lits);
+                        sites.push_back({ r, line });
+                    };
+                    add(u->fileGate);
+                    for (const auto& g : u->declGates) add(g);
+                }
+                std::map<size_t, std::string> contradictions;
+                cover = coverGates(gates, bcReq, baseNoHeap, contradictions);
+                installCoverConfig(bcReq, baseNoHeap, CoverConfig());
+                g_outputShared = baseShared;
+                for (const auto& c : contradictions) {
+                    Diagnostic d;
+                    d.file = sites[c.first].file;
+                    d.line = sites[c.first].line;
+                    d.code = "compileFor";
+                    d.message = "`" + renderGateLits(gates[c.first]) + "` can never be active — " + c.second
+                              + ". No configuration compiles what it gates, so it is a mistake";
+                    if (seenDiag.insert(key(d)).second) diags.push_back({ d, "" });
+                }
+            }
+            for (const auto& c : cover) {
+                if (!installCoverConfig(bcReq, baseNoHeap, c)) continue;
+                if (!analyzeUnder(c.label())) ++unloaded;
+            }
+            if (!cover.empty()) {
+                // Back to the check's own configuration, for the next `--each` program.
+                installCoverConfig(bcReq, baseNoHeap, CoverConfig());
+                g_outputShared = baseShared;
+            }
             timingDump("check", src);
-            const auto& diags = idx.diagnostics();
+
             // Only an ERROR fails the check. A warning is advice — reporting it is the point, but failing
-            // on it would mean a deprecation notice breaks every `kama check` in the tree.
-            size_t errs = 0;
-            for (const auto& d : diags) if (d.severity == DiagSeverity::Error) ++errs;
+            // on it would mean a deprecation notice breaks every `kama check` in the tree. A configuration
+            // that did not load counts as one error (its reason is already on stderr).
+            size_t errs = unloaded;
+            for (const auto& t : diags) if (t.d.severity == DiagSeverity::Error) ++errs;
+            bool anyWarning = false;
+            for (const auto& t : diags) if (t.d.severity != DiagSeverity::Error) anyWarning = true;
             if (jsonOut) {
                 // Everything on STDOUT and nothing on stderr, so a caller can read one stream. `ok` is the
                 // verdict the exit code carries, restated so a consumer that captured only stdout still has
                 // it. The exit code is unchanged — a wrapper script must keep working when --json is added.
                 Json j = jsonEnvelope("check", src);
                 j.set("ok", errs == 0);
-                j.set("units", (int)units.size());
+                j.set("units", (int)unitNames.size());
+                j.set("configurations", (int)configs);
                 Json rs = Json::array();
-                for (const auto& d : diags) rs.push(jsonDiagnostic(d));
+                for (const auto& t : diags) {
+                    Json jd = jsonDiagnostic(t.d);
+                    if (!t.config.empty()) jd.set("configuration", t.config);
+                    rs.push(jd);
+                }
                 j.set("results", rs);
                 jsonPrint(j);
                 return errs ? 1 : 0;
             }
-            for (const auto& d : diags) renderDiagnostic(stderr, d);
+            for (const auto& t : diags) {
+                if (t.config.empty()) { renderDiagnostic(stderr, t.d); continue; }
+                Diagnostic d = t.d;
+                d.message += "  [" + t.config + "]";
+                renderDiagnostic(stderr, d);
+            }
+            const std::string cfgs = configs > 1 ? std::to_string(configs) + " configurations, " : "";
             if (errs) {
-                fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
-                        src.c_str(), errs, errs == 1 ? "" : "s");
+                fprintf(stderr, "kama: %s FAILED (%s%zu error%s)\n",
+                        src.c_str(), cfgs.c_str(), errs, errs == 1 ? "" : "s");
                 return 1;
             }
-            fprintf(stderr, "kama: %s OK (%zu unit%s analyzed%s)\n",
-                    src.c_str(), units.size(), units.size() == 1 ? "" : "s",
-                    diags.empty() ? "" : ", with warnings");
+            fprintf(stderr, "kama: %s OK (%s%zu unit%s analyzed%s)\n",
+                    src.c_str(), cfgs.c_str(), unitNames.size(), unitNames.size() == 1 ? "" : "s",
+                    anyWarning ? ", with warnings" : "");
             return 0;
         };
 
