@@ -2157,7 +2157,11 @@ rather than here, so there is one number to keep current. Forward work:
     The question was whether emit-on-instantiation + `--gc-sections` suffices, or explicit per-module opt-in is
     warranted before the stdlib grows. The answer splits in two, and only one half was ever a packaging question.
 
-    A ladder of release builds, native, each in its own directory (`.scratch/kr4/measure.sh`; `analyze` is the median of five `KAMA_TIMING=1` runs):
+    A ladder of release builds, native. To rebuild it: five programs from an empty `main` up to one
+    importing fourteen `std::` modules, each built `--release --keep-c` **into its own directory** (a shared
+    one makes every rung count its predecessors' C as its own — that mistake produced a plausible wrong
+    answer first), counting C function definitions in the kept `.c` and taking `analyze` as the median of
+    five `KAMA_TIMING=1 kama check` runs:
 
     | program | imports | closure units | analyze | fns emitted | binary |
     |---|---|---|---|---|---|
