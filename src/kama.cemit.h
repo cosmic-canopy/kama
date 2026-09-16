@@ -816,6 +816,13 @@ public:
                        bool strict)
     { _activeFlags = active; _declaredFlags = declared; _strictFlags = strict; }
 
+    // Why a gate can NEVER be active under any configuration, or "" when some configuration could activate
+    // it. A callback because the answer needs the manifest's single-select groups, which are the driver's
+    // (kama.driver.cpp, gateContradiction) — the emitter knows only which flags are on right now. Called
+    // once per gate as it is pruned, so build, check and the language server all refuse the same dead gate.
+    void setGateContradiction(std::function<std::string(const SharedAttributeList&)> f)
+    { _gateContradiction = std::move(f); }
+
     // The baked `KAMA_LOG` default (from the manifest `log` section). When non-empty and the program imports
     // std::log, `main` seeds it into the process env (overwrite=0), so a shipped binary carries its project
     // default log filter while `--log`/`KAMA_LOG` still override it (M5).
@@ -1662,6 +1669,7 @@ private:
     void        emitOnPanicPrologue(int depth);
     void        recordDestructibleOwner(const std::string& cVar, const std::string& className);
     void        checkOnPanicRegions();
+    std::function<std::string(const SharedAttributeList&)> _gateContradiction;   // see setGateContradiction
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an

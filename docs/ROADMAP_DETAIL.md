@@ -252,68 +252,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### A declaration `@compileFor` drops is never checked (KR-54) — measured 2026-09-14, `0.9.340`
-
-`pruneInactiveDecls` removes an inactive declaration from its unit before name pre-registration and
-collection (SPEC *Conditional compilation*), so nothing downstream knows it existed — by design, and it is why
-a gated-out declaration's symbols cannot leak. The cost is that NO rule reaches it. Measured on a loose file,
-native host:
-
-```kama
-@compileFor(ARCH_WASM32)
-fn int32 f(Zork z) { Optional<Zork> o = Optional::None; return 0; }
-fn int32 main() { return 0; }
-```
-
-builds clean — the unknown `Zork` in the signature and the body are never resolved. The same holds for every
-rule, not only names: a gated body is never type-checked, ownership-checked or emitted on this host. For a
-language whose moat is portable C, that is the platform seam rotting on the targets a developer does not build
-every day, and the first report arrives from the one who does.
-
-Found while deciding where the name-resolution campaign's body checks live (`0.9.340`): a separate pre-emission walk was proposed partly to judge
-code the compiler never emits, and measuring showed it would not have — pruning runs before either walk.
-
-**Not the answer: judging names before pruning.** Names legitimately differ per target — an `extern fn`, an
-`extern "<header.h>"` or a `type extern value` may exist on one target only, and a gated declaration may name
-exactly those — so a pre-prune resolution pass would refuse correct code.
-
-**Re-measured 2026-09-15 at `0.9.352`**, and the hole is wider than the paragraph above. Probes:
-`.scratch/next-session/k54/` on the Mac; each one-liner is reproducible from this section.
-
-1. **The declaration gate still rots**, exactly as measured at `0.9.340`.
-2. **A gated-out FILE rots too, and silently** — the realistic shape, since `file @compileFor(FLAG);` exists for
-   per-platform implementation files. A copy of `tests/file_gate.d` with `fn int32 rotted(Zork z)` appended to
-   its wasm-only unit BUILDS CLEAN natively, and `kama check` on the project says "OK (2 units analyzed)" of
-   three files. (Naming a gated-out file explicitly on the command line is an error, so only the project
-   sweep hides it — which is the only way anyone compiles a multi-platform project.)
-3. **The analysis already works; it is simply never run.** The same file under `--target WASM` reports both
-   errors. So the fix is a driver/orchestration question, not an analysis one.
-4. **Cross-target analysis needs no cross toolchain.** `--target WINDOWS` cross-built on a Mac, and `--target
-   WASM` reached kama's own diagnostics and only then failed on a missing `emcc` — so a CHECK pass over other
-   targets costs nothing but time.
-5. **`kama check` cannot select a configuration today** — no `--target`, no `--select`. (Both `build` and
-   `check` do accept `--define`, though only `run` documents it in `kama --help`: a usage-text gap to fix in
-   passing.)
-6. **The axis is not only TARGET.** SPEC *Conditional compilation* gives four sources of flags, and each hides
-   the other half of every gate written on it — measured on one file with four gated declarations: a debug
-   build reports the `@compileFor(DEBUG)` one alone, `--release` the `!DEBUG` one alone, `--no-heap` that debug
-   one PLUS the `NOHEAP` one, and the `@compileFor(TELEMETRY)` one stays invisible until `--define TELEMETRY`.
-   So "once per declared target" is necessary and NOT sufficient.
-
-**The design question, sharpened by 6.** The configuration space is a product — TARGET × BUILD\_TYPE × OUTPUT ×
-every user single-select group × the powerset of the `flags` bag — so it cannot be enumerated. But the code does
-not need it enumerated: a gate is a conjunction of possibly-negated flag names (`@compileFor(A, B)`, `(!FLAG)` —
-there is no `||`), so the obligation can be stated over the GATES THE PROGRAM CONTAINS rather than over the
-configurations it admits: **every `@compileFor` and every file gate is active in at least one checked
-configuration.** That set is computable (a small set cover; a flag and its negation simply need two), and it is
-what "this code is checked somewhere" means. The corpus to size it against: 69 gate sites over 27 files, ~15
-distinct gate expressions. ⚠️ This is a proposal, not a ruling — the maintainer decides before code.
-
-Open questions for that pass: where the covering set is computed and how a diagnostic names the configuration it
-came from; what a loose build (no manifest, so no declared flag universe) is owed, given an undeclared flag there
-is simply inactive; cost (N analyses of seconds each, and the prelude/import closure is already shared by
-`--each`); and whether `kama build` should say that it checked one configuration of N.
-
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and

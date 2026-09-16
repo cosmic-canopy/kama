@@ -32412,6 +32412,12 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         SharedAttributeList* ap = decl ? attrsOf(decl.get()) : nullptr;
         if (!ap || !*ap) { kept.push_back(decl); continue; }
+        // A gate that can never be active gates DEAD code — no configuration compiles it — so it is a
+        // mistake, and it is one under every verb: the refusal lives here, where every gate passes.
+        if (_gateContradiction) {
+            std::string why = _gateContradiction(*ap);      // the whole sentence: the driver owns the groups
+            if (!why.empty()) unsupported(why.c_str(), decl->line);
+        }
         if (!compileForActive(*ap, decl->line)) {           // gate inactive -> decl never exists
             std::string n = nameOf(decl.get());
             if (!n.empty()) { _prunedNames.insert(n); unit->prunedNames.insert(n); }

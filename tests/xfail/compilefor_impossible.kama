@@ -1,0 +1,12 @@
+// A gate that can NEVER be active gates dead code, so it is a mistake rather than a declaration nobody
+// compiles. `DEBUG` and `RELEASE` are two values of BUILD_TYPE, and a single-select group has exactly one
+// value per build — so no configuration in any product of flags reaches this body.
+//
+// Refused in `pruneInactiveDecls`, where every gate passes, so `kama build`, `kama check` and the language
+// server all say it. That is the difference between this and a gate merely out of reach of every declared
+// target (`@compileFor(ARCH_RISCV64)` with no riscv target): that one is stub code for a platform this
+// project does not support yet, is checked the day the target is declared, and is NOT an error.
+@compileFor(DEBUG, RELEASE)
+fn int32 unreachableEverywhere() { return 251; }
+
+fn int32 main() { return 0; }

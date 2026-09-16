@@ -108,6 +108,7 @@ class_identity_operator	class_identity_operator.kama:18
 class_identity_value	class_identity_value.kama:14 class_identity_value.kama:17 class_identity_value.kama:19 class_identity_value.kama:20
 clong_serialize	clong_serialize.kama:3
 compilefor_dangling	compilefor_dangling.kama:8
+compilefor_impossible	compilefor_impossible.kama:10
 compilefor_member_pair	compilefor_member_pair.kama:10 compilefor_member_pair.kama:8
 compilefor_on_method	compilefor_on_method.kama:9
 comptime_args_arity	comptime_args_arity.kama:3
@@ -337,6 +338,7 @@ field_on_primitive	field_on_primitive.kama:4
 field_on_string	field_on_string.kama:4
 file_gate_after_import	file_gate_after_import.kama:8
 file_gate_bad_attribute	file_gate_bad_attribute.kama:7
+file_gate_impossible	file_gate_impossible.kama:4
 file_gate_module_all_gated	main.kama:8
 file_gate_operand	file_gate_operand.kama:12
 file_gate_still_parsed	file_gate_still_parsed.kama:13

@@ -178,7 +178,12 @@ This is the sharpest edge in the toolchain for an agent, so it is stated plainly
 | | catches |
 |---|---|
 | `kama check` | name resolution, unknown functions/methods/types, named-argument mismatches, ownership/move analysis, serde marks, **and a type mismatch by kind** |
-| `kama build` | all of the above, plus whatever the C compiler still catches |
+| `kama build` | all of the above, plus whatever the C compiler still catches — but only for the ONE configuration it is building |
+
+`kama check` is also the only command that reaches code your build's flags leave out: it covers every
+`@compileFor` and file gate in your own files, adding configurations until each has been active once, and
+tags a diagnostic from another configuration with the flags that reproduce it — `[--target WASM]`. Pass
+any configuration flag to check exactly that one instead. See SPEC *Conditional compilation*.
 
 A **kind** is one of four families: a number, a `bool`, a `string`, or a type value. Crossing between
 two of them is rejected by `kama check`, in kama's own words, against your `.kama` line:

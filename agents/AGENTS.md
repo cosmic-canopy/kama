@@ -51,6 +51,11 @@ kama run               # build the manifest entry and run it
 kama check <file>      # FAST SUBSET — see below
 ```
 
+`kama check` is the one command that also looks at code THIS build leaves out: it analyzes whatever
+further configurations your `@compileFor` gates need, so a wasm-only or release-only file cannot rot
+unnoticed, and tags anything it finds with the flags that reproduce it (`[--target WASM]`). Pass a
+configuration flag (`--target`, `--release`, `--define`…) to check exactly that one instead.
+
 `kama check` runs name resolution, named-argument matching, ownership/move analysis, and type checking
 **by kind** — a value is a number, a `bool`, a `string`, or a type value, and crossing between two of
 them (`int32 x = "oops";`) is rejected — wherever a value crosses into a destination of a stated type <!-- xfail: narrow_local, narrow_argument -->

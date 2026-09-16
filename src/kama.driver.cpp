@@ -1925,6 +1925,13 @@ static bool g_outputShared = false;   // OUTPUT=SHARED — the emitter defines t
 // checked and a failure only warns), so the signing mechanism lands before the enforcement policy.
 static bool g_verifySignatures = false;
 
+// One literal of a `@compileFor` gate: a flag name, possibly negated. The gate is their conjunction —
+// there is no `||` — which is what makes the covering check's set cover computable (KR-54).
+struct GateLit { std::string name; bool neg = false; };
+static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs);   // all three defined with
+static std::string gateContradiction(const std::vector<GateLit>& lits);       // the covering check, below
+static std::string renderGateLits(const std::vector<GateLit>& lits);
+
 // `@compileFor(FLAG)` conditional compilation (the "structure" axis): the active build-flag set
 // (built-ins derived from `--target`/`--release`, plus `--define`), the declared-flag universe (from
 // `kama.json`, Stage 2), and whether strict flag-name validation is on. File-scope like `g_noHeap`,
@@ -2013,6 +2020,17 @@ static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string&
 
     const int line = (*unit->fileGate)[0] ? (*unit->fileGate)[0]->line : 1;
     bool bad = false;
+    // A file gate that can never be active excludes the file from EVERY build — dead code, and the same
+    // mistake the declaration gate is refused for (CEmitter::pruneInactiveDecls).
+    {
+        std::string why = gateContradiction(gateLiterals(unit->fileGate));
+        if (!why.empty()) {
+            fprintf(stderr, "kama: error: %s:%d: `file %s;` can never be active — %s. No configuration "
+                            "compiles this file, so it is a mistake.\n",
+                    path.c_str(), line, renderFileGate(unit->fileGate).c_str(), why.c_str());
+            return FileGate::Malformed;
+        }
+    }
     const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, g_declaredFlags, g_strictFlags,
                                              [&](const std::string& m) {
                                                  fprintf(stderr, "kama: error: %s:%d: %s\n",
@@ -2359,6 +2377,14 @@ static void configureEmitter(CEmitter& e)
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
+    // ...and why a gate could never be active, which needs the manifest's select groups (see KR-54).
+    e.setGateContradiction([](const SharedAttributeList& attrs) -> std::string {
+        std::vector<GateLit> lits = gateLiterals(attrs);
+        std::string why = gateContradiction(lits);
+        if (why.empty()) return why;
+        return "`" + renderGateLits(lits) + "` can never be active — " + why
+             + ". No configuration compiles what it gates, so it is a mistake";
+    });
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
     e.setForeignRoots({ absolutePath(resolveStdlibDir(g_argv0)), absolutePath(storeDir()) });   // KR-38 attribution
     // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
@@ -5033,8 +5059,6 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
 //   * A gate that can NEVER be active (`DEBUG, RELEASE`; `X, !X`) is an error: it is always a typo.
 //   * Only the project's own units owe this; a dependency's gates are that package's obligation.
 
-struct GateLit { std::string name; bool neg = false; };
-
 // A gate's literals — every `@compileFor` in the list, ANDed. Malformed arguments are skipped: the default
 // configuration's analysis already reports them, through kamaCompileForActive.
 static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs)
@@ -5162,12 +5186,12 @@ static bool gateActiveIn(const std::vector<GateLit>& lits, const std::set<std::s
     return true;
 }
 
-// Pick the configurations that activate every gate in `gates` the default leaves inactive. Returns them in
-// order; `contradictions` receives the index of each gate no configuration could EVER activate, with why.
-// Leaves the globals holding whatever resolved last — the caller reinstalls what it needs.
+// Pick the configurations that activate every gate in `gates` the default leaves inactive, in order. A gate
+// no configuration can activate simply gets none — an IMPOSSIBLE one is refused by the analysis itself
+// (CEmitter::pruneInactiveDecls), and one merely out of reach of every declared target is not an error at
+// all. Leaves the globals holding whatever resolved last — the caller reinstalls what it needs.
 static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit>>& gates,
-                                           const BuildConfigRequest& base, bool baseNoHeap,
-                                           std::map<size_t, std::string>& contradictions)
+                                           const BuildConfigRequest& base, bool baseNoHeap)
 {
     std::vector<CoverConfig> chosen;
     if (!installCoverConfig(base, baseNoHeap, CoverConfig())) return chosen;
@@ -5178,8 +5202,7 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
     std::vector<bool> covered(gates.size(), false);
     for (size_t i = 0; i < gates.size(); ++i) {
         if (gateActiveIn(gates[i], defaultActive)) { covered[i] = true; continue; }
-        std::string why = gateContradiction(gates[i]);
-        if (!why.empty()) { contradictions[i] = why; covered[i] = true; }
+        if (!gateContradiction(gates[i]).empty()) covered[i] = true;   // refused by the analysis, not here
     }
 
     for (size_t gi = 0; gi < gates.size(); ++gi) {
@@ -9851,36 +9874,19 @@ int main(int argc, char** argv)
                 // Every gate the program's own files contain, as parsed — a file's gate and each gated
                 // declaration's (CompilationUnit::declGates survives pruning; see there).
                 std::vector<std::vector<GateLit>> gates;
-                struct Site { std::string file; int line; };
-                std::vector<Site> sites;
                 for (const auto& r : roots) {
                     SharedCompilationUnit u = parseFile(r);
                     if (!u) continue;
                     auto add = [&](const SharedAttributeList& attrs) {
                         std::vector<GateLit> lits = gateLiterals(attrs);
-                        if (lits.empty()) return;
-                        int line = 1;                                // the `@compileFor` entry's own line
-                        for (auto& at : *attrs)
-                            if (at && at->name && *at->name == "compileFor") { line = at->line; break; }
-                        gates.push_back(lits);
-                        sites.push_back({ r, line });
+                        if (!lits.empty()) gates.push_back(lits);
                     };
                     add(u->fileGate);
                     for (const auto& g : u->declGates) add(g);
                 }
-                std::map<size_t, std::string> contradictions;
-                cover = coverGates(gates, bcReq, baseNoHeap, contradictions);
+                cover = coverGates(gates, bcReq, baseNoHeap);
                 installCoverConfig(bcReq, baseNoHeap, CoverConfig());
                 g_outputShared = baseShared;
-                for (const auto& c : contradictions) {
-                    Diagnostic d;
-                    d.file = sites[c.first].file;
-                    d.line = sites[c.first].line;
-                    d.code = "compileFor";
-                    d.message = "`" + renderGateLits(gates[c.first]) + "` can never be active — " + c.second
-                              + ". No configuration compiles what it gates, so it is a mistake";
-                    if (seenDiag.insert(key(d)).second) diags.push_back({ d, "" });
-                }
             }
             for (const auto& c : cover) {
                 if (!installCoverConfig(bcReq, baseNoHeap, c)) continue;

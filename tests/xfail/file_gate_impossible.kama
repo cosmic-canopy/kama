@@ -1,0 +1,6 @@
+// The file gate half of compilefor_impossible: a gate that can never be active excludes this file from
+// every build there is, which is a mistake rather than a file nobody compiles. Read there for why an
+// out-of-reach target gate is a different thing and is accepted.
+file @compileFor(OS_LINUX, OS_WINDOWS);
+
+fn int32 main() { return 0; }

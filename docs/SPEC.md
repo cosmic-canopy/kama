@@ -2430,6 +2430,46 @@ built on one sank a build that was never going to run the code.
 [`tests/file_gate.d/`](../tests/file_gate.d/) is the working example — two implementations of one
 function, one gated per platform, returning the same value on the native and wasm legs.
 
+#### `kama check` covers every gate ✅
+
+A gate is a *keep/drop*, so the code it drops is never analyzed — which means code for a target, a build
+type or a flag you do not build every day rots in silence, and the first report comes from whoever does
+build it. So **`kama check` owes every gate in your own files one analysis in which that gate is active**:
+
+```sh
+$ kama check kama.json
+src/impl_wasm.kama:11:0: error: unknown type `Zork` in a parameter — …  [--target WASM]
+kama: src/app.kama FAILED (2 configurations, 1 error)
+```
+
+It analyzes the configuration it was given, then adds configurations until each `@compileFor` and each
+file gate has been active in one, and **tags** a diagnostic from any other configuration with the flags
+that reproduce it. No cross toolchain is involved: this is kama's own analysis, and a `--target WASM`
+check on a Mac needs no emscripten. The obligation is over the *gates the program contains*, not over the
+configurations it admits — the latter is a product (TARGET × BUILD_TYPE × OUTPUT × every group × the
+powerset of `flags`) and cannot be enumerated, while a gate is a conjunction of possibly-negated names
+with no `||`, so a covering set is computable and is what "this code is checked somewhere" means.
+
+- **Any explicit configuration flag means exactly that configuration** — `--target`, `--select`,
+  `--define`, `--undefine`, `--release`/`--debug`, `--no-heap`, `--shared`. That is both the fast inner
+  loop and the way a tag is reproduced: the tag *is* the command.
+- **A gate no known target can activate is not checked, and that is not an error.** Stub code for a
+  platform you do not support yet (`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for
+  nobody and breaks nobody; declaring the target — which building it needs anyway — brings it into the
+  cover.
+- **A gate that can *never* be active is an error** — `@compileFor(DEBUG, RELEASE)` names two values of <!-- xfail: compilefor_impossible -->
+  one single-select group, `@compileFor(X, !X)` contradicts itself, and `@compileFor(OS_LINUX, OS_WINDOWS)`
+  names two values of one triple component; no configuration compiles what any of them gates. The refusal
+  is in the prune pass itself, where every gate passes, so **every verb** says it — `kama build` and the
+  language server included. A **file** gate that can never be active is refused the same way. <!-- xfail: file_gate_impossible -->
+- **Only your own files owe the cover.** A dependency's gates are that package's obligation, checked by
+  its own CI.
+- **`kama build` is unchanged** — one artifact, one configuration, judged fully. `check` is the verb whose
+  job is judgment, so the cover is its.
+
+The guard for the cover itself is [`tools/check-compilefor-cover.sh`](../tools/check-compilefor-cover.sh):
+every axis, both tags, and the corpus swept.
+
 **Flags** are reproducible — from the explicit build invocation, never ambient environment. They come
 from two places: **single-select groups** (pick one value; its name becomes a flag) and the
 **multi-select `flags` bag** (any number on at once).

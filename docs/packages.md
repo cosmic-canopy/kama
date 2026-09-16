@@ -437,6 +437,10 @@ for m in libs/config libs/net apps/server; do
 done
 ```
 
+That `kama check` is also each member's portability gate: with no configuration flag it covers every
+`@compileFor` and file gate the member contains, so a wasm-only or Windows-only file is analyzed even on
+a Linux runner (SPEC *Conditional compilation*). Nothing cross-compiles — it is kama's own analysis.
+
 Without either key nothing breaks — the tooling infers the file set as before. These keys buy precision
 and remove the cap. If you have a large tree that genuinely is one program and you'd rather not declare
 it, `KAMA_LSP_MAX_FILES` raises the inference cap (`0` = no limit).
