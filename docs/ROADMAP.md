@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-60**
+**Next id: KR-61**
 
 ## The shape
 
@@ -107,6 +107,7 @@ Most of this gates on the repo going public.
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-32 | **Debugger value formatting** — render `string`/`Optional`/collections as kama values, not their emitted-C form | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-60 | **`kama stats <op>`** — a project report the compiler alone can produce exactly: lines (total / code / comment / blank, classified by the LEXER, so a `//` inside a string is not a comment), declarations by kind (types per `value`/`resource`/`contract`/`enum`, functions per free/method/ctor/operator/extern/`expose`/`fnptr`, enum variants, module constants), generic **templates vs emitted instantiations**, the **unsafe surface** (`unsafe fn` count, types holding an `UnsafePtr`), the **FFI surface** (`extern` headers/fns in, `expose fn` out — which IS the ABI), **gated-out code** (`@compileFor` sites, configurations the cover needs, lines in NO configuration), per-module lines + export counts, the dependency/`csources`/`link` inventory, and the top-N largest declarations. Human table + `--json`; operand rule as `build`/`check` (a `kama.json` is the project, `.kama` files are just those); runs the same analysis `check` runs, which is what makes the instantiation and conformance numbers exact. ⚠️ **Not named `diagnostics`** — that word is compiler errors/warnings and `kama query --diagnostics` | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
 
 ## FUTURE — the big arcs, in this order

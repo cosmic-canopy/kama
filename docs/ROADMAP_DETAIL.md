@@ -2267,6 +2267,41 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
+- **`kama stats <op>` — the project report (KR-60), filed 2026-09-16.** Asked for as "kama diagnostics";
+  ⚠️ **that name is taken** — *diagnostics* means compiler errors and warnings everywhere in this repo, and
+  `kama query --diagnostics` is a shipped mode, so a second meaning would collide exactly where people look.
+  `kama stats` is the spelling (maintainer ruling), with the operand rule `build`/`check` already use: a
+  `kama.json` means the project, `.kama` files mean just those.
+
+  **Why the compiler rather than `cloc`/`tokei`:** the interesting numbers are ones a line counter cannot
+  produce. A lexer knows a `//` inside a string is not a comment; only the emitter knows how many
+  monomorphs a template actually produced; only the resolver knows the conformance edges; and only kama
+  knows which lines its own gates exclude. The report is **one analysis** — the same `check` runs
+  (maintainer ruling: full analysis, not parse-only) — so every number is what the compiler resolved.
+
+  **What v1 reports** (all four groups chosen by the maintainer, plus the three the request named):
+  - **Lines** — total / code / comment / blank, classified in the lexer. A line with code and a trailing
+    comment is CODE (the usual convention); the classification is exact by construction.
+  - **Declarations by kind** — types per `value`/`resource`/`contract`/`enum` (`generic-type` separately,
+    since the index already distinguishes it), functions per free / method / `ctor` / operator / `extern fn`
+    / `expose fn` / `fnptr`, enum variants, module `static`/`comptime` constants, fields.
+  - **Generics + unsafe + FFI** — templates vs **emitted instantiations**; `unsafe fn` count and how many
+    types hold an `UnsafePtr` (the audit question for a systems language); `extern` headers and functions
+    in, `expose fn` out — that last list *is* the project's ABI.
+  - **Gated-out code** — `@compileFor` and file-gate sites, how many configurations the cover needs
+    (the cover solver shipped at `0.9.357` answers this already), and how many lines sit in NO configuration this build.
+  - **Module + dependency shape** — per-module lines and declarations, `export` counts (the public surface,
+    so a module quietly becoming the API is visible), dependencies with versions, `csources`, `link`.
+  - **Top-N largest declarations** — by line span, from the AST. `ASTNode` already carries `endLine`, so
+    this needs no new position plumbing (⚠️ that span is the lexer position at reduction and is documented
+    as approximate for multi-token nodes — verify it on real declarations before trusting the ranking).
+
+  **What it needs that does not exist yet:** per-line classification in `kama.l` (two rules to instrument,
+  carried on `CompilationUnit` beside the other parse-time facts), one or two `CEmitter` accessors for the
+  instantiation and conformance counts, and a guard over a fixture project whose numbers are hand-verified.
+  Everything else is a walk of the units the driver already has. Human table by default, `--json` through
+  the existing envelope. Sized **M** — about a session.
+
 - **tree-sitter accepts 78 of kama's 84 reserved words as a binding name; the compiler accepts 6 (the contextual ones).**
   Measured 2026-09-02 across the full keyword table, in both type positions:
 
