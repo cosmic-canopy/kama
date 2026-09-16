@@ -2467,8 +2467,12 @@ with no `||`, so a covering set is computable and is what "this code is checked 
 - **`kama build` is unchanged** — one artifact, one configuration, judged fully. `check` is the verb whose
   job is judgment, so the cover is its.
 
+**Your editor does the same for one file**: a source the editor's configuration gates out is analyzed under
+a configuration that admits it, with its diagnostics tagged the same way — see
+[editors.md](editors.md#build-configuration--the-same-file-in-every-editor).
+
 The guard for the cover itself is [`tools/check-compilefor-cover.sh`](../tools/check-compilefor-cover.sh):
-every axis, both tags, and the corpus swept.
+every axis, both tags, and the corpus swept; the editor half is section J of `tools/check-lsp.sh`.
 
 **Flags** are reproducible — from the explicit build invocation, never ambient environment. They come
 from two places: **single-select groups** (pick one value; its name becomes a flag) and the

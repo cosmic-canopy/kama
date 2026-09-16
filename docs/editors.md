@@ -133,6 +133,11 @@ Two things to know:
 - **One configuration per server process**, pinned by the first file that resolved a manifest. Open a
   second project in the same window and it is analyzed under the first one's flags. Declare a shared flag
   universe in the root manifest, or use one window per project.
+- **...except a file that configuration gates out.** A source excluded by its own `file @compileFor(...)`
+  is not part of this build, but it is still a file you are editing — so it is analyzed under a
+  configuration that *does* admit it (the same cover `kama check` computes), and its diagnostics say which:
+  `` `Config` has no field `port`  [--target WASM] ``. Without that it would have no import closure at all,
+  and correct code would fill with squiggles about names its own module declares.
 
 ---
 
