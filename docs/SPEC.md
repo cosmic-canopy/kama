@@ -1608,7 +1608,7 @@ A native, single-binary I/O foundation — **library over FFI, no new language s
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
 `Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
-`isDir`, `modified` (a `std::time::SystemTime`, one-second resolution) and `readOnly` (the recorded
+`isDir`, `modified` (a `std::time::Timestamp`, one-second resolution) and `readOnly` (the recorded
 permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
 `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
@@ -1812,14 +1812,14 @@ bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;   // C: `bd.usage 
 
 ### Time (`std::time`) ✅
 
-`import { std::time::Duration, std::time::Instant, std::time::SystemTime, std::time::monotonicNow,
+`import { std::time::Duration, std::time::Instant, std::time::Timestamp, std::time::monotonicNow,
 std::time::unixNow, std::time::sleep };` — **two clocks, and choosing between them is the only thing
 the module asks of a caller.**
 
 | | type | read with | for |
 |---|---|---|---|
 | **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. |
-| **wall** | `SystemTime` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1678..2262). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
+| **wall** | `Timestamp` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1678..2262). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
 
 `Duration` is the signed span both produce (`fromMillis`/`asSecsF`/… and `+ - <`); all three implement
 `Equatable`/`Comparable`, so a stamp is a `SortedMap` key without a comparator. There is deliberately no

@@ -1,25 +1,25 @@
 // std::time — the wall clock and `sleep`. Every check is deterministic: the only wall-clock-dependent
 // assertion is a CENTURY-wide window, and the sleep is measured with a slack an oversubscribed CI box
 // cannot lose (it may sleep longer, never less). The eight flags sum to 255 — an exit code is one byte.
-import { std::time::Duration, std::time::Instant, std::time::SystemTime,
+import { std::time::Duration, std::time::Instant, std::time::Timestamp,
          std::time::monotonicNow, std::time::unixNow, std::time::sleep };
 
 fn int32 main() {
     int32 r = 0;
 
     // Arithmetic on a stamp, with no clock involved at all.
-    SystemTime s = SystemTime.fromUnixSecs(s: 1000000000i64);   // 2001-09-09T01:46:40Z
+    Timestamp s = Timestamp.fromUnixSecs(s: 1000000000i64);   // 2001-09-09T01:46:40Z
     if (s.asUnixMillis() == 1000000000000i64)                   { r = r + 1; }
     if (s.asUnixNanos() == 1000000000000000000i64)              { r = r + 2; }
-    SystemTime later = s + Duration.fromMillis(ms: 1500i64);
+    Timestamp later = s + Duration.fromMillis(ms: 1500i64);
     if (later.durationSince(earlier: s).asMillis() == 1500i64)  { r = r + 4; }
     // ...and backward, which the wall clock really can do — a negative span is a value, not an error.
     if (s.durationSince(earlier: later).asMillis() == -1500i64) { r = r + 8; }
     if (s < later)                                              { r = r + 16; }
-    if (SystemTime.epoch().asUnixSecs() == 0i64)                { r = r + 32; }
+    if (Timestamp.epoch().asUnixSecs() == 0i64)                { r = r + 32; }
 
     // The clock itself, bounded rather than pinned: after 2020-01-01 and before 2100-01-01.
-    SystemTime now = unixNow();
+    Timestamp now = unixNow();
     if (now.asUnixSecs() > 1577836800i64 && now.asUnixSecs() < 4102444800i64) { r = r + 64; }
 
     // `sleep` advances the MONOTONIC clock by at least the span asked for. 20 ms asked, 15 ms asserted:

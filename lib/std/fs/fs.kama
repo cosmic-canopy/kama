@@ -7,7 +7,7 @@ import {
     std::collections::DynamicArray,
     std::collections::FixedArray,
     std::collections::View, std::collections::ConstView,
-    std::time::SystemTime,
+    std::time::Timestamp,
     std::path::parent,
     std::path::join,
     std::ptr::nonNull,
@@ -49,7 +49,7 @@ type enum OpenMode { Read, Write, Append }
 // What the filesystem records about a path.
 //
 // `modified` is a wall-clock stamp, so comparing two of them tells you which is newer and nothing about
-// how long ago; it also moves backward when the clock does (see `std::time::SystemTime`). Resolution is
+// how long ago; it also moves backward when the clock does (see `std::time::Timestamp`). Resolution is
 // whatever the filesystem records — nanoseconds on macOS, Linux and the wasm VFS, whole seconds on
 // Windows (`_stat64` has no sub-second field); kama_os.h picks the spelling per libc.
 //
@@ -59,7 +59,7 @@ type enum OpenMode { Read, Write, Append }
 type value Metadata {
     public usize size;
     public bool isDir;
-    public SystemTime modified;
+    public Timestamp modified;
     public bool readOnly;
 }
 
@@ -197,7 +197,7 @@ unsafe fn Result<Metadata, IoError> stat(const ref string path) {
                               outMtimeNs: addr(of: mtime), outReadOnly: addr(of: ro));
     if (rc != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Metadata.of(size: cast<usize>(sz), isDir: isdir != 0,
-                                         modified: SystemTime.fromUnixNanos(n: mtime), readOnly: ro != 0));
+                                         modified: Timestamp.fromUnixNanos(n: mtime), readOnly: ro != 0));
 }
 
 // Does the path exist? A plain `bool`, not a `Result`: "no" and "the lookup failed" are the same answer

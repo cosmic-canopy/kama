@@ -180,7 +180,7 @@ static inline int32_t   kama_unlink(const char* path) {
 }
 
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
-// mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::SystemTime` with no conversion at the
+// mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::Timestamp` with no conversion at the
 // kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here.
 // `readOnly` is the write PERMISSION BIT, not an access check: it says what the file's mode records, and
 // says nothing about this process (root ignores it; an ACL can deny a writable-looking file).
@@ -763,7 +763,7 @@ static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(p
 
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
 // 0 = ok, -1 = error (errno set). mtime is NANOSECONDS from the UNIX epoch, so it IS a
-// `std::time::SystemTime` at the kama end with no conversion.
+// `std::time::Timestamp` at the kama end with no conversion.
 //
 // The sub-second field is spelled three ways across the platforms this branch serves, and each one is
 // picked by the spelling it actually has rather than by the OS name: macOS/BSD's `st_mtimespec` is visible

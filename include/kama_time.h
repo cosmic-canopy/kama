@@ -3,7 +3,7 @@
 
 // kama clock + sleep binding — the FFI boundary for `std::time`.
 //
-// The ONE place the platform clock difference is absorbed, so `std::time` (Duration/Instant/SystemTime)
+// The ONE place the platform clock difference is absorbed, so `std::time` (Duration/Instant/Timestamp)
 // stays 100% platform-agnostic — the same bindings-layer role kama_os.h plays for I/O, kept SEPARATE so a
 // program that only wants a clock (a game frame timer, an MCU delay, a scheduler benchmark) never pulls in
 // <winsock2.h>. That separation is why `sleep` lives here and not beside kama_os.h's `kama_sleep_ms`, which

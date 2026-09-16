@@ -6,7 +6,7 @@ import { std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::stat, std
          std::fs::rename, std::fs::remove,
          std::fs::readDir, std::fs::writeFile, std::fs::readFile,
          std::io::IoError, std::io::writeAll, std::collections::DynamicArray,
-         std::path::join, std::time::SystemTime, std::time::Duration, std::time::unixNow };
+         std::path::join, std::time::Timestamp, std::time::Duration, std::time::unixNow };
 
 fn bool ok(Result<Unit, IoError> r) {
     return match (r) { case Ok(value: u): true; case Err(error: e): false; };
@@ -59,7 +59,7 @@ fn int32 main() {
     DynamicArray<uint8> body = bytesOf(s: "hello");
     match (writeFile(path: f1, bytes: body)) { case Ok(value: n): { r = r + 8; } case Err(error: e): { } };
 
-    SystemTime now = unixNow();
+    Timestamp now = unixNow();
     match (stat(path: f1)) {
         case Err(error: e): { }
         case Ok(value: m): {
