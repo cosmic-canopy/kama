@@ -1705,7 +1705,8 @@ from the socket, not a silent drop.
 differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
 the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the
 OS's choice), with `leaveMulticastV4`/`leaveMulticastV6` beside them. `interfaceIndex(name:)` turns `lo0` or `eth0` <!-- test: net_udp_multicast -->
-into an index, and a name that is no interface is `Err(NotFound)`. `setMulticastInterfaceV4`/`V6` choose the
+into an index, and a name that is no interface is `Err(NotFound)`. On Windows the name is the NDIS name
+(`loopback_0`, `ethernet_32769`), and the friendly name (`Loopback Pseudo-Interface 1`) is `Err(NotFound)`. `setMulticastInterfaceV4`/`V6` choose the
 interface sends leave by (without it the routing table picks, and a loopback-bound V4 socket's send fails on a
 host with a default route); `setMulticastLoop` and `setMulticastHops` apply to either family. A group or
 interface of the other family is `Err(InvalidInput)` before the OS is asked. <!-- test: net_udp_multicast -->

@@ -199,6 +199,24 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `HostUnreachable`, which reads like a network answer rather than a missing init. `tests/net_resolve`
   scored 111 of 127 on exactly that: the flag lost was the `resolve("localhost")` that ran before its
   listener bound.
+- **`<iphlpapi.h>` defines `interface`, `hyper` and 19 more lowercase macros**, despite `WIN32_LEAN_AND_MEAN`:
+  its chain reaches `<rpc.h>`/`<rpcndr.h>` (`#define interface struct`). A kama name spelled that way then breaks
+  the C, and at `0.9.376` `UdpSocket.joinMulticastV4(interface:)` failed to compile EVERY program importing
+  `std::net`. So `kama_os.h` declares `if_nametoindex` itself (`0.9.377`). Before adding a Windows SDK header to
+  the seam, diff its `clang -dM -E` lowercase macros against the current set. Even without it, `<windef.h>` leaves
+  `near`, `far`, `pascal` and `cdecl` defined, which is KR-67.
+- **IPv6 on Windows, measured 2026-09-17 (`0.9.377`, `net_ipv6` 127, `net_udp_multicast` 31):**
+  * `IPV6_V6ONLY` defaults ON. With the seam's `setsockopt(…, 0)` deleted, both dual-stack cases fail (127 → 109),
+    so that line is load-bearing here, where Linux and macOS would pass without it.
+  * `if_nametoindex` takes the NDIS name: `loopback_0` → 1, `ethernet_32769` → 4. The friendly
+    `Loopback Pseudo-Interface 1` and a POSIX `lo` are `NotFound`.
+  * V6 multicast DOES deliver on loopback, from a socket bound to `::` with the loopback index, as on macOS
+    and unlike Linux's `lo`.
+- **Binding a wildcard (`::`, `""`, `0.0.0.0`) raises a Windows Defender Firewall prompt** for every new
+  executable, and each fixture is a fresh `.exe` in a fresh temp dir, so `net_ipv6` and `net_udp_multicast`
+  prompt on every run. The dialog does not block the program, and Cancel is harmless: it refuses INBOUND
+  traffic from the network, while the fixtures talk over loopback. To silence it on a dev VM, run in an admin
+  shell: `Set-NetFirewallProfile -Profile Domain,Public,Private -NotifyOnListen False`.
 - **`abort()` exits 127; it is not a death by signal.** So the POSIX `>= 128` trap predicate matches
   nothing here, and 127 is a value a program can also *return* — the runtime's own message on stderr is
   the discriminator. `run_tests.sh` (trap fixtures) and `tools/check-release-arith.sh` each carry this

@@ -70,10 +70,9 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    instance).
 4. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
    allocator verdict (§4).
-5. **On the Windows box, in parallel: KR-58** (the maintainer's split, 2026-09-17: the Windows box takes the Windows
-   rows while KR-49/KR-50 are built on the other machine). Brief in §2b: what is measured, the four decisions to
-   measure and put to the maintainer BEFORE code, and the red-first fixture. Start with decisions 2 and 3 (stack
-   reserve, probe cost), which are pure measurement.
+5. **KR-58 on the Windows box, AFTER KR-49/KR-50** (maintainer, 2026-09-17: wait for their results, since a
+   declared pool may change what a `@heap` extern means; see §2b "Meets KR-49"). The brief in §2b is otherwise ready:
+   decisions 2 and 3 (stack reserve, probe cost) are pure measurement and go first.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
@@ -401,7 +400,7 @@ every free in the corpus returned its exact size and alignment.
 ### 2b. The Windows seam stops allocating per path (KR-58) — brief, not started
 
 Written 2026-09-17 on the Windows box at `0.9.369`, from reading `include/kama_os.h` and one probe. It is the Windows
-box's next row, built in parallel with KR-49 on the other machine.
+box's row once KR-49/KR-50 have landed on the other machine.
 
 **What is true today.** `kama__wpath` converts every UTF-8 path to a heap UTF-16 string (`kama__wide` → a
 `kama__sized_alloc` block), and past 248 characters makes a SECOND heap block for the `GetFullPathNameW` result with

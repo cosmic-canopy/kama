@@ -746,13 +746,17 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
-- **`std::net` IPv6 + multicast on Windows (KR-64).** IPv6 and multicast shipped at `0.9.372`–`0.9.376`, written for Winsock
-  and POSIX in one shared address seam and verified on macOS and Linux only. What Windows alone can show:
-  `IPV6_V6ONLY` is ON by default there, so `bind("::")` dual-stack depends on the seam's explicit `0`;
-  `if_nametoindex` needs iphlpapi (linked for a Windows target) and takes the NDIS name, and the fixture's
-  `loopback_0` is a guess; whether V6 loopback multicast delivers (Linux's `lo` does not, macOS's does) decides
-  `tests/net_udp_multicast`'s `v6LoopbackDelivers` gate there. Run `net_ipv6`, `net_resolve` and
-  `net_udp_multicast` natively and fix what they find.
+- **A platform header's macros collide with kama names (KR-67).** Found verifying `std::net` on Windows
+  (2026-09-17): `<iphlpapi.h>` defined `interface`, and `UdpSocket.joinMulticastV4(interface:)` broke every
+  program importing `std::net` (fixed in `0.9.377` by declaring `if_nametoindex` instead). The same class is
+  still open for what `<windows.h>` itself leaves defined under `WIN32_LEAN_AND_MEAN`. Measured with `clang -dM -E`
+  over `kama_os.h`'s Windows include set, the lowercase object-like macros are `near`, `far`, `pascal`, `cdecl`,
+  `environ` and `errno`, plus function-like names that expand only before a `(`. A parameter `near` emits
+  `float near`, which the macro makes `float`, and clang reads it as an unnamed parameter. Rejected first: adding them
+  to `c_reserved`, since they are not C and would take `near`/`far` from every platform for one vendor's legacy.
+  Candidates: `#undef` the empty legacy macros after the SDK includes (they are Win16 spellings nothing in the
+  seam uses, but a user `extern` header included later might), or emit C names that cannot collide. Decide with a
+  fixture that fails on Windows first, and check `errno`/`environ` separately, because those are real on POSIX too.
 - **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
   only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
   for a contract destination, correctly (a contract admits every kind by design, which is what makes
