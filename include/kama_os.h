@@ -85,7 +85,12 @@ static inline char* kama__sized_strdup(const char* s) {
 #endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
-#include <iphlpapi.h>     // if_nametoindex (kama_interface_index) — iphlpapi.dll, linked for a Windows target
+// `if_nametoindex` (kama_interface_index) lives in iphlpapi.dll, linked for a Windows target, and is DECLARED here
+// rather than through <iphlpapi.h>, whose chain (iprtrmib.h -> mprapi.h -> ... -> rpc.h/rpcndr.h) ignores
+// WIN32_LEAN_AND_MEAN and defines 21 lowercase macros, `#define interface struct` and `hyper` among them. Any kama
+// name spelled that way then breaks the C: `UdpSocket.joinMulticastV4(interface:)` failed to compile every program
+// importing std::net on Windows (0.9.376). The prototype is netioapi.h's: NET_IFINDEX (ULONG) WINAPI (PCSTR).
+unsigned long __stdcall if_nametoindex(const char* name);
 #include <windows.h>      // FindFirstFileW / HANDLE / MultiByteToWideChar / GetFullPathNameW
 #include <io.h>           // _wopen, _read, _write, _close, _wunlink
 #include <direct.h>       // _wmkdir, _wrmdir
