@@ -1,0 +1,9 @@
+{
+  "name": "cxxshim",
+  "version": "1.0.0",
+  "kind": "library",
+  "source": "src",
+  "csources": ["csrc/shim.cpp"],
+  "cxxflags": ["-DKAMA_TEST_SHIM_SCALE=3"],
+  "modules": { ".": { "visibility": "public" } }
+}

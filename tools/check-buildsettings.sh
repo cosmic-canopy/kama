@@ -236,26 +236,133 @@ JSON
     || { bad "a relative -I on the ROOT was refused"; head -2 "$tmp/e" >&2; }
 
 # ---------------------------------------------------------------------------------------------------
-echo "check-buildsettings: \`csources\` compiles C, and says what it does not compile"
+echo "check-buildsettings: \`csources\` compiles the C family by extension, each with its own flags and driver"
 
-# The runnable end-to-end proofs are tests/csources_basic.d/ and tests/csources_dep.d/ — they build a C
-# file and call into it, on every leg. What lives here is the part an exit code cannot see: the
-# refusals, where the object lands, and the collision two packages can cause.
+# The runnable end-to-end proofs are tests/csources_basic.d/, tests/csources_dep.d/,
+# tests/csources_cxx.d/ and tests/csources_cxx_dep.d/ — they build the sources and call into them, on
+# every leg. What lives here is the part an exit code cannot see: which flags and which DRIVER each
+# command got, the refusals, where the object lands, and the collision two packages can cause.
 
-# C++ is refused BY NAME, with the two reasons, rather than reaching the C compiler as a `-std=c11`
-# compile of a .cpp and failing there.
-app cpp <<'JSON'
-{ "name": "cpp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
-  "csources": ["csrc/thing.cpp"],
+# An extension outside the C family is refused by name, listing the four languages, rather than reaching
+# the C compiler as whatever it guesses.
+app hdr <<'JSON'
+{ "name": "hdr", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/thing.h"],
   "modules": { ".": { "visibility": "internal" } } }
 JSON
-if "$KAMA" build "$tmp/cpp/kama.json" -o "$tmp/cpp/app" >"$tmp/o" 2>"$tmp/e"; then
-    bad "a .cpp in \`csources\` was accepted"
-elif grep -qF 'compiles C only today' "$tmp/e" && grep -qF 'C++ runtime library' "$tmp/e"; then
-    ok "a .cpp entry is refused, naming both obstacles"
+if "$KAMA" build "$tmp/hdr/kama.json" -o "$tmp/hdr/app" >"$tmp/o" 2>"$tmp/e"; then
+    bad "a .h in \`csources\` was accepted"
+elif grep -qF '`.cpp`/`.cc`/`.cxx` (C++)' "$tmp/e" && grep -qF '`.mm` (Objective-C++)' "$tmp/e"; then
+    ok "a non-C-family entry is refused, naming the languages csources compiles"
 else
-    bad "a .cpp entry was refused without saying why"; head -3 "$tmp/e" >&2
+    bad "a .h entry was refused without saying why"; head -3 "$tmp/e" >&2
 fi
+
+# Fake drivers that print their own name, so the COMMAND is observable without compiling anything: each
+# line of output is one command, starting with the driver that ran it. `cc`/`c++` is the pairing
+# deriveCxxDriver reads from the name, and `mycc` is a C driver with no C++ spelling at all.
+mkdir -p "$tmp/bin"
+for d in x86-gcc x86-g++ mycc mycxx; do
+    printf '#!/bin/sh\necho "%s $*"\n' "$d" > "$tmp/bin/$d"; chmod +x "$tmp/bin/$d"
+done
+
+app langs <<'JSON'
+{ "name": "langs", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/a.c", "csrc/a.cpp", "csrc/b.m", "csrc/c.mm"],
+  "cflags": ["-DALL_TUS"], "cxxflags": ["-DCXX_ONLY"], "objcflags": ["-DOBJC_ONLY"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/langs/csrc"; for f in a.c a.cpp b.m c.mm; do : > "$tmp/langs/csrc/$f"; done
+# `line <output>`: the one command that writes `$tmp/langs/<output>` — an object, or `app` for the link.
+# The fake driver echoes its arguments after the shell has removed their quotes, hence the bare path.
+line() { grep -e " -o $tmp/langs/$1\$" -e " -o $tmp/langs/$1 " "$tmp/o" | head -1; }
+if "$KAMA" build "$tmp/langs/kama.json" -j 2 --cc "$tmp/bin/x86-gcc" -o "$tmp/langs/app" >"$tmp/o" 2>"$tmp/e"; then
+    kc=$(line app.o); c=$(line csrc__self__a.c.o); cxx=$(line csrc__self__a.cpp.o)
+    m=$(line csrc__self__b.m.o); mm=$(line csrc__self__c.mm.o); ld=$(line app)
+    case "$kc" in x86-gcc\ *-std=c11*) ok "kama's own C: the C driver, ISO c11" ;; *) bad "kama's own C command: $kc" ;; esac
+    case "$c"  in x86-gcc\ *-std=gnu11*"-x c "*) ok "a .c entry: the C driver, gnu11, -x c" ;; *) bad "the .c command: $c" ;; esac
+    case "$cxx" in x86-g++\ *-std=gnu++17*"-x c++ -DCXX_ONLY"*) ok "a .cpp entry: the derived C++ driver, gnu++17, cxxflags after -x c++" ;; *) bad "the .cpp command: $cxx" ;; esac
+    case "$m"  in x86-gcc\ *-std=gnu11*"-x objective-c -DOBJC_ONLY"*) ok "a .m entry: the C driver, gnu11, objcflags" ;; *) bad "the .m command: $m" ;; esac
+    case "$mm" in x86-g++\ *-std=gnu++17*"-x objective-c++ -DCXX_ONLY -DOBJC_ONLY"*) ok "a .mm entry: the C++ driver, both flag lists" ;; *) bad "the .mm command: $mm" ;; esac
+    case "$ld" in x86-g++\ *) ok "a build holding C++ links with the C++ driver" ;; *) bad "the link command: $ld" ;; esac
+    for cmdl in "$kc" "$c" "$m"; do
+        case "$cmdl" in *CXX_ONLY*) bad "cxxflags reached a non-C++ TU: $cmdl" ;; esac
+    done
+    for cmdl in "$kc" "$c" "$cxx"; do
+        case "$cmdl" in *OBJC_ONLY*) bad "objcflags reached a non-Objective-C TU: $cmdl" ;; esac
+    done
+    case "$cxx$mm" in *-Werror=incompatible-pointer-types*) bad "a C-only -Werror promotion reached a C++ TU" ;; *) ok "...and the C-only promotions stay off the C++ TUs" ;; esac
+    case "$cxx" in *"-iquote . "*) ok "...and a C++ TU gets \`-iquote .\`, not \`-I.\` (a VERSION file is <version>)" ;; *) bad "a C++ TU still gets -I.: $cxx" ;; esac
+else
+    bad "the four-language build failed"; head -3 "$tmp/e" >&2
+fi
+
+# The same sources minus the C++ ones: nothing links a C++ runtime, which is what keeps a headless
+# server that shares a package with a C++ UI free of libstdc++.
+sed 's/"csrc\/a.cpp", //; s/, "csrc\/c.mm"//' "$tmp/langs/kama.json" > "$tmp/langs/k2" && mv "$tmp/langs/k2" "$tmp/langs/kama.json"
+if "$KAMA" build "$tmp/langs/kama.json" -j 2 --cc "$tmp/bin/x86-gcc" -o "$tmp/langs/app" >"$tmp/o" 2>"$tmp/e"; then
+    grep -qF 'x86-g++' "$tmp/o" && bad "a build with no C++ entry used the C++ driver" \
+        || ok "a build with no C++ entry never runs the C++ driver"
+else
+    bad "the C/Objective-C build failed"; head -3 "$tmp/e" >&2
+fi
+
+# A driver with no C++ spelling is refused BY NAME, pointing at both routes; `--cxx` is the route.
+app nocxx <<'JSON'
+{ "name": "nocxx", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/a.cpp"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/nocxx/csrc"; : > "$tmp/nocxx/csrc/a.cpp"
+if "$KAMA" build "$tmp/nocxx/kama.json" --cc "$tmp/bin/mycc" -o "$tmp/nocxx/app" >"$tmp/o" 2>"$tmp/e"; then
+    bad "a C++ build with an underivable --cc was accepted"
+elif grep -qF 'no' "$tmp/e" && grep -qF -- '--cxx <compiler>' "$tmp/e"; then
+    ok "a C++ build whose --cc has no C++ spelling is refused, naming --cxx"
+else
+    bad "the underivable-driver refusal did not say what to do"; head -3 "$tmp/e" >&2
+fi
+if "$KAMA" build "$tmp/nocxx/kama.json" --cc "$tmp/bin/mycc" --cxx "$tmp/bin/mycxx" -j 2 -o "$tmp/nocxx/app" >"$tmp/o" 2>"$tmp/e" \
+   && grep -qF 'mycxx' "$tmp/o"; then
+    ok "...and --cxx names it"
+else
+    bad "--cxx did not supply the C++ driver"; head -3 "$tmp/e" >&2
+fi
+
+# The derivation keeps a prefix, a version suffix and a subcommand: `clang-17` → `clang++-17`, a bare `cc`
+# → `c++`, and the bundled `"…/zig" cc` → `"…/zig" c++` (zig takes the one-invocation path, so this also
+# covers the link there).
+for pair in "clang-17 clang++-17" "cc c++" "zig zig"; do
+    set -- $pair
+    mkdir -p "$tmp/drv"
+    printf '#!/bin/sh\necho "%s $*"\n' "$1" > "$tmp/drv/$1"; printf '#!/bin/sh\necho "%s $*"\n' "$2" > "$tmp/drv/$2"
+    chmod +x "$tmp/drv/$1" "$tmp/drv/$2"
+    if [ "$1" = zig ]; then drv="\"$tmp/drv/zig\" cc"; want="zig c++ "; label="zig cc"
+    else drv="$tmp/drv/$1"; want="$2 "; label=$1; fi
+    if "$KAMA" build "$tmp/nocxx/kama.json" --cc "$drv" -o "$tmp/nocxx/app" >"$tmp/o" 2>"$tmp/e" \
+       && grep -q "^$want" "$tmp/o"; then
+        ok "the C++ spelling of \`$label\` is derived: $want"
+    else
+        bad "the C++ driver was not derived from \`$1\` (want $want)"; head -3 "$tmp/o" "$tmp/e" >&2
+    fi
+    rm -rf "$tmp/drv"
+done
+
+# A dependency's `cxxflags` is held to the same portability rule as its `cflags`.
+app relcxx relpkg <<'JSON'
+{ "name": "relcxx", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "relpkg": { "path": "./vendor/relpkg" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/relcxx/vendor/relpkg/kama.json" <<'JSON'
+{ "name": "relpkg", "version": "1.0.0", "kind": "library", "source": "src", "cxxflags": ["-Iinclude"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/relcxx/kama.json" >/dev/null 2>&1 || true
+"$KAMA" build "$tmp/relcxx/kama.json" -o "$tmp/relcxx/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a dependency's relative -I in cxxflags was accepted" \
+    || { grep -qF 'relative path in its build flags' "$tmp/e" \
+         && ok "a dependency's relative -I in cxxflags is refused like one in cflags" \
+         || { bad "a relative cxxflags path failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
 
 app absol <<'JSON'
 { "name": "absol", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",

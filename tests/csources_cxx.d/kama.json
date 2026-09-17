@@ -1,0 +1,10 @@
+{
+  "name": "csrccxx",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/count.c", "csrc/count.cpp"],
+  "cxxflags": ["-DKAMA_TEST_CXX_BONUS=4"],
+  "modules": { ".": { "visibility": "internal" } }
+}

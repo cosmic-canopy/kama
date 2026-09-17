@@ -618,6 +618,36 @@ std::string resolveCCompiler(const char* argv0)
     return "clang";
 }
 
+// The C++ spelling of a C driver, or "" when it has none. Measured for KR-20: the C++ runtime follows the
+// DRIVER — `clang++`, `g++`, `zig c++` and `em++` each link the right one where the C spelling does not
+// (macOS `clang` misses `std::logic_error`, `zig cc` cannot find `<vector>`) — so linking a C++ build
+// with this needs no per-target `-lc++`/`-lstdc++` table. The program is the first word (quoted, for a
+// bundled zig path); flags after it ride along, so `clang -fsanitize=…` keeps its sanitizers.
+std::string deriveCxxDriver(const std::string& cc)
+{
+    size_t end = std::string::npos;
+    if (!cc.empty() && cc[0] == '"') { end = cc.find('"', 1); if (end != std::string::npos) ++end; }
+    else end = cc.find(' ');
+    if (end == std::string::npos) end = cc.size();
+    const std::string prog = cc.substr(0, end), rest = cc.substr(end);
+    if (rest == " cc" || rest.compare(0, 4, " cc ") == 0) return prog + " c++" + rest.substr(3);   // zig
+    size_t base = prog.find_last_of("/\\");
+    base = base == std::string::npos ? 0 : base + 1;
+    const std::string name = prog.substr(base);
+    if (name.find("++") != std::string::npos) return cc;   // already a C++ driver
+    // Replace the LAST occurrence, so a prefix or a suffix survives: `aarch64-linux-gnu-gcc` → `…-g++`,
+    // `clang-17` → `clang++-17`, `clang.exe` → `clang++.exe`.
+    auto swap = [&](const std::string& from, const std::string& to) {
+        const size_t at = name.rfind(from);
+        return prog.substr(0, base) + name.substr(0, at) + to + name.substr(at + from.size()) + rest;
+    };
+    if (name.find("emcc")  != std::string::npos) return swap("emcc", "em++");
+    if (name.find("clang") != std::string::npos) return swap("clang", "clang++");
+    if (name.find("gcc")   != std::string::npos) return swap("gcc", "g++");
+    if (name == "cc" || name == "cc.exe" || name == "cc\"") return swap("cc", "c++");
+    return "";
+}
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -2063,6 +2093,11 @@ struct TargetSpec {
     // has a subsystem field at all; elsewhere this is an accepted no-op so one build script carries it.
     std::string subsystem;
     std::vector<std::string> cflags, ldflags;
+    // The per-language twins of `cflags`: `cxxflags` reach a C++ or Objective-C++ `csources` entry,
+    // `objcflags` an Objective-C or Objective-C++ one, and neither reaches kama's own C. `cxx` is the C++
+    // driver paired with `cc`, for a `cc` whose C++ spelling cannot be derived (see deriveCxxDriver).
+    std::vector<std::string> cxxflags, objcflags;
+    std::string cxx;
     // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
     // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
     // a project needing `-lm` everywhere says it once instead of per target.
@@ -2304,6 +2339,9 @@ static bool resolveTarget(const std::string& selRaw,
         if (!u.subsystem.empty()) out.subsystem = u.subsystem;
         out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
         out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
+        out.cxxflags.insert(out.cxxflags.end(),   u.cxxflags.begin(),  u.cxxflags.end());
+        out.objcflags.insert(out.objcflags.end(), u.objcflags.begin(), u.objcflags.end());
+        if (!u.cxx.empty()) out.cxx = u.cxx;
         if (u.linkSet)   { out.link   = u.link;   out.linkSet   = true; }   // replace, per the note in the reader
         if (u.webgpuSet) { out.webgpu = u.webgpu; out.webgpuSet = true; }
         if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
@@ -2761,12 +2799,28 @@ struct EmValue {
     std::string scalar;              // !isList — already rendered (`true` -> "1", a number verbatim)
 };
 
+// The language of a `csources` entry, read from its extension. `Kama` is kama's own generated C, which is
+// never a csources entry but shares the compile table (see `ccInputs` in the build).
+enum class CLang { None, Kama, C, Cxx, ObjC, ObjCxx };
+static CLang csourceLang(const std::string& path)
+{
+    const size_t dot = path.rfind('.'), slash = path.find_last_of("/\\");
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) return CLang::None;
+    const std::string ext = path.substr(dot);
+    if (ext == ".c") return CLang::C;
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx") return CLang::Cxx;
+    if (ext == ".m") return CLang::ObjC;
+    if (ext == ".mm") return CLang::ObjCxx;
+    return CLang::None;
+}
+
 // Everything ONE manifest contributes to the C command line, with its own project/target rules already
 // applied. Joined across manifests by the dependency walk in resolveBuildConfig, where the ordering and
 // merge rules are written out.
 struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
     std::vector<std::string> cflags, ldflags, link;
+    std::vector<std::string> cxxflags, objcflags;     // per-language, like cflags (see TargetSpec)
     std::vector<std::string> csources, jsLibraries;   // as written, relative to `manifestPath`
     std::vector<std::string> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
@@ -2835,6 +2889,8 @@ struct ManifestReader {
     // nothing to such a build, which would leave dependency propagation half-dead on arrival.
     std::vector<std::string>* cflagsOut = nullptr;          // set to capture the project-level `cflags`
     std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
+    std::vector<std::string>* cxxflagsOut = nullptr;        // ...`cxxflags` (C++ and Objective-C++ entries)
+    std::vector<std::string>* objcflagsOut = nullptr;       // ...`objcflags` (Objective-C and Objective-C++)
     std::vector<std::string>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
     std::vector<std::string>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
@@ -2909,14 +2965,6 @@ struct ManifestReader {
         }
     }
 
-    // One `csources` entry. `.c` and nothing else, for now, and the refusals say why rather than
-    // leaving the author to find out from the C compiler.
-    //
-    // C++ is refused BY NAME because it is a real gap and not an oversight: kama hands every input the
-    // same flag prefix (`-std=c11` and the C-only warning promotions), so a C++ TU would need its own,
-    // and linking one needs the target's C++ runtime library, which varies per target. `.m`/`.mm` are
-    // refused for a third reason — an Objective-C source is inherently one-platform, and `csources` is
-    // deliberately project-level with no per-target tier to exclude it from a wasm build.
     // The path rules every file-naming manifest key shares: inside the package, and relative to the
     // manifest that names it — so the project stays relocatable and a published package cannot name a
     // directory nobody else has.
@@ -2933,22 +2981,13 @@ struct ManifestReader {
         return true;
     }
 
+    // One `csources` entry. Its language is its extension (csourceLang), as cgo, CMake and the cc crate
+    // read it — a second, explicit spelling could only agree with the file name or contradict it.
     bool validCSource(const std::string& p) {
         if (!validRelPath(p, "csources")) return false;
-        const size_t dot = p.rfind('.');
-        const std::string ext = dot == std::string::npos ? std::string() : p.substr(dot);
-        if (ext == ".c") return true;
-        if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c++" || ext == ".mm")
-            return fail("`csources` compiles C only today, and \"" + p + "\" is C++. Two things are "
-                        "missing: every input shares one flag prefix (`-std=c11` plus the C-only warning "
-                        "promotions), and a C++ link needs the target's C++ runtime library. Build it "
-                        "outside kama and name the objects through `ldflags` for now");
-        if (ext == ".m")
-            return fail("`csources` compiles C only today, and \"" + p + "\" is Objective-C — which is "
-                        "one platform's language, while `csources` is project-wide with no per-target "
-                        "tier to exclude it from your other targets. Guard the C with `#ifdef __APPLE__` "
-                        "instead");
-        return fail("`csources` names C source files (`.c`), and \"" + p + "\" is not one");
+        if (csourceLang(p) != CLang::None) return true;
+        return fail("`csources` names C-family source files — `.c` (C), `.cpp`/`.cc`/`.cxx` (C++), `.m` "
+                    "(Objective-C), `.mm` (Objective-C++) — and \"" + p + "\" is none of them");
     }
 
     // `emSettings`: { "<KEY>": <array of strings | string | number | boolean> }. The value's SHAPE is
@@ -3301,6 +3340,9 @@ struct ManifestReader {
                 }
                 else if (k == "cflags")  { if (!stringArray(t.cflags,  "cflags"))  return false; }
                 else if (k == "ldflags") { if (!stringArray(t.ldflags, "ldflags")) return false; }
+                else if (k == "cxxflags")  { if (!stringArray(t.cxxflags,  "cxxflags"))  return false; }
+                else if (k == "objcflags") { if (!stringArray(t.objcflags, "objcflags")) return false; }
+                else if (k == "cxx")       { if (!str(t.cxx)) return false; }
                 // A target OVERRIDES the project's `link` rather than adding to it — that is what
                 // "overridable" means, and it is the only way to say "not on this target". Note this is
                 // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
@@ -3580,6 +3622,8 @@ struct ManifestReader {
             // line is project-then-target and the more specific one gets the last word.
             else if (key == "cflags") { if (cflagsOut) { if (!stringArray(*cflagsOut, "cflags")) return false; } else if (!skipValue()) return false; }
             else if (key == "ldflags") { if (ldflagsOut) { if (!stringArray(*ldflagsOut, "ldflags")) return false; } else if (!skipValue()) return false; }
+            else if (key == "cxxflags")  { if (cxxflagsOut)  { if (!stringArray(*cxxflagsOut,  "cxxflags"))  return false; } else if (!skipValue()) return false; }
+            else if (key == "objcflags") { if (objcflagsOut) { if (!stringArray(*objcflagsOut, "objcflags")) return false; } else if (!skipValue()) return false; }
             // The project's own C sources, compiled alongside the C kama emits. PARSED and VALIDATED
             // unconditionally, like `modules` and unlike the sink-guarded keys above: the value set is
             // closed (a `.c` path, relative to this manifest), and a swallowed entry would be a
@@ -4314,6 +4358,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.linkOut = &out.link; r.cflagsOut = &out.cflags; r.ldflagsOut = &out.ldflags;
+    r.cxxflagsOut = &out.cxxflags; r.objcflagsOut = &out.objcflags;
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
     r.reproFloatOut = &out.reproFloat;
@@ -4513,6 +4558,8 @@ static bool loadBuildSettings(const std::string& manifestPath, const std::string
     if (t == targets.end()) return true;
     out.cflags.insert(out.cflags.end(),   t->second.cflags.begin(),  t->second.cflags.end());
     out.ldflags.insert(out.ldflags.end(), t->second.ldflags.begin(), t->second.ldflags.end());
+    out.cxxflags.insert(out.cxxflags.end(),   t->second.cxxflags.begin(),  t->second.cxxflags.end());
+    out.objcflags.insert(out.objcflags.end(), t->second.objcflags.begin(), t->second.objcflags.end());
     if (t->second.linkSet) out.link = t->second.link;   // replaces THIS manifest's own list, nobody else's
     if (t->second.reproFloatSet) out.reproFloat = t->second.reproFloat;   // same: this manifest's own tier
     return true;
@@ -4820,6 +4867,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!l.subsystem.empty()) t.subsystem = l.subsystem;
                 if (!l.cflags.empty())  t.cflags  = l.cflags;
                 if (!l.ldflags.empty()) t.ldflags = l.ldflags;
+                if (!l.cxxflags.empty())  t.cxxflags  = l.cxxflags;
+                if (!l.objcflags.empty()) t.objcflags = l.objcflags;
+                if (!l.cxx.empty())       t.cxx       = l.cxx;
             }
             for (auto& kv : lgroups) {                                            // local extends/wins
                 SelectGroup& g = g_selectGroups[kv.first];
@@ -4861,6 +4911,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // the whole rule, and it is the same direction `select.TARGET` appends in.
     g_target.cflags.insert(g_target.cflags.begin(), g_rootSettings.cflags.begin(), g_rootSettings.cflags.end());
     g_target.ldflags.insert(g_target.ldflags.begin(), g_rootSettings.ldflags.begin(), g_rootSettings.ldflags.end());
+    g_target.cxxflags.insert(g_target.cxxflags.begin(),   g_rootSettings.cxxflags.begin(),  g_rootSettings.cxxflags.end());
+    g_target.objcflags.insert(g_target.objcflags.begin(), g_rootSettings.objcflags.begin(), g_rootSettings.objcflags.end());
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
     if (!g_target.reproFloatSet) g_target.reproFloat = g_manifestReproFloat;
@@ -4881,7 +4933,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         std::vector<std::string> views;
         views.push_back(projDir + "/.kama/deps");
         if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
-        std::vector<std::string> depCflags, depLdflags, depLink;
+        std::vector<std::string> depCflags, depLdflags, depLink, depCxxflags, depObjcflags;
         for (const std::string& view : views) {
             std::vector<std::string> names = listDir(view);
             std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
@@ -4901,6 +4953,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     continue;
                 }
                 if (!depFlagPathIsPortable(bs.cflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.cxxflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.objcflags, n, depManifest, derr) ||
                     !depFlagPathIsPortable(bs.ldflags, n, depManifest, derr)) {
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
@@ -4914,6 +4968,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 }
                 depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
                 depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
+                depCxxflags.insert(depCxxflags.end(),   bs.cxxflags.begin(),  bs.cxxflags.end());
+                depObjcflags.insert(depObjcflags.end(), bs.objcflags.begin(), bs.objcflags.end());
                 depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
                 // An OR, one way: a dependency that needs reproducible arithmetic gets it, and no
                 // dependency's `false` can take it from a consumer (or a sibling) that asked. The
@@ -4936,6 +4992,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         }
         g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
         g_target.ldflags.insert(g_target.ldflags.begin(), depLdflags.begin(), depLdflags.end());
+        g_target.cxxflags.insert(g_target.cxxflags.begin(),   depCxxflags.begin(),  depCxxflags.end());
+        g_target.objcflags.insert(g_target.objcflags.begin(), depObjcflags.begin(), depObjcflags.end());
         // `link` is a NAME list, so a repeat is pure noise and two dependencies both wanting `m` is the
         // ordinary case. `cflags`/`ldflags` are raw text, where a repeat can be load-bearing
         // (`-Xlinker -foo`) and where last-wins is the semantic — those are left exactly as written.
@@ -7958,6 +8016,8 @@ void usage()
         "                              (the `@compileFor` configuration: a single-select group's value, a `flags` entry)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                              (`no-heap`, `link` and `webgpu` are also kama.json keys, per-target overridable)\n"
+        "                             [--cxx <compiler>]  the C++ driver for C++/Objective-C++ `csources`, when\n"
+        "                              it cannot be derived from --cc (clang→clang++, gcc→g++, zig cc→zig c++)\n"
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
         "                             [--dynamic-runtime]  link the runtime as a DLL instead of statically.\n"
         "                              Windows only in effect (elsewhere libc IS the system, so there is no\n"
@@ -9468,6 +9528,7 @@ int main(int argc, char** argv)
     std::vector<std::string> inputs;      // one or more .kama source files
     std::string output;
     std::string cc;                       // empty => pick default per target
+    std::string cxx;                      // --cxx: the C++ driver paired with --cc (empty => derived)
     std::string target     = "HOST";      // a catalog/manifest NAME, or an <arch>-<os>-<abi> triple
     bool targetExplicit    = false;        // was --target passed? (a manifest `"default": true` must lose to it)
     std::vector<std::string> links;        // -l libraries (FFI)
@@ -9523,6 +9584,7 @@ int main(int argc, char** argv)
             buildJobs = (int)v;
         }
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
+        else if (a == "--cxx" && i + 1 < argc)    cxx = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
         else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
         else if (a == "--no-line")                emitLines = false;
@@ -11041,8 +11103,13 @@ int main(int argc, char** argv)
         // this group. Spelled the way BOTH compilers accept: gcc hard-errors on an unknown `-Werror=`
         // option, and a cross toolchain here can be gcc. On gcc the qualifier case is a separate
         // `-Wdiscarded-qualifiers` this does not promote, so there the kama-side check carries it alone.
-        cmd << compiler << crossFlags << " -std=c11 -Werror=return-type -Werror=uninitialized"
-                                         " -Werror=incompatible-pointer-types ";
+        // The driver and the standard are recorded as SPANS, like `cflags` below: a `csources` entry of
+        // another language compiles with this same prefix, its own standard spliced in (see `prefixFor`).
+        const size_t driverEnd = compiler.size();
+        cmd << compiler << crossFlags;
+        const size_t stdPos = (size_t)cmd.tellp();
+        cmd << " -std=c11 -Werror=return-type -Werror=uninitialized -Werror=incompatible-pointer-types ";
+        const size_t stdEnd = (size_t)cmd.tellp();
         // `reproducible-float`: forbid the C compiler contracting `a*b + c` into a single fused
         // multiply-add. clang's default is `on`, which contracts within one expression — so the same
         // source gives different bits on a target WITH an FMA (arm64) than on one without (wasm32 MVP,
@@ -11198,7 +11265,9 @@ int main(int argc, char** argv)
         // `~/.kama` (the documented path) a Windows account named `John Smith` got
         // `no such file or directory: 'Smith/.kama/include'` and could not build hello-world at all.
         // Not Windows-only — `sh -c` word-splits identically. Measured: ROADMAP_DETAIL §2.
-        cmd << "-I\"" << runtimeDir << "\" -I\"" << dirName(absolutePath(input)) << "\" -I. ";
+        cmd << "-I\"" << runtimeDir << "\" -I\"" << dirName(absolutePath(input)) << "\" ";
+        const size_t dotIncPos = (size_t)cmd.tellp();   // spliced for C++, see `prefixFor`
+        cmd << "-I. ";
         if (!headerDir.empty()) cmd << "-I\"" << headerDir << "\" ";   // the shared generated header
         if (headerDir != genDir && fileExists(g_hostHeaderPath))
             cmd << "-I\"" << genDir << "\" ";   // the host header, for the project's own `csources` (KR-52)
@@ -11315,10 +11384,10 @@ int main(int argc, char** argv)
         //
         // `tok` is the input spelled exactly as it appeared on the old single command line, trailing
         // space included; `obj` is where a `-c` compile of it writes.
-        // `ownStd` marks an input whose token carries its OWN `-std=` (a `csources` entry). `-std=` is not
-        // positional — in one invocation the last one applies to every input — so such an input can never
-        // share a command with kama's C; see the single-invocation arm below.
-        struct CcInput { std::string tok, obj; bool ownStd = false; };
+        // `lang` is the input's language. Anything but kama's own C compiles with its OWN standard, and
+        // `-std=` is not positional — in one invocation the last one applies to every input — so such an
+        // input never shares a command with kama's C; see `prefixFor` and the single-invocation arm below.
+        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; };
         std::vector<CcInput> ccInputs;
         for (auto& cf : cFiles)
             ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o" });
@@ -11352,8 +11421,9 @@ int main(int argc, char** argv)
                         cs.owner.empty() ? "" : (cs.owner + "`)").c_str());
                     return 2;
                 }
+                // The whole file name, extension included, so `foo.c` beside `foo.cpp` is two objects.
                 std::string obj = genDir + "/csrc__" + (cs.owner.empty() ? std::string("self") : cs.owner)
-                                + "__" + stripExtension(baseName(cs.path)) + ".o";
+                                + "__" + baseName(cs.path) + ".o";
                 auto claimed = objClaimed.emplace(obj, cs.path);
                 if (!claimed.second) {
                     fprintf(stderr,
@@ -11362,16 +11432,73 @@ int main(int argc, char** argv)
                         claimed.first->second.c_str(), cs.path.c_str(), obj.c_str());
                     return 2;
                 }
-                // `-std=gnu11`, overriding the `-std=c11` the base prefix set: kama's OWN C is written to
-                // ISO C11, but a `csources` entry is somebody else's C, and the C the world writes is GNU
-                // C — every compiler defaults to it, and a vendored library reaches for its extensions.
-                // Measured: libsodium's `randombytes.c` uses emscripten's `EM_ASM`, which refuses to
-                // compile under `-std=c*` ("use -std=gnu* modes instead"), so the first package's wasm
-                // leg failed on the one file that reads the browser's entropy. Placed on the input, not
-                // in the prefix, so it reaches exactly the foreign translation units.
-                ccInputs.push_back({ "-std=gnu11 \"" + cs.path + "\" ", obj, true });
+                // The language is spelled with `-x`, not left to the driver's reading of the extension:
+                // kama already decided it (csourceLang), and a C++ driver would read a `.c` as C++. The
+                // per-language flags ride on the input, AFTER the prefix's `cflags`, so a `-std=` in
+                // `cxxflags` wins over the pinned one. The standard itself is spliced in by `prefixFor`.
+                const CLang lang = csourceLang(cs.path);
+                std::string tok;
+                auto flags = [&](const std::vector<std::string>& fs) { for (const auto& f : fs) tok += f + " "; };
+                switch (lang) {
+                    case CLang::Cxx:    tok = "-x c++ "; flags(g_target.cxxflags); break;
+                    case CLang::ObjC:   tok = "-x objective-c "; flags(g_target.objcflags); break;
+                    case CLang::ObjCxx: tok = "-x objective-c++ "; flags(g_target.cxxflags); flags(g_target.objcflags); break;
+                    default:            tok = "-x c "; break;
+                }
+                ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang });
             }
         }
+
+        // The C++ driver, wanted only when a C++ or Objective-C++ entry is in the build — which is also
+        // the only time the LINK uses it, so a program without one never links a C++ runtime. `--cxx`
+        // pairs with `--cc`, a target's `cxx` with its `cc`; otherwise it is the C driver's own C++
+        // spelling, and a driver that has none is refused by name rather than guessed at.
+        bool needsCxx = false;
+        for (const auto& in : ccInputs) if (in.lang == CLang::Cxx || in.lang == CLang::ObjCxx) needsCxx = true;
+        std::string cxxDriver;
+        if (needsCxx) {
+            if (!cxx.empty())                              cxxDriver = cxx;
+            else if (cc.empty() && !g_target.cxx.empty())  cxxDriver = g_target.cxx;
+            else                                           cxxDriver = deriveCxxDriver(compiler);
+            if (cxxDriver.empty()) {
+                fprintf(stderr,
+                        "kama: this build compiles C++ (a `csources` entry), and the C compiler `%s` has no\n"
+                        "      C++ spelling kama knows (clang→clang++, gcc→g++, cc→c++, zig cc→zig c++,\n"
+                        "      emcc→em++). Name the C++ driver: `--cxx <compiler>`, or `cxx` beside the\n"
+                        "      target's `cc` in kama.json.\n", compiler.c_str());
+                return 2;
+            }
+        }
+        // The compile prefix for one language: kama's C keeps `-std=c11`; somebody else's C (and
+        // Objective-C) is GNU C, because the C the world writes is GNU C — measured, libsodium's
+        // `randombytes.c` uses emscripten's `EM_ASM`, which refuses `-std=c*`; C++ is `gnu++17`, which is
+        // what clang and GCC 11+ already default to, pinned so a compiler upgrade does not change a build.
+        // C++ drops the C-only `-Werror=` promotions, which g++ warns on per TU.
+        auto prefixFor = [&](const std::string& prefix, CLang l) {
+            std::string p = prefix;
+            const bool cxxLang = l == CLang::Cxx || l == CLang::ObjCxx;
+            // Splices run from the END of the prefix backwards, so each recorded offset is still valid.
+            // ⚠️ `-I.` becomes `-iquote .` for C++: libc++ includes `<version>`, and on a case-insensitive
+            // file system (macOS, Windows) a `VERSION` file in the working directory IS `<version>` —
+            // measured, a C++ csource built from this repo's root compiled `0.9.378` as a header. Quoted
+            // includes still search `.`, so a header there stays findable.
+            if (cxxLang) p.replace(dotIncPos, 4, "-iquote . ");   // the 4 bytes of "-I. "
+            if (l != CLang::Kama)
+                p.replace(stdPos, stdEnd - stdPos,
+                          cxxLang ? " -std=gnu++17 "
+                                  : " -std=gnu11 -Werror=return-type -Werror=uninitialized"
+                                    " -Werror=incompatible-pointer-types ");
+            if (cxxLang) p.replace(0, driverEnd, cxxDriver);
+            return p;
+        };
+        // A command that LINKS starts with the C++ driver whenever the build holds C++ — except on wasm,
+        // where `emcc` links C++ objects and their runtime itself, and `em++` cannot take this link: it
+        // compiles kama's C in the same invocation, and emcc's argument handling separates `-x c` from the
+        // file it names, so clang++ read `main.c` as C++ ("-std=c11 not allowed with C++", measured).
+        const bool cxxLinks = needsCxx && !wasm;
+        auto linkDriver = [&](const std::string& command) {
+            return cxxLinks ? cxxDriver + command.substr(driverEnd) : command;
+        };
 
         // ---- The link tail. Every flag from here down is link-time, which is exactly why the sources
         // can move to the end: a compile-only build (`stopsAtObject`) suppresses all of it.
@@ -11645,7 +11772,7 @@ int main(int argc, char** argv)
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
                 const std::string obj = toolPath(in->obj);   // the object AND cmd's two redirections (see toolPath)
-                cmds.push_back(base + dashC + in->tok + "-o \"" + obj + "\""
+                cmds.push_back(prefixFor(base, in->lang) + dashC + in->tok + "-o \"" + obj + "\""
                                + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"");
             }
             std::vector<int> rcs;
@@ -11685,7 +11812,7 @@ int main(int argc, char** argv)
                     // nothing, it consumes objects. See where the span is recorded for what a compile
                     // flag on a link line does (KB-16).
                     std::ostringstream ld;
-                    ld << base.substr(0, cflagsPos) << base.substr(cflagsEnd) << linkGc;
+                    ld << linkDriver(base.substr(0, cflagsPos)) << base.substr(cflagsEnd) << linkGc;
                     // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).
                     for (auto& o : objs) ld << "\"" << toolPath(o) << "\" ";
                     ld << link.str() << "-o \"" << toolPath(linkOut) << "\"";
@@ -11701,14 +11828,20 @@ int main(int argc, char** argv)
             // measured, COFF refuses it (zig → windows) and zig's wasm-ld drops the symbols. And not a
             // loss for zig: libsodium's 120 files are 0.9 s warm this way against 1.7 s for one `-r`.
             std::vector<const CcInput*> ownStd;
-            for (auto& in : ccInputs) if (in.ownStd) ownStd.push_back(&in);
+            for (auto& in : ccInputs) if (in.lang != CLang::Kama) ownStd.push_back(&in);
             std::vector<std::string> objs;
             rc = ownStd.empty() ? 0 : compileEach(ownStd, poolJobs, objs);
             if (rc == 0) {
-                for (auto& in : ccInputs) if (!in.ownStd) cmd << in.tok;
+                // Under a C++ driver kama's `.c` inputs are spelled `-x c`, or it would compile them as C++.
+                // An input that already names its language (the gpu seam's `-x objective-c`) is left alone.
+                for (auto& in : ccInputs) {
+                    if (in.lang != CLang::Kama) continue;
+                    if (cxxLinks && in.tok.compare(0, 3, "-x ") != 0) cmd << "-x c " << in.tok << "-x none ";
+                    else cmd << in.tok;
+                }
                 for (auto& o : objs) cmd << "\"" << toolPath(o) << "\" ";
                 cmd << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
-                rc = runCmd(cmd.str());
+                rc = runCmd(linkDriver(cmd.str()));
             }
         }
 

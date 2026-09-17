@@ -1,0 +1,11 @@
+// `csources` compiles C++ beside C: by extension, `.cpp` as `gnu++17` with the project's `cxxflags`,
+// linked with the C++ spelling of the C driver so the C++ runtime comes with it.
+extern "count.h";
+extern fn int32 kama_test_count_c();
+extern fn int32 kama_test_count_cxx();
+
+unsafe fn int32 total() { return kama_test_count_c() + kama_test_count_cxx(); }
+
+fn int32 main() {
+    return total();   // 10 + 11
+}

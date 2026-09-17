@@ -197,33 +197,59 @@ default.
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
 
-### `csources` — your own C, compiled by `kama build`
+### `csources` — your own C, C++ and Objective-C, compiled by `kama build`
 
-A project (or a package) can hand the build its own C:
+A project (or a package) can hand the build its own sources:
 
 ```json
 {
-  "csources": ["csrc/adder.c", "csrc/hash.c"]
+  "csources":  ["csrc/adder.c", "csrc/ui.cpp", "csrc/window.m"],
+  "cxxflags":  ["-fno-exceptions"],
+  "objcflags": ["-fobjc-arc"]
 }
 ```
 
-Each entry is one translation unit, compiled with the same flags kama's own generated C gets — except
-that it is compiled as **`-std=gnu11`** where kama's own C is ISO `c11`: a vendored library is somebody
-else's C, and the C the world writes is GNU C (emscripten's `EM_ASM`, which libsodium's entropy source
-uses, refuses to compile in a `-std=c*` mode) — and linked into the same artifact — no out-of-band
-Makefile. Paths are **relative to the manifest that declares
-them**, and each entry's directory goes on the include path, so a header sitting beside the `.c` is
-found both from that `.c` and from the kama file that `extern "adder.h";`s it.
+Each entry is one translation unit, linked into the same artifact — no out-of-band Makefile. **Its
+language is its extension**, the way cgo, CMake and the cc crate read it:
+
+| extension | language | standard | flags it gets |
+|---|---|---|---|
+| `.c` | C | `-std=gnu11` | `cflags` |
+| `.cpp`, `.cc`, `.cxx` | C++ | `-std=gnu++17` | `cflags`, then `cxxflags` |
+| `.m` | Objective-C | `-std=gnu11` | `cflags`, then `objcflags` |
+| `.mm` | Objective-C++ | `-std=gnu++17` | `cflags`, then `cxxflags`, then `objcflags` |
+
+kama's own generated C stays ISO `c11`. A `.c` entry is somebody else's C, and the C the world writes is
+GNU C (emscripten's `EM_ASM`, which libsodium's entropy source uses, refuses to compile in a `-std=c*`
+mode). C++ is pinned to `gnu++17` — what clang and GCC 11+ already default to — so a compiler upgrade
+cannot change your build; say `"cxxflags": ["-std=c++20"]` to move it, and since `cxxflags` come after
+the pinned standard, yours wins. Each entry compiles as its own command, so its standard never reaches
+another translation unit.
+
+`cxxflags` and `objcflags` sit on the project and in a `select.TARGET` arm, and a dependency's reach
+its consumer, exactly like `cflags` — with one difference that is the reason they exist: `cflags` reach
+**every** translation unit, kama's own C included, while `cxxflags` reach only the C++ entries and
+`objcflags` only the Objective-C ones. The C-only warning promotions kama adds for its own C
+(`-Werror=incompatible-pointer-types` and friends) stay off C++.
+
+**The C++ driver brings the C++ runtime.** A build holding a C++ or Objective-C++ entry compiles those
+entries, and **links**, with the C++ spelling of your C compiler — `clang` → `clang++`, `gcc` → `g++`,
+`cc` → `c++`, `zig cc` → `zig c++`, `emcc` → `em++`, keeping any prefix or version suffix
+(`aarch64-linux-gnu-gcc` → `aarch64-linux-gnu-g++`, `clang-17` → `clang++-17`). That driver links the
+right runtime on every target (`libc++` on macOS, `libstdc++` on Linux, zig's bundled libc++, emscripten's),
+so there is no `-lc++`/`-lstdc++` to name per target. (On wasm the link stays with `emcc`, which links
+C++ objects and their runtime itself.) A build **without** a C++ entry never uses it, so
+a program that shares a package tree with a C++ UI does not link a C++ runtime. When your C compiler has
+no C++ spelling kama knows, name one: `--cxx <compiler>` beside `--cc`, or `"cxx"` beside a target's
+`"cc"`; otherwise the build is refused by name.
+
+Paths are **relative to the manifest that declares them**, and each entry's directory goes on the
+include path, so a header sitting beside the source is found both from that source and from the kama
+file that `extern "adder.h";`s it. A C++ header shared with kama wants the usual `extern "C"` guard.
 
 A dependency's `csources` are compiled too, which is what lets a package that wraps a C library ship
 the shim that binds it. Two packages that both ship `csrc/shim.c` are fine — the object is named after
-the package that owns the source.
-
-**C only, today.** A `.cpp` (or `.cc`, `.cxx`, `.mm`) entry is refused by name, and the message says
-why: every input shares one flag prefix (`-std=c11`, plus the C-only warning promotions), and a C++
-link needs the target's C++ runtime library. A `.m` is refused for a third reason — Objective-C is one
-platform's language, and `csources` is project-wide with no per-target tier to exclude it elsewhere.
-For per-target C, guard the source itself (`#ifndef __EMSCRIPTEN__`), which is how C does it.
+the package that owns the source — and so is `foo.c` beside `foo.cpp`.
 
 Two smaller rules, both refusals with a message: an **absolute** path (a manifest must stay
 relocatable, and a published package cannot name a directory nobody else has) and a path escaping the
@@ -314,7 +340,7 @@ What a dependency **cannot** do is redefine your build:
 
 | it contributes | it does not |
 |---|---|
-| `cflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| `cflags`, `cxxflags`, `objcflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings` | `cc`, `cxx`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | `reproducible-float` — it can only turn contraction off, and its own arithmetic is what you compile | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 

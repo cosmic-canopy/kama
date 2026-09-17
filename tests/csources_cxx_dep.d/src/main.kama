@@ -1,0 +1,4 @@
+// A dependency's C++ `csources` entry, and its `cxxflags`, reach the consumer's build.
+import { cxxshim::sumTo };
+
+fn int32 main() { return sumTo(n: 4); }   // (1+2+3+4) * 3
