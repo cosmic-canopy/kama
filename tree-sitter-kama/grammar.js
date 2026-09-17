@@ -1110,9 +1110,14 @@ module.exports = grammar({
     truncate_expression: ($) =>
       seq('truncate', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
 
-    // These take a TYPE, not an expression.
+    // These take a TYPE, not an expression — or, as `sizeof(ptr: p)`, the object a pointer really points at
+    // (a derived behind a base pointer), a runtime value. The label is a name, like any argument; the compiler
+    // refuses one that is not `ptr`.
     sizeof_expression: ($) =>
-      seq(choice('sizeof', 'alignof'), '(', field('type', $._type), ')'),
+      choice(
+        seq(choice('sizeof', 'alignof'), '(', field('type', $._type), ')'),
+        seq(choice('sizeof', 'alignof'), '(', field('name', $.identifier), ':', field('value', $._expression), ')'),
+      ),
 
     unary_expression: ($) =>
       prec.right(

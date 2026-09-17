@@ -206,6 +206,8 @@ fn void main()
     int32 b = alignof(Point);
     int32 c = cast<int32>(d);
     float32 e = bitcast<float32>(f);
+    usize g = sizeof(ptr: this.p);
+    usize h = alignof(ptr: q);
 }
 
 --------------------------------------------------------------------------------
@@ -242,6 +244,22 @@ fn void main()
           (identifier)
           (bitcast_expression
             (primitive_type)
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (sizeof_expression
+            (identifier)
+            (field_expression
+              (this_expression)
+              (identifier)))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (sizeof_expression
+            (identifier)
             (identifier)))))))
 
 ================================================================================
