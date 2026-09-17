@@ -261,9 +261,26 @@ fi
 # Fake drivers that print their own name, so the COMMAND is observable without compiling anything: each
 # line of output is one command, starting with the driver that ran it. `cc`/`c++` is the pairing
 # deriveCxxDriver reads from the name, and `mycc` is a C driver with no C++ spelling at all.
+# ⚠️ A `#!/bin/sh` stub is not executable by kama on WINDOWS: the driver runs each command through
+# `system()`, which is cmd.exe there, and cmd cannot run a shell script — every C++ case below failed with
+# "is not recognized as an internal or external command" until this wrote a `.cmd` twin (measured 2026-09-17
+# verifying the C++ csources work on Windows). cmd applies PATHEXT even to a full path, so the EXTENSIONLESS
+# name the cases already pass keeps working, and nothing else in this file changes.
+stub() {   # stub <dir> <name>
+    printf '#!/bin/sh
+echo "%s $*"
+' "$2" > "$1/$2"; chmod +x "$1/$2"
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
+        # It DELEGATES to the sh stub rather than echoing itself, so the output is byte-identical on
+        # every platform: cmd's `%*` keeps the quotes kama wrote, where a shell strips them, and the
+        # `-o <path>` match below is written for the stripped form.
+        printf '@"%s" "%%~dp0%s" %%*
+' "$(cygpath -m "$(command -v sh)")" "$2" > "$1/$2.cmd" ;;
+    esac
+}
 mkdir -p "$tmp/bin"
 for d in x86-gcc x86-g++ mycc mycxx; do
-    printf '#!/bin/sh\necho "%s $*"\n' "$d" > "$tmp/bin/$d"; chmod +x "$tmp/bin/$d"
+    stub "$tmp/bin" "$d"
 done
 
 app langs <<'JSON'
@@ -275,7 +292,12 @@ JSON
 mkdir -p "$tmp/langs/csrc"; for f in a.c a.cpp b.m c.mm; do : > "$tmp/langs/csrc/$f"; done
 # `line <output>`: the one command that writes `$tmp/langs/<output>` — an object, or `app` for the link.
 # The fake driver echoes its arguments after the shell has removed their quotes, hence the bare path.
-line() { grep -e " -o $tmp/langs/$1\$" -e " -o $tmp/langs/$1 " "$tmp/o" | head -1; }
+# ⚠️ Match the path the way KAMA WRITES it, not the way this shell spells it: on msys2 `$tmp` is
+# `/tmp/tmp.X` while the driver writes `C:/msys64/tmp/tmp.X`, so every one of these lookups came back
+# empty there (measured 2026-09-17).
+tmpw="$tmp"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmpw=$(cygpath -m "$tmp") ;; esac
+line() { grep -e " -o $tmpw/langs/$1\$" -e " -o $tmpw/langs/$1 " "$tmp/o" | head -1; }
 if "$KAMA" build "$tmp/langs/kama.json" -j 2 --cc "$tmp/bin/x86-gcc" -o "$tmp/langs/app" >"$tmp/o" 2>"$tmp/e"; then
     kc=$(line app.o); c=$(line csrc__self__a.c.o); cxx=$(line csrc__self__a.cpp.o)
     m=$(line csrc__self__b.m.o); mm=$(line csrc__self__c.mm.o); ld=$(line app)
@@ -334,8 +356,7 @@ fi
 for pair in "clang-17 clang++-17" "cc c++" "zig zig"; do
     set -- $pair
     mkdir -p "$tmp/drv"
-    printf '#!/bin/sh\necho "%s $*"\n' "$1" > "$tmp/drv/$1"; printf '#!/bin/sh\necho "%s $*"\n' "$2" > "$tmp/drv/$2"
-    chmod +x "$tmp/drv/$1" "$tmp/drv/$2"
+    stub "$tmp/drv" "$1"; stub "$tmp/drv" "$2"
     if [ "$1" = zig ]; then drv="\"$tmp/drv/zig\" cc"; want="zig c++ "; label="zig cc"
     else drv="$tmp/drv/$1"; want="$2 "; label=$1; fi
     if "$KAMA" build "$tmp/nocxx/kama.json" --cc "$drv" -o "$tmp/nocxx/app" >"$tmp/o" 2>"$tmp/e" \
