@@ -16916,13 +16916,15 @@ void CEmitter::computeDestructible()
             // `match (give r)` on it is refused as if `r` were a field. Measured on the first external
             // package: every `Result<K, E>` whose `K` had a dtor worked, and the one whose payload was
             // a bare resource did not. Same fixpoint, same scope setup, read through isMoveOnlyValue
-            // so a nested intrinsic (`Optional<Result<Token, E>>`) propagates.
+            // so a nested intrinsic (`Optional<Result<Token, E>>`) propagates. A `value` is computed too:
+            // isMoveOnlyValue answers by its declared kind and never reads the flag, so for a value it only
+            // feeds the refusal below (KR-63).
             bool m = ci.moveOnly || (ci.base && ci.base->moveOnly);
-            if (!m && !ci.isIntrinsicColl && ci.kind != TypeKind::Value)
+            if (!m && !ci.isIntrinsicColl)
                 for (auto& f : ci.fields) {
                     if (isMoveOnlyValue(cType(f.type))) { m = true; break; }
                 }
-            if (!m && !ci.isIntrinsicColl && ci.kind != TypeKind::Value)
+            if (!m && !ci.isIntrinsicColl)
                 for (auto& v : ci.variants) {
                     for (auto& f : v.payload) {
                         if (isMoveOnlyValue(cType(f.type))) { m = true; break; }
@@ -16956,6 +16958,15 @@ void CEmitter::computeDestructible()
             ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
             unsupported(("a `value` owns nothing, but `" + ci.name + "` transitively owns a resource "
                          "— declare it `type resource`").c_str(), ci.declLine());
+        }
+        // ...and a `value` is COPIED, so it may not hold a move-only field either: a resource that owns
+        // nothing (an `Atomic`, a token) still has identity, and copying the holder would make two of it
+        // (KR-63 — `Holder k = h; k.a.store(5)` left `h.a` untouched). SPEC: a resource "owns something,
+        // or has identity"; `destructible` answers the first half, `moveOnly` the second.
+        else if (ci.kind == TypeKind::Value && ci.moveOnly && !ci.isExternStruct) {
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);
+            unsupported(("a `value` is copied, but `" + ci.name + "` holds a move-only resource, which has "
+                         "identity and must not be copied — declare it `type resource`").c_str(), ci.declLine());
         }
     }
 }

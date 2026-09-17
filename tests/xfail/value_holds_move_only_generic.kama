@@ -1,0 +1,4 @@
+// KR-63: a generic `value` is checked per instantiation — `G<Token>` holds a token that must not be copied.
+type resource Token { public ctor make() { } }
+type value G<T> { public T x; public ctor make(T x) { this.x = give x; } }
+fn int32 main() { Token t = Token.make(); G<Token> g = G::<Token>.make(x: give t); G<Token> k = g; return 0; }

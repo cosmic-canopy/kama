@@ -70,7 +70,7 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    b. **Probe before building** (a doc is not evidence): does the no-heap walk actually reach into a user
       `Allocator`'s body today? `tests/noheap_arena.kama` says a `BumpAllocator`'s `allocate` is judged by what it
       reaches — make a pool whose `allocate` calls `GlobalAllocator` and confirm it is REFUSED under the flag.
-   c. **KR-63 first** (a `type value` must not hold a move-only field) — it is the ground the declaration stands on.
+   c. ~~**KR-63 first**~~ — shipped `0.9.370`: a `type value` may not hold a move-only field.
    d. **Build KR-49 to §3's "RECOMMENDED SHAPE"**: the entry-TU singleton for the one instance (the
       `setPanicHandler`/argv precedent), its fields held to the sharing-seams rule (`Atomic`, `const`, raw storage),
       `@globalAllocator type resource … implements Allocator`, at most one, constant-initialized — after the three
@@ -470,7 +470,7 @@ implicit (GOALS #5). What remains outside explicit per-isolate allocation is wha
 "`string` has no allocator"), not an implicit override.
 
 **Three things the session must PROBE before building, not assume:**
-- **KR-63 first.** A `type value` holding an `Atomic<T>` builds today and COPIES the cell (measured at `0.9.369`:
+- ~~**KR-63 first.**~~ (shipped `0.9.370`) A `type value` holding an `Atomic<T>` built and COPIES the cell (measured at `0.9.369`:
   `Holder k = h; k.a.store(5)` leaves `h.a` at 1), because the value check tests `destructible` and skips the
   `moveOnly` it computes. The global allocator is precisely a type whose identity must not be laundered through
   a copy, so the hole is closed before the declaration is built on top of it.

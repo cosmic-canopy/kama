@@ -1030,6 +1030,9 @@ upcast_bad	upcast_bad.kama:8
 use_after_give_shared	use_after_give_shared.kama:8
 use_after_move	use_after_move.kama:8
 usize_from_int32	usize_from_int32.kama:1
+value_holds_move_only	value_holds_move_only.kama:5
+value_holds_move_only_enum	value_holds_move_only_enum.kama:4
+value_holds_move_only_generic	value_holds_move_only_generic.kama:3
 value_owns_resource	value_owns_resource.kama:3
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15

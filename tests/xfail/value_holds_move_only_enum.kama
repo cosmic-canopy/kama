@@ -1,0 +1,5 @@
+// KR-63: the move-only resource may sit in an enum payload; the enum moves, so the `value` holding it may not.
+type resource Token { public ctor make() { } }
+type enum E { Cell(Token t), Empty }
+type value Holder { public E e; public ctor make() { this.e = E::Empty; } }
+fn int32 main() { Holder h = Holder.make(); Holder k = h; return 0; }

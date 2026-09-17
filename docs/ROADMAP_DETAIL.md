@@ -247,24 +247,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### A `type value` may hold a move-only field and silently copy it (KR-63) — found 2026-09-17, `0.9.369`, designing KR-49
-
-```kama
-import { std::concurrent::Atomic };
-type value Holder { public Atomic<int32> a; public ctor make() { this.a = Atomic.make(value: 1); } }
-fn int32 main() { Holder h = Holder.make(); Holder k = h; k.a.store(value: 5); return h.a.load() * 10 + k.a.load(); }
-```
-
-exits 15: the copy made a second cell. `Atomic<int32> y = x;` on its own is a move (a later `x` is a use-after-move
-error), so the value kind is laundering the resource's identity. The check at the end of the destructibility
-fixpoint ("a `value` owns nothing, but … transitively owns a resource") tests `ci.destructible` — "owns something to
-drop" — while the same fixpoint computes `moveOnly` and deliberately skips it for `TypeKind::Value`. `Atomic` has no
-destructor, so it is not destructible, and slips through. SPEC's own definition is the fix's specification: a
-resource owns something **or has identity**. Refuse a `value` with a move-only field (transitively, as the
-destructible check is), with an xfail fixture per path (direct field, `InlineArray` of it, enum payload). Found
-because KR-49's global allocator is a process-wide instance with `Atomic` state — precisely identity that must not be
-copied — so this closes before that is built.
-
 ### A generic instance named only in `sizeof`/`alignof` is never instantiated (KR-62) — found 2026-09-16, `0.9.366`
 
 `fn int32 main() { usize s = sizeof(DynamicArray<int64>); return cast<int32>(s); }` passes kama and fails in

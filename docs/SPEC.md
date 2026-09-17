@@ -3053,7 +3053,10 @@ every function, so declarations are greppable and self-describing:
 
 - **`type value Name { … }`** — owns nothing, **copies** freely (a `memcpy`; no hidden shared refs). Sealed
   (no `virtual`/`abstract`/`final`), no destructor. Fields default **private**; mark a field `public` per
-  field (a `value` with all-public fields is a plain-old-data struct).
+  field (a `value` with all-public fields is a plain-old-data struct). Because it copies, a `value` may hold
+  no `resource` — not an owning one, and not one that owns nothing but has identity (an `Atomic<T>`, a token),
+  directly, in an enum payload, or through a generic instance: copying the holder would make two of it.
+  <!-- xfail: value_owns_resource, value_holds_move_only, value_holds_move_only_enum, value_holds_move_only_generic -->
 - **`type resource Name { … }`** — owns something, or has identity: **move-only**, RAII-dropped. Fields are
   **private only** (ownership stays encapsulated). An empty `type resource Token { }` is a valid move-only
   identity/token. Extensible variants add a qualifier after `type`: `type virtual resource`, `type abstract
