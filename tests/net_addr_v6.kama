@@ -1,0 +1,125 @@
+// std::net — IPv6 text. `parseIp` reads RFC 4291 text and `IpAddr` writes RFC 5952's canonical form; the
+// round trips below are RFC 5952's own examples. No sockets. Returns the failure count plus 100 if the
+// check count drifted, so a table that silently stopped running cannot pass.
+import { std::net::IpAddr, std::net::SocketAddr, std::net::parseIp };
+
+fn int32 canon(const ref string text, const ref string want) {
+    match (parseIp(text: text)) {
+        case None: { print(s: "refused: ${text}\n"); return 1; }
+        case Some(value: ip): {
+            string got = "${ip}";
+            if (got != want) { print(s: "${text} rendered ${got}, want ${want}\n"); return 1; }
+            return 0;
+        }
+    };
+}
+
+fn int32 refuse(const ref string text) {
+    match (parseIp(text: text)) {
+        case None: { return 0; }
+        case Some(value: ip): { print(s: "accepted: ${text}\n"); return 1; }
+    };
+}
+
+fn int32 main() {
+    int32 bad = 0;
+    int32 checks = 0;
+
+    // RFC 5952 4.2: the longest zero run is `::`, a first run wins a tie, a single zero group is not compressed.
+    bad = bad + canon(text: "2001:db8:0:0:0:0:2:1", want: "2001:db8::2:1");        checks = checks + 1;
+    bad = bad + canon(text: "2001:db8::0:1", want: "2001:db8::1");                 checks = checks + 1;
+    bad = bad + canon(text: "2001:db8:0:1:1:1:1:1", want: "2001:db8:0:1:1:1:1:1"); checks = checks + 1;
+    bad = bad + canon(text: "2001:0:0:1:0:0:0:1", want: "2001:0:0:1::1");         checks = checks + 1;
+    bad = bad + canon(text: "2001:db8:0:0:1:0:0:1", want: "2001:db8::1:0:0:1");    checks = checks + 1;
+    // 4.1 + 4.3: no leading zeros, lowercase.
+    bad = bad + canon(text: "2001:0DB8::00AB:cDeF", want: "2001:db8::ab:cdef");    checks = checks + 1;
+    // The edges of `::`: all zeros, loopback, a trailing gap, a gap standing for ONE group.
+    bad = bad + canon(text: "::", want: "::");                                     checks = checks + 1;
+    bad = bad + canon(text: "0:0:0:0:0:0:0:0", want: "::");                        checks = checks + 1;
+    bad = bad + canon(text: "::1", want: "::1");                                   checks = checks + 1;
+    bad = bad + canon(text: "1::", want: "1::");                                   checks = checks + 1;
+    bad = bad + canon(text: "::2:3:4:5:6:7:8", want: "0:2:3:4:5:6:7:8");           checks = checks + 1;
+    bad = bad + canon(text: "1:2:3:4:5:6:7:8", want: "1:2:3:4:5:6:7:8");           checks = checks + 1;
+    bad = bad + canon(text: "fe80::1", want: "fe80::1");                           checks = checks + 1;
+    // Section 5: an IPv4-mapped address renders dotted, whichever way it was written.
+    bad = bad + canon(text: "::ffff:1.2.3.4", want: "::ffff:1.2.3.4");             checks = checks + 1;
+    bad = bad + canon(text: "::FFFF:0102:0304", want: "::ffff:1.2.3.4");           checks = checks + 1;
+    // A dotted tail on anything else is just the last 32 bits.
+    bad = bad + canon(text: "1:2:3:4:5:6:1.2.3.4", want: "1:2:3:4:5:6:102:304");   checks = checks + 1;
+    // The longest legal text, 45 bytes.
+    bad = bad + canon(text: "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255", want: "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"); checks = checks + 1;
+    // IPv4 still renders dotted.
+    bad = bad + canon(text: "127.0.0.1", want: "127.0.0.1");                       checks = checks + 1;
+
+    // Refused: every malformed shape, and the two a lenient parser lets through (a zone, an octal tail).
+    bad = bad + refuse(text: "");                         checks = checks + 1;
+    bad = bad + refuse(text: ":");                        checks = checks + 1;
+    bad = bad + refuse(text: ":::");                      checks = checks + 1;
+    bad = bad + refuse(text: ":1");                       checks = checks + 1;
+    bad = bad + refuse(text: "1:");                       checks = checks + 1;
+    bad = bad + refuse(text: "1:2:3:4:5:6:7:8:");         checks = checks + 1;   // eight groups, then a stray ':'
+    bad = bad + refuse(text: "1::2:");                    checks = checks + 1;
+    bad = bad + refuse(text: "::1::");                    checks = checks + 1;
+    bad = bad + refuse(text: "1::2::3");                  checks = checks + 1;
+    bad = bad + refuse(text: "1:2:3:4:5:6:7");            checks = checks + 1;
+    bad = bad + refuse(text: "1:2:3:4:5:6:7:8:9");        checks = checks + 1;
+    bad = bad + refuse(text: "1:2:3:4:5:6:7::8");         checks = checks + 1;   // `::` standing for nothing
+    bad = bad + refuse(text: "12345::");                  checks = checks + 1;
+    bad = bad + refuse(text: "g::1");                     checks = checks + 1;
+    bad = bad + refuse(text: "1.2.3.4::");                checks = checks + 1;
+    bad = bad + refuse(text: "::1.2.3.4:5");              checks = checks + 1;
+    bad = bad + refuse(text: "1:2:3:4:5:6:7:1.2.3.4");    checks = checks + 1;
+    bad = bad + refuse(text: "::ffff:1.2.3");             checks = checks + 1;
+    bad = bad + refuse(text: "::ffff:01.2.3.4");          checks = checks + 1;   // the octal trap, in a tail
+    bad = bad + refuse(text: "fe80::1%lo0");              checks = checks + 1;   // a zone is SocketAddr's
+    bad = bad + refuse(text: "fe80::1%1");                checks = checks + 1;
+    bad = bad + refuse(text: "[::1]");                    checks = checks + 1;
+    bad = bad + refuse(text: " ::1");                     checks = checks + 1;
+
+    // The bytes are network order: 2001:db8:: is 20 01 0d b8, then zeros.
+    match (parseIp(text: "2001:db8::a")) {
+        case Some(value: ip): {
+            match (ip) {
+                case V6(octets: o): {
+                    if (!(o[0] == 32ui8 && o[1] == 1ui8 && o[2] == 13ui8 && o[3] == 184ui8
+                          && o[4] == 0ui8 && o[14] == 0ui8 && o[15] == 10ui8)) { bad = bad + 1; }
+                }
+                case V4(a: x, b: y, c: z, d: w): { bad = bad + 1; }
+            };
+        }
+        case None: { bad = bad + 1; }
+    };
+    checks = checks + 1;
+
+    // A mapped address stays V6: the parser never picks a socket family for the caller.
+    match (parseIp(text: "::ffff:127.0.0.1")) {
+        case Some(value: ip): { match (ip) { case V6(octets: o): { } case V4(a: x, b: y, c: z, d: w): { bad = bad + 1; } }; }
+        case None: { bad = bad + 1; }
+    };
+    checks = checks + 1;
+
+    // A socket address brackets V6 (RFC 3986), shows a scope by index, and leaves V4 bare.
+    match (parseIp(text: "::1")) {
+        case Some(value: ip): {
+            SocketAddr plain = SocketAddr.of(ip: ip, port: 8080ui16);
+            SocketAddr scoped = SocketAddr.scoped(ip: ip, port: 22ui16, scopeId: 4ui32);
+            string p = "${plain}";
+            string q = "${scoped}";
+            if (p != "[::1]:8080") { print(s: "${p}\n"); bad = bad + 1; }
+            if (q != "[::1%4]:22") { print(s: "${q}\n"); bad = bad + 1; }
+        }
+        case None: { bad = bad + 1; }
+    };
+    match (parseIp(text: "10.0.0.1")) {
+        case Some(value: ip): {
+            SocketAddr v4 = SocketAddr.of(ip: ip, port: 53ui16);
+            string r = "${v4}";
+            if (r != "10.0.0.1:53") { print(s: "${r}\n"); bad = bad + 1; }
+        }
+        case None: { bad = bad + 1; }
+    };
+    checks = checks + 2;
+
+    if (checks != 45) { print(s: "checks=${checks}\n"); return bad + 100; }
+    return bad;
+}

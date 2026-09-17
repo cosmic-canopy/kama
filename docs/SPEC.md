@@ -1637,8 +1637,18 @@ keeps taking numeric text and performs **no** lookup — a call that reads like 
 network round trip behind the caller's back, so a name is resolved by a function that says so. `parseIp`
 is the strict numeric parser under it: exactly four decimal octets, no leading zero on a multi-digit part
 (C's `inet_addr` reads `010.0.0.1` as octal and `127.1` as a packed number — the CVE-2021-29922 shape). <!-- test: net_resolve -->
-IPv4 only, because every socket seam is `AF_INET`; a name that resolves to IPv6 alone reports
+Sockets are IPv4 only, because every socket seam is `AF_INET`; a name that resolves to IPv6 alone reports
 `HostUnreachable` rather than an empty list.
+
+**Addresses (`std::net`).** `IpAddr` is `V4(uint8 a, uint8 b, uint8 c, uint8 d)` or
+`V6(InlineArray<uint8>#(16) octets)`, both in network order, and `match` on one names both arms. `parseIp`
+reads IPv6 text as RFC 4291 writes it — `::` once, and an optional dotted IPv4 tail under the same strict
+octet rules — and an `IpAddr` renders RFC 5952's canonical form: lowercase, no leading zeros, the longest
+run of two or more zero groups as `::`, and an IPv4-mapped address dotted (`::ffff:1.2.3.4`). A mapped
+address stays `V6`. A zone (`fe80::1%lo0`) is **refused** by `parseIp`: the scope names an interface of this <!-- test: net_addr_v6 -->
+machine rather than part of the address, so it is `SocketAddr.scopeId`, the C `sin6_scope_id` (0 when there
+is none; `SocketAddr.of(ip:, port:)` leaves it 0 and `SocketAddr.scoped(ip:, port:, scopeId:)` sets it). A
+`SocketAddr` renders `127.0.0.1:80`, `[::1]:8080`, or `[fe80::1%4]:22`.
 
 **Lines and the standard streams (`std::io`).** `BufReader<R>.readLine() -> Result<Optional<string>,
 IoError>` is the text-framing primitive over the byte substrate: `Ok(None)` is end of input, the

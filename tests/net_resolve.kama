@@ -8,6 +8,7 @@ import { std::net::SocketAddr, std::net::parseIp, std::net::resolve,
 fn bool isLoopback(ref SocketAddr a) {
     return match (a.ip) {
         case V4(a: p, b: q, c: r, d: s): p == 127ui8 && q == 0ui8 && r == 0ui8 && s == 1ui8;
+        case V6(octets: o): a.ipString() == "::1";
     };
 }
 

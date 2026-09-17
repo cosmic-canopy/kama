@@ -1,5 +1,5 @@
 
-import { std::fmt::u8Str, std::io::IoError, std::io::lastError,
+import { std::io::IoError, std::io::lastError,
          std::collections::DynamicArray, std::collections::FixedArray };
 
 export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne };
@@ -7,19 +7,88 @@ export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne };
 extern "kama_os.h";
 extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<uint32> outIps, int32 max);
 
-// An IP address. IPv4 today; the `enum` tag leaves room for a `V6(...)` arm later without reshaping any
-// existing match site (they already bind by variant). Octets are stored in logical order (a.b.c.d).
-type enum IpAddr {
-    V4(uint8 a, uint8 b, uint8 c, uint8 d)
+// An IP address. Both arms store the address in NETWORK order, as the wire and the C `in_addr`/`in6_addr`
+// do: `V4` as its four dotted octets a.b.c.d, `V6` as its sixteen bytes, so `::1` is fifteen zeros and a one.
+// `match` is exhaustive, so code that matches on an `IpAddr` names both arms.
+//
+// There is no zone here (`fe80::1%lo0`): a scope names an interface of THIS machine, not part of the
+// address, so it rides on `SocketAddr.scopeId` — the same split as the C `sockaddr_in6` and Rust.
+type enum IpAddr implements Formattable {
+    V4(uint8 a, uint8 b, uint8 c, uint8 d),
+    V6(InlineArray<uint8>#(16) octets);
+
+    // The text form. V4 is dotted decimal. V6 is RFC 5952's canonical form, the one every other renderer
+    // agrees on: lowercase hex, no leading zeros in a group, the LONGEST run of two or more zero groups
+    // written `::` (the first one when two runs tie), and an IPv4-mapped address (`::ffff:0:0/96`) with its
+    // last 32 bits dotted, because that is how a v4 peer on a dual-stack socket reads.
+    public const fn void format(ref Formatter f) {
+        match (this) {
+            case V4(a: a, b: b, c: c, d: d): {
+                f.writeU64(v: cast<uint64>(a)); f.writeStr(s: ".");
+                f.writeU64(v: cast<uint64>(b)); f.writeStr(s: ".");
+                f.writeU64(v: cast<uint64>(c)); f.writeStr(s: ".");
+                f.writeU64(v: cast<uint64>(d));
+            }
+            case V6(octets: o): {
+                InlineArray<uint16>#(8) g = [0; 8];
+                int32 i = 0;
+                while (i < 8) {
+                    g[i] = (cast<uint16>(o[2 * i]) << 8ui16) | cast<uint16>(o[2 * i + 1]);
+                    i = i + 1;
+                }
+                // ::ffff:a.b.c.d — the first five groups zero, the sixth all ones.
+                if (g[0] == 0ui16 && g[1] == 0ui16 && g[2] == 0ui16 && g[3] == 0ui16 && g[4] == 0ui16
+                    && g[5] == 65535ui16) {
+                    f.writeStr(s: "::ffff:");
+                    f.writeU64(v: cast<uint64>(o[12])); f.writeStr(s: ".");
+                    f.writeU64(v: cast<uint64>(o[13])); f.writeStr(s: ".");
+                    f.writeU64(v: cast<uint64>(o[14])); f.writeStr(s: ".");
+                    f.writeU64(v: cast<uint64>(o[15]));
+                    return;
+                }
+                // The longest zero run; a run of ONE group is written out, not compressed (RFC 5952 4.2.2).
+                int32 bestAt = -1;
+                int32 bestLen = 1;
+                int32 runAt = -1;
+                i = 0;
+                while (i <= 8) {
+                    if (i < 8 && g[i] == 0ui16) {
+                        if (runAt < 0) { runAt = i; }
+                    } else if (runAt >= 0) {
+                        if (i - runAt > bestLen) { bestAt = runAt; bestLen = i - runAt; }
+                        runAt = -1;
+                    }
+                    i = i + 1;
+                }
+                i = 0;
+                while (i < 8) {
+                    if (i == bestAt) {
+                        f.writeStr(s: "::");
+                        i = i + bestLen;
+                    } else {
+                        if (i > 0 && i != bestAt + bestLen) { f.writeStr(s: ":"); }
+                        f.writeU64Radix(v: cast<uint64>(g[i]), radix: 16, width: 16, upper: 0, prefix: 0, pad: 0, flags: 0);
+                        i = i + 1;
+                    }
+                }
+            }
+        };
+    }
 }
 
 // A host + port endpoint. This is the value the datagram layer hands BACK — `UdpSocket.recvFrom` (the
 // sender) and `localAddr()` (the OS-assigned ephemeral port). Callers still pass plain `host`+`port`
 // strings/scalars INTO connect/bind/sendTo; `SocketAddr` exists so returns have a first-class shape.
-@generate(of)
+//
+// `scopeId` is the interface index a link-local V6 address (`fe80::…`) is only meaningful on — the C
+// `sin6_scope_id`. It is 0 for everything else, V4 always, which is why `of` leaves it out.
 type value SocketAddr implements Formattable {
     public IpAddr ip;
     public uint16 port;
+    public uint32 scopeId;
+
+    public ctor of(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; this.scopeId = 0ui32; }
+    public ctor scoped(IpAddr ip, uint16 port, uint32 scopeId) { this.ip = ip; this.port = port; this.scopeId = scopeId; }
 
     // Rebuild from the HOST-order IPv4 + host-order port the C layer returns (kama_os.h ntohl's `s_addr`),
     // so octet extraction is fixed-shift and endianness-independent.
@@ -31,25 +100,49 @@ type value SocketAddr implements Formattable {
         return SocketAddr.of(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
     }
 
-    // Just the "a.b.c.d" host text (no port) — feeds the C `sockaddr_in` fill for sendTo.
+    // Just the host text (no port) — feeds the C `sockaddr_in` fill for sendTo.
     public const fn string ipString() {
-        return match (this.ip) {
-            case V4(a: a, b: b, c: c, d: d): u8Str(v: a) + "." + u8Str(v: b) + "." + u8Str(v: c) + "." + u8Str(v: d);
-        };
+        Formatter f = Formatter.make();
+        this.ip.format(f: ref f);
+        return f.finish();
     }
 
-    // Render "a.b.c.d:port" into a Formatter (the `Formattable` contract), so `"${addr}"` renders it
-    // gives the owned-string convenience; `ipString()` supplies the host octets (host-order match).
+    // `a.b.c.d:port`, or `[v6]:port` — the brackets are what keeps a V6 address's colons apart from the
+    // port's (RFC 3986). A nonzero scope renders as `[fe80::1%4]:port`, the interface by its index.
     public const fn void format(ref Formatter f) {
-        string host = this.ipString();
-        f.writeStr(s: ref host);
+        match (this.ip) {
+            case V4(a: a, b: b, c: c, d: d): { this.ip.format(f: ref f); }
+            case V6(octets: o): {
+                f.writeStr(s: "[");
+                this.ip.format(f: ref f);
+                if (this.scopeId != 0ui32) { f.writeStr(s: "%"); f.writeU64(v: cast<uint64>(this.scopeId)); }
+                f.writeStr(s: "]");
+            }
+        };
         f.writeStr(s: ":");
         f.writeU64(v: cast<uint64>(this.port));
     }
 }
 
-// Parse a numeric IPv4 address — "127.0.0.1" — into an `IpAddr`. `None` when the text is not exactly four
-// decimal octets. A host NAME is not this function's job; `resolve` is.
+// Parse a numeric address — "127.0.0.1" or "::1" — into an `IpAddr`. `None` when the text is not one. A host
+// NAME is not this function's job; `resolve` is. Text with a colon in it is IPv6, anything else IPv4.
+fn Optional<IpAddr> parseIp(const ref string text) {
+    isize n = text.length();
+    isize i = 0;
+    while (i < n) {
+        if (text[i] == 58ui8) { return parseV6(text: text); }   // ':'
+        i = i + 1;
+    }
+    return match (parseV4(text: text, from: 0)) {
+        case Some(value: v): Optional::Some(value: IpAddr::V4(a: cast<uint8>((v >> 24ui32) & 255ui32),
+                                                              b: cast<uint8>((v >> 16ui32) & 255ui32),
+                                                              c: cast<uint8>((v >> 8ui32) & 255ui32),
+                                                              d: cast<uint8>(v & 255ui32)));
+        case None: Optional::None;
+    };
+}
+
+// IPv4 dotted decimal from `from` to the END of `text`, packed high-to-low (a.b.c.d = 0xaabbccdd).
 //
 // ⚠️ STRICT on purpose, and the strictness is a security property, not pedantry. C's `inet_addr`/`inet_aton`
 // accept a leading zero as OCTAL and accept fewer than four parts as a packed number, so "010.0.0.1" is
@@ -57,15 +150,15 @@ type value SocketAddr implements Formattable {
 // the resolver can be made to disagree with itself that way — it is CVE-2021-29922 in Rust's std and the
 // same bug in Go, Python, Node and glibc's own `inet_addr` in the same year. So: exactly four parts, one to
 // three digits each, no leading zero on a multi-digit part, nothing else in the string.
-fn Optional<IpAddr> parseIp(const ref string text) {
+fn Optional<uint32> parseV4(const ref string text, isize from) {
     isize n = text.length();
-    if (n == 0 || n > 15) { return Optional::None; }        // "255.255.255.255" is the longest legal form
+    if (n - from == 0 || n - from > 15) { return Optional::None; }   // "255.255.255.255" is the longest legal form
     uint32 acc = 0ui32;      // the octets so far, packed high-to-low
     int32 parts = 0;         // completed octets
     int32 cur = -1;          // the octet being read; -1 = no digit seen since the last dot
     int32 digits = 0;
     bool leadingZero = false;
-    isize i = 0;
+    isize i = from;
     while (i < n) {
         uint8 ch = text[i];
         if (ch >= 48ui8 && ch <= 57ui8) {                      // '0'..'9'
@@ -85,12 +178,82 @@ fn Optional<IpAddr> parseIp(const ref string text) {
         i = i + 1;
     }
     if (cur < 0 || parts != 3) { return Optional::None; }
-    acc = (acc << 8ui32) | cast<uint32>(cur);
-    uint8 a = cast<uint8>((acc >> 24ui32) & 255ui32);
-    uint8 b = cast<uint8>((acc >> 16ui32) & 255ui32);
-    uint8 c = cast<uint8>((acc >> 8ui32) & 255ui32);
-    uint8 d = cast<uint8>(acc & 255ui32);
-    return Optional::Some(value: IpAddr::V4(a: a, b: b, c: c, d: d));
+    return Optional::Some(value: (acc << 8ui32) | cast<uint32>(cur));
+}
+
+// IPv6 text (RFC 4291 2.2): eight groups of one to four hex digits, `::` standing for one or more zero
+// groups at most once, and optionally the last 32 bits written as a dotted IPv4 tail under `parseV4`'s rules
+// (so `::ffff:010.0.0.1` is refused for the same reason `010.0.0.1` is).
+//
+// ⚠️ A zone (`fe80::1%lo0`) is REFUSED, not stripped: the scope is an interface of this machine and lives on
+// `SocketAddr.scopeId`. And an IPv4-mapped address stays `V6` — quietly turning `::ffff:1.2.3.4` into `V4`
+// would make the parser decide which socket family a caller gets.
+fn Optional<IpAddr> parseV6(const ref string text) {
+    isize n = text.length();
+    // "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255" is the longest legal form.
+    if (n < 2 || n > 45) { return Optional::None; }
+    InlineArray<uint16>#(8) g = [0; 8];
+    int32 count = 0;         // groups read
+    int32 gapAt = -1;        // how many groups preceded the `::`, or -1 when there is none
+    isize i = 0;
+    if (text[0] == 58ui8) {                                    // a leading colon must be half of `::`
+        if (text[1] != 58ui8) { return Optional::None; }
+        gapAt = 0;
+        i = 2;
+    }
+    while (i < n) {
+        isize start = i;
+        uint32 group = 0ui32;
+        while (i < n && i - start < 5) {
+            uint8 ch = text[i];
+            uint32 digit = 16ui32;
+            if (ch >= 48ui8 && ch <= 57ui8)       { digit = cast<uint32>(ch - 48ui8); }
+            else if (ch >= 97ui8 && ch <= 102ui8) { digit = cast<uint32>(ch - 87ui8); }   // 'a'..'f'
+            else if (ch >= 65ui8 && ch <= 70ui8)  { digit = cast<uint32>(ch - 55ui8); }   // 'A'..'F'
+            if (digit == 16ui32) { break; }
+            group = group * 16ui32 + digit;
+            i = i + 1;
+        }
+        if (i < n && text[i] == 46ui8) {                       // '.': this group was the dotted tail's start
+            if (count > 6) { return Optional::None; }
+            match (parseV4(text: text, from: start)) {
+                case None: { return Optional::None; }
+                case Some(value: v4): {
+                    g[count] = cast<uint16>(v4 >> 16ui32);
+                    g[count + 1] = cast<uint16>(v4 & 65535ui32);
+                    count = count + 2;
+                }
+            };
+            i = n;
+            break;
+        }
+        isize digits = i - start;
+        if (digits == 0 || digits > 4 || count == 8) { return Optional::None; }
+        g[count] = cast<uint16>(group);
+        count = count + 1;
+        if (i == n) { break; }
+        if (text[i] != 58ui8) { return Optional::None; }       // anything but ':' — `%zone` lands here
+        i = i + 1;
+        if (i == n) { return Optional::None; }                 // a single trailing ':'
+        if (text[i] == 58ui8) {
+            if (gapAt >= 0) { return Optional::None; }         // a second `::`
+            gapAt = count;
+            i = i + 1;
+        }
+    }
+    if (gapAt < 0 && count != 8) { return Optional::None; }
+    if (gapAt >= 0 && count > 7) { return Optional::None; }    // `::` must stand for at least one group
+    InlineArray<uint8>#(16) o = [0; 16];
+    int32 k = 0;
+    while (k < count) {
+        // Groups before the gap keep their place; the rest slide to the end.
+        int32 at = k;
+        if (gapAt >= 0 && k >= gapAt) { at = k + 8 - count; }
+        o[2 * at] = cast<uint8>(g[k] >> 8ui16);
+        o[2 * at + 1] = cast<uint8>(g[k] & 255ui16);
+        k = k + 1;
+    }
+    return Optional::Some(value: IpAddr::V6(octets: o));
 }
 
 // The most addresses one lookup reports. A name with more than this many A records is answering a load
