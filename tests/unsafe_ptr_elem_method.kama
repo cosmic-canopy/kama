@@ -3,6 +3,7 @@
 // first consumer's KB-14), because typing the element for `exprClass` breaks the collections' bitwise
 // relocate stores. The consumer-driven audit (0.9.220) types the RECEIVER only — a call borrows the
 // element in place, exactly as the field form does — and stores stay untyped.
+extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 

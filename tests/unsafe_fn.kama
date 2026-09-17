@@ -4,6 +4,7 @@
 //
 // Covers every position the marker reaches: a method, a `ctor`, a destructor, an `operator[]`, and a free
 // function — plus the point of the model, which is that safe `main` calls all of them with no ceremony.
+extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 

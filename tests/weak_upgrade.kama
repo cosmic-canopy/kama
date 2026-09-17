@@ -45,7 +45,7 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
         this.c[0].strong = this.c[0].strong - 1;
         if (this.c[0].strong == 0) {
             drop(ptr: this.p);
-            free(p: cast<UnsafePtr>(this.p));
+            usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a);
             if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
         }
     }

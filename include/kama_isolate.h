@@ -30,10 +30,10 @@ static inline void kama_isolate_join(kama_isolate_t h) { pthread_join(h, NULL); 
 
 // Heap-BOXED handle, for the RAII `Isolate` type (`Isolate h = isolate worker(...);`). kama holds the box
 // as an opaque `UnsafePtr` (void*) — portable, since a bare kama_isolate_t is not always pointer-sized. spawn_boxed
-// mallocs the box and spawns; join_boxed joins the thread and frees the box. The handle owns the join, so
+// allocates the box and spawns; join_boxed joins the thread and frees the box. The handle owns the join, so
 // dropping it (scope exit) joins — a forgotten join can't orphan the thread.
 static inline void* kama_isolate_spawn_boxed(void* (*entry)(void*), void* arg) {
-    kama_isolate_t* box = (kama_isolate_t*)malloc(sizeof(kama_isolate_t));
+    kama_isolate_t* box = (kama_isolate_t*)kama_alloc(sizeof(kama_isolate_t), _Alignof(kama_isolate_t));
     if (!box) kama_panic(kama_string_lit("isolate spawn failed", 20));
     *box = kama_isolate_spawn(entry, arg);
     return box;
@@ -41,7 +41,7 @@ static inline void* kama_isolate_spawn_boxed(void* (*entry)(void*), void* arg) {
 static inline void kama_isolate_join_boxed(void* h) {
     kama_isolate_t* box = (kama_isolate_t*)h;
     kama_isolate_join(*box);
-    free(box);
+    kama_free(box, sizeof(kama_isolate_t), _Alignof(kama_isolate_t));
 }
 
 // The default worker count for `parallel_for` (M6.3) when no build-time override is set: the machine's

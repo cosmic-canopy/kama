@@ -128,6 +128,35 @@ static inline bool kama_type_name_eq(const char* a, const char* b) {
 //  - Beyond it the block comes from the platform's aligned allocator, and must go back to ITS release: on
 //    Windows `_aligned_malloc` pairs only with `_aligned_free` — which is why `kama_free` takes `align` too.
 //    C11 `aligned_alloc` (POSIX, emscripten, newlib) wants a size that is a multiple of `align`.
+#if defined(KAMA_ALLOC_CHECK)
+// THE PROOF THAT EVERY RELEASE TELLS THE TRUTH. The sanitizer leg (run_tests.sh, KAMA_SAN) compiles with this
+// defined: each block carries the layout it was allocated with in a header just before it, and `kama_free`
+// panics when the layout it is handed differs. So a green `./dev test san` means every free in the corpus —
+// emitted, runtime, stdlib, OS seam — passed exactly the size and alignment its block was allocated with,
+// which is what a replacement allocator trusting `deallocate(pointer, bytes, align)` relies on.
+static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, size_t wantAlign);   // below kama_panic
+static inline size_t kama__alloc_check_pad(size_t align) {                  // header bytes, rounded to the block's alignment
+    size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
+    return (2 * sizeof(size_t) + a - 1) & ~(a - 1);
+}
+static inline void* kama_alloc(size_t n, size_t align) {
+    extern void* aligned_alloc(size_t, size_t);
+    size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
+    size_t pad = kama__alloc_check_pad(align);
+    char* raw = (char*)aligned_alloc(a, (pad + n + a - 1) & ~(a - 1));
+    if (!raw) return NULL;
+    size_t* h = (size_t*)(void*)(raw + pad - 2 * sizeof(size_t));
+    h[0] = n; h[1] = align;
+    return raw + pad;
+}
+static inline void kama_free(void* p, size_t n, size_t align) {
+    if (!p) return;
+    size_t* h = (size_t*)(void*)((char*)p - 2 * sizeof(size_t));
+    if (h[0] != n || h[1] != align) kama__alloc_check_fail(n, align, h[0], h[1]);
+    extern void free(void*);
+    free((char*)p - kama__alloc_check_pad(h[1]));
+}
+#else
 static inline void* kama_alloc(size_t n, size_t align) {
     if (align <= _Alignof(max_align_t)) { extern void* malloc(size_t); return malloc(n); }
 #if defined(_WIN32)
@@ -145,6 +174,7 @@ static inline void kama_free(void* p, size_t n, size_t align) {
 #endif
     extern void free(void*); free(p);
 }
+#endif
 static inline void  kama_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
 static inline void* kama_alloc_zeroed(size_t n, size_t align) {
     extern void* memset(void*, int, size_t);
@@ -1577,6 +1607,13 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
     abort();
 #endif
 }
+
+#if defined(KAMA_ALLOC_CHECK)
+static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, size_t wantAlign) {
+    (void)n; (void)align; (void)wantN; (void)wantAlign;   // a debugger shows them; the message names the rule
+    kama_panic(kama_string_lit("allocation check: a block was released with a different size or alignment than it was allocated with", 100));
+}
+#endif
 
 // A `Shared<T>`'s control block (declared up beside `kama_ctrl`). ⚠️ It CHECKS its allocation: it used to
 // write `c->strong` straight through whatever kama_alloc returned, so the one path that is supposed to

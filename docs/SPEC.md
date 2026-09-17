@@ -651,13 +651,13 @@ a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) �
 real-time region is expected to use. A **`new` is judged the same way, by the allocator it draws from**: a
 placement `new(allocator: a)` takes its block from `a`, so it is legal exactly when `a` is, while a bare
 `new` is refused as the libc allocation it is ([tests/noheap_new_bump.kama](../tests/noheap_new_bump.kama)). <!-- xfail: noheap_new --> Under the whole-program flag the region itself must not come from the heap
-either: `Arena.make` mallocs its buffer, so a `--no-heap` program backs a `BumpAllocator` with storage it owns.
+either: `Arena.make` draws its buffer from `GlobalAllocator`, so a `--no-heap` program backs a `BumpAllocator` with storage it owns.
 
 **C the compiler cannot read declares itself.** An `extern fn` whose C touches the heap is marked `@heap`, <!-- xfail: noheap_heap_extern -->
 and a call to it is then an allocation fact like any the compiler writes: `@heap extern fn UnsafePtr
 calloc(usize n, usize size);`. The mark is on the SYMBOL, so a redeclaration without it does not unmark the
 call. The runtime's own externs are marked when kama's C for them allocates or frees on ANY target (the
-prelude's `malloc`/`free`, `std::fs` paths, which Windows converts on the heap, `std::process`, channels, the
+prelude's `kama_alloc`/`kama_free` funnel, `std::fs` paths, which Windows converts on the heap, `std::process`, channels, the
 number formatters). A no-heap verdict is therefore the same on every target. An unmarked user extern is
 unchecked C, as it always was. `@heap` is refused on anything but an `extern fn`: a body's allocations are seen <!-- xfail: heap_attr_on_body, heap_attr_on_fnptr -->
 without it, and a `fnptr` has no C of its own.
@@ -803,8 +803,8 @@ fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any d
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 
 Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`,
-`Shared<T, A>`, and `Weak<T, A>`. A bare `new T.make(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
-malloc/free); a **placement** form `new(allocator: a) T.make(args)` draws the block from `a` and stores the handle in
+`Shared<T, A>`, and `Weak<T, A>`. A bare `new T.make(args)` is unchanged (`A` defaults to `GlobalAllocator` → the
+system heap); a **placement** form `new(allocator: a) T.make(args)` draws the block from `a` and stores the handle in
 the box, so its dtor releases through the **same** allocator — letting a boxed object live in a caller-owned
 arena and be bulk-reclaimed on `reset()`:
 
@@ -872,6 +872,13 @@ kama: a `static` will not hold a resource and a raw element will not be dropped 
 it back to `adoptIn` with that allocator, or free it as the allocator would. `Shared<T>` has no `release()`:
 its control block makes the ownership a count, not a pointer, so there is nothing a host could hold.
 <!-- test: owned_release -->
+
+**Where an adopted block comes from, and where it goes back.** A bare `new T.make(…)` into any `HeapOwner<T>` — <!-- test: box_basic, box_dtor, rc_basic -->
+the stdlib's or one you write — draws the block from `GlobalAllocator` with `T`'s layout, so the owner's
+destructor returns it there, with the object's own layout read before the drop: `usize n = sizeof(ptr: this.p);
+usize a = alignof(ptr: this.p); drop(ptr: this.p); GlobalAllocator.make().deallocate(pointer:
+cast<UnsafePtr>(this.p), bytes: n, align: a);`. Not libc `free`: kama's heap goes through one funnel that a
+program may replace, and the sanitizer leg checks every release against the layout its block was allocated with.
 
 ```kama
 unsafe fn UnsafePtr<World> install(Owned<World> w) { return w.release(); }   // the host's userdata now owns it
@@ -2364,7 +2371,7 @@ The module's other member is the honest reading of a C pointer that may be null:
 returns `Optional<UnsafePtr>` — `Some(p)` or `None`, decided once at the FFI seam, so the fact reaches a
 `match` instead of a `== null` test someone can forget. An `extern fn` cannot return an `Optional` (its
 prototype comes from the C header), so this is how the stdlib reads every extern that genuinely returns null
-(`kama_diropen`, `kama_poller_create`, the process argv/envp builders, `malloc` behind `Arena`); `readDir` on <!-- test: fs_readdir_missing -->
+(`kama_diropen`, `kama_poller_create`, the process argv/envp builders); `readDir` on <!-- test: fs_readdir_missing -->
 a missing directory is the `Err` that path produces. It is the inverse of the prelude's `unwrapPtr`/`ptrOrNull`.
 
 ### Inline assembly — `asm("...")` ✅

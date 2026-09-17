@@ -17,7 +17,7 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public unsafe const fn const ref T deref() { return this.p[0]; }
     public unsafe fn ref T derefMut() { return this.p[0]; }
-    unsafe ~Box() { drop(ptr: this.p); free(p: cast<UnsafePtr>(this.p)); }
+    unsafe ~Box() { usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); drop(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a); }
 }
 
 fn int32 main() {

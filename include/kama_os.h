@@ -38,6 +38,32 @@
 
 #include "kama_runtime.h"
 
+// A heap block that REMEMBERS its size, for this seam's own buffers whose size is not in hand where they are
+// released — a wide path, a command line, an argv/envp vector and each string in it. One `size_t` header, and
+// the block comes from and goes back to the allocation funnel with its exact layout, so a replacement allocator
+// is never handed a guess. Private to this header: a buffer that becomes a `kama_string` is `kama_alloc(n, 1)`
+// with `cap = n`, because the string releases it.
+static inline void* kama__sized_alloc(size_t n) {
+    size_t* h = (size_t*)kama_alloc(sizeof(size_t) + n, _Alignof(max_align_t));
+    if (!h) return NULL;
+    h[0] = sizeof(size_t) + n;
+    return h + 1;
+}
+static inline void* kama__sized_zeroed(size_t n) {
+    extern void* memset(void*, int, size_t);
+    void* p = kama__sized_alloc(n); if (p) memset(p, 0, n); return p;
+}
+static inline void kama__sized_free(void* p) {
+    if (!p) return;
+    size_t* h = (size_t*)p - 1;
+    kama_free(h, h[0], _Alignof(max_align_t));
+}
+static inline char* kama__sized_strdup(const char* s) {
+    extern size_t strlen(const char*);
+    size_t n = strlen(s) + 1;
+    char* d = (char*)kama__sized_alloc(n); if (d) kama_copy(d, s, n); return d;
+}
+
 #if defined(_WIN32)
 
 // ============================ Windows (Winsock + CRT) ============================
@@ -116,18 +142,18 @@ static inline void kama__capture_wsa(void) {
 static inline wchar_t* kama__wide(const char* s, int len) {   // len -1: NUL-terminated (count INCLUDES the NUL)
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, NULL, 0);
     if (n <= 0) { errno = EINVAL; return NULL; }
-    wchar_t* w = (wchar_t*)malloc((size_t)n * sizeof(wchar_t));
+    wchar_t* w = (wchar_t*)kama__sized_alloc((size_t)n * sizeof(wchar_t));   // released by kama__wfree
     if (!w) { errno = ENOMEM; return NULL; }
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, w, n);
     return w;
 }
-// The read direction, as a fresh malloc'd UTF-8 string (the caller owns it; kama_alloc IS malloc, so it may
-// become a kama_string's buffer directly). ⚠️ NTFS permits a lone surrogate in a name; it comes back as
+// The read direction, as a fresh UTF-8 string from `kama_alloc(n, 1)` — `n` is `*outLen + 1` — so it may become a
+// kama_string's buffer directly (cap = n). ⚠️ NTFS permits a lone surrogate in a name; it comes back as
 // U+FFFD and cannot be re-opened — the same limit Rust's `to_str()` has, and not worth an OsString.
 static inline char* kama__utf8(const wchar_t* w, size_t* outLen) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);   // includes the NUL
     if (n <= 0) { errno = EINVAL; return NULL; }
-    char* s = (char*)malloc((size_t)n);
+    char* s = (char*)kama_alloc((size_t)n, 1);
     if (!s) { errno = ENOMEM; return NULL; }
     WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
     if (outLen) *outLen = (size_t)n - 1;
@@ -144,11 +170,11 @@ static inline wchar_t* kama__wpath(const char* utf8) {
     if (!w) return NULL;
     if (wcslen(w) < 248 || (w[0] == L'\\' && w[1] == L'\\' && w[2] == L'?' && w[3] == L'\\')) return w;
     DWORD full = GetFullPathNameW(w, 0, NULL, NULL);                        // required size, incl. NUL
-    wchar_t* v = full ? (wchar_t*)malloc(((size_t)full + 8) * sizeof(wchar_t)) : NULL;   // + `\\?\UNC\`
-    if (!v) { free(w); errno = full ? ENOMEM : ENOENT; return NULL; }
+    wchar_t* v = full ? (wchar_t*)kama__sized_alloc(((size_t)full + 8) * sizeof(wchar_t)) : NULL;   // + `\\?\UNC\`
+    if (!v) { kama__sized_free(w); errno = full ? ENOMEM : ENOENT; return NULL; }
     DWORD got = GetFullPathNameW(w, full, v + 4, NULL);                     // excludes the NUL on success
-    free(w);
-    if (got == 0 || got >= full) { free(v); errno = ENOENT; return NULL; }
+    kama__sized_free(w);
+    if (got == 0 || got >= full) { kama__sized_free(v); errno = ENOENT; return NULL; }
     if (v[4] == L'\\' && v[5] == L'\\') {                                    // \\srv\share\x -> \\?\UNC\srv\share\x
         memmove(v + 8, v + 6, ((size_t)got - 2 + 1) * sizeof(wchar_t));
         memcpy(v, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));
@@ -157,8 +183,9 @@ static inline wchar_t* kama__wpath(const char* utf8) {
     }
     return v;
 }
-// free() may clobber errno; the wrappers below free their wide copy AFTER the call whose errno they return.
-static inline void kama__wfree(void* p) { int e = errno; free(p); errno = e; }
+// Releasing may clobber errno; the wrappers below free their wide copy AFTER the call whose errno they return.
+// Every wide path/string above is a sized block, so this is the one release for all of them.
+static inline void kama__wfree(void* p) { int e = errno; kama__sized_free(p); errno = e; }
 
 // ---- files (wide CRT low-level I/O) -----------------------------------------
 // _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data. The `_w*` CRT
@@ -215,7 +242,7 @@ static inline int32_t kama_rmdir(const char* path) {
 }
 static inline DWORD kama__attrs(const char* path) {
     wchar_t* w = kama__wpath(path); if (!w) return INVALID_FILE_ATTRIBUTES;
-    DWORD a = GetFileAttributesW(w); free(w); return a;
+    DWORD a = GetFileAttributesW(w); kama__wfree(w); return a;
 }
 // Is this path a symlink (a reparse point here), WITHOUT following it? The distinction only matters to a
 // recursive delete, which must not walk through a link and empty a directory somewhere else.
@@ -229,7 +256,7 @@ static inline int32_t kama_rename(const char* from, const char* to) {
     wchar_t* wt = kama__wpath(to);   if (!wt) { kama__wfree(wf); return -1; }
     BOOL ok = MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
     DWORD e = ok ? 0 : GetLastError();
-    free(wf); free(wt);
+    kama__wfree(wf); kama__wfree(wt);
     if (!ok) { errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES; return -1; }
     return 0;
 }
@@ -243,22 +270,22 @@ static inline int32_t kama_exists(const char* path) {
 typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW data; int pending; } kama__dir;
 static inline void* kama_diropen(const char* path) {
     size_t n = strlen(path);
-    char* pattern = (char*)malloc(n + 3);                                    // "<path>\*"
+    char* pattern = (char*)kama__sized_alloc(n + 3);                         // "<path>\*"
     if (!pattern) { errno = ENOMEM; return NULL; }
     memcpy(pattern, path, n); pattern[n] = '\\'; pattern[n + 1] = '*'; pattern[n + 2] = '\0';
     wchar_t* w = kama__wpath(pattern);                                       // GetFullPathNameW keeps a trailing `*`
     kama__wfree(pattern);
     if (!w) return NULL;
-    kama__dir* d = (kama__dir*)malloc(sizeof *d);
-    if (!d) { free(w); errno = ENOMEM; return NULL; }
-    d->h = FindFirstFileW(w, &d->data); free(w);
-    if (d->h == INVALID_HANDLE_VALUE) { free(d); errno = ENOENT; return NULL; }
+    kama__dir* d = (kama__dir*)kama_alloc(sizeof *d, _Alignof(kama__dir));
+    if (!d) { kama__wfree(w); errno = ENOMEM; return NULL; }
+    d->h = FindFirstFileW(w, &d->data); kama__wfree(w);
+    if (d->h == INVALID_HANDLE_VALUE) { kama_free(d, sizeof *d, _Alignof(kama__dir)); errno = ENOENT; return NULL; }
     d->pending = 1;
     return d;
 }
 static inline int32_t kama_dirclose(void* dirp) {
     kama__dir* d = (kama__dir*)dirp;
-    BOOL ok = FindClose(d->h); free(d); return ok ? 0 : -1;
+    BOOL ok = FindClose(d->h); kama_free(d, sizeof *d, _Alignof(kama__dir)); return ok ? 0 : -1;
 }
 static inline kama_string kama_dirnext(void* dirp) {
     kama__dir* d = (kama__dir*)dirp;
@@ -266,7 +293,7 @@ static inline kama_string kama_dirnext(void* dirp) {
     if (!d->pending && !FindNextFileW(d->h, &d->data)) return r;
     d->pending = 0;
     size_t len = 0;
-    char* s = kama__utf8(d->data.cFileName, &len);                          // malloc'd, NUL-terminated
+    char* s = kama__utf8(d->data.cFileName, &len);                          // kama_alloc(len + 1, 1), NUL-terminated
     if (!s) return r;
     r.data = s; r.len = len; r.cap = len + 1;                                // same shape kama_string_from_raw builds
     return r;
@@ -407,7 +434,7 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 // contract std::net::Poller advertises. (Bounded by FD_SETSIZE, raised above.)
 typedef struct kama__poller { WSAPOLLFD* fds; int len; int cap; } kama__poller;
 static inline void* kama_poller_create(void) {
-    kama__poller* p = (kama__poller*)malloc(sizeof *p);
+    kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { errno = ENOMEM; return NULL; }
     p->fds = NULL; p->len = 0; p->cap = 0; return p;
 }
@@ -419,8 +446,11 @@ static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
     for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
     if (p->len == p->cap) {
         int nc = p->cap ? p->cap * 2 : 8;
-        WSAPOLLFD* nf = (WSAPOLLFD*)realloc(p->fds, (size_t)nc * sizeof(WSAPOLLFD));
-        if (!nf) return; p->fds = nf; p->cap = nc;
+        WSAPOLLFD* nf = (WSAPOLLFD*)kama_alloc((size_t)nc * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
+        if (!nf) return;
+        if (p->len) kama_copy(nf, p->fds, (size_t)p->len * sizeof(WSAPOLLFD));
+        if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
+        p->fds = nf; p->cap = nc;
     }
     p->fds[p->len].fd = (SOCKET)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
 }
@@ -468,7 +498,9 @@ static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
 }
 static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
-    if (p) { free(p->fds); free(p); }
+    if (!p) return;
+    if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
+    kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
 // ---- process (std::process; Win32 CreateProcessW) --------------------------
@@ -476,15 +508,15 @@ static inline void kama_poller_free(void* ph) {
 // argv-vector helpers (kama_argv_*) are platform-agnostic; kama_envp_build returns the SAME char*[] shape as
 // POSIX (so process.kama frees it with kama_argv_free), and kama_proc_spawn converts argv[]/envp[] into the
 // Windows command-line string + double-NUL env block on the fly — in UTF-8, then to UTF-16 at the call.
-static inline void* kama_argv_new(int32_t n) { return calloc((size_t)n + 1, sizeof(char*)); }
-static inline void  kama_argv_set(void* v, int32_t i, const char* s) { ((char**)v)[i] = _strdup(s ? s : ""); }
+static inline void* kama_argv_new(int32_t n) { return kama__sized_zeroed(((size_t)n + 1) * sizeof(char*)); }
+static inline void  kama_argv_set(void* v, int32_t i, const char* s) { ((char**)v)[i] = kama__sized_strdup(s ? s : ""); }
 static inline void  kama_argv_free(void* v) {
     if (!v) return;
-    for (char** p = (char**)v; *p; ++p) free(*p);
-    free(v);
+    for (char** p = (char**)v; *p; ++p) kama__sized_free(*p);
+    kama__sized_free(v);
 }
 // Merge the inherited env (unless `clear`) with each "KEY=VALUE" override (replace-by-KEY, else append) into
-// a fresh malloc'd char*[] — identical semantics to the POSIX kama_envp_build. The inherited half is read
+// a fresh char*[] of sized blocks — identical semantics to the POSIX kama_envp_build. The inherited half is read
 // from GetEnvironmentStringsW, the process's own UTF-16 block, converted to UTF-8 — NOT `_environ`, which is
 // that block re-encoded through the ANSI code page. The hidden `=C:=...` drive entries are dropped, as the
 // CRT drops them.
@@ -493,11 +525,12 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
     int nov = 0; if (ov) while (ov[nov]) nov++;
     wchar_t* blk = clear ? NULL : GetEnvironmentStringsW();
     int nbase = 0; if (blk) for (wchar_t* p = blk; *p; p += wcslen(p) + 1) nbase++;
-    char** out = (char**)calloc((size_t)nbase + (size_t)nov + 1, sizeof(char*));
+    char** out = (char**)kama__sized_zeroed(((size_t)nbase + (size_t)nov + 1) * sizeof(char*));
     int k = 0;
     if (blk) for (wchar_t* p = blk; *p; p += wcslen(p) + 1) {
         if (*p == L'=') continue;
-        char* e = kama__utf8(p, NULL);
+        size_t elen = 0;
+        char* e = kama__utf8(p, &elen);                                     // kama_alloc(elen + 1, 1)
         if (!e) continue;
         const char* eq = strchr(e, '=');
         size_t klen = eq ? (size_t)(eq - e) : strlen(e);
@@ -507,10 +540,11 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
             size_t olen = oeq ? (size_t)(oeq - o) : strlen(o);
             if (olen == klen && _strnicmp(o, e, klen) == 0) { overridden = 1; break; }   // Windows env is case-insensitive
         }
-        if (overridden) free(e); else out[k++] = e;
+        if (!overridden) out[k++] = kama__sized_strdup(e);                  // the vector's strings are sized blocks
+        kama_free(e, elen + 1, 1);
     }
     if (blk) FreeEnvironmentStringsW(blk);
-    for (int j = 0; j < nov; j++) out[k++] = _strdup(ov[j]);
+    for (int j = 0; j < nov; j++) out[k++] = kama__sized_strdup(ov[j]);
     out[k] = NULL;
     return out;
 }
@@ -520,7 +554,7 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
 static inline char* kama__win_cmdline(char** argv) {
     size_t total = 1;
     for (char** a = argv; *a; a++) total += 2 * strlen(*a) + 3;   // worst case: full backslash doubling + 2 quotes + space
-    char* buf = (char*)malloc(total);
+    char* buf = (char*)kama__sized_alloc(total);                  // worst case, so it is released by its header
     if (!buf) return NULL;
     char* w = buf;
     for (char** a = argv; *a; a++) {
@@ -548,7 +582,7 @@ static inline char* kama__win_cmdline(char** argv) {
 static inline char* kama__win_envblock(char** envp, size_t* outLen) {
     size_t total = 2;                                  // final "\0\0" (also the empty-block case)
     for (char** e = envp; *e; e++) total += strlen(*e) + 1;
-    char* buf = (char*)malloc(total);
+    char* buf = (char*)kama__sized_alloc(total);
     if (!buf) return NULL;
     char* w = buf;
     for (char** e = envp; *e; e++) { size_t l = strlen(*e); memcpy(w, *e, l); w += l; *w++ = '\0'; }
@@ -580,8 +614,8 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     wchar_t* wenv = envblock ? kama__wide(envblock, (int)envlen) : NULL;
     wchar_t* wcwd = (cwd && cwd[0]) ? kama__wide(cwd, -1) : NULL;
     int convOk = wcmd && (!envblock || wenv) && (!(cwd && cwd[0]) || wcwd);
-    free(cmdline); free(envblock);
-    if (!convOk) { free(wcmd); free(wenv); free(wcwd); return -1; }     // errno: EINVAL (bad UTF-8) or ENOMEM
+    kama__wfree(cmdline); kama__wfree(envblock);
+    if (!convOk) { kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd); return -1; }   // errno: EINVAL (bad UTF-8) or ENOMEM
 
     STARTUPINFOW si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
     int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0);
@@ -605,7 +639,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         if (outFd >= 0 && hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, 0);
         if (errFd >= 0 && hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, 0);
     }
-    free(wcmd); free(wenv); free(wcwd);
+    kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd);
     if (!ok) {
         DWORD e = GetLastError();
         errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
@@ -737,7 +771,6 @@ extern int   fork(void);
 extern void  _exit(int);
 extern int   kill(int, int);
 extern int   fcntl(int, int, ...);
-extern char* strdup(const char*);
 extern char** environ;
 
 // ---- errno / last-error ----------------------------------------------------
@@ -834,30 +867,30 @@ static inline kama_string kama_dirnext(void* dirp) {
 }
 
 // ---- process (std::process; POSIX fork/exec) -------------------------------
-// A child's argv/envp are built HERE as strdup'd `char*[]` — owned independently of the kama `string` RAII,
+// A child's argv/envp are built HERE as copied `char*[]` (kama__sized_strdup) — owned independently of the kama `string` RAII,
 // so they survive across fork even after the parent frees the source strings. kama holds only the opaque
 // vector `UnsafePtr`, `int32` fds/pid, and the `int` wait-status folded to scalar accessors (like `struct stat`).
 static inline void* kama_argv_new(int32_t n) {
-    return calloc((size_t)n + 1, sizeof(char*));           // n slots + NULL terminator, zeroed
+    return kama__sized_zeroed(((size_t)n + 1) * sizeof(char*));   // n slots + NULL terminator, zeroed
 }
 static inline void kama_argv_set(void* v, int32_t i, const char* s) {
-    ((char**)v)[i] = strdup(s ? s : "");                   // own a copy (survives kama-string drop across fork)
+    ((char**)v)[i] = kama__sized_strdup(s ? s : "");       // own a copy (survives kama-string drop across fork)
 }
 static inline void kama_argv_free(void* v) {
     if (!v) return;
-    for (char** p = (char**)v; *p; ++p) free(*p);
-    free(v);
+    for (char** p = (char**)v; *p; ++p) kama__sized_free(*p);
+    kama__sized_free(v);
 }
 // Build the child's envp: start from the parent `environ` (unless `clear`), then apply each "KEY=VALUE"
 // override — REPLACING an inherited entry with the same KEY (getenv semantics: a plain append wouldn't
 // override, since libc returns the first match), else appending. `overrides` is a NULL-terminated char*[]
-// of "KEY=VALUE". Returns a fresh strdup'd char*[] (free with kama_argv_free). Done in the PARENT (malloc
+// of "KEY=VALUE". Returns a fresh char*[] of copies (free with kama_argv_free). Done in the PARENT (allocating
 // is safe there); the child only assigns the result to `environ` then execs.
 static inline void* kama_envp_build(void* overridesV, int32_t clear) {
     char** ov = (char**)overridesV;
     int nov = 0; if (ov) while (ov[nov]) nov++;
     int nbase = 0; if (!clear && environ) while (environ[nbase]) nbase++;
-    char** out = (char**)calloc((size_t)nbase + (size_t)nov + 1, sizeof(char*));
+    char** out = (char**)kama__sized_zeroed(((size_t)nbase + (size_t)nov + 1) * sizeof(char*));
     int k = 0;
     for (int i = 0; i < nbase; i++) {
         const char* e = environ[i];
@@ -869,9 +902,9 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
             size_t olen = oeq ? (size_t)(oeq - o) : strlen(o);
             if (olen == klen && strncmp(o, e, klen) == 0) { overridden = 1; break; }
         }
-        if (!overridden) out[k++] = strdup(e);
+        if (!overridden) out[k++] = kama__sized_strdup(e);
     }
-    for (int j = 0; j < nov; j++) out[k++] = strdup(ov[j]);
+    for (int j = 0; j < nov; j++) out[k++] = kama__sized_strdup(ov[j]);
     out[k] = NULL;
     return out;
 }
@@ -970,8 +1003,12 @@ static inline void kama_proc_detach(ptrdiff_t handle) {
     if (kama_reap_keep(r)) {
         if (kama_reap_len == kama_reap_cap) {
             size_t cap = kama_reap_cap ? kama_reap_cap * 2 : 16;
-            int* p = (int*)realloc(kama_reap_pids, cap * sizeof(int));
-            if (p) { kama_reap_pids = p; kama_reap_cap = cap; }
+            int* p = (int*)kama_alloc(cap * sizeof(int), _Alignof(int));
+            if (p) {
+                if (kama_reap_len) kama_copy(p, kama_reap_pids, kama_reap_len * sizeof(int));
+                if (kama_reap_pids) kama_free(kama_reap_pids, kama_reap_cap * sizeof(int), _Alignof(int));
+                kama_reap_pids = p; kama_reap_cap = cap;
+            }
         }
         if (kama_reap_len < kama_reap_cap) kama_reap_pids[kama_reap_len++] = (int)handle;
         // else: allocation failed — drop the pid rather than fail the destructor. That child stays a
@@ -1069,7 +1106,7 @@ static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close(
 // ready bits: 1=readable (incl. hangup/error so the caller reads EOF/err), 2=writable (a connect resolved).
 typedef struct kama__poller { struct pollfd* fds; int len; int cap; } kama__poller;
 static inline void* kama_poller_create(void) {
-    kama__poller* p = (kama__poller*)malloc(sizeof *p);
+    kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { errno = ENOMEM; return NULL; }
     p->fds = NULL; p->len = 0; p->cap = 0; return p;
 }
@@ -1081,8 +1118,11 @@ static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
     for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
     if (p->len == p->cap) {
         int nc = p->cap ? p->cap * 2 : 8;
-        struct pollfd* nf = (struct pollfd*)realloc(p->fds, (size_t)nc * sizeof(struct pollfd));
-        if (!nf) return; p->fds = nf; p->cap = nc;
+        struct pollfd* nf = (struct pollfd*)kama_alloc((size_t)nc * sizeof(struct pollfd), _Alignof(struct pollfd));
+        if (!nf) return;
+        if (p->len) kama_copy(nf, p->fds, (size_t)p->len * sizeof(struct pollfd));
+        if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(struct pollfd), _Alignof(struct pollfd));
+        p->fds = nf; p->cap = nc;
     }
     p->fds[p->len].fd = (int)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
 }
@@ -1106,7 +1146,9 @@ static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
 }
 static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
-    if (p) { free(p->fds); free(p); }
+    if (!p) return;
+    if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(struct pollfd), _Alignof(struct pollfd));
+    kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
 // ---- UDP datagrams ---------------------------------------------------------

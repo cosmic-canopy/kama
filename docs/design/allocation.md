@@ -2,8 +2,8 @@
 
 **Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
 §5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth** (§2's prerequisite) at `0.9.366`, and **the layout
-funnel + an aligned `Allocator`** (§2's first half, and KR-61) at `0.9.367`. **KR-48's second half is next** —
-see "What KR-48 still has to move" in §2; §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+funnel + an aligned `Allocator`** (KR-61) at `0.9.367`, and **the whole funnel** (§2) at `0.9.369` — on Linux and
+wasm. **KR-48 now waits only on a Windows build** (its row lists what has not compiled there). §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -15,17 +15,18 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-16, Linux).** `dev` = `origin/dev` at `0.9.359`, everything below PUSHED. This campaign's three
-commits — `0.9.353` (the recording gap: a slot call the compiler writes is a no-heap fact), `0.9.354` (a `new` is
-judged by the allocator it draws from, not the verb) and `0.9.355` (KR-51, `Handle` asks the reader) — then the
-other machine's KR-54 work on top, `0.9.356`–`0.9.359` (`kama check` analyzes every configuration a gate needs;
-a gate that can never be active is refused; the LSP half). Before all of it, `0.9.347`–`0.9.348` (KR-47:
-reach-based `--no-heap`, `@heap extern fn`, section GC on no-heap/embedded compiles). The gate figures are in
-each commit message. Since this campaign opened: KR-46 shipped at `0.9.340`, KR-52 at
-`0.9.341`–`0.9.345` and KR-55 (`type extern enum`/`type expose enum`) at `0.9.346`. Filed along the way:
-**KR-57** (shadowing a function) and **KR-58** (the Windows seam allocates a wide path per file-system call, so
-eighteen externs, eleven of them `std::fs`, are `@heap` on every target though some platforms allocate nothing there). A new roadmap row takes the `Next id:` counter
-at the top of `docs/ROADMAP.md`, and bumps it.
+**State (2026-09-17, Linux).** `dev` is `origin/dev` (`0.9.365`, the other machine's KR-1 `std::time`) plus this
+campaign's UNPUSHED commits — the maintainer pushes, and pulls onto the Windows box to verify KR-48:
+- the handoff doc; `0.9.366` (`deallocate` gets the size `allocate` was given: a `__size` vtable slot,
+  `sizeof(ptr:)`, a bindable that releases through the box it came from); KR-61/KR-62 filed;
+- `0.9.367` (KR-61: `Allocator` carries `align`, the funnel is `kama_alloc(n, align)`/`kama_free(p, n, align)`,
+  every emitted site, `kama_runtime.h`, prelude and stdlib moved; the dead concrete smart-pointer macros deleted);
+- `0.9.368` (found on the way: a worker spawned from two modules had its trampoline in only one TU);
+- `0.9.369` (the OS seam, channel, isolate and app headers moved; `check-alloc-funnel.sh`; `KAMA_ALLOC_CHECK` on
+  the san leg). Gate figures are in each commit message.
+Still filed: **KR-57** (shadowing a function), **KR-58** (the Windows seam allocates a wide path per file-system
+call), **KR-62** (`sizeof` of a generic instance named nowhere else). A new roadmap row takes the `Next id:`
+counter at the top of `docs/ROADMAP.md`, and bumps it.
 
 **The order changed on 2026-09-15/16 (maintainer), and KR-39 is no longer next.** Reading the emitter for
 KR-39 answered its own question: devirtualizing in emission cannot reach serde, because the slot calls live in
@@ -60,24 +61,13 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 **First steps next session:**
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
-   on the rebased HEAD before building on it. The other machine is on KR-54 and its neighbours — coordinate
-   before touching the driver or `kama check`.
-2. **KR-48 is next**, and §2 below is its design. The inventory there was taken at `0.9.318` and its LINE numbers
-   are stale; find a site by its function name. **Re-measured at `0.9.359`**, the shape is:
-   - **21 raw `malloc` sites** in the emitted C (`src/kama.cemit.cpp` string literals) plus their frees;
-   - **`include/kama_os.h` 50**, `kama_channel.h` 4, `kama_isolate.h` 2, `kama_app.h` 1;
-   - **`include/kama_runtime.h` 4** — `kama_alloc`/`kama_calloc`/`kama_realloc`/`kama_free` themselves
-     (`:123`-`:126`), already `static inline` over a block-scope `extern`, so the funnel EXISTS and the work is
-     moving callers onto it, not building it;
-   - **6 libc `extern fn` declarations** across `prelude/`+`lib/` (the prelude's `GlobalAllocator` pair, and
-     `std::process`'s `kama_free`).
-   Two decisions belong to this step, both open: **a sized `kama_free(p, n)`** (§2 — `Allocator.deallocate`
-   already takes `bytes`, a size-class allocator wants it, and most runtime frees know the size already; confirm
-   the rest before deciding), and which externs keep `@heap` afterwards. ⚠️ The four funnel names are now SEEDED
-   into `_heapSymbols` (`src/kama.cemit.h`) — after KR-48 that seed is the whole heap surface, so check it still
-   says what it should rather than leaving it beside a new mechanism.
-3. **Then KR-49**, where §3's open question is already answered — **a declaration**, because the flag can check
-   its body. It needs the maintainer's call on the meaning split first (see above).
+   on the rebased HEAD before building on it.
+2. **KR-48 on Windows** (the Windows box): `./dev matrix`. A failure is most likely a compile error in the
+   Windows branch of `kama_os.h`, which this campaign could not build; every site follows one of two patterns
+   (§2, "What moved at `0.9.369`"). Delete the KR-48 row when it is green.
+3. **KR-49** — needs the maintainer's call on the meaning split above first (`--no-heap` = never reaches the
+   SYSTEM heap). The replacement is a declaration; the funnel it delegates from now exists with its final
+   signature, and `_heapSymbols` is seeded with exactly `kama_alloc`, `kama_alloc_zeroed`, `kama_free`.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
@@ -361,16 +351,24 @@ allocator, whose release differs on Windows (`_aligned_free`) — which is why t
 - the dead concrete `KAMA_OWNED/SHARED/WEAK_{TYPE,FUNCS}` macros (a smart-pointer class is only ever over a
   contract — measured: 0 of 826 fixtures emitted them) and the emitter arms that wrote them are deleted.
 
-**What KR-48 still has to move** (the sweep at `0.9.359`, less what `0.9.367` did):
-- **`kama_os.h`** raw `malloc`/`free`/`realloc` — `kama__wpath`/`kama__wide`/`kama__wfree` results (size is local,
-  never returned); `kama__win_cmdline` and `proc_spawn`'s `wcmd`/`wenv`/`wcwd` (`wenv` has embedded NULs — keep
-  the size, do not recompute); argv/envp vectors (slot count not stored); `strdup`/`_strdup` (hidden allocators —
-  a funnel helper); the poller, `diropen` cursor, Windows `kama__utf8`; `kama_channel.h` (4), `kama_isolate.h`
-  (2), `kama_app.h` (1). Every raw `realloc` there knows its old size.
-- **The guard** `tools/check-alloc-funnel.sh`, and the **proof for the whole corpus**: under the san leg, the
-  default `kama_alloc` stores the layout in a header and `kama_free` panics on a mismatch, so a green
-  `./dev test san` means every free passed the right layout. (Not before the OS seam moves: a raw `malloc`
-  block freed through the funnel would trip it.)
+**What moved at `0.9.369` — the rest of KR-48.** Every raw call in `kama_os.h`, `kama_channel.h`, `kama_isolate.h`
+and `kama_app.h`, by one of two patterns:
+- **the layout is in hand where the block is released** → `kama_alloc`/`kama_free` with it: the pollers (growth is
+  alloc + copy + free, sized by `cap`), the Windows `diropen` cursor, the POSIX reaper's pid array, the channel
+  and its ring (the ring takes the fundamental alignment — the element's is not passed across that seam, and
+  elements are copied in and out, never read in place), the isolate box, the emscripten loop record;
+- **it is not** → `kama__sized_alloc`/`_zeroed`/`_strdup`/`_free`, a one-word size header in front of a funnel block,
+  private to `kama_os.h`: every wide path and string (`kama__wide`, `kama__wpath`, and `kama__wfree` releases them
+  all), the `readDir` pattern, the Windows command line and environment block, and the argv/envp vectors and their
+  strings on both platforms — which replaced `strdup`/`_strdup`, allocators no grep for `malloc` finds. `kama__utf8`
+  stays a plain `kama_alloc(n, 1)` because its result becomes a `kama_string`; `kama_envp_build` copies the entries
+  it keeps into sized blocks.
+
+**Held down two ways.** `tools/check-alloc-funnel.sh` refuses a C allocator call (`malloc`, `free`, `strdup`,
+`aligned_alloc`, …) anywhere in `include/`, `prelude/`, `lib/` or the C the emitter writes, outside the funnel's own
+block — self-tested on planted calls. And the san leg compiles with `KAMA_ALLOC_CHECK`: the funnel records each
+block's layout in a header and panics when a release passes a different one, so a green `./dev test san` proves
+every free in the corpus returned its exact size and alignment.
 
 ### 3. Replacing the default implementation
 

@@ -11,6 +11,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include "kama_runtime.h"   /* kama_alloc */
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -23,7 +24,7 @@ static void kama__loop_step(void* arg) {
     if (!l->tick(l->state)) emscripten_cancel_main_loop();
 }
 static inline void kama_run_loop(int (*tick)(void*), void* state) {
-    kama__loop* l = (kama__loop*)malloc(sizeof *l);
+    kama__loop* l = (kama__loop*)kama_alloc(sizeof *l, _Alignof(kama__loop));   // lives until the process ends
     if (!l) return;
     l->tick = tick; l->state = state;
     emscripten_set_main_loop_arg(kama__loop_step, l, 0, 1);   // 1 = simulate infinite loop (does not return)

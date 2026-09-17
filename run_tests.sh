@@ -66,7 +66,9 @@ if [ "${KAMA_SAN:-0}" != "0" ]; then
     # type-erased self is ABI-identical (how essentially all C OO dispatch works), but UBSan's
     # `function` sub-check enforces exact function-pointer type identity and would flag it. All other
     # UBSan checks (integer overflow, null, bounds, alignment, …) and ASan stay on.
-    SAN_FLAGS=(--cc "clang -fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g")
+    # -DKAMA_ALLOC_CHECK: the allocation funnel records each block's layout and panics when a release passes a
+    # different one (kama_runtime.h) — so this leg also proves every free hands back its exact size and alignment.
+    SAN_FLAGS=(--cc "clang -fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g -DKAMA_ALLOC_CHECK")
     export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
     export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
     echo "(sanitizer mode: ASan + UBSan on native positive fixtures)"

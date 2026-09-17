@@ -63,9 +63,12 @@ static inline int kama_channel_recv_open(kama_channel_t* ch) {
 // Returns an opaque handle held by kama as an `UnsafePtr`. Panics on allocation failure (spawn-like: not a
 // recoverable condition in the M3 surface).
 static inline void* kama_channel_new(size_t elemSize, size_t cap) {
-    kama_channel_t* ch = (kama_channel_t*)malloc(sizeof(kama_channel_t));
+    kama_channel_t* ch = (kama_channel_t*)kama_alloc(sizeof(kama_channel_t), _Alignof(kama_channel_t));
     if (!ch) kama_panic(kama_string_lit("channel alloc failed", 20));
-    ch->buf = (unsigned char*)malloc((cap ? cap : 1) * elemSize);
+    // The element's alignment is not passed across this seam, so the ring takes the fundamental one: enough for
+    // every element short of an over-aligned (`@align(32)`+) type — which is also the most a byte ring can use,
+    // since elements are memcpy'd in and out rather than read in place.
+    ch->buf = (unsigned char*)kama_alloc((cap ? cap : 1) * elemSize, _Alignof(max_align_t));
     if (!ch->buf) kama_panic(kama_string_lit("channel alloc failed", 20));
     pthread_mutex_init(&ch->mu, NULL);
     pthread_cond_init(&ch->notEmpty, NULL);
@@ -105,8 +108,8 @@ static inline void kama_channel_free(kama_channel_t* ch) {
     pthread_mutex_destroy(&ch->mu);
     pthread_cond_destroy(&ch->notEmpty);
     pthread_cond_destroy(&ch->notFull);
-    free(ch->buf);
-    free(ch);
+    kama_free(ch->buf, (ch->cap ? ch->cap : 1) * ch->elemSize, _Alignof(max_align_t));
+    kama_free(ch, sizeof(kama_channel_t), _Alignof(kama_channel_t));
 }
 
 // Move one element (elemSize bytes) INTO the channel. Blocks while the ring is full and the receiver
