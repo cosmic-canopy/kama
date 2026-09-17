@@ -274,8 +274,7 @@ echo "%s $*"
         # It DELEGATES to the sh stub rather than echoing itself, so the output is byte-identical on
         # every platform: cmd's `%*` keeps the quotes kama wrote, where a shell strips them, and the
         # `-o <path>` match below is written for the stripped form.
-        printf '@"%s" "%%~dp0%s" %%*
-' "$(cygpath -m "$(command -v sh)")" "$2" > "$1/$2.cmd" ;;
+        printf '@"%s" "%%~dp0%s" %%*\r\n' "$(cygpath -m "$(command -v sh)")" "$2" > "$1/$2.cmd" ;;
     esac
 }
 mkdir -p "$tmp/bin"
