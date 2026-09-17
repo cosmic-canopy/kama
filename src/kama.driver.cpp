@@ -5742,7 +5742,12 @@ int runCmd(const std::string& cmd)
 #if defined(_WIN32)
     return rc;                 // Windows: system() returns the child's exit code directly
 #else
-    return WEXITSTATUS(rc);    // POSIX: extract it from the wait status (<sys/wait.h>)
+    // POSIX: extract it from the wait status (<sys/wait.h>). A child killed by a signal has no exit code, and
+    // WEXITSTATUS of that status reads 0: `kama run` of a program that trapped (SIGABRT) reported SUCCESS, and a
+    // C compiler that crashed would have too. The shell only reports the signal when it `exec`s the command
+    // itself, which /bin/sh does for a lone command. 128 + signal is the shell's own spelling (134 = abort),
+    // and the one the `-j` pool below already uses.
+    return WIFEXITED(rc) ? WEXITSTATUS(rc) : 128 + WTERMSIG(rc);
 #endif
 }
 
