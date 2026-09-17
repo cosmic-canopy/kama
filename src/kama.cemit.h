@@ -753,6 +753,13 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& declared,
                           bool strict,
                           const std::function<void(const std::string&)>& report);
+// One literal of that rule, for a gate that is not an attribute list: a manifest `csources`/`cincludes`
+// entry's `compileFor` (kama.driver.cpp). Defined in kama.cemit.cpp.
+bool kamaGateLitActive(const std::string& name, bool neg,
+                       const std::set<std::string>& active,
+                       const std::set<std::string>& declared,
+                       bool strict,
+                       const std::function<void(const std::string&)>& report);
 
 class CEmitter {
 public:

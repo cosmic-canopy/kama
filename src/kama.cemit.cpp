@@ -32598,6 +32598,22 @@ bool kamaIsBuildConfigFlag(const std::string& n)
 // diagnostic channels: the emitter's `unsupported()` for a declaration gate, and the driver's stderr for
 // a FILE gate (`file @compileFor(FLAG);`), which is read before any emitter exists. One definition, so a
 // file gate and a decl gate can never come to disagree about what `!FLAG` means.
+// One literal of a gate: is `name` (negated when `neg`) satisfied by `active`? Validates the name under
+// strict mode first. The single definition every gate goes through — a `@compileFor` attribute below, and
+// a `csources`/`cincludes` entry's `compileFor` in the manifest (kama.driver.cpp) — so the two spellings of
+// one gate can never come to disagree.
+bool kamaGateLitActive(const std::string& name, bool neg,
+                       const std::set<std::string>& active,
+                       const std::set<std::string>& declared,
+                       bool strict,
+                       const std::function<void(const std::string&)>& report)
+{
+    if (strict && !kamaIsBuildConfigFlag(name) && !declared.count(name))
+        report("`@compileFor` references undeclared flag `" + name +
+               "` (add it to the `flags` object in kama.json)");
+    return active.count(name) ? !neg : neg;
+}
+
 bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& active,
                           const std::set<std::string>& declared,
@@ -32605,12 +32621,6 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::function<void(const std::string&)>& report)
 {
     if (!attrs) return true;
-    auto validate = [&](const std::string& name) {
-        if (!strict) return;
-        if (kamaIsBuildConfigFlag(name) || declared.count(name)) return;
-        report("`@compileFor` references undeclared flag `" + name +
-               "` (add it to the `flags` object in kama.json)");
-    };
     for (auto& at : *attrs) {
         if (!at || !at->name || *at->name != "compileFor") continue;
         if (!at->args || at->args->empty()) {
@@ -32621,8 +32631,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
             if (!arg) continue;
             // bare `FLAG` — an identifier name with no value expression.
             if (arg->name && arg->name->value && !arg->expression) {
-                validate(*arg->name->value);
-                if (!active.count(*arg->name->value)) return false;
+                if (!kamaGateLitActive(*arg->name->value, false, active, declared, strict, report)) return false;
                 continue;
             }
             // negated `!FLAG` — a unary-not (EXCLAMATION) over an identifier (see kama.y attr_arg).
@@ -32631,8 +32640,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
                 if (su && su->token == EXCLAMATION && su->expression) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
                         if (id->value) {
-                            validate(*id->value);
-                            if (active.count(*id->value)) return false;
+                            if (!kamaGateLitActive(*id->value, true, active, declared, strict, report)) return false;
                             continue;
                         }
                 }

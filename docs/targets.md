@@ -258,6 +258,34 @@ project with `..`. A path that simply is not there is named by kama, not by the 
 `OUTPUT=OBJECT` builds one translation unit by definition, so it refuses a build that has a `csources`
 entry beside the program — `OUTPUT=STATIC` is the shape that takes several.
 
+### A source for some targets only — `compileFor` on an entry
+
+A `csources` or `cincludes` entry can be an object carrying a gate:
+
+```json
+{
+  "csources": [
+    "src/ui.cpp",
+    { "path": "src/platform_mac.m", "compileFor": ["OS_MACOS"] },
+    { "path": "src/audio_native.c", "compileFor": ["!ARCH_WASM32"] }
+  ]
+}
+```
+
+`compileFor` holds exactly the literals `@compileFor(...)` takes — flag names and `!FLAG`, all of which
+must hold — and is judged by the same rule, over the same flags: the derived `ARCH_`/`OS_`/`ABI_`/`HOSTED`
+facts, `DEBUG`/`RELEASE`, a declared `select` value, a `flags` entry. So gate on the fact, never on how
+the build was spelled: `OS_MACOS` holds for a `HOST` build on a Mac, for `--target MACOS` and for a bare
+`aarch64-macos-none`, while a `select.TARGET.MACOS` arm would match only the second. That is also why a
+**dependency** can ship a macOS-only source: it cannot know what its consumer calls the target, but it
+can state the fact, and its gate is judged against the build it compiles into.
+
+The refusals are the `@compileFor` ones — a name that is neither a build-configuration fact nor declared,
+and a gate no configuration can activate (`["DEBUG", "RELEASE"]`) — plus one of the manifest's own: an
+entry whose gate leaves it **out** of this build must still exist, the way a gated-out kama file is
+still parsed. A path that is wrong only on the platform nobody builds daily is exactly what a gate would
+otherwise hide.
+
 ### `cincludes` — a package's include tree
 
 A header beside its `.c` is found on its own (above). A library whose headers live in their own tree —

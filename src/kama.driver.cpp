@@ -2814,6 +2814,11 @@ static CLang csourceLang(const std::string& path)
     return CLang::None;
 }
 
+// One `csources` or `cincludes` entry as written: a path, and the gate it compiles under. A plain string
+// in the manifest is an entry with no gate; `{ "path": …, "compileFor": [ "OS_MACOS", "!HOSTED" ] }` is one
+// with a gate — the literals of `@compileFor(OS_MACOS, !HOSTED)`, conjoined, judged by the same rule.
+struct SourceEntry { std::string path; std::vector<GateLit> gate; };
+
 // Everything ONE manifest contributes to the C command line, with its own project/target rules already
 // applied. Joined across manifests by the dependency walk in resolveBuildConfig, where the ordering and
 // merge rules are written out.
@@ -2821,8 +2826,9 @@ struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
     std::vector<std::string> cflags, ldflags, link;
     std::vector<std::string> cxxflags, objcflags;     // per-language, like cflags (see TargetSpec)
-    std::vector<std::string> csources, jsLibraries;   // as written, relative to `manifestPath`
-    std::vector<std::string> cincludes;               // include DIRECTORIES, likewise relative
+    std::vector<SourceEntry> csources;                // as written, relative to `manifestPath`
+    std::vector<std::string> jsLibraries;             // likewise
+    std::vector<SourceEntry> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
     // The one boolean that travels. `no-heap` and `webgpu` are whole-artifact decisions a dependency
     // must not make for its consumer (one changes what compiles, the other demands an SDK) and are read
@@ -2836,7 +2842,7 @@ struct BuildSettings {
 
 // One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
 // shipping `shim.c` from writing the same object file (and racing for it under `-j`).
-struct CSourceRef { std::string owner, path; };
+struct CSourceRef { std::string owner, path; std::vector<GateLit> gate; };
 static std::vector<CSourceRef> g_csources;
 // KR-52: where `kama build` writes the host header (`<project>.h` beside the output), or "" for a command that
 // writes none (`transpile`, `check`). Set by the build around its emit, read by writeHostHeaderIfExposed.
@@ -2891,9 +2897,9 @@ struct ManifestReader {
     std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
     std::vector<std::string>* cxxflagsOut = nullptr;        // ...`cxxflags` (C++ and Objective-C++ entries)
     std::vector<std::string>* objcflagsOut = nullptr;       // ...`objcflags` (Objective-C and Objective-C++)
-    std::vector<std::string>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
+    std::vector<SourceEntry>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
-    std::vector<std::string>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
+    std::vector<SourceEntry>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
     // A VECTOR, not a map: the file's own order is the order a conflict names its settings in, and the
     // order they reach the command line.
     std::vector<std::pair<std::string, EmValue>>* emSettingsOut = nullptr;
@@ -2962,6 +2968,61 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
             if (i < s.size() && s[i] == ']') { ++i; return true; }
             return fail("expected ',' or ']' in the array" + where);
+        }
+    }
+
+    // A `csources`/`cincludes` array: each element a path string, or an object with `path` and an
+    // optional `compileFor` — a non-empty array of `"FLAG"` / `"!FLAG"`, exactly the literals `@compileFor`
+    // takes. Closed like every other object in the manifest. Whether the gate holds is decided once the
+    // build's flags are known (resolveBuildConfig); its SHAPE is checked here, in every command.
+    bool sourceEntries(std::vector<SourceEntry>& out, const char* key) {
+        const std::string k = std::string("`") + key + "`";
+        ws(); if (i >= s.size() || s[i] != '[') return fail(k + " must be a JSON array");
+        ++i; ws();
+        if (i < s.size() && s[i] == ']') { ++i; return true; }
+        while (true) {
+            SourceEntry e;
+            if (i < s.size() && s[i] == '"') { if (!str(e.path)) return false; }
+            else if (i < s.size() && s[i] == '{') {
+                ++i; ws();
+                bool havePath = false, haveGate = false;
+                if (i < s.size() && s[i] == '}') ++i;
+                else while (true) {
+                    std::string ek; if (!str(ek)) return false;
+                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a " + k + " entry");
+                    ++i; ws();
+                    if (ek == "path") { if (!str(e.path)) return false; havePath = true; }
+                    else if (ek == "compileFor") {
+                        std::vector<std::string> lits;
+                        if (!stringArray(lits, "compileFor")) return false;
+                        if (lits.empty())
+                            return fail(k + " entry: `compileFor` requires at least one flag name");
+                        for (const std::string& l : lits) {
+                            const bool neg = !l.empty() && l[0] == '!';
+                            const std::string name = neg ? l.substr(1) : l;
+                            if (!kamaIsIdentifier(name))
+                                return fail(k + " entry: `compileFor` takes flag names or `!FLAG` — the literals "
+                                            "`@compileFor(...)` takes — and \"" + l + "\" is not one");
+                            e.gate.push_back({ name, neg });
+                        }
+                        haveGate = true;
+                    }
+                    else return fail("unknown key `" + ek + "` in a " + k + " entry — an entry takes `path` "
+                                     "and `compileFor`");
+                    ws();
+                    if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+                    if (i < s.size() && s[i] == '}') { ++i; break; }
+                    return fail("expected ',' or '}' in a " + k + " entry");
+                }
+                if (!havePath) return fail("a " + k + " entry object needs a `path`");
+                (void)haveGate;
+            }
+            else return fail(k + " entries are path strings or `{ \"path\": …, \"compileFor\": […] }` objects");
+            out.push_back(std::move(e));
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == ']') { ++i; return true; }
+            return fail("expected ',' or ']' in " + k);
         }
     }
 
@@ -3630,10 +3691,10 @@ struct ManifestReader {
             // translation unit silently missing from the link — which surfaces as an undefined symbol
             // with nothing pointing back at the manifest that named it.
             else if (key == "csources") {
-                std::vector<std::string> scratch;
-                std::vector<std::string>& into = csourcesOut ? *csourcesOut : scratch;
-                if (!stringArray(into, "csources")) return false;
-                for (const std::string& p : into) if (!validCSource(p)) return false;
+                std::vector<SourceEntry> scratch;
+                std::vector<SourceEntry>& into = csourcesOut ? *csourcesOut : scratch;
+                if (!sourceEntries(into, "csources")) return false;
+                for (const SourceEntry& e : into) if (!validCSource(e.path)) return false;
             }
             // The emscripten pair. VALIDATED on every target, not just wasm — the same manifest builds
             // both, and a typo caught only under `--target wasm` is a typo found by whoever ships to the
@@ -3650,10 +3711,10 @@ struct ManifestReader {
             // is checked where the command line is built, which is the one place that can name the
             // declaring package too.
             else if (key == "cincludes") {
-                std::vector<std::string> scratch;
-                std::vector<std::string>& into = cincludesOut ? *cincludesOut : scratch;
-                if (!stringArray(into, "cincludes")) return false;
-                for (const std::string& p : into) if (!validRelPath(p, "cincludes")) return false;
+                std::vector<SourceEntry> scratch;
+                std::vector<SourceEntry>& into = cincludesOut ? *cincludesOut : scratch;
+                if (!sourceEntries(into, "cincludes")) return false;
+                for (const SourceEntry& e : into) if (!validRelPath(e.path, "cincludes")) return false;
             }
             else if (key == "emSettings") {
                 std::vector<std::pair<std::string, EmValue>> scratch;
@@ -4978,12 +5039,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // A dependency wrapping a C library ships the shim that binds it, and the consumer
                 // compiles it — which is the whole reason `csources` propagates. Resolved against the
                 // DECLARING manifest, lexically (see the symlink note above).
-                for (const std::string& cs : bs.csources)
-                    g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs) });
+                for (const SourceEntry& cs : bs.csources)
+                    g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
                 for (const std::string& js : bs.jsLibraries)
                     g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
-                for (const std::string& inc : bs.cincludes)
-                    g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc) });
+                for (const SourceEntry& inc : bs.cincludes)
+                    g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc.path), inc.gate });
                 if (!mergeEmSettings(bs.emSettings, n, derr)) {
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
@@ -5005,12 +5066,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // The project's own C comes after its dependencies', matching the flag order: a dependency
     // contributes first, the project last.
     if (!req.manifest.empty()) {
-        for (const std::string& cs : g_rootSettings.csources)
-            g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs) });
+        for (const SourceEntry& cs : g_rootSettings.csources)
+            g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs.path), cs.gate });
         for (const std::string& js : g_rootSettings.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
-        for (const std::string& inc : g_rootSettings.cincludes)
-            g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc) });
+        for (const SourceEntry& inc : g_rootSettings.cincludes)
+            g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
         // The project merges LAST, which is what makes "the project wins" true of a scalar — including
         // over a conflict two dependencies could not settle between themselves.
         std::string merr;
@@ -5111,6 +5172,44 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             return false;
         }
         g_activeFlags.erase(u);
+    }
+
+    // Gated `csources`/`cincludes` entries, judged now that the flag set is final. The rule is the
+    // `@compileFor` rule, literal for literal (kamaGateLitActive), so a manifest gate and a source gate can
+    // never disagree: a name must be a build-configuration fact or declared (strict mode — a dependency's
+    // gate included, as its kama code is), and a gate no configuration can activate is refused as the typo
+    // it is. A gated-OUT entry must still exist, as a gated-out kama file is still parsed: a path that
+    // rots on the one platform nobody builds daily is exactly what a gate would otherwise hide.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool dirs = pass == 1;
+        std::vector<CSourceRef>& list = dirs ? g_cincludes : g_csources;
+        const char* key = dirs ? "cincludes" : "csources";
+        std::vector<CSourceRef> kept;
+        for (CSourceRef& e : list) {
+            if (e.gate.empty()) { kept.push_back(std::move(e)); continue; }
+            const std::string who = e.owner.empty() ? std::string() : " (declared by dependency `" + e.owner + "`)";
+            const std::string here = "`" + std::string(key) + "` entry '" + e.path + "'" + who;
+            const std::string never = gateContradiction(e.gate);
+            if (!never.empty()) {
+                err = here + ": `compileFor` " + renderGateLits(e.gate) + " can never be active — " + never
+                    + ". No configuration compiles it, so it is a mistake";
+                return false;
+            }
+            bool active = true;
+            std::string bad;
+            for (const GateLit& l : e.gate)
+                if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_strictFlags,
+                                       [&](const std::string& m) { if (bad.empty()) bad = m; }))
+                    active = false;
+            if (!bad.empty()) { err = here + ": " + bad; return false; }
+            if (active) { kept.push_back(std::move(e)); continue; }
+            if (dirs ? !dirExists(e.path) : !fileExists(e.path)) {
+                err = here + " does not exist. It is gated out of this build, and still refused: a path that "
+                      "is wrong only where nobody builds daily is what the gate would otherwise hide";
+                return false;
+            }
+        }
+        list = std::move(kept);
     }
     return true;
 }

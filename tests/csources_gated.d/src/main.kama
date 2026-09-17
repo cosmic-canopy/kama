@@ -1,0 +1,13 @@
+// A `csources` or `cincludes` entry can carry a `compileFor` gate — the literals `@compileFor` takes,
+// judged by the same rule over the build's derived flags. Exactly one of the two platform files compiles
+// (both would be a duplicate symbol, neither an undefined one), and exactly one include directory is on
+// the path; each reports whether it was the right one for the compiler that built it.
+extern "gated.h";
+extern fn int32 kama_test_gated_side();
+extern fn int32 kama_test_gated_include();
+
+unsafe fn int32 check() { return kama_test_gated_side() + kama_test_gated_include(); }
+
+fn int32 main() {
+    return check();   // 1 + 10 on every target; a wrong gate gives 100 or more, or fails to link
+}

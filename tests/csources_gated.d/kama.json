@@ -1,0 +1,17 @@
+{
+  "name": "csrcgated",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": [
+    "csrc/common.c",
+    { "path": "csrc/web.c",    "compileFor": ["ARCH_WASM32"] },
+    { "path": "csrc/native.c", "compileFor": ["!ARCH_WASM32"] }
+  ],
+  "cincludes": [
+    { "path": "inc_web",    "compileFor": ["ARCH_WASM32"] },
+    { "path": "inc_native", "compileFor": ["!ARCH_WASM32"] }
+  ],
+  "modules": { ".": { "visibility": "internal" } }
+}

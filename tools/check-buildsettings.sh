@@ -457,6 +457,72 @@ for how in "-j 1" "--cc zig-cc"; do
 done
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: a \`csources\`/\`cincludes\` entry's \`compileFor\` is the @compileFor rule"
+
+# The runnable proof is tests/csources_gated.d/ (one file per side of ARCH_WASM32, on every leg). Here: the
+# refusals, and the two things an exit code cannot show — a DEPENDENCY's gate, and a declared select value.
+gate() {   # gate <name> <csources JSON list> — a project with csrc/a.c and csrc/b.c present
+    app "$1" <<JSON
+{ "name": "$1", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": [$2],
+  "select": { "AUDIO": { "NONE": { "default": true }, "MINI": {} } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+    mkdir -p "$tmp/$1/csrc"; : > "$tmp/$1/csrc/a.c"; : > "$tmp/$1/csrc/b.c"
+}
+gaterej() {   # gaterej <name> <want> <what>
+    if "$KAMA" build "$tmp/$1/kama.json" --cc "echo CC:" -o "$tmp/$1/app" >"$tmp/o" 2>"$tmp/e"; then
+        bad "$3 — accepted"
+    elif grep -qF -- "$2" "$tmp/e"; then ok "$3"
+    else bad "$3 — refused without \"$2\""; head -2 "$tmp/e" >&2; fi
+}
+
+gate gundecl '{ "path": "csrc/a.c", "compileFor": ["NOT_DECLARED"] }'
+gaterej gundecl 'references undeclared flag `NOT_DECLARED`' "an undeclared flag in a gate is refused, as in @compileFor"
+gate gnever '{ "path": "csrc/a.c", "compileFor": ["DEBUG", "RELEASE"] }'
+gaterej gnever 'can never be active' "a gate no configuration can activate is refused"
+gate gkey '{ "path": "csrc/a.c", "compilefor": ["DEBUG"] }'
+gaterej gkey 'unknown key `compilefor` in a `csources` entry' "a misspelled entry key names itself"
+gate gshape '{ "path": "csrc/a.c", "compileFor": ["DEBUG || RELEASE"] }'
+gaterej gshape 'is not one' "a gate literal that is not FLAG or !FLAG is refused"
+gate gmissing '{ "path": "csrc/gone.c", "compileFor": ["!HOSTED"] }'
+gaterej gmissing 'gated out of this build, and still refused' "a gated-OUT entry that does not exist is still refused"
+
+# A declared select value is a flag like any other: the entry follows `--select`.
+gate gsel '{ "path": "csrc/a.c", "compileFor": ["MINI"] }, { "path": "csrc/b.c", "compileFor": ["!MINI"] }'
+"$KAMA" build "$tmp/gsel/kama.json" -j 2 --cc "echo CC:" -o "$tmp/gsel/app" >"$tmp/o" 2>"$tmp/e" || true
+"$KAMA" build "$tmp/gsel/kama.json" -j 2 --cc "echo CC:" --select AUDIO=MINI -o "$tmp/gsel/app" >"$tmp/o2" 2>>"$tmp/e" || true
+if grep -qF 'csrc/b.c' "$tmp/o" && ! grep -qF 'csrc/a.c' "$tmp/o" \
+   && grep -qF 'csrc/a.c' "$tmp/o2" && ! grep -qF 'csrc/b.c' "$tmp/o2"; then
+    ok "a gate on a declared select value follows --select"
+else
+    bad "a select-value gate did not pick its entry"; head -3 "$tmp/e" >&2
+fi
+
+# A DEPENDENCY's gate is judged against the consumer's build — the one it compiles into — for its
+# csources and its cincludes alike.
+app gdep gpkg <<'JSON'
+{ "name": "gdep", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "gpkg": { "path": "./vendor/gpkg" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/gdep/vendor/gpkg/csrc" "$tmp/gdep/vendor/gpkg/inc_on" "$tmp/gdep/vendor/gpkg/inc_off"
+: > "$tmp/gdep/vendor/gpkg/csrc/on.c"; : > "$tmp/gdep/vendor/gpkg/csrc/off.c"
+cat > "$tmp/gdep/vendor/gpkg/kama.json" <<'JSON'
+{ "name": "gpkg", "version": "1.0.0", "kind": "library", "source": "src",
+  "csources":  [{ "path": "csrc/on.c", "compileFor": ["HOSTED"] }, { "path": "csrc/off.c", "compileFor": ["!HOSTED"] }],
+  "cincludes": [{ "path": "inc_on", "compileFor": ["HOSTED"] }, { "path": "inc_off", "compileFor": ["!HOSTED"] }],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+line=$(cmdline gdep)
+if printf '%s' "$line" | grep -qF 'csrc/on.c' && ! printf '%s' "$line" | grep -qF 'csrc/off.c' \
+   && printf '%s' "$line" | grep -qF 'inc_on' && ! printf '%s' "$line" | grep -qF 'inc_off'; then
+    ok "a dependency's gated csources and cincludes follow the consumer's build"
+else
+    bad "a dependency's gates were not applied"; printf '%s\n' "$line" | sed 's/^/    /' | head -5 >&2
+fi
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: \`cincludes\` puts a package's include tree on the path, under the path rules"
 
 # The runnable proof is tests/cincludes_dep.d/: a dependency whose header lives in include/, not beside

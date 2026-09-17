@@ -1,0 +1,5 @@
+#ifdef __EMSCRIPTEN__
+#define KAMA_TEST_WHICH_IS_RIGHT 100
+#else
+#define KAMA_TEST_WHICH_IS_RIGHT 10
+#endif
