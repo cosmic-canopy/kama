@@ -85,6 +85,7 @@ static inline char* kama__sized_strdup(const char* s) {
 #endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
+#include <iphlpapi.h>     // if_nametoindex (kama_interface_index) — iphlpapi.dll, linked for a Windows target
 #include <windows.h>      // FindFirstFileW / HANDLE / MultiByteToWideChar / GetFullPathNameW
 #include <io.h>           // _wopen, _read, _write, _close, _wunlink
 #include <direct.h>       // _wmkdir, _wrmdir
@@ -708,6 +709,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
 #include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // htons, ntohs
+#include <net/if.h>       // if_nametoindex (kama_interface_index)
 // getaddrinfo, freeaddrinfo, EAI_* (kama_resolve_host). ⚠️ All three are past the ISO C line glibc draws
 // under `-std=c11`, which is why kama_runtime.h asks for `_DEFAULT_SOURCE` at the top of every generated
 // TU — see the block there before moving this include or "simplifying" that one.
@@ -1231,6 +1233,88 @@ static inline int32_t kama_set_ttl(ptrdiff_t fd, uint32_t ttl) {
         : setsockopt((kama__sock)fd, IPPROTO_IP, IP_TTL, (const char*)&v, (socklen_t)sizeof v);
     if (rc != 0) return kama__sock_fail();
     return 0;
+}
+
+// ---- multicast -----------------------------------------------------------------
+// Membership is per interface, and the two families name one differently, which is why kama has a V4 and a V6
+// spelling rather than one that hides a lookup: IP_ADD_MEMBERSHIP takes the interface's ADDRESS (0.0.0.0 =
+// the OS's choice), IPV6_JOIN_GROUP its INDEX (0 = the OS's choice). `join` is 1 to join, 0 to leave. The
+// group and interface bytes are network order, as every address crossing here is.
+#if defined(__EMSCRIPTEN__)
+// emscripten's <netinet/in.h> declares no `struct ip_mreq` (everything else here it has — measured), and a wasm
+// program has no raw sockets to join a group on in any case: std::net's native half is not a wasm feature.
+static inline int32_t kama_multicast_v4(ptrdiff_t fd, const uint8_t* group, const uint8_t* iface, int32_t join) {
+    (void)fd; (void)group; (void)iface; (void)join;
+    errno = ENOPROTOOPT; return -1;
+}
+#else
+static inline int32_t kama_multicast_v4(ptrdiff_t fd, const uint8_t* group, const uint8_t* iface, int32_t join) {
+    struct ip_mreq m;
+    memset(&m, 0, sizeof m);
+    memcpy(&m.imr_multiaddr, group, 4);
+    memcpy(&m.imr_interface, iface, 4);
+    if (setsockopt((kama__sock)fd, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+                   (const char*)&m, (socklen_t)sizeof m) != 0) return kama__sock_fail();
+    return 0;
+}
+#endif
+// Linux spells the V6 pair IPV6_ADD/DROP_MEMBERSHIP (and aliases JOIN/LEAVE); macOS and Winsock spell JOIN/LEAVE.
+#if !defined(IPV6_JOIN_GROUP)
+#  define IPV6_JOIN_GROUP  IPV6_ADD_MEMBERSHIP
+#  define IPV6_LEAVE_GROUP IPV6_DROP_MEMBERSHIP
+#endif
+static inline int32_t kama_multicast_v6(ptrdiff_t fd, const uint8_t* group, uint32_t index, int32_t join) {
+    struct ipv6_mreq m;
+    memset(&m, 0, sizeof m);
+    memcpy(&m.ipv6mr_multiaddr, group, 16);
+    m.ipv6mr_interface = index;
+    if (setsockopt((kama__sock)fd, IPPROTO_IPV6, join ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP,
+                   (const char*)&m, (socklen_t)sizeof m) != 0) return kama__sock_fail();
+    return 0;
+}
+// The outgoing interface for this socket's multicast sends. Without it the group routes by the table, so a host
+// with a default route sends a loopback-bound socket's datagram out a real interface and fails (measured on
+// macOS: EADDRNOTAVAIL), and a multi-homed host picks for the caller.
+static inline int32_t kama_multicast_if_v4(ptrdiff_t fd, const uint8_t* iface) {
+    struct in_addr a;
+    memcpy(&a, iface, 4);
+    if (setsockopt((kama__sock)fd, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&a, (socklen_t)sizeof a) != 0)
+        return kama__sock_fail();
+    return 0;
+}
+static inline int32_t kama_multicast_if_v6(ptrdiff_t fd, uint32_t index) {
+    unsigned int v = (unsigned int)index;
+    if (setsockopt((kama__sock)fd, IPPROTO_IPV6, IPV6_MULTICAST_IF, (const char*)&v, (socklen_t)sizeof v) != 0)
+        return kama__sock_fail();
+    return 0;
+}
+// Loopback and hop limit of multicast sends, by the socket's family. The V6 options take an int everywhere. The
+// V4 ones are the historical `u_char`: macOS and Linux accept a byte or an int (measured), OpenBSD accepts only
+// the byte, and Winsock documents a DWORD — so a byte on POSIX and a DWORD on Windows.
+static inline int32_t kama_multicast_opt(ptrdiff_t fd, int32_t hops, uint32_t value) {
+    int rc;
+    if (kama__sock_family(fd) == 6) {
+        int v = (int)value;
+        rc = setsockopt((kama__sock)fd, IPPROTO_IPV6, hops ? IPV6_MULTICAST_HOPS : IPV6_MULTICAST_LOOP,
+                        (const char*)&v, (socklen_t)sizeof v);
+    } else {
+#if defined(_WIN32)
+        DWORD v = (DWORD)value;
+#else
+        unsigned char v = (unsigned char)value;
+#endif
+        rc = setsockopt((kama__sock)fd, IPPROTO_IP, hops ? IP_MULTICAST_TTL : IP_MULTICAST_LOOP,
+                        (const char*)&v, (socklen_t)sizeof v);
+    }
+    if (rc != 0) return kama__sock_fail();
+    return 0;
+}
+// An interface's index from its name (`lo0`, `eth0`; on Windows the NDIS name, e.g. `ethernet_32769`, not the
+// friendly "Ethernet"). 0 with errno ENOENT when there is no such interface — 0 is never a real index.
+static inline uint32_t kama_interface_index(const char* name) {
+    unsigned int i = (name && *name) ? if_nametoindex(name) : 0u;
+    if (i == 0) errno = ENOENT;
+    return (uint32_t)i;
 }
 
 // ---- name resolution (DNS) -------------------------------------------------

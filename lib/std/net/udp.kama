@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom };
+import { std::io::IoError, std::io::lastError, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom, IpAddr };
 
 export { UdpSocket, DatagramSocket };
 
@@ -23,6 +23,11 @@ extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, Unsa
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_set_ttl(isize fd, uint32 ttl);
 extern fn int32 kama_set_broadcast(isize fd, int32 on);
+extern fn int32 kama_multicast_v4(isize fd, UnsafeConstPtr<uint8> group, UnsafeConstPtr<uint8> iface, int32 join);
+extern fn int32 kama_multicast_v6(isize fd, UnsafeConstPtr<uint8> group, uint32 index, int32 join);
+extern fn int32 kama_multicast_if_v4(isize fd, UnsafeConstPtr<uint8> iface);
+extern fn int32 kama_multicast_if_v6(isize fd, uint32 index);
+extern fn int32 kama_multicast_opt(isize fd, int32 hops, uint32 value);
 extern fn int32 kama_close_socket(isize fd);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
@@ -178,8 +183,71 @@ type resource UdpSocket implements DatagramSocket {
         return Result::Ok(value: Unit::Unit);
     }
 
-    // Multicast join/leave (IP_ADD_MEMBERSHIP) is deferred — broadcast covers LAN discovery for now, and
-    // multicast has no browser analogue. Tracked as a later std::net milestone, not a silent gap.
+    // ---- multicast ----
+    // A group is joined PER INTERFACE, and the families name an interface differently — V4 by an address it
+    // holds, V6 by its index (`interfaceIndex`) — so each has its own call, as in the C API. `0.0.0.0` / index 0
+    // leave the choice to the OS. A group or interface of the wrong family is `Err(InvalidInput)`. Membership
+    // ends when the socket closes; `leave` is for ending it sooner. None of this has a browser analogue.
+
+    public unsafe fn Result<Unit, IoError> joinMulticastV4(const ref IpAddr group, const ref IpAddr interface) {
+        return this.membershipV4(group: group, interface: interface, join: 1);
+    }
+    public unsafe fn Result<Unit, IoError> leaveMulticastV4(const ref IpAddr group, const ref IpAddr interface) {
+        return this.membershipV4(group: group, interface: interface, join: 0);
+    }
+    public unsafe fn Result<Unit, IoError> joinMulticastV6(const ref IpAddr group, uint32 interfaceIndex) {
+        return this.membershipV6(group: group, interfaceIndex: interfaceIndex, join: 1);
+    }
+    public unsafe fn Result<Unit, IoError> leaveMulticastV6(const ref IpAddr group, uint32 interfaceIndex) {
+        return this.membershipV6(group: group, interfaceIndex: interfaceIndex, join: 0);
+    }
+
+    // The interface this socket's multicast SENDS leave by (IP_MULTICAST_IF / IPV6_MULTICAST_IF). Without it the
+    // routing table picks, so a loopback-bound V4 socket's send goes for a real interface and fails, and a
+    // multi-homed host sends on whichever it likes.
+    public unsafe fn Result<Unit, IoError> setMulticastInterfaceV4(const ref IpAddr interface) {
+        if (interface.family() != 4) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(16) i = interface.bytes();
+        if (kama_multicast_if_v4(fd: this.fd, iface: addr(of: i[0])) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<Unit, IoError> setMulticastInterfaceV6(uint32 interfaceIndex) {
+        if (kama_multicast_if_v6(fd: this.fd, index: interfaceIndex) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Whether this socket's own multicast sends are delivered back to groups it (or another socket on this host)
+    // joined. On by default on every OS.
+    public unsafe fn Result<Unit, IoError> setMulticastLoop(bool on) {
+        uint32 v = on ? 1ui32 : 0ui32;
+        if (kama_multicast_opt(fd: this.fd, hops: 0, value: v) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // The hop limit of multicast sends (default 1: the local link). The unicast limit is `setTtl`.
+    public unsafe fn Result<Unit, IoError> setMulticastHops(uint32 hops) {
+        if (kama_multicast_opt(fd: this.fd, hops: 1, value: hops) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    unsafe fn Result<Unit, IoError> membershipV4(const ref IpAddr group, const ref IpAddr interface, int32 join) {
+        if (group.family() != 4 || interface.family() != 4) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(16) g = group.bytes();
+        InlineArray<uint8>#(16) i = interface.bytes();
+        if (kama_multicast_v4(fd: this.fd, group: addr(of: g[0]), iface: addr(of: i[0]), join: join) != 0) {
+            return Result::Err(error: lastError());
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    unsafe fn Result<Unit, IoError> membershipV6(const ref IpAddr group, uint32 interfaceIndex, int32 join) {
+        if (group.family() != 6) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(16) g = group.bytes();
+        if (kama_multicast_v6(fd: this.fd, group: addr(of: g[0]), index: interfaceIndex, join: join) != 0) {
+            return Result::Err(error: lastError());
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
 
     // The raw socket handle — the intended bridge for handing this socket to a std::net::Poller.
     public const fn isize rawHandle() { return this.fd; }

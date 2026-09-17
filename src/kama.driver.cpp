@@ -11438,6 +11438,8 @@ int main(int argc, char** argv)
         // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
         // build produced on Linux silently omitted the socket library.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lws2_32 ";
+        // ...and `if_nametoindex` (std::net::interfaceIndex) lives in iphlpapi.dll, same rule and same pruning.
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-liphlpapi ";
         // std::random's entropy seam (kama_random.h) is BCryptGenRandom on Windows, which lives in
         // bcrypt.dll — same rule, same pruning: keyed on the TARGET, dropped by --gc-sections when unused.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lbcrypt ";

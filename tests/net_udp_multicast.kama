@@ -1,0 +1,171 @@
+// std::net multicast over loopback: join a group, send to it, receive our own datagram, leave. Receives wait
+// through a Poller, so a datagram that never arrives fails instead of hanging the suite. The five flags sum to 31.
+//
+// ⚠️ V6 DELIVERY IS NOT CHECKED ON LINUX, measured rather than assumed: Linux's `lo` carries no multicast route,
+// so a send to ff02::… on it is ENETUNREACH on every Linux host, container or not, while the same send succeeds on
+// macOS (there only from a socket bound to ::1: an unbound one is EHOSTUNREACH). Joining, leaving and the options
+// are still checked there.
+import {
+    std::net::UdpSocket,
+    std::net::IpAddr,
+    std::net::SocketAddr,
+    std::net::RecvFrom,
+    std::net::Poller,
+    std::net::Interest,
+    std::net::parseIp,
+    std::net::interfaceIndex,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
+
+@compileFor(OS_LINUX)
+fn string loopbackName() { return "lo"; }
+@compileFor(OS_WINDOWS)
+fn string loopbackName() { return "loopback_0"; }
+@compileFor(!OS_LINUX, !OS_WINDOWS)
+fn string loopbackName() { return "lo0"; }
+
+@compileFor(OS_LINUX)
+fn bool v6LoopbackDelivers() { return false; }
+@compileFor(!OS_LINUX)
+fn bool v6LoopbackDelivers() { return true; }
+
+fn IpAddr ip(const ref string text) {
+    return match (parseIp(text: text)) { case Some(value: a): a; case None: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8); };
+}
+
+fn uint16 portOf(ref UdpSocket s) {
+    Result<SocketAddr, IoError> r = s.localAddr();
+    return match (r) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+}
+
+fn bool ok(const ref Result<Unit, IoError> r) {
+    return match (r) { case Ok(value: u): true; case Err(error: e): false; };
+}
+
+// Send four bytes from `tx` to `to`; receive them at `rx` within two seconds. The sender as `rx` saw it, or "".
+fn string relay(ref UdpSocket tx, ref UdpSocket rx, ref SocketAddr to) {
+    DynamicArray<uint8> msg = DynamicArray.empty();
+    msg.add(item: 107ui8); msg.add(item: 97ui8); msg.add(item: 109ui8); msg.add(item: 97ui8);
+    Result<usize, IoError> sent = tx.sendTo(bytes: msg.view(), to: to);
+    match (sent) { case Err(error: e): { string why = e.message(); print(s: "send: ${why}\n"); return ""; } case Ok(value: n): { } };
+    Result<Poller, IoError> rp = Poller.create();
+    match (give rp) {
+        case Err(error: e): { return ""; }
+        case Ok(value: p): {
+            p.add(fd: rx.rawHandle(), interest: Interest::Read);
+            Result<int32, IoError> ready = p.wait(timeoutMs: 2000);
+            match (ready) { case Err(error: e): { return ""; } case Ok(value: n): { if (n < 1) { print(s: "no datagram\n"); return ""; } } };
+        }
+    };
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    Result<RecvFrom, IoError> got = rx.recvFrom(into: buf.viewMut());
+    return match (got) {
+        case Err(error: e): "";
+        case Ok(value: rf): rf.count == 4 && buf[2] == 109ui8 ? "${rf.from}" : "";
+    };
+}
+
+fn int32 v4() {
+    IpAddr group = ip(text: "224.0.0.199");
+    IpAddr loop = ip(text: "127.0.0.1");
+    Result<UdpSocket, IoError> rr = UdpSocket.bind(host: "0.0.0.0", port: 0ui16);
+    Result<UdpSocket, IoError> rt = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    match (give rr) {
+        case Err(error: e): { return 0; }
+        case Ok(value: rx): {
+            match (give rt) {
+                case Err(error: e): { return 0; }
+                case Ok(value: tx): {
+                    if (!ok(r: rx.joinMulticastV4(group: group, interface: loop))) { print(s: "v4 join\n"); return 0; }
+                    if (!ok(r: tx.setMulticastInterfaceV4(interface: loop))) { print(s: "v4 if\n"); return 0; }
+                    if (!ok(r: tx.setMulticastLoop(on: true)) || !ok(r: tx.setMulticastHops(hops: 1ui32))) { return 0; }
+                    SocketAddr to = SocketAddr.of(ip: group, port: portOf(s: rx));
+                    string from = relay(tx: tx, rx: rx, to: to);
+                    uint16 txPort = portOf(s: tx);
+                    string want = "127.0.0.1:${txPort}";
+                    if (from != want) { print(s: "v4 sender ${from}, want ${want}\n"); return 0; }
+                    if (!ok(r: rx.leaveMulticastV4(group: group, interface: loop))) { print(s: "v4 leave\n"); return 0; }
+                    return 1;
+                }
+            };
+        }
+    };
+}
+
+fn int32 v6() {
+    IpAddr group = ip(text: "ff02::6b61:6d61");
+    uint32 index = match (interfaceIndex(name: loopbackName())) { case Ok(value: i): i; case Err(error: e): 0ui32; };
+    if (index == 0ui32) { print(s: "no loopback index\n"); return 0; }
+    Result<UdpSocket, IoError> rr = UdpSocket.bind(host: "::", port: 0ui16);
+    Result<UdpSocket, IoError> rt = UdpSocket.bind(host: "::1", port: 0ui16);
+    match (give rr) {
+        case Err(error: e): { return 0; }
+        case Ok(value: rx): {
+            match (give rt) {
+                case Err(error: e): { return 0; }
+                case Ok(value: tx): {
+                    if (!ok(r: rx.joinMulticastV6(group: group, interfaceIndex: index))) { print(s: "v6 join\n"); return 0; }
+                    if (!ok(r: tx.setMulticastInterfaceV6(interfaceIndex: index))) { print(s: "v6 if\n"); return 0; }
+                    if (!ok(r: tx.setMulticastLoop(on: true)) || !ok(r: tx.setMulticastHops(hops: 1ui32))) { print(s: "v6 opts\n"); return 0; }
+                    if (v6LoopbackDelivers()) {
+                        SocketAddr to = SocketAddr.scoped(ip: group, port: portOf(s: rx), scopeId: index);
+                        string from = relay(tx: tx, rx: rx, to: to);
+                        uint16 txPort = portOf(s: tx);
+                        string want = "[::1]:${txPort}";
+                        if (from != want) { print(s: "v6 sender ${from}, want ${want}\n"); return 0; }
+                    }
+                    if (!ok(r: rx.leaveMulticastV6(group: group, interfaceIndex: index))) { print(s: "v6 leave\n"); return 0; }
+                    return 2;
+                }
+            };
+        }
+    };
+}
+
+// A name that is no interface is NotFound, not index 0 passed on as "the OS's choice".
+fn int32 unknownInterface() {
+    return match (interfaceIndex(name: "kama-no-such-if")) {
+        case Ok(value: i): 0;
+        case Err(error: e): match (e) { case NotFound: 4; case _: 0; };
+    };
+}
+
+fn bool invalid(const ref Result<Unit, IoError> r) {
+    return match (r) { case Ok(value: u): false; case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; };
+}
+
+// A group or interface of the other family is refused before the OS sees it.
+fn int32 wrongFamily() {
+    Result<UdpSocket, IoError> rs = UdpSocket.bind(host: "0.0.0.0", port: 0ui16);
+    match (give rs) {
+        case Err(error: e): { return 0; }
+        case Ok(value: s): {
+            IpAddr six = ip(text: "ff02::1");
+            IpAddr four = ip(text: "224.0.0.1");
+            IpAddr any = ip(text: "0.0.0.0");
+            if (!invalid(r: s.joinMulticastV4(group: six, interface: any))) { return 0; }
+            if (!invalid(r: s.joinMulticastV4(group: four, interface: six))) { return 0; }
+            if (!invalid(r: s.joinMulticastV6(group: four, interfaceIndex: 0ui32))) { return 0; }
+            if (!invalid(r: s.setMulticastInterfaceV4(interface: six))) { return 0; }
+            return 8;
+        }
+    };
+}
+
+// A V4-only option set on a V6 socket is refused by the OS, so the options must pick by the socket's family.
+fn int32 v6Options() {
+    Result<UdpSocket, IoError> rs = UdpSocket.bind(host: "::1", port: 0ui16);
+    match (give rs) {
+        case Err(error: e): { return 0; }
+        case Ok(value: s): {
+            if (!ok(r: s.setMulticastHops(hops: 4ui32)) || !ok(r: s.setMulticastLoop(on: false))) { return 0; }
+            return 16;
+        }
+    };
+}
+
+fn int32 main() {
+    return v4() + v6() + unknownInterface() + wrongFamily() + v6Options();   // 31
+}

@@ -1652,6 +1652,15 @@ OS (Windows defaults it on), so one socket serves both families and an IPv4 peer
 `setTtl` sets the unicast hop limit of either family. A send to an address of the other family is an error <!-- test: net_ipv6 -->
 from the socket, not a silent drop.
 
+**Multicast (`std::net`).** A `UdpSocket` joins a group **per interface**, and the families name an interface
+differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
+the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the
+OS's choice), with `leaveMulticastV4`/`leaveMulticastV6` beside them. `interfaceIndex(name:)` turns `lo0` or `eth0` <!-- test: net_udp_multicast -->
+into an index, and a name that is no interface is `Err(NotFound)`. `setMulticastInterfaceV4`/`V6` choose the
+interface sends leave by (without it the routing table picks, and a loopback-bound V4 socket's send fails on a
+host with a default route); `setMulticastLoop` and `setMulticastHops` apply to either family. A group or
+interface of the other family is `Err(InvalidInput)` before the OS is asked. <!-- test: net_udp_multicast -->
+
 **Addresses (`std::net`).** `IpAddr` is `V4(uint8 a, uint8 b, uint8 c, uint8 d)` or
 `V6(InlineArray<uint8>#(16) octets)`, both in network order, and `match` on one names both arms. `parseIp`
 reads IPv6 text as RFC 4291 writes it — `::` once, and an optional dotted IPv4 tail under the same strict
