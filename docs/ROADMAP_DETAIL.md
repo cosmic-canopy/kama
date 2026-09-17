@@ -1833,12 +1833,14 @@ synthesized member to the user's type. The fixtures should then assert a live co
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
-rule is permanent. What is not is eleven `std::fs` externs being heap at all: `kama__wpath` converts every UTF-8 path
-to a heap UTF-16 string on Windows, where POSIX passes the bytes straight through. A stack buffer for the common
-case removes the heap from those calls and the marks come off. The long-path (`\\?\`, >`MAX_PATH`) fallback is the
-design question. Seven more are heap on one platform only, measured per variant: `kama_proc_spawn` on Windows,
-`kama_proc_detach` on POSIX, and `kama_args_at`, `kama_program_*` and `kama_env_lookup`
-natively but not on wasm. Whether each can stop allocating, or honestly cannot, is part of the row.
+rule is permanent. What is not is ten `std::fs` externs being heap at all: `kama__wpath` converts every UTF-8 path
+to a heap UTF-16 string on Windows, where POSIX passes the bytes straight through. One of the ten, `kama_path_meta`
+(`stat`), was never marked, so `--no-heap` accepts a program that allocates on Windows (probed `0.9.369`). A stack
+buffer sized to the NT path limit removes the heap from all ten, and the marks come off. A heap fallback for a long
+path would keep them, which is why the long-path case decides the design. The seven one-platform externs were judged
+on 2026-09-17: all honestly allocate (owned strings, unbounded command lines, a growing reap list) and stay marked.
+The brief, with the measurements to take and the decisions to put to the maintainer before code, is §2b of
+[docs/design/allocation.md](design/allocation.md).
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
