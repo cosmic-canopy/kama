@@ -293,13 +293,26 @@ manifest-relative library directory (or archive path) resolved against the decla
 entry like `csources` — but whether kama should carry prebuilt binaries at all (they are per-target and
 per-toolchain, where a `csources` entry is portable) is the question to rule first.
 
-### Verify `csources` C++ and Objective-C on Windows (KR-71) — filed 2026-09-17, `0.9.382`
+### `--cc gcc` cannot build any kama program (KR-72) — found 2026-09-17 verifying the C++ `csources` work on Windows, `0.9.383`
 
-The `csources` C++/Objective-C work (`0.9.379`–`0.9.382`) ran on macOS (clang, zig, `zig cc -target x86_64-linux-gnu`), Linux (the container's clang/gcc under
-ASan) and wasm (emcc). Unrun on the Windows box: msys2 `gcc`→`g++` and `clang`→`clang++` derivation with a
-`.exe` suffix, `cmd.exe` running the per-file commands, `-iquote .` (the `VERSION`-as-`<version>` collision
-is case-insensitivity, which Windows has), and a mingw C++ link bringing `libstdc++` statically under the
-default `runtime`. `tests/csources_cxx.d` and `tests/csources_cxx_dep.d` are the fixtures.
+Every kama compile command carries `-Wno-error=incompatible-function-pointer-types`, which demotes clang's
+error-by-default for a kama `fnptr` handed to a C callback field (the sanctioned FFI seam). **gcc has no
+warning by that name** — it suggests `-Wincompatible-pointer-types` — and an unknown `-Wno-error=` spelling is
+a hard error there, not an ignored flag. Measured on the Windows box, msys2 gcc 16.2:
+
+```
+$ kama build --cc gcc hello.kama -o hello.exe
+cc1.exe: error: '-Wno-error=incompatible-function-pointer-types': no option
+'-Wincompatible-function-pointer-types'; did you mean '-Wincompatible-pointer-types'?
+kama: gcc failed (exit 1)
+```
+
+`cc1plus.exe` refuses it too, so a C++ `csources` build fails the same way. **This is not Windows-specific** —
+it is any gcc driver on any host, and it was found only because Windows is where the C++ `csources` verification
+ran. kama derives `gcc`→`g++` on purpose (`deriveCxxDriver`) and docs/targets.md names gcc as a `cc`, so this is
+a supported path that has never worked. The fix is to emit the flag only for the driver family that has it
+(the same name test `deriveCxxDriver` already does, or one probe per build); the fixture needs a gcc on PATH and
+skips where there is none, like the other toolchain-dependent guards.
 
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
@@ -1844,6 +1857,28 @@ is the only object that knows, and there is no other home for the numbers: a mod
 the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the prelude, returning `ref Pool`,
 refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
 synthesized member to the user's type. The fixtures should then assert a live count.
+
+**Windows allocates before `main` (KR-73)** — found 2026-09-17 running the allocator campaign's own fixtures on
+Windows for the first time, `0.9.384`. The synthesized `main` calls `kama_args_init`, and its Windows branch
+(`include/kama_runtime.h`) re-reads the command line with `CommandLineToArgvW` and converts it to UTF-8 —
+`kama_alloc_zeroed` for the vector, `kama_alloc` per argument — because the CRT's narrow argv is the ANSI
+re-encoding and mojibake for a non-ASCII path. POSIX takes `argv` as the OS gave it and allocates nothing.
+
+Measured, one argument, so two allocations:
+- `tests/global_allocator_pool` returns 26 where it accounts for 28 (`22` expected, `20` got): its arithmetic
+  assumes the declared pool is empty when `main` starts. A probe that drains the pool as its first statement
+  reports 29 free slots of 32 (the drain's own array is the 30th), so exactly two are already gone.
+  `tools/check-noheap.sh` fails with the same fixture and the same cause.
+- A `--no-heap` program's emitted `main` still calls `kama_args_init`, and the linked binary references
+  `malloc` — so on Windows the flag does not deliver what it promises, at startup, before any user code runs.
+  Nothing catches it: the reach walk reads the C the compiler writes, and this allocation lives in a runtime
+  header the walk never sees (the same blind spot `_heapSymbols` seeds by hand).
+
+The likely fix is to convert LAZILY — on the first `args()`, `programName()`, `programPath()` or `env()` — so a
+program that never asks for them allocates nothing and matches POSIX, with a guard for the first call racing
+between isolates. Then decide what the pool fixture should assert: the honest cross-platform shape is to
+measure the baseline at entry rather than assume 32 free slots. ⚠️ Whatever is chosen, `--no-heap` on Windows
+needs a fixture of its own, because the flag's promise is exactly what broke here.
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That

@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-72**
+**Next id: KR-74**
 
 ## The shape
 
@@ -97,7 +97,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-68 | **Every module's C preprocesses the whole OS header set** — one generated `<name>.gen.h` carries every `extern` header, so importing `std::fs` anywhere puts `<windows.h>` (21,748 macros) in front of EVERY module's C. Preprocessing `kama_os.h` measured ~263 ms against ~121 ms for `kama_runtime.h` alone on the Windows VM (ratio only — that box is QEMU + x64 emulation). Moving the seam behind plain prototypes, with bodies in one TU, would cut per-TU preprocessing on every platform (GOALS #2) and shrink the macro surface; it costs inlining of the thin syscall wrappers, so it is measured on a NATIVE box first. Not a fix for KR-67 — a user's own `extern` header bleeds either way | M? | [§9](ROADMAP_DETAIL.md#s9) |
 | KR-69 | **A misspelled triple-component flag in a gate is silently inactive** — `@compileFor(OS_WINODWS)` (and a `csources` entry's `compileFor`) builds and passes `kama check`: any `OS_`/`ARCH_`/`ABI_` name validates because triples are open, and the covering check skips a gate no known target activates. Wants a ruling on a closed component table | ? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-70 | **A dependency cannot ship a prebuilt archive** — a relative `-L` in a dependency is refused (correctly) and `link` names no directory, so a package wrapping a cmake-built library leaves its consumer to link it. Rule first whether kama carries per-target binaries at all | ? | [§2](ROADMAP_DETAIL.md#s2) |
-| KR-71 | **Verify `csources` C++/Objective-C on Windows** — msys2 `g++`/`clang++` derivation with `.exe`, cmd.exe per-file commands, `-iquote .` on a case-insensitive FS, the mingw C++ runtime link; fixtures `csources_cxx.d`, `csources_cxx_dep.d` | S | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-73 | **Windows allocates before `main`, so a declared pool and `--no-heap` both lose on Windows** — the synthesized `main` calls `kama_args_init`, which re-reads the command line as UTF-8 and draws the argv vector plus one string per argument FROM THE FUNNEL, where POSIX takes argv as given and allocates nothing. Two consequences, both measured `0.9.384`: `tests/global_allocator_pool` gets 26 slots where it accounts for 28 (its arithmetic assumes an empty pool at entry, and `check-noheap` fails with it), and a `--no-heap` program REFERENCES `malloc` and allocates at startup, which is the one thing the flag promises it will not. Likely answer: convert lazily, on the first `args()`/`programName()`/`env()`, so a program that never asks allocates nothing — POSIX's behaviour. Decide the fixture's arithmetic with it. **Windows box** | M? | [§5](ROADMAP_DETAIL.md#s5) |
+| KR-72 | **`--cc gcc` cannot build ANY kama program** — the driver always passes clang's `-Wno-error=incompatible-function-pointer-types` (`src/kama.driver.cpp`, the FFI callback demotion), and gcc has no such warning name, so `cc1.exe`/`cc1plus.exe` refuse it: a hello-world with `--cc gcc` exits 1 (measured `0.9.383`, msys2 gcc 16.2). Not Windows-specific — any gcc driver on any host. kama derives `gcc`→`g++` and documents gcc as a `cc`, so this is a supported path that never worked. Gate the flag on the driver family (the `deriveCxxDriver` name test is the seam) or probe once; a regression fixture needs a gcc, so it skips where there is none | S | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — tooling & ecosystem
 

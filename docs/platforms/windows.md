@@ -216,7 +216,9 @@ Worth knowing before debugging, because each of these produced a confident wrong
   executable, and each fixture is a fresh `.exe` in a fresh temp dir, so `net_ipv6` and `net_udp_multicast`
   prompt on every run. The dialog does not block the program, and Cancel is harmless: it refuses INBOUND
   traffic from the network, while the fixtures talk over loopback. To silence it on a dev VM, run in an admin
-  shell: `Set-NetFirewallProfile -Profile Domain,Public,Private -NotifyOnListen False`.
+  shell: `Set-NetFirewallProfile -Profile Domain,Public,Private -NotifyOnListen False`. ⚠️ `False` is a
+  `GpoBoolean` (`True`/`False`/`NotConfigured`), NOT PowerShell's `$false`, which fails to cast. Check with
+  `Get-NetFirewallProfile -All | Select-Object Name, NotifyOnListen`.
 - **`abort()` exits 127; it is not a death by signal.** So the POSIX `>= 128` trap predicate matches
   nothing here, and 127 is a value a program can also *return* — the runtime's own message on stderr is
   the discriminator. `run_tests.sh` (trap fixtures) and `tools/check-release-arith.sh` each carry this
