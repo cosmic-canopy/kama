@@ -5,7 +5,8 @@ import { std::io::IoError, std::io::lastError,
 export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne };
 
 extern "kama_os.h";
-extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<uint32> outIps, int32 max);
+extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIps,
+                                  UnsafePtr<uint32> outScope, int32 max);
 
 // An IP address. Both arms store the address in NETWORK order, as the wire and the C `in_addr`/`in6_addr`
 // do: `V4` as its four dotted octets a.b.c.d, `V6` as its sixteen bytes, so `::1` is fifteen zeros and a one.
@@ -16,6 +17,26 @@ extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<uint32> 
 type enum IpAddr implements Formattable {
     V4(uint8 a, uint8 b, uint8 c, uint8 d),
     V6(InlineArray<uint8>#(16) octets);
+
+    // The sockets lower an address to the seam's form (see kama_os.h): a family, 4 or 6, and sixteen
+    // NETWORK-order bytes, V4 using the first four. Copied, never byte-swapped, so neither side has an
+    // endianness.
+    friend TcpStream[family, bytes];
+    friend TcpListener[family, bytes];
+    friend UdpSocket[family, bytes];
+
+    const fn int32 family() {
+        return match (this) { case V4(a: a, b: b, c: c, d: d): 4; case V6(octets: o): 6; };
+    }
+
+    const fn InlineArray<uint8>#(16) bytes() {
+        InlineArray<uint8>#(16) result = [0; 16];
+        match (this) {
+            case V4(a: a, b: b, c: c, d: d): { result[0] = a; result[1] = b; result[2] = c; result[3] = d; }
+            case V6(octets: o): { result = o; }
+        };
+        return result;
+    }
 
     // The text form. V4 is dotted decimal. V6 is RFC 5952's canonical form, the one every other renderer
     // agrees on: lowercase hex, no leading zeros in a group, the LONGEST run of two or more zero groups
@@ -87,24 +108,37 @@ type value SocketAddr implements Formattable {
     public uint16 port;
     public uint32 scopeId;
 
+    friend TcpStream[host];
+    friend TcpListener[host];
+    friend UdpSocket[host, raw];
+    friend resolve[raw];
+
     public ctor of(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; this.scopeId = 0ui32; }
     public ctor scoped(IpAddr ip, uint16 port, uint32 scopeId) { this.ip = ip; this.port = port; this.scopeId = scopeId; }
 
-    // Rebuild from the HOST-order IPv4 + host-order port the C layer returns (kama_os.h ntohl's `s_addr`),
-    // so octet extraction is fixed-shift and endianness-independent.
-    public ctor fromHostIp(uint32 ip, uint16 port) {
-        uint8 a = cast<uint8>((ip >> 24ui32) & 255ui32);
-        uint8 b = cast<uint8>((ip >> 16ui32) & 255ui32);
-        uint8 c = cast<uint8>((ip >> 8ui32) & 255ui32);
-        uint8 d = cast<uint8>(ip & 255ui32);
-        return SocketAddr.of(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
+    // An address in the seam's form, as `recvfrom`/`getsockname`/the resolver hand one back (see `IpAddr.bytes`).
+    ctor raw(int32 family, const ref InlineArray<uint8>#(16) bytes, uint16 port, uint32 scopeId) {
+        IpAddr ip = IpAddr::V4(a: bytes[0], b: bytes[1], c: bytes[2], d: bytes[3]);
+        uint32 zone = 0ui32;
+        if (family == 6) { ip = IpAddr::V6(octets: bytes); zone = scopeId; }
+        this.ip = ip;
+        this.port = port;
+        this.scopeId = zone;
     }
 
-    // Just the host text (no port) — feeds the C `sockaddr_in` fill for sendTo.
-    public const fn string ipString() {
-        Formatter f = Formatter.make();
-        this.ip.format(f: ref f);
-        return f.finish();
+    // The endpoint a host TEXT names for `bind`/`connect`: numeric only, through `parseIp`'s strict rules — a
+    // name is `resolve`'s job — so anything else is `InvalidInput`. The empty string keeps the meaning it has
+    // always had: every IPv4 interface to bind, IPv4 loopback to connect. The dual-stack wildcard is `"::"`.
+    ctor Result<SocketAddr, IoError> host(const ref string text, uint16 port, bool forBind) {
+        if (text.length() == 0) {
+            IpAddr any = IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8);
+            if (forBind) { any = IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8); }
+            return Result::Ok(value: SocketAddr.of(ip: any, port: port));
+        }
+        return match (parseIp(text: text)) {
+            case Some(value: ip): Result::Ok(value: SocketAddr.of(ip: ip, port: port));
+            case None: Result::Err(error: IoError::InvalidInput);
+        };
     }
 
     // `a.b.c.d:port`, or `[v6]:port` — the brackets are what keeps a V6 address's colons apart from the
@@ -260,16 +294,13 @@ fn Optional<IpAddr> parseV6(const ref string text) {
 // balancer's round-robin, and a caller trying them in order will have succeeded long before the sixteenth.
 comptime int32 RESOLVE_MAX = 16;
 
-// Resolve a host NAME (or a numeric address) to every IPv4 endpoint it names, at `port`.
+// Resolve a host NAME (or a numeric address) to every endpoint it names, IPv4 and IPv6, at `port`.
 //
 // The list comes back in the RESOLVER's order, which is already RFC 6724 destination-address selection —
-// try them in order and take the first that connects, which is what a happy-eyeballs client does. A
-// numeric host is answered here without a lookup at all, through `parseIp` and therefore under its strict
-// rules; a name goes to the system resolver.
-//
-// ⚠️ IPv4 only, because every socket in `std::net` is: an IPv6 result has nowhere to go yet. A name that
-// resolves to IPv6 ONLY reports `HostUnreachable` rather than an empty list — the distinction matters to a
-// caller, and "I found nothing you can use" is not the same answer as "there is nothing".
+// try them in order and take the first that connects, which `TcpStream.connectHost` does. It is NOT
+// filtered: on macOS `localhost` is `::1` first, so a server listening on `127.0.0.1` alone is not the first
+// address here. A numeric host is answered without a lookup at all, through `parseIp` and therefore under
+// its strict rules; a name goes to the system resolver. A link-local answer carries its `scopeId`.
 //
 // ⚠️ It BLOCKS, possibly for seconds, and cannot be given a timeout — `getaddrinfo` takes none and the
 // asynchronous spellings are per-platform. Resolve on another isolate if the stall is not affordable.
@@ -282,12 +313,19 @@ unsafe fn Result<DynamicArray<SocketAddr>, IoError> resolve(const ref string hos
         }
         case None: { }
     };
-    FixedArray<uint32> ips = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
-    int32 n = kama_resolve_host(host: host.cstr(), outIps: addr(of: ips[0]), max: RESOLVE_MAX);
+    FixedArray<int32> families = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
+    FixedArray<uint8> bytes = FixedArray.make(size: cast<isize>(RESOLVE_MAX * 16));
+    FixedArray<uint32> scopes = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
+    int32 n = kama_resolve_host(host: host.cstr(), outFamily: addr(of: families[0]), outIps: addr(of: bytes[0]),
+                                outScope: addr(of: scopes[0]), max: RESOLVE_MAX);
     if (n < 0) { return Result::Err(error: lastError()); }
     int32 i = 0;
     while (i < n) {
-        found.add(item: SocketAddr.fromHostIp(ip: ips[cast<isize>(i)], port: port));
+        InlineArray<uint8>#(16) one = [0; 16];
+        int32 k = 0;
+        while (k < 16) { one[k] = bytes[cast<isize>(i * 16 + k)]; k = k + 1; }
+        isize at = cast<isize>(i);
+        found.add(item: SocketAddr.raw(family: families[at], bytes: one, port: port, scopeId: scopes[at]));
         i = i + 1;
     }
     return Result::Ok(value: give found);

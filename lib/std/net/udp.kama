@@ -4,19 +4,22 @@ import { std::io::IoError, std::io::lastError, std::collections::View, std::coll
 export { UdpSocket, DatagramSocket };
 
 // POSIX/Winsock UDP bindings — see kama_os.h. Same conventions as the TCP module: socket handles are
-// `isize` (`< 0 == error`), the `sockaddr_in` fill stays in C, and kama passes only the handle, a numeric
-// host string, a port, and scalar out-params. `recvfrom`'s sender comes back as a host-order IPv4 + port.
+// `isize` (`< 0 == error`), the sockaddr fill stays in C, and an address crosses in `IpAddr.bytes`' seam form
+// (family, sixteen network-order bytes, port, scope id) — in as scalars, back as scalar out-params.
 extern "kama_os.h";
 extern fn int32 kama_net_init();
-extern fn isize kama_socket_udp();
+extern fn isize kama_socket_udp(int32 family);
 extern fn int32 kama_set_reuseaddr(isize fd);
-extern fn int32 kama_bind_inet(isize fd, UnsafeConstPtr<cchar> host, uint16 port);
-extern fn int32 kama_connect_inet(isize fd, UnsafeConstPtr<cchar> host, uint16 port);
-extern fn isize kama_sendto_inet(isize fd, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<cchar> host, uint16 port);
-extern fn isize kama_recvfrom_inet(isize fd, UnsafePtr<uint8> buf, usize n, UnsafePtr<uint32> outIp, UnsafePtr<uint16> outPort);
+extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
+extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
+extern fn isize kama_sendto_addr(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 family, UnsafeConstPtr<uint8> ip,
+                                 uint16 port, uint32 scopeId);
+extern fn isize kama_recvfrom_addr(isize fd, UnsafePtr<uint8> buf, usize n, UnsafePtr<int32> outFamily,
+                                   UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
-extern fn int32 kama_getsockname(isize fd, UnsafePtr<uint32> outIp, UnsafePtr<uint16> outPort);
+extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp,
+                                      UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_set_ttl(isize fd, uint32 ttl);
 extern fn int32 kama_set_broadcast(isize fd, int32 on);
@@ -49,15 +52,27 @@ type resource UdpSocket implements DatagramSocket {
     isize fd = -1;
     private ctor make(isize fd) { this.fd = fd; }
 
-    // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
-    // (read the actual port back with localAddr()). SO_REUSEADDR is set. The socket closes on drop.
+    // Bind to a numeric host:port. host ""/"0.0.0.0" = every IPv4 interface, "::" = every interface of both
+    // families (IPV6_V6ONLY off, as for `TcpListener`); port 0 = OS-assigned ephemeral (read the actual port
+    // back with localAddr()). Text that is not a numeric address is `Err(InvalidInput)`. SO_REUSEADDR is set.
+    // The socket's family is the address's, for its whole life. The socket closes on drop.
     public unsafe ctor Result<UdpSocket, IoError> bind(const ref string host, uint16 port) {
+        return match (SocketAddr.host(text: host, port: port, forBind: true)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): UdpSocket.bindTo(addr: a);
+        };
+    }
+
+    // `bind` to an address value — the one spelling that reaches a link-local V6 address (its `scopeId`).
+    public unsafe ctor Result<UdpSocket, IoError> bindTo(const ref SocketAddr addr) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        isize fd = kama_socket_udp();
+        int32 family = addr.ip.family();
+        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        isize fd = kama_socket_udp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
-        if (kama_bind_inet(fd: fd, host: host.cstr(), port: port) != 0) {
+        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
@@ -67,18 +82,30 @@ type resource UdpSocket implements DatagramSocket {
 
     // Set a default peer (POSIX `connect` on a datagram socket): send/recv then need no address, and recv
     // only delivers datagrams FROM that peer (others get ICMP-refused / dropped).
+    // Text that is not a numeric address is `Err(InvalidInput)`.
     public unsafe fn Result<Unit, IoError> connect(const ref string host, uint16 port) {
-        if (kama_connect_inet(fd: this.fd, host: host.cstr(), port: port) != 0) { return Result::Err(error: lastError()); }
+        return match (SocketAddr.host(text: host, port: port, forBind: false)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): this.connectTo(addr: a);
+        };
+    }
+
+    // `connect` to an address value (a sender a datagram came from, a scoped one).
+    public unsafe fn Result<Unit, IoError> connectTo(const ref SocketAddr addr) {
+        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        if (kama_connect_addr(fd: this.fd, family: addr.ip.family(), ip: addr(of: bytes[0]), port: addr.port,
+                              scopeId: addr.scopeId) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
     public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) {
-        string h = to.ipString();
+        InlineArray<uint8>#(16) ip = to.ip.bytes();
+        int32 family = to.ip.family();
         while (true) {
-            isize n = kama_sendto_inet(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()),
-                                       host: h.cstr(), port: to.port);
+            isize n = kama_sendto_addr(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()),
+                                       family: family, ip: addr(of: ip[0]), port: to.port, scopeId: to.scopeId);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
@@ -87,13 +114,16 @@ type resource UdpSocket implements DatagramSocket {
     // Receive one datagram into `into` (truncated to into.length() if larger); returns count + sender.
     // Non-blocking + nothing queued => Err(WouldBlock). EINTR-retried.
     public unsafe fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
-        uint32 ip = 0ui32;
+        int32 family = 4;
+        InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
-        if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr.fromHostIp(ip: ip, port: port))); }
+        uint32 zone = 0ui32;
+        if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone))); }
         while (true) {
-            isize n = kama_recvfrom_inet(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
-                                         outIp: addr(of: ip), outPort: addr(of: port));
-            if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr.fromHostIp(ip: ip, port: port))); }
+            isize n = kama_recvfrom_addr(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
+                                         outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port),
+                                         outScope: addr(of: zone));
+            if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone))); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
@@ -126,10 +156,13 @@ type resource UdpSocket implements DatagramSocket {
 
     // Resolve the actual local address (after bind port 0, this yields the OS-assigned ephemeral port).
     public unsafe fn Result<SocketAddr, IoError> localAddr() {
-        uint32 ip = 0ui32;
+        int32 family = 4;
+        InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
-        if (kama_getsockname(fd: this.fd, outIp: addr(of: ip), outPort: addr(of: port)) != 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: SocketAddr.fromHostIp(ip: ip, port: port));
+        uint32 zone = 0ui32;
+        if (kama_getsockname_addr(fd: this.fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port),
+                                  outScope: addr(of: zone)) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone));
     }
 
     // Set the outgoing IP TTL (hop limit).

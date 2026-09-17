@@ -1,6 +1,6 @@
 // std::fmt (P1) coverage: char UTF-8 encoding, float, the empty buffer, and the migrated `SocketAddr`
 // rendering through the `Formattable` contract via `${…}`. Exit code 15 = all four checks passed.
-import { std::net::SocketAddr };
+import { std::net::SocketAddr, std::net::IpAddr };
 
 fn int32 main() {
     int32 r = 0;
@@ -25,7 +25,7 @@ fn int32 main() {
     if (es == "") { r = r + 4; }
 
     // SocketAddr now implements Formattable; `${…}` renders it through the sink
-    SocketAddr a = SocketAddr.fromHostIp(ip: 2130706433ui32, port: 8080ui16);   // 127.0.0.1
+    SocketAddr a = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 8080ui16);
     string rendered = "${a}";
     if (rendered == "127.0.0.1:8080") { r = r + 8; }
 

@@ -113,6 +113,7 @@ static inline int32_t kama_EHOSTUNREACH(void) { return (int32_t)EHOSTUNREACH; }
 static inline int32_t kama_ENETUNREACH(void)  { return (int32_t)ENETUNREACH; }
 static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
+static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 
 static inline void kama__capture_wsa(void) {
     int e = WSAGetLastError();
@@ -129,6 +130,7 @@ static inline void kama__capture_wsa(void) {
         case WSAEHOSTUNREACH: errno = EHOSTUNREACH;  break;
         case WSAENETUNREACH:  errno = ENETUNREACH;   break;
         case WSAEMSGSIZE:     errno = EMSGSIZE;      break;
+        case WSAEINVAL:       errno = EINVAL;        break;
         default:              errno = e;             break;   // carried through as IoError::Other(code)
     }
 }
@@ -310,29 +312,14 @@ static inline int32_t kama_net_init(void) {
     if (!done) { WSADATA w; if (WSAStartup(MAKEWORD(2, 2), &w) != 0) { kama__capture_wsa(); return -1; } done = 1; }
     return 0;
 }
-static inline ptrdiff_t kama_socket_tcp(void) {
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+// `family` is kama's 4 or 6, never an AF_* value: those differ per OS (AF_INET6 is 23 here, 30 on macOS).
+static inline ptrdiff_t kama_socket_tcp(int32_t family) {
+    SOCKET s = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)s;
 }
 static inline int32_t kama_set_reuseaddr(ptrdiff_t fd) {
     BOOL one = 1; return (int32_t)setsockopt((SOCKET)fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (int)sizeof one);
-}
-static inline int32_t kama_bind_inet(ptrdiff_t fd, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = (host && *host) ? inet_addr(host) : htonl(INADDR_ANY);
-    if (bind((SOCKET)fd, (struct sockaddr*)&a, (int)sizeof a) != 0) { kama__capture_wsa(); return -1; }
-    return 0;
-}
-static inline int32_t kama_connect_inet(ptrdiff_t fd, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = inet_addr((host && *host) ? host : "127.0.0.1");
-    if (connect((SOCKET)fd, (struct sockaddr*)&a, (int)sizeof a) != 0) { kama__capture_wsa(); return -1; }
-    return 0;
 }
 static inline int32_t kama_listen(ptrdiff_t fd, int32_t backlog) {
     if (listen((SOCKET)fd, (int)backlog) != 0) { kama__capture_wsa(); return -1; }
@@ -356,46 +343,21 @@ static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n) {
 static inline int32_t kama_close_socket(ptrdiff_t fd) { return (int32_t)closesocket((SOCKET)fd); }
 
 // ---- UDP datagrams (Winsock2) ----------------------------------------------
-static inline ptrdiff_t kama_socket_udp(void) {
-    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+static inline ptrdiff_t kama_socket_udp(int32_t family) {
+    SOCKET s = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)s;
 }
-static inline ptrdiff_t kama_sendto_inet(ptrdiff_t fd, const uint8_t* buf, size_t n, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = inet_addr((host && *host) ? host : "127.0.0.1");
-    int r = sendto((SOCKET)fd, (const char*)buf, (int)n, 0, (struct sockaddr*)&a, (int)sizeof a);
-    if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
-    return (ptrdiff_t)r;
-}
-static inline ptrdiff_t kama_recvfrom_inet(ptrdiff_t fd, uint8_t* buf, size_t n, uint32_t* outIp, uint16_t* outPort) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    int alen = (int)sizeof a;
-    int r = recvfrom((SOCKET)fd, (char*)buf, (int)n, 0, (struct sockaddr*)&a, &alen);
-    if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
-    if (outIp) *outIp = (uint32_t)ntohl(a.sin_addr.s_addr); if (outPort) *outPort = ntohs(a.sin_port);
-    return (ptrdiff_t)r;
-}
 
-// ---- socket address / options ----------------------------------------------
-// `outIp` is HOST-order (ntohl'd) so kama extracts octets with fixed shifts, endianness-independent.
-static inline int32_t kama_getsockname(ptrdiff_t fd, uint32_t* outIp, uint16_t* outPort) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    int alen = (int)sizeof a;
-    if (getsockname((SOCKET)fd, (struct sockaddr*)&a, &alen) != 0) { kama__capture_wsa(); return -1; }
-    if (outIp) *outIp = (uint32_t)ntohl(a.sin_addr.s_addr); if (outPort) *outPort = ntohs(a.sin_port);
-    return 0;
-}
+// The two pieces the shared address calls (below the platform split) need from each platform: the native
+// handle type, and turning a failed call's error into errno.
+typedef SOCKET kama__sock;
+static inline int32_t kama__sock_fail(void) { kama__capture_wsa(); return -1; }
+
+// ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
     u_long mode = on ? 1u : 0u;
     if (ioctlsocket((SOCKET)fd, FIONBIO, &mode) != 0) { kama__capture_wsa(); return -1; }
-    return 0;
-}
-static inline int32_t kama_set_ttl(ptrdiff_t fd, uint32_t ttl) {
-    DWORD v = (DWORD)ttl;
-    if (setsockopt((SOCKET)fd, IPPROTO_IP, IP_TTL, (const char*)&v, (int)sizeof v) != 0) { kama__capture_wsa(); return -1; }
     return 0;
 }
 static inline int32_t kama_set_broadcast(ptrdiff_t fd, int32_t on) {
@@ -745,7 +707,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <sys/socket.h>   // socket, bind, listen, accept, connect, setsockopt, send, recv
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
 #include <netinet/tcp.h>  // TCP_NODELAY
-#include <arpa/inet.h>    // inet_addr
+#include <arpa/inet.h>    // htons, ntohs
 // getaddrinfo, freeaddrinfo, EAI_* (kama_resolve_host). ⚠️ All three are past the ISO C line glibc draws
 // under `-std=c11`, which is why kama_runtime.h asks for `_DEFAULT_SOURCE` at the top of every generated
 // TU — see the block there before moving this include or "simplifying" that one.
@@ -794,6 +756,7 @@ static inline int32_t kama_EHOSTUNREACH(void) { return (int32_t)EHOSTUNREACH; }
 static inline int32_t kama_ENETUNREACH(void)  { return (int32_t)ENETUNREACH; }
 static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
+static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 
 // ---- files -----------------------------------------------------------------
 static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY); }
@@ -1078,26 +1041,12 @@ fail:
 }
 
 // ---- TCP sockets -----------------------------------------------------------
-// The `sockaddr_in` fill (family/htons/inet_addr/zero-init) and the `(struct sockaddr*)` cast are all done
-// here — kama passes only fd:isize, host:cstr, port:uint16. Handles are `ptrdiff_t` (isize).
+// Handles are `ptrdiff_t` (isize). The address calls (bind/connect/sendto/recvfrom/getsockname) are written
+// once, below the platform split. `family` is kama's 4 or 6, never an AF_* value, which differ per OS.
 static inline int32_t   kama_net_init(void) { return 0; }   // POSIX: nothing to init (Windows: WSAStartup)
-static inline ptrdiff_t kama_socket_tcp(void) { return (ptrdiff_t)socket(AF_INET, SOCK_STREAM, 0); }
+static inline ptrdiff_t kama_socket_tcp(int32_t family) { return (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0); }
 static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
     int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, (socklen_t)sizeof one);
-}
-static inline int32_t kama_bind_inet(ptrdiff_t fd, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = (host && *host) ? inet_addr(host) : htonl(INADDR_ANY);
-    return (int32_t)bind((int)fd, (struct sockaddr*)&a, (socklen_t)sizeof a);
-}
-static inline int32_t kama_connect_inet(ptrdiff_t fd, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = inet_addr((host && *host) ? host : "127.0.0.1");
-    return (int32_t)connect((int)fd, (struct sockaddr*)&a, (socklen_t)sizeof a);
 }
 static inline int32_t   kama_listen(ptrdiff_t fd, int32_t backlog) { return (int32_t)listen((int)fd, (int)backlog); }
 static inline ptrdiff_t kama_accept(ptrdiff_t fd)                  { return (ptrdiff_t)accept((int)fd, (struct sockaddr*)0, (socklen_t*)0); }
@@ -1156,43 +1105,18 @@ static inline void kama_poller_free(void* ph) {
 }
 
 // ---- UDP datagrams ---------------------------------------------------------
-// Same conventions as TCP: `sockaddr_in` fill stays in C, kama passes fd:isize + host:cstr + port:uint16.
-// `recvfrom` hands the sender back as scalar out-params (IPv4 as a big-endian uint32 + host-order port) —
-// never a struct — exactly like kama_fstat_size folds `struct stat`. On error return -1 (errno set).
-static inline ptrdiff_t kama_socket_udp(void) { return (ptrdiff_t)socket(AF_INET, SOCK_DGRAM, 0); }
-static inline ptrdiff_t kama_sendto_inet(ptrdiff_t fd, const uint8_t* buf, size_t n, const char* host, uint16_t port) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port   = htons(port);
-    a.sin_addr.s_addr = inet_addr((host && *host) ? host : "127.0.0.1");
-    return (ptrdiff_t)sendto((int)fd, buf, n, 0, (struct sockaddr*)&a, (socklen_t)sizeof a);
-}
-static inline ptrdiff_t kama_recvfrom_inet(ptrdiff_t fd, uint8_t* buf, size_t n, uint32_t* outIp, uint16_t* outPort) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    socklen_t alen = (socklen_t)sizeof a;
-    ptrdiff_t r = (ptrdiff_t)recvfrom((int)fd, buf, n, 0, (struct sockaddr*)&a, &alen);
-    if (r >= 0) { if (outIp) *outIp = (uint32_t)ntohl(a.sin_addr.s_addr); if (outPort) *outPort = ntohs(a.sin_port); }
-    return r;
-}
+static inline ptrdiff_t kama_socket_udp(int32_t family) { return (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, 0); }
 
-// ---- socket address / options ----------------------------------------------
-// `outIp` is HOST-order (ntohl'd) so kama extracts octets with fixed shifts (a=>>24 … d=&0xff),
-// endianness-independent. `outPort` is host order too.
-static inline int32_t kama_getsockname(ptrdiff_t fd, uint32_t* outIp, uint16_t* outPort) {
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    socklen_t alen = (socklen_t)sizeof a;
-    if (getsockname((int)fd, (struct sockaddr*)&a, &alen) != 0) return -1;
-    if (outIp) *outIp = (uint32_t)ntohl(a.sin_addr.s_addr); if (outPort) *outPort = ntohs(a.sin_port);
-    return 0;
-}
+// See the Winsock twin: the native handle, and errno on failure (already set here).
+typedef int kama__sock;
+static inline int32_t kama__sock_fail(void) { return -1; }
+
+// ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
     int fl = fcntl((int)fd, F_GETFL, 0);
     if (fl < 0) return -1;
     if (on) fl |= O_NONBLOCK; else fl &= ~O_NONBLOCK;
     return (int32_t)fcntl((int)fd, F_SETFL, fl);
-}
-static inline int32_t kama_set_ttl(ptrdiff_t fd, uint32_t ttl) {
-    int v = (int)ttl; return (int32_t)setsockopt((int)fd, IPPROTO_IP, IP_TTL, &v, (socklen_t)sizeof v);
 }
 static inline int32_t kama_set_broadcast(ptrdiff_t fd, int32_t on) {
     int v = on ? 1 : 0; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_BROADCAST, &v, (socklen_t)sizeof v);
@@ -1211,6 +1135,104 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 
 #endif  // !_WIN32
 
+// ---- socket addresses (both platforms) ---------------------------------------
+// Written once: `sockaddr_in`/`sockaddr_in6`/`sockaddr_storage` and the five calls that take or return one
+// are the same BSD interface on Winsock and on POSIX, and the platform blocks above supply the only two
+// differences (`kama__sock`, `kama__sock_fail`).
+//
+// An address crosses as kama holds it: a family (4 or 6), sixteen bytes in NETWORK order (V4 uses the first
+// four), a host-order port, and a scope id (the `sin6_scope_id`; ignored for V4). The bytes are copied, never
+// byte-swapped, so no side of the seam has an endianness. There is no host TEXT here any more: `inet_addr`
+// read `010.0.0.1` as octal, and kama's strict `parseIp` is now the only numeric parser.
+static inline socklen_t kama__sa_fill(struct sockaddr_storage* ss, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
+    memset(ss, 0, sizeof *ss);
+    if (family == 6) {
+        struct sockaddr_in6* a = (struct sockaddr_in6*)(void*)ss;
+        a->sin6_family = AF_INET6;
+        a->sin6_port = htons(port);
+        memcpy(&a->sin6_addr, ip, 16);
+        a->sin6_scope_id = scope;
+        return (socklen_t)sizeof *a;
+    }
+    struct sockaddr_in* a = (struct sockaddr_in*)(void*)ss;
+    a->sin_family = AF_INET;
+    a->sin_port = htons(port);
+    memcpy(&a->sin_addr, ip, 4);
+    return (socklen_t)sizeof *a;
+}
+// The inverse. A family that is neither (never, for an inet socket) reads as family 0.
+static inline void kama__sa_read(const struct sockaddr_storage* ss, int32_t* family, uint8_t* ip, uint16_t* port, uint32_t* scope) {
+    memset(ip, 0, 16);
+    *family = 0; *port = 0; *scope = 0;
+    if (ss->ss_family == AF_INET6) {
+        const struct sockaddr_in6* a = (const struct sockaddr_in6*)(const void*)ss;
+        *family = 6; memcpy(ip, &a->sin6_addr, 16); *port = ntohs(a->sin6_port); *scope = a->sin6_scope_id;
+    } else if (ss->ss_family == AF_INET) {
+        const struct sockaddr_in* a = (const struct sockaddr_in*)(const void*)ss;
+        *family = 4; memcpy(ip, &a->sin_addr, 4); *port = ntohs(a->sin_port);
+    }
+}
+// ⚠️ A V6 bind turns IPV6_V6ONLY OFF, so one socket on `::` serves both families (a v4 peer shows up as
+// `::ffff:a.b.c.d`). Linux and macOS default it off, Windows ON, so without this the same program listened
+// dual-stack on two platforms and V6-only on the third. Best effort: a stack without the option still binds.
+static inline int32_t kama_bind_addr(ptrdiff_t fd, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
+    struct sockaddr_storage ss;
+    socklen_t len = kama__sa_fill(&ss, family, ip, port, scope);
+    if (family == 6) {
+        int off = 0;
+        (void)setsockopt((kama__sock)fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&off, (socklen_t)sizeof off);
+    }
+    if (bind((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__sock_fail();
+    return 0;
+}
+static inline int32_t kama_connect_addr(ptrdiff_t fd, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
+    struct sockaddr_storage ss;
+    socklen_t len = kama__sa_fill(&ss, family, ip, port, scope);
+    if (connect((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__sock_fail();
+    return 0;
+}
+static inline ptrdiff_t kama_sendto_addr(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
+    struct sockaddr_storage ss;
+    socklen_t len = kama__sa_fill(&ss, family, ip, port, scope);
+    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, 0, (struct sockaddr*)&ss, len);
+    if (r < 0) return kama__sock_fail();
+    return r;
+}
+// The sender comes back through scalar out-params (never a struct), as kama_fstat_size folds `struct stat`.
+static inline ptrdiff_t kama_recvfrom_addr(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t* outFamily, uint8_t* outIp, uint16_t* outPort, uint32_t* outScope) {
+    struct sockaddr_storage ss; memset(&ss, 0, sizeof ss);
+    socklen_t len = (socklen_t)sizeof ss;
+    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, 0, (struct sockaddr*)&ss, &len);
+    if (r < 0) return kama__sock_fail();
+    kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
+    return r;
+}
+static inline int32_t kama_getsockname_addr(ptrdiff_t fd, int32_t* outFamily, uint8_t* outIp, uint16_t* outPort, uint32_t* outScope) {
+    struct sockaddr_storage ss; memset(&ss, 0, sizeof ss);
+    socklen_t len = (socklen_t)sizeof ss;
+    if (getsockname((kama__sock)fd, (struct sockaddr*)&ss, &len) != 0) return kama__sock_fail();
+    kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
+    return 0;
+}
+// The family a socket was created with — the per-family options below have a V4 and a V6 spelling, and the
+// socket is the only thing that knows which applies. 0 when it cannot say.
+static inline int32_t kama__sock_family(ptrdiff_t fd) {
+    struct sockaddr_storage ss; memset(&ss, 0, sizeof ss);
+    socklen_t len = (socklen_t)sizeof ss;
+    if (getsockname((kama__sock)fd, (struct sockaddr*)&ss, &len) != 0) return 0;
+    return ss.ss_family == AF_INET6 ? 6 : 4;
+}
+// The unicast hop limit: IP_TTL on a V4 socket, IPV6_UNICAST_HOPS on a V6 one (where IP_TTL is refused).
+// Both take a 4-byte integer, a DWORD on Winsock.
+static inline int32_t kama_set_ttl(ptrdiff_t fd, uint32_t ttl) {
+    int v = (int)ttl;
+    int rc = kama__sock_family(fd) == 6
+        ? setsockopt((kama__sock)fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, (const char*)&v, (socklen_t)sizeof v)
+        : setsockopt((kama__sock)fd, IPPROTO_IP, IP_TTL, (const char*)&v, (socklen_t)sizeof v);
+    if (rc != 0) return kama__sock_fail();
+    return 0;
+}
+
 // ---- name resolution (DNS) -------------------------------------------------
 // ⚠️ The ONE seam in this file that is written once instead of twice, and the exception is deliberate:
 // `getaddrinfo` is the same standardized call with the same semantics on Winsock and on POSIX (that is why
@@ -1218,16 +1240,11 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 // declares it — <ws2tcpip.h> and <netdb.h>. Copying an identical body would only give it somewhere to
 // drift. Everything else here differs per platform, which is why everything else is duplicated.
 //
-// Resolves a host NAME, or a numeric dotted quad, to IPv4 addresses in HOST order — the same convention
-// kama_getsockname uses, so kama extracts octets with fixed shifts and never sees an endianness. They come
-// back in the RESOLVER's order, which is the answer to a question the caller did not ask twice: the system
-// resolver already applies RFC 6724 destination-address selection, and re-sorting them here would throw
-// that away. Returns the count written (1..max), or -1 with errno set.
-//
-// IPv4 ONLY, and the ai_family below is the whole reason: every socket call in this file is AF_INET, so an
-// IPv6 address resolved here would have nowhere to go. Widening that is one coherent piece of work
-// (bind/connect/sendto/recvfrom/getsockname and `IpAddr`), tracked on the roadmap, not something to half-do
-// in a resolver.
+// Resolves a host NAME to its addresses of BOTH families, each as the socket-address calls above take one:
+// `outFamily[i]` (4 or 6), sixteen bytes at `outIps + 16*i`, `outScope[i]`. They come back in the RESOLVER's
+// order, which is the answer to a question the caller did not ask twice: the system resolver already applies
+// RFC 6724 destination-address selection (which is why `localhost` is `::1` FIRST on macOS), and re-sorting
+// or filtering them here would throw that away. Returns the count written (1..max), or -1 with errno set.
 //
 // It BLOCKS, possibly for seconds, and there is no portable timeout — `getaddrinfo` takes none, and the
 // asynchronous spellings (getaddrinfo_a, GetAddrInfoEx) share no interface. A program that cannot afford
@@ -1248,13 +1265,13 @@ static inline int32_t kama__eai_errno(int rc) {
 #endif
     return (int32_t)EHOSTUNREACH;
 }
-static inline int32_t kama_resolve_host(const char* host, uint32_t* outIps, int32_t max) {
+static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, uint8_t* outIps, uint32_t* outScope, int32_t max) {
     struct addrinfo hints;
     struct addrinfo* res = (struct addrinfo*)0;
     struct addrinfo* it;
     int32_t n = 0;
     int rc;
-    if (!host || !*host || !outIps || max <= 0) { errno = ENOENT; return -1; }
+    if (!host || !*host || !outFamily || !outIps || !outScope || max <= 0) { errno = ENOENT; return -1; }
     // ⚠️ `getaddrinfo` is a WINSOCK call, so it needs WSAStartup like every socket here does — and this
     // is the one entry point that reaches it without creating a socket first. Without this, a resolve
     // performed before the program's first `bind`/`connect` failed with WSANOTINITIALISED (carried out
@@ -1263,17 +1280,23 @@ static inline int32_t kama_resolve_host(const char* host, uint32_t* outIps, int3
     // No-op on POSIX, where kama_net_init() returns 0.
     if (kama_net_init() != 0) return -1;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family   = AF_INET;
+    hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;   // one entry per address, not one per (address, socket type)
     rc = getaddrinfo(host, (const char*)0, &hints, &res);
     if (rc != 0) { errno = kama__eai_errno(rc); return -1; }
     for (it = res; it && n < max; it = it->ai_next) {
-        if (it->ai_family != AF_INET || !it->ai_addr) continue;
-        outIps[n++] = (uint32_t)ntohl(((struct sockaddr_in*)(void*)it->ai_addr)->sin_addr.s_addr);
+        struct sockaddr_storage ss;
+        uint16_t port;
+        if (!it->ai_addr || (it->ai_family != AF_INET && it->ai_family != AF_INET6)) continue;
+        if ((size_t)it->ai_addrlen > sizeof ss) continue;
+        memset(&ss, 0, sizeof ss);
+        memcpy(&ss, it->ai_addr, (size_t)it->ai_addrlen);
+        kama__sa_read(&ss, &outFamily[n], outIps + 16 * n, &port, &outScope[n]);
+        n++;
     }
     freeaddrinfo(res);
-    // A success that yielded nothing is a failure to the caller, not an empty list: it means the name
-    // resolved to IPv6 only, which no socket in this file can reach.
+    // A success that yielded nothing is a failure to the caller, not an empty list: every answer was of a
+    // family no socket here speaks.
     if (n == 0) { errno = EHOSTUNREACH; return -1; }
     return n;
 }

@@ -1631,14 +1631,26 @@ a racing writer, which needs `openat`). `exists` returns a `bool`, and is a snap
 it and handle the error.
 
 **Names (`std::net`).** `resolve(host:, port:) -> Result<DynamicArray<SocketAddr>, IoError>` asks the
-system resolver for **every** IPv4 address a name has, in the resolver's own (RFC 6724) order;
-`resolveOne` is the first of them; `TcpStream.connectTo(addr:)` connects to one. `connect(host:, port:)`
-keeps taking numeric text and performs **no** lookup — a call that reads like a syscall must not make a
-network round trip behind the caller's back, so a name is resolved by a function that says so. `parseIp`
-is the strict numeric parser under it: exactly four decimal octets, no leading zero on a multi-digit part
-(C's `inet_addr` reads `010.0.0.1` as octal and `127.1` as a packed number — the CVE-2021-29922 shape). <!-- test: net_resolve -->
-Sockets are IPv4 only, because every socket seam is `AF_INET`; a name that resolves to IPv6 alone reports
-`HostUnreachable` rather than an empty list.
+system resolver for **every** address a name has, IPv4 and IPv6, in the resolver's own (RFC 6724) order and
+unfiltered (on macOS `localhost` is `::1` first); `resolveOne` is the first of them. `TcpStream.connectHost(host:,
+port:)` resolves a name and tries each address in that order, keeping the first that connects and reporting the <!-- test: net_resolve -->
+last failure otherwise, so a server bound to `127.0.0.1` alone is reached by name although `::1` is tried
+first. (One after another, not raced: RFC 8305 happy eyeballs is not offered.) `connect(host:, port:)` keeps
+taking numeric text and performs **no** lookup — a call that reads like a syscall must not make a network round
+trip behind the caller's back, so a name is resolved by a function that says so, and a name handed to `connect`
+is `Err(InvalidInput)`. `parseIp` is the strict numeric parser under every text-taking call: exactly four
+decimal octets, no leading zero on a multi-digit part (C's `inet_addr` reads `010.0.0.1` as octal and `127.1`
+as a packed number — the CVE-2021-29922 shape). `inet_addr` is gone from the socket seam, so `connect(host:
+"010.0.0.1")`, which reached 8.0.0.1 before `0.9.375`, is now `Err(InvalidInput)`.
+
+**Sockets and families (`std::net`).** A socket's family is its address's, for its whole life. The text forms
+(`TcpStream.connect`/`connectNonBlocking`, `TcpListener.bind`, `UdpSocket.bind`/`connect`) each have an address
+form (`connectTo`, `connectToNonBlocking`, `bindTo`, `connectTo`) taking a `SocketAddr`, which is the only
+spelling that reaches a link-local address, whose interface is its `scopeId`. `""` keeps its meaning: every
+IPv4 interface to bind, IPv4 loopback to connect. `"::"` is **dual-stack**: `IPV6_V6ONLY` is turned off on every
+OS (Windows defaults it on), so one socket serves both families and an IPv4 peer reads as `::ffff:a.b.c.d`.
+`setTtl` sets the unicast hop limit of either family. A send to an address of the other family is an error <!-- test: net_ipv6 -->
+from the socket, not a silent drop.
 
 **Addresses (`std::net`).** `IpAddr` is `V4(uint8 a, uint8 b, uint8 c, uint8 d)` or
 `V6(InlineArray<uint8>#(16) octets)`, both in network order, and `match` on one names both arms. `parseIp`

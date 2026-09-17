@@ -1,10 +1,9 @@
 // Construction-model M7.1: the net VALUE types construct dot-on-type — `RecvFrom.of` is `@generate(of)`,
-// `SocketAddr.of` is hand-written (it leaves `scopeId` 0), and `SocketAddr.fromHostIp` is a `ctor`. No
+// `SocketAddr.of` and `SocketAddr.scoped` are hand-written ctors (`of` leaves `scopeId` 0). No
 // sockets — pure value construction (the nameless `SocketAddr(...)` primary was removed at M8d.2).
 import { std::net::SocketAddr, std::net::RecvFrom, std::net::IpAddr };
 fn int32 main() {
-    // 127.0.0.1:8080 built from the host-order packed IPv4 via the `fromHostIp` ctor (dot-on-type).
-    SocketAddr a = SocketAddr.fromHostIp(ip: 2130706433ui32, port: 8080ui16);   // 127.0.0.1
+    SocketAddr a = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 8080ui16);
     SocketAddr b = SocketAddr.of(ip: IpAddr::V4(a: cast<uint8>(10), b: cast<uint8>(0),
                                                 c: cast<uint8>(0), d: cast<uint8>(1)), port: 53ui16);
     RecvFrom rf = RecvFrom.of(count: cast<usize>(12), from: b);

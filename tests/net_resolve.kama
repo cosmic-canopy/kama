@@ -1,6 +1,7 @@
 // std::net — name resolution, and the strict numeric parser under it. `localhost` is the one name every
 // machine resolves without a network (it is in /etc/hosts on POSIX and its Windows equivalent), so this
-// fixture needs no DNS server and no internet. The seven flags sum to 127.
+// fixture needs no DNS server and no internet. The ten flags sum to 1023; the exit code is one byte, so the
+// fixture prints the flags and exits 0 only when every one is set.
 import { std::net::SocketAddr, std::net::parseIp, std::net::resolve,
          std::net::resolveOne, std::net::TcpListener, std::net::TcpStream,
          std::io::IoError };
@@ -8,7 +9,7 @@ import { std::net::SocketAddr, std::net::parseIp, std::net::resolve,
 fn bool isLoopback(ref SocketAddr a) {
     return match (a.ip) {
         case V4(a: p, b: q, c: r, d: s): p == 127ui8 && q == 0ui8 && r == 0ui8 && s == 1ui8;
-        case V6(octets: o): a.ipString() == "::1";
+        case V6(octets: o): "${a.ip}" == "::1";
     };
 }
 
@@ -16,18 +17,16 @@ fn bool rejects(const ref string text) {
     return match (parseIp(text: text)) { case Some(value: v): false; case None: true; };
 }
 
-// The end-to-end shape the API exists for: resolve a name, then connect to what came back. The listener is
-// already bound, so the connect completes into the backlog without an accept.
-fn bool dialResolved(uint16 port) {
-    Result<SocketAddr, IoError> ra = resolveOne(host: "localhost", port: port);
-    match (ra) {
-        case Err(error: e): { return false; }
-        case Ok(value: a): {
-            Result<TcpStream, IoError> rs = TcpStream.connectTo(addr: a);
-            return match (rs) { case Ok(value: s): true; case Err(error: e2): false; };
-        }
-    };
-    return false;
+// The end-to-end shape the API exists for: connect to a NAME, whichever family its server listens on. The
+// listener is already bound, so the connect completes into the backlog without an accept.
+fn bool dialName(uint16 port) {
+    Result<TcpStream, IoError> rs = TcpStream.connectHost(host: "localhost", port: port);
+    return match (rs) { case Ok(value: s): true; case Err(error: e): false; };
+}
+
+fn bool invalidInput(const ref string host) {
+    Result<TcpStream, IoError> rs = TcpStream.connect(host: host, port: 9ui16);
+    return match (rs) { case Ok(value: s): false; case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; };
 }
 
 fn int32 main() {
@@ -37,7 +36,7 @@ fn int32 main() {
     match (parseIp(text: "192.168.1.9")) {
         case Some(value: ip): {
             SocketAddr a = SocketAddr.of(ip: ip, port: 80ui16);
-            string s = a.ipString();
+            string s = "${a.ip}";
             if (s == "192.168.1.9") { r = r + 1; }
         }
         case None: { }
@@ -56,12 +55,18 @@ fn int32 main() {
     };
 
     // A NAME goes to the system resolver. `localhost` must come back, and as a loopback address.
+    // Every answer is kept, of either family (macOS gives `::1` first, then `127.0.0.1`), and each is loopback.
     match (resolve(host: "localhost", port: 9ui16)) {
         case Err(error: e): { }
         case Ok(value: list): {
-            isize n = list.length();
-            SocketAddr first = copy list[0];
-            if (n >= 1 && isLoopback(a: ref first)) { r = r + 16; }
+            bool all = list.length() >= 1;
+            isize i = 0;
+            while (i < list.length()) {
+                SocketAddr each = copy list[i];
+                if (!isLoopback(a: ref each) || each.port != 9ui16) { all = false; }
+                i = i + 1;
+            }
+            if (all) { r = r + 16; }
         }
     };
 
@@ -72,12 +77,24 @@ fn int32 main() {
         case Ok(value: list): { }
     };
 
-    // ...and the whole point: resolve a name, connect to what came back.
+    // ...and the whole point: connect by name. A listener on 127.0.0.1 alone is reached although the resolver
+    // may put `::1` first — the localhost trap `connectHost` exists for — and one on ::1 alone is reached too.
     uint16 port = cast<uint16>(47661);
     match (TcpListener.bind(host: "127.0.0.1", port: port)) {
         case Err(error: e): { }
-        case Ok(value: listener): { if (dialResolved(port: port)) { r = r + 64; } }
+        case Ok(value: listener): { if (dialName(port: port)) { r = r + 64; } }
+    };
+    uint16 port6 = cast<uint16>(47662);
+    match (TcpListener.bind(host: "::1", port: port6)) {
+        case Err(error: e): { }
+        case Ok(value: listener): { if (dialName(port: port6)) { r = r + 128; } }
     };
 
-    return r;   // 127
+    // `connect` takes numeric text only: a name is refused, not looked up behind the caller's back...
+    if (invalidInput(host: "localhost")) { r = r + 256; }
+    // ...and so is the octal form C's `inet_addr` used to read as 8.0.0.1 here.
+    if (invalidInput(host: "010.0.0.1")) { r = r + 512; }
+
+    if (r != 1023) { print(s: "net_resolve flags=${r}, want 1023\n"); return 1; }
+    return 0;
 }

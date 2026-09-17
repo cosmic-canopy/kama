@@ -7,20 +7,22 @@ import {
     std::collections::View, std::collections::ConstView,
     ReliableStream,
     SocketAddr,
+    resolve,
+    std::collections::DynamicArray,
 };
 
 export { TcpListener, TcpStream };
 
 // POSIX/Winsock TCP bindings — see kama_os.h. Socket handles are `isize`: a Windows SOCKET is wider than
 // int, and INVALID_SOCKET reinterpreted as isize is -1, so a uniform `< 0 == error` convention holds on
-// both platforms. The sockaddr_in fill (family/htons/inet_addr/cast) all happens in C — kama passes only
-// the handle, a numeric host string, and a uint16 port.
+// both platforms. The sockaddr fill happens in C; kama passes the handle and an address as `addr.kama`'s
+// seam form (family 4 or 6, sixteen network-order bytes, port, scope id).
 extern "kama_os.h";
 extern fn int32 kama_net_init();
-extern fn isize kama_socket_tcp();
+extern fn isize kama_socket_tcp(int32 family);
 extern fn int32 kama_set_reuseaddr(isize fd);
-extern fn int32 kama_bind_inet(isize fd, UnsafeConstPtr<cchar> host, uint16 port);
-extern fn int32 kama_connect_inet(isize fd, UnsafeConstPtr<cchar> host, uint16 port);
+extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
+extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_listen(isize fd, int32 backlog);
 extern fn isize kama_accept(isize fd);
 extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
@@ -47,18 +49,13 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     // prefer `connect` for client sockets.
     public ctor make(isize fd) { this.fd = fd; }
 
-    // Connect to a numeric host:port (e.g. "127.0.0.1"). The stream closes on drop.
+    // Connect to a numeric host:port ("127.0.0.1", "::1"; "" is IPv4 loopback). Text that is not a numeric
+    // address is `Err(InvalidInput)` — no lookup happens here. The stream closes on drop.
     public unsafe ctor Result<TcpStream, IoError> connect(const ref string host, uint16 port) {
-        int32 ir = kama_net_init();
-        if (ir != 0) { return Result::Err(error: lastError()); }
-        isize fd = kama_socket_tcp();
-        if (fd < 0) { return Result::Err(error: lastError()); }
-        if (kama_connect_inet(fd: fd, host: host.cstr(), port: port) != 0) {
-            IoError e = lastError();                        // capture before close (close may clear errno)
-            int32 rc = kama_close_socket(fd: fd);
-            return Result::Err(error: e);
-        }
-        return Result::Ok(value: TcpStream.make(fd: fd));
+        return match (SocketAddr.host(text: host, port: port, forBind: false)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): TcpStream.connectTo(addr: a);
+        };
     }
 
     // Connect to an address a lookup already produced — `resolve`/`resolveOne` in this module, or the
@@ -66,8 +63,46 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     // lookup, so a call that reads like a syscall cannot silently make a DNS round trip, and a name is
     // resolved by a function that says so and hands back every address it found.
     public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr addr) {
-        string host = addr.ipString();
-        return TcpStream.connect(host: host, port: addr.port);
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        int32 family = addr.ip.family();
+        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        isize fd = kama_socket_tcp(family: family);
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
+            IoError e = lastError();                        // capture before close (close may clear errno)
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        return Result::Ok(value: TcpStream.make(fd: fd));
+    }
+
+    // Connect to a host NAME: `resolve` it, then try each address in the resolver's order and keep the first
+    // that connects. Every address failing reports the LAST failure, the one nearest the caller's intent.
+    //
+    // This is the call that makes a name work whichever family its server listens on. The resolver's order
+    // is not "the one that is up": on macOS `localhost` is `::1` first, so connecting to only the first
+    // address of `resolve("localhost")` is refused by a server bound to `127.0.0.1`, and the next address
+    // would have worked. Tried one after another, not raced (no RFC 8305 happy eyeballs): an address that
+    // times out rather than refusing stalls the attempts behind it.
+    public unsafe ctor Result<TcpStream, IoError> connectHost(const ref string host, uint16 port) {
+        DynamicArray<SocketAddr> addrs = DynamicArray.empty();
+        Result<DynamicArray<SocketAddr>, IoError> found = resolve(host: host, port: port);
+        match (give found) {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: list): { addrs = give list; }
+        };
+        IoError last = IoError::HostUnreachable;   // `resolve` never succeeds empty, so an attempt replaces it
+        isize i = 0;
+        while (i < addrs.length()) {
+            Result<TcpStream, IoError> attempt = TcpStream.connectTo(addr: addrs[i]);
+            match (give attempt) {
+                case Ok(value: s): { return Result::Ok(value: give s); }
+                case Err(error: e): { last = e; }
+            };
+            i = i + 1;
+        }
+        return Result::Err(error: last);
     }
 
     // `Reader`: read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
@@ -109,18 +144,29 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // Begin a non-blocking connect. The returned stream's connection may still be in flight: poll it for
-    // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback.
+    // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback;
+    // text that is not a numeric address is `Err(InvalidInput)`.
     public unsafe ctor Result<TcpStream, IoError> connectNonBlocking(const ref string host, uint16 port) {
+        return match (SocketAddr.host(text: host, port: port, forBind: false)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): TcpStream.connectToNonBlocking(addr: a);
+        };
+    }
+
+    // `connectNonBlocking` to an address a lookup or a datagram already produced (a scoped one included).
+    public unsafe ctor Result<TcpStream, IoError> connectToNonBlocking(const ref SocketAddr addr) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        isize fd = kama_socket_tcp();
+        int32 family = addr.ip.family();
+        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         if (kama_set_nonblocking(fd: fd, on: 1) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        if (kama_connect_inet(fd: fd, host: host.cstr(), port: port) != 0) {
+        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
             int32 e = kama_last_error();
             // EINPROGRESS (POSIX) / EAGAIN (Winsock WSAEWOULDBLOCK) = handshake in flight — NOT an error.
             if (e != kama_EINPROGRESS() && e != kama_EAGAIN()) {
@@ -157,14 +203,27 @@ type resource TcpListener {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
     private ctor make(isize fd) { this.fd = fd; }
 
-    // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
+    // Bind + listen on a numeric host:port. "" or "0.0.0.0" = every IPv4 interface; "::" = every interface of
+    // BOTH families (IPV6_V6ONLY is turned off on every OS, so a v4 client arrives as `::ffff:a.b.c.d`).
+    // Text that is not a numeric address is `Err(InvalidInput)`. SO_REUSEADDR is set.
     public unsafe ctor Result<TcpListener, IoError> bind(const ref string host, uint16 port) {
+        return match (SocketAddr.host(text: host, port: port, forBind: true)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): TcpListener.bindTo(addr: a);
+        };
+    }
+
+    // `bind` to an address value — the one spelling that reaches a link-local V6 address, whose interface is
+    // its `scopeId` and has no place in host text.
+    public unsafe ctor Result<TcpListener, IoError> bindTo(const ref SocketAddr addr) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        isize fd = kama_socket_tcp();
+        int32 family = addr.ip.family();
+        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
-        if (kama_bind_inet(fd: fd, host: host.cstr(), port: port) != 0) {
+        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);

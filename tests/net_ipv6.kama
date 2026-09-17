@@ -1,0 +1,161 @@
+// std::net over IPv6 — UDP and TCP on `::1`, and the dual-stack wildcard `::` serving an IPv4 peer. Single
+// process and deadlock-free, like net_loopback: a datagram is kernel-buffered before its recv, and a connect
+// completes into the backlog before the accept. A datagram that never arrives must FAIL, not hang the suite,
+// so every receive waits through a Poller with a timeout. The seven flags sum to 127.
+import {
+    std::net::UdpSocket,
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::SocketAddr,
+    std::net::IpAddr,
+    std::net::RecvFrom,
+    std::net::Poller,
+    std::net::Interest,
+    std::io::IoError,
+    std::io::writeAll,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
+
+fn SocketAddr local(ref UdpSocket s) {
+    Result<SocketAddr, IoError> r = s.localAddr();
+    return match (r) { case Ok(value: a): a; case Err(error: e): SocketAddr.of(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16); };
+}
+
+// Send three bytes a -> to, receive them at b; the sender as b saw it, rendered, or "" on any failure.
+fn string relay(ref UdpSocket a, ref UdpSocket b, ref SocketAddr to) {
+    DynamicArray<uint8> msg = DynamicArray.empty();
+    msg.add(item: 6ui8); msg.add(item: 7ui8); msg.add(item: 8ui8);
+    Result<usize, IoError> sent = a.sendTo(bytes: msg.view(), to: to);
+    match (sent) { case Err(error: e): { return ""; } case Ok(value: n): { if (n != 3) { return ""; } } };
+    Result<Poller, IoError> rp = Poller.create();
+    match (give rp) {
+        case Err(error: e): { return ""; }
+        case Ok(value: p): {
+            p.add(fd: b.rawHandle(), interest: Interest::Read);
+            Result<int32, IoError> ready = p.wait(timeoutMs: 2000);
+            match (ready) { case Err(error: e): { return ""; } case Ok(value: n): { if (n < 1) { return ""; } } };
+        }
+    };
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    Result<RecvFrom, IoError> got = b.recvFrom(into: buf.viewMut());
+    return match (got) {
+        case Err(error: e): "";
+        case Ok(value: rf): rf.count == 3 && buf[2] == 8ui8 ? "${rf.from}" : "";
+    };
+}
+
+fn int32 udpLoopback() {
+    Result<UdpSocket, IoError> ra = UdpSocket.bind(host: "::1", port: 0ui16);
+    Result<UdpSocket, IoError> rb = UdpSocket.bind(host: "::1", port: 0ui16);
+    match (give ra) {
+        case Err(error: e): { return 0; }
+        case Ok(value: a): {
+            match (give rb) {
+                case Err(error: e): { return 0; }
+                case Ok(value: b): {
+                    SocketAddr aAddr = local(s: a);
+                    SocketAddr bAddr = local(s: b);
+                    string bText = "${bAddr}";
+                    string want = "[::1]:${bAddr.port}";
+                    if (bText != want) { print(s: "localAddr ${bText}\n"); return 0; }
+                    string from = relay(a: a, b: b, to: bAddr);
+                    string wantFrom = "[::1]:${aAddr.port}";
+                    if (from != wantFrom) { print(s: "sender ${from}, want ${wantFrom}\n"); return 0; }
+                    return 1;
+                }
+            };
+        }
+    };
+}
+
+// A V4 socket bound to 127.0.0.1 sends to a dual-stack `::` socket; the receiver sees the v4-mapped form.
+fn int32 udpDualStack() {
+    Result<UdpSocket, IoError> rd = UdpSocket.bind(host: "::", port: 0ui16);
+    Result<UdpSocket, IoError> rv = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    match (give rd) {
+        case Err(error: e): { return 0; }
+        case Ok(value: dual): {
+            match (give rv) {
+                case Err(error: e): { return 0; }
+                case Ok(value: v4): {
+                    SocketAddr v4Addr = local(s: v4);
+                    SocketAddr target = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: local(s: dual).port);
+                    string from = relay(a: v4, b: dual, to: target);
+                    string wantFrom = "[::ffff:127.0.0.1]:${v4Addr.port}";
+                    if (from != wantFrom) { print(s: "dual-stack sender ${from}, want ${wantFrom}\n"); return 0; }
+                    return 2;
+                }
+            };
+        }
+    };
+}
+
+// A family mismatch is an error from the socket, not a crash or a silent drop.
+fn int32 udpWrongFamily() {
+    Result<UdpSocket, IoError> rv = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    match (give rv) {
+        case Err(error: e): { return 0; }
+        case Ok(value: v4): {
+            SocketAddr six = SocketAddr.of(ip: IpAddr::V6(octets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), port: 9ui16);
+            DynamicArray<uint8> msg = DynamicArray.empty();
+            msg.add(item: 1ui8);
+            Result<usize, IoError> sent = v4.sendTo(bytes: msg.view(), to: six);
+            return match (sent) { case Ok(value: n): 0; case Err(error: e): 4; };
+        }
+    };
+}
+
+// Connect to `host`, write five bytes and close; accept on `l` and read them back.
+fn bool tcpRoundTrip(ref TcpListener l, const ref string host, uint16 port) {
+    {
+        Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
+        match (give rc) {
+            case Err(error: e): { return false; }
+            case Ok(value: c): {
+                DynamicArray<uint8> data = DynamicArray.empty();
+                int32 i = 0;
+                while (i < 5) { data.add(item: cast<uint8>(40 + i)); i = i + 1; }
+                Result<Unit, IoError> w = writeAll(w: c, bytes: data.view());
+                match (w) { case Err(error: e): { return false; } case Ok(value: u): { } };
+            }
+        };
+    }
+    Result<TcpStream, IoError> ra = l.accept();
+    return match (give ra) {
+        case Err(error: e): false;
+        case Ok(value: s): {
+            FixedArray<uint8> buf = FixedArray.make(size: 16);
+            Result<isize, IoError> r = s.read(into: buf.viewMut());
+            := match (r) { case Ok(value: n): n == 5 && buf[4] == 44ui8; case Err(error: e): false; };
+        }
+    };
+}
+
+fn int32 tcp(const ref string bindHost, const ref string dialHost, uint16 port, int32 flag) {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: bindHost, port: port);
+    return match (give rl) {
+        case Err(error: e): 0;
+        case Ok(value: l): tcpRoundTrip(l: l, host: dialHost, port: port) ? flag : 0;
+    };
+}
+
+// The unicast hop limit on a V6 socket (IPV6_UNICAST_HOPS; the V4 option is refused there).
+fn int32 udpHops() {
+    Result<UdpSocket, IoError> rs = UdpSocket.bind(host: "::1", port: 0ui16);
+    match (give rs) {
+        case Err(error: e): { return 0; }
+        case Ok(value: s): {
+            Result<Unit, IoError> r = s.setTtl(ttl: 7ui32);
+            return match (r) { case Ok(value: u): 64; case Err(error: e): 0; };
+        }
+    };
+}
+
+fn int32 main() {
+    int32 r = udpLoopback() + udpDualStack() + udpWrongFamily() + udpHops()
+            + tcp(bindHost: "::1", dialHost: "::1", port: 47671ui16, flag: 8)
+            + tcp(bindHost: "::", dialHost: "127.0.0.1", port: 47672ui16, flag: 16)   // dual-stack TCP
+            + tcp(bindHost: "::", dialHost: "::1", port: 47673ui16, flag: 32);
+    return r;   // 127
+}
