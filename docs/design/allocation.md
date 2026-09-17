@@ -63,20 +63,53 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 2. ~~**KR-48 on Windows**~~ — closed 2026-09-17: `./dev test` (2040 fixtures) and `./dev check` (72 guards) green at
    `0.9.369` with no change to the Windows branch of `kama_os.h`. Two guards needed fixing for msys2 (gawk's `-v`
    escapes, no `python3`); the san/wasm legs are the Linux box's and already ran there.
-3. **KR-49** (this machine, in parallel with the Windows box — it touches the emitter, prelude and
-   `kama_runtime.h`'s funnel, not `kama_os.h`, so it should not collide with KR-48/KR-58 there). In order:
-   a. **Confirm the recommendation** in *Still open* item 1 with the maintainer (one meaning: never reaches the
-      system heap). Everything below assumes it.
-   b. **Probe before building** (a doc is not evidence): does the no-heap walk actually reach into a user
-      `Allocator`'s body today? `tests/noheap_arena.kama` says a `BumpAllocator`'s `allocate` is judged by what it
-      reaches — make a pool whose `allocate` calls `GlobalAllocator` and confirm it is REFUSED under the flag.
-   c. ~~**KR-63 first**~~ — shipped `0.9.370`: a `type value` may not hold a move-only field.
-   d. **Build KR-49 to §3's "RECOMMENDED SHAPE"**: the entry-TU singleton for the one instance (the
-      `setPanicHandler`/argv precedent), its fields held to the sharing-seams rule (`Atomic`, `const`, raw storage),
-      `@globalAllocator type resource … implements Allocator`, at most one, constant-initialized — after the three
-      probes listed there (KR-63, the contract kind, the no-heap edge). `KAMA_ALLOC_CHECK` wraps whichever
-      implementation is active, so the san leg keeps proving layouts. A fixture that spawns isolates and frees a
-      box in a different isolate than allocated it is the test the design exists to pass.
+3. **KR-49** — decided 2026-09-17 and ready to build. What is settled: *Still open* item 1 (one meaning), KR-63
+   (shipped `0.9.370`), and the contract kind (a SIBLING contract, `GlobalHeap`, measured in §3). In order:
+   a. **Probe the no-heap edge** (a doc is not evidence). `buildCallGraph` reads only the C the compiler writes.
+      It never reads `include/kama_runtime.h`, which is why `_heapSymbols` seeds `kama_alloc`, `kama_alloc_zeroed`
+      and `kama_free` by name. Confirm the edge the design needs can be drawn in emitted C, and that a pool whose
+      `allocate` reaches `GlobalAllocator` can be refused (it would recurse into itself).
+   b. **Probe constant initialization.** The instance is a C global, so it gets no startup hook. The recommendation
+      is `= {0}` (the module-static no-initializer rule) with no non-trivial ctor. Write a useful pool, with a bump
+      index, `InlineArray` storage and an `Atomic` free list, and confirm it works starting from all zeros. If it
+      cannot, that is a fork for the maintainer.
+   c. **Build** (0.9.371) to §3's RECOMMENDED SHAPE, from the build map below.
+   d. **`Shared.adopt` and the `SortedMap` root onto `A`**: its own commit (0.9.372), with a `@noheap` fixture over
+      `BumpAllocator`.
+   e. Docs: SPEC *No-heap subset* plus a new `@globalAllocator` subsection. Delete the KR-49 row and its detail, and
+      re-word KR-50/KR-39 ("after KR-49" becomes "now").
+
+   **Build map** (anchors at `0.9.370`; find each by its NAME, the numbers drift):
+   - *Prelude:* `type contract GlobalHeap for resource` with `Allocator`'s two members, beside `Allocator`
+     (`prelude/global.kama`, ~l.121). `GlobalAllocator` (~l.664) stays the value handle onto the funnel.
+   - *Attribute:* one more `else if` in the type-attribute switch in `collectClasses` (next to `align`/`packed`), a
+     `ClassInfo` flag, and the "unknown type attribute" text updated. Whole-program checks: at most one (name both),
+     a `resource`, not generic, implements `GlobalHeap`, and every field is `Atomic` (`isAtomicClass`), deeply
+     immutable (`deeplyImmutable`), `UnsafePtr`, or an `InlineArray`/`Simd` of scalars. Reuse the field walk of
+     `checkSendableDeclarations` with a new per-field predicate. Each refusal gets an xfail fixture.
+   - *Lowering:* put `#define KAMA_GLOBAL_ALLOCATOR 1` in the preamble before `#include "kama_runtime.h"`, the way
+     `KAMA_ONPANIC` is emitted (single-TU `emit` and the shared header in `emitProgram`). That reaches every TU and
+     `kama transpile` output with no driver flag. The entry TU emits `<Pool> kama_global_allocator = {0};` and
+     `kama__global_allocate`/`kama__global_deallocate` over it, beside `emitRuntimeSlotDefinitions`, or in the first
+     unit under `--shared`. The definition is NOT inside `!KAMA_TARGET_EMBEDDED`, because MCUs are a primary consumer.
+   - *Runtime:* split the funnel in `kama_runtime.h` (from the "THE ALLOCATION FUNNEL" banner) into an
+     implementation layer, which is either `malloc` or the `extern kama__global_*` pair under the define, and the
+     `KAMA_ALLOC_CHECK` layer over whichever is active. `kama_alloc_zeroed` follows. `check-alloc-funnel.sh`
+     exempts that block by its banner, so keep the banner.
+   - *`--no-heap`:* with a declaration, `_heapSymbols` stops seeding the three funnel names, and `buildCallGraph`
+     adds the edges `kama_alloc`/`kama_alloc_zeroed` → `kama__global_allocate` and `kama_free` →
+     `kama__global_deallocate`, so the pool's body decides. The `GlobalAllocator` leaf (the `owner.name ==
+     "GlobalAllocator"` arm) and `newDrawsFromHeap` record an allocation site only when nothing is declared. Audit
+     every other hard-coded `"GlobalAllocator"` in `kama.cemit.cpp` (nine at `0.9.370`), and change only those that
+     mean "is the heap". A pool body that reaches the funnel is refused in EVERY build, with the chain, over
+     `checkNoHeapTransitive`'s BFS.
+   - *Fixtures:* `tests/global_allocator_pool.kama` (box, grow, string, free, live count via the pool; also built
+     `--no-heap`) and `tests/global_allocator_isolates.kama` (allocate in one isolate, free in another, live count
+     back to 0: THE test the design exists to pass). The xfail fixtures are two declarations, a `value`, a plain
+     mutable field, a pool reaching `GlobalAllocator`, and not implementing `GlobalHeap`. Each new xfail fixture
+     needs its row in `tests/xfail/DIAGNOSTIC_LINES`. Check the position before adding the row.
+   - *Not in scope:* a reference two-tier (tcache) pool. The isolate-exit open point above stays open until one
+     ships.
 4. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
    allocator verdict (§4).
 
@@ -441,7 +474,7 @@ one would be a different pool in every isolate, and a box sent over a channel wo
    declaration; a pool that needs a lock-free free list writes it over `Atomic` compare-exchange, which is also
    what makes it safe to call from an ISR on a single core. Nothing new to learn, nothing to trust.
 
-**The declaration then reads:** `@globalAllocator type resource Pool implements Allocator { … }` — a `resource`,
+**The declaration then reads:** `@globalAllocator type resource Pool implements GlobalHeap { … }` — a `resource`,
 because a process-wide instance with `Atomic` state has IDENTITY and must never be copied (see KR-63 below, which
 is why this is not spelled `type value`). Construction: its `default ctor` must be a compile-time-constant init
 (the module-static rule — no startup hook, no init-order fiasco, the MCU shape), since the instance is a C global.
@@ -474,15 +507,20 @@ implicit (GOALS #5). What remains outside explicit per-isolate allocation is wha
   `Holder k = h; k.a.store(5)` leaves `h.a` at 1), because the value check tests `destructible` and skips the
   `moveOnly` it computes. The global allocator is precisely a type whose identity must not be laundered through
   a copy, so the hole is closed before the declaration is built on top of it.
-- **The contract kind.** `Allocator` is `for value`, because a container stores `A alloc` by value and copies it.
-  A global instance is a resource and is never stored or copied — only called through the funnel. Measure what
-  `for value, resource` would admit in a container position (does the ownership checker already refuse a
-  resource `A` in `DynamicArray<T, A>`?) before choosing between widening the clause and a sibling contract;
-  GOALS #4 favours one contract with the checker holding the position rule, if the checker does hold it.
+- ~~**The contract kind.**~~ **DECIDED 2026-09-17: a sibling contract, `type contract GlobalHeap for resource`**,
+  with `Allocator`'s two members. `Allocator` stays `for value`. Measured at `0.9.369`: widening `Allocator` to
+  `for value, resource` broke 108 of 120 container fixtures with 324 errors, all in `shared.kama`/`weak.kama`, even
+  at `A = GlobalAllocator`. A bound's kind clause is what makes a container's `A` copyable, and once the clause
+  admits a resource, `A` is move-only in the TEMPLATE and every `this.alloc` copy is refused. Keeping one contract
+  would need new bound syntax to say "a value `Allocator`" at the 18 `A: Allocator` sites. The two are not two ways
+  to do one thing (GOALS #4). `Allocator` is a HANDLE: many of them, stored in containers and copied. `GlobalHeap`
+  is THE HEAP: exactly one, never stored in an `A` slot, and called only through the funnel. Neither can stand in
+  for the other. The third option, having the attribute check the two members structurally with no contract, was
+  rejected as an implicit promise (GOALS #5).
 - **The no-heap walk.** The call graph is read from emitted C, and the funnel lives in a header it does not scan.
   With a declaration the emitted C must contain an edge `kama_alloc` → `Pool__allocate` (e.g. the entry TU defines
   `kama__global_allocate`/`_deallocate` over `kama_global_allocator`, and the header's funnel calls them under a
-  define the driver sets for every TU), and `_heapSymbols` must stop seeding `kama_alloc`/`kama_free` as heap for
+  define the emitter writes into every TU's preamble, as `KAMA_ONPANIC` is), and `_heapSymbols` must stop seeding `kama_alloc`/`kama_free` as heap for
   THAT program — so the pool's body, not the funnel's name, decides. Confirm a pool whose `allocate` calls
   `GlobalAllocator` is still refused (the leaf is the default implementation, which a pool must not reach).
 
