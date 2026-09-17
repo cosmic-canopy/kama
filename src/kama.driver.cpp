@@ -11308,7 +11308,10 @@ int main(int argc, char** argv)
         //
         // `tok` is the input spelled exactly as it appeared on the old single command line, trailing
         // space included; `obj` is where a `-c` compile of it writes.
-        struct CcInput { std::string tok, obj; };
+        // `ownStd` marks an input whose token carries its OWN `-std=` (a `csources` entry). `-std=` is not
+        // positional — in one invocation the last one applies to every input — so such an input can never
+        // share a command with kama's C; see the single-invocation arm below.
+        struct CcInput { std::string tok, obj; bool ownStd = false; };
         std::vector<CcInput> ccInputs;
         for (auto& cf : cFiles)
             ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o" });
@@ -11359,7 +11362,7 @@ int main(int argc, char** argv)
                 // compile under `-std=c*` ("use -std=gnu* modes instead"), so the first package's wasm
                 // leg failed on the one file that reads the browser's entropy. Placed on the input, not
                 // in the prefix, so it reaches exactly the foreign translation units.
-                ccInputs.push_back({ "-std=gnu11 \"" + cs.path + "\" ", obj });
+                ccInputs.push_back({ "-std=gnu11 \"" + cs.path + "\" ", obj, true });
             }
         }
 
@@ -11584,6 +11587,7 @@ int main(int argc, char** argv)
         // being true when runCmdsParallel grew its `_spawnlp(_P_NOWAIT)`/`_cwait` arm — see that
         // function, whose own comment calls the pool "the single largest lever on Windows build time".
         // The comment outlived the code by describing a clamp the condition below never applied.
+        const int poolJobs = nJobs;   // the unclamped width, for the inputs that must compile on their own
         if (ccInputs.size() < 2 || wasm || isZig(compiler)) nJobs = 1;
 
         // Compile every input on its own and join the results, rather than handing them all to one
@@ -11620,30 +11624,40 @@ int main(int argc, char** argv)
         }
 #endif
         int rc;
-        if (perTU) {
-            std::string base = cmd.str();
-            std::vector<std::string> objs, cmds;
+        const std::string base = cmd.str();
+        // Compile each input on its own `-c` job, `jobs` at a time, appending its object to `objs`.
+        auto compileEach = [&](const std::vector<const CcInput*>& inputs, int jobs,
+                               std::vector<std::string>& objs) {
+            std::vector<std::string> cmds, mine;
             // A compile-only job needs `-c`, which the flags already carry for OBJECT/STATIC.
             const std::string dashC = stopsAtObject ? "" : "-c ";
-            for (auto& in : ccInputs) {
-                objs.push_back(in.obj);
-                genFiles.push_back(in.obj);
+            for (const CcInput* in : inputs) {
+                mine.push_back(in->obj);
+                genFiles.push_back(in->obj);
                 // Capture each job's streams separately — not `2>&1` — because stream identity matters:
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
-                const std::string obj = toolPath(in.obj);   // the object AND cmd's two redirections (see toolPath)
-                cmds.push_back(base + dashC + in.tok + "-o \"" + obj + "\""
+                const std::string obj = toolPath(in->obj);   // the object AND cmd's two redirections (see toolPath)
+                cmds.push_back(base + dashC + in->tok + "-o \"" + obj + "\""
                                + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"");
             }
             std::vector<int> rcs;
-            rc = runCmdsParallel(cmds, nJobs, rcs);
+            int r = runCmdsParallel(cmds, jobs, rcs);
             // Replay in INPUT order, whatever order they finished in. Logs are not build artifacts, so
             // they go regardless of --keep-c.
             for (size_t i = 0; i < cmds.size(); ++i) {
-                if (rcs[i] < 0) { remove(osp(objs[i] + ".out").c_str()); remove(osp(objs[i] + ".err").c_str()); continue; }
-                replayAndRemove(objs[i] + ".out", stdout);
-                replayAndRemove(objs[i] + ".err", stderr);
+                if (rcs[i] < 0) { remove(osp(mine[i] + ".out").c_str()); remove(osp(mine[i] + ".err").c_str()); continue; }
+                replayAndRemove(mine[i] + ".out", stdout);
+                replayAndRemove(mine[i] + ".err", stderr);
             }
+            objs.insert(objs.end(), mine.begin(), mine.end());
+            return r;
+        };
+        if (perTU) {
+            std::vector<std::string> objs;
+            std::vector<const CcInput*> all;
+            for (auto& in : ccInputs) all.push_back(&in);
+            rc = compileEach(all, nJobs, objs);
             // The join runs only on a clean wave, so it can never see an object a stopped wave skipped.
             if (rc == 0) {
                 if (outStatic) {
@@ -11672,9 +11686,23 @@ int main(int argc, char** argv)
                 }
             }
         } else {
-            for (auto& in : ccInputs) cmd << in.tok;
-            cmd << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
-            rc = runCmd(cmd.str());
+            // One invocation compiles and links kama's C — but an input with its own `-std=` cannot be in
+            // it: `-std=` is not positional, so the LAST one applies to every input, and a `csources`
+            // entry's `gnu11` used to turn kama's own ISO C into GNU C on exactly the builds that take
+            // this arm (zig, wasm, `-j 1`). Those inputs compile first, as their own jobs at the pool's
+            // full width, and join as objects. Not a partial link (`-r`) of them in one command instead:
+            // measured, COFF refuses it (zig → windows) and zig's wasm-ld drops the symbols. And not a
+            // loss for zig: libsodium's 120 files are 0.9 s warm this way against 1.7 s for one `-r`.
+            std::vector<const CcInput*> ownStd;
+            for (auto& in : ccInputs) if (in.ownStd) ownStd.push_back(&in);
+            std::vector<std::string> objs;
+            rc = ownStd.empty() ? 0 : compileEach(ownStd, poolJobs, objs);
+            if (rc == 0) {
+                for (auto& in : ccInputs) if (!in.ownStd) cmd << in.tok;
+                for (auto& o : objs) cmd << "\"" << toolPath(o) << "\" ";
+                cmd << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
+                rc = runCmd(cmd.str());
+            }
         }
 
         if (rc != 0) {                       // genCleanup removes the generated files on the way out

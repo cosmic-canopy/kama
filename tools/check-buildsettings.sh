@@ -280,8 +280,8 @@ JSON
          || { bad "a missing csource failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
 
 # TWO PACKAGES SHIPPING `shim.c`. Without an owner prefix on the object name they write the same file —
-# a silent overwrite in one invocation, and a RACE under -j. `-j 2` forces the per-TU path, which is the
-# only leg where the object names are actually used.
+# a silent overwrite, and a RACE under -j. A csource always compiles to its own object, on the per-TU
+# path (`-j 2`) and on the one-invocation path alike (it cannot share kama's `-std=`), so both are built.
 app twoshims geo phys <<'JSON'
 { "name": "twoshims", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
   "dependencies": { "geo": { "path": "./vendor/geo" }, "phys": { "path": "./vendor/phys" } },
@@ -297,9 +297,11 @@ JSON
 done
 rc=0
 "$KAMA" pkg install "$tmp/twoshims/kama.json" >/dev/null 2>&1 || rc=1
-[ "$rc" = 0 ] && { "$KAMA" build "$tmp/twoshims/kama.json" -j 2 -o "$tmp/twoshims/app" >"$tmp/o" 2>"$tmp/e" || rc=1; }
-# The program's own exit code is 7 by construction (see `app`), so only the BUILD is being judged here.
-[ "$rc" = 0 ] && { arc=0; "$tmp/twoshims/app" >/dev/null 2>&1 || arc=$?; [ "$arc" = 7 ] || rc=1; }
+for j in 2 1; do
+    [ "$rc" = 0 ] && { "$KAMA" build "$tmp/twoshims/kama.json" -j $j -o "$tmp/twoshims/app" >"$tmp/o" 2>"$tmp/e" || rc=1; }
+    # The program's own exit code is 7 by construction (see `app`), so only the BUILD is being judged here.
+    [ "$rc" = 0 ] && { arc=0; "$tmp/twoshims/app" >/dev/null 2>&1 || arc=$?; [ "$arc" = 7 ] || rc=1; }
+done
 if [ "$rc" = 0 ]; then
     ok "two packages both shipping csrc/shim.c compile to different objects"
 else
@@ -325,6 +327,27 @@ mkdir -p "$tmp/objkind/csrc"; printf 'int kama_objkind_x(void) { return 1; }\n' 
     || { grep -qF 'single translation unit' "$tmp/e" \
          && ok "OUTPUT=OBJECT with a csource is refused by name, pointing at OUTPUT=STATIC" \
          || { bad "OUTPUT=OBJECT failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+# Kama's own C stays ISO `c11` beside a `gnu11` csource ON THE ONE-INVOCATION PATH. `-std=` is not
+# positional, so one command holding both used to compile kama's C as GNU C — on zig, on wasm, and at
+# `-j 1`. tests/csources_std_split.d/ proves it on every leg's DEFAULT path (per-TU natively, one
+# invocation on wasm); these force the one-invocation path natively, where the fixture cannot reach.
+split="$ROOT/tests/csources_std_split.d"
+for how in "-j 1" "--cc zig-cc"; do
+    set -- -j 1
+    if [ "$how" = "--cc zig-cc" ]; then
+        command -v zig >/dev/null 2>&1 || { echo "  skip: no zig on PATH for the \`$how\` leg"; continue; }
+        set -- --cc "zig cc"
+    fi
+    arc=0
+    if "$KAMA" build "$split/kama.json" "$@" -o "$tmp/split" >"$tmp/o" 2>"$tmp/e"; then
+        "$tmp/split" >/dev/null 2>&1 || arc=$?
+        [ "$arc" = 10 ] && ok "kama's C stays ISO and the csource GNU in one invocation ($how)" \
+            || bad "one invocation compiled a TU in the wrong C mode ($how): exit $arc, want 10 (tens = kama's C is ISO, ones = the csource is ISO)"
+    else
+        bad "the std-split fixture failed to build ($how)"; head -3 "$tmp/e" >&2
+    fi
+done
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: \`cincludes\` puts a package's include tree on the path, under the path rules"

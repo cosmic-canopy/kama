@@ -1,0 +1,14 @@
+// Each translation unit keeps its OWN C standard: kama's generated C is ISO `c11`, a `csources` entry
+// is `gnu11`. `-std=` is not positional — in one compiler invocation the last one applies to every
+// input — so a build that hands both to one command (zig, wasm, `-j 1`) compiled kama's C as GNU C.
+extern "probe.h";
+extern fn int32 kama_test_kama_tu_is_iso();
+extern fn int32 kama_test_csources_tu_is_iso();
+
+unsafe fn int32 modes() {
+    return kama_test_kama_tu_is_iso() * 10 + kama_test_csources_tu_is_iso();
+}
+
+fn int32 main() {
+    return modes();   // 10: kama's C is ISO, the csources entry is GNU
+}
