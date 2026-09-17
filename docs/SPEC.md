@@ -533,10 +533,8 @@ threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives 
 `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the eager
 `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
 too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
-every *interior* node box draw from `A` (via the placement `new(allocator:) BTreeNode` below), so `arena.reset()`
-reclaims the whole tree. (One box per tree — the always-live root — stays `GlobalAllocator`, freed by RAII: a
-bare `new` into a stateless-allocator box is legal for any pointee `A` and sidesteps the eager-root/`withAllocator`
-ordering, whereas a placement root would require the not-yet-assigned handle. A minor, documented wart.)
+every node box, the root included, draw from `A` (via the placement `new(allocator:) BTreeNode` below), so
+`arena.reset()` reclaims the whole tree.
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
 `std.mem.Allocator` model), a two-method contract. It is **foundational**, so the `Allocator` contract and the
 default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`Hashable`) — both the collections
@@ -608,8 +606,8 @@ Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Cir
 ```
 
 Every allocation on this path answers `None`, including a `Shared` handle's control block. A bare
-`try new` into a box whose allocator is **stateful** is refused — that block would be released through <!-- xfail: try_new_stateful_bare -->
-the wrong allocator — so an arena-backed box is built with the placement form
+`try new` into a box whose allocator is anything but `GlobalAllocator` is refused, because that block would be released through <!-- xfail: try_new_stateful_bare -->
+the wrong allocator. An arena-backed box is built with the placement form
 ([tests/try_new_arena.kama](../tests/try_new_arena.kama),
 [tests/try_new_iface.kama](../tests/try_new_iface.kama),
 [tests/xfail/try_new_stateful_bare.kama](../tests/xfail/try_new_stateful_bare.kama)).
@@ -639,7 +637,7 @@ compiler writes itself as well: owning a type whose FIELD frees, or an `Optional
 that free. The call graph is read from the C the build emits, so every call the compiler writes is an edge,
 whether or not any source line spells it.
 
-The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop, noheap_flag_container -->
+The chain ends at libc, and `GlobalAllocator` is the leaf, unless the program declares a global allocator (below): a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop, noheap_flag_container -->
 rejected inside a no-heap region, including merely *owning* one (dropping it frees; `free` can block on the
 allocator's lock exactly as `malloc` can). **The whole-program `--no-heap` flag applies the same leaf**, so
 a no-heap build cannot reach `malloc` through a container either. A reached allocation is reported where it is
@@ -721,6 +719,57 @@ type value Mixer {                                     // ...and the same gate o
     @noheap public fn int32 fill(int32 n) { ... }      // the natural spelling for an audio callback
 }
 ```
+
+#### Global allocator — `@globalAllocator` ✅
+
+Every heap block a kama program's C obtains or releases goes through one funnel, the runtime's `kama_alloc`/`kama_free`,
+and that includes each box, container buffer, string, error box and `spawn` bundle. It defaults to the platform
+allocator. A program replaces that default with a **declaration**:
+
+```kama
+import { std::concurrent::Atomic };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // storage the program owns
+    Atomic<int32> lock;                   // every field starts at zero
+    Atomic<usize> bumped;
+    Atomic<usize> head;
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { … }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { … }
+}
+```
+
+`GlobalHeap` has the same two members as `Allocator`, and it is a separate contract because the two are different
+things. An `Allocator` is a **handle**: there are many of them, stored in containers and copied. `GlobalHeap` is
+**the heap**: there is exactly one, and only the funnel calls it. The default `A`, `GlobalAllocator`, is a handle
+onto the funnel, so it follows the declaration with no change. A bare `DynamicArray<T>` draws from the pool.
+
+**One instance, process-wide.** The compiler emits `Pool kama_global_allocator = {0};` once, in the entry
+translation unit, and every translation unit and every isolate calls into it. A block allocated in one isolate may
+be freed in another ([tests/global_allocator_isolates.kama](../tests/global_allocator_isolates.kama)). The
+declaration is held to rules that follow from that: <!-- test: global_allocator_pool, global_allocator_isolates -->
+- **At most one** per program. <!-- xfail: global_allocator_two -->
+- **A `type resource`, not generic, implementing `GlobalHeap`.** The heap has identity and must not be copied, and
+  the contract is what promises the funnel its two members. <!-- xfail: global_allocator_value, global_allocator_generic, global_allocator_no_contract -->
+- **No constructor and no field initializer.** The instance is a C global, and nothing runs before `main` to
+  construct it (an MCU has no hook for that either). It starts as zero bytes, so a pool is designed to begin at
+  zero: an empty free list, and nothing bumped yet. <!-- xfail: global_allocator_ctor, global_allocator_field_init -->
+- **Fields follow the sharing-seams rule**, because every isolate writes the same object. Each field is an
+  `Atomic`, a deeply `immutable` value, raw storage (`UnsafePtr`), or an `InlineArray`/`Simd` of scalars. A plain
+  `usize` would be written without synchronization. <!-- xfail: global_allocator_mutable_field -->
+- **A pool may not reach the funnel.** Once a pool is declared, the funnel *is* the pool, so a pool that draws from
+  `GlobalAllocator`, or from anything that allocates through it, calls itself. It is refused in every build, and the <!-- xfail: global_allocator_reaches_itself -->
+  diagnostic names the cycle.
+
+**No-heap.** `@noheap` and `--no-heap` keep one meaning: *never reaches the system heap*. With a declaration, the
+funnel is the pool rather than the system heap. Every allocation the no-heap gate would refuse becomes a call into
+`GlobalHeap::allocate`, and the pool's own body decides. A pool over storage it owns therefore makes boxes,
+containers, strings and error boxes legal under both. A pool that calls a `@heap` extern is refused, and the chain <!-- xfail: global_allocator_noheap_heap_pool -->
+runs through the pool (`tick -> GlobalHeap::allocate -> Pool::allocate`). `--no-heap` still refuses whatever the
+declaration does not cover: a `@heap` extern reached from anywhere, and a slot call it cannot see through.
+
+The sanitizer leg's layout check (`KAMA_ALLOC_CHECK`) wraps whichever implementation is active, so a declared pool
+is held to the same promise as the default: every `deallocate` receives exactly the layout its block was allocated with.
 
 #### Foreign entry points — `@foreignEntry` / `@callerThread` ✅
 
@@ -816,15 +865,15 @@ Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7); 
 ```
 
 The allocator must be spelled on the box type (`Owned<T, A>` / `Shared<T, A>`, explicit over implicit — a
-`new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). A stateful `A` **requires** <!-- xfail: new_alloc_shared -->
-the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). For <!-- xfail: new_bare_stateful -->
+`new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). Any `A` but `GlobalAllocator` <!-- xfail: new_alloc_shared -->
+**requires** the placement form. A bare `new` draws from the global allocator while the box releases through `A`, <!-- xfail: new_bare_stateful -->
+so it is a compile error even for a stateless `A`, since the two families would meet only by accident. For <!-- xfail: new_bare_stateless_custom -->
 `Shared`/`Weak`, **both** the pointee and the shared control block are drawn from `A`, and every handle carries
 its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`), so whichever handle observes
 `strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the ctrl through the right
 allocator; `arena.reset()` reclaims a whole ref-counted graph. With allocator-aware `new`,
 **`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) thread `A` through their full
-`SortedMap<K, V, A>` / `SortedSet<K, A>` form (interior node boxes placement-`new` from `A`; the root box stays
-`GlobalAllocator`). **Interface-element** boxes (`Owned/Shared/Weak<Contract, A>`, e.g. `Shared<Shape,
+`SortedMap<K, V, A>` / `SortedSet<K, A>` form (every node box, the root included, placement-`new` from `A`). **Interface-element** boxes (`Owned/Shared/Weak<Contract, A>`, e.g. `Shared<Shape,
 BumpAllocator>`) draw from the allocator the same way: the type-erased fat handle (`{obj, vtbl[, ctrl]}`) grows a
 by-value `A alloc` + pointee `objsize`, so the pointee and control block are drawn from `A` and freed through it
 — completing allocator coverage for **every** box (concrete and contract-erased). Default-`GlobalAllocator`

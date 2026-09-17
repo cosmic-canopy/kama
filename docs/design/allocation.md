@@ -3,7 +3,8 @@
 **Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
 §5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth** (§2's prerequisite) at `0.9.366`, and **the layout
 funnel + an aligned `Allocator`** (KR-61) at `0.9.367`, and **the whole funnel** (§2, KR-48) at `0.9.369` — verified
-on Linux, wasm and Windows. §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+on Linux, wasm and Windows, and **the replaceable global allocator** (§3, KR-49) at `0.9.377`–`0.9.378`. §4 not
+started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -35,7 +36,7 @@ premise ("`serializeJsonBuffer` constructs its backend, so the callee is knowabl
 nowhere the proof is needed. It also does not matter yet: no serde path is heap-free even with a proven callee
 (every backend ctor allocates a `FixedArray` scratch or frame stacks, readers take an owned buffer, there is no
 fixed-buffer writer, and every `Err` boxes). **What answers serde is this campaign's own arc:** after KR-48 every
-allocation funnels through `kama_alloc`/`kama_free`, and after KR-49 those delegate to a global allocator the
+allocation funnels through `kama_alloc`/`kama_free`, and since `0.9.377` those delegate to a global allocator the
 program DECLARES — whose body `--no-heap` can then check like any other code, so a pool over program-owned
 storage is provably not the system heap and the whole serde chain (scratch, buffers, error boxes) lands in it.
 
@@ -63,60 +64,17 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 2. ~~**KR-48 on Windows**~~ — closed 2026-09-17: `./dev test` (2040 fixtures) and `./dev check` (72 guards) green at
    `0.9.369` with no change to the Windows branch of `kama_os.h`. Two guards needed fixing for msys2 (gawk's `-v`
    escapes, no `python3`); the san/wasm legs are the Linux box's and already ran there.
-3. **KR-49** — decided 2026-09-17 and ready to build. What is settled: *Still open* item 1 (one meaning), KR-63
-   (shipped `0.9.370`), and the contract kind (a SIBLING contract, `GlobalHeap`, measured in §3). In order:
-   a. **Probe the no-heap edge** (a doc is not evidence). `buildCallGraph` reads only the C the compiler writes.
-      It never reads `include/kama_runtime.h`, which is why `_heapSymbols` seeds `kama_alloc`, `kama_alloc_zeroed`
-      and `kama_free` by name. Confirm the edge the design needs can be drawn in emitted C, and that a pool whose
-      `allocate` reaches `GlobalAllocator` can be refused (it would recurse into itself).
-   b. **Probe constant initialization.** The instance is a C global, so it gets no startup hook. The recommendation
-      is `= {0}` (the module-static no-initializer rule) with no non-trivial ctor. Write a useful pool, with a bump
-      index, `InlineArray` storage and an `Atomic` free list, and confirm it works starting from all zeros. If it
-      cannot, that is a fork for the maintainer.
-   c. **Build** (0.9.371) to §3's RECOMMENDED SHAPE, from the build map below.
-   d. **`Shared.adopt` and the `SortedMap` root onto `A`**: its own commit (0.9.372), with a `@noheap` fixture over
-      `BumpAllocator`.
-   e. Docs: SPEC *No-heap subset* plus a new `@globalAllocator` subsection. Delete the KR-49 row and its detail, and
-      re-word KR-50/KR-39 ("after KR-49" becomes "now").
-
-   **Build map** (anchors at `0.9.370`; find each by its NAME, the numbers drift):
-   - *Prelude:* `type contract GlobalHeap for resource` with `Allocator`'s two members, beside `Allocator`
-     (`prelude/global.kama`, ~l.121). `GlobalAllocator` (~l.664) stays the value handle onto the funnel.
-   - *Attribute:* one more `else if` in the type-attribute switch in `collectClasses` (next to `align`/`packed`), a
-     `ClassInfo` flag, and the "unknown type attribute" text updated. Whole-program checks: at most one (name both),
-     a `resource`, not generic, implements `GlobalHeap`, and every field is `Atomic` (`isAtomicClass`), deeply
-     immutable (`deeplyImmutable`), `UnsafePtr`, or an `InlineArray`/`Simd` of scalars. Reuse the field walk of
-     `checkSendableDeclarations` with a new per-field predicate. Each refusal gets an xfail fixture.
-   - *Lowering:* put `#define KAMA_GLOBAL_ALLOCATOR 1` in the preamble before `#include "kama_runtime.h"`, the way
-     `KAMA_ONPANIC` is emitted (single-TU `emit` and the shared header in `emitProgram`). That reaches every TU and
-     `kama transpile` output with no driver flag. The entry TU emits `<Pool> kama_global_allocator = {0};` and
-     `kama__global_allocate`/`kama__global_deallocate` over it, beside `emitRuntimeSlotDefinitions`, or in the first
-     unit under `--shared`. The definition is NOT inside `!KAMA_TARGET_EMBEDDED`, because MCUs are a primary consumer.
-   - *Runtime:* split the funnel in `kama_runtime.h` (from the "THE ALLOCATION FUNNEL" banner) into an
-     implementation layer, which is either `malloc` or the `extern kama__global_*` pair under the define, and the
-     `KAMA_ALLOC_CHECK` layer over whichever is active. `kama_alloc_zeroed` follows. `check-alloc-funnel.sh`
-     exempts that block by its banner, so keep the banner.
-   - *`--no-heap`:* with a declaration, `_heapSymbols` stops seeding the three funnel names, and `buildCallGraph`
-     adds the edges `kama_alloc`/`kama_alloc_zeroed` → `kama__global_allocate` and `kama_free` →
-     `kama__global_deallocate`, so the pool's body decides. The `GlobalAllocator` leaf (the `owner.name ==
-     "GlobalAllocator"` arm) and `newDrawsFromHeap` record an allocation site only when nothing is declared. Audit
-     every other hard-coded `"GlobalAllocator"` in `kama.cemit.cpp` (nine at `0.9.370`), and change only those that
-     mean "is the heap". A pool body that reaches the funnel is refused in EVERY build, with the chain, over
-     `checkNoHeapTransitive`'s BFS.
-   - *Fixtures:* `tests/global_allocator_pool.kama` (box, grow, string, free, live count via the pool; also built
-     `--no-heap`) and `tests/global_allocator_isolates.kama` (allocate in one isolate, free in another, live count
-     back to 0: THE test the design exists to pass). The xfail fixtures are two declarations, a `value`, a plain
-     mutable field, a pool reaching `GlobalAllocator`, and not implementing `GlobalHeap`. Each new xfail fixture
-     needs its row in `tests/xfail/DIAGNOSTIC_LINES`. Check the position before adding the row.
-   - *Not in scope:* a reference two-tier (tcache) pool. The isolate-exit open point above stays open until one
-     ships.
+3. ~~**KR-49**~~ — shipped `0.9.377` (`@globalAllocator`) and `0.9.378` (`Shared.adopt`, the `SortedMap` root, and
+   the bare-`new` rule). The record is SPEC *Global allocator*; what the probes and the build decided is at the end
+   of §3. Filed from it: **KR-65** (three raw-pointer expressions that reach clang) and **KR-66** (reaching the
+   instance).
 4. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
    allocator verdict (§4).
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
-(shipped `0.9.355`) → ~~**KR-48** `kama_alloc`/`kama_free`~~ (shipped `0.9.369`) → **KR-49**
-replaceable global allocator → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
+(shipped `0.9.355`) → ~~**KR-48** `kama_alloc`/`kama_free`~~ (shipped `0.9.369`) → ~~**KR-49**
+replaceable global allocator~~ (shipped `0.9.378`) → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
 land right after KR-47 "on the same walk", in view of tier 1 of the devirtualization ladder (KR-23); reading the
 emitter retired that plan, for the reasons at the top of this doc. One half of the premise survives and is worth
 keeping: the proof of "which body does this slot reach" belongs to ONE mechanism, not two. Note that the walk now
@@ -173,7 +131,7 @@ Still open, to be decided and written down — in this order, because each one n
    - **GOALS #3** ("Arena/pool allocators arrive as library types"): a program-owned pool is the sanctioned
      answer to "no heap", not an evasion of it — and the compiler already PROVES a pool's body is heap-free
      rather than trusting it.
-   - **It is what makes KR-49 worth having and needs no exception to build.** KR-49 moves the leaf from
+   - **It is what makes the global allocator worth having and needs no exception to build.** KR-49 moved the leaf from
      `GlobalAllocator` to the funnel's DEFAULT implementation. A program that declares `@globalAllocator` over
      storage it owns then has a checked body behind `GlobalAllocator`, so boxes, containers, strings and error
      boxes become legal under both spellings — and one that declares nothing is refused exactly as today.
@@ -486,7 +444,7 @@ contended as it is written: a single `Atomic` compare-exchange free list is lock
 between cores under heavy concurrent allocation. The scalable shape needs NO new language — kama's two storage
 seams are exactly the two tiers of a tcache/mimalloc allocator: a module `static` is per-isolate by construction,
 so it holds each isolate's uncontended cache, and the singleton's `Atomic` fields hold the shared backing a cache
-refills from and a cross-isolate free returns to. **Open design point for KR-49: there is no isolate-exit hook**, so
+refills from and a cross-isolate free returns to. **Open design point for a reference pool: there is no isolate-exit hook**, so
 a dying isolate's cached blocks are stranded unless the cache is bounded or drained — decide which before a
 reference pool ships. (A C thread kama did not create sees statics at their initialiser, so it simply starts with
 an empty cache — safe, provided the empty-cache path goes to the shared tier.)
@@ -523,6 +481,25 @@ implicit (GOALS #5). What remains outside explicit per-isolate allocation is wha
   define the emitter writes into every TU's preamble, as `KAMA_ONPANIC` is), and `_heapSymbols` must stop seeding `kama_alloc`/`kama_free` as heap for
   THAT program — so the pool's body, not the funnel's name, decides. Confirm a pool whose `allocate` calls
   `GlobalAllocator` is still refused (the leaf is the default implementation, which a pool must not reach).
+
+#### §3 AS BUILT (`0.9.377`–`0.9.378`) — what the probes and the build decided
+
+- **Construction is zero bytes, and nothing else.** Probed first: a pool with `InlineArray` storage and `Atomic`
+  free-list and bump fields works from `<Pool> g = {0};` with its ctor never run. So the declaration refuses a
+  ctor AND a field initializer. Either would be a promise the program never keeps, since there is no hook to run
+  them. (The recommendation above said "a compile-time-constant default ctor". Zero was enough, and it is simpler.)
+- **The no-heap edge, by construction.** With a declaration, every funnel FACT becomes an EDGE into
+  `kama__global_allocate`: the three funnel names in `buildCallGraph`, every `rejectIfNoHeap` site (they are all
+  funnel allocations, since starting a thread was never a site), and the `GlobalAllocator` leaf. The pool's body then
+  decides, for `@noheap` and `--no-heap` alike, over the existing walk. A pool that reaches the funnel is a cycle
+  through its own entry, refused in every build. The chain renders the entries as `GlobalHeap::allocate`.
+- **`value` needs no check of its own.** `GlobalHeap` is `for resource`, so the conformance refuses it.
+- **A bare `new` needs `A == GlobalAllocator`** (maintainer, 2026-09-17). A field-less custom `A` used to pass the
+  "stateful" check, and its box freed through `A` a block the funnel had allocated. Measured: 0 allocations and 2
+  frees through a counting `A` for one `Shared`. That is the mixed-family defect of §2 one level up, and a declared
+  pool would turn it from latent to live. Any other `A` takes the placement form.
+- **The fixtures prove the routing by exhaustion**, because kama code cannot reach the instance to read a count.
+  That gap is KR-66.
 
 ### 4. Allocator-aware errors
 
@@ -562,7 +539,7 @@ after §1, because under today's eager rule its new box would fail any `--no-hea
 
 1. ~~§1 reach-based `--no-heap` (KR-47), then the `Handle` fix~~ — both shipped (`0.9.348`, `0.9.355`).
 2. §2 `kama_alloc`/`kama_free` as the only primitives, and the guard (KR-48; no behaviour change; mixed pairs gone).
-3. §3 replacing the default implementation (KR-49; + `Shared.adopt`, `SortedMap` root).
+3. ~~§3 replacing the default implementation (KR-49; + `Shared.adopt`, `SortedMap` root)~~ — shipped `0.9.378`.
 4. §4 allocator-aware error boxing; decide the per-call question (KR-50).
 5. OS seam and extern coverage completed; foreign-owned list verified against the code.
 

@@ -6,7 +6,7 @@
 # Everything else goes through them, carrying the block's layout. Two defects this holds down:
 #   * MIXED FAMILIES. Before the funnel, ~20 blocks were allocated by one family (a raw emitted `malloc`, the
 #     runtime's `kama_alloc`, an `Allocator`) and released by another. That was correct only because every family
-#     happened to be libc, and wrong the moment one is replaced — which is what KR-49's global allocator does.
+#     happened to be libc, and wrong the moment one is replaced — which is what a declared `@globalAllocator` does.
 #   * HIDDEN ALLOCATORS. `strdup` returns `malloc` memory, so a `strdup` is a raw allocation that no grep for
 #     `malloc` finds.
 # The sanitizer leg proves the other half: under KAMA_ALLOC_CHECK every release is checked against the layout its

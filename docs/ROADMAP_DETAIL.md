@@ -255,6 +255,17 @@ clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_Globa
 `sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
 a generic type would hit it too.
 
+### Three raw-pointer expressions pass kama and fail in clang (KR-65) — found 2026-09-17 building `@globalAllocator`, `0.9.370`
+
+Each is a few lines, and each is accepted by the checker and handed to the C compiler to refuse:
+- `unsafe fn usize f() { InlineArray<uint64>#(4) s = [0; 4]; return cast<usize>(addr(of: s[0])); }` →
+  `pointer cannot be cast to type 'double'`: the cast emits `KAMA_NARROW` over a pointer. Binding the `addr` to an
+  `UnsafePtr<uint64>` local first works, so the operand's type is lost only when it is inline.
+- `UnsafePtr p = cast<UnsafePtr>(s);` with `s` an `InlineArray` → `operand of type 'InlineArray_uint8_4' where
+  arithmetic or pointer type is required`. Either lower it to the storage address or refuse it in kama.
+- `unsafe fn UnsafePtr f(UnsafePtr p) { return p + 4; }` → `KAMA_ADD`'s `_Generic` has no `void*` association.
+  Either define byte arithmetic on `UnsafePtr` or refuse it and point at `addr(of: buf[i])`.
+
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
@@ -1784,7 +1795,7 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-### The allocation campaign (KR-49 – KR-50, KR-58) — opened 2026-09-12
+### The allocation campaign (KR-50, KR-58, KR-66) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1806,6 +1817,19 @@ bytes, align)`); `tools/check-alloc-funnel.sh` keeps the C allocator inside it, 
 proves every release hands back its exact layout. The record is SPEC (*Allocator*, `sizeof(ptr:)`/`alignof(ptr:)`) and
 the design doc's §2. Verified on Linux, wasm and Windows (2026-09-17: the Windows branch of `kama_os.h` needed no
 change; two guards did, for msys2's gawk and its missing python3).
+
+**Step 3 shipped** (`0.9.377`–`0.9.378`). `@globalAllocator type resource Pool implements GlobalHeap`
+replaces the funnel's default: one instance, `= {0}` in the entry TU, shared by every isolate. With a declaration
+every funnel fact in the no-heap walk is an edge into the pool, so its body decides. `Shared.adopt` and the
+`SortedMap` root now draw from `A`, and a bare `new` needs `A == GlobalAllocator`. The record is SPEC *Global
+allocator* and the design doc's §3.
+
+**Reaching the instance (KR-66)**, found writing step 3's fixtures, which had to prove the routing by exhaustion
+because nothing could read a count. Verdict: scheduled, not optional. An MCU program measures its memory, the pool
+is the only object that knows, and there is no other home for the numbers: a module `static` is per-isolate, and
+the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the prelude, returning `ref Pool`,
+refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
+synthesized member to the user's type. The fixtures should then assert a live count.
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
