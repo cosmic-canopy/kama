@@ -40,11 +40,9 @@ program DECLARES — whose body `--no-heap` can then check like any other code, 
 storage is provably not the system heap and the whole serde chain (scratch, buffers, error boxes) lands in it.
 
 That settles §3's open question in favour of **the declaration**, not the weak symbol: a declaration has a body
-the flag can read, where a weak symbol could only be trusted. And it raises one for the maintainer, written here
-because it changes what the flag MEANS: `@noheap` = *never allocates* (an ISR / audio callback: deterministic,
-nothing can run out) and `--no-heap` = *never reaches the system heap* (an MCU with no `malloc`, where a fixed
-pool the program owns is exactly right). The two audiences want different guarantees; the split above gives each
-one its own word and keeps today's behaviour for the attribute.
+the flag can read, where a weak symbol could only be trusted. It seemed to raise a second question — whether
+`@noheap` and `--no-heap` should mean different things — and that one turned out to rest on a misreading; see
+item 1 of the *Still open* list below.
 
 **The recording gap (`0.9.353`), found planning KR-39.** The no-heap call graph could not see a call the
 COMPILER writes through a vtable, and four holes fell out of that, each with a fixture that built clean at
@@ -65,9 +63,27 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 2. ~~**KR-48 on Windows**~~ — closed 2026-09-17: `./dev test` (2040 fixtures) and `./dev check` (72 guards) green at
    `0.9.369` with no change to the Windows branch of `kama_os.h`. Two guards needed fixing for msys2 (gawk's `-v`
    escapes, no `python3`); the san/wasm legs are the Linux box's and already ran there.
-3. **KR-49** — needs the maintainer's call on the meaning split above first (`--no-heap` = never reaches the
-   SYSTEM heap). The replacement is a declaration; the funnel it delegates from now exists with its final
-   signature, and `_heapSymbols` is seeded with exactly `kama_alloc`, `kama_alloc_zeroed`, `kama_free`.
+3. **KR-49** (this machine, in parallel with the Windows box — it touches the emitter, prelude and
+   `kama_runtime.h`'s funnel, not `kama_os.h`, so it should not collide with KR-48/KR-58 there). In order:
+   a. **Confirm the recommendation** in *Still open* item 1 with the maintainer (one meaning: never reaches the
+      system heap). Everything below assumes it.
+   b. **Probe before building** (a doc is not evidence): does the no-heap walk actually reach into a user
+      `Allocator`'s body today? `tests/noheap_arena.kama` says a `BumpAllocator`'s `allocate` is judged by what it
+      reaches — make a pool whose `allocate` calls `GlobalAllocator` and confirm it is REFUSED under the flag.
+   c. **Decide where a global pool keeps its state — the hazard to settle first.** A module `static` is
+      PER-ISOLATE (`_Thread_local`, SPEC concurrency). A declared global allocator whose state lives in a
+      `static` would give every isolate its own pool, and an `Owned` sent over a channel would be freed into a
+      different pool than it came from. Options to weigh: require the declared type to be stateless over
+      program-wide storage it names explicitly (`static hardware`/`@section` storage is not per-isolate — check),
+      refuse `@globalAllocator` in a program that spawns (weak), or make the funnel's state an explicit
+      `Atomic`-guarded seam. Record the verdict in §3 before any code.
+   d. Then the surface: `@globalAllocator` on a `type value … implements Allocator` (at most one per program;
+      refuse two, refuse one on a stateful type per (c)); `kama_alloc`/`kama_free` call it; the no-heap leaf moves
+      from `GlobalAllocator::allocate`/`deallocate` to the funnel's default (`_heapSymbols` is seeded with exactly
+      `kama_alloc`, `kama_alloc_zeroed`, `kama_free` today — check what it must say after). `KAMA_ALLOC_CHECK`
+      wraps whichever implementation is active, so the san leg keeps proving layouts.
+4. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
+   allocator verdict (§4).
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
@@ -115,11 +131,34 @@ The decisions that are specific to this campaign, made by the maintainer on
 
 Still open, to be decided and written down — in this order, because each one narrows the next:
 
-1. **What `--no-heap` PROMISES** (maintainer, needed before KR-49). `@noheap` = *never allocates* — an ISR or an
-   audio callback wants determinism, and a pool that can run out does not qualify. `--no-heap` = *never reaches
-   the SYSTEM heap* — an MCU with no `malloc` is served exactly by a fixed pool the program owns. Today the flag
-   means the first. The second is what makes a replaced global allocator worth having, and it already has a
-   precedent: a `BumpAllocator` over owned storage is legal under the flag (`check-noheap.sh` 6c/6d).
+1. **What `--no-heap` promises — RECOMMENDED 2026-09-17, awaiting the maintainer's yes (the first thing the
+   KR-49 session confirms).** *One meaning for both spellings: the region, or the program, never reaches the
+   SYSTEM heap.* This is not a new rule — it is what both ALREADY mean, and the question as first posed ("`@noheap`
+   = never allocates, `--no-heap` = never reaches the system heap; the flag means the first today") was wrong about
+   the code. Measured at `0.9.369`: `tests/noheap_new_bump.kama` is a `@noheap fn` that places a `new` and grows a
+   `DynamicArray` in a `BumpAllocator`, and builds; SPEC *No-heap subset* makes `GlobalAllocator` the leaf for BOTH,
+   and gives the reason — the system `malloc`/`free` "can block on the allocator's lock". The property kama checks
+   is *no system heap*, never *no allocation*. Why keep it one meaning:
+   - **GOALS #4 and the campaign's own constraint** ("a rule that holds in some positions and not others is the
+     defect"): two spellings that differ only in SCOPE — a body, or what the entry points reach — must not also
+     differ in MEANING. A split would make `new(allocator: pool)` legal under the flag and illegal in a `@noheap`
+     body that the same program reaches, and would break the fixtures that pin today's behaviour.
+   - **GOALS #3** ("Arena/pool allocators arrive as library types"): a program-owned pool is the sanctioned
+     answer to "no heap", not an evasion of it — and the compiler already PROVES a pool's body is heap-free
+     rather than trusting it.
+   - **It is what makes KR-49 worth having and needs no exception to build.** KR-49 moves the leaf from
+     `GlobalAllocator` to the funnel's DEFAULT implementation. A program that declares `@globalAllocator` over
+     storage it owns then has a checked body behind `GlobalAllocator`, so boxes, containers, strings and error
+     boxes become legal under both spellings — and one that declares nothing is refused exactly as today.
+   - **Determinism is not lost.** The worry behind "never allocates" was an ISR or audio callback. What those
+     cannot afford is an unbounded or locking allocator they did not write — the system heap — which stays
+     refused. A pool the program declares is the program's code, bounded as the program makes it; its exhaustion
+     is `None` from `try new` (GOALS #3d), and an infallible `new` panics as it does today.
+   - **"Never allocates, even from a pool" is GENUINELY OPTIONAL, not scheduled** (the AGENTS.md verdict): no
+     consumer needs it, because a region that must not allocate at all is written without an allocation, and one
+     that must not TOUCH a given pool is written without that pool's handle — both already visible in source. If
+     a real consumer appears, it is a separate attribute over the same reach walk, not a second meaning of this
+     one.
 2. ~~declaration vs weak symbol for the replacement (§3)~~ — **decided: a DECLARATION**, because the flag can
    read its body and check it, where a weak link-time symbol could only be trusted. Recorded in §3.
 3. ~~A sized `kama_free(p, n)`~~ — **decided: SIZED** (2026-09-16), recorded in §2.
