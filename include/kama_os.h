@@ -50,8 +50,12 @@ static inline void* kama__sized_alloc(size_t n) {
     return h + 1;
 }
 static inline void* kama__sized_zeroed(size_t n) {
-    extern void* memset(void*, int, size_t);
-    void* p = kama__sized_alloc(n); if (p) memset(p, 0, n); return p;
+    // The name is PARENTHESIZED, declaration and call: on macOS a TU that has already read <string.h> has
+    // `memset` as a function-like fortify macro (`__builtin___memset_chk`), and a bare block-scope redeclaration
+    // expands into a syntax error — every program including this header failed to compile there. A
+    // parenthesized name is never macro-expanded and names the one real function either way.
+    extern void* (memset)(void*, int, size_t);
+    void* p = kama__sized_alloc(n); if (p) (memset)(p, 0, n); return p;
 }
 static inline void kama__sized_free(void* p) {
     if (!p) return;
