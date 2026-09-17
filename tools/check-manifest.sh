@@ -108,6 +108,36 @@ proj lic <<'JSON'
 { "name": "lic", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "license": "MIT", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept lic "\`license\` is a known key"
+
+# The same rule one level down, inside a `select` arm. Measured before it: `"cflgas"` in a HOST arm built
+# and ran, a per-target flag that silently did nothing.
+proj armtypo <<'JSON'
+{ "name": "armtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "TARGET": { "HOST": { "cflgas": ["-DX"] } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject armtypo 'unknown key `cflgas` in the target `HOST`' "a misspelled key in a target arm names itself"
+
+proj armlocal <<'JSON'
+{ "name": "armlocal", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf '{ "select": { "TARGET": { "HOST": { "ldflgas": [] } } } }\n' > "$tmp/armlocal/kama.local.json"
+reject armlocal 'unknown key `ldflgas` in the target `HOST`' "...and in a kama.local.json arm"
+
+proj valtypo <<'JSON'
+{ "name": "valtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "AUDIO": { "NONE": { "default": true }, "MINI": { "inherit": "NONE" } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject valtypo 'unknown key `inherit` in `select.AUDIO.MINI`' "a misspelled key in a select value names itself"
+
+proj valdflt <<'JSON'
+{ "name": "valdflt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "AUDIO": { "NONE": { "default": "yes" } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject valdflt '`default` in `select.AUDIO.NONE` must be true or false' "a non-boolean \`default\` is refused, not read as false"
 proj licbad <<'JSON'
 { "name": "licbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "license": 1, "modules": { ".": { "visibility": "internal" } } }
 JSON

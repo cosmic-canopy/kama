@@ -3244,8 +3244,12 @@ struct ManifestReader {
                 else if (k == "default") {
                     if      (s.compare(i, 4, "true")  == 0) { g.dflt = name; i += 4; }
                     else if (s.compare(i, 5, "false") == 0) { i += 5; }
-                    else if (!skipValue()) return false;
-                } else if (!skipValue()) return false;   // future per-value keys tolerated
+                    else return fail("`default` in `select." + group + "." + name + "` must be true or false");
+                }
+                // Closed, like the top level: a typo'd key here used to be skipped, which reads exactly like
+                // a key that does nothing.
+                else return fail("unknown key `" + k + "` in `select." + group + "." + name
+                                 + "` — a select value takes `inherits` and `default`");
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
                 if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -3313,9 +3317,12 @@ struct ManifestReader {
                 else if (k == "default") {
                     if      (s.compare(i, 4, "true")  == 0) { if (defaultTargetOut) *defaultTargetOut = name; i += 4; }
                     else if (s.compare(i, 5, "false") == 0) { i += 5; }
-                    else if (!skipValue()) return false;
+                    else return fail("`default` in `select.TARGET." + name + "` must be true or false");
                 }
-                else if (!skipValue()) return false;   // future target keys tolerated
+                // Closed, like the top level. This used to be "future target keys tolerated", and measured,
+                // `"cflgas"` in a HOST arm built and ran: a typo'd per-target flag did nothing, silently, and a
+                // key written for a newer kama would vanish on this one instead of saying so.
+                else return fail("unknown key `" + k + "` in the target `" + name + "`");
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
                 if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -4141,8 +4148,8 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
                 fromFile.c_str(), owner.c_str(), owner.c_str());
 }
 
-// Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
-// tolerated), so this is orthogonal to the flag load.
+// Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader, so this is
+// orthogonal to the flag load.
 static bool loadManifestTargets(const std::string& path, std::map<std::string, TargetSpec>& out,
                                 std::map<std::string, SelectGroup>& groupsOut, std::string& err,
                                 std::string* defaultTargetOut = nullptr)
