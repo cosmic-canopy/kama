@@ -1,8 +1,10 @@
 # C names — a kama name reaches C in a namespace no header can rewrite (KR-67)
 
-**Status:** measured and recommended 2026-09-17 on the Windows box at `0.9.379`. **Not started.** Waiting on the
-maintainer's ruling on the four decisions below. Delete this doc when KR-67 ships, as the maintenance rule for
-`docs/design/` says.
+**Status:** measured and recommended 2026-09-17 on the Windows box at `0.9.379`; **the four decisions below are
+RULED** (maintainer, 2026-09-17, on the Mac at `0.9.383` — every recommendation taken as written: D1 prefix what kama
+owns, D2 `k_`, D3 the kama spelling in the published host header, D4 keep reserving C's keywords), and the macOS
+measurements the doc asked for are in. **Not started — the sweep is the next session's work.** Delete this doc when
+KR-67 ships, as the maintenance rule for `docs/design/` says.
 
 ## Which box does this work
 
@@ -19,9 +21,8 @@ Everything a fresh session needs is here and in the KR-67 row. Nothing depends o
 scratch directory.
 
 1. `git fetch && git rebase origin/dev`, `./dev build`.
-2. Read **Decisions** and confirm the maintainer has ruled. Do not start the sweep on the recommendation alone: D1
-   extends a rule `src/kama.l` wrote down (reserve, don't rename), and a fork against a written plan goes to the
-   maintainer first.
+2. Read **Decisions**. All four are RULED (see Status) — build what they say. A fork from them goes to the
+   maintainer first, as D1 extends a rule `src/kama.l` wrote down (reserve, don't rename).
 3. Land the red-first fixture (**Plan** step 1) and see it fail on Windows. It should also fail on the Linux box
    (`_LP64`, `errno`).
 4. Then the sweep, in the order in **Plan**.
@@ -59,18 +60,53 @@ includes every `extern` header, and every module's C includes it, so importing `
 in front of EVERY module's names. The set also moves with the SDK version and with each user's own
 `extern "<vendor.h>"`.
 
-**It is not Windows-only.** `_LP64` is predefined for `x86_64-linux-gnu` (checked here with `--target`), and kama
-identifiers may start with `_`. `errno` is a macro everywhere, and POSIX `<sys/stat.h>` makes `st_mtime` one. The
-POSIX lowercase set is not measured yet: take it on the Linux and macOS boxes with the same `-dM` command.
+**It is not Windows-only — MEASURED on macOS, 2026-09-17 at `0.9.383`** (aarch64-macos, Apple clang; the POSIX set
+this doc asked for).
+
+`clang -dM -E` over the FULL shipped header set (every `include/kama_*.h` a module can `extern`): **4,708 macros,
+1,933 without a leading `_`**, and **0 starting with `k_`** — D2's premise holds on this platform too, and
+`tools/check-c-names.sh` (**Plan** step 5) is what keeps it true.
+
+- **Lowercase object-like (~50), the ones that rewrite a name anywhere it appears:** `errno st_mtime st_atime
+  st_ctime st_birthtime s6_addr h_addr sa_handler sa_sigaction d_fileno math_errhandling ru_first ru_last
+  true false bool w_termsig w_coredump w_stopsig w_retcode w_stopval sv_onstack ifc_buf ifc_req ifr_addr ifr_mtu
+  ifr_flags ifr_data ifr_media ifr_metric ifr_phys …` (the `ifr_*` family is 18 of them).
+- **Lowercase function-like (~50), which fire only when a `(` follows:** `alloca offsetof major minor makedev
+  howmany bcopy bzero memcpy memmove memset memccpy strcpy strncpy strcat strncat strlcpy strlcat stpcpy stpncpy
+  htonl htons htonll ntohl ntohs ntohll isnan isinf isfinite isnormal signbit fpclassify isgreater isless
+  islessgreater isunordered sigaddset sigdelset sigemptyset sigfillset sigismember sigmask timeradd timersub
+  timerclear timercmp timerisset timevalcmp pthread_cleanup_push pthread_cleanup_pop`.
+- **566 leading-underscore macros a kama identifier could legally spell**, `_LP64` among them.
+
+**Per-position probe on macOS** (each program imports `std::fs`, so `kama_os.h` is in the TU):
+
+| position | probe | result |
+|---|---|---|
+| local | `int32 errno = 3;` | ❌ `illegal initializer (only variables can be initialized)` — `#define errno (*__error())` |
+| local | `int32 _LP64 = 3;` | ❌ |
+| struct field | `public int32 st_mtime;` | ❌ `expected ';' at end of declaration list`, **blamed on `<name>.gen.h`** |
+| enum payload field | `Circle(int32 s6_addr)` | ❌ |
+| control, no `std::` import | `int32 errno = 3;` | ✅ |
+| contract vtable slot | `fn int32 min();` through a handle | ✅ **here** — macOS's set has no `min` macro; Windows' does |
+| field / param named for a FUNCTION-like macro | `p.alloca`, `fn t(int32 strcpy)` | ✅ — no `(` follows, so it does not fire |
+| module `static`, type name, enum case, free fn | `errno`, `st_mtime`, `offsetof` | ✅ prefixed already |
+
+⚠️ **Two lessons for the red-first fixture.** The hostile set is PER PLATFORM — `near`/`far`/`min` break on Windows
+and not here, `errno`/`st_mtime`/`s6_addr`/`_LP64` break on both — so the fixture needs names from each platform's
+set to be red everywhere, and each box's green run is its own witness. And a function-like macro only fires where a
+`(` follows, so a field named `alloca` is fine while a contract slot named `min` is not: the fixture must CALL
+through the fn-pointer and vtable positions, not merely declare them.
+
+The Linux `-dM` set is still unmeasured; take it there (`_LP64` and `errno` are known to break).
 
 **Found this way:** `<iphlpapi.h>` defining `interface` broke every `std::net` program on Windows at `0.9.376` (fixed
 `0.9.379` by not including it). That is one instance; the class is this doc.
 
-## Decisions — the recommendation, for the maintainer
+## Decisions — RULED 2026-09-17 (each recommendation taken as written)
 
 ### D1. Mechanism: every name kama OWNS reaches C prefixed, and the declared C surface keeps its spelling
 
-**Recommended.** Types, functions, statics and enum cases already live in a kama-owned C namespace (`_F…`,
+**RULED.** Types, functions, statics and enum cases already live in a kama-owned C namespace (`_F…`,
 `std__…`), which is why they never broke. Extend that one rule to the remaining positions: fields, variant payload
 fields and union members, parameters, locals and bindings, and contract/vtable slot names. The positions that
 DECLARE C keep the C spelling, because C code on the other side depends on it: `extern fn` names, `type extern
@@ -106,7 +142,7 @@ Rejected, with the measured reason:
 
 ### D2. Spelling: the prefix `k_`
 
-**Recommended: `k_<name>`** (`near` → `k_near`, `_LP64` → `k__LP64`).
+**RULED: `k_<name>`** (`near` → `k_near`, `_LP64` → `k__LP64`).
 - It must not start with `_` + capital or `__`. That is C's implementation namespace, where system headers live:
   `_LP64` is a real predefined macro, so an `_L` prefix would collide for a local named `P64`.
 - **Measured on Windows: 0 of 21,748 macros start with `k_`.** Nothing kama emits starts with `k_` today (0 hits in
@@ -118,14 +154,14 @@ Rejected, with the measured reason:
 
 ### D3. `expose fn` parameter names in the host header
 
-**Recommended: keep the kama spelling in the published header** and prefix them in the implementation C. Parameter
+**RULED: keep the kama spelling in the published header** and prefix them in the implementation C. Parameter
 names in a C prototype are not ABI and may differ from the definition, and the header is documentation for the host
 author, compiled in the HOST's macro environment, which kama cannot see. A collision there is part of the declared
 C surface, like an `expose` field. Record that residual in SPEC *Exposing to a host*.
 
 ### D3b. Every prefixed name maps back to exactly one kama name, and the COMPILER owns the mapping
 
-**Recommended, and a requirement rather than a nicety.** KR-32 (the debugger) has to turn `k_near` back into `near`
+**RULED, and a requirement rather than a nicety.** KR-32 (the debugger) has to turn `k_near` back into `near`
 for locals, the call stack and watch expressions, because those come from the debug info and no LLDB formatter can
 rewrite them — a name layer in the VS Code extension does it. That layer must not re-implement the mangling in
 JavaScript, where it would drift from the emitter. So: keep the mangling reversible (one kama name per C name, with
@@ -136,7 +172,7 @@ KR-32's first part, but do not ship a mangling KR-32 cannot reverse.
 
 ### D4. Keep reserving C's keywords in the lexer
 
-**Recommended: keep `c_reserved` as is.** After D1 only the declared-C positions still need it, so relaxing it for
+**RULED: keep `c_reserved` as is.** After D1 only the declared-C positions still need it, so relaxing it for
 kama-owned positions would become possible and source-compatible at any time. It is **genuinely optional** (nobody
 needs a local named `switch`), and one lexer rule for every position is simpler than two. Rewrite the `kama.l`
 comment to say this, so the old "reserve, don't rename" rationale does not read as contradicted.
