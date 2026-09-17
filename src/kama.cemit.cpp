@@ -6895,10 +6895,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // one (no fields, e.g. GlobalAllocator). A stateful `Owned<T, A>` needs the handle,
                             // so require the placement form (else the block would leak on a no-op deallocate).
                             if (!placed) {
-                                std::string ba = boxAllocatorArg(ty);
-                                if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
-                                    unsupported(("this box's allocator `" + ba + "` is stateful — construct it with "
-                                                 "`new(allocator: …) T(...)`, not a bare `new`").c_str(), n->line);
+                                const std::string why = bareNewRefusal(boxAllocatorArg(ty), "new", "T");
+                                if (!why.empty()) unsupported(why.c_str(), n->line);
                             } else {
                                 // The box's declared allocator type must match the `new(allocator: …)` handle —
                                 // there is no inference axis; spell it (e.g. `Shared<T, BumpAllocator>`).
@@ -19024,6 +19022,18 @@ std::string CEmitter::boxAllocatorArg(const std::string& ty)
     return "";
 }
 
+// A bare `new`/`try new` takes its block from the global allocator (the funnel), and the box releases it through its
+// own `A` — so the two meet only when `A` IS `GlobalAllocator`. Any other `A` is refused and told the placement
+// form, stateless or not: a field-less custom allocator used to pass here, and its box freed through `A` a block
+// the funnel had allocated (measured: 0 allocations and 2 frees through `A` for one `Shared`), which a declared
+// `@globalAllocator` turns from latent into freeing pool memory elsewhere. "" when the bare form is fine.
+std::string CEmitter::bareNewRefusal(const std::string& boxAlloc, const std::string& verb, const std::string& what)
+{
+    if (boxAlloc.empty() || boxAlloc == "GlobalAllocator") return "";
+    return "this box releases through its allocator `" + boxAlloc + "`, but a bare `" + verb + "` draws from the global "
+           "allocator — construct it with `" + verb + "(allocator: …) " + what + "(...)`";
+}
+
 bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line, const char* verb)
 {
     const std::string V(verb);   // "new" / "try new" — the advice must name the verb the user wrote
@@ -19040,8 +19050,7 @@ bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, 
                 : "the box's allocator type `" + allocType + "` does not match the `" + V + "(allocator: …)` "
                   "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), line);
     } else if (boxStateful) {
-        unsupported(("this box's allocator `" + allocType + "` is stateful — construct it with "
-                     "`" + V + "(allocator: …) T(...)`, not a bare `" + V + "`").c_str(), line);
+        unsupported(bareNewRefusal(allocType, verb, "T").c_str(), line);
     }
     return boxStateful;   // a matched, non-Global placement drives the `_ALLOC_` emission path
 }
@@ -23852,10 +23861,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
         bool placed = !pa.second.empty();
         if (!placed) {   // bare `new` into a stateful-allocator box leaks — require the placement form
-            std::string ba = boxAllocatorArg(targetCType);
-            if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
-                return reject("this box's allocator `" + ba + "` is stateful — construct it with "
-                              "`new(allocator: …) T(...)`, not a bare `new`");
+            const std::string why = bareNewRefusal(boxAllocatorArg(targetCType), "new", "T");
+            if (!why.empty()) return reject(why);
         } else {
             std::string boxA = boxAllocatorArg(targetCType);   // declared box allocator must match the handle
             if (!boxA.empty() && boxA != pa.second)
@@ -31189,12 +31196,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
     bool placed = !pa.second.empty();
     if (!placed) {
-        std::string ba = boxAllocatorArg(S);
-        if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty()) {
-            unsupported(("this box's allocator `" + ba + "` is stateful — construct it with "
-                         "`new(allocator: …) T(...)`, not a bare `new`").c_str(), srcLine);
-            return "";
-        }
+        const std::string why = bareNewRefusal(boxAllocatorArg(S), "new", "T");
+        if (!why.empty()) { unsupported(why.c_str(), srcLine); return ""; }
     } else {
         std::string boxA = boxAllocatorArg(S);   // no inference axis — the declared box-A must match the handle
         if (!boxA.empty() && boxA != pa.second) {
@@ -31373,11 +31376,8 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     bool placed = !pa.second.empty();
     std::string boxA = boxAllocatorArg(S);
     if (!placed) {
-        if (!boxA.empty() && _classes.count(boxA) && !_classes[boxA].fields.empty()) {
-            unsupported(("this box's allocator `" + boxA + "` is stateful — construct it with "
-                         "`try new(allocator: …) " + disp + "(...)`, not a bare `try new`").c_str(), srcLine);
-            return "";
-        }
+        const std::string why = bareNewRefusal(boxA, "try new", disp);
+        if (!why.empty()) { unsupported(why.c_str(), srcLine); return ""; }
     } else if (!boxA.empty() && boxA != pa.second) {   // no inference axis — the declared box-A must match
         unsupported(("the box's allocator type `" + boxA + "` does not match the `try new(allocator: …)` "
                      "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), srcLine);

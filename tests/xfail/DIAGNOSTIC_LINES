@@ -635,6 +635,7 @@ new_arg_iface_nonimpl	new_arg_iface_nonimpl.kama:5
 new_arg_marker	new_arg_marker.kama:4
 new_arg_ref	new_arg_ref.kama:4
 new_bare_stateful	new_bare_stateful.kama:5
+new_bare_stateless_custom	new_bare_stateless_custom.kama:11
 new_dot_fallible_bad_type	new_dot_fallible_bad_type.kama:18
 new_plain_value	new_plain_value.kama:3
 new_ret_abstract	new_ret_abstract.kama:2 new_ret_abstract.kama:3

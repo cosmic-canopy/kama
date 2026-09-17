@@ -1,0 +1,13 @@
+// A bare `new` draws from the global allocator, and the box releases through its own `A` — which meet only when
+// `A` IS `GlobalAllocator`. A field-less custom allocator used to pass: this `Shared` took its block and control
+// block from the funnel and freed both through `Counting` (0 allocations, 2 frees).
+type value Counting implements Allocator {
+    public default ctor make() { return this; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
+fn int32 main() {
+    Shared<Box, Counting> s = new Box.make(v: 7);
+    return s.v;
+}

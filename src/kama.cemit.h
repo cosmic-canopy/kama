@@ -2228,6 +2228,7 @@ private:
     // Does this `new` reach the system heap, or storage the program already owns? The no-heap gate asks
     // before refusing the verb — see the definition for why the verb was the wrong question.
     bool newDrawsFromHeap(ObjectCreationNode* oc) const;
+    std::string bareNewRefusal(const std::string& boxAlloc, const std::string& verb, const std::string& what);
     // The allocator type-arg of an `Owned<T, A>` box instance (its last generic arg); "" if `ty` is not an
     // `Owned` instance. Used to reject a bare `new` into a STATEFUL-allocator box (which would leak — the
     // block is malloc'd but the box's no-op `deallocate` never frees it).

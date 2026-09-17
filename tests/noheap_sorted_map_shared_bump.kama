@@ -1,0 +1,21 @@
+// Two boxes used to ignore the allocator they name: a `SortedMap`'s root came from `GlobalAllocator` whatever its
+// `A`, and so did a `Shared`'s control block. Both now draw from `A`, so a whole B-tree and a shared handle over a
+// bump allocator live in storage the program owns — and a `@noheap` region may build and drop them. Before, the
+// root's `new` alone made `SortedMap.withAllocator` a heap allocation here.
+import { std::collections::SortedMap, std::collections::BumpAllocator };
+type value Point implements Sendable { public int32 x = 0; public ctor at(int32 x) { this.x = x; } }
+@noheap fn int32 tick(BumpAllocator bump) {
+    SortedMap<int32, int32, BumpAllocator> m = SortedMap.withAllocator(allocator: bump);
+    m.put(key: 2, value: 20);
+    m.put(key: 1, value: 10);
+    Shared<Point, BumpAllocator> s = new(allocator: bump) Point.at(x: 7);
+    Shared<Point, BumpAllocator> t = s;                    // a retain on the arena-backed control block
+    return match (m.get(key: 1)) { case Some(value: v): v + t.x; case None: 0; };   // 10 + 7
+}
+unsafe fn int32 run() {
+    InlineArray<uint8>#(8192) store = [0ui8; 8192];
+    isize used = 0;
+    BumpAllocator bump = BumpAllocator.make(buffer: addr(of: store[0]), offset: addr(of: used), capacity: 8192);
+    return tick(bump: bump);
+}
+fn int32 main() { return run(); }

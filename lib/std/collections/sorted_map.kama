@@ -587,11 +587,9 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
                    Serializable when [K: Serializable, V: Serializable],
                    Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>],
                    Sendable when [K: Sendable, V: Sendable, A: Sendable] {
-    // The ROOT box is drawn from `GlobalAllocator` (the `Owned`'s A defaults to Global), independent of
-    // the node's own `A`: a bare `new` into a stateless-allocator box is allowed for any pointee A and
-    // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement
-    // `new(allocator:)` sites in BTreeNode), so all but this one root box lives in the arena.
-    Owned<BTreeNode<K,V,A>> root;
+    // Every node box, the root included, is drawn from `A` through a placement `new(allocator:)`, so the whole tree
+    // lives in the allocator it names. Each ctor assigns `alloc` before it builds the root from it.
+    Owned<BTreeNode<K,V,A>, A> root;
     isize len = 0; uint32 mods = 0;
     A alloc;                                            // the allocator the tree's nodes + arrays draw from
 
@@ -600,7 +598,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // zero-inits `len`/`mods`, default-fills `alloc`, and leaves the owning `root` for us to assign — the
     // M8d.1 completeness gate REQUIRES `root` be set before return, which building it satisfies.
     public default ctor empty() when [A: default] {
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: this.alloc);
+        Owned<BTreeNode<K,V,A>, A> r = new(allocator: this.alloc) BTreeNode<K,V,A>.make(leaf: true, allocator: this.alloc);
         this.root = give r;
     }
 
@@ -608,7 +606,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // we set `alloc` from the real handle, then build the root from it — mirrors `PriorityQueue::withAllocator`.
     public ctor withAllocator(A allocator) {
         this.alloc = allocator;
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: allocator);
+        Owned<BTreeNode<K,V,A>, A> r = new(allocator: allocator) BTreeNode<K,V,A>.make(leaf: true, allocator: allocator);
         this.root = give r;
     }
 
