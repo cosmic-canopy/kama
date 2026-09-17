@@ -21,11 +21,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "check-stats: FAIL — $1" >&2; shift; [ $# -eq 0 ] || sed 's/^/  /' "$@" >&2; exit 1; }
 
-# `jget <file> <dotted.path>`: read one number out of the --json envelope, without a JSON dependency.
-jget() { python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
-for k in sys.argv[2].split("."): d = d[int(k)] if k.isdigit() else d[k]   # a digit indexes an array
-print(d)' "$1" "$2"; }
+# `jget <file> <section>.<key>` (or `<section>.0.<key>`, the first element of an array section): read one number
+# out of the --json envelope with sed, without a JSON dependency. Every section is a flat object of numbers, which
+# is all this needs. (It was python3, which a Windows msys2 shell does not have, so the guard never ran there.)
+jget() {
+    sed "s/.*\"${2%%.*}\":\[*{\([^}]*\)}.*/\1/" "$1" | tr , '\n' | sed -n "s/^\"${2##*.}\"://p"
+}
 
 # ---- 1. lines, counted by hand ---------------------------------------------------------------------
 # 14 lines exactly. Hand tally, which is the whole point of this fixture:

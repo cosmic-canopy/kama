@@ -23,7 +23,9 @@ trap 'rm -rf "$tmp"' EXIT
 fail() { echo "check-alloc-funnel: FAIL — $*" >&2; exit 1; }
 
 NAMES='malloc|calloc|realloc|free|strdup|_strdup|strndup|aligned_alloc|_aligned_malloc|_aligned_free|posix_memalign'
-CALL="(^|[^A-Za-z0-9_.>])($NAMES)[[:space:]]*\\("
+# `[(]`, not `\(`: the pattern reaches awk through `-v`, which processes escapes, and gawk turns `\(` into a bare `(`
+# — an unbalanced regex that is fatal (mawk keeps `\(`, so it passed on Linux and failed on Windows' msys2 gawk).
+CALL="(^|[^A-Za-z0-9_.>])($NAMES)[[:space:]]*[(]"
 
 # Print `file:line: text` for every call to a C allocator in C/kama source, `//` comments stripped. The funnel's
 # own block in kama_runtime.h (from its banner to `kama_copy`) is the one exemption.
