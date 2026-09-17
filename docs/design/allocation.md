@@ -126,8 +126,7 @@ The decisions that are specific to this campaign, made by the maintainer on
 
 Still open, to be decided and written down — in this order, because each one narrows the next:
 
-1. **What `--no-heap` promises — RECOMMENDED 2026-09-17, awaiting the maintainer's yes (the first thing the
-   KR-49 session confirms).** *One meaning for both spellings: the region, or the program, never reaches the
+1. ~~What `--no-heap` promises~~ — **DECIDED 2026-09-17 by the maintainer, as recommended below.** *One meaning for both spellings: the region, or the program, never reaches the
    SYSTEM heap.* This is not a new rule — it is what both ALREADY mean, and the question as first posed ("`@noheap`
    = never allocates, `--no-heap` = never reaches the system heap; the flag means the first today") was wrong about
    the code. Measured at `0.9.369`: `tests/noheap_new_bump.kama` is a `@noheap fn` that places a `new` and grows a
@@ -408,7 +407,7 @@ every free in the corpus returned its exact size and alignment.
 
 A program replaces the two primitives, not the eleven families that used to call libc.
 
-**DECIDED (2026-09-16): a declaration** — e.g. `@globalAllocator type value Tlsf implements Allocator { … }`, at
+**DECIDED (2026-09-16): a declaration** — e.g. `@globalAllocator type resource Tlsf implements Allocator { … }`, at
 most one per program; the compiler emits `kama_alloc`/`kama_free` against it. Explicit and greppable (GOALS #5);
 the compiler can refuse two, and refuse a stateful one with no way to reach its state. **The reason it wins is
 `--no-heap`:** a declaration has a BODY the flag can walk, so a pool over storage the program owns is *proven*
