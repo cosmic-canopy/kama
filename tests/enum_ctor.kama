@@ -1,0 +1,17 @@
+// A named `ctor` on a `type enum` — generic, tagged and payload-less. An infallible one lowered to a `void`
+// C function with its `return` dropped until 0.9.373, which clang refused at the call site.
+type enum Box<T> {
+    Full(T item), Empty;
+    public ctor nothing() { return Box::Empty; }
+    public ctor holding(T item) { return Box::Full(item: item); }
+    public const fn int32 n() { return match (this) { case Full(item: i): 1; case Empty: 0; }; }
+}
+type enum Color { Red, Green; public ctor fav() { return Color::Green; } }
+fn int32 main() {
+    Box<int32> a = Box.holding(item: 5);
+    Box<int32> b = Box::<int32>.nothing();
+    Color c = Color.fav();
+    int32 k = 0;
+    if (c == Color::Green) { k = 100; }
+    return a.n() * 10 + b.n() + k;   // 110
+}

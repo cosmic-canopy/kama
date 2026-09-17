@@ -1,0 +1,6 @@
+// A fallible ctor on an ENUM returns `Result<…, E>`, as on a type: a failure carries why. It went unchecked.
+type enum Door {
+    Open, Shut;
+    public ctor Optional<Door> parse(int32 n) { if (n == 0) { return Optional::Some(value: Door::Open); } return Optional::None; }
+}
+fn int32 main() { return 0; }

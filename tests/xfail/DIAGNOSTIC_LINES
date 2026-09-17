@@ -272,6 +272,7 @@ enum_bare_spelling	enum_bare_spelling.kama:4
 enum_boundary_no_width	enum_boundary_no_width.kama:2
 enum_boundary_payload	enum_boundary_payload.kama:2
 enum_contract_method_not_public	enum_contract_method_not_public.kama:5
+enum_ctor_optional	enum_ctor_optional.kama:4
 enum_extends	enum_extends.kama:3
 enum_extern_and_expose	enum_extern_and_expose.kama:2
 enum_field	enum_field.kama:4
@@ -371,6 +372,8 @@ foreign_entry_static_read	foreign_entry_static_read.kama:10
 foreign_entry_static_transitive	foreign_entry_static_transitive.kama:7
 foreign_entry_via_extern_agg	foreign_entry_via_extern_agg.kama:15
 foreign_entry_via_fnptr_bind	foreign_entry_via_fnptr_bind.kama:7
+friend_enum_nongranted	friend_enum_nongranted.kama:8
+friend_enum_unknown	friend_enum_unknown.kama:2
 friend_generic_arity	friend_generic_arity.kama:9
 friend_generic_member_typo	friend_generic_member_typo.kama:9
 friend_generic_sibling	friend_generic_sibling.kama:18

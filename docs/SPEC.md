@@ -4561,7 +4561,8 @@ type enum IoError : uint8 implements Error {
 The `;` separating variants from members is **mandatory**, and it is what makes the body unambiguous: a
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->
-they satisfy a contract — but **not a field or a destructor** — its layout is its tag plus its
+they satisfy a contract — and named `ctor`s and `friend` grants, as a type does <!-- test: enum_ctor, friend_enum --> <!-- xfail: friend_enum_nongranted, friend_enum_unknown, enum_ctor_optional -->
+— but **not a field or a destructor** — its layout is its tag plus its
 variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Members never change
 what an enum IS in C: a payload-less enum stays its integer (`typedef int32_t Color`), and its methods take it
 by value (`bool Color__isWarm(Color self)`), the way a `type intrinsic` method takes a primitive; a contract

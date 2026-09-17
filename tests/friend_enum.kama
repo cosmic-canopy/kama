@@ -1,0 +1,45 @@
+// `friend` on a `type enum`. The grants parsed and were silently dropped until 0.9.373 (collectEnumConformances
+// looked at fields, destructors and methods only), so a private enum member stayed refused to the very accessor
+// its grant named. Member visibility is per TYPE: the free function below is in the same file and still needs
+// its grant (tests/xfail/friend_enum_nongranted). Covers a tagged enum, a payload-less one and a generic one,
+// granted to a free function, a type and a `Type::method`.
+type enum Shape {
+    Circle(int32 r),
+    Square(int32 side);
+    friend area[scale];
+    friend Canvas[scale, unit];
+    friend Printer::width[unit];
+    private const fn int32 scale() { return match (this) { case Circle(r: r): 3 * r * r; case Square(side: s): s * s; }; }
+    private ctor unit() { return Shape::Square(side: 1); }
+}
+
+type enum Level { Low, High; friend area[weight]; private const fn int32 weight() { return match (this) { case Low: 1; case High: 10; }; } }
+
+type enum Box<T> { Full(T item), Empty; friend area[peek]; private const fn bool peek() { return match (this) { case Full(item: i): true; case Empty: false; }; } }
+
+fn int32 area(const ref Shape s) {
+    Level l = Level::High;
+    Box<int32> b = Box::Full(item: 4);
+    int32 bonus = 0;
+    if (b.peek()) { bonus = 1; }
+    return s.scale() + l.weight() + bonus;            // 12 + 10 + 1
+}
+
+type resource Canvas {
+    int32 total = 0;
+    public ctor make() { this.total = 0; }
+    public fn int32 paint() { Shape u = Shape.unit(); return u.scale(); }   // 1
+}
+
+type value Printer {
+    int32 n;
+    public ctor make() { this.n = 0; }
+    public fn int32 width() { Shape u = Shape.unit(); return match (u) { case Circle(r: r): 0; case Square(side: s): s; }; }   // 1
+}
+
+fn int32 main() {
+    Shape c = Shape::Square(side: 2);
+    Canvas cv = Canvas.make();
+    Printer p = Printer.make();
+    return area(s: ref c) + cv.paint() + p.width();   // 4 + 10 + 1 + 1 + 1 = 17
+}

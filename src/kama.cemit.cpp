@@ -18178,6 +18178,34 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
     // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
     mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
     mi.isCtor       = md->isCtor;
+    // The rule collectClasses holds a type's ctors to: an infallible ctor writes no return type, a fallible
+    // one writes `Result<…, E>` and never `Optional` — a failure carries WHY. An enum's ctor went unchecked,
+    // so `ctor Optional<E> parse(…)` was accepted here and refused on a `type value`. ENUMS only: this also
+    // serves `type intrinsic` blocks, whose ctor spells the primitive it returns (`ctor int8 fromWide`).
+    const bool isEnumOwner = _enumDeclNodes.count(tkey) != 0;
+    if (isEnumOwner && md->isCtor && md->returnType) {
+        const std::string rt = md->returnType->value ? *md->returnType->value : "";
+        if (rt != "Result")
+            unsupported(("a `ctor` with a return type must be `Result<…, E>` (fallible) — "
+                         "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
+    }
+    // ...and an INFALLIBLE one returns the enum itself, as a type's does. With no return type written it
+    // lowered to a `void` function and its `return` value was dropped, which clang then refused at the caller.
+    // A generic enum's carries its own parameters (`Box<T>`), so each instance substitutes them.
+    if (isEnumOwner && md->isCtor && !md->returnType && contract.empty()) {
+        auto ed = _enumDeclNodes.find(tkey);
+        if (ed != _enumDeclNodes.end() && ed->second->identifier) {
+            EnumDeclarationNode* e = ed->second;
+            auto rt = synthClone(*e->identifier);
+            if (e->typeParams && !e->typeParams->empty()) {
+                if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic-ctor>"));
+                rt->genericArgs = std::make_shared<IdentifierList>();
+                for (auto& tp : *e->typeParams) if (tp) rt->genericArgs->push_back(synthId(*tp));
+                if (!rt->genericArgs->empty()) rt->genericArg = (*rt->genericArgs)[0];
+            }
+            mi.returnType = rt;
+        }
+    }
     mi.fromContract = contract;             // an injected method, not part of the type's own API
     // A `type intrinsic` block's methods belong to its contract, so they are public. An enum's OWN members
     // follow the member rule every other kind follows — private unless written `public` — which they did
@@ -18295,6 +18323,21 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                     else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
                         checkWhenParams(md->whenParams, ed->typeParams, bare, md->line);
                 }
+            // `friend` grants, captured raw as collectClasses captures a class's, for resolveFriends to resolve
+            // (it walks `_classes` and `_genericTypes`, where an enum's ClassInfo lives). They parsed and were
+            // then DROPPED — this loop looked at fields, destructors and methods — so a grant on an enum was
+            // silently inert: its private member stayed refused to the very accessor it named, and a typo'd
+            // accessor was accepted. Found building `std::net` (KR-6), whose `IpAddr` grants its sockets.
+            std::vector<RawFriendGrant> enumGrants;
+            if (ed->members)
+                for (auto& m : *ed->members)
+                    if (auto* fg = dynamic_cast<FriendGrantNode*>(m.get())) {
+                        RawFriendGrant rg; rg.accessor = fg->accessor; rg.line = fg->line;
+                        if (fg->members)                                  // null => `[...]` (all privates)
+                            for (auto& fm : *fg->members)
+                                if (fm && fm->value) rg.members.insert(*fm->value);
+                        enumGrants.push_back(rg);
+                    }
             if (hasIfaces)
                 for (auto& i : *ifaceNodes) if (i) checkWhenParams(i->whenParams, ed->typeParams, bare, ed->line);
 
@@ -18308,6 +18351,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 auto tt = _genericTypes.find(name);
                 if (tt == _genericTypes.end()) continue;   // errored earlier — already diagnosed
                 ClassInfo& tmpl = tt->second;
+                for (auto& rg : enumGrants) tmpl.friendGrantsRaw.push_back(rg);
                 if (ed->members)
                     for (auto& m : *ed->members) {
                         auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
@@ -18350,6 +18394,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 ci = _classes.find(name);
             }
             ClassInfo& eci = ci->second;
+            for (auto& rg : enumGrants) eci.friendGrantsRaw.push_back(rg);
             // A prelude enum has no home module, so its method bodies are emitted `static inline` into the
             // header — which means its PROTOTYPES must be static too, or the C compiler sees a static
             // declaration following a non-static one. `preludeStatic` is what drives that linkage.
@@ -18395,7 +18440,10 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
     for (auto& m : *ed->members) {
         auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
         if (!md || !md->name || !md->name->value || !md->body) continue;
-        std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
+        // The return type off the method table, not the node: an infallible ctor's is synthesized there.
+        auto mit = eci.methods.find(*md->name->value);
+        SharedIdentifier rtype = (mit != eci.methods.end()) ? mit->second.returnType : md->returnType;
+        std::string ret = cType(rtype) + placeRetSuffix(md->isRef, md->isConstRef);
         line(md->line);
         _returnIsPlace = md->isRef;
         _returnIsConstPlace = md->isConstRef;

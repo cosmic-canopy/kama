@@ -1,0 +1,9 @@
+// A grant on an ENUM opens only the members it names, exactly as on a type (friend_nongranted).
+type enum Door {
+    Open, Shut;
+    friend inspect[isOpen];
+    private const fn bool isOpen() { return match (this) { case Open: true; case Shut: false; }; }
+    private const fn int32 code() { return 7; }
+}
+fn int32 inspect(Door d) { return d.code(); }   // ERROR: code is not in the grant
+fn int32 main() { return inspect(d: Door::Open); }

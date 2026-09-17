@@ -1,0 +1,1 @@
+a `ctor` with a return type must be `Result<…, E>`

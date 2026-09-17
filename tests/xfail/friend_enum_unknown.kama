@@ -1,0 +1,3 @@
+// A grant on an ENUM must name a real accessor. Enum grants were dropped unread, so this typo compiled.
+type enum Door { Open, Shut; friend Nonexistent[isOpen]; private const fn bool isOpen() { return true; } }
+fn int32 main() { Door d = Door::Open; return 0; }
