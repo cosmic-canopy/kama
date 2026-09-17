@@ -448,6 +448,28 @@ is why this is not spelled `type value`). Construction: its `default ctor` must 
 (the module-static rule — no startup hook, no init-order fiasco, the MCU shape), since the instance is a C global.
 At most one per program; a second is an error naming both.
 
+**Contention, and per-isolate allocators (asked 2026-09-17).** One instance does not mean one lock. The DEFAULT is
+the platform `malloc`, which already keeps per-thread caches, so nothing changes there. A declared pool is as
+contended as it is written: a single `Atomic` compare-exchange free list is lock-free but bounces one shared word
+between cores under heavy concurrent allocation. The scalable shape needs NO new language — kama's two storage
+seams are exactly the two tiers of a tcache/mimalloc allocator: a module `static` is per-isolate by construction,
+so it holds each isolate's uncontended cache, and the singleton's `Atomic` fields hold the shared backing a cache
+refills from and a cross-isolate free returns to. **Open design point for KR-49: there is no isolate-exit hook**, so
+a dying isolate's cached blocks are stranded unless the cache is bounded or drained — decide which before a
+reference pool ships. (A C thread kama did not create sees statics at their initialiser, so it simply starts with
+an empty cache — safe, provided the empty-cache path goes to the shared tier.)
+
+A PER-ISOLATE ALLOCATOR is already expressible, explicitly: everything that takes `A` (containers, `Owned<T, A>`,
+`Shared<T, A>`, `new(allocator:)`) can draw from an arena per worker, and `Sendable` keeps such a block from
+crossing — measured at `0.9.369`: spawning an `Owned<P, BumpAllocator>` is refused because `BumpAllocator` (for `A`)
+is not `Sendable`, while `Owned<P>` builds. **Recommended NON-GOAL: a per-isolate override of the DEFAULT allocator.**
+What it would redirect is exactly what crosses isolates by construction — a spawn bundle allocated in the parent is
+freed in the child, strings and boxes travel over channels, a channel's ring is shared by both ends — so each
+would be freed into the wrong allocator, the hazard the singleton exists to prevent; and it would make allocation
+implicit (GOALS #5). What remains outside explicit per-isolate allocation is what has no `A` (`string`,
+`Formatter`, `Owned<Error>`, runtime internals); if that ever matters, the answer is giving those an `A` (see
+"`string` has no allocator"), not an implicit override.
+
 **Three things the session must PROBE before building, not assume:**
 - **KR-63 first.** A `type value` holding an `Atomic<T>` builds today and COPIES the cell (measured at `0.9.369`:
   `Holder k = h; k.a.store(5)` leaves `h.a` at 1), because the value check tests `destructible` and skips the
