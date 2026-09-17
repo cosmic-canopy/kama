@@ -735,15 +735,13 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
-- **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
-  as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr`. ⚠️ **Not without touching match
-  sites** (probed `0.9.365`): `match` is exhaustive, so every `match` on an `IpAddr` fails to compile until
-  it handles `V6` — a source break, pre-1.0, in-tree only (`addr.kama`, `net_addr_ctor`, `net_resolve`; no
-  external user matches on it). The harder half is behaviour, not the seam: every socket and `resolve` are
-  `AF_INET`, and `getaddrinfo("localhost")` unfiltered returns `::1` FIRST on macOS, so lifting the filter
-  sends `resolveOne("localhost")` to an address a `127.0.0.1` listener never hears — connect order and
-  dual-stack listening need a ruling before the seam changes. Multicast join/leave (`IP_ADD_MEMBERSHIP` /
-  `IPV6_JOIN_GROUP`) is unbuilt — broadcast covers LAN discovery today.
+- **`std::net` IPv6 + multicast on Windows (KR-64).** IPv6 and multicast shipped at `0.9.372`–`0.9.376`, written for Winsock
+  and POSIX in one shared address seam and verified on macOS and Linux only. What Windows alone can show:
+  `IPV6_V6ONLY` is ON by default there, so `bind("::")` dual-stack depends on the seam's explicit `0`;
+  `if_nametoindex` needs iphlpapi (linked for a Windows target) and takes the NDIS name, and the fixture's
+  `loopback_0` is a guess; whether V6 loopback multicast delivers (Linux's `lo` does not, macOS's does) decides
+  `tests/net_udp_multicast`'s `v6LoopbackDelivers` gate there. Run `net_ipv6`, `net_resolve` and
+  `net_udp_multicast` natively and fix what they find.
 - **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
   only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
   for a contract destination, correctly (a contract admits every kind by design, which is what makes
