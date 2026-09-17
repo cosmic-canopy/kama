@@ -1781,7 +1781,7 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-### The allocation campaign (KR-48 – KR-50, KR-58) — opened 2026-09-12
+### The allocation campaign (KR-49 – KR-50, KR-58) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1797,17 +1797,12 @@ both are "judge what is actually reached", and they should share one reach walk.
 read from the emitted C, and C the compiler cannot read declares itself with `@heap extern fn`. Its record is
 SPEC *No-heap subset*, docs/targets.md (the section-GC contract) and the design doc's §1.
 
-**Step 2 shipped on Linux + wasm, awaiting Windows (KR-48)** (`0.9.366`–`0.9.369`). One funnel, `kama_alloc(n,
-align)`/`kama_free(p, n, align)`, carrying each block's LAYOUT because the `Allocator` contract promises it
-(`allocate(bytes, align)`/`deallocate(pointer, bytes, align)`); `tools/check-alloc-funnel.sh` keeps the C allocator
-inside it, and the san leg's `KAMA_ALLOC_CHECK` proves every release hands back its exact layout. The record is
-SPEC (*Allocator*, `sizeof(ptr:)`/`alignof(ptr:)`) and the design doc's §2. What is left is only to BUILD and RUN it
-on Windows: this campaign's machine has no Windows SDK headers, so the Windows branch of `kama_os.h` — every
-function the row lists — has not been compiled since it moved. `kama_runtime.h`'s Windows code (argv, program path,
-env, `_aligned_malloc`) does syntax-check for the x86_64 msvc and gnu targets. Expect, if anything breaks, a
-typo-class compile error in `kama_os.h`, not a design problem: every site there follows one of two patterns
-(`kama__sized_*` for a buffer whose size is not in hand at release, `kama_alloc`/`kama_free` with the layout
-otherwise), and both run on POSIX through argv/envp, pollers and dirs.
+**Step 2 shipped** (`0.9.366`–`0.9.369`). One funnel, `kama_alloc(n, align)`/`kama_free(p, n, align)`,
+carrying each block's LAYOUT because the `Allocator` contract promises it (`allocate(bytes, align)`/`deallocate(pointer,
+bytes, align)`); `tools/check-alloc-funnel.sh` keeps the C allocator inside it, and the san leg's `KAMA_ALLOC_CHECK`
+proves every release hands back its exact layout. The record is SPEC (*Allocator*, `sizeof(ptr:)`/`alignof(ptr:)`) and
+the design doc's §2. Verified on Linux, wasm and Windows (2026-09-17: the Windows branch of `kama_os.h` needed no
+change; two guards did, for msys2's gawk and its missing python3).
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That

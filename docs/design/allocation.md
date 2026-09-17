@@ -2,8 +2,8 @@
 
 **Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
 §5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth** (§2's prerequisite) at `0.9.366`, and **the layout
-funnel + an aligned `Allocator`** (KR-61) at `0.9.367`, and **the whole funnel** (§2) at `0.9.369` — on Linux and
-wasm. **KR-48 now waits only on a Windows build** (its row lists what has not compiled there). §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+funnel + an aligned `Allocator`** (KR-61) at `0.9.367`, and **the whole funnel** (§2, KR-48) at `0.9.369` — verified
+on Linux, wasm and Windows. §3–§4 not started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -62,20 +62,16 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
    on the rebased HEAD before building on it.
-2. **KR-48 on Windows** (the Windows box): `./dev test > log`, then `./dev check > log`. `./dev matrix` cannot
-   pass there (no podman/docker), and it does not need to: the Windows box verifies Windows only, and the san/wasm
-   legs already ran on Linux. A failure is most likely a compile error in the Windows branch of `kama_os.h`, which
-   this campaign could not build; every site follows one of two patterns (§2, "What moved at `0.9.369`"). Delete the
-   KR-48 row when it is green. **Already known (2026-09-17, Windows, `0.9.369+gf8f43471`):** `./dev build` is clean,
-   and `./dev fixture fs_readdir` / `fs_dirs` pass, so `kama__wpath`/`kama__wfree` and `kama_diropen` compile and
-   run. Still unexercised: the Winsock poller, `argv`/`envp`, `proc_spawn`, `kama_capture2`, `_aligned_malloc`.
+2. ~~**KR-48 on Windows**~~ — closed 2026-09-17: `./dev test` (2040 fixtures) and `./dev check` (72 guards) green at
+   `0.9.369` with no change to the Windows branch of `kama_os.h`. Two guards needed fixing for msys2 (gawk's `-v`
+   escapes, no `python3`); the san/wasm legs are the Linux box's and already ran there.
 3. **KR-49** — needs the maintainer's call on the meaning split above first (`--no-heap` = never reaches the
    SYSTEM heap). The replacement is a declaration; the funnel it delegates from now exists with its final
    signature, and `_heapSymbols` is seeded with exactly `kama_alloc`, `kama_alloc_zeroed`, `kama_free`.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
-(shipped `0.9.355`) → **KR-48** `kama_alloc`/`kama_free` → **KR-49**
+(shipped `0.9.355`) → ~~**KR-48** `kama_alloc`/`kama_free`~~ (shipped `0.9.369`) → **KR-49**
 replaceable global allocator → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
 land right after KR-47 "on the same walk", in view of tier 1 of the devirtualization ladder (KR-23); reading the
 emitter retired that plan, for the reasons at the top of this doc. One half of the premise survives and is worth
