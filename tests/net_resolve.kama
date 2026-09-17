@@ -56,6 +56,9 @@ fn int32 main() {
 
     // A NAME goes to the system resolver. `localhost` must come back, and as a loopback address.
     // Every answer is kept, of either family (macOS gives `::1` first, then `127.0.0.1`), and each is loopback.
+    // Whether `localhost` HAS a V6 answer is the host's hosts file, not kama: macOS maps `::1 localhost`, while
+    // Debian and Ubuntu map `::1` only to `ip6-localhost`, so there the name is V4 alone. Recorded for the dial below.
+    bool localhostV6 = false;
     match (resolve(host: "localhost", port: 9ui16)) {
         case Err(error: e): { }
         case Ok(value: list): {
@@ -64,6 +67,7 @@ fn int32 main() {
             while (i < list.length()) {
                 SocketAddr each = copy list[i];
                 if (!isLoopback(a: ref each) || each.port != 9ui16) { all = false; }
+                match (each.ip) { case V4(a: p, b: q, c: x, d: y): { } case V6(octets: o): { localhostV6 = true; } };
                 i = i + 1;
             }
             if (all) { r = r + 16; }
@@ -78,7 +82,9 @@ fn int32 main() {
     };
 
     // ...and the whole point: connect by name. A listener on 127.0.0.1 alone is reached although the resolver
-    // may put `::1` first — the localhost trap `connectHost` exists for — and one on ::1 alone is reached too.
+    // may put `::1` first — the localhost trap `connectHost` exists for — and one on ::1 alone is reached too,
+    // WHEN the name resolves to `::1` at all. Where it does not (Debian/Ubuntu, above) there is no V6 address to
+    // try, so the flag is owed only by a host that has one: requiring it there tested the hosts file, not kama.
     uint16 port = cast<uint16>(47661);
     match (TcpListener.bind(host: "127.0.0.1", port: port)) {
         case Err(error: e): { }
@@ -87,7 +93,7 @@ fn int32 main() {
     uint16 port6 = cast<uint16>(47662);
     match (TcpListener.bind(host: "::1", port: port6)) {
         case Err(error: e): { }
-        case Ok(value: listener): { if (dialName(port: port6)) { r = r + 128; } }
+        case Ok(value: listener): { if (!localhostV6 || dialName(port: port6)) { r = r + 128; } }
     };
 
     // `connect` takes numeric text only: a name is refused, not looked up behind the caller's back...
