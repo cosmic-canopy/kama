@@ -176,6 +176,10 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
         // rooted at `main` — which `--no-heap` now routinely does, since `main` is where a program owns
         // the container whose destructor frees.
         if (tok == "kama_main") { out += "main"; continue; }
+        // ...and the funnel's two entries into a `@globalAllocator` pool, which a no-heap chain passes through on its
+        // way into the pool's body. The reader declared against the contract, so the chain names its member.
+        if (tok == "kama__global_allocate")   { out += "GlobalHeap::allocate"; continue; }
+        if (tok == "kama__global_deallocate") { out += "GlobalHeap::deallocate"; continue; }
 
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
@@ -9544,11 +9548,24 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // passthrough on purpose: kama emits C, the C compiler lays the struct out, and a
                     // second source of truth in kama could only disagree with it per target.
                     readLayoutAttr(*at, ci.alignN, ci.packed, cd->line);
+                } else if (*at->name == "globalAllocator") {
+                    // The program's heap (SPEC *Global allocator*). Marked here, known before any body is
+                    // emitted — the no-heap facts recorded during emission depend on it — and judged against
+                    // the rest of its rules in checkGlobalAllocator, once fields and conformances exist.
+                    if (at->args && !at->args->empty())
+                        unsupported("`@globalAllocator` takes no arguments", cd->line);
+                    else if (cd->typeParams && !cd->typeParams->empty())
+                        unsupported(("`@globalAllocator` marks `" + *cd->name->value + "`, which is generic — the "
+                                     "program's heap is ONE instance, so it names one concrete type").c_str(), cd->line);
+                    else {
+                        ci.globalAllocator = true;
+                        if (_globalAllocator.empty()) _globalAllocator = ci.name;
+                    }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name
                                  + (*at->name == "linkName" ? "` here — `@linkName` names a C symbol, and only a "
                                     "`type expose value` has a host-visible name to fix"
-                                    : "` (expected `@generate`, `@align(N)` or `@packed`)")).c_str(), cd->line);
+                                    : "` (expected `@generate`, `@align(N)`, `@packed` or `@globalAllocator`)")).c_str(), cd->line);
                 }
             }
 
@@ -19412,6 +19429,24 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "#endif\n";
     if (externsHeader("kama_log.h"))
         *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
+    // `@globalAllocator`: THE heap — one object for the whole process, so one definition, here. Zero bytes (the
+    // module-static no-initializer rule; there is no hook to construct it before `main`), and not hosted-only: an
+    // MCU is the first program that wants one. The funnel reaches the pool through these two entries, which are
+    // also what the no-heap walk hangs every funnel use on (buildCallGraph). A malformed declaration is refused
+    // by checkGlobalAllocator, which runs before any C is compiled — so a missing member emits nothing here.
+    if (!_globalAllocator.empty()) {
+        const ClassInfo& gci = _classes[_globalAllocator];
+        auto a = gci.methods.find("allocate"), d = gci.methods.find("deallocate");
+        if (a != gci.methods.end() && d != gci.methods.end())
+            *_out << _globalAllocator << " kama_global_allocator = {0};\n"
+                  << "void* kama__global_allocate(size_t n, size_t align) {\n"
+                  << "    Optional_UnsafePtr o = " << a->second.cName << "(&kama_global_allocator, n, align);\n"
+                  << "    return o.tag == Optional_UnsafePtr_Some ? o.u.Some.value : 0;\n"
+                  << "}\n"
+                  << "void kama__global_deallocate(void* p, size_t n, size_t align) {\n"
+                  << "    " << d->second.cName << "(&kama_global_allocator, p, n, align);\n"
+                  << "}\n";
+    }
     // The detached-child reaper's park (kama_os.h, POSIX branch) — same one-definition rule: its
     // accessors are `static inline`, so a per-TU `static` park would defeat the cross-TU sweep.
     if (externsHeader("kama_os.h"))
@@ -25020,6 +25055,14 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
     // Checked BEFORE the record below as well as before the rejection: a probe body must not teach the
     // transitivity analysis that a function allocates, for the same reason it must not fail the build.
     if (_probingTemplate) return;
+    // With `@globalAllocator` declared, every site this gate sees draws from the funnel, and the funnel is no longer
+    // the system heap: it is the pool. So the site is an EDGE into the pool (buildCallGraph), and the pool's body
+    // decides — for `@noheap` as for `--no-heap`, over the same walk. (Starting a thread is not a site here; a
+    // borrowed `spawn` records nothing, and a moved one records only its bundle, which the funnel allocates.)
+    if (!_globalAllocator.empty()) {
+        if (!_currentFunc.empty() && !_funnelCallers.count(_currentFunc)) _funnelCallers[_currentFunc] = line;
+        return;
+    }
     // RECORD FIRST, GATE SECOND — and note the record is unconditional, taken whether or not this body
     // is `@noheap`. That is the whole point: the function that actually allocates is almost never the
     // annotated one, so the analysis needs the allocation facts for EVERY body, not just the gated ones.
@@ -25120,6 +25163,7 @@ void CEmitter::buildCallGraph()
 {
     const std::string& s = _emittedC;
     const size_t n = s.size();
+    const bool pool = !_globalAllocator.empty();   // `@globalAllocator`: the funnel is an edge, not a heap fact
     auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
     auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
     // A `#`-directive starts at a line's first non-blank char and runs to an unescaped newline.
@@ -25254,6 +25298,13 @@ void CEmitter::buildCallGraph()
             if (!member && afterType && (next == '=' || next == ';' || next == ',' || next == '['))
                 declared.insert(id);
             if (!member && id != b.name && defined.count(id)) refs.push_back(Ref{ id, line, next == '(' });
+            // With `@globalAllocator`, the funnel is the pool: a call to it is an edge into the pool's entry, not an
+            // allocation fact (see rejectIfNoHeap for the sites whose C calls a runtime helper instead).
+            const bool funnel = id == "kama_alloc" || id == "kama_alloc_zeroed" || id == "kama_free";
+            if (pool && !member && next == '(' && funnel) {
+                refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate" : "kama__global_allocate", line, true });
+                prevTok = id; i = e; continue;
+            }
             // A call to C marked `@heap` is an allocation fact for this body — the first one, unless emission
             // already recorded one with a better sentence (the gate names the construct; this names the symbol).
             if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
@@ -25280,6 +25331,8 @@ void CEmitter::buildCallGraph()
             prevTok = id;
             i = e;
         }
+        auto fc = _funnelCallers.find(b.name);   // a funnel use emission recorded (rejectIfNoHeap)
+        if (pool && fc != _funnelCallers.end()) refs.push_back(Ref{ "kama__global_allocate", fc->second, true });
         auto& out = _callEdges[b.name];
         const auto drops = _dropSiteLines.find(b.name);
         for (const Ref& r : refs) {
@@ -25555,6 +25608,119 @@ bool CEmitter::unitsUseOnPanic(const std::vector<SharedCompilationUnit>& units)
         }
     }
     return false;
+}
+
+// Does any unit declare `@globalAllocator`? Asked before the TU's first line is written, like unitsUseOnPanic and
+// for the same reason: the answer defines KAMA_GLOBAL_ALLOCATOR ahead of the runtime header, whose funnel then calls
+// the pool's entry (`extern` in every TU, defined in the entry TU — emitRuntimeSlotDefinitions).
+bool CEmitter::unitsDeclareGlobalAllocator(const std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* c = dynamic_cast<ClassDeclarationNode*>(decl.get()))
+                if (c->attributes && hasAttr(c->attributes, "globalAllocator")) return true;
+    }
+    return false;
+}
+
+// `@globalAllocator` — the rules a declaration must meet, whole-program, after emission (fields, conformances and
+// ctors are all known by then), and the one defect the no-heap walk cannot see from outside: a pool that reaches the
+// funnel is a pool that calls ITSELF. Refused in every build, not only a no-heap one, because it is not a question
+// of heap — the first allocation would recurse until the stack runs out.
+//
+// The instance is `<Pool> kama_global_allocator = {0};` — a C global, with no startup hook to run a constructor
+// before `main` (and none an MCU would have), so it begins as zero bytes and nothing else. Hence no ctor and no field
+// initializer: either would be a promise the program never keeps. Its fields follow the sharing-seams rule, because
+// every isolate calls into the same object: an `Atomic`, a deeply immutable value, raw storage (`UnsafePtr`), or an
+// `InlineArray`/`Simd` of scalars.
+void CEmitter::checkGlobalAllocator()
+{
+    std::vector<ClassInfo*> decls;
+    for (auto& kv : _classes) if (kv.second.globalAllocator) decls.push_back(&kv.second);
+    if (decls.empty()) return;
+    auto refuse = [&](ClassInfo* ci, const std::string& why, int line = 0) {
+        ScopedStr _cu(_collectingUnitPath, ci->declFile);   // whole-program pass: see diagFile()
+        unsupported(("`@globalAllocator` `" + ci->name + "` " + why).c_str(), line ? line : ci->declLine());
+    };
+    if (decls.size() > 1) {
+        refuse(decls[1], "is the program's second global allocator — `" + decls[0]->name + "` is already "
+               "declared, and a program has ONE heap");
+        return;
+    }
+    // Must be a `resource` — the heap is one object with identity, and a `value` would be copied — which needs no
+    // test of its own: `GlobalHeap` is `for resource`, so the conformance below already refuses any other kind.
+    ClassInfo* ci = decls[0];
+    bool implements = false;
+    for (auto& itf : ci->interfaces) if (itf == "GlobalHeap") { implements = true; break; }
+    if (!implements) { refuse(ci, "must declare `implements GlobalHeap` — the contract is what promises the funnel "
+                              "its `allocate`/`deallocate`"); return; }
+    if (!ci->ctors.empty()) {
+        refuse(ci, "declares a constructor, which would never run — the instance is a C global that starts as zero "
+               "bytes, before `main` and with no startup hook, so design its state to begin at zero");
+        return;
+    }
+    const NsCtx savedCtx = _nsCtx;
+    const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    enterClassCtx(*ci);
+    std::string bad;
+    int badLine = 0;   // the field's own line: that is where the author acts
+    for (auto& f : ci->fields) {
+        badLine = f.nameId ? f.nameId->line : 0;
+        if (f.initializer) {
+            bad = "initializes its field `" + f.name + "`, which would never run — the instance is a C global that "
+                  "starts as zero bytes, so design its state to begin at zero";
+            break;
+        }
+        const std::string fc = cType(f.type);
+        auto cls = _classes.find(fc);
+        bool storage = false;   // `InlineArray`/`Simd` of scalars: raw bytes, whose discipline is the pool's own
+        if (cls != _classes.end() && cls->second.isIntrinsicColl
+            && (cls->second.collKind == CollKind::Fixed || cls->second.collKind == CollKind::Simd)) {
+            auto co = _collections.find(fc);
+            const std::string elem = co != _collections.end() ? co->second.elemCType : "";
+            storage = !elem.empty() && isScalarPrimKey(primKeyOfCType(elem));
+        }
+        const bool shareable = storage || isAtomicClass(fc) || (!fc.empty() && fc.back() == '*')
+                            || (cls != _classes.end() && !cls->second.isIntrinsicColl && deeplyImmutable(fc));
+        if (!shareable) {
+            bad = "has a field `" + f.name + "` (of type `" + (f.type && f.type->value ? *f.type->value : fc) + "`) that every isolate would write without "
+                  "synchronization — a global allocator's fields are `Atomic`, deeply `immutable`, raw storage "
+                  "(`UnsafePtr`), or an `InlineArray`/`Simd` of scalars";
+            break;
+        }
+    }
+    _nsCtx = savedCtx; _typeSubst = savedSubst;
+    if (!bad.empty()) { refuse(ci, bad, badLine); return; }
+
+    // A pool that reaches the funnel. Breadth-first from its two entries for the shortest chain; with a
+    // declaration, every funnel use in the graph is an edge back into these entries (buildCallGraph).
+    for (const char* entry : { "kama__global_allocate", "kama__global_deallocate" }) {
+        std::map<std::string, std::string> parent;
+        std::vector<std::string> queue{ entry };
+        std::set<std::string> seen{ entry };
+        std::string hit;
+        for (size_t qi = 0; qi < queue.size() && hit.empty(); ++qi) {
+            auto it = _callEdges.find(queue[qi]);
+            if (it == _callEdges.end()) continue;
+            for (auto& e : it->second) {
+                if (e.first == "kama__global_allocate" || e.first == "kama__global_deallocate") {
+                    parent[e.first + "#"] = queue[qi]; hit = e.first + "#"; break;
+                }
+                if (seen.insert(e.first).second) { parent[e.first] = queue[qi]; queue.push_back(e.first); }
+            }
+        }
+        if (hit.empty()) continue;
+        std::vector<std::string> chain;
+        for (std::string n = hit; !n.empty(); n = (parent.count(n) ? parent[n] : std::string())) chain.push_back(n);
+        chain.front().pop_back();   // the `#` that told the revisit apart from the start
+        std::string path;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+        refuse(ci, "reaches the global allocator it implements, through " + path + " — which is itself, so the "
+               "first allocation would recurse without end; a pool draws from storage it owns");
+        return;
+    }
 }
 
 void CEmitter::checkForeignEntryStatics()
@@ -26649,7 +26815,10 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // Recorded, never rejected here. Routing it through `rejectIfNoHeap` would fire while the PRELUDE's own
     // body is being emitted, so every `--no-heap` build would fail pointing at a line in the prelude that
     // the author did not write. The fact belongs to the analysis; the diagnostic belongs at the call.
-    if (!_probingTemplate && owner.name == "GlobalAllocator" && memberName
+    //
+    // Only while the program declares no `@globalAllocator`. With one, `GlobalAllocator` is a handle onto the pool,
+    // and its body's `kama_alloc` call is an edge into it like any other funnel use (buildCallGraph).
+    if (!_probingTemplate && _globalAllocator.empty() && owner.name == "GlobalAllocator" && memberName
         && (std::string(memberName) == "allocate" || std::string(memberName) == "deallocate")
         && !_allocSites.count(cName))
         // No file/line, and this is now a CHOICE rather than a defence. It was written when a position
@@ -33951,6 +34120,8 @@ int CEmitter::emit(SharedCompilationUnit unit)
     // `lstat`/`getaddrinfo` in the same translation unit — eleven errors naming kama's header (consumer KB-25).
     if (unit && unit->codeDeclarationList && unitsUseOnPanic({unit}))
         *_out << "#define KAMA_ONPANIC 1\n";
+    if (unit && unit->codeDeclarationList && unitsDeclareGlobalAllocator({unit}))
+        *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";   // the funnel calls the declared pool — kama_runtime.h
     *_out << "#include \"kama_runtime.h\"\n";
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
@@ -33970,6 +34141,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
@@ -34006,6 +34178,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     *_out << "#ifndef " << guard << "\n#define " << guard << "\n";
     if (unitsUseOnPanic(units))   // see emit(): program-wide, since every TU includes this header
         *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h> (KB-25)
+    if (unitsDeclareGlobalAllocator(units))   // ...and the same for the funnel's implementation
+        *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
     *_out << "#include \"kama_runtime.h\"\n";
     emitIncludes(units);        // FFI #include directives (before any type decls)
     // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
@@ -34026,6 +34200,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)

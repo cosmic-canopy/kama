@@ -122,6 +122,17 @@ type contract Allocator for value {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
+// THE heap, where `Allocator` is a handle onto one: `@globalAllocator type resource Pool implements GlobalHeap`
+// replaces the default implementation of the runtime's funnel (`kama_alloc`/`kama_free`), so every box, container,
+// string and error box in the program draws from it — and `GlobalAllocator`, the default `A`, follows. Exactly one
+// instance exists, process-wide and shared by every isolate, and nothing stores or copies it: only the funnel calls
+// it. The same two members as `Allocator`, and a sibling rather than the same contract because a bound's kind clause
+// is what makes a container's `A` copyable (widening `Allocator` to `for value, resource` broke every container).
+// SPEC *Global allocator*.
+type contract GlobalHeap for resource {
+    fn Optional<UnsafePtr> allocate(usize bytes, usize align);
+    fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
+}
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
 // every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `type enum` that
 // declares `implements Error` and is BOXED into an `Owned<Error>` fat handle at the boundary (Swift's `enum X: Error`

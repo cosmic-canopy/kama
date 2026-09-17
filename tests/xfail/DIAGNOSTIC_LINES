@@ -422,6 +422,14 @@ give_copyable_local	give_copyable_local.kama:9
 give_inline_ctor_arg	give_inline_ctor_arg.kama:7
 give_ptr_local_reuse	give_ptr_local_reuse.kama:13 give_ptr_local_reuse.kama:16
 global_absolute_path	global_absolute_path.kama:10
+global_allocator_ctor	global_allocator_ctor.kama:3
+global_allocator_field_init	global_allocator_field_init.kama:3
+global_allocator_generic	global_allocator_generic.kama:2
+global_allocator_mutable_field	global_allocator_mutable_field.kama:3
+global_allocator_no_contract	global_allocator_no_contract.kama:2
+global_allocator_reaches_itself	global_allocator_reaches_itself.kama:3
+global_allocator_two	global_allocator_two.kama:6
+global_allocator_value	global_allocator_value.kama:2
 graph_alloc_iface	graph_alloc_iface.kama:23
 graph_coll_no_itermut	graph_coll_no_itermut.kama:17
 graph_coll_unmarked	graph_coll_unmarked.kama:22

@@ -260,4 +260,49 @@ if ! grep -qF -- '-> `GlobalAllocator::' "$tmp/ha.err"; then
     sed 's/^/  /' "$tmp/ha.err" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while a bump-allocated container over owned storage still builds and runs, and a heap-backed Arena does not)"
+# 7. A DECLARED GLOBAL ALLOCATOR (SPEC *Global allocator*). With `@globalAllocator`, the funnel is the pool and not the
+#    system heap, so boxes, containers and strings are legal under the flag, and the pool's body decides. The fixture
+#    runs in the corpus without the flag; here it is built WITH it, and the same source minus the attribute is the
+#    control that proves the declaration is what the flag accepted.
+poolsrc="$ROOT/tests/global_allocator_pool.kama"
+if ! "$KAMA" build --no-heap "$poolsrc" -o "$tmp/pool.out" >/dev/null 2>"$tmp/pool.err"; then
+    echo "check-noheap: FAIL — a program over a declared global allocator must build under '--no-heap':" >&2
+    sed 's/^/  /' "$tmp/pool.err" >&2; exit 1
+fi
+rc=0
+"$tmp/pool.out" >/dev/null 2>&1 || rc=$?
+if [ "$rc" != "$(cat "$ROOT/tests/global_allocator_pool.expect")" ]; then
+    echo "check-noheap: FAIL — the declared global allocator under '--no-heap' did not run (got $rc)" >&2; exit 1
+fi
+sed 's/^@globalAllocator //' "$poolsrc" > "$tmp/nopool.kama"
+if "$KAMA" build --no-heap "$tmp/nopool.kama" -o "$tmp/nopool.out" >/dev/null 2>"$tmp/nopool.err"; then
+    echo "check-noheap: FAIL — '--no-heap' accepted the pool program with its \`@globalAllocator\` removed" >&2; exit 1
+fi
+if ! grep -qF "heap allocation (new) is forbidden" "$tmp/nopool.err"; then
+    echo "check-noheap: FAIL — the undeclared pool program was rejected, but not by the no-heap gate:" >&2
+    sed 's/^/  /' "$tmp/nopool.err" >&2; exit 1
+fi
+# 7b. ...and a pool whose OWN body reaches the system heap is refused under the flag, through the funnel's entry.
+cat > "$tmp/heappool.kama" <<'EOF'
+extern "<stdlib.h>";
+@heap extern fn UnsafePtr malloc(usize n);
+@globalAllocator type resource Pool implements GlobalHeap {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: malloc(n: bytes)); }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
+fn int32 main() { Owned<Box> b = new Box.make(v: 3); return b.v; }
+EOF
+if "$KAMA" build --no-heap "$tmp/heappool.kama" -o "$tmp/hp.out" >/dev/null 2>"$tmp/hp.err"; then
+    echo "check-noheap: FAIL — '--no-heap' accepted a global allocator that calls malloc" >&2; exit 1
+fi
+if ! grep -qF 'calls `malloc`, which is `@heap`' "$tmp/hp.err"; then
+    echo "check-noheap: FAIL — the malloc-backed pool was rejected, but not by the walk into its body:" >&2
+    sed 's/^/  /' "$tmp/hp.err" >&2; exit 1
+fi
+if ! "$KAMA" build "$tmp/heappool.kama" -o "$tmp/hp2.out" >/dev/null 2>"$tmp/hp2.err"; then
+    echo "check-noheap: FAIL — the malloc-backed pool does not build even WITHOUT '--no-heap':" >&2
+    sed 's/^/  /' "$tmp/hp2.err" >&2; exit 1
+fi
+
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation; the flag applies the GlobalAllocator leaf program-wide, anchored at the innermost user body and never blaming the stdlib, while a bump-allocated container over owned storage still builds and runs, and a heap-backed Arena does not; a declared global allocator over owned storage builds and runs under the flag, and one that calls malloc does not)"

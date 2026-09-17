@@ -1,0 +1,7 @@
+// Every isolate calls into the one instance, so a plain mutable field would be written without synchronization.
+@globalAllocator type resource Pool implements GlobalHeap {
+    usize used;
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

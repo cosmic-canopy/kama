@@ -1,0 +1,9 @@
+// A pool drawing from `GlobalAllocator` draws from the funnel, which with a declaration IS this pool: the first
+// allocation would recurse without end. Refused in every build, with the chain.
+@globalAllocator type resource Pool implements GlobalHeap {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        return GlobalAllocator.make().allocate(bytes: bytes, align: align);
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

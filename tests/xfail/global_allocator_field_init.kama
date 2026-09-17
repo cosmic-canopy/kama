@@ -1,0 +1,7 @@
+// A field initializer is a constructor in disguise, and would never run either.
+@globalAllocator type resource Pool implements GlobalHeap {
+    UnsafePtr<uint8> region = cast<UnsafePtr<uint8>>(cast<usize>(4096));
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

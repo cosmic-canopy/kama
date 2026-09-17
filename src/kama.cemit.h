@@ -398,6 +398,7 @@ struct ClassInfo {
     // `comptime assert` verify what the toolchain actually did. 0 / false = say nothing.
     int                               alignN = 0;
     bool                              packed = false;
+    bool                              globalAllocator = false;   // `@globalAllocator` — see checkGlobalAllocator
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
                                                               // method bodies must be emitted static-inline in
@@ -1604,6 +1605,15 @@ private:
     // an author their function "is `@noheap`" when they wrote no attribute names a cause that is not there.
     struct NoHeapFn  { std::string display; int line = 0; std::string file; bool fromFlag = false; };
     std::map<std::string, AllocSite> _allocSites;   // C name -> why it allocates DIRECTLY
+    // `@globalAllocator` (SPEC *Global allocator*): the one declared pool's class, "" when the program declares none.
+    // With one, the funnel is no longer the system heap, so every fact that says "draws from the funnel" becomes an
+    // EDGE to the pool's entry (`kama__global_allocate`) instead of an allocation, and the pool's body decides.
+    // `_funnelCallers` holds those edges for the sites whose C does not spell `kama_alloc` itself (a string concat
+    // calls a runtime helper that does): C name -> the first site's line.
+    std::string                _globalAllocator;
+    std::map<std::string, int> _funnelCallers;
+    bool unitsDeclareGlobalAllocator(const std::vector<SharedCompilationUnit>& units);
+    void checkGlobalAllocator();   // the declaration's rules, and a pool that reaches the funnel, after emission
     // caller -> callee -> the FIRST call site. A map rather than a list so a body that calls the same
     // helper fifty times contributes one edge, and so iteration order is the callee name — the walk below
     // reports a chain, and a chain that changed between builds would be a diagnostic nobody could pin.

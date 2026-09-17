@@ -1,0 +1,10 @@
+// A program has ONE heap: a second `@globalAllocator` is refused, naming the first.
+@globalAllocator type resource First implements GlobalHeap {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+@globalAllocator type resource Second implements GlobalHeap {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

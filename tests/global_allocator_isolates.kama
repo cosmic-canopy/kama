@@ -1,0 +1,121 @@
+// THE test the global allocator exists to pass: a block allocated in one isolate and freed in another goes back to
+// the SAME heap. A module `static` is per-isolate, which is why the pool is one process-global instance instead
+// (SPEC *Global allocator*). Main boxes five points and sends them to a child, which frees them; the child boxes five
+// and sends them back, and main frees those. Counted by exhaustion, as in global_allocator_pool.kama: after the
+// exchange the pool hands out exactly as many slots as before it, so nothing was freed into a different heap and
+// nothing leaked. Run under KAMA_TSAN=1: the pool's list is shared, and its lock is what makes that sound.
+import {
+    std::concurrent::Atomic, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+    std::collections::DynamicArray,
+};
+
+// 48 slots of 1024 bytes, one spin-locked free list — global_allocator_pool.kama's pool, half as large again.
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(6144) storage;   // 48 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;                 // slots handed out by the bump so far
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 48) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+}
+
+type value Point implements Sendable { public int32 x = 0; public ctor at(int32 x) { this.x = x; } }
+
+fn int32 drain() {
+    DynamicArray<Owned<Point>> held = DynamicArray.withCapacity(capacity: 47);
+    int32 n = 0;
+    bool going = true;
+    while (going) {
+        Optional<Owned<Point>> t = try new Point.at(x: n);
+        match (give t) {
+            case Some(value: p): { held.add(item: give p); n = n + 1; }
+            case None: { going = false; }
+        };
+    }
+    return n;
+}
+
+type resource Ends implements Sendable {   // `spawn` moves ONE bundle
+    Receiver<Owned<Point>> rx;
+    Sender<Owned<Point>> tx;
+    public ctor of(Receiver<Owned<Point>> rx, Sender<Owned<Point>> tx) { this.rx = give rx; this.tx = give tx; }
+
+    // Frees every box main sent, then boxes five of its own for main to free.
+    public fn void run() {
+        bool going = true;
+        while (going) {
+            Optional<Owned<Point>> v = this.rx.recv();
+            match (give v) {
+                case Some(value: p): { }      // dropped here: freed on this isolate
+                case None: { going = false; }
+            };
+        }
+        int32 i = 0;
+        while (i < 5) { this.tx.send(item: new Point.at(x: i)); i = i + 1; }
+    }
+}
+
+fn void child(Ends ends) { ends.run(); }      // ~Ends: main's `recv` ends
+
+fn void sendAll(Sender<Owned<Point>> tx) {
+    int32 i = 0;
+    while (i < 5) { tx.send(item: new Point.at(x: i)); i = i + 1; }
+}                                             // ~Sender: the child's `recv` ends
+
+fn int32 exchange() {
+    Channel<Owned<Point>> there = Channel.bounded(capacity: 8);
+    Channel<Owned<Point>> back = Channel.bounded(capacity: 8);
+    Receiver<Owned<Point>> rx = back.receiver();
+    int32 got = 0;
+    scope {
+        Ends ends = Ends.of(rx: there.receiver(), tx: back.sender());
+        spawn child(ends: give ends);
+        sendAll(tx: there.sender());
+        bool going = true;
+        while (going) {
+            Optional<Owned<Point>> v = rx.recv();
+            match (give v) {
+                case Some(value: p): { got = got + p.x; }   // freed here: allocated on the child
+                case None: { going = false; }
+            };
+        }
+    }
+    return got;                               // 0+1+2+3+4
+}
+
+fn int32 main() {
+    int32 before = drain();
+    int32 sum = exchange();
+    int32 after = drain();
+    if (before != after) { return 1; }
+    return sum;                               // 10
+}

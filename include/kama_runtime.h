@@ -128,22 +128,54 @@ static inline bool kama_type_name_eq(const char* a, const char* b) {
 //  - Beyond it the block comes from the platform's aligned allocator, and must go back to ITS release: on
 //    Windows `_aligned_malloc` pairs only with `_aligned_free` — which is why `kama_free` takes `align` too.
 //    C11 `aligned_alloc` (POSIX, emscripten, newlib) wants a size that is a multiple of `align`.
+// Two layers. The IMPLEMENTATION is where a block comes from: the platform allocator below, or — when the program
+// declares `@globalAllocator` (SPEC *Global allocator*) — the declared pool, reached through two entries the entry
+// TU defines over its one instance. The CHECK, when on, wraps whichever implementation is active, so the sanitizer
+// leg proves a declared pool's layouts exactly as it proves the default's.
+#if defined(KAMA_GLOBAL_ALLOCATOR)
+extern void* kama__global_allocate(size_t n, size_t align);
+extern void  kama__global_deallocate(void* p, size_t n, size_t align);
+static inline void* kama__impl_alloc(size_t n, size_t align) { return kama__global_allocate(n, align); }
+static inline void  kama__impl_free(void* p, size_t n, size_t align) { kama__global_deallocate(p, n, align); }
+#else
+static inline void* kama__impl_alloc(size_t n, size_t align) {
+    if (align <= _Alignof(max_align_t)) { extern void* malloc(size_t); return malloc(n); }
+#if defined(_WIN32)
+    extern void* _aligned_malloc(size_t, size_t); return _aligned_malloc(n, align);
+#else
+    extern void* aligned_alloc(size_t, size_t); return aligned_alloc(align, (n + align - 1) & ~(align - 1));
+#endif
+}
+static inline void kama__impl_free(void* p, size_t n, size_t align) {
+    (void)n;   // the default allocator keeps its own header; a replacement may not, which is why callers pass it
+#if defined(_WIN32)
+    if (align > _Alignof(max_align_t)) { extern void _aligned_free(void*); _aligned_free(p); return; }
+#else
+    (void)align;
+#endif
+    extern void free(void*); free(p);
+}
+#endif
 #if defined(KAMA_ALLOC_CHECK)
 // THE PROOF THAT EVERY RELEASE TELLS THE TRUTH. The sanitizer leg (run_tests.sh, KAMA_SAN) compiles with this
 // defined: each block carries the layout it was allocated with in a header just before it, and `kama_free`
 // panics when the layout it is handed differs. So a green `./dev test san` means every free in the corpus —
 // emitted, runtime, stdlib, OS seam — passed exactly the size and alignment its block was allocated with,
-// which is what a replacement allocator trusting `deallocate(pointer, bytes, align)` relies on.
+// which is what a replacement allocator trusting `deallocate(pointer, bytes, align)` relies on. The header's own
+// block is released with the layout IT was allocated with, so a declared pool is held to the same promise.
 static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, size_t wantAlign);   // below kama_panic
 static inline size_t kama__alloc_check_pad(size_t align) {                  // header bytes, rounded to the block's alignment
     size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
     return (2 * sizeof(size_t) + a - 1) & ~(a - 1);
 }
+static inline size_t kama__alloc_check_total(size_t n, size_t align) {      // the whole block, header included
+    size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
+    return (kama__alloc_check_pad(align) + n + a - 1) & ~(a - 1);
+}
 static inline void* kama_alloc(size_t n, size_t align) {
-    extern void* aligned_alloc(size_t, size_t);
     size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
     size_t pad = kama__alloc_check_pad(align);
-    char* raw = (char*)aligned_alloc(a, (pad + n + a - 1) & ~(a - 1));
+    char* raw = (char*)kama__impl_alloc(kama__alloc_check_total(n, align), a);
     if (!raw) return NULL;
     size_t* h = (size_t*)(void*)(raw + pad - 2 * sizeof(size_t));
     h[0] = n; h[1] = align;
@@ -153,27 +185,12 @@ static inline void kama_free(void* p, size_t n, size_t align) {
     if (!p) return;
     size_t* h = (size_t*)(void*)((char*)p - 2 * sizeof(size_t));
     if (h[0] != n || h[1] != align) kama__alloc_check_fail(n, align, h[0], h[1]);
-    extern void free(void*);
-    free((char*)p - kama__alloc_check_pad(h[1]));
+    size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
+    kama__impl_free((char*)p - kama__alloc_check_pad(align), kama__alloc_check_total(n, align), a);
 }
 #else
-static inline void* kama_alloc(size_t n, size_t align) {
-    if (align <= _Alignof(max_align_t)) { extern void* malloc(size_t); return malloc(n); }
-#if defined(_WIN32)
-    extern void* _aligned_malloc(size_t, size_t); return _aligned_malloc(n, align);
-#else
-    extern void* aligned_alloc(size_t, size_t); return aligned_alloc(align, (n + align - 1) & ~(align - 1));
-#endif
-}
-static inline void kama_free(void* p, size_t n, size_t align) {
-    (void)n;   // the default allocator keeps its own header; a replacement may not, which is why callers pass it
-#if defined(_WIN32)
-    if (align > _Alignof(max_align_t)) { extern void _aligned_free(void*); _aligned_free(p); return; }
-#else
-    (void)align;
-#endif
-    extern void free(void*); free(p);
-}
+static inline void* kama_alloc(size_t n, size_t align) { return kama__impl_alloc(n, align); }
+static inline void  kama_free(void* p, size_t n, size_t align) { kama__impl_free(p, n, align); }
 #endif
 static inline void  kama_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
 static inline void* kama_alloc_zeroed(size_t n, size_t align) {

@@ -1,0 +1,6 @@
+// The contract is what promises the funnel its two members; matching them by shape alone is not a promise.
+@globalAllocator type resource Pool {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

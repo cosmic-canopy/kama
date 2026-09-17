@@ -1,0 +1,6 @@
+// The heap is one object with identity, shared by every isolate — a `value` would be copied.
+@globalAllocator type value Pool implements GlobalHeap {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }

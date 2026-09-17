@@ -1,0 +1,74 @@
+// `@globalAllocator` (SPEC *Global allocator*): the program's heap is a declared pool over storage it owns, so
+// every box, container and string draws from it — and nothing else does. Proven by EXHAUSTION rather than a
+// counter: the pool has 32 slots, so the 33rd `try new` fails while the system heap has plenty, and a freed slot
+// is handed out again. Also built `--no-heap` (tests/support): the pool's body is the whole allocation story.
+import { std::concurrent::Atomic, std::collections::DynamicArray };
+
+// 32 slots of 1024 bytes. A free slot links to the next through its first word; a spin lock guards the list.
+// Every field starts at zero, which is the only way the instance ever starts: an empty list, nothing bumped yet.
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;                 // slots handed out by the bump so far
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+}
+
+type value Point { public int32 x = 0; public int32 y = 0; public ctor at(int32 x, int32 y) { this.x = x; this.y = y; } }
+
+// Fill every slot the pool has left, then free them all; returns how many there were.
+fn int32 drain() {
+    DynamicArray<Owned<Point>> held = DynamicArray.withCapacity(capacity: 31);   // itself one slot
+    int32 n = 0;
+    bool going = true;
+    while (going) {
+        Optional<Owned<Point>> t = try new Point.at(x: n, y: n);
+        match (give t) {
+            case Some(value: p): { held.add(item: give p); n = n + 1; }
+            case None: { going = false; }
+        };
+    }
+    return n;
+}
+
+fn int32 main() {
+    Owned<Point> a = new Point.at(x: 3, y: 4);                // a box
+    DynamicArray<int32> grown = DynamicArray.empty();         // a container that grows
+    int32 i = 0;
+    while (i < 20) { grown.add(item: i); i = i + 1; }
+    string s = "pool" + "-backed";                            // a string built at runtime
+    int32 first = drain();                                    // 32 - (box, array, string, `held`) = 28
+    int32 again = drain();                                    // every slot came back
+    if (first != again) { return 1; }
+    return first + a.x + cast<int32>(s.length()) - cast<int32>(grown.length());   // 28 + 3 + 11 - 20 = 22
+}

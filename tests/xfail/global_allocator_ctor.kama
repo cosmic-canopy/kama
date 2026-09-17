@@ -1,0 +1,9 @@
+// The instance is a C global that starts as zero bytes — nothing runs a constructor before `main`.
+import { std::concurrent::Atomic };
+@globalAllocator type resource Pool implements GlobalHeap {
+    Atomic<usize> used;
+    public default ctor make() { this.used = Atomic.make(value: 64); }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+fn int32 main() { return 0; }
