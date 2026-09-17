@@ -62,9 +62,13 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 
 1. `git fetch && git rebase origin/dev`, `./dev build`. If the rebase brings emitter changes, re-run the matrix
    on the rebased HEAD before building on it.
-2. **KR-48 on Windows** (the Windows box): `./dev matrix`. A failure is most likely a compile error in the
-   Windows branch of `kama_os.h`, which this campaign could not build; every site follows one of two patterns
-   (§2, "What moved at `0.9.369`"). Delete the KR-48 row when it is green.
+2. **KR-48 on Windows** (the Windows box): `./dev test > log`, then `./dev check > log`. `./dev matrix` cannot
+   pass there (no podman/docker), and it does not need to: the Windows box verifies Windows only, and the san/wasm
+   legs already ran on Linux. A failure is most likely a compile error in the Windows branch of `kama_os.h`, which
+   this campaign could not build; every site follows one of two patterns (§2, "What moved at `0.9.369`"). Delete the
+   KR-48 row when it is green. **Already known (2026-09-17, Windows, `0.9.369+gf8f43471`):** `./dev build` is clean,
+   and `./dev fixture fs_readdir` / `fs_dirs` pass, so `kama__wpath`/`kama__wfree` and `kama_diropen` compile and
+   run. Still unexercised: the Winsock poller, `argv`/`envp`, `proc_spawn`, `kama_capture2`, `_aligned_malloc`.
 3. **KR-49** — needs the maintainer's call on the meaning split above first (`--no-heap` = never reaches the
    SYSTEM heap). The replacement is a declaration; the funnel it delegates from now exists with its final
    signature, and `_heapSymbols` is seeded with exactly `kama_alloc`, `kama_alloc_zeroed`, `kama_free`.
