@@ -11683,6 +11683,25 @@ int main(int argc, char** argv)
         // (kama_args_init, kama_runtime.h). mingw-w64 links shell32 by default; zig's cross line is its
         // own, so say it — same rule, same pruning.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lshell32 ";
+        // The C++ RUNTIME, by the same rule as -lpthread above: link non-system runtime statically, so a
+        // binary depends only on what the target OS already has. Measured on the Windows box verifying
+        // KR-71: tests/csources_cxx.d built here imported libstdc++-6.dll AND libgcc_s_seh-1.dll out of
+        // the msys2 tree and exited 0xC0000135 (STATUS_DLL_NOT_FOUND) from a plain PowerShell — the exact
+        // failure the pthread wrapper exists to prevent, reached through a C++ `csources` entry instead.
+        //
+        // ⚠️ `-static-libstdc++` is NOT the fix, and measuring is the only way to see why: it makes
+        // libstdc++ static, and mingw's static libstdc++ then needs winpthread, which the C++ DRIVER
+        // appends as a dynamic `-lpthread` AFTER every user argument (`clang++ -###`), so the binary swaps
+        // one msys2 DLL for another. An early `-Wl,-Bstatic -lpthread` cannot fix that either: the archive
+        // is scanned before libstdc++ is pulled in, so nothing is needed from it yet and nothing is
+        // extracted. A TRAILING `-Wl,-Bstatic` is what covers the driver's own tail, and `-static-libgcc`
+        // covers libgcc_s_seh-1.dll, which the wrapper cannot reach because the driver spells it `-lgcc_s`.
+        //
+        // Not a blanket `-static`: this sits at the END of the link, so the libraries a USER names
+        // (--link, --webgpu) are already bound and keep their dynamic linkage. Same line the pthread rule
+        // draws. Measured clean on both clang++ and g++ (no non-system DLL imports; the program still runs).
+        if (!wasm && !stopsAtObject && g_target.isWindows() && cxxLinks && g_target.runtime != "dynamic")
+            link << "-static-libgcc -Wl,-Bstatic ";
         // The PE SUBSYSTEM. Console is the default and stays byte-for-byte what it always was, so every
         // console tool, the CI legs and `kama` itself are untouched; a GUI program opts IN and stops
         // getting the stray console window Windows opens for a console-subsystem PE.

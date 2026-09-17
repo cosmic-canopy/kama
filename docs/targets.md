@@ -512,6 +512,16 @@ A program using `isolate` / `parfor` / `channel` used to bind `libwinpthread-1.d
 tree and die at process start with `STATUS_DLL_NOT_FOUND` (`0xC0000135`) on any machine without it —
 including the machine that built it, unless an msys2 shell launched it.
 
+**The C++ runtime follows the same rule**, and it reaches a program through a C++/Objective-C++
+`csources` entry. mingw's `libstdc++-6.dll` and `libgcc_s_seh-1.dll` ship with your *compiler*, so a
+Windows C++ build used to die the same way (measured `0.9.383`: `tests/csources_cxx.d` exited
+`0xC0000135` from a plain PowerShell on the machine that built it). A Windows link that holds C++ now
+ends with `-static-libgcc -Wl,-Bstatic`, so the driver's own runtime tail binds statically. ⚠️ Note
+what does NOT work, because it is the obvious thing to try: `-static-libstdc++` alone makes libstdc++
+static, and mingw's static libstdc++ then needs winpthread — which the C++ driver appends *after* every
+argument you pass, so the binary swaps one msys2 DLL for another. The flags are trailing, so libraries
+you named are already bound and keep their linkage.
+
 This is the same stance Go, Rust and Zig take: static runtime on Windows, dynamic libc elsewhere.
 Libraries **you** name (`--link`, `--webgpu`) are untouched and remain your choice to ship or link —
 kama makes the decision only about its own runtime.

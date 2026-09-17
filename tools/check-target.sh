@@ -153,6 +153,37 @@ reject MACOS   "-Wl,-Bstatic" "macOS pthreads live in libc — nothing to link s
 #     all, so it gets no wrapper either.
 reject WINDOWS "-Wl,-Bstatic" "a non-threaded program links no pthread to make static"
 
+# 2b-ii. THE C++ RUNTIME, the same rule reached through a C++ `csources` entry. Measured verifying KR-71 on
+#     the Windows box: tests/csources_cxx.d built there imported libstdc++-6.dll and libgcc_s_seh-1.dll from
+#     the msys2 tree and exited 0xC0000135 from a plain PowerShell, exactly as the pthread case did.
+#     `-static-libstdc++` is NOT the fix (mingw's static libstdc++ then needs winpthread, which the C++
+#     driver appends dynamically after every user argument): a TRAILING `-Wl,-Bstatic` covers the driver's
+#     own tail, and `-static-libgcc` covers libgcc_s_seh-1.dll. Trailing, so a user's --link/--webgpu
+#     libraries are already bound and keep their dynamic linkage.
+CXXFIXTURE="$ROOT/tests/csources_cxx.d/kama.json"
+if [ ! -f "$CXXFIXTURE" ]; then echo "check-target: missing $CXXFIXTURE" >&2; exit 1; fi
+# Its own line builder: a C++ build refuses a stubbed `cc` it cannot derive a C++ spelling from, so name both.
+cxxline() {
+    "$KAMA" build --release --cc "echo" --cxx "echo" "$CXXFIXTURE" --target "$1" -o "$tmp/out" 2>/dev/null
+}
+cxxwant() {   # cxxwant <target> <substring> <description>
+    if ! cxxline "$1" | grep -qF -- "$2"; then
+        echo "check-target: FAIL — a C++ build for $1 did not pass '$2' ($3)" >&2
+        cxxline "$1" | sed 's/^/    /' >&2; exit 1
+    fi
+}
+cxxreject() {   # cxxreject <target> <substring> <description>
+    if cxxline "$1" | grep -qF -- "$2"; then
+        echo "check-target: FAIL — a C++ build for $1 passed '$2' but must not ($3)" >&2
+        cxxline "$1" | sed 's/^/    /' >&2; exit 1
+    fi
+}
+cxxwant   WINDOWS "-static-libgcc -Wl,-Bstatic"           "a Windows C++ program must not need libstdc++-6.dll or libgcc_s_seh-1.dll to start"
+cxxreject LINUX   "-static-libgcc" "libstdc++ is a system component on Linux; static linkage is not the rule there"
+cxxreject MACOS   "-static-libgcc" "macOS has no libgcc_s to link and does not support a static libSystem"
+# Pay-for-what-you-use: a program with no C++ in it gets no C++ runtime flags.
+reject    WINDOWS "-static-libgcc" "a C-only program links no C++ runtime to make static"
+
 # 2c. WASM THREADS ARE A HOSTING MODEL, not a link flag: `-pthread` + PROXY_TO_PTHREAD run `main` on a worker
 #     and need a SharedArrayBuffer, whose COOP/COEP headers break a cross-origin WebSocket. So a browser build
 #     is threaded only when the program CREATES a thread (`spawn`/`isolate`/`parallel_for`) — never because it
