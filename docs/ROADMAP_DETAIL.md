@@ -747,16 +747,13 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
 - **A platform header's macros collide with kama names (KR-67).** Found verifying `std::net` on Windows
-  (2026-09-17): `<iphlpapi.h>` defined `interface`, and `UdpSocket.joinMulticastV4(interface:)` broke every
-  program importing `std::net` (fixed in `0.9.377` by declaring `if_nametoindex` instead). The same class is
-  still open for what `<windows.h>` itself leaves defined under `WIN32_LEAN_AND_MEAN`. Measured with `clang -dM -E`
-  over `kama_os.h`'s Windows include set, the lowercase object-like macros are `near`, `far`, `pascal`, `cdecl`,
-  `environ` and `errno`, plus function-like names that expand only before a `(`. A parameter `near` emits
-  `float near`, which the macro makes `float`, and clang reads it as an unnamed parameter. Rejected first: adding them
-  to `c_reserved`, since they are not C and would take `near`/`far` from every platform for one vendor's legacy.
-  Candidates: `#undef` the empty legacy macros after the SDK includes (they are Win16 spellings nothing in the
-  seam uses, but a user `extern` header included later might), or emit C names that cannot collide. Decide with a
-  fixture that fails on Windows first, and check `errno`/`environ` separately, because those are real on POSIX too.
+  (2026-09-17): `<iphlpapi.h>` defined `interface` and broke every `std::net` program (fixed `0.9.379`). Probing every
+  position then showed the class. Each place kama writes a user's name raw (field, parameter, local, payload field,
+  contract slot, fn-pointer local) breaks under a same-named macro, while the prefixed places (types, functions,
+  statics, enum cases) never do. It is not Windows-only (`_LP64` is predefined on Linux; `errno` is a macro
+  everywhere), and a user's own `extern` header can do it on any target. The measurements, the site inventory, the
+  recommended rule (prefix what kama owns, keep the declared C surface) with the rejected alternatives and why, and
+  the red-first plan are in [docs/design/c-names.md](design/c-names.md).
 - **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
   only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
   for a contract destination, correctly (a contract admits every kind by design, which is what makes
