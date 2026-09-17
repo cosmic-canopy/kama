@@ -4,6 +4,15 @@
 maintainer's ruling on the four decisions below. Delete this doc when KR-67 ships, as the maintenance rule for
 `docs/design/` says.
 
+## Which box does this work
+
+**Not the Windows box** (decided with the maintainer, 2026-09-17). The change touches emission for every target, so its
+gate is `./dev matrix` — native, sanitizer and wasm — which the Windows VM cannot run (no containers), and that box
+verifies Windows only. It is also QEMU + x86_64 emulation, where one gate is ~30 minutes and this sweep needs many.
+**Build it on the Mac (or Linux); the Windows box is the WITNESS** — the red-first fixture fails there on every
+position, and the Windows confirmation at the end belongs there. Same for KR-32: no `lldb` or `gdb` is installed in
+that msys2.
+
 ## Picking this up
 
 Everything a fresh session needs is here and in the KR-67 row. Nothing depends on an assistant's memory or a
@@ -17,9 +26,9 @@ scratch directory.
    (`_LP64`, `errno`).
 4. Then the sweep, in the order in **Plan**.
 
-On Windows use the UCRT64 login-shell form from `docs/platforms/windows.md`. The gate is `./dev test` then
-`./dev check`. This change touches emission on every target, so the maintainer's `./dev matrix` on the Linux box
-(san, wasm) and a macOS build are part of it too.
+The gate is `./dev matrix` on the box that builds it. When it is green, hand the branch to the Windows box for
+`./dev test` + `./dev check` there (the UCRT64 login-shell form is in `docs/platforms/windows.md`), because that is
+where the hostile headers are.
 
 ## What is true today (measured, `0.9.379`, Windows UCRT64)
 
@@ -114,6 +123,17 @@ names in a C prototype are not ABI and may differ from the definition, and the h
 author, compiled in the HOST's macro environment, which kama cannot see. A collision there is part of the declared
 C surface, like an `expose` field. Record that residual in SPEC *Exposing to a host*.
 
+### D3b. Every prefixed name maps back to exactly one kama name, and the COMPILER owns the mapping
+
+**Recommended, and a requirement rather than a nicety.** KR-32 (the debugger) has to turn `k_near` back into `near`
+for locals, the call stack and watch expressions, because those come from the debug info and no LLDB formatter can
+rewrite them — a name layer in the VS Code extension does it. That layer must not re-implement the mangling in
+JavaScript, where it would drift from the emitter. So: keep the mangling reversible (one kama name per C name, with
+the separator unambiguous against a kama identifier that itself contains `__`), and expose it from the compiler —
+either a name map written beside a debug build, or a `kama` subcommand that demangles. The compiler already
+demangles types for its own diagnostics (`demangleForDisplay`), which is the seam to extend. Decide the form with
+KR-32's first part, but do not ship a mangling KR-32 cannot reverse.
+
 ### D4. Keep reserving C's keywords in the lexer
 
 **Recommended: keep `c_reserved` as is.** After D1 only the declared-C positions still need it, so relaxing it for
@@ -121,8 +141,10 @@ kama-owned positions would become possible and source-compatible at any time. It
 needs a local named `switch`), and one lexer rule for every position is simpler than two. Rewrite the `kama.l`
 comment to say this, so the old "reserve, don't rename" rationale does not read as contradicted.
 
-**Consequences to accept (not decisions):** a native debugger shows `k_near` for kama-owned locals and fields.
-DWARF carries the C name, and a pretty-printer cannot rename a variable. Note it in the debugging docs beside KR-32.
+**The debugger cost, stated plainly:** a native debugger shows `k_near` for a local today-named `near`. Fields and
+type names can be presented correctly by an LLDB formatter (KR-32 part 2), but locals, frames and watch expressions
+cannot — D3b is what makes fixing them possible. Everything else about debugging is unchanged: breakpoints and
+stepping are already kama-source-level through `#line`. KR-32 moved out of LATER on the strength of this.
 Clang errors only appear on compiler bugs, and would name `k_…`.
 
 ## Inventory (read at `0.9.376`; find by function NAME, the numbers drift)
@@ -182,13 +204,13 @@ prefixed, and the serde and format fixtures compare bytes, so those catch it.
 7. **`VERSION` bump.** Gate: Windows `./dev test` + `./dev check`, then the maintainer's `./dev matrix` on Linux and
    a macOS build, and take the POSIX `-dM` lowercase set there to record beside the Windows one.
 
-**Size: L.** Mechanical but wide (~200 sites plus ~290 literals), self-checking by the suite, and no runtime change.
+**Size: L.** Built on the Mac/Linux box (see above). Mechanical but wide (~200 sites plus ~290 literals), self-checking by the suite, and no runtime change.
 
-## Adjacent — measured here, not part of KR-67
+## Adjacent — measured here, filed as KR-68, not part of KR-67
 
 **Every module TU preprocesses the whole OS header set.** Preprocessing `#include "kama_os.h"` took ~263 ms against
 ~121 ms for `kama_runtime.h` alone on this VM (five runs each, including process start). So importing `std::fs`
 adds ~140 ms to EVERY module's C compile. That is a QEMU + x64-emulation figure, so read only the ratio. Moving the
 OS seam behind plain prototypes (bodies in one TU, or kept inline only where it measurably matters) could be a real
 compile-time win (GOALS #2) on every platform. It would also shrink the macro surface, though D1 is what makes names
-safe. Worth its own row if the maintainer wants it measured on a native box. Do not fold it into KR-67.
+safe. Filed as **KR-68** (§9), to be re-measured on a native box. Do not fold it into KR-67.

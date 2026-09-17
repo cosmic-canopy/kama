@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-68**
+**Next id: KR-69**
 
 ## The shape
 
@@ -94,6 +94,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-62 | **A generic instance named only inside `sizeof`/`alignof` is never instantiated** — `usize s = sizeof(DynamicArray<int64>);` (or `Simd<float32>#(4)`) with no other use of the type reaches clang as an undeclared identifier; kama accepted it. Register the instance when the operand is resolved, as a local declaration does | S? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-65 | **Three raw-pointer expressions pass kama and fail in clang** — `cast<usize>(addr(of: s[0]))` (a `KAMA_NARROW` over a pointer), `cast<UnsafePtr>(anInlineArray)` (a struct cast to `void*`), and `UnsafePtr + 4` (`KAMA_ADD`'s `_Generic` has no `void*` arm). Each either lowers or is refused in kama, never left to the C compiler | S? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-67 | **A kama name that any C header `#define`s breaks the C** — fields, parameters, locals, payload fields, contract slots and fn-pointer locals reach C unprefixed, so a macro rewrites them: `float32 near` fails in clang on Windows once `std::fs` is imported (`<windef.h>`), `_LP64`/`errno` do on Linux, and a vendor header can do it anywhere; 21,748 macros are in scope of one Windows TU. Recommended: every name kama OWNS reaches C as `k_<name>` and the declared C surface (`extern`, `expose`) keeps its spelling; four decisions for the maintainer first. **Windows box** | L | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-32 | **The debugger shows emitted-C names and values** — stepping and breakpoints are already kama-source-level, but a `string` inspects as `kama_string {data,len,cap}`, an `Optional` as its tagged union, a type as `_Ffile__V`, a frame as `_Ffile__V__make`, and an enum value as `_Ffile__Mode_CopyFile`. Three parts: LLDB summaries for the values; synthetic children so a struct's fields read as kama names; and a name layer in the VS Code extension between it and CodeLLDB for LOCALS, the CALL STACK and watch expressions, which no formatter can reach. The first two are independent; the third needs KR-67's name map. Moved out of LATER 2026-09-17: KR-67 prefixes locals too, so this stops being polish | L? | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-68 | **Every module's C preprocesses the whole OS header set** — one generated `<name>.gen.h` carries every `extern` header, so importing `std::fs` anywhere puts `<windows.h>` (21,748 macros) in front of EVERY module's C. Preprocessing `kama_os.h` measured ~263 ms against ~121 ms for `kama_runtime.h` alone on the Windows VM (ratio only — that box is QEMU + x64 emulation). Moving the seam behind plain prototypes, with bodies in one TU, would cut per-TU preprocessing on every platform (GOALS #2) and shrink the macro surface; it costs inlining of the thin syscall wrappers, so it is measured on a NATIVE box first. Not a fix for KR-67 — a user's own `extern` header bleeds either way | M? | [§9](ROADMAP_DETAIL.md#s9) |
 
 ## LATER — tooling & ecosystem
 
@@ -106,7 +108,6 @@ Most of this gates on the repo going public.
 | KR-29 | **tree-sitter accepts 78 of the 84 reserved words as a binding name** — `Thing else = …` renders as a valid declaration in every editor on this grammar, and the compiler then rejects it. The two reserve differently by construction: `kama.l` consults one table at every identifier, tree-sitter extracts keywords CONTEXTUALLY and a binding site expects `$.identifier`. ⚠️ `check-treesitter.sh` cannot see this class, and the one fixture that looks like it covers it passes on its USE site, not its declaration | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
-| KR-32 | **Debugger value formatting** — render `string`/`Optional`/collections as kama values, not their emitted-C form | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
 
 ## FUTURE — the big arcs, in this order

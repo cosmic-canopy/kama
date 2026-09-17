@@ -2063,6 +2063,16 @@ remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h
 Where kama currently stands is measured in [benchmarks/RESULTS.md](benchmarks/RESULTS.md) — read it there
 rather than here, so there is one number to keep current. Forward work:
 
+- **Every module's C preprocesses the whole OS header set (KR-68).** One generated `<name>.gen.h` carries every
+  `extern` header a build touches, and every module's `.c` includes it, so importing `std::fs` ANYWHERE puts the
+  platform headers in front of EVERY module. Measured 2026-09-17 on the Windows VM while scoping KR-67:
+  preprocessing `#include "kama_os.h"` took ~263 ms against ~121 ms for `kama_runtime.h` alone (5 runs each,
+  process start included), and one such TU sees 21,748 macros. ⚠️ That box is QEMU + x86_64 emulation, so read the
+  RATIO and re-measure natively before acting. The shape of a fix: the OS seam behind plain prototypes with its
+  bodies in one TU, keeping `static inline` only where inlining measurably pays — it trades inlining of the thin
+  syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
+  shrinks the macro surface as a side effect. **Not** a fix for KR-67: a user's own `extern "<vendor.h>"` bleeds
+  into their own TU either way, which is why names must be safe by construction instead.
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
   `-O` level (`-O3`), or the optimization level dominates a tiny kernel.
@@ -2501,12 +2511,19 @@ rather than here, so there is one number to keep current. Forward work:
 - **Workspace-internal dependencies — one follow-on.** Workspaces work today ([packages.md](packages.md)).
   What is left: version reconciliation on publish — `kama publish` substituting a registry version for a
   workspace path dep.
-- **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
-  kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
-  `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
-  summaries / synthetic providers (CodeLLDB supports Python formatters) so `string`/`Optional`/`Result`/the
-  collections/smart-pointers render as kama values. Small next to the LSP, high polish-value, builds directly
-  on the shipped debug flow.
+- **The debugger shows emitted-C names and values (KR-32).** Breakpoints and stepping are already
+  kama-source-level (the emitted C carries `#line`, and F5 launches CodeLLDB — `editor/vscode/extension.js`), but
+  everything INSPECTED reads as C: a `string` is `kama_string {data,len,cap}`, an `Optional<T>` its tagged union, a
+  type `_Ffile__V`, a frame `_Ffile__V__make`, an enum value `_Ffile__Mode_CopyFile`. Three parts, and only the
+  first was ever scoped: (1) LLDB type summaries / synthetic providers (CodeLLDB runs Python formatters) for
+  `string`/`Optional`/`Result`/the collections/the smart pointers; (2) synthetic children, so a struct's fields read
+  as kama names and its type as the kama type; (3) LOCALS, the CALL STACK and watch expressions, which come from the
+  debug info and no formatter can rewrite — that needs a name layer in the VS Code extension, between it and
+  CodeLLDB. **Moved out of LATER on 2026-09-17** because KR-67 prefixes locals as well (`near` would inspect as
+  `k_near`), so part 3 stops being polish. Part 3 consumes KR-67's name map; the compiler owns the mapping (it
+  already demangles types for its own messages, `demangleForDisplay`), so the extension never re-implements the
+  rules. ⚠️ The Windows box has no `lldb`/`gdb` installed and cannot gate this; it belongs where a debugger and
+  `./dev matrix` live.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.
