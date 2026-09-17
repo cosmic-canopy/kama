@@ -266,6 +266,41 @@ Each is a few lines, and each is accepted by the checker and handed to the C com
 - `unsafe fn UnsafePtr f(UnsafePtr p) { return p + 4; }` → `KAMA_ADD`'s `_Generic` has no `void*` association.
   Either define byte arithmetic on `UnsafePtr` or refuse it and point at `addr(of: buf[i])`.
 
+### A misspelled triple-component flag in a gate is silently inactive (KR-69) — found 2026-09-17 shipping the `csources` gates, `0.9.382`
+
+`@compileFor(OS_WINODWS)` and `@compileFor(ARCH_AARCH46)` build and pass `kama check` without a word, in a
+manifest too: every gate goes through `kamaGateLitActive`, and `kamaIsBuildConfigFlag` accepts ANY name with
+an `OS_`/`ARCH_`/`ABI_` prefix, because triples are open (kama hands `aarch64-winodws-gnu` to the C compiler,
+and zig is what refuses it). `kama check`'s covering check (`0.9.353`) does not catch it either, by its own ruling: "a gate no
+known target can activate is NOT checked and NOT an error". So a typo'd platform gate deletes the
+declaration (or, since `0.9.382`, a `csources` entry) on every build. The same class `@compileFor(WINDOWS)` was
+(fixed in the docs 2026-09-01), one level down.
+
+Wants a ruling before code: kama has no closed table of os/arch/abi names today and deliberately so. The
+options as they stand: a closed list of known components (zig's and LLVM's are public) with an escape for a
+declared target; or a warning channel, which kama does not have on purpose; or refusing a component no
+built-in or DECLARED target names (the covering check already knows that set) — which would make an
+anonymous `--target` triple's gates unreachable until the target is declared.
+
+### A dependency cannot ship a prebuilt archive (KR-70) — found 2026-09-17 preparing the `csources` C++ work
+
+A package that wraps a library it cannot build from source through `csources` (a cmake project, a vendor
+SDK) has no way to hand its consumer the archive: `-L<relative>` in a dependency's `ldflags` is refused,
+correctly, because it would resolve against the consumer's working directory; `link` names a library but
+not where it is. The first engine consumer works around it in the ROOT package (RmlUi and whisper.cpp
+archives, built by their cmake half). The structured answer is the `cincludes` shape for libraries — a
+manifest-relative library directory (or archive path) resolved against the declaring manifest, gated per
+entry like `csources` — but whether kama should carry prebuilt binaries at all (they are per-target and
+per-toolchain, where a `csources` entry is portable) is the question to rule first.
+
+### Verify `csources` C++ and Objective-C on Windows (KR-71) — filed 2026-09-17, `0.9.382`
+
+The `csources` C++/Objective-C work (`0.9.379`–`0.9.382`) ran on macOS (clang, zig, `zig cc -target x86_64-linux-gnu`), Linux (the container's clang/gcc under
+ASan) and wasm (emcc). Unrun on the Windows box: msys2 `gcc`→`g++` and `clang`→`clang++` derivation with a
+`.exe` suffix, `cmd.exe` running the per-file commands, `-iquote .` (the `VERSION`-as-`<version>` collision
+is case-insensitivity, which Windows has), and a mingw C++ link bringing `libstdc++` statically under the
+default `runtime`. `tests/csources_cxx.d` and `tests/csources_cxx_dep.d` are the fixtures.
+
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
@@ -1062,76 +1097,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
       list.** A project with its OWN window seam now writes its own `link` + per-target `ldflags`, which
       is the right outcome: kama's hardcoded GLFW/framework list exists for a program that externs
       `kama_gpu.h`, and a project that does not is not entitled to track it.
-    - What is left is the C++ half of `csources`, which is its own row.
-
-- **`csources` compiles C, not C++ (KR-20) — measured 2026-09-17 at `0.9.376`, ready to rule and build.** The
-  consumer carried this as one open bug (their KB-16) for eight releases while kama reported its queue empty:
-  it was **two defects**. The bug half — a project's `cflags` (their `-x objective-c`) reaching the LINK
-  command — was FIXED at `0.9.238` and is pinned by `tools/check-buildsettings.sh`. The gap is this row.
-  ⚠️ **Lesson for triage:** a report that is half gap and half bug gets counted by whichever half the reader
-  holds. Split it on arrival.
-
-  **The consumer's real need** (`friendly-fire-department/native/Makefile`, 259 lines, run by `tools/build`
-  before `kama build`): one Objective-C file (`ffd_platform_mac.m`, 49 lines, macOS only, compiled with
-  `-x objective-c`), one C++17 file (`ffd_ui_native.cpp`, 938 lines, RmlUi's shim), one C file that needs
-  whisper's include tree, and two cmake builds (RmlUi 6.3, whisper.cpp + ggml) producing static archives.
-  Their kama.json files link those archives by name and name the C++ runtime by hand per target (`c++` on
-  macOS, `stdc++` on Linux). Separate archives exist so `server` and `tests` never link a C++ runtime. The
-  cmake half stays theirs; a C++ `csources` plus per-target sources retires the rest.
-
-  **Measured toolchain facts — do not re-derive:**
-  - **The DRIVER picks the C++ runtime; no per-target table is needed.** macOS `clang` cannot link a C++ TU
-    (undefined `std::logic_error`) but `clang++` can; Linux `clang` needs `-lstdc++` (no `libc++` in the image),
-    `clang++`/`g++` just link; `zig cc` cannot even find `<vector>` but `zig c++` compiles, links (builds
-    libc++ from source on first use) and cross-links a Windows C++ exe; `em++` links, and `emcc` also links
-    C++ objects. So "`-lc++` vs `-lstdc++`, a table kama does not have" is answered by linking with the C++
-    spelling of the same driver: `clang`→`clang++`, `gcc`→`g++`, `cc`→`c++`, `zig cc`→`zig c++`,
-    `emcc`→`em++`.
-  - ⚠️ **`-std=` is NOT positional.** In one command the LAST `-std=` applies to every input:
-    `clang++ -x c -std=gnu11 a.c -x c++ -std=gnu++17 b.cpp` fails ("-std=gnu++17 not allowed with C"), under
-    clang, zig and em++ alike. `-x` IS positional. So C and C++ cannot share one compiler invocation.
-  - ⚠️ **A LIVE BUG, same cause:** single-invocation builds (`zig cc` — the bundled install — and every wasm
-    build) put `csources`' `-std=gnu11` after the prefix's `-std=c11`, so **kama's own generated C compiles as
-    GNU C whenever any `csources` entry is present**, though docs/targets.md says it stays ISO `c11`. Measured
-    with `__STRICT_ANSI__` (clang and zig both: 99, gnu). Per-TU builds (native clang with ≥2 inputs) are right.
-  - Single invocation exists for a reason, measured and in the comment at the `nJobs` clamp: zig's
-    content-addressed cache makes one call 0.11 s after an edit versus 0.59 s per TU (5× worse per-TU), and
-    emcc's Python startup makes per-TU spawning costly. **A fix must not trade that away**: group inputs by
-    (language, standard) and run one invocation per group, instead of going per-TU.
-  - A clang++ compile ignores the C-only promotions (`-Werror=incompatible-pointer-types`) silently; **g++ warns
-    per TU** ("not valid for C++"). They belong to C inputs only.
-  - A `#ifdef __APPLE__`-guarded `.m` compiles as `-x objective-c` on Linux clang and on `zig cc -target
-    x86_64-windows-gnu`; an unguarded Foundation import does not. So Objective-C does not strictly NEED a
-    per-target tier, but a per-target tier is the explicit spelling.
-  - Object names drop the extension (`csrc__<owner>__<stem>.o`), so `foo.c` + `foo.cpp` in one package collide
-    (the existing refusal would fire).
-  - The precedent for per-input language: the native gpu seam's input token is `-x objective-c "seam.c" -x none`.
-  - ⚠️ **Unknown keys INSIDE a `select.TARGET` arm are silently skipped** ("future target keys tolerated"), while
-    an unknown top-level key is refused (`unknown key`). Measured: `"cflgas"` and `"csources"` in a HOST arm
-    built and ran. A typo'd per-target flag does nothing, and a per-target `csources` written for a newer kama
-    would silently vanish on this one.
-  - The host header (`kama build`'s generated `<project>.h`) is already C++17-clean with an `extern "C"` guard.
-
-  **Rulings wanted before code** (ask with a kama.json example and a comparison table: Go cgo compiles
-  `.c`/`.cc`/`.cpp`/`.cxx`/`.m` by extension with `CGO_CXXFLAGS`, links with the C++ driver when C++ is present,
-  and selects per platform by `_darwin.m` file names and build tags; Zig's `addCSourceFiles` takes per-group
-  flags plus `linkLibCpp()`; Rust's `cc` crate is per-builder `.cpp(true)` + `std`, per-target through `cfg` in
-  build.rs; CMake has `CMAKE_CXX_STANDARD`/`CMAKE_CXX_FLAGS` and per-source language by extension):
-  1. **Language by extension** (`.c`, `.cpp`/`.cc`/`.cxx`, `.m`, `.mm`) or an explicit per-entry language.
-  2. **The C++ standard**: pinned (as C is pinned to `gnu11`) and to what, and how a project changes it.
-  3. **Where C++-only (and Objective-C-only) flags live**: project `cflags` reach kama's own C too, so
-     `-std=c++20`/`-fno-exceptions`/`-fobjc-arc` need a home, such as a `cxxflags` key on both tiers, or
-     per-entry flags.
-  4. **Per-target sources**: `csources` (and `cincludes`?) inside a `select.TARGET` arm, additive to the
-     project's; and whether unknown target-arm keys become an error (they must, if per-target sources ship).
-  5. **The C++ driver**: derived from the C driver as measured above; an explicit `--cc`/target `cc` with no
-     derivable C++ spelling then needs a `cxx`/`--cxx`. Link with it only when a C++ or ObjC++ TU is in the
-     build, so a program without one (the consumer's `server`/`tests`) never links a C++ runtime.
-
-  **Out of scope, stated:** building a cmake project (theirs). Related and unfiled: a DEPENDENCY cannot carry
-  a relative `-L`, so a package cannot ship a prebuilt archive for its consumer to link. The consumer works
-  around it in the root package; weigh it separately.
-
   - **Declared NOT ours, and they agree** — the audio backend, WebGPU binding breadth, their RFC6455
     framing, module statics being per-isolate (correct behaviour), and a PATH entry that is a directory
     breaking `make` in the emscripten image. Their `ENGINE_TODO.md` holds those.
