@@ -5218,6 +5218,44 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v->line);
             return "0";
         }
+        // The same rule on the SOURCE side, which had no check at all: `cast<UnsafePtr>(anInlineArray)` emitted
+        // `((void*)(s))` and clang refused it — "operand of type 'InlineArray_uint8_4' where arithmetic or
+        // pointer type is required" — naming a mangled type the author never wrote (KR-65). A struct is not a
+        // conversion source for the same reason it is not a target: C converts scalars and pointers.
+        // `string` (kama_string) and a tagged enum are aggregates and land here too; a plain enum is an
+        // integer and stays legal, which is why `isEnum` is excluded.
+        //
+        // Where an aggregate's ADDRESS is what was wanted — the InlineArray case — `addr(of: s[0])` is the one
+        // spelling, and it already works (GOALS #4, one way to do a thing). A pointer target says so.
+        {
+            const std::string src = typeOfExpr(v->unaryExpression);
+            if (!src.empty() && _classes.count(src) && !isEnum(src)) {
+                if (opaqueScalarUnknown(src)) return "0";   // an opaque param — see the header
+                // Name it the way it was WRITTEN: a generic instance's `_classes` key is its MANGLED name
+                // (`InlineArray_uint8_4`), and a diagnostic naming a mangled type sends the reader looking
+                // for a spelling that is not in their file. The operand's declared type node carries the
+                // spelling; the template key answers for the instance shapes that have no node here.
+                std::string srcName;
+                if (auto* id = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
+                    if (id->value) {
+                        auto tn = _localTypeNodes.find(*id->value);
+                        if (tn != _localTypeNodes.end() && tn->second && tn->second->value) srcName = *tn->second->value;
+                    }
+                if (srcName.empty()) {
+                    auto gi = _genericTypeInsts.find(src);
+                    srcName = gi != _genericTypeInsts.end() && !gi->second.templateKey.empty()
+                            ? gi->second.templateKey
+                            : (src == "kama_string" ? std::string("string") : src);
+                }
+                const bool ptrTarget = !target.empty() && target.back() == '*';
+                unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
+                             "and `" + srcName + "` is neither. "
+                           + (ptrTarget ? std::string("For the address of its storage write `addr(of: x[0])`; to")
+                                        : std::string("To"))
+                           + " reinterpret a scalar's bits use `bitcast`").c_str(), v->line);
+                return "0";
+            }
+        }
         // A plain enum is a SET of named constants, not a range, so an integer arriving from outside has
         // no reason to name one — and the infallible verb has no honest use at either end: when the value
         // is known the variant already HAS a name (`Color::Green`), and when it is not the conversion is

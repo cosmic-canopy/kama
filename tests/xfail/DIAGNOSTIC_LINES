@@ -89,6 +89,7 @@ brace_if_bare	brace_if_bare.kama:6
 brace_if_empty_semi	brace_if_empty_semi.kama:6
 brace_while_bare	brace_while_bare.kama:5
 callerthread_on_body	callerthread_on_body.kama:4
+cast_aggregate_source	cast_aggregate_source.kama:6
 cast_const_oob	cast_const_oob.kama:5
 cast_const_oob_comptime	cast_const_oob_comptime.kama:4
 cast_const_oob_unsigned	cast_const_oob_unsigned.kama:3

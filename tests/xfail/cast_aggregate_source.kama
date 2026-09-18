@@ -1,0 +1,9 @@
+// A `cast` converts between scalars and pointers, on BOTH sides. The target side has been checked since
+// 0.9.x; the SOURCE side had no check, so this reached the C compiler, which named a mangled type the author
+// never wrote (KR-65). The address of an InlineArray's storage is `addr(of: s[0])` — the one spelling.
+unsafe fn UnsafePtr storage() {
+    InlineArray<uint8>#(4) s = [0; 4];
+    return cast<UnsafePtr>(s);
+}
+
+fn int32 main() { return 0; }

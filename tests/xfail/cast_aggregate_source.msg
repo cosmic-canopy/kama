@@ -1,0 +1,1 @@
+`cast<UnsafePtr>(…)` — a conversion works between scalars and pointers, and `InlineArray` is neither. For the address of its storage write `addr(of: x[0])`
