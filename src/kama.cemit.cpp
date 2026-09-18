@@ -30145,8 +30145,8 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // `addr(of: place)` — the builtin's result is a pointer to the place's type, and it is READ-ONLY when
     // the place roots in a const binding: that is how `addr(of:)` on `const this` / a `const` local hands
     // back an `UnsafeConstPtr<T>` instead of being refused, and the sinks (rejectConstPtrWiden) are what
-    // keep it from becoming a writable one. Typed by `lvalueCType`, so an element place (`addr(of:
-    // this.data[i])`) answers "" and stays silent, exactly as it did before this arm existed.
+    // keep it from becoming a writable one. Typed by `lvalueCType`, with the fallbacks below for the places it
+    // does not type.
     if (inv->identifier && inv->identifier->value && *inv->identifier->value == "addr" && !inv->expression
         && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
         && inv->args && inv->args->size() == 1 && (*inv->args)[0] && (*inv->args)[0]->expression) {
@@ -30160,8 +30160,20 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         if (ct.empty())
             if (auto* pin = dynamic_cast<InvocationNode*>(a.get()))
                 if (invocationReturnsPlace(pin)) ct = callReturnTypeRaw(pin);
+        // An element place of any container, const or not. It used to be typed only through a const chain, so
+        // `cast<usize>(addr(of: s[0]))` had no source type and `narrowCheck` wrapped a pointer in
+        // `KAMA_NARROW`, which clang refused (KR-65).
         if (ct.empty())
-            if (dynamic_cast<ElementAccessNode*>(a.get()) && chainThroughConstPlace(a)) ct = indexElemTypeRaw(a);
+            if (auto* ea = dynamic_cast<ElementAccessNode*>(a.get())) {
+                ct = typeOfExpr(a);
+                // `p[i]` through a raw-pointer LOCAL or parameter: `ptrElemType` answers only for a field, so
+                // the pointee is read off the local's own C type here.
+                if (ct.empty() && !ea->expression && ea->identifier) {
+                    const std::string pt = lvalueCType(std::static_pointer_cast<ExpressionNode>(ea->identifier));
+                    if (pt.size() > 1 && pt.back() == '*' && pt != "void*" && pt != "void const*")
+                        ct = pt.substr(0, pt.size() - 1);
+                }
+            }
         // A module `static` / `comptime` is neither a local nor a field, so `lvalueCType` does not know
         // it. A `comptime` is real `static const` storage (SPEC § Compile-time constants), so its address
         // is read-only — `addr(of: CAP)` into an `UnsafePtr<int32>` was accepted until 0.9.204, and

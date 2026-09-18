@@ -1,0 +1,17 @@
+// `cast<usize>(addr(of: s[i]))` — an element's address as an integer, then back through `cast<UnsafePtr<T>>`.
+// The element place used to have no type, so the cast wrapped a pointer in a numeric narrowing check that
+// clang refused (KR-65). An offset is `addr(of: p[n])`, the one spelling of pointer arithmetic.
+unsafe fn int32 run() {
+    InlineArray<uint64>#(4) s = [0; 4];
+    s[2] = 42;
+    usize first = cast<usize>(addr(of: s[0]));
+    usize third = cast<usize>(addr(of: s[2]));
+    if (third - first != 2 * sizeof(uint64)) { return 1; }
+    UnsafePtr<uint64> p = cast<UnsafePtr<uint64>>(third);
+    if (p[0] != 42) { return 2; }
+    UnsafePtr<uint8> bytes = cast<UnsafePtr<uint8>>(addr(of: s[0]));
+    if (cast<usize>(addr(of: bytes[16])) != third) { return 3; }
+    return 0;
+}
+
+fn int32 main() { return run(); }
