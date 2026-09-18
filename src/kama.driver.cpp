@@ -11741,6 +11741,14 @@ int main(int argc, char** argv)
             // A kama program is a batch program: `main` returns an exit code and the process is done.
             // (The reasoning, and the node teardown deadlock that made it unconditional, is above.)
             setScalar("EXIT_RUNTIME", "1");
+            // A wasm build holding C++ LINKS with `emcc`, never `em++` (the same invocation compiles
+            // kama's C, and emcc applies one `-x` to every input) — and `emcc` then links the C-only
+            // runtime libraries, so a C++ object's `std::string`, `__cxa_throw` and typeinfo are
+            // undefined at `wasm-ld`. Emscripten's own message names the door: "Try linking with 'em++'
+            // or passing '-sDEFAULT_TO_CXX'". This is the second, and it is a LINK setting, so it belongs
+            // here with the rest rather than in the flags. ⚠️ `-lc++ -lc++abi` is NOT the fix, though it
+            // looks like one: emcc maps them to the `-noexcept` variants, which have no `__cxa_throw`.
+            if (needsCxx) setScalar("DEFAULT_TO_CXX", "1");
             if (needsNetWeb) { addList("EXPORTED_RUNTIME_METHODS", "UTF8ToString");
                                addList("EXPORTED_RUNTIME_METHODS", "HEAPU8"); }
             if (needsPthread) {
