@@ -75,16 +75,21 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    address now has a type, so `cast<usize>(addr(of: s[0]))` lowers (`0.9.386`); an aggregate `cast` SOURCE is refused
    like the target always was (`0.9.387`); and pointer arithmetic is a non-goal, refused at the operator and pointed
    at `addr(of: p[i])` (`0.9.388`). The record is SPEC *`UnsafePtr`*.
-5. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
-   allocator verdict (§4).
-6. **KR-58 on the Windows box, AFTER KR-49/KR-50** (maintainer, 2026-09-17: wait for their results, since a
+5. ~~**KR-50**~~ — shipped `0.9.394`–`0.9.395`, and the boxing needed no change: `tests/global_allocator_serde.kama`
+   runs a serde failure against a declared pool whose `deallocate` panics on any pointer it never handed out. Writing
+   it found the two defects it now guards (a moved-from value kept its `cap` and released a NULL; a fact from a
+   synthesized body was filed against the wrong function — KR-75). The per-call error allocator is a NON-GOAL, with
+   its reason, and the `--no-heap` half is **KR-39's**, not this row's: dropping a boxed error dispatches a
+   destructor through a contract, which the flag refuses whatever the heap is. All of it is written up in §4.
+6. **KR-58 on the Windows box, AFTER KR-49** (maintainer, 2026-09-17: wait for their results, since a
    declared pool may change what a `@heap` extern means; see §2b "Meets KR-49"). The brief in §2b is otherwise ready:
    decisions 2 and 3 (stack reserve, probe cost) are pure measurement and go first.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
 (shipped `0.9.355`) → ~~**KR-48** `kama_alloc`/`kama_free`~~ (shipped `0.9.369`) → ~~**KR-49**
-replaceable global allocator~~ (shipped `0.9.378`) → **KR-50** allocator-aware errors → revisit **KR-39**. It was KR-39 that was to
+replaceable global allocator~~ (shipped `0.9.378`) → ~~**KR-50** allocator-aware errors~~ (shipped `0.9.395`) →
+**KR-39**, which that row's evidence has now made concrete rather than theoretical. It was KR-39 that was to
 land right after KR-47 "on the same walk", in view of tier 1 of the devirtualization ladder (KR-23); reading the
 emitter retired that plan, for the reasons at the top of this doc. One half of the premise survives and is worth
 keeping: the proof of "which body does this slot reach" belongs to ONE mechanism, not two. Note that the walk now
@@ -625,9 +630,32 @@ box's `A` — the `A3` path bare `new` into a stateful `A` already uses. With §
 is `GlobalAllocator`) then draws from the program's declared allocator, which answers "a user can replace
 it" for serde and every other fallible API without touching a contract.
 
-Open: whether a PER-CALL error allocator is wanted too (serde into an arena, errors included). That is a
-contract change — `Result<T, Owned<Error, A>>` in `Serializable`/`Deserializable` — and source-breaking for
-every hand-written serde, so it is decided on its merits here and not assumed.
+**SHIPPED — proven `0.9.394`–`0.9.395`, and it needed no change to the boxing at all.**
+`tests/global_allocator_serde.kama` is the proof: a declared pool whose `deallocate` PANICS on any pointer it
+never handed out, a JSON document that fails to deserialize (`300` into an `int8`, so the reader boxes an
+`Error`) and one that succeeds. It runs, which says the error box and its release both went through the pool.
+
+Writing that fixture was what found the two defects it now guards: a moved-from string kept its `cap`, so its
+drop released a NULL that libc absorbs and a user's pool does not (`0.9.394`), and an allocation fact recorded
+while a synthesized body was emitted was filed against the wrong function (`0.9.395`, KR-75). Both were
+invisible until a pool was the heap — which is the argument for a pool fixture over reading the emitter.
+
+**The per-call error allocator is a NON-GOAL.** The question was whether `Serializable`/`Deserializable`
+should carry `Result<T, Owned<Error, A>>` so a caller can put errors in the same arena as the values. It should
+not: with §3 the error box already follows the program's declared allocator, so the case this would serve is
+narrower than it looks — a program that wants its errors in a DIFFERENT arena from its global pool, while
+`@globalAllocator` exists precisely so that one pool answers for everything. Against that, the contract change
+is source-breaking for every hand-written serde in every consumer, and it puts an allocator parameter in the
+signature of the most-implemented contract kama has. If a per-arena error is ever wanted, it is wanted for
+fallible APIs in general and belongs to a design for that, not to serde's contract.
+
+⚠️ **What is NOT proven, and it is not this row's to fix:** the same fixture under `--no-heap` is refused —
+*"`main` dispatches the destructor of the object behind a contract or base-class handle ... through `main` ->
+`Result::…::dtor` -> `Owned_Error_GlobalAllocator::dtor`"*. The pool is irrelevant to that verdict: dropping a
+boxed error goes through a contract-dispatched destructor, which the walk cannot resolve, so the flag refuses
+the program however its heap is spelled. That is **KR-39** exactly, whose row used to say it waits on this
+one — the dependency ran the other way, and this is its first concrete consumer: a serde error path under
+`--no-heap` is unreachable until a slot's callee can be proven.
 
 ### 5. Serde's error path stays honest
 
@@ -724,7 +752,7 @@ refused, so the Windows argv path had to become funnel-only first.
 1. ~~§1 reach-based `--no-heap` (KR-47), then the `Handle` fix~~ — both shipped (`0.9.348`, `0.9.355`).
 2. §2 `kama_alloc`/`kama_free` as the only primitives, and the guard (KR-48; no behaviour change; mixed pairs gone).
 3. ~~§3 replacing the default implementation (KR-49; + `Shared.adopt`, `SortedMap` root)~~ — shipped `0.9.378`.
-4. §4 allocator-aware error boxing; decide the per-call question (KR-50).
+4. ~~§4 allocator-aware error boxing; decide the per-call question~~ — shipped `0.9.395`; per-call is a non-goal (§4).
 5. OS seam and extern coverage completed; foreign-owned list verified against the code.
 
 Each step: fixtures landed red first, `SPEC.md` updated in the same commit, `VERSION` bumped.
