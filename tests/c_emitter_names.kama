@@ -1,0 +1,25 @@
+// KR-67, the other half: a kama name must not collide with an identifier the EMITTER reserves for
+// itself either. SPEC § Reserved/runtime says generated C reserves `__`-prefixed identifiers, but the
+// lexer never enforced it, so this program used to emit a redefinition:
+//
+//     int32_t __ret_0 = 3;      /* the user's local  */
+//     int32_t __ret_0;          /* the emitter's return temp — `error: redefinition of '__ret_0'` */
+//
+// The fix is not to reserve the spelling (the stdlib itself uses `__sr`/`__sk` names by convention)
+// but to put every name the USER owns in its own C namespace, which leaves `__` exclusively the
+// emitter's. So these names are legal kama and must simply work.
+type value Slot {
+    public int32 __vptr;                       // the emitter's vtable-pointer member
+    public int32 __size;                       // the emitter's layout slot
+    public ctor make(int32 __vptr, int32 __size) { this.__vptr = __vptr; this.__size = __size; }
+}
+
+fn int32 blend(int32 __base) { return __base + 1; }   // the emitter's inherited-base member
+
+fn int32 main() {
+    int32 __ret_0 = 3;                         // the emitter's return temp
+    int32 __match0 = 4;                        // the emitter's match subject temp
+    Slot s = Slot.make(__vptr: 5, __size: 6);
+    // 3 + 4 + 5 + 6 + 1 = 19
+    return __ret_0 + __match0 + s.__vptr + s.__size + blend(__base: 0);
+}

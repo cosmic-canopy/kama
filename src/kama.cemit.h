@@ -1796,6 +1796,12 @@ private:
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
     static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
     std::string qualify(const std::string& name) const;          // scope-prefix a declared name (the file-private scope for a name this file does not export)
+    // KR-67. A name kama OWNS reaches C as `k_<name>`, so no header macro can rewrite it. See the
+    // definition in kama.cemit.cpp for the rule and why the C preprocessor leaves no alternative.
+    static std::string kName(const std::string& name);           // a kama-owned C identifier: `near` -> `k_near`
+    // A MEMBER of `owner`: raw when the owner DECLARES C (`type extern value` must match the header,
+    // `type expose value` is a published layout), prefixed otherwise.
+    static std::string kMember(const ClassInfo& owner, const std::string& name);
     // A sibling file's PRIVATE key for `name`, if some other file of this module declares it unexported —
     // handed back so `checkReach` refuses it by name ("not exported by a.kama") instead of the resolver
     // reporting an unknown symbol. `known` is the table test the caller was already using.
@@ -1821,7 +1827,11 @@ private:
     bool isNamespace(const std::string& name) const;             // a known public namespace (or alias)
 
     // RAII scope stack: live destructible locals per lexical scope.
-    struct LiveLocal { std::string cVar; std::string className; };
+    // `cVar` is the KAMA spelling: it is a `_moveState` key and it is interpolated into a
+    // diagnostic, so it must stay what the author wrote. `userName` says whether the C write
+    // needs the KR-67 `k_` prefix — true for a user local/binding/parameter, false for an
+    // emitter temp (`__strtmp0`, `__msubj1`, …), which is already in the emitter's own namespace.
+    struct LiveLocal { std::string cVar; std::string className; bool userName = false; };
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
@@ -2663,7 +2673,7 @@ private:
     SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
     // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); returns the temp.
     std::string emitStickyErrBox(int depth, const std::string& enumType = "DeError",
-                                 const std::string& errExpr = "r.vtbl->errorCode(r.obj)");
+                                 const std::string& errExpr = "r.vtbl->k_errorCode(r.obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
     std::vector<std::string> _graphNodeOrder;       // graph node types in a stable order (typeIndex; the shell reader chain)
@@ -3089,7 +3099,7 @@ private:
     void dropCondTemps(size_t preLoc, int depth);              // drop+unregister a condition's hoisted temps
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     void emitUnwindAll(int depth);                             // return: innermost..function root
-    void recordDestructibleLocal(const std::string& cVar, const std::string& className);
+    void recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName = false);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     static bool bodyDiverges(SharedStatement s);               // body ends in return/break/continue
     void emitDtorDefinition(ClassInfo& ci);

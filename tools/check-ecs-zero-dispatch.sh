@@ -44,7 +44,7 @@ fi
 
 # 2. the plain system writes through a concrete Transform* with no dispatch
 body=$(sed -n "/^void ${P}__integrate(std/,/^}/p" "$tmp/ecs.c")
-if echo "$body" | grep -q "${P}__Transform\* t"; then
+if echo "$body" | grep -q "${P}__Transform\* k_t"; then
     echo "  ok: the system loop walks a concrete Transform*"
 else
     echo "  FAIL: the system loop no longer binds a concrete Transform*"; fail=1

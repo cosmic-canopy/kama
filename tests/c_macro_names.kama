@@ -1,0 +1,66 @@
+// KR-67 — a kama name that a platform header `#define`s must still reach C intact.
+//
+// Every position that emits a name into C carries a spelling here that IS a macro on at least one
+// supported target, so the whole class sits in one program. The three imports put the OS seam's
+// headers in front of this module's C (one generated `<name>.gen.h` carries every `extern` header).
+//
+// ⚠️ Two properties this fixture depends on, both measured (docs/design/c-names.md):
+//   * The hostile set is PER PLATFORM — `near`/`far`/`min`/`max` are macros on Windows and not on
+//     macOS; `errno`/`_LP64`/`st_mtime`/`s6_addr` are macros on macOS and Linux. So no single box
+//     sees every position go red, and each box's green run is its own witness.
+//   * A FUNCTION-LIKE macro fires only where a `(` follows. A contract slot named `min` or a
+//     fn-pointer local named `max` is therefore only hostile when it is CALLED — which is why this
+//     fixture invokes through both rather than merely declaring them.
+import { std::fs::exists, std::net::IpAddr, std::net::SocketAddr, std::process::Command };
+
+// Fields: `near` is <windef.h>, `st_mtime` is <sys/stat.h>.
+type value Frame {
+    public int32 near;
+    public int32 st_mtime;
+    public ctor make(int32 near, int32 st_mtime) { this.near = near; this.st_mtime = st_mtime; }
+}
+
+// Variant payload field: `s6_addr` is <netinet6/in6.h>.
+type enum Endpoint { V6(int32 s6_addr), None }
+
+// Contract/vtable slot: `min` is <stdlib.h> on Windows. Dispatched through the handle below.
+type contract Bounded for value { fn int32 min(); }
+type value Range implements Bounded {
+    int32 lo;
+    public ctor of(int32 lo) { this.lo = lo; }
+    public fn int32 min() { return this.lo; }
+}
+
+// Fn-pointer slot: `max` is <stdlib.h> on Windows. Invoked through the local below.
+fnptr int32 Pick(int32 a, int32 b);
+fn int32 pickHigher(int32 a, int32 b) { if (a > b) { return a; } return b; }
+
+// Parameter: `far` is <windef.h>.
+fn int32 widen(int32 far) { return far + 1; }
+
+fn int32 main() {
+    // Locals: `errno` is a macro everywhere, `_LP64` is predefined on macOS and Linux.
+    int32 errno = 3;
+    int32 _LP64 = 4;
+    int32 environ = 5;
+
+    Frame f = Frame.make(near: 6, st_mtime: 3);
+    Endpoint e = Endpoint::V6(s6_addr: 8);
+    int32 payload = match (e) { case V6(s6_addr: v): v; case None: 0; };
+
+    Range r = Range.of(lo: 9);                // a contract handle reseats an lvalue, not an rvalue
+    Bounded b = r;
+    int32 lo = b.min();                       // vtable slot, CALLED
+
+    Pick max = pickHigher;
+    int32 hi = max(a: 1, b: 2);               // fn-pointer local, CALLED
+
+    // Keep all three seams reachable so their headers stay in this TU.
+    SocketAddr sa = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 80ui16);
+    Command cmd = Command.make(program: "true");
+    int32 seam = 0;
+    if (exists(path: ".") && sa.port == 80ui16) { seam = 1; }
+
+    // 3 + 4 + 5 + 6 + 3 + 8 + 9 + 2 + 1 + 1 = 42
+    return errno + _LP64 + environ + f.near + f.st_mtime + payload + lo + hi + widen(far: 0) + seam;
+}

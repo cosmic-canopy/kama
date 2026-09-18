@@ -612,6 +612,49 @@ std::string CEmitter::qualify(const std::string& name) const
     return _nsCtx.scope + "__" + name;
 }
 
+// KR-67: a name kama OWNS reaches C in a namespace no header can rewrite.
+//
+// The C preprocessor is not scoped, so a macro from ANY included header rewrites a matching identifier
+// anywhere it appears — and one generated `<name>.gen.h` carries every `extern` header, so importing
+// `std::fs` anywhere puts the whole OS seam in front of EVERY module's names. Measured: 4,708 macros
+// over the shipped macOS set, 21,748 over one Windows TU. A field `st_mtime`, a local `errno`, a
+// payload field `s6_addr` and a local `_LP64` all failed in clang before this.
+//
+// Types, functions, statics and enum cases were never affected — `qualify()` above already puts them in
+// a kama-owned namespace. This extends that one rule to the positions that emitted a name RAW: fields,
+// variant payload fields and union members, parameters, locals and bindings, and contract/vtable slots.
+//
+// Why a prefix rather than reserving the spellings (the alternative `kama.l` took for C's keywords):
+// the hostile set is unbounded (17K on one target), differs per target and SDK, moves with every
+// user's own `extern "<vendor.h>"`, and reserving would refuse on Linux a name that is only a macro on
+// Windows — which would make source non-portable. A prefix closes the class BY CONSTRUCTION instead,
+// for every target and every header kama has never seen, at zero runtime cost.
+//
+// Why `k_`: it must not start with `_`+capital or `__`, which is C's implementation namespace, where
+// the system headers live (`_LP64` is a real predefined macro). Measured: 0 of 4,708 macOS and 0 of
+// 21,748 Windows macros start with `k_`; `tools/check-c-names.sh` keeps that premise checked.
+//
+// The mangling is REVERSIBLE — strip exactly one leading `k_` — which KR-32's debugger name layer
+// needs; a user name already spelled `k_x` becomes `k_k_x` and still reverses.
+//
+// ⚠️ This is the C WRITE only. Every analysis map stays keyed by the kama spelling (`_localTypes`,
+// `_moveState`, `_refParams`, `_paramNames`, `ParamSig::name` — which is the named-argument protocol
+// key — and `ClassInfo::fieldNames`), and so does every WIRE or DISPLAY string (serde field names,
+// variant tags, `@generate(Formattable)` text). Those go out through `kamaStrLit`/`emitFmtLiteral`;
+// a C identifier position never does, which is the discriminator at every site below.
+std::string CEmitter::kName(const std::string& name)
+{
+    return name.empty() ? name : "k_" + name;
+}
+
+// A member of `owner`. The positions that DECLARE C keep the C spelling, because code on the other
+// side depends on it: a `type extern value`'s fields must match the header they came from, and a
+// `type expose value` publishes its layout and field names to a host. Everything else kama owns.
+std::string CEmitter::kMember(const ClassInfo& owner, const std::string& name)
+{
+    return (owner.isExternStruct || owner.isExposeStruct) ? name : kName(name);
+}
+
 void CEmitter::restoreFileRung(NsCtx& ns, const std::string& declFile) const
 {
     ns.privScope.clear(); ns.exportedHere.clear();
@@ -4663,8 +4706,8 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
 
     // 4. Wrap a `Template` over the borrowed arrays (designated init — robust to field layout).
     std::string tv = "__tmpl" + std::to_string(_tempCounter++);
-    _hoisted.push_back("Template " + tv + " = { ._parts = " + pa + ", ._nparts = " + std::to_string(partVars.size()) +
-                       ", ._holes = " + holesPtr + ", ._nholes = " + std::to_string(holeVars.size()) + " };");
+    _hoisted.push_back("Template " + tv + " = { .k__parts = " + pa + ", .k__nparts = " + std::to_string(partVars.size()) +
+                       ", .k__holes = " + holesPtr + ", .k__nholes = " + std::to_string(holeVars.size()) + " };");
 
     // 5. Call the tag: `<tag>(&__tmpl)` returns a fresh owned R (like Formatter__finish), which the enclosing
     //    assignment/return/arg takes ownership of. Hand-emitted via the resolved cName (bypasses named-arg
@@ -4855,7 +4898,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // built, and ran (tests/xfail/scope_op_field_leak).
         const bool qualified = v->qualifier && !v->qualifier->empty();
         // A ref/out parameter is a pointer in C; reads dereference it.
-        if (!qualified && _refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + nm + ")"; }
+        if (!qualified && _refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + kName(nm) + ")"; }
         // An unqualified name that is a field of the enclosing class (or an
         // ancestor) and not a local/param resolves to self->[__base.]…field.
         if (!qualified && _currentClass && !_localTypes.count(nm)) {
@@ -4872,7 +4915,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 _ctorSelfUsed = true;           // in a ctor: the implicit `this` storage is needed
                 checkFieldAccess(owner, nm, v->line);
                 recordFieldRef(owner, nm, v);   // implicit `this.` field read
-                return "self->" + basePathTo(_currentClass, owner) + nm;
+                return "self->" + basePathTo(_currentClass, owner) + kMember(*owner, nm);
             }
         }
         // A bare **function name** used as a value (not a call) → its C function
@@ -4914,7 +4957,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         }
         checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
         recordRef(bindingKeyOf(nm), v);   // a local, a param, or an unindexed name (empty key => dropped)
-        return nm;
+        // KR-67: a BOUND name is a local/param/binding kama owns, so it reads by its prefixed C
+        // spelling. An unbound one is a builtin or a synthesized compiler name — already in the
+        // emitter's own namespace, and prefixing it would not match its declaration.
+        return bound ? kName(nm) : nm;
     }
 
     if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
@@ -4935,7 +4981,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             ClassInfo* owner = findFieldOwner(_currentClass->base, name);
             if (owner) { checkFieldAccess(owner, name, ba->line);
                          recordFieldRef(owner, name, ba->identifier.get());
-                         return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
+                         return "self->__base." + basePathTo(_currentClass->base, owner) + kMember(*owner, name); }
         }
         // Say what actually happened. This used to report the bare fragment "base access", naming
         // neither the member nor the type — the two failures below are quite different problems.
@@ -5418,7 +5464,7 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         auto ci = _classes.find(it->className);
         if (ci != _classes.end() && !ci->second.destructible) continue;
         indent(depth);
-        *_out << it->className << "__dtor(&" << it->cVar << ");\n";
+        *_out << it->className << "__dtor(&" << (it->userName ? kName(it->cVar) : it->cVar) << ");\n";
     }
     // A `@onPanic` region DISARMS on every exit path: this helper is on all of them (fall-through, and
     // the return/break/continue unwinds), and the root scope is the region's frame.
@@ -5490,7 +5536,7 @@ void CEmitter::dropCondTemps(size_t preLoc, int depth)
         if (ms != _moveState.end() && ms->second != MoveState::NotMoved) continue;   // moved / maybe-moved: no drop
         auto ci = _classes.find(locs[i].className);
         if (ci != _classes.end() && !ci->second.destructible) continue;              // owns nothing
-        indent(depth); *_out << locs[i].className << "__dtor(&" << locs[i].cVar << ");\n";
+        indent(depth); *_out << locs[i].className << "__dtor(&" << (locs[i].userName ? kName(locs[i].cVar) : locs[i].cVar) << ");\n";
     }
     if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
 }
@@ -5511,11 +5557,11 @@ void CEmitter::emitUnwindAll(int depth)
         emitScopeCleanup(_scopes[i], depth);
 }
 
-void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className)
+void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName)
 {
     recordDestructibleOwner(cVar, className);   // the `@onPanic` walk's fact, at the one registration point
     if (!_scopes.empty())
-        _scopes.back().locals.push_back({cVar, className});
+        _scopes.back().locals.push_back({cVar, className, userName});
     // Track for move analysis: move-only resources AND heap-owning collections/strings (so `give s`
     // suppresses the source's scope-drop, and a use-after-move is caught). A never-`give`n collection/
     // string stays NotMoved → drops normally, exactly as before.
@@ -5736,7 +5782,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 continue;
             }
             indent(depth + 1);
-            *_out << viewCType << " " << alias << " = " << vmi->cName
+            *_out << viewCType << " " << kName(alias) << " = " << vmi->cName
                   << "(&(" << emitExpression(recvExpr) << "));\n";
             noteScopedBinding(alias);   // the window's scope owns the alias — popScope retires all three entries
             _localTypes[alias] = viewCType;
@@ -6058,7 +6104,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             unsupported((KW + " body writes to captured `" + nm + "` — a non-atomic capture is shared "
                          "across all workers and would race; make it an `Atomic<T>`, or write only through the "
                          "loop element `" + loopVar + "`").c_str(), pf->line);
-        c.addr = _refParams.count(nm) ? nm : ("&(" + nm + ")");   // a ref-param capture IS already a pointer
+        c.addr = _refParams.count(nm) ? kName(nm) : ("&(" + kName(nm) + ")");   // a ref-param capture IS already a pointer
         // A capture reaches every worker by `ref` — the same crossing as a borrowed bundle, so the same
         // sendability gate (see the element record above).
         if (!_probingTemplate && !c.cType.empty())
@@ -6100,8 +6146,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _currentReturnCType = "void";
         _tempCounter = 0;
 
-        body << "static void " << bodyFn << "(" << viewCType << " __slice";
-        for (auto& c : caps) body << ", " << c.cType << "* " << c.name;
+        body << "static void " << bodyFn << "(" << viewCType << " " << kName("__slice");
+        for (auto& c : caps) body << ", " << c.cType << "* " << kName(c.name);
         body << ") {\n";
 
         _paramNames.insert("__slice");
@@ -6433,7 +6479,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
             // value and a `match` arm take — so a destination-typed construction (`DynamicArray<T> items =
             // DynamicArray.empty();`) resolves as it does in a local initializer, instead of refusing with
             // "give the type arguments" when they are already on the field (KR-21 b).
-            emitOwnedValueInto(nm + "." + f.name, fieldCType(ty, f), f.initializer, lineNo, depth, "a field initializer",
+            emitOwnedValueInto(nm + "." + kMember(_classes[ty], f.name), fieldCType(ty, f), f.initializer, lineNo, depth, "a field initializer",
                                /*kindChecked=*/true);
             continue;
         }
@@ -6448,7 +6494,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
         for (auto& kv : cit->second.methods)
             if (kv.second.isDefaultCtor) {
                 line(lineNo); indent(depth);
-                *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
+                *_out << nm << "." << kMember(_classes[ty], f.name) << " = " << kv.second.cName << "();\n";
                 filled = true;
                 break;
             }
@@ -6687,7 +6733,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // the concrete object (which must be an lvalue that outlives `s`).
                 if (iface) {
                     line(n->line); indent(depth);
-                    *_out << ty << " " << nm;
+                    *_out << ty << " " << kName(nm);
                     if (d->initializer) {
                         std::string c = exprClass(d->initializer);
                         // Conformance, ahead of the cascade. The `else` at the bottom used to be the only
@@ -6729,7 +6775,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (isSigType(ty)) {
                     _localTypes[nm] = ty;
                     line(n->line); indent(depth);
-                    *_out << ty << " " << nm;
+                    *_out << ty << " " << kName(nm);
                     if (!d->initializer)
                         unsupported("a FunctionPtr must be initialized (it is non-null)", n->line);
                     else
@@ -6750,7 +6796,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
                     flushHoisted(depth);                                   // temp decls first…
                     indent(depth);
-                    *_out << ty << " " << nm << initStr << ";\n";          // …then this declaration
+                    *_out << ty << " " << kName(nm) << initStr << ";\n";          // …then this declaration
                     return;
                 }
 
@@ -6774,9 +6820,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // a contradiction. Spell `T x = T.empty();` to get the default.
                 bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
                     || !d->initializer;
-                *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
+                *_out << ty << " " << kName(nm) << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
-                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
+                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty, /*userName=*/true);  // track empty resources for move analysis
                 // `slot T x;` — a HOLE, so it is not live and must NOT be dropped. Seed the state the
                 // move analysis already uses for "this local owns nothing right now": scope cleanup skips
                 // a Moved local, and an assignment's drop-the-old-value step is suppressed the same way.
@@ -6790,7 +6836,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // releases what is already there. The `= {0}` above plus the field-default fill below
                     // is that valid state.
                     if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct)
-                        emitAggregateFill(nm, ty, n->line, depth);
+                        emitAggregateFill(kName(nm), ty, n->line, depth, /*moveKey=*/nm);
                     return;   // otherwise declared-only (zero-inited empty, or a non-destructible value)
                 }
 
@@ -6822,7 +6868,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (cst->isTry) {
                         line(n->line);
                         bool ph = _hoistOK; _hoistOK = true;
-                        std::string s = emitTryCast(ty, nm, cst, n->line);
+                        std::string s = emitTryCast(ty, kName(nm), cst, n->line);
                         _hoistOK = ph; flushHoisted(depth);
                         if (!s.empty()) { indent(depth); *_out << s << "\n"; }
                         return;
@@ -6851,7 +6897,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (oc->isTry) {
                         line(n->line);
                         bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                        std::string s = emitTryNewBox(ty, nm, oc, n->line);
+                        std::string s = emitTryNewBox(ty, kName(nm), oc, n->line);
                         _hoistOK = ph; flushHoisted(depth);
                         if (!s.empty()) { indent(depth); *_out << s << "\n"; }
                         return;
@@ -6862,7 +6908,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (ctorIsFallible(oc)) {
                         line(n->line);
                         bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                        std::string s = emitFallibleNewBox(ty, nm, oc, n->line);
+                        std::string s = emitFallibleNewBox(ty, kName(nm), oc, n->line);
                         _hoistOK = ph; flushHoisted(depth);
                         if (!s.empty()) { indent(depth); *_out << s << "\n"; }
                         return;
@@ -6904,25 +6950,25 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     auto pa = placementAllocator(oc, n->line, /*emit=*/true);
                                     ap = "__alloc" + std::to_string(_tempCounter++);
                                     *_out << pa.second << " " << ap << " = " << pa.first << ";\n"; indent(depth);
-                                    *_out << nm << ".obj = (void*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(octy) << "));\n";
+                                    *_out << kName(nm) << ".obj = (void*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(octy) << "));\n";
                                 } else {
-                                    *_out << nm << ".obj = kama_alloc(" << layoutOf(octy) << ");\n";
+                                    *_out << kName(nm) << ".obj = kama_alloc(" << layoutOf(octy) << ");\n";
                                 }
-                                indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+                                indent(depth); *_out << "if (!" << kName(nm) << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (newBuildsValue(octy, oc))
-                                    emitNewFactoryMove(octy, "(" + octy + "*)" + nm + ".obj", oc, n->line, depth);
-                                indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
+                                    emitNewFactoryMove(octy, "(" + octy + "*)" + kName(nm) + ".obj", oc, n->line, depth);
+                                indent(depth); *_out << kName(nm) << ".vtbl = &" << octy << "__as_" << T << ";\n";
                                 if (useAlloc) {
-                                    indent(depth); *_out << nm << ".alloc = " << ap << ";\n";
+                                    indent(depth); *_out << kName(nm) << ".alloc = " << ap << ";\n";
                                 }
                                 if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
                                     indent(depth);
                                     if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
-                                        *_out << nm << ".ctrl = (kama_ctrl*)unwrapPtr(" << _collections[ty].allocType
+                                        *_out << kName(nm) << ".ctrl = (kama_ctrl*)unwrapPtr(" << _collections[ty].allocType
                                               << "__allocate(&" << ap << ", " << layoutOf("kama_ctrl") << ")); "
-                                              << nm << ".ctrl->strong = 1; " << nm << ".ctrl->weak = 0;\n";
+                                              << kName(nm) << ".ctrl->strong = 1; " << kName(nm) << ".ctrl->weak = 0;\n";
                                     else
-                                        *_out << nm << ".ctrl = kama_ctrl_new();\n";
+                                        *_out << kName(nm) << ".ctrl = kama_ctrl_new();\n";
                                 }
                             }
                         }
@@ -6993,7 +7039,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     if (!bp.empty()) bp.pop_back();
                                     adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
                                 }
-                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg
+                                indent(depth); *_out << kName(nm) << " = " << adoptM->cName << "(" << adoptArg
                                                      << (ap.empty() ? "" : ", " + ap) << ");\n";
                             }
                         }
@@ -7027,28 +7073,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line); indent(depth);
                     std::string src = emitExpression(init);
                     if (isInterface(_classes[ty].collElemClass)) {
-                        *_out << nm << ".obj = (" << src << ").obj; " << nm << ".vtbl = (" << src << ").vtbl; "
-                             << nm << ".ctrl = (" << src << ").ctrl;\n";
+                        *_out << kName(nm) << ".obj = (" << src << ").obj; " << kName(nm) << ".vtbl = (" << src << ").vtbl; "
+                             << kName(nm) << ".ctrl = (" << src << ").ctrl;\n";
                         // stateful-A iface Weak (M11d): carry the allocator so it frees the ctrl through the
                         // right A even after its Shared is gone.
                         std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
                         if (!wa.empty() && wa != "GlobalAllocator") {
-                            indent(depth); *_out << nm << ".alloc = (" << src << ").alloc;\n";
+                            indent(depth); *_out << kName(nm) << ".alloc = (" << src << ").alloc;\n";
                         }
                     }
                     else
-                        *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
-                    indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
+                        *_out << kName(nm) << ".ptr = (" << src << ").ptr; " << kName(nm) << ".ctrl = (" << src << ").ctrl;\n";
+                    indent(depth); *_out << "if (" << kName(nm) << ".ctrl) " << kName(nm) << ".ctrl->weak++;\n";
                 } else if (isSmartPtrUpcast(ty, init)) {
                     // Cross-element upcast: widen a concrete-element `Shared`/`Owned` into this
                     // contract-element (intrinsic fat) handle. The pointee is shared/moved; `nm`
                     // was already zero-declared above.
                     line(n->line);
-                    emitSmartPtrUpcast(nm, ty, init, handoff, depth, n->line);
+                    emitSmartPtrUpcast(kName(nm), ty, init, handoff, depth, n->line);
                 } else if (isSmartPtrBaseUpcast(ty, init)) {
                     // Base-class upcast: widen a derived-class handle into this base-class handle.
                     line(n->line);
-                    emitSmartPtrBaseUpcast(nm, ty, init, handoff, depth, n->line);
+                    emitSmartPtrBaseUpcast(kName(nm), ty, init, handoff, depth, n->line);
                 } else if (isSmartPtrHandoffMismatch(ty, init)) {
                     // Both sides own, but the widening isn't valid — a clear diagnostic instead of
                     // the misleading "collection hand-off" message below.
@@ -7068,7 +7114,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     std::string pk = primWidenKey(init, _classes[ty].collElemClass);
                     std::string t = emitPrimBoxIntoContract(ty, pk, emitExpression(init), n->line);
                     flushHoisted(depth);
-                    indent(depth); *_out << nm << " = " << t << ";\n";
+                    indent(depth); *_out << kName(nm) << " = " << t << ";\n";
                 } else if (isSmartPtrClass(ty) && isInterface(_classes[ty].collElemClass)
                            && exprClass(init) == "kama_string"
                            && classDeclaresContract("kama_string", _classes[ty].collElemClass)) {
@@ -7090,11 +7136,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv);
                     }
                     flushHoisted(depth);
-                    indent(depth); *_out << nm << " = " << t << ";\n";
+                    indent(depth); *_out << kName(nm) << " = " << t << ";\n";
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
-                    emitBindablePromote(nm, ty, init, depth);
+                    emitBindablePromote(kName(nm), ty, init, depth);
                 } else {
                     // Copy-initialize from another named value. The give/copy marker
                     // (or the type's default) decides move vs duplicate.
@@ -7125,7 +7171,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     _hoistOK = ph;
                     flushHoisted(depth);
                     indent(depth);
-                    *_out << nm << " = " << iv << ";\n";
+                    *_out << kName(nm) << " = " << iv << ";\n";
                     if (isSmartPtrClass(ty) && isSmartPtrLValue(init)) {
                         CollKind k = smartKind(ty);
                         // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.
@@ -7134,7 +7180,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                         indent(depth);
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
-                        else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                        else        *_out << kName(nm) << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl
                                && !isFixedColl(ty) && !isValueVectorKind(_classes[ty].collKind)
                                && isNamedValue(init.get())) {
@@ -7156,7 +7202,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
                                              "or use `give` to move)").c_str(), n->line);
-                            else { indent(depth); *_out << nm << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
+                            else { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer.
                         else { indent(depth); *_out << moveNullStmt(ty, emitExpression(init)) << "\n"; }
@@ -7174,7 +7220,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
-                        if (doCopy) { indent(depth); *_out << nm << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
+                        if (doCopy) { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         else { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }
                     }
                     // A value/primitive: the plain `=` above IS the hand-off — `copy` and `give` are both
@@ -7523,10 +7569,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // is recorded destructible (the collection owns the element).
         indent(depth + 2);
         if (fe->isRef) {
-            *_out << elemTy << "* " << nm << " = " << coll << "__at(" << fp << ", " << ix << ");\n";
+            *_out << elemTy << "* " << kName(nm) << " = " << coll << "__at(" << fp << ", " << ix << ");\n";
             _refParams.insert(nm);
         } else {
-            *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+            *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
         }
 
         SharedStatement last;
@@ -8101,7 +8147,7 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
                 if (!first) s += ", ";
                 first = false;
                 const std::string nm = (d->name && d->name->value) ? *d->name->value : "";
-                s += nm;
+                s += kName(nm);
                 // A `for` init declares a LOCAL. Record it in the binding tables exactly as emitDeclarator
                 // does — it used to be invisible to all of them, so the counter of every `for` loop in the
                 // corpus reached the identifier arm as a name nothing bound. Not pushed onto the scope's
@@ -12774,7 +12820,7 @@ void CEmitter::emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std:
         if (ret != "void") *_out << "return ";
         *_out << mi->cName << "(*(" << ci.name << "*)self";
         if (m.params) for (auto& p : *m.params) if (p && p->identifier && p->identifier->value)
-            *_out << ", " << *p->identifier->value;
+            *_out << ", " << kName(*p->identifier->value);
         *_out << ");\n}\n";
     }
 }
@@ -12803,9 +12849,9 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
             if (!mi) continue;
             indent(1);
             if (pci->isScalarRecv)
-                *_out << "." << m.name << " = &" << scalarSlotThunk(key, cn, m.name) << ",\n";
+                *_out << "." << kName(m.name) << " = &" << scalarSlotThunk(key, cn, m.name) << ",\n";
             else
-                *_out << "." << m.name << " = (" << cType(m.returnType)
+                *_out << "." << kName(m.name) << " = (" << cType(m.returnType)
                       << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << "(*)" << ifaceSlotSig(m.params)
                       << ")&" << mi->cName << ",\n";
         }
@@ -14715,7 +14761,7 @@ void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
     if (!_genericTypeInsts.count(opt)) return;          // prelude Optional unavailable -> skip (upgrade stays)
     *_out << "static inline " << opt << " " << info.cName << "__tryUpgrade(" << info.cName << "* self) {\n"
           << "    " << sh << " s = " << info.cName << "__upgrade(self);\n"
-          << "    if (s.ctrl) return (" << opt << "){ .tag = " << opt << "_Some, .u.Some = { .value = s } };\n"
+          << "    if (s.ctrl) return (" << opt << "){ .tag = " << opt << "_Some, .u.k_Some = { .k_value = s } };\n"
           << "    return (" << opt << "){ .tag = " << opt << "_None };\n"
           << "}\n";
 }
@@ -14731,7 +14777,7 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
           << "* self, kama_string needle) {\n"
           << "    size_t off;\n"
           << "    if (kama_string__find_raw(self, needle, &off))\n"
-          << "        return (" << opt << "){ .tag = " << opt << "_Some, .u.Some = { .value = off } };\n"
+          << "        return (" << opt << "){ .tag = " << opt << "_Some, .u.k_Some = { .k_value = off } };\n"
           << "    return (" << opt << "){ .tag = " << opt << "_None };\n"
           << "}\n";
 }
@@ -14754,7 +14800,7 @@ void CEmitter::emitFixedView(const CollectionInfo& info)
         const std::string vt = cType(mi->second.returnType);
         if (!isViewCType(vt)) continue;                            // registration failed; nothing to emit
         *_out << "static inline " << vt << " " << info.cName << "__" << member << "(" << info.cName << "* self) {\n"
-              << "    return (" << vt << "){ .data = self->v, .len = (ptrdiff_t)(" << info.constValue << ") };\n"
+              << "    return (" << vt << "){ .k_data = self->v, .k_len = (ptrdiff_t)(" << info.constValue << ") };\n"
               << "}\n";
     }
 }
@@ -15277,7 +15323,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         nextCall = nextMi->cName + "(&" + it + ")";
         // `Optional<T> next()` -> T, read off the monomorphized Optional's `Some` payload rather than
         // re-deriving it from the return type's generic argument: this is the very field the binding is
-        // initialized from two lines down (`__o.u.Some.value`), so it cannot disagree with what is emitted.
+        // initialized from two lines down (`__o.u.k_Some.k_value`), so it cannot disagree with what is emitted.
         if (_classes.count(optC))
             for (const auto& vc : _classes[optC].variants)
                 if (vc.name == "Some" && vc.payload.size() == 1)
@@ -15286,7 +15332,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 
     // Same rule as the intrinsic-collection path: the DECLARED element type must be what the iterator
     // yields. Without it the payload was assigned straight into the binding and C's implicit conversions
-    // did the rest — `foreach (bool v in someInt32Array)` compiled to `bool v = __o.u.Some.value;`, so
+    // did the rest — `foreach (bool v in someInt32Array)` compiled to `bool v = __o.u.k_Some.k_value;`, so
     // every non-zero element silently became `true`. Skipped when actualElem could not be determined, so
     // an iterator shape this does not understand keeps working rather than becoming an error.
     if (!actualElem.empty() && actualElem != elemTy) {
@@ -15334,11 +15380,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
-        indent(depth + 2); *_out << elemTy << "* " << nm << " = " << nextCall << ";\n";
+        indent(depth + 2); *_out << elemTy << "* " << kName(nm) << " = " << nextCall << ";\n";
     } else {
         indent(depth + 2); *_out << optC << " " << ot << " = " << nextCall << ";\n";
         indent(depth + 2); *_out << "if (" << ot << ".tag == " << optC << "_None) break;\n";
-        indent(depth + 2); *_out << elemTy << " " << nm << " = " << ot << ".u.Some.value;\n";
+        indent(depth + 2); *_out << elemTy << " " << kName(nm) << " = " << ot << ".u.k_Some.k_value;\n";
         // A destructible by-value element that the binding OWNS must RAII-drop each iteration, else it
         // leaks — but only if `next()` yields a FRESH owned value. The compiler-provided `Split` iterator
         // does. `Iterator<T>` yields BY VALUE (a copy — SPEC), so the binding OWNS a destructible element
@@ -15346,7 +15392,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // its `Optional<T>` must hand it off with `give`/`copy` (a bare named payload is rejected at variant
         // construction), so the yield is always a fresh/owned value, never an alias the iterator still owns.
         if (_classes.count(elemTy) && _classes[elemTy].destructible)
-            recordDestructibleLocal(nm, elemTy);
+            recordDestructibleLocal(nm, elemTy, /*userName=*/true);
     }
     SharedStatement last;
     if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
@@ -15598,7 +15644,7 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(srcCls, true) << "(&(" << srcE << "));\n";
     indent(depth); *_out << nm << ".vtbl = &" << libT << "__as_" << dstElem << ";\n";
     if (dk != CollKind::Owned) {                                // intrinsic Owned<I> is {obj, vtbl} — no ctrl
-        indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << srcE << ").c;\n";
+        indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << srcE << ").k_c;\n";
         if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
                                             << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n"; }
     }
@@ -15607,7 +15653,7 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     // carrying: the vtable reports it, a derived object's included.)
     std::string dstAlloc = _collections.count(dstTy) ? _collections[dstTy].allocType : "";
     if (!dstAlloc.empty() && dstAlloc != "GlobalAllocator") {
-        indent(depth); *_out << nm << ".alloc = (" << srcE << ").alloc;\n";
+        indent(depth); *_out << nm << ".alloc = (" << srcE << ").k_alloc;\n";
     }
     // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
     // the destination handle now owns the ref (it shares the same ctrl without an increment).
@@ -15655,12 +15701,12 @@ void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& 
         // a move transfers the ref (no bump — the source's dtor is suppressed below). Carry the
         // source's allocator handle so the base handle releases the shared ctrl through the SAME
         // allocator (a zero-init default would `free` an arena-owned ctrl → double-free on reset).
-        std::string allocArg = boxAllocatorArg(dstTy).empty() ? "" : (", (" + srcE + ").alloc");
+        std::string allocArg = boxAllocatorArg(dstTy).empty() ? "" : (", (" + srcE + ").k_alloc");
         // The library ctor is the named factory `make(p, c, alloc)` (M8d.2 F7 renamed the nameless primary),
         // so it returns the base handle BY VALUE — assign it into the already-declared `nm` (not the old
         // in-place `__ctor(&nm, …)`, which no longer exists).
-        indent(depth); *_out << nm << " = " << dstTy << "__make(" << basePtr << ", (" << srcE << ").c" << allocArg << ");\n";
-        if (retain) { indent(depth); *_out << "(" << srcE << ").c->strong++;\n"; }
+        indent(depth); *_out << nm << " = " << dstTy << "__make(" << basePtr << ", (" << srcE << ").k_c" << allocArg << ");\n";
+        if (retain) { indent(depth); *_out << "(" << srcE << ").k_c->k_strong++;\n"; }
     } else {
         // Owned: adopt the base subobject (no ctrl); always a move.
         indent(depth); *_out << nm << " = " << dstTy << "__adopt(" << basePtr << ");\n";
@@ -19509,7 +19555,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
             *_out << _globalAllocator << " kama_global_allocator = {0};\n"
                   << "void* kama__global_allocate(size_t n, size_t align) {\n"
                   << "    Optional_UnsafePtr o = " << a->second.cName << "(&kama_global_allocator, n, align);\n"
-                  << "    return o.tag == Optional_UnsafePtr_Some ? o.u.Some.value : 0;\n"
+                  << "    return o.tag == Optional_UnsafePtr_Some ? o.u.k_Some.k_value : 0;\n"
                   << "}\n"
                   << "void kama__global_deallocate(void* p, size_t n, size_t align) {\n"
                   << "    " << d->second.cName << "(&kama_global_allocator, p, n, align);\n"
@@ -19881,7 +19927,7 @@ std::string CEmitter::bagCtorSig(const ClassInfo& ci, const std::string& which)
         for (auto& f : ci.fields) {
             if (!first) sig += ", ";
             first = false;
-            sig += cType(f.type) + " " + f.name;
+            sig += cType(f.type) + " " + kName(f.name);   // a PARAMETER, always kama-owned (KR-67)
         }
     if (first) sig += "void";   // `zero()`, or an (edge-case) field-less `of`
     return sig + ")";
@@ -19898,7 +19944,8 @@ void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
         for (auto& f : ci.fields) {
             if (!first) *_out << ", ";
             first = false;
-            *_out << "." << f.name << " = " << f.name;
+            // LHS is a MEMBER (raw for an expose layout), RHS the PARAMETER bagCtorSig just declared.
+            *_out << "." << kMember(ci, f.name) << " = " << kName(f.name);
         }
         *_out << " };\n";
     } else {
@@ -22942,15 +22989,15 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
             auto ait = _classes.find(act);
             if (ait != _classes.end())
                 for (auto& kv : ait->second.methods)
-                    if (kv.second.isDefaultCtor) { allocInit = "    h.alloc = " + kv.second.cName + "();\n"; break; }
+                    if (kv.second.isDefaultCtor) { allocInit = "    h.k_alloc = " + kv.second.cName + "();\n"; break; }
         }
         releaseFn = "__kama_bind_release_" + objCls;
         if (_moduleHelperKeys.insert("bind:" + objCls).second) {
             std::ostringstream th;
             th << "static void " << releaseFn << "(void* obj, kama_ctrl* ctrl) {\n"
                << "    " << objCls << " h = {0};\n"
-               << "    h.p = (" << T << "*)obj;\n";
-            if (retain) th << "    h.c = (void*)ctrl;\n";
+               << "    h.k_p = (" << T << "*)obj;\n";
+            if (retain) th << "    h.k_c = (void*)ctrl;\n";
             else        th << "    (void)ctrl;\n";
             th << allocInit
                << "    " << objCls << "__dtor(&h);\n"
@@ -22961,7 +23008,7 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
     // The receiver pointer comes from `deref()` (T*); the refcount block is the library `.c`, whose `Ctrl`
     // layout is `kama_ctrl`-compatible (`usize` counts for this).
     indent(depth); *_out << nm << ".obj = (void*)" << derefFnName(objCls, true) << "(&(" << objE << "));\n";
-    if (retain) { indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << objE << ").c;\n"; }
+    if (retain) { indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << objE << ").k_c;\n"; }
     indent(depth); *_out << nm << ".fn = (void (*)(void))" << mi->cName << ";\n";
     indent(depth); *_out << nm << ".release = " << releaseFn << ";\n";
     // Ownership transfer: a shared owner RETAINS (bump strong); a unique owner MOVES — consume the source at
@@ -23409,9 +23456,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 noteScopedBinding(bn);
                 hideShadowedLocal(bn, /*refBinder=*/false);
                 std::string bcty = fieldCType(subjCls, pf);
-                std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
+                std::string slot = std::string(sp) + "->u." + kName(*a->variantName)
+                                 + "." + kMember(_classes[subjCls], pf.name);
                 indent(depth + 2);
-                *_out << bcty << " " << bn << " = " << slot << ";\n";
+                *_out << bcty << " " << kName(bn) << " = " << slot << ";\n";
                 // Destructure-MOVE: when the subject is CONSUMED (`match (give x)`) and the payload is owning,
                 // the binding takes ownership — defuse the subject slot (so the subject's drop no-ops it) and
                 // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).
@@ -23426,7 +23474,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // A consumed subject hands ownership to the binding whatever the payload's shape is.
                 if (subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
                     indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
-                    _scopes.back().locals.push_back({bn, bcty});
+                    _scopes.back().locals.push_back({bn, bcty, /*userName=*/true});
                     _moveState[bn] = MoveState::NotMoved;
                     defusedSubject = true;
                 } else if (!subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
@@ -24065,7 +24113,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
 
     std::string s = "(" + ci.name + "){ .tag = " + ci.name + "_" + variant;
     if (!vc->payload.empty()) {
-        s += ", .u." + variant + " = {";
+        s += ", .u." + kName(variant) + " = {";
         bool first = true;
         for (auto& f : vc->payload) {
             auto ai = byName.find(f.name);
@@ -24208,7 +24256,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 field = val;
             }
             s += (first ? " ." : ", .");
-            s += f.name + " = " + field;
+            s += kMember(ci, f.name) + " = " + field;
             first = false;
         }
         s += " }";
@@ -24436,7 +24484,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
         // gate existed to make necessary rather than decorative.
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
-        std::string callee = _refParams.count(name) ? ("(*" + name + ")") : name;
+        std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
     }
 
@@ -24461,7 +24509,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // bound object (call the method with it, or the free fn directly).
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isBindableClass(_localTypes[name])) {
-        return emitBindableInvoke(name, _localTypes[name], call->args, call->line);
+        return emitBindableInvoke(kName(name), _localTypes[name], call->args, call->line);
     }
 
     // FFI: `addr(x)` is a builtin — the address of a local/value (`&(x)`), for out-params and passing a
@@ -24866,7 +24914,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
                              + (libElem.empty() ? _classes[pct].collElemClass : libElem)
                              + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p->line);
             s += std::string(constPtr ? "const " : "") + std::string(hwPtr ? "volatile " : "") + cType(p->type)
-               + (paramByRef(p.get()) ? "* " : " ") + nm;
+               + (paramByRef(p.get()) ? "* " : " ") + kName(nm);   // KR-67 (the host header keeps the kama spelling — D3)
         }
     }
     if (s.empty()) s = "void";
@@ -25954,7 +26002,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             // (emitBlockScoped); stash it there. Sound because the arg path now forces the caller to
             // `give`/`copy` a named owned collection/string (it can't pass a live-owned one bare).
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) {
-                _pendingParamDtors.push_back({pn, pty});
+                _pendingParamDtors.push_back({pn, pty, /*userName=*/true});
                 if (ownsByValue(pty)) _moveState[pn] = MoveState::NotMoved;   // track move-only / collection / string param
             }
             if (!paramByRef(p.get()) && isViewCType(pty)) _viewParams.insert(pn);   // valid root for a view return
@@ -26093,7 +26141,7 @@ void CEmitter::emitStruct(ClassInfo& ci)
                               /*alsoView=*/true);   // a view can't be a field (would dangle) — but a view's OWN
                                                     // `UnsafePtr<T>`/`int` fields are fine; only view-TYPED fields reject
         indent(1);
-        *_out << cType(f.type) << " " << f.name << ";\n";
+        *_out << cType(f.type) << " " << kMember(ci, f.name) << ";\n";
         hasMember = true;
     }
     if (!hasMember) {
@@ -26145,9 +26193,9 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
                 // A by-value user value/resource payload is legal — the unified struct order
                 // lays out the payload type first; a self/mutual by-value cycle is caught (infinite size)
                 // by unifiedStructOrder.
-                indent(3); *_out << cType(f.type) << " " << f.name << ";\n";
+                indent(3); *_out << cType(f.type) << " " << kMember(ci, f.name) << ";\n";
             }
-            indent(2); *_out << "} " << v.name << ";\n";
+            indent(2); *_out << "} " << kName(v.name) << ";\n";
         }
         indent(1); *_out << "} u;\n";
     }
@@ -26162,7 +26210,7 @@ std::string CEmitter::vtableSlotSig(const VSlot& s)
     if (s.node && s.node->params) {
         for (auto& p : *s.node->params) {
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + kName(nm);
         }
     }
     return sig + ")";
@@ -26181,7 +26229,7 @@ void CEmitter::emitVtableType(ClassInfo& ci)
     *_out << "struct " << ci.name << "_vtable {\n";
     for (auto& s : it->second) {
         indent(1);
-        *_out << cType(s.node->returnType) << " (*" << s.name << ")" << vtableSlotSig(s) << ";\n";
+        *_out << cType(s.node->returnType) << " (*" << kName(s.name) << ")" << vtableSlotSig(s) << ";\n";
     }
     // Virtual-destructor slot: destroying a derived through a base handle (`Shared<Base>`
     // owning a `Derived`) dispatches here, so the MOST-DERIVED dtor runs (no slicing). NULL
@@ -26215,7 +26263,7 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
         if (impl == ci.slotImpl.end()) continue;   // not visible here -> zero
         indent(1);
         // cast the impl (declared with a derived* self) to the slot's owner* signature
-        *_out << "." << s.name << " = (" << cType(s.node->returnType) << "(*)"
+        *_out << "." << kName(s.name) << " = (" << cType(s.node->returnType) << "(*)"
              << vtableSlotSig(s) << ")&" << impl->second << ",\n";
     }
     // this class's own destructor drives polymorphic drop (`__vdrop`); NULL if it frees nothing.
@@ -26243,7 +26291,7 @@ std::string CEmitter::ifaceSlotSig(SharedParameterList params)
     if (params)
         for (auto& p : *params) {
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + kName(nm);
         }
     return sig + ")";
 }
@@ -26293,7 +26341,7 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
         indent(1);
         // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot
         // (`T const*` for `const ref T`).
-        *_out << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << " (*" << m.name << ")"
+        *_out << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace) << " (*" << kName(m.name) << ")"
               << ifaceSlotSig(m.params) << ";\n";
     }
     // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
@@ -26402,9 +26450,9 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             }
             indent(1);
             if (ci.isScalarRecv)
-                *_out << "." << m.name << " = &" << scalarSlotThunk(ci.name, ii.name, m.name) << ",\n";
+                *_out << "." << kName(m.name) << " = &" << scalarSlotThunk(ci.name, ii.name, m.name) << ",\n";
             else
-                *_out << "." << m.name << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
+                *_out << "." << kName(m.name) << " = (" << cType(m.returnType) << placeRetSuffix(m.isPlaceReturn, m.isConstPlace)
                      << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
         }
         // the virtual-destructor slot — the concrete dtor (cast to the erased signature), or NULL when this
@@ -26583,8 +26631,8 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
                                   "`@noheap`").c_str(), srcLine);
         // A member that IS `@noheap` is proven, so the call carries the marker the call graph reads back
         // out of the C — without it the slot call would be a fact like any other (see buildCallGraph).
-        const std::string slot = m.noHeap ? ("KAMA_NOHEAP_SLOT((" + recv + ").vtbl->" + method + ")")
-                                          : ("(" + recv + ").vtbl->" + method);
+        const std::string slot = m.noHeap ? ("KAMA_NOHEAP_SLOT((" + recv + ").vtbl->" + kName(method) + ")")
+                                          : ("(" + recv + ").vtbl->" + kName(method));
         std::vector<ParamSig> params = paramSigsOf(m.params);
         // A place-returning slot (`fn ref T m()` / `fn const ref T m()`) yields a `T*` / `T const*`; deref it
         // so the call is an lvalue everywhere, exactly as the class and free-function paths do — a contract
@@ -26777,7 +26825,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
                 auto cit = _classes.find(cType(it->type));
                 if (cit != _classes.end() && cit->second.destructible) {
                     indent(3);
-                    *_out << cit->second.name << "__dtor(&self->u." << v.name << "." << it->name << ");\n";
+                    *_out << cit->second.name << "__dtor(&self->u." << kName(v.name) << "." << kMember(ci, it->name) << ");\n";
                 }
             }
             indent(3); *_out << "break;\n";
@@ -26802,7 +26850,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
         auto cit = _classes.find(cType(it->type));
         if (cit != _classes.end() && cit->second.destructible) {
             indent(1);
-            *_out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
+            *_out << cit->second.name << "__dtor(&self->" << kMember(ci, it->name) << ");\n";
         }
     }
 #if KAMA_INHERITANCE
@@ -26954,7 +27002,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             // a by-value smart-ptr OR owning collection/`string` param is owned by the callee — drop it at
             // fn-end (a `ref` is a borrow — never). The root scope is already on the stack, so record it
             // directly (dropped last). recordDestructibleLocal also move-tracks an ownsByValue param.
-            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) recordDestructibleLocal(pn, pty);
+            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) recordDestructibleLocal(pn, pty, /*userName=*/true);
             if (!paramByRef(p.get()) && isViewCType(pty)) _viewParams.insert(pn);   // valid root for a view return
         }
     }
@@ -27033,7 +27081,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                 // falling off the end is the `Ok`. Saying so here is what keeps a missing `Ok` from
                 // reading as an omission.
                 *_out << "return (" << _currentReturnCType << "){ .tag = " << _currentReturnCType
-                      << "_Ok, .u.Ok = { .value = __self } };\n";
+                      << "_Ok, .u.k_Ok = { .k_value = __self } };\n";
         }
     }
     if (ctorBody) {
@@ -27215,7 +27263,7 @@ static const char* serScalarSuffix(int builtInVal)
 // platform-varying width has no wire format, whichever axis it varies on.
 // The FIELD a serde diagnostic is about: the one the per-field loop is emitting (`_serdeField`). It used to
 // be recovered from the emitted access path, which names a field only in the simplest shape — an `Optional`
-// or `Owned` field is read through a temp and written through `.u.Some.value` / a deref call, and an enum
+// or `Owned` field is read through a temp and written through `.u.k_Some.k_value` / a deref call, and an enum
 // payload is read into a `__p_` local, so the refusals said `__ov0`, `value`, `boxed)))` and `__p_w` (KR-15).
 // The path stays as the fallback for a walk that is not over a field (a container's elements).
 std::string CEmitter::serdeFieldName(const std::string& access)
@@ -27315,22 +27363,22 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
         // Mark presence BEFORE the value. A self-describing backend no-ops this (JSON and KBIN recognise a
         // present value by its own bytes); a positional one has nothing to look at, so `Some` and `None`
         // must differ by something the reader can count on.
-        indent(depth + 1); *_out << "w->vtbl->writeSome(w->obj);\n";
-        emitSerFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1, resultCType);
+        indent(depth + 1); *_out << "w->vtbl->k_writeSome(w->obj);\n";
+        emitSerFieldWrite(ty->genericArg, "(" + access + ").u.k_Some.k_value", depth + 1, resultCType);
         indent(depth + 1); *_out << "break;\n";
         indent(depth); *_out << "}\n";
-        indent(depth); *_out << "case " << oc << "_None: { w->vtbl->writeNull(w->obj); break; }\n";
+        indent(depth); *_out << "case " << oc << "_None: { w->vtbl->k_writeNull(w->obj); break; }\n";
         indent(depth); *_out << "default: break;\n";
         indent(depth); *_out << "}\n";
         return;
     }
     if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) {
-        indent(depth); *_out << "w->vtbl->writeString(w->obj, &(" << access << "));\n";
+        indent(depth); *_out << "w->vtbl->k_writeString(w->obj, &(" << access << "));\n";
         return;
     }
     const char* suf = serScalarSuffix(ty ? ty->builtInVal : 0);
     if (*suf) {
-        indent(depth); *_out << "w->vtbl->write" << suf << "(w->obj, " << access << ");\n";
+        indent(depth); *_out << "w->vtbl->k_write" << suf << "(w->obj, " << access << ");\n";
         return;
     }
     // `Owned<T>` — walk THROUGH the handle and write the pointee inline. See ownedPointeeOf.
@@ -27348,12 +27396,12 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
     if (resultCType.empty()) {
         // graph-node/void context: sticky flag carries the failure to the boundary — drop the redundant box.
         indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { "
-                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.k_Err.k_error); }\n";
         return;
     }
     // propagate the boxed Err (self is borrowed — no partial to clean up).
     indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { return (" << resultCType
-                         << "){ .tag = " << resultCType << "_Err, .u.Err = { .error = " << t << ".u.Err.error } }; }\n";
+                         << "){ .tag = " << resultCType << "_Err, .u.k_Err = { .k_error = " << t << ".u.k_Err.k_error } }; }\n";
 }
 
 uint32_t CEmitter::serWireId(const ClassInfo& ci, const FieldInfo& f) const
@@ -27411,19 +27459,19 @@ void CEmitter::validateSerFieldKeys(ClassInfo& ci, int line)
 
 void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const FieldInfo*>& fields, int depth)
 {
-    indent(depth); *_out << "FieldKey __key = r.vtbl->field(r.obj);\n";
+    indent(depth); *_out << "FieldKey __key = r.vtbl->k_field(r.obj);\n";
     indent(depth); *_out << "int32_t __slot = -1;\n";
     indent(depth); *_out << "if (__key.tag == FieldKey_Name) {\n";
     bool first = true;
     for (size_t i = 0; i < fields.size(); ++i) {
         const FieldInfo& f = *fields[i];
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(depth + 1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key.u.Name.name, "
+        indent(depth + 1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key.u.k_Name.k_name, "
                                  << kamaStrLit(wire) << ")) __slot = " << i << ";\n";
         first = false;
     }
     indent(depth); *_out << "} else if (__key.tag == FieldKey_Id) {\n";
-    indent(depth + 1); *_out << "switch (__key.u.Id.id) {\n";
+    indent(depth + 1); *_out << "switch (__key.u.k_Id.k_id) {\n";
     for (size_t i = 0; i < fields.size(); ++i) {
         indent(depth + 2); *_out << "case " << serWireId(ci, *fields[i]) << "u: __slot = " << i << "; break;\n";
     }
@@ -27433,7 +27481,7 @@ void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const Fie
     // `Position` is already the slot: a positional reader counts fields in the order the derive emits them,
     // which is ascending id, which is this list. It cannot report an id VALUE — it never saw one — and the two
     // cannot share the `Id` switch, since an explicit id may collide numerically with another field's rank.
-    indent(depth + 1); *_out << "if (__key.u.Position.rank < " << fields.size() << "u) __slot = (int32_t)__key.u.Position.rank;\n";
+    indent(depth + 1); *_out << "if (__key.u.k_Position.k_rank < " << fields.size() << "u) __slot = (int32_t)__key.u.k_Position.k_rank;\n";
     indent(depth); *_out << "}\n";
 }
 
@@ -27446,17 +27494,17 @@ std::string CEmitter::scalarEnumIs(const ClassInfo& ci, size_t vi, const std::st
 
 void CEmitter::emitVariantKeySlot(const ClassInfo& ci, int depth)
 {
-    indent(depth); *_out << "FieldKey __tag = r.vtbl->variant(r.obj);\n";
+    indent(depth); *_out << "FieldKey __tag = r.vtbl->k_variant(r.obj);\n";
     indent(depth); *_out << "int32_t __vslot = -1;\n";
     indent(depth); *_out << "if (__tag.tag == FieldKey_Name) {\n";
     for (size_t i = 0; i < ci.variants.size(); ++i) {
-        indent(depth + 1); *_out << (i ? "else if" : "if") << " (kama_string__equals(&__tag.u.Name.name, "
+        indent(depth + 1); *_out << (i ? "else if" : "if") << " (kama_string__equals(&__tag.u.k_Name.k_name, "
                                  << kamaStrLit(ci.variants[i].name) << ")) __vslot = " << i << ";\n";
     }
     indent(depth); *_out << "} else {\n";
     // A variant's index IS its declaration index, so `Id` and `Position` mean the same number here and share
     // one switch — unlike a field, whose id may be an author-chosen sparse value.
-    indent(depth + 1); *_out << "uint32_t __vk = (__tag.tag == FieldKey_Id) ? __tag.u.Id.id : __tag.u.Position.rank;\n";
+    indent(depth + 1); *_out << "uint32_t __vk = (__tag.tag == FieldKey_Id) ? __tag.u.k_Id.k_id : __tag.u.k_Position.k_rank;\n";
     indent(depth + 1); *_out << "switch (__vk) {\n";
     for (size_t i = 0; i < ci.variants.size(); ++i) {
         indent(depth + 2); *_out << "case " << i << "u: __vslot = " << i << "; break;\n";
@@ -27474,22 +27522,22 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
-    indent(1); *_out << "w->vtbl->beginObject(w->obj, " << wf.size() << ");\n";
+    indent(1); *_out << "w->vtbl->k_beginObject(w->obj, " << wf.size() << ");\n";
     for (const FieldInfo* fp : wf) {
         const FieldInfo& f = *fp;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", "
+        indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit(wire) << ", "
                          << serWireId(ci, f) << "u);\n";
         ScopedStr _sf(_serdeField, f.name);
-        emitSerFieldWrite(f.type, "self->" + f.name, 1, resC);
+        emitSerFieldWrite(f.type, "self->" + kMember(ci, f.name), 1, resC);
     }
-    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "w->vtbl->k_endObject(w->obj);\n";
     // Boundary: a sticky failure (a scalar value the format can't represent) -> Err(boxed).
-    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "if (w->vtbl->k_failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->k_errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 
@@ -27591,7 +27639,7 @@ void CEmitter::emitEqualsDefinition(ClassInfo& ci)
     for (auto& fld : ci.fields) {
         if (fld.serSkip) continue;
         if (!cond.empty()) cond += " && ";
-        cond += eqFieldTest(fld.type, "self->" + fld.name, "other->" + fld.name, line);
+        cond += eqFieldTest(fld.type, "self->" + kMember(ci, fld.name), "other->" + kMember(ci, fld.name), line);
     }
     // A fieldless (or fully-skipped) bag has exactly one value, so all its instances are equal.
     indent(1); *_out << "return " << (cond.empty() ? "true" : cond) << ";\n";
@@ -27632,7 +27680,7 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
     indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
     for (auto& fld : ci.fields) {
         if (fld.serSkip) continue;
-        indent(1); *_out << "h = (h ^ " << hashFieldExpr(fld.type, "self->" + fld.name, line)
+        indent(1); *_out << "h = (h ^ " << hashFieldExpr(fld.type, "self->" + kMember(ci, fld.name), line)
                          << ") * 16777619ULL;\n";
     }
     indent(1); *_out << "return h;\n";
@@ -27653,7 +27701,7 @@ void CEmitter::emitFormatDefinition(ClassInfo& ci)
     for (auto& fld : ci.fields) {
         if (fld.serSkip) continue;
         emitFmtLiteral((any ? ", " : disp + " { ") + fld.name + ": ");
-        emitFmtFieldWrite(fld.type, "self->" + fld.name, line);
+        emitFmtFieldWrite(fld.type, "self->" + kMember(ci, fld.name), line);
         any = true;
     }
     emitFmtLiteral(any ? " }" : disp + " {}");
@@ -27663,9 +27711,9 @@ void CEmitter::emitFormatDefinition(ClassInfo& ci)
 // The `Deserializer r` read EXPRESSION for a field type (scalar/string direct, else `<CType>__deserialize`).
 std::string CEmitter::deReadExpr(SharedIdentifier ty)
 {
-    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) return "r.vtbl->readString(r.obj)";
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) return "r.vtbl->k_readString(r.obj)";
     const char* suf = serScalarSuffix(ty ? ty->builtInVal : 0);
-    if (*suf) return std::string("r.vtbl->read") + suf + "(r.obj)";
+    if (*suf) return std::string("r.vtbl->k_read") + suf + "(r.obj)";
     return cType(ty) + "__deserialize(r)";
 }
 
@@ -27693,16 +27741,16 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     // Optional<T>: null → None; else read the inner value (fallible if composite) and wrap Some.
     if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {
         std::string oc = cType(ty);
-        indent(depth); *_out << "if (r.vtbl->readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
+        indent(depth); *_out << "if (r.vtbl->k_readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
         indent(depth); *_out << "else {\n";
         if (isScalarDeType(ty->genericArg)) {
-            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = "
+            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.k_Some = { .k_value = "
                                    << deReadExpr(ty->genericArg) << " } };\n";
         } else {
             std::string tmp = "__ov" + std::to_string(_tempCounter++);
             indent(depth+1); *_out << cType(ty->genericArg) << " " << tmp << ";\n";
             emitDeFieldRead(ty->genericArg, tmp, depth+1, resultCType, cleanup);
-            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = " << tmp << " } };\n";
+            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.k_Some = { .k_value = " << tmp << " } };\n";
         }
         indent(depth); *_out << "}\n";
         return;
@@ -27749,15 +27797,15 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
         // graph-shell context: no `Result` to return here, and the sticky flag already carries the failure to
         // the graph boundary — so on Err just drop the redundant box (leak-clean), else take the value.
         indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { "
-                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
-        indent(depth); *_out << "else " << dst << " = " << t << ".u.Ok.value;\n";
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.k_Err.k_error); }\n";
+        indent(depth); *_out << "else " << dst << " = " << t << ".u.k_Ok.k_value;\n";
         return;
     }
     // propagate the boxed `Err` (drop the partial via `cleanup`).
     indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { " << cleanup
-                         << "return (" << resultCType << "){ .tag = " << resultCType << "_Err, .u.Err = { .error = "
-                         << t << ".u.Err.error } }; }\n";
-    indent(depth); *_out << dst << " = " << t << ".u.Ok.value;\n";
+                         << "return (" << resultCType << "){ .tag = " << resultCType << "_Err, .u.k_Err = { .k_error = "
+                         << t << ".u.k_Err.k_error } }; }\n";
+    indent(depth); *_out << dst << " = " << t << ".u.k_Ok.k_value;\n";
 }
 
 // `Owned<X>.deserialize` — the box read. The mirror of the `Owned` arm in emitDeFieldRead: read the pointee
@@ -27781,11 +27829,11 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
           << "__deserialize(Deserializer r)\n{\n";
     indent(1); *_out << innC << " __or = " << pc << "__deserialize(r);\n";
     indent(1); *_out << "if (__or.tag == " << innC << "_Err) return (" << resC << "){ .tag = " << resC
-                     << "_Err, .u.Err = { .error = __or.u.Err.error } };\n";
+                     << "_Err, .u.k_Err = { .k_error = __or.u.k_Err.k_error } };\n";
     indent(1); *_out << pc << "* __ob = (" << pc << "*)kama_alloc(" << layoutOf(pc) << ");\n";
     indent(1); *_out << "if (!__ob) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-    indent(1); *_out << "*__ob = __or.u.Ok.value;\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = "
+    indent(1); *_out << "*__ob = __or.u.k_Ok.k_value;\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = "
                      << adoptM->cName << "(__ob) } };\n";
     *_out << "}\n\n";
 }
@@ -27804,7 +27852,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
         if (f.serSkip) continue;
         if (f.type && f.type->value && *f.type->value == "Optional") {
             std::string oc = cType(f.type);
-            indent(1); *_out << "result." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+            indent(1); *_out << "result." << kMember(ci, f.name) << " = (" << oc << "){ .tag = " << oc << "_None };\n";
         }
     }
     // On an early Err inside the loop: free the current key, then drop the partial result.
@@ -27817,28 +27865,28 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // ⚠️ The count is the WRITE-visible one. It describes what a writer PUT on the wire, so a
     // `@deprecated` field — read when present, never written — must not be counted, or a positional
     // reader expects one field too many and runs off the end of the record.
-    indent(1); *_out << "r.vtbl->beginObject(r.obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
-    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(1); *_out << "r.vtbl->k_beginObject(r.obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
+    indent(1); *_out << "while (r.vtbl->k_moreFields(r.obj)) {\n";
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
-        { ScopedStr _sf(_serdeField, rf[i]->name); emitDeFieldRead(rf[i]->type, "result." + rf[i]->name, 4, resC, cleanup); }
+        { ScopedStr _sf(_serdeField, rf[i]->name); emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, cleanup); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
-    indent(3); *_out << "default: r.vtbl->skipValue(r.obj); break;\n";
+    indent(3); *_out << "default: r.vtbl->k_skipValue(r.obj); break;\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "FieldKey__dtor(&__key);\n";   // the key owns its name string — free each iteration
     indent(1); *_out << "}\n";
-    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_endObject(r.obj);\n";
     // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
-    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    indent(1); *_out << "if (r.vtbl->k_failed(r.obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
     std::string box = emitStickyErrBox(2);
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = result } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = result } };\n";
     *_out << "}\n\n";
 }
 
@@ -27860,11 +27908,11 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     emitVariantWriteFrame(ci, [&](const FieldInfo& f, const std::string& access, int d) {
         emitSerFieldWrite(f.type, access, d, resC);
     });
-    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "if (w->vtbl->k_failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->k_errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 
@@ -27877,7 +27925,7 @@ void CEmitter::emitVariantWriteFrame(ClassInfo& ci,
     if (ci.isScalarEnum()) {
         for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
             indent(1); *_out << (vi ? "else if" : "if") << " (" << scalarEnumIs(ci, vi, scalarSelf) << ") "
-                             << "w->vtbl->variant(w->obj, " << kamaStrLit(ci.variants[vi].name) << ", " << vi << "u);\n";
+                             << "w->vtbl->k_variant(w->obj, " << kamaStrLit(ci.variants[vi].name) << ", " << vi << "u);\n";
         }
         return;
     }
@@ -27891,7 +27939,7 @@ void CEmitter::emitVariantWriteFrame(ClassInfo& ci,
         if (!v.payload.empty()) { indent(2); *_out << "case " << ci.name << "_" << v.name << ": __n = 2; break;\n"; }
     indent(2); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "w->vtbl->beginObject(w->obj, __n);\n";
+    indent(1); *_out << "w->vtbl->k_beginObject(w->obj, __n);\n";
     indent(1); *_out << "switch (self->tag) {\n";
     // The externally-tagged framing keys are addressed like any other key: "tag" is id 0 and "value" is
     // id 1. They cannot collide with a payload field's id because a payload is a NESTED object with its
@@ -27899,31 +27947,31 @@ void CEmitter::emitVariantWriteFrame(ClassInfo& ci,
     for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
         auto& v = ci.variants[vi];
         indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
-        indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("tag") << ", 0u);\n";
+        indent(2); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("tag") << ", 0u);\n";
         // The selector goes through `variant`, not `writeString`: a discriminant is one of `n` known
         // alternatives, so a positional or numbered backend spends one byte on it where a name costs the
         // whole string. A named backend writes the name and its bytes are unchanged. The index is the
         // variant's declaration index, which is also its C tag value.
-        indent(2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
+        indent(2); *_out << "w->vtbl->k_variant(w->obj, " << kamaStrLit(v.name) << ", " << vi << "u);\n";
         if (!v.payload.empty()) {
-            indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 1u);\n";
-            indent(2); *_out << "w->vtbl->beginObject(w->obj, " << v.payload.size() << ");\n";
+            indent(2); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("value") << ", 1u);\n";
+            indent(2); *_out << "w->vtbl->k_beginObject(w->obj, " << v.payload.size() << ");\n";
             for (size_t pi = 0; pi < v.payload.size(); ++pi) {
                 auto& f = v.payload[pi];
                 // A payload field carries no attributes (the grammar gives a variant payload no slot for
                 // one), so its id is positional by construction and can never be reordered.
-                indent(2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(f.name) << ", " << pi << "u);\n";
+                indent(2); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit(f.name) << ", " << pi << "u);\n";
                 ScopedStr _sf(_serdeField, f.name);
-                writeField(f, "self->u." + v.name + "." + f.name, 2);
+                writeField(f, "self->u." + kName(v.name) + "." + kMember(ci, f.name), 2);
             }
-            indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
+            indent(2); *_out << "w->vtbl->k_endObject(w->obj);\n";
         }
         indent(2); *_out << "break;\n";
         indent(1); *_out << "}\n";
     }
     indent(1); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "w->vtbl->k_endObject(w->obj);\n";
 }
 
 void CEmitter::emitVariantPayloadWalk(ClassInfo& ci,
@@ -27935,7 +27983,7 @@ void CEmitter::emitVariantPayloadWalk(ClassInfo& ci,
         indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
         for (auto& f : v.payload) {
             ScopedStr _sf(_serdeField, f.name);
-            walkField(f, "self->u." + v.name + "." + f.name, 2);
+            walkField(f, "self->u." + kName(v.name) + "." + kMember(ci, f.name), 2);
         }
         indent(2); *_out << "break;\n";
         indent(1); *_out << "}\n";
@@ -27962,14 +28010,14 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         for (size_t i = 0; i < ci.variants.size(); ++i) {
             indent(2); *_out << "case " << i << ": __result = " << ci.name << "_" << ci.variants[i].name << "; break;\n";
         }
-        indent(2); *_out << "default: r.vtbl->fail(r.obj); break;\n";
+        indent(2); *_out << "default: r.vtbl->k_fail(r.obj); break;\n";
         indent(1); *_out << "}\n";
         indent(1); *_out << "FieldKey__dtor(&__tag);\n";
-        indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+        indent(1); *_out << "if (r.vtbl->k_failed(r.obj)) {\n";
         std::string nbox = emitStickyErrBox(2);
-        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << nbox << " } };\n";
+        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << nbox << " } };\n";
         indent(1); *_out << "}\n";
-        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __result } };\n";
+        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = __result } };\n";
         *_out << "}\n\n";
         return;
     }
@@ -27980,33 +28028,33 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // Draining makes the reader ask `next()` past the end, which IS an error, and skips any unknown
     // trailing field on the way — the same forward-compat rule the struct path above has always had.
     auto closeObj = [&](int d) {
-        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
-                            "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
-        indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
+        indent(d); *_out << "while (r.vtbl->k_moreFields(r.obj)) { FieldKey __sk = r.vtbl->k_field(r.obj); "
+                            "FieldKey__dtor(&__sk); r.vtbl->k_skipValue(r.obj); }\n";
+        indent(d); *_out << "r.vtbl->k_endObject(r.obj);\n";
     };
     // 0 = "not statically known": which variant follows — and so whether the frame is `{tag}` or
     // `{tag, value}` — is only known once the tag is read, and the tag is INSIDE this object.
-    indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_beginObject(r.obj, 0);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj);\n";
     // The framing keys are read POSITIONALLY and discarded — the shape `{tag, value}` is fixed, so there is
     // nothing to dispatch on. Only the selector and the payload fields carry information.
-    indent(1); *_out << "FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k);\n";   // the "tag" key
+    indent(1); *_out << "FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k);\n";   // the "tag" key
     emitVariantKeySlot(ci, 1);
     bool first = true;
     for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
         auto& v = ci.variants[vi];
         indent(1); *_out << (first ? "if" : "else if") << " (__vslot == " << vi << ") {\n";
         if (!v.payload.empty()) {
-            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-            indent(2); *_out << "FieldKey __kv = r.vtbl->field(r.obj); FieldKey__dtor(&__kv);\n";   // the "value" key
-            indent(2); *_out << "r.vtbl->beginObject(r.obj, " << v.payload.size() << ");\n";
+            indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+            indent(2); *_out << "FieldKey __kv = r.vtbl->k_field(r.obj); FieldKey__dtor(&__kv);\n";   // the "value" key
+            indent(2); *_out << "r.vtbl->k_beginObject(r.obj, " << v.payload.size() << ");\n";
             // an early Err while reading payload field i must free __tag + drop the already-read temps.
             std::string cleanup = "FieldKey__dtor(&__tag); ";
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
                 std::string idx = std::to_string(i);
-                indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-                indent(2); *_out << "FieldKey __pk" << idx << " = r.vtbl->field(r.obj); FieldKey__dtor(&__pk" << idx << ");\n";
+                indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+                indent(2); *_out << "FieldKey __pk" << idx << " = r.vtbl->k_field(r.obj); FieldKey__dtor(&__pk" << idx << ");\n";
                 indent(2); *_out << cType(f.type) << " __p_" << f.name << ";\n";
                 { ScopedStr _sf(_serdeField, f.name); emitDeFieldRead(f.type, "__p_" + f.name, 2, resC, cleanup); }
                 if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
@@ -28014,8 +28062,8 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             }
             closeObj(2);   // the value object
             closeObj(2);   // the outer object
-            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << ", .u." << v.name << " = { ";
-            for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << v.payload[i].name << " = __p_" << v.payload[i].name; }
+            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << ", .u." << kName(v.name) << " = { ";
+            for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << kMember(ci, v.payload[i].name) << " = __p_" << v.payload[i].name; }
             *_out << " } };\n";
         } else {
             closeObj(2);   // the outer object
@@ -28030,23 +28078,23 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // DROPPED from an enum whose every variant carries a payload. Return the Err here instead: nothing
     // has been constructed, so there is no partial to drop and `__result` is never touched.
     if (!dflt.empty()) {
-        indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
+        indent(1); *_out << "else { r.vtbl->k_fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
     } else {
         indent(1); *_out << "else {\n";
-        indent(2); *_out << "r.vtbl->fail(r.obj);\n";
+        indent(2); *_out << "r.vtbl->k_fail(r.obj);\n";
         indent(2); *_out << "FieldKey__dtor(&__tag);\n";
         std::string ubox = emitStickyErrBox(2);
-        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ubox << " } };\n";
+        indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << ubox << " } };\n";
         indent(1); *_out << "}\n";
     }
     indent(1); *_out << "FieldKey__dtor(&__tag);\n";
     // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
-    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    indent(1); *_out << "if (r.vtbl->k_failed(r.obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&__result);\n"; }
     std::string ebox = emitStickyErrBox(2);
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ebox << " } };\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << ebox << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __result } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = __result } };\n";
     *_out << "}\n\n";
 }
 
@@ -28087,7 +28135,7 @@ void CEmitter::emitEnumFormatDefinition(ClassInfo& ci)
             bool any = false;
             for (auto& f : v.payload) {
                 emitFmtLiteral((any ? ", " : v.name + " { ") + f.name + ": ");
-                emitFmtFieldWrite(f.type, "self->u." + v.name + "." + f.name, line);
+                emitFmtFieldWrite(f.type, "self->u." + kName(v.name) + "." + kMember(ci, f.name), line);
                 any = true;
             }
             emitFmtLiteral(" }");
@@ -28119,8 +28167,8 @@ void CEmitter::emitEnumEqualsDefinition(ClassInfo& ci)
             std::string cond;
             for (auto& f : v.payload) {
                 if (!cond.empty()) cond += " && ";
-                cond += eqFieldTest(f.type, "self->u." + v.name + "." + f.name,
-                                            "other->u." + v.name + "." + f.name, line);
+                cond += eqFieldTest(f.type, "self->u." + kName(v.name) + "." + kMember(ci, f.name),
+                                            "other->u." + kName(v.name) + "." + kMember(ci, f.name), line);
             }
             indent(2); *_out << "return " << cond << ";\n";
             indent(1); *_out << "}\n";
@@ -28151,7 +28199,7 @@ void CEmitter::emitEnumHashDefinition(ClassInfo& ci)
             indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
             for (auto& f : v.payload) {
                 indent(2); *_out << "h = (h ^ "
-                                 << hashFieldExpr(f.type, "self->u." + v.name + "." + f.name, line)
+                                 << hashFieldExpr(f.type, "self->u." + kName(v.name) + "." + kMember(ci, f.name), line)
                                  << ") * 16777619ULL;\n";
             }
             indent(2); *_out << "break;\n";
@@ -28778,12 +28826,12 @@ void CEmitter::emitPolyContractResolvers()
     bool first = true;
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeReads(_classes[K])) continue;
-        indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&which.u.Name.name, "
+        indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&which.u.k_Name.k_name, "
                          << kamaStrLit(graphWireName(_classes[K])) << ")) __slot = " << _classes[K].graphTypeId << ";\n";
         first = false;
     }
-    indent(1); *_out << "} else if (which.tag == FieldKey_Id) { __slot = (int32_t)which.u.Id.id; }\n";
-    indent(1); *_out << "else { __slot = (int32_t)which.u.Position.rank; }\n";
+    indent(1); *_out << "} else if (which.tag == FieldKey_Id) { __slot = (int32_t)which.u.k_Id.k_id; }\n";
+    indent(1); *_out << "else { __slot = (int32_t)which.u.k_Position.k_rank; }\n";
     indent(1); *_out << "FieldKey__dtor(&which);\n";
     indent(1); *_out << "kama_de_box* __b = 0;\n";
     indent(1); *_out << "switch (__slot) {\n";
@@ -28852,7 +28900,7 @@ void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& acces
     if (graphOptional(ty)) {
         std::string oc = cType(ty);
         indent(depth); *_out << "if ((" << access << ").tag == " << oc << "_Some) {\n";
-        emitGraphFieldVisit(ty->genericArg, "(" + access + ").u.Some.value", depth + 1);
+        emitGraphFieldVisit(ty->genericArg, "(" + access + ").u.k_Some.k_value", depth + 1);
         indent(depth); *_out << "}\n";
         return;
     }
@@ -28865,7 +28913,7 @@ void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& acces
     auto nest = graphNestOf(ty);
     if (nest.first.empty()) return;
     if (!typeHasGraphAdapters(nest.second)) return;   // reported once, by writeNode
-    indent(depth); *_out << nest.second << "__visitEdges(" << (nest.first == "owned" ? "(" + access + ").p" : "&(" + access + ")") << ", g);\n";
+    indent(depth); *_out << nest.second << "__visitEdges(" << (nest.first == "owned" ? "(" + access + ").k_p" : "&(" + access + ")") << ", g);\n";
 }
 
 // A field whose type carries the graph through its own body: emit that call, against either the discard
@@ -28885,7 +28933,7 @@ bool CEmitter::emitGraphParticipantCall(SharedIdentifier ty, const std::string& 
     indent(depth + 1); *_out << resC << " " << t << " = " << fc << "__serializeInto(&(" << access << "), "
                              << (sink ? "&" + t + "s" : "w") << ", g);\n";
     indent(depth + 1); *_out << "if (" << t << ".tag == " << resC << "_Err) { "
-                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.k_Err.k_error); }\n";
     indent(depth); *_out << "}\n";
     return true;
 }
@@ -28895,8 +28943,8 @@ bool CEmitter::emitGraphParticipantCall(SharedIdentifier ty, const std::string& 
 std::string CEmitter::graphInternExpr(const GraphEdge& e, const std::string& val, int depth)
 {
     std::string t = "__gid" + std::to_string(_tempCounter++);
-    std::string obj = e.elemIsContract ? "(" + val + ").obj" : "(void*)(" + val + ").p";
-    std::string ctl = e.elemIsContract ? "(" + val + ").ctrl" : "(kama_ctrl*)(" + val + ").c";
+    std::string obj = e.elemIsContract ? "(" + val + ").obj" : "(void*)(" + val + ").k_p";
+    std::string ctl = e.elemIsContract ? "(" + val + ").ctrl" : "((kama_ctrl*)(" + val + ").k_c)";
     std::string tid = e.elemIsContract ? (e.elemC + "__graphTypeId((" + val + ").vtbl)")
                                        : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
     indent(depth); *_out << "uint64_t " << t << " = 0;\n";
@@ -28919,11 +28967,11 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
         std::string oc = cType(ty);
         indent(depth); *_out << "switch ((" << access << ").tag) {\n";
         indent(depth); *_out << "case " << oc << "_Some: {\n";
-        indent(depth + 1); *_out << "w->vtbl->writeSome(w->obj);\n";
-        emitGraphFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1);
+        indent(depth + 1); *_out << "w->vtbl->k_writeSome(w->obj);\n";
+        emitGraphFieldWrite(ty->genericArg, "(" + access + ").u.k_Some.k_value", depth + 1);
         indent(depth + 1); *_out << "break;\n";
         indent(depth); *_out << "}\n";
-        indent(depth); *_out << "case " << oc << "_None: { w->vtbl->writeNull(w->obj); break; }\n";
+        indent(depth); *_out << "case " << oc << "_None: { w->vtbl->k_writeNull(w->obj); break; }\n";
         indent(depth); *_out << "default: break;\n";
         indent(depth); *_out << "}\n";
         return;
@@ -28931,7 +28979,7 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
     GraphEdge e = graphEdgeOf(ty);
     if (!e.kind.empty()) {
         std::string t = graphInternExpr(e, access, depth);
-        indent(depth); *_out << "w->vtbl->writeU64(w->obj, " << t << ");\n";
+        indent(depth); *_out << "w->vtbl->k_writeU64(w->obj, " << t << ");\n";
         return;
     }
     // …and the real write of that same participant: its own body, this time against the caller's sink,
@@ -28956,7 +29004,7 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
                               "or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             return;
         }
-        indent(depth); *_out << nest.second << "__writeNode(" << (nest.first == "owned" ? "(" + access + ").p" : "&(" + access + ")") << ", w, g);\n";
+        indent(depth); *_out << nest.second << "__writeNode(" << (nest.first == "owned" ? "(" + access + ").k_p" : "&(" + access + ")") << ", w, g);\n";
         return;
     }
     emitSerFieldWrite(ty, access, depth, "");   // an ordinary value field — sticky-only context
@@ -28971,20 +29019,20 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
         auto nest = graphNestOf(inner);
         if (e.kind.empty() && nest.first.empty()) { emitDeFieldRead(ty, dst, depth, "", ""); return; }
         std::string oc = cType(ty);
-        indent(depth); *_out << "if (r.vtbl->readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
+        indent(depth); *_out << "if (r.vtbl->k_readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
         indent(depth); *_out << "else {\n";
         std::string tmp = "__gv" + std::to_string(_tempCounter++);
         indent(depth + 1); *_out << cType(inner) << " " << tmp << " = {0};\n";
         emitGraphFieldRead(inner, tmp, depth + 1);
-        indent(depth + 1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = " << tmp << " } };\n";
+        indent(depth + 1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.k_Some = { .k_value = " << tmp << " } };\n";
         indent(depth); *_out << "}\n";
         return;
     }
     GraphEdge e = graphEdgeOf(ty);
     if (!e.kind.empty()) {   // pass 1: read the id, STASH it in the pointer slot, control block NULL
-        indent(depth); *_out << "{ uint64_t __rid = r.vtbl->readU64(r.obj); ";
+        indent(depth); *_out << "{ uint64_t __rid = r.vtbl->k_readU64(r.obj); ";
         if (e.elemIsContract) *_out << "(" << dst << ").obj = (void*)(uintptr_t)__rid; (" << dst << ").vtbl = NULL; (" << dst << ").ctrl = NULL; }\n";
-        else                  *_out << "(" << dst << ").p = (" << e.elemC << "*)(uintptr_t)__rid; (" << dst << ").c = NULL; }\n";
+        else                  *_out << "(" << dst << ").k_p = (" << e.elemC << "*)(uintptr_t)__rid; (" << dst << ").k_c = NULL; }\n";
         return;
     }
     // A PARTICIPANT field, read through its own body with the graph threaded — the mirror of the write.
@@ -28996,9 +29044,9 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             const std::string t = "__gr" + std::to_string(_tempCounter++);
             indent(depth); *_out << innerRes << " " << t << " = " << fc << "__deserializeFrom(r, g);\n";
             indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Ok) " << dst << " = " << t
-                                 << ".u.Ok.value;\n";
+                                 << ".u.k_Ok.k_value;\n";
             indent(depth); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&" << t
-                                 << ".u.Err.error); kama_de_graph_fail(g, DeError_Malformed); }\n";
+                                 << ".u.k_Err.k_error); kama_de_graph_fail(g, DeError_Malformed); }\n";
             return;
         }
     }
@@ -29022,8 +29070,8 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             return;
         }
         if (nest.first == "owned") {
-            indent(depth); *_out << "(" << dst << ").p = (" << nest.second << "*)kama_alloc_zeroed(" << layoutOf(nest.second) << ");\n";
-            indent(depth); *_out << nest.second << "____readInto((" << dst << ").p, r, g);\n";
+            indent(depth); *_out << "(" << dst << ").k_p = (" << nest.second << "*)kama_alloc_zeroed(" << layoutOf(nest.second) << ");\n";
+            indent(depth); *_out << nest.second << "____readInto((" << dst << ").k_p, r, g);\n";
         } else {
             indent(depth); *_out << nest.second << "____readInto(&(" << dst << "), r, g);\n";
         }
@@ -29042,14 +29090,14 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
         if (e.kind.empty() && nest.first.empty()) return;
         std::string oc = cType(ty);
         indent(depth); *_out << "if ((" << dst << ").tag == " << oc << "_Some) {\n";
-        emitGraphFieldWire(inner, "(" + dst + ").u.Some.value", depth + 1);
+        emitGraphFieldWire(inner, "(" + dst + ").u.k_Some.k_value", depth + 1);
         indent(depth); *_out << "}\n";
         return;
     }
     GraphEdge e = graphEdgeOf(ty);
     if (!e.kind.empty()) {   // pass 2: the stash becomes a retained handle
         std::string X = e.elemC;
-        std::string slot = e.elemIsContract ? "(" + dst + ").obj" : "(" + dst + ").p";
+        std::string slot = e.elemIsContract ? "(" + dst + ").obj" : "(" + dst + ").k_p";
         const char* cnt = (e.kind == "Weak") ? "weak" : "strong";
         indent(depth); *_out << "{ uint64_t __rid = (uint64_t)(uintptr_t)" << slot << "; " << slot << " = NULL;\n";
         indent(depth + 1); *_out << "if (__rid != 0) {\n";
@@ -29062,7 +29110,7 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
             indent(depth + 3); *_out << "else { (" << dst << ").obj = __t->ptr; (" << dst << ").vtbl = __vt; (" << dst << ").ctrl = __t->ctrl; __t->ctrl->" << cnt << "++; }\n";
         } else {
             indent(depth + 3); *_out << "if (__t->type_id != " << _classes[X].graphTypeId << "u) kama_de_graph_fail(g, DeError_TypeMismatch);\n";
-            indent(depth + 3); *_out << "else { (" << dst << ").p = (" << X << "*)__t->ptr; (" << dst << ").c = (void*)__t->ctrl; __t->ctrl->" << cnt << "++; }\n";
+            indent(depth + 3); *_out << "else { (" << dst << ").k_p = (" << X << "*)__t->ptr; (" << dst << ").k_c = (void*)__t->ctrl; __t->ctrl->" << cnt << "++; }\n";
         }
         indent(depth + 2); *_out << "}\n";
         indent(depth + 1); *_out << "}\n";
@@ -29082,7 +29130,7 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
     }
     auto nest = graphNestOf(ty);
     if (nest.first.empty() || !typeHasGraphAdapters(nest.second)) return;   // reported by readInto
-    indent(depth); *_out << nest.second << "__wireEdges(" << (nest.first == "owned" ? "(" + dst + ").p" : "&(" + dst + ")") << ", g);\n";
+    indent(depth); *_out << nest.second << "__wireEdges(" << (nest.first == "owned" ? "(" + dst + ").k_p" : "&(" + dst + ")") << ", g);\n";
 }
 
 // ---- bodies ----------------------------------------------------------------------------------------------
@@ -29100,8 +29148,8 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
         *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
               << "* self, Deserializer r, struct kama_de_graph* g)\n{\n";
         indent(1); *_out << resC << " __t = " << ci.name << "__deserializeFrom(r, g);\n";
-        indent(1); *_out << "if (__t.tag == " << resC << "_Ok) *self = __t.u.Ok.value;\n";
-        indent(1); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&__t.u.Err.error); "
+        indent(1); *_out << "if (__t.tag == " << resC << "_Ok) *self = __t.u.k_Ok.k_value;\n";
+        indent(1); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&__t.u.k_Err.k_error); "
                             "kama_de_graph_fail(g, DeError_Malformed); }\n";
         *_out << "}\n\n";
         return;
@@ -29115,25 +29163,25 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
         if (f.serSkip) continue;
         if (f.type && f.type->value && *f.type->value == "Optional") {
             std::string oc = cType(f.type);
-            indent(1); *_out << "self->" << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+            indent(1); *_out << "self->" << kMember(ci, f.name) << " = (" << oc << "){ .tag = " << oc << "_None };\n";
         }
     }
     std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
-    indent(1); *_out << "r.vtbl->beginObject(r.obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
-    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(1); *_out << "r.vtbl->k_beginObject(r.obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
+    indent(1); *_out << "while (r.vtbl->k_moreFields(r.obj)) {\n";
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
-        { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + rf[i]->name, 4); }
+        { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
-    indent(3); *_out << "default: r.vtbl->skipValue(r.obj); break;\n";
+    indent(3); *_out << "default: r.vtbl->k_skipValue(r.obj); break;\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "FieldKey__dtor(&__key);\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_endObject(r.obj);\n";
     *_out << "}\n\n";
 }
 
@@ -29144,15 +29192,15 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
 void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
 {
     auto closeObj = [&](int d) {
-        indent(d); *_out << "while (r.vtbl->moreFields(r.obj)) { FieldKey __sk = r.vtbl->field(r.obj); "
-                            "FieldKey__dtor(&__sk); r.vtbl->skipValue(r.obj); }\n";
-        indent(d); *_out << "r.vtbl->endObject(r.obj);\n";
+        indent(d); *_out << "while (r.vtbl->k_moreFields(r.obj)) { FieldKey __sk = r.vtbl->k_field(r.obj); "
+                            "FieldKey__dtor(&__sk); r.vtbl->k_skipValue(r.obj); }\n";
+        indent(d); *_out << "r.vtbl->k_endObject(r.obj);\n";
     };
     const bool unit = ci.isScalarEnum();
     if (!unit) {
-        indent(1); *_out << "r.vtbl->beginObject(r.obj, 0);\n";
-        indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
-        indent(1); *_out << "{ FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";   // the "tag" key
+        indent(1); *_out << "r.vtbl->k_beginObject(r.obj, 0);\n";
+        indent(1); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+        indent(1); *_out << "{ FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";   // the "tag" key
     }
     emitVariantKeySlot(ci, 1);
     for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
@@ -29162,24 +29210,24 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
         for (auto& f : v.payload)   // zero is `Some(0)` for an Optional — start every one at None
             if (f.type && f.type->value && *f.type->value == "Optional") {
                 std::string oc = cType(f.type);
-                indent(2); *_out << "self->u." << v.name << "." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+                indent(2); *_out << "self->u." << kName(v.name) << "." << kMember(ci, f.name) << " = (" << oc << "){ .tag = " << oc << "_None };\n";
             }
         if (!v.payload.empty()) {
-            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-            indent(2); *_out << "{ FieldKey __kv = r.vtbl->field(r.obj); FieldKey__dtor(&__kv); }\n";   // the "value" key
-            indent(2); *_out << "r.vtbl->beginObject(r.obj, " << v.payload.size() << ");\n";
+            indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+            indent(2); *_out << "{ FieldKey __kv = r.vtbl->k_field(r.obj); FieldKey__dtor(&__kv); }\n";   // the "value" key
+            indent(2); *_out << "r.vtbl->k_beginObject(r.obj, " << v.payload.size() << ");\n";
             for (auto& f : v.payload) {
-                indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-                indent(2); *_out << "{ FieldKey __pk = r.vtbl->field(r.obj); FieldKey__dtor(&__pk); }\n";
+                indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+                indent(2); *_out << "{ FieldKey __pk = r.vtbl->k_field(r.obj); FieldKey__dtor(&__pk); }\n";
                 ScopedStr _sf(_serdeField, f.name);
-                emitGraphFieldRead(f.type, "self->u." + v.name + "." + f.name, 2);
+                emitGraphFieldRead(f.type, "self->u." + kName(v.name) + "." + kMember(ci, f.name), 2);
             }
             closeObj(2);   // the value object
         }
         if (!unit) closeObj(2);   // the outer object
         indent(1); *_out << "}\n";
     }
-    indent(1); *_out << "else { r.vtbl->fail(r.obj); kama_de_graph_fail(g, DeError_Malformed); }\n";
+    indent(1); *_out << "else { r.vtbl->k_fail(r.obj); kama_de_graph_fail(g, DeError_Malformed); }\n";
     indent(1); *_out << "FieldKey__dtor(&__tag);\n";
     *_out << "}\n\n";
 }
@@ -29198,12 +29246,12 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         indent(1); *_out << "Serializer __s = __kama_null_serializer();\n";
         indent(1); *_out << resC << " __d = " << K << "__serializeInto(self, &__s, g);\n";
         indent(1); *_out << "if (__d.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
-                         << "__dtor(&__d.u.Err.error); }\n";
+                         << "__dtor(&__d.u.k_Err.k_error); }\n";
         *_out << "}\n\n";
         *_out << stat << "void " << K << "__writeNode(" << K << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
         indent(1); *_out << resC << " __r = " << K << "__serializeInto(self, w, g);\n";
         indent(1); *_out << "if (__r.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
-                         << "__dtor(&__r.u.Err.error); }\n";
+                         << "__dtor(&__r.u.k_Err.k_error); }\n";
         *_out << "}\n\n";
     }
     if (graphTwinNeeded(ci, /*write=*/false)) {
@@ -29221,7 +29269,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
             emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldVisit(f.type, a, d); });
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
             ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldVisit(fp->type, "self->" + fp->name, 1);
+            emitGraphFieldVisit(fp->type, "self->" + kMember(ci, fp->name), 1);
         }
         *_out << "}\n\n";
         // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
@@ -29233,14 +29281,14 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
             *_out << "}\n\n";
         } else {
         std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
-        indent(1); *_out << "w->vtbl->beginObject(w->obj, " << wf.size() << ");\n";
+        indent(1); *_out << "w->vtbl->k_beginObject(w->obj, " << wf.size() << ");\n";
         for (const FieldInfo* fp : wf) {
             const std::string& wire = fp->serName.empty() ? fp->name : fp->serName;
-            indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit(wire) << ", " << serWireId(ci, *fp) << "u);\n";
+            indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit(wire) << ", " << serWireId(ci, *fp) << "u);\n";
             ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldWrite(fp->type, "self->" + fp->name, 1);
+            emitGraphFieldWrite(fp->type, "self->" + kMember(ci, fp->name), 1);
         }
-        indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+        indent(1); *_out << "w->vtbl->k_endObject(w->obj);\n";
         *_out << "}\n\n";
         }
     }
@@ -29251,7 +29299,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
             emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWire(f.type, a, d); });
         for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) {
             ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldWire(fp->type, "self->" + fp->name, 1);
+            emitGraphFieldWire(fp->type, "self->" + kMember(ci, fp->name), 1);
         }
         *_out << "}\n\n";
     }
@@ -29393,19 +29441,19 @@ void CEmitter::emitNullSerializer()
     // method), so the tag is not itself a value.
     *_out << stat << "SerError __kama_ns_errorCode(void* o) { (void)o; return SerError_IoError; }\n";
     *_out << "static const Serializer_vtbl __kama_null_ser_vtbl = {\n";   // a table, not a function: no `inline`
-    indent(1); *_out << ".beginObject = __kama_ns_usize, .endObject = __kama_ns_void,\n";
-    indent(1); *_out << ".field = __kama_ns_field, .variant = __kama_ns_variant,\n";
-    indent(1); *_out << ".beginArray = __kama_ns_usize, .endArray = __kama_ns_void,\n";
-    indent(1); *_out << ".writeI8 = __kama_ns_writeI8, .writeI16 = __kama_ns_writeI16, "
-                        ".writeI32 = __kama_ns_writeI32, .writeI64 = __kama_ns_writeI64,\n";
-    indent(1); *_out << ".writeU8 = __kama_ns_writeU8, .writeU16 = __kama_ns_writeU16, "
-                        ".writeU32 = __kama_ns_writeU32, .writeU64 = __kama_ns_writeU64,\n";
-    indent(1); *_out << ".writeF32 = __kama_ns_writeF32, .writeF64 = __kama_ns_writeF64,\n";
-    indent(1); *_out << ".writeBool = __kama_ns_writeBool, .writeChar = __kama_ns_writeChar, "
-                        ".writeString = __kama_ns_str,\n";
-    indent(1); *_out << ".writeSome = __kama_ns_void, .writeNull = __kama_ns_void,\n";
-    indent(1); *_out << ".failed = __kama_ns_failed, .fail = __kama_ns_void, "
-                        ".failWith = NULL, .errorCode = __kama_ns_errorCode,\n";
+    indent(1); *_out << ".k_beginObject = __kama_ns_usize, .k_endObject = __kama_ns_void,\n";
+    indent(1); *_out << ".k_field = __kama_ns_field, .k_variant = __kama_ns_variant,\n";
+    indent(1); *_out << ".k_beginArray = __kama_ns_usize, .k_endArray = __kama_ns_void,\n";
+    indent(1); *_out << ".k_writeI8 = __kama_ns_writeI8, .k_writeI16 = __kama_ns_writeI16, "
+                        ".k_writeI32 = __kama_ns_writeI32, .k_writeI64 = __kama_ns_writeI64,\n";
+    indent(1); *_out << ".k_writeU8 = __kama_ns_writeU8, .k_writeU16 = __kama_ns_writeU16, "
+                        ".k_writeU32 = __kama_ns_writeU32, .k_writeU64 = __kama_ns_writeU64,\n";
+    indent(1); *_out << ".k_writeF32 = __kama_ns_writeF32, .k_writeF64 = __kama_ns_writeF64,\n";
+    indent(1); *_out << ".k_writeBool = __kama_ns_writeBool, .k_writeChar = __kama_ns_writeChar, "
+                        ".k_writeString = __kama_ns_str,\n";
+    indent(1); *_out << ".k_writeSome = __kama_ns_void, .k_writeNull = __kama_ns_void,\n";
+    indent(1); *_out << ".k_failed = __kama_ns_failed, .k_fail = __kama_ns_void, "
+                        ".k_failWith = NULL, .k_errorCode = __kama_ns_errorCode,\n";
     *_out << "};\n";
     *_out << stat << "Serializer __kama_null_serializer(void) { Serializer s; s.obj = NULL; "
                      "s.vtbl = &__kama_null_ser_vtbl; return s; }\n\n";
@@ -29525,7 +29573,7 @@ void CEmitter::emitGraphWireElements(ClassInfo& ci)
     // `UnsafePtr<T>` and bookkeeping, so this is a no-op for one; a hand-written participant's edges are
     // here and nowhere else.
     for (auto& f : ci.fields)
-        if (!f.serSkip) { ScopedStr _sf(_serdeField, f.name); emitGraphFieldWire(f.type, "self->" + f.name, 1); }
+        if (!f.serSkip) { ScopedStr _sf(_serdeField, f.name); emitGraphFieldWire(f.type, "self->" + kMember(ci, f.name), 1); }
     // …then ELEMENTS, which are not fields and so have to be iterated.
     bool wantElems = false;
     auto gi = _genericTypeInsts.find(ci.name);
@@ -29587,8 +29635,8 @@ void CEmitter::emitGraphEdgeHelpers()
         *_out << stat << resC << " " << cls << "__serializeEdge(" << cls
               << "* self, Serializer* w, struct kama_ser_graph* g)\n{\n";
         indent(1); *_out << "uint64_t __id = 0;\n";
-        std::string obj = e.elemIsContract ? "self->obj" : "(void*)self->p";
-        std::string ctl = e.elemIsContract ? "self->ctrl" : "(kama_ctrl*)self->c";
+        std::string obj = e.elemIsContract ? "self->obj" : "(void*)self->k_p";
+        std::string ctl = e.elemIsContract ? "self->ctrl" : "((kama_ctrl*)self->k_c)";
         std::string tid = e.elemIsContract ? (e.elemC + "__graphTypeId(self->vtbl)")
                                            : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
         // A null control block is an empty handle; an EXPIRED `Weak` has a live block and a dead pointee,
@@ -29598,8 +29646,8 @@ void CEmitter::emitGraphEdgeHelpers()
         indent(2); *_out << "if (__tid != KAMA_GRAPH_NO_NODE) __id = kama_ser_graph_intern(g, "
                             "(uint64_t)(uintptr_t)" << obj << ", __tid);\n";
         indent(1); *_out << "}\n";
-        indent(1); *_out << "w->vtbl->writeU64(w->obj, __id);\n";
-        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+        indent(1); *_out << "w->vtbl->k_writeU64(w->obj, __id);\n";
+        indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = Unit_Unit } };\n";
         *_out << "}\n\n";
 
         // The read twin. Pass 1 takes the id and STASHES it in the handle's own pointer slot with a NULL
@@ -29618,14 +29666,14 @@ void CEmitter::emitGraphEdgeHelpers()
         *_out << stat << edgeRes << " " << cls << "__deserializeEdge(Deserializer r, struct kama_de_graph* g)\n{\n";
         indent(1); *_out << "(void)g;\n";
         indent(1); *_out << cls << " __h;\n";
-        indent(1); *_out << "uint64_t __rid = r.vtbl->readU64(r.obj);\n";
+        indent(1); *_out << "uint64_t __rid = r.vtbl->k_readU64(r.obj);\n";
         if (e.elemIsContract) {
             indent(1); *_out << "__h.obj = (void*)(uintptr_t)__rid; __h.vtbl = NULL; __h.ctrl = NULL;\n";
         } else {
-            indent(1); *_out << "__h.p = (" << e.elemC << "*)(uintptr_t)__rid; __h.c = NULL;\n";
+            indent(1); *_out << "__h.k_p = (" << e.elemC << "*)(uintptr_t)__rid; __h.k_c = NULL;\n";
         }
         indent(1); *_out << "return (" << edgeRes << "){ .tag = " << edgeRes
-                         << "_Ok, .u.Ok = { .value = __h } };\n";
+                         << "_Ok, .u.k_Ok = { .k_value = __h } };\n";
         *_out << "}\n\n";
     }
 }
@@ -29650,41 +29698,41 @@ void CEmitter::emitGraphWorklistLoop(int depth)
 // `objects: [{id, type, value}]` — the table, in id order. Shared by both drivers.
 void CEmitter::emitGraphObjectTable(int depth)
 {
-    indent(depth); *_out << "w->vtbl->beginArray(w->obj, kama_ser_graph_count(&__g));\n";
+    indent(depth); *_out << "w->vtbl->k_beginArray(w->obj, kama_ser_graph_count(&__g));\n";
     indent(depth); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++) {\n";
-    indent(depth + 1); *_out << "w->vtbl->beginObject(w->obj, 3);\n";
-    indent(depth + 1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("id") << ", 0u);\n";
-    indent(depth + 1); *_out << "w->vtbl->writeU64(w->obj, (uint64_t)(__i + 1));\n";
-    indent(depth + 1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
+    indent(depth + 1); *_out << "w->vtbl->k_beginObject(w->obj, 3);\n";
+    indent(depth + 1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("id") << ", 0u);\n";
+    indent(depth + 1); *_out << "w->vtbl->k_writeU64(w->obj, (uint64_t)(__i + 1));\n";
+    indent(depth + 1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("type") << ", 1u);\n";
     indent(depth + 1); *_out << "switch (kama_ser_graph_type(&__g, __i)) {\n";
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeWrites(_classes[K])) continue;
         indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
         // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
         // backend writes the index, so the choice costs one byte where a name would cost its length.
-        indent(depth + 2); *_out << "w->vtbl->variant(w->obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
+        indent(depth + 2); *_out << "w->vtbl->k_variant(w->obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
                                  << _classes[K].graphTypeId << "u);\n";
-        indent(depth + 2); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("value") << ", 2u);\n";
+        indent(depth + 2); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("value") << ", 2u);\n";
         indent(depth + 2); *_out << K << "__writeNode((" << K << "*)kama_ser_graph_obj(&__g, __i), w, &__g);\n";
         indent(depth + 2); *_out << "break;\n";
         indent(depth + 1); *_out << "}\n";
     }
     indent(depth + 1); *_out << "default: break;\n";
     indent(depth + 1); *_out << "}\n";
-    indent(depth + 1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(depth + 1); *_out << "w->vtbl->k_endObject(w->obj);\n";
     indent(depth); *_out << "}\n";
-    indent(depth); *_out << "w->vtbl->endArray(w->obj);\n";
+    indent(depth); *_out << "w->vtbl->k_endArray(w->obj);\n";
 }
 
 // The tail both drivers share: free the worklist and turn the sink's sticky flag into the fallible Result.
 void CEmitter::emitGraphDriverTail(const std::string& resC)
 {
     indent(1); *_out << "kama_ser_graph_free(&__g);\n";
-    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
-    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "if (w->vtbl->k_failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->k_errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 
@@ -29697,12 +29745,12 @@ void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
     indent(1); *_out << "uint64_t __root = kama_ser_graph_intern(&__g, (uint64_t)(uintptr_t)self, "
                      << ci.graphTypeId << "u);\n";
     emitGraphWorklistLoop(1);
-    indent(1); *_out << "w->vtbl->beginObject(w->obj, 2);\n";
-    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
-    indent(1); *_out << "w->vtbl->writeU64(w->obj, __root);\n";
-    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
+    indent(1); *_out << "w->vtbl->k_beginObject(w->obj, 2);\n";
+    indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
+    indent(1); *_out << "w->vtbl->k_writeU64(w->obj, __root);\n";
+    indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
     emitGraphObjectTable(1);
-    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "w->vtbl->k_endObject(w->obj);\n";
     emitGraphDriverTail(resC);
 }
 
@@ -29724,15 +29772,15 @@ void CEmitter::emitGraphRootDriver(ClassInfo& ci)
     indent(1); *_out << "Serializer __sink = __kama_null_serializer();\n";
     indent(1); *_out << "{ " << resC << " __d = " << ci.name << "__serializeInto(self, &__sink, &__g);\n";
     indent(1); *_out << "  if (__d.tag == " << resC << "_Err) { " << cType(ownedErrorTypeNode())
-                     << "__dtor(&__d.u.Err.error); } }\n";
+                     << "__dtor(&__d.u.k_Err.k_error); } }\n";
     emitGraphWorklistLoop(1);
-    indent(1); *_out << "w->vtbl->beginObject(w->obj, 2);\n";
-    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
+    indent(1); *_out << "w->vtbl->k_beginObject(w->obj, 2);\n";
+    indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("root") << ", 0u);\n";
     indent(1); *_out << "{ " << resC << " __r = " << ci.name << "__serializeInto(self, w, &__g);\n";
     indent(1); *_out << "  if (__r.tag == " << resC << "_Err) { kama_ser_graph_free(&__g); return __r; } }\n";
-    indent(1); *_out << "w->vtbl->field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
+    indent(1); *_out << "w->vtbl->k_field(w->obj, " << kamaStrLit("objects") << ", 1u);\n";
     emitGraphObjectTable(1);
-    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "w->vtbl->k_endObject(w->obj);\n";
     emitGraphDriverTail(resC);
 }
 
@@ -29775,31 +29823,31 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
     // The envelope is read POSITIONALLY: its shape is fixed, so each key is consumed and discarded and the
     // order is the contract (`type` before `value`, or the reader cannot dispatch).
-    indent(1); *_out << "r.vtbl->beginObject(r.obj, 2);\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(1); *_out << "uint64_t __root = r.vtbl->readU64(r.obj);\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(1); *_out << "r.vtbl->beginArray(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_beginObject(r.obj, 2);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "uint64_t __root = r.vtbl->k_readU64(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "r.vtbl->k_beginArray(r.obj);\n";
     // PASS 1 — one shell per entry: allocated, scalars read, every edge id stashed in its own pointer slot.
-    indent(1); *_out << "while (r.vtbl->moreElems(r.obj)) {\n";
-    indent(2); *_out << "r.vtbl->beginObject(r.obj, 3);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(2); *_out << "uint64_t __eid = r.vtbl->readU64(r.obj);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(2); *_out << "FieldKey __ty = r.vtbl->variant(r.obj);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "while (r.vtbl->k_moreElems(r.obj)) {\n";
+    indent(2); *_out << "r.vtbl->k_beginObject(r.obj, 3);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->k_readU64(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "FieldKey __ty = r.vtbl->k_variant(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
     indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
     indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
     // A table id may appear once, and 0 is never a live id. On refusal the shell just read is dropped.
     indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, DeError_DuplicateId)) {\n";
     indent(3); *_out << "__kama_graph_dropBox(__b);\n";
     indent(2); *_out << "}\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-    indent(2); *_out << "r.vtbl->endObject(r.obj);\n";
-    indent(2); *_out << "if (r.vtbl->failed(r.obj)) break;\n";   // a malformed entry cannot be stepped over
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_endObject(r.obj);\n";
+    indent(2); *_out << "if (r.vtbl->k_failed(r.obj)) break;\n";   // a malformed entry cannot be stepped over
     indent(1); *_out << "}\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
-    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_endObject(r.obj);\n";
     // PASS 2 — ids become handles, in read order.
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) {\n";
     indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
@@ -29818,7 +29866,7 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(1); *_out << "kama_de_box* __rb = kama_de_graph_lookup(&__g, __root);\n";
     indent(1); *_out << "if (!__rb) kama_de_graph_fail(&__g, DeError_UnresolvedReference);\n";
     indent(1); *_out << "else if (__rb->type_id != " << ci.graphTypeId << "u) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
-    indent(1); *_out << "else { __ret.p = (" << T << "*)__rb->ptr; __ret.c = (void*)__rb->ctrl; __rb->ctrl->strong++; }\n";
+    indent(1); *_out << "else { __ret.k_p = (" << T << "*)__rb->ptr; __ret.k_c = (void*)__rb->ctrl; __rb->ctrl->strong++; }\n";
     // CLEANUP — drop each shell's construction strong. A node no live edge reaches dies here, so a forged
     // wire cannot leak; one the root reaches survives on the reference just taken.
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
@@ -29828,16 +29876,16 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     // Malformed, so it is reported first.
     indent(1); *_out << "if (__g.failed) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
-    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError)__g.code);\n";
+    indent(2); *_out << "r.vtbl->k_failWith(r.obj, (DeError)__g.code);\n";
     std::string gbox = emitStickyErrBox(2);
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << gbox << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    indent(1); *_out << "if (r.vtbl->k_failed(r.obj)) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
     std::string rbox = emitStickyErrBox(2);
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << rbox << " } };\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << rbox << " } };\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __ret } };\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.k_Ok = { .k_value = __ret } };\n";
     *_out << "}\n\n";
 }
 
@@ -29859,31 +29907,31 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";
     *_out << stat << resC << " " << T << "__deserialize(Deserializer r)\n{\n";
     indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
-    indent(1); *_out << "r.vtbl->beginObject(r.obj, 2);\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "r.vtbl->k_beginObject(r.obj, 2);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
     // PASS 1a — the root's own value, with each edge element stashing its id.
     indent(1); *_out << resC << " __rv = " << T << "__deserializeFrom(r, &__g);\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(1); *_out << "r.vtbl->beginArray(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "r.vtbl->k_beginArray(r.obj);\n";
     // PASS 1b — the table, exactly as the node reader builds it.
-    indent(1); *_out << "while (r.vtbl->moreElems(r.obj)) {\n";
-    indent(2); *_out << "r.vtbl->beginObject(r.obj, 3);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(2); *_out << "uint64_t __eid = r.vtbl->readU64(r.obj);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
-    indent(2); *_out << "FieldKey __ty = r.vtbl->variant(r.obj);\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj); { FieldKey __k = r.vtbl->field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(1); *_out << "while (r.vtbl->k_moreElems(r.obj)) {\n";
+    indent(2); *_out << "r.vtbl->k_beginObject(r.obj, 3);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->k_readU64(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
+    indent(2); *_out << "FieldKey __ty = r.vtbl->k_variant(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj); { FieldKey __k = r.vtbl->k_field(r.obj); FieldKey__dtor(&__k); }\n";
     indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
     indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, DeError_TypeMismatch);\n";
     indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, DeError_DuplicateId)) {\n";
     indent(3); *_out << "__kama_graph_dropBox(__b);\n";
     indent(2); *_out << "}\n";
-    indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
-    indent(2); *_out << "r.vtbl->endObject(r.obj);\n";
-    indent(2); *_out << "if (r.vtbl->failed(r.obj)) break;\n";
+    indent(2); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+    indent(2); *_out << "r.vtbl->k_endObject(r.obj);\n";
+    indent(2); *_out << "if (r.vtbl->k_failed(r.obj)) break;\n";
     indent(1); *_out << "}\n";
-    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
-    indent(1); *_out << "r.vtbl->endObject(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_moreFields(r.obj);\n";
+    indent(1); *_out << "r.vtbl->k_endObject(r.obj);\n";
     // PASS 2 — the shells first, then the root's own elements.
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) {\n";
     indent(2); *_out << "kama_de_box* __b = kama_de_graph_at(&__g, __i);\n";
@@ -29898,17 +29946,17 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(1); *_out << "}\n";
     if (graphWireElementsNeeded(ci)) {
         indent(1); *_out << "if (__rv.tag == " << resC << "_Ok) " << T
-                         << "__wireParts(&__rv.u.Ok.value, &__g);\n";
+                         << "__wireParts(&__rv.u.k_Ok.k_value, &__g);\n";
     }
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
     indent(1); *_out << "kama_de_graph_free(&__g);\n";
     indent(1); *_out << "if (__g.failed) {\n";
-    indent(2); *_out << "r.vtbl->failWith(r.obj, (DeError)__g.code);\n";
+    indent(2); *_out << "r.vtbl->k_failWith(r.obj, (DeError)__g.code);\n";
     std::string gbox = emitStickyErrBox(2);
     indent(2); *_out << "if (__rv.tag == " << resC << "_Ok) " << cType(retNode->genericArgs->at(0))
-                     << "__dtor(&__rv.u.Ok.value);\n";
-    indent(2); *_out << "else " << cType(ownedErrorTypeNode()) << "__dtor(&__rv.u.Err.error);\n";
-    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
+                     << "__dtor(&__rv.u.k_Ok.k_value);\n";
+    indent(2); *_out << "else " << cType(ownedErrorTypeNode()) << "__dtor(&__rv.u.k_Err.k_error);\n";
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.k_Err = { .k_error = " << gbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return __rv;\n";
     *_out << "}\n\n";
@@ -30677,13 +30725,17 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line);
                      recordFieldRef(owner, field, ma->identifier.get()); }
         else if (_classes.count(T)) { rejectMissingField(&_classes[T], T, ma, field); return "0"; }
-        return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
+        return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + (owner ? kMember(*owner, field) : kName(field));
     }
     std::string basePath;
+    // The type that DECLARES `field` decides its C spelling (KR-67): prefixed, unless that type is an
+    // `extern`/`expose` value, whose fields are a declared C surface. Unresolved receiver -> prefixed,
+    // which is the kama-owned default; an extern type always resolves, so a miss here is a clang error.
+    ClassInfo* fieldOwner = nullptr;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
         if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line);
-                     recordFieldRef(owner, field, ma->identifier.get()); }
+                     recordFieldRef(owner, field, ma->identifier.get()); fieldOwner = owner; }
         else {
             // the field is NOT on the wrapper itself — auto-deref via a `Deref<T>` contract to the
             // pointee: `w.field` -> `Cls__deref(&(w))->[base]field` (a T*). (Only when not on `cls`.)
@@ -30700,14 +30752,14 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
                 std::string bp = basePathTo(&_classes[dtgt], fo);
                 checkFieldAccess(fo, field, ma->line);
                 recordFieldRef(fo, field, ma->identifier.get());
-                if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + field;
+                if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + kMember(*fo, field);
             }
         }
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
-        return "self->" + basePath + field;
+        return "self->" + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
     }
     // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`
     // (a real lvalue), so `arr[i].field = v` is a valid write — not `(__get(...)).field = v` (assigning
@@ -30743,7 +30795,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             return "0";
         }
     }
-    return "(" + emitPlace(ma->expression) + ")." + basePath + field;
+    return "(" + emitPlace(ma->expression) + ")." + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
 }
 
 // `v.zz` where `v`'s type is KNOWN and has no such field. Says what the name is when it is something
@@ -30853,8 +30905,8 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             canAccess(fo, f.visibility, method, srcLine);
                             const SigInfo& sig = _sigs.at(fc);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
-                            return emitReorderedCall(sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + method + ")")
-                                                                : ("(" + recvPtr + ")->" + method), "", sig.params,
+                            return emitReorderedCall(sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
+                                                                : ("(" + recvPtr + ")->" + kMember(*fo, method)), "", sig.params,
                                                      args, srcLine);
                         }
                         // ...and its bound twin: a `BindableFunctionPtr` FIELD, invoked. The local arm
@@ -30862,7 +30914,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         // holding one — the shape a UI event table is — could store it and never fire it.
                         if (isBindableClass(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
-                            return emitBindableInvoke("(" + recvPtr + ")->" + method, fc, args, srcLine);
+                            return emitBindableInvoke("(" + recvPtr + ")->" + kMember(*fo, method), fc, args, srcLine);
                         }
                     }
         }
@@ -30945,7 +30997,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             std::string vptr = "((" + root + "*)" + recvPtr + ")->__vptr";
             // A `@noheap` virtual method is proven — every override is checked against it — so the slot
             // call is marked for the call graph, exactly as a `@noheap` contract member's is.
-            std::string slot = vptr + "->" + method;
+            std::string slot = vptr + "->" + kName(method);
             if (mi->noHeap) slot = "KAMA_NOHEAP_SLOT(" + slot + ")";
             return emitReorderedCall(slot, self, mi->params, args, srcLine);
         }
@@ -31216,13 +31268,13 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         std::string tmp = "__fnew"   + std::to_string(_tempCounter++);
         std::string box = "__fbox"   + std::to_string(_tempCounter++);
         std::string ap  = "__falloc" + std::to_string(_tempCounter++);
-        const std::string okName  = okV->payload[0].name;
-        const std::string errName = errV->payload[0].name;
+        const std::string okName  = kName(okV->payload[0].name);
+        const std::string errName = kName(errV->payload[0].name);
         std::string s;
         s  = RT + " " + tmp + " = " + cc + "; ";
         s += "if (" + tmp + ".tag == " + RT + "_Err) { ";
-        s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.Err = { ." + errName + " = "
-                 + tmp + ".u.Err." + errName + " } }; ";
+        s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.k_Err = { ." + errName + " = "
+                 + tmp + ".u.k_Err." + errName + " } }; ";
         s += "} else { ";
         s +=   S + " " + box + "; ";
         if (useAlloc) {
@@ -31233,7 +31285,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
             s += box + ".obj = kama_alloc(" + layoutOf(cls) + "); ";
         }
         s += "if (!" + box + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
-        s += "*(" + cls + "*)" + box + ".obj = " + tmp + ".u.Ok." + okName + "; ";
+        s += "*(" + cls + "*)" + box + ".obj = " + tmp + ".u.k_Ok." + okName + "; ";
         s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
         if (useAlloc) {
             s += box + ".alloc = " + ap + "; ";
@@ -31245,7 +31297,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
             else
                 s += box + ".ctrl = kama_ctrl_new(); ";
         }
-        s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
+        s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.k_Ok = { ." + okName + " = "
                  + box + " } }; ";
         s += "}";
         return s;
@@ -31293,8 +31345,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     std::string cc = emitReorderedCall(mi->cName, "", mi->params, oc->args, srcLine);   // pushes arg hand-offs
     std::string tmp = "__fnew" + std::to_string(_tempCounter++);
     std::string hp  = "__fheap" + std::to_string(_tempCounter++);
-    const std::string okName  = okV->payload[0].name;    // "value"
-    const std::string errName = errV->payload[0].name;   // "error"
+    const std::string okName  = kName(okV->payload[0].name);   // "value" -> "k_value"
+    const std::string errName = kName(errV->payload[0].name);  // "error" -> "k_error"
 
     // Allocate ONLY on the Ok path: allocate the pointee (from `a` when placement, else libc malloc), MOVE
     // the payload in, `adopt`/`adoptIn` it into the owning handle, wrap in `Ok`. The `Err` path allocates
@@ -31304,8 +31356,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     std::string s;
     s  = RT + " " + tmp + " = " + cc + "; ";
     s += "if (" + tmp + ".tag == " + RT + "_Err) { ";
-    s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.Err = { ." + errName + " = "
-             + tmp + ".u.Err." + errName + " } }; ";
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.k_Err = { ." + errName + " = "
+             + tmp + ".u.k_Err." + errName + " } }; ";
     s += "} else { ";
     if (placed) {
         s += pa.second + " " + ap + " = " + pa.first + "; ";
@@ -31314,9 +31366,9 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         s += T + "* " + hp + " = (" + T + "*)kama_alloc(" + layoutOf(T) + "); ";
     }
     s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
-    s +=   "*(" + hp + ") = " + tmp + ".u.Ok." + okName + "; ";
+    s +=   "*(" + hp + ") = " + tmp + ".u.k_Ok." + okName + "; ";
     std::string adoptCall = adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ")";
-    s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.k_Ok = { ." + okName + " = "
              + adoptCall + " } }; ";
     s += "}";
     return s;
@@ -31345,7 +31397,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         return "";
     }
     std::string S = fieldCType(target, someV->payload[0]);   // the inner Owned/Shared instance
-    const std::string someName = someV->payload[0].name;              // "value"
+    const std::string someName = kName(someV->payload[0].name);       // "value" -> "k_value" (KR-67)
     { std::string ve = newVariantEnum(oc, heapOwnerTarget(S)); if (!ve.empty()) cls = ve; }
     // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
     // Mirrors emitFallibleNewBox's interface branch (malloc `.obj`, construct into it, set `.vtbl`, and —
@@ -31423,7 +31475,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
         if (useAlloc) s += box + ".alloc = " + ap + "; ";
         if (shared) s += box + ".ctrl = " + ctl + "; ";
-        s += lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+        s += lval + " = (" + target + "){ .tag = " + target + "_Some, .u.k_Some = { ." + someName + " = "
            + box + " } }; ";
         s += shared ? "} }" : "}";
         return s;
@@ -31483,7 +31535,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     }
     s += "if (!" + hp + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
     s += ctorStmt;
-    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.k_Some = { ." + someName + " = "
              + adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ") } }; ";
     s += "}";
     return s;
@@ -31532,7 +31584,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
                      "holds `" + S + "`").c_str(), srcLine);
         return "";
     }
-    const std::string someName = someV->payload[0].name;              // "value"
+    const std::string someName = kName(someV->payload[0].name);       // "value" -> "k_value" (KR-67)
     // The temp is the WIDEST integer of the operand's signedness, so the test sees the true value: a
     // `uint64` above LLONG_MAX must not arrive as a negative, and a negative must not arrive as huge.
     const std::string src = typeOfExpr(cst->unaryExpression);
@@ -31581,7 +31633,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";
     s += "if (" + test + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
     const std::string val = "(" + dst + ")" + t;
-    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.k_Some = { ." + someName + " = "
              + val + " } }; }";
     return s;
 }
@@ -31675,7 +31727,7 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
     std::string op = "(" + emitExpression(ad->operand) + ")";   // side-effect-free (a binding / field access)
     return "((" + op + ".vtbl == &" + enumC + "__as_" + contract + " || kama_type_name_eq(" + op
          + ".vtbl->__type, \"" + enumC + "\")) ? "
-         + "(" + optC + "){ .tag = " + optC + "_Some, .u.Some = { .value = *(" + enumC + "*)" + op + ".obj } } : "
+         + "(" + optC + "){ .tag = " + optC + "_Some, .u.k_Some = { .k_value = *(" + enumC + "*)" + op + ".obj } } : "
          + "(" + optC + "){ .tag = " + optC + "_None })";
 }
 
