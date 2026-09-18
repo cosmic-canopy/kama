@@ -38,7 +38,7 @@ if grep -q '= 251;' "$relc"; then
     echo "  a gated-out decl must not reach the emitted C (no #ifdef — Kama does the selection)" >&2
     exit 1
 fi
-if ! grep -q '__ret_0 = 7;' "$relc"; then
+if ! grep -q 'kama_ret_0 = 7;' "$relc"; then
     echo "check-compilefor: FAIL — RELEASE build is missing the @compileFor(!DEBUG) fallback ('= 7;')" >&2
     exit 1
 fi
@@ -157,12 +157,12 @@ cat > "$tmp/derived.kama" <<'KAMA'
 fn int32 main() { return pick(); }
 KAMA
 "$KAMA" transpile --no-line "$tmp/derived.kama" --target aarch64-linux-gnu -o "$tmp/derived_linux.c" >/dev/null
-if ! grep -q '__ret_0 = 1;' "$tmp/derived_linux.c"; then
+if ! grep -q 'kama_ret_0 = 1;' "$tmp/derived_linux.c"; then
     echo "check-compilefor: FAIL — a linux triple did not activate the derived OS_LINUX flag" >&2
     exit 1
 fi
 "$KAMA" transpile --no-line "$tmp/derived.kama" --target wasm32-emscripten-none -o "$tmp/derived_wasm.c" >/dev/null
-if ! grep -q '__ret_0 = 2;' "$tmp/derived_wasm.c"; then
+if ! grep -q 'kama_ret_0 = 2;' "$tmp/derived_wasm.c"; then
     echo "check-compilefor: FAIL — a non-linux triple still activated the derived OS_LINUX flag" >&2
     exit 1
 fi
