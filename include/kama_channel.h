@@ -39,7 +39,7 @@ typedef struct {
     pthread_cond_t  notFull;    /* a blocked send waits here; a recv / last-receiver-drop signals it */
     unsigned char*  buf;        /* cap * elemSize bytes */
     size_t          elemSize;
-    size_t          cap;
+    size_t          kama_cap;
     size_t          count;
     size_t          head;       /* next slot to read  */
     size_t          tail;       /* next slot to write */
@@ -74,7 +74,7 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     pthread_cond_init(&ch->notEmpty, NULL);
     pthread_cond_init(&ch->notFull, NULL);
     ch->elemSize = elemSize;
-    ch->cap = cap;
+    ch->kama_cap = cap;
     ch->count = ch->head = ch->tail = 0;
     ch->senders = ch->receivers = 0;
     ch->senderClaimed = ch->receiverClaimed = 0;   /* unclaimed == open; see the struct's note */
@@ -108,7 +108,7 @@ static inline void kama_channel_free(kama_channel_t* ch) {
     pthread_mutex_destroy(&ch->mu);
     pthread_cond_destroy(&ch->notEmpty);
     pthread_cond_destroy(&ch->notFull);
-    kama_free(ch->buf, (ch->cap ? ch->cap : 1) * ch->elemSize, _Alignof(max_align_t));
+    kama_free(ch->buf, (ch->kama_cap ? ch->kama_cap : 1) * ch->elemSize, _Alignof(max_align_t));
     kama_free(ch, sizeof(kama_channel_t), _Alignof(kama_channel_t));
 }
 
@@ -123,7 +123,7 @@ static inline void kama_channel_free(kama_channel_t* ch) {
 static inline int kama_channel_send(void* h, const void* elem) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
-    if (ch->cap == 0) {                                       /* rendezvous */
+    if (ch->kama_cap == 0) {                                       /* rendezvous */
         while (ch->count != 0 && kama_channel_recv_open(ch)) /* wait for a free slot (prior hand-off done) */
             pthread_cond_wait(&ch->notFull, &ch->mu);
         if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
@@ -145,11 +145,11 @@ static inline int kama_channel_send(void* h, const void* elem) {
         pthread_mutex_unlock(&ch->mu);
         return taken ? 0 : -1;                               /* receiver died before taking → not delivered */
     }
-    while (ch->count == ch->cap && kama_channel_recv_open(ch))
+    while (ch->count == ch->kama_cap && kama_channel_recv_open(ch))
         pthread_cond_wait(&ch->notFull, &ch->mu);
     if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
     memcpy(ch->buf + ch->tail * ch->elemSize, elem, ch->elemSize);
-    ch->tail = (ch->tail + 1) % ch->cap;
+    ch->tail = (ch->tail + 1) % ch->kama_cap;
     ch->count++;
     pthread_cond_signal(&ch->notEmpty);
     pthread_mutex_unlock(&ch->mu);
@@ -165,7 +165,7 @@ static inline int kama_channel_recv(void* h, void* out) {
     while (ch->count == 0 && kama_channel_send_open(ch))
         pthread_cond_wait(&ch->notEmpty, &ch->mu);
     if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }   /* drained + senders gone */
-    if (ch->cap == 0) {                                       /* rendezvous: take from the single slot */
+    if (ch->kama_cap == 0) {                                       /* rendezvous: take from the single slot */
         memcpy(out, ch->buf, ch->elemSize);
         ch->count = 0;
         ch->takenSeq++;                                      /* THIS is what tells the sender its item landed */
@@ -177,7 +177,7 @@ static inline int kama_channel_recv(void* h, void* out) {
         return 0;
     }
     memcpy(out, ch->buf + ch->head * ch->elemSize, ch->elemSize);
-    ch->head = (ch->head + 1) % ch->cap;
+    ch->head = (ch->head + 1) % ch->kama_cap;
     ch->count--;
     pthread_cond_signal(&ch->notFull);
     pthread_mutex_unlock(&ch->mu);
@@ -193,7 +193,7 @@ static inline int kama_channel_try_pop(void* h, void* out) {
     pthread_mutex_lock(&ch->mu);
     if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return 0; }
     memcpy(out, ch->buf + ch->head * ch->elemSize, ch->elemSize);
-    if (ch->cap != 0) ch->head = (ch->head + 1) % ch->cap;
+    if (ch->kama_cap != 0) ch->head = (ch->head + 1) % ch->kama_cap;
     ch->count--;
     pthread_mutex_unlock(&ch->mu);
     return 1;

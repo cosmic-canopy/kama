@@ -3,7 +3,7 @@
 
 int host_run(void) {
     FrameStats s = exposeval_makeStats(10);                    /* built in kama, read in C */
-    if (s.origin.x != 3.0f || s.kind != exposeval_geo_Kind_Segment || s.tag.v[2] != 3) return 100;
+    if (s.origin.x != 3.0f || s.kind != exposeval_geo_Kind_Segment || s.tag.kama_v[2] != 3) return 100;
     s.frames = 20;                                             /* changed in C, read back in kama */
     exposeval_geo_Vec2 v = { 1.0f, 2.0f };
     exposeval_Wire w = { 2, 40 };

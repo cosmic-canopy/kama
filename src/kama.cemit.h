@@ -2700,7 +2700,7 @@ private:
     SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
     // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); returns the temp.
     std::string emitStickyErrBox(int depth, const std::string& enumType = "DeError",
-                                 const std::string& errExpr = "r.vtbl->k_errorCode(r.obj)");
+                                 const std::string& errExpr = "r.kama_vtbl->k_errorCode(r.kama_obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
     std::vector<std::string> _graphNodeOrder;       // graph node types in a stable order (typeIndex; the shell reader chain)

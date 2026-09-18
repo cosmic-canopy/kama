@@ -222,7 +222,7 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 
 // Per-element copy. A bitwise-copyable element (owns nothing) copies memberwise; a
 // `Copyable` resource element deep-copies via its own `Elem__copy(&e)`. Given an element POINTER,
-// both yield the copied element BY VALUE, so `NAME##__copy` assigns `r.data[i] = ELEM_COPY(&src[i])`.
+// both yield the copied element BY VALUE, so `NAME##__copy` assigns `r.kama_data[i] = ELEM_COPY(&src[i])`.
 #define KAMA_ELEM_MEMBERWISE(e) (*(e))
 
 // Owned<I> over a CONTRACT — a unique-owning fat pointer: the handle IS the contract
@@ -235,26 +235,26 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 // the free were invisible, so dropping a polymorphic box whose object frees passed a `@noheap` region
 // (0.9.353). Put a body back in here and it stops being analysed. The `_TYPE` halves stay: a struct
 // declaration calls nothing.
-#define KAMA_OWNED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; } NAME;
+#define KAMA_OWNED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; } NAME;
 
 // Allocator-aware Owned<I> (M11d): the fat handle carries its own copy of the caller's allocator value
 // `alloc` (a lightweight value handle over externally-owned state, e.g. an arena) + the concrete pointee's
 // `objsize`, so the drop frees `obj` through THAT allocator instead of libc. Selected only for a stateful
 // allocator; a default GlobalAllocator box keeps the plain layout above (byte-identical).
 #define KAMA_OWNED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
-    typedef struct NAME { void* obj; const VTBL* vtbl; ATYPE alloc; size_t objsize; } NAME;
+    typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; ATYPE kama_alloc; size_t kama_objsize; } NAME;
 
 // The control block behind every shared handle (`Shared<I>`, and the library `Shared<T>`'s layout-compatible
 // `Ctrl`): a SEPARATE allocation, so a `Weak` can outlive the object. (The concrete `Owned<T>`/`Shared<T>`/
 // `Weak<T>` are library types in lib/std/memory; only the CONTRACT handles below are the runtime's.)
-typedef struct kama_ctrl { size_t strong; size_t weak; } kama_ctrl;   // weak: reserved for Weak<T>
+typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; } kama_ctrl;   // weak: reserved for Weak<T>
 #include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
 // kama_ctrl_new is defined further down, next to kama_panic: it has to CHECK its allocation, and the
 // panic path (and `kama_string`) is declared below this point. Its only in-header caller is well past it.
 static inline kama_ctrl* kama_ctrl_new(void);
 // Shared<I> over a CONTRACT — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
 // on the shared count; the last strong handle drops the concrete object via the vtable's `__dtor`.
-#define KAMA_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; } NAME;
+#define KAMA_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; kama_ctrl* kama_ctrl; } NAME;
 
 // Allocator-aware Shared<I> (M11d): fat handle carries its own `alloc` value copy + pointee `objsize`.
 // Both the pointee AND the ctrl block are drawn from `alloc` at the new-site, so the last strong drop frees
@@ -262,11 +262,11 @@ static inline kama_ctrl* kama_ctrl_new(void);
 // Shared frees the ctrl through its OWN equal `alloc` copy (all copies are equal — a value handle over
 // externally-owned state). Default GlobalAllocator boxes keep the plain layout above (byte-identical).
 #define KAMA_SHARED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
-    typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
+    typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; kama_ctrl* kama_ctrl; ATYPE kama_alloc; size_t kama_objsize; } NAME;
 
 // Weak<I> over a CONTRACT — same fat layout as Shared<I>; counts `weak`, never touches
 // the concrete object. `upgrade()` yields a live Shared<I> (obj/vtbl/ctrl) or an empty one.
-#define KAMA_WEAK_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; } NAME;
+#define KAMA_WEAK_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; kama_ctrl* kama_ctrl; } NAME;
 
 // Allocator-aware Weak<I> (M11d): same fat layout as Shared + `alloc`/`objsize`; counts `weak`, never
 // touches the concrete object. Frees the ctrl (through its own `alloc` copy) when BOTH counts reach 0.
@@ -274,7 +274,7 @@ static inline kama_ctrl* kama_ctrl_new(void);
 // through the right allocator (init `= {0}` so the empty/expired case leaves them zeroed) — emitted by the
 // compiler beside the drop, see the Owned<I> note above.
 #define KAMA_WEAK_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
-    typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
+    typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; kama_ctrl* kama_ctrl; ATYPE kama_alloc; size_t kama_objsize; } NAME;
 
 // BindableFunctionPtr<Sig> — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:
@@ -288,8 +288,8 @@ static inline kama_ctrl* kama_ctrl_new(void);
 // Move-only (it may uniquely own the object). The drop, which calls through `release`, is emitted by the
 // compiler (see the Owned<I> note).
 #define KAMA_BINDABLE_TYPE(NAME)                                              \
-typedef struct NAME { void* obj; kama_ctrl* ctrl;                            \
-                      void (*fn)(void); void (*release)(void*, kama_ctrl*); } NAME;
+typedef struct NAME { void* kama_obj; kama_ctrl* kama_ctrl;                  \
+                      void (*kama_fn)(void); void (*kama_release)(void*, kama_ctrl*); } NAME;
 
 // Raw byte write to a standard fd with NO <stdio.h> — the one place that spells the platform's
 // write syscall. Everything below (bounds trap, panic, assert, print/log floor) goes through here.
@@ -932,12 +932,12 @@ KAMA_PLACE_TYPES(volatile, v)
 #define KAMA_POSTADD(p, b) KAMA_PLACE_SEL(postadd, p)((p), (b))
 #define KAMA_POSTSUB(p, b) KAMA_PLACE_SEL(postsub, p)((p), (b))
 
-// InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
+// InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T kama_v[N]; }`). It owns no heap:
 // it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
 // The element must be a `value` (owns nothing), so there is no per-element dtor/copy. This is how
 // kama reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), the size is
 // part of the type (monomorphized per (T,N)), and the whole thing is a first-class value.
-#define KAMA_FIXED_TYPE(T, N, NAME) typedef struct NAME { T v[N]; } NAME;
+#define KAMA_FIXED_TYPE(T, N, NAME) typedef struct NAME { T kama_v[N]; } NAME;
 // Indices are `ptrdiff_t` (kama's `isize`), not `size_t`: an index is a SIZE, and kama's size type is
 // signed so that `len - 1` on an empty container is -1 rather than SIZE_MAX. That makes the negative case
 // REACHABLE here, where an unsigned index made it merely unrepresentable, so each check tests it
@@ -945,25 +945,25 @@ KAMA_PLACE_TYPES(volatile, v)
 #define KAMA_FIXED_FUNCS(T, N, NAME)                                           \
 static inline T      NAME##__get(const NAME* self, ptrdiff_t i) {               \
     if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
-    return self->v[i];                                                          \
+    return self->kama_v[i];                                                          \
 }                                                                               \
 static inline void   NAME##__set(NAME* self, ptrdiff_t i, T x) {                \
     if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
-    self->v[i] = x;                                                             \
+    self->kama_v[i] = x;                                                             \
 }                                                                               \
 static inline T*     NAME##__at(NAME* self, ptrdiff_t i) {                      \
     if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
-    return &self->v[i];                                                         \
+    return &self->kama_v[i];                                                         \
 }                                                                               \
 static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (ptrdiff_t)(N); } \
 /* The safe InlineArray->pointer bridge, matching FixedArray/DynamicArray: OBTAINING the buffer      \
    pointer is safe, DEREFERENCING it needs an `unsafe fn` — a rule that falls out of the `*`-suffixed \
    return type, not from anything special-cased here. This is the one container that is stack-        \
    allocated, fixed-size and allocation-free, so it is what a `@noheap` region has to hand to C.     */\
-static inline T const* NAME##__dataPtr(NAME* self) { return self->v; }                          \
-static inline T*     NAME##__dataPtrMut(NAME* self) { return self->v; }                         \
+static inline T const* NAME##__dataPtr(NAME* self) { return self->kama_v; }                          \
+static inline T*     NAME##__dataPtrMut(NAME* self) { return self->kama_v; }                         \
 static inline NAME   NAME##__fill(T x) {                                        \
-    NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
+    NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.kama_v[i] = x; return r;      \
 }
 #define KAMA_FIXED_DEFINE(T, N, NAME) KAMA_FIXED_TYPE(T, N, NAME) KAMA_FIXED_FUNCS(T, N, NAME)
 
@@ -1016,7 +1016,7 @@ static inline T NAME##__lane(const NAME* self, ptrdiff_t i) {                   
     return (*self)[i];                                                          \
 }                                                                               \
 static inline ARR NAME##__toArray(const NAME* self) {                           \
-    ARR r; for (int i = 0; i < (N); ++i) r.v[i] = (*self)[i]; return r;         \
+    ARR r; for (int i = 0; i < (N); ++i) r.kama_v[i] = (*self)[i]; return r;         \
 }                                                                               \
 static inline NAME NAME##__abs(const NAME* self) {                              \
     NAME r; for (int i = 0; i < (N); ++i) {                                      \
@@ -1181,75 +1181,75 @@ typedef char kama_cchar;
 // freed by RAII. All string ops read uniformly; only concat allocates. Raw
 // memory stays confined here — the kama surface sees only a safe `string`.
 typedef struct kama_string {
-    char*  data;   // UTF-8 bytes; borrowed (cap==0) bytes are never mutated/freed
-    size_t len;    // byte length
-    size_t cap;    // 0 => borrowed/literal, >0 => heap-owned
+    char*  kama_data;   // UTF-8 bytes; borrowed (kama_cap==0) bytes are never mutated/freed
+    size_t kama_len;    // byte length
+    size_t kama_cap;    // 0 => borrowed/literal, >0 => heap-owned
 } kama_string;
 
 // Borrowed view of a string literal (static storage; valid for the whole run).
 static inline kama_string kama_string_lit(const char* s, size_t n) {
     kama_string r;
-    r.data = (char*)s;   // never written/freed while cap==0
-    r.len  = n;
-    r.cap  = 0;
+    r.kama_data = (char*)s;   // never written/freed while cap==0
+    r.kama_len  = n;
+    r.kama_cap  = 0;
     return r;
 }
 
 // RAII: free only heap-owned strings; borrowed views are a no-op.
 static inline void kama_string__dtor(kama_string* self) {
-    if (self->cap) kama_free(self->data, self->cap, 1);
-    self->data = NULL; self->len = 0; self->cap = 0;
+    if (self->kama_cap) kama_free(self->kama_data, self->kama_cap, 1);
+    self->kama_data = NULL; self->kama_len = 0; self->kama_cap = 0;
 }
 // `len`/`cap` stay `size_t` in the struct — they are ALLOCATION sizes, and this layout is the C-facing
 // one. The ACCESSOR returns `ptrdiff_t`, because a length is kama's `isize`. The narrowing is safe by
 // construction: no allocation may exceed PTRDIFF_MAX (the same bound Rust puts on a single allocation,
 // for the same reason — a byte offset between two points in one object must be representable).
-static inline ptrdiff_t kama_string__length(kama_string* self) { return (ptrdiff_t)self->len; }
+static inline ptrdiff_t kama_string__length(kama_string* self) { return (ptrdiff_t)self->kama_len; }
 // FFI: the underlying NUL-terminated bytes, for passing to a C `const char*`.
-static inline const char* kama_string__cstr(kama_string* self) { return self->data; }
+static inline const char* kama_string__cstr(kama_string* self) { return self->kama_data; }
 static inline bool kama_string__equals(kama_string* self, kama_string other) {
-    return self->len == other.len &&
-           (self->len == 0 || kama_cmp(self->data, other.data, self->len) == 0);
+    return self->kama_len == other.kama_len &&
+           (self->kama_len == 0 || kama_cmp(self->kama_data, other.kama_data, self->kama_len) == 0);
 }
 // Deep copy -> a fresh heap-owned string (even copying a borrowed literal).
 static inline kama_string kama_string__copy(const kama_string* self) {
-    kama_string r; r.len = self->len;
-    if (self->len == 0) { r.data = NULL; r.cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->len + 1, 1);
-    kama_copy(buf, self->data, self->len);
-    buf[self->len] = '\0';
-    r.data = buf; r.cap = self->len + 1;   // heap-owned
+    kama_string r; r.kama_len = self->kama_len;
+    if (self->kama_len == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
+    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    kama_copy(buf, self->kama_data, self->kama_len);
+    buf[self->kama_len] = '\0';
+    r.kama_data = buf; r.kama_cap = self->kama_len + 1;   // heap-owned
     return r;
 }
 // Returns a fresh heap-owned string (the caller binds it -> RAII frees it).
 static inline kama_string kama_string__concat(kama_string* self, kama_string other) {
-    size_t n = self->len + other.len;
+    size_t n = self->kama_len + other.kama_len;
     char*  buf = (char*)kama_alloc(n + 1, 1);
-    if (self->len) kama_copy(buf, self->data, self->len);
-    if (other.len) kama_copy(buf + self->len, other.data, other.len);
+    if (self->kama_len) kama_copy(buf, self->kama_data, self->kama_len);
+    if (other.kama_len) kama_copy(buf + self->kama_len, other.kama_data, other.kama_len);
     buf[n] = '\0';
-    kama_string r; r.data = buf; r.len = n; r.cap = n + 1; return r;
+    kama_string r; r.kama_data = buf; r.kama_len = n; r.kama_cap = n + 1; return r;
 }
 // Bounds-checked byte access: `s[i]` returns the i-th UTF-8 byte (a uint8). Traps on out-of-range.
 // (Codepoints come from `.chars()`; this is the raw byte, honest to the UTF-8-bytes model.)
 static inline uint8_t kama_string__get(kama_string* self, size_t i) {
-    if (i >= self->len) kama_bounds_fail(i, self->len);
-    return (uint8_t)self->data[i];
+    if (i >= self->kama_len) kama_bounds_fail(i, self->kama_len);
+    return (uint8_t)self->kama_data[i];
 }
 
 // --- Strings Phase 3 (ergonomics) -------------------------------------------
 // True when `off` is a character boundary: `len` is one (a range's exclusive end), and any other offset
 // is a boundary unless it names a CONTINUATION byte (10xxxxxx). O(1), no decoding.
 static inline bool kama_utf8_is_boundary(const kama_string* self, size_t off) {
-    return off >= self->len || ((unsigned char)self->data[off] & 0xC0) != 0x80;
+    return off >= self->kama_len || ((unsigned char)self->kama_data[off] & 0xC0) != 0x80;
 }
 // The greatest character boundary <= `off` (Rust's `floor_char_boundary`). Total: never traps, clamps
 // past-the-end to `len`. At most 3 bytes back, since a UTF-8 sequence is at most 4 bytes long. This is
 // THE primitive that makes an arithmetic offset safe — at either end of a range and at any position — so
 // `substring` stays the one slicing operation instead of growing a safe twin.
 static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t off) {
-    if (off >= self->len) return self->len;
-    while (off > 0 && ((unsigned char)self->data[off] & 0xC0) == 0x80) --off;
+    if (off >= self->kama_len) return self->kama_len;
+    while (off > 0 && ((unsigned char)self->kama_data[off] & 0xC0) == 0x80) --off;
     return off;
 }
 // Owned byte-range copy of `[start, end)` — a fresh heap-owned string (cap>0). Traps on
@@ -1264,16 +1264,16 @@ static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t of
 // and how Rust's `&s[0..2]` panics on a non-char-boundary. For an offset from arithmetic rather than from
 // a search, snap it with `floorCharBoundary` (or use `truncate`) — both are total.
 static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end) {
-    if (start > end || end > self->len) kama_bounds_fail(end, self->len);
+    if (start > end || end > self->kama_len) kama_bounds_fail(end, self->kama_len);
     if (!kama_utf8_is_boundary(self, start)) kama_utf8_split_fail(start);
     if (!kama_utf8_is_boundary(self, end))   kama_utf8_split_fail(end);
     size_t n = end - start;
-    kama_string r; r.len = n;
-    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    kama_string r; r.kama_len = n;
+    if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
     char* buf = (char*)kama_alloc(n + 1, 1);
-    kama_copy(buf, self->data + start, n);
+    kama_copy(buf, self->kama_data + start, n);
     buf[n] = '\0';
-    r.data = buf; r.cap = n + 1;   // heap-owned
+    r.kama_data = buf; r.kama_cap = n + 1;   // heap-owned
     return r;
 }
 // At most `maxBytes` bytes from the start, never splitting a character — the named form of the common
@@ -1287,24 +1287,24 @@ static inline kama_string kama_string__truncate(kama_string* self, size_t maxByt
 // (raw found-flag + offset); the emitter wraps it as `Optional<usize>` for `.find()`. A plain
 // borrowed-safe byte scan (no <string.h>).
 static inline bool kama_string__find_raw(kama_string* self, kama_string needle, size_t* out) {
-    if (needle.len == 0) { *out = 0; return true; }
-    if (needle.len > self->len) return false;
-    for (size_t i = 0; i + needle.len <= self->len; ++i)
-        if (kama_cmp(self->data + i, needle.data, needle.len) == 0) { *out = i; return true; }
+    if (needle.kama_len == 0) { *out = 0; return true; }
+    if (needle.kama_len > self->kama_len) return false;
+    for (size_t i = 0; i + needle.kama_len <= self->kama_len; ++i)
+        if (kama_cmp(self->kama_data + i, needle.kama_data, needle.kama_len) == 0) { *out = i; return true; }
     return false;
 }
 static inline bool kama_string__contains(kama_string* self, kama_string needle) {
     size_t o; return kama_string__find_raw(self, needle, &o);
 }
 static inline bool kama_string__startsWith(kama_string* self, kama_string prefix) {
-    return prefix.len <= self->len &&
-           (prefix.len == 0 || kama_cmp(self->data, prefix.data, prefix.len) == 0);
+    return prefix.kama_len <= self->kama_len &&
+           (prefix.kama_len == 0 || kama_cmp(self->kama_data, prefix.kama_data, prefix.kama_len) == 0);
 }
 static inline bool kama_string__endsWith(kama_string* self, kama_string suffix) {
-    return suffix.len <= self->len &&
-           (suffix.len == 0 || kama_cmp(self->data + (self->len - suffix.len), suffix.data, suffix.len) == 0);
+    return suffix.kama_len <= self->kama_len &&
+           (suffix.kama_len == 0 || kama_cmp(self->kama_data + (self->kama_len - suffix.kama_len), suffix.kama_data, suffix.kama_len) == 0);
 }
-static inline bool kama_string__isEmpty(kama_string* self) { return self->len == 0; }
+static inline bool kama_string__isEmpty(kama_string* self) { return self->kama_len == 0; }
 
 // ASCII whitespace only (space, tab, LF, VT, FF, CR). Unicode whitespace is deferred to a Unicode module.
 static inline int kama_string__is_ws(char c) {
@@ -1313,79 +1313,79 @@ static inline int kama_string__is_ws(char c) {
 // Owned copy of `[lo, hi)` (a heap string, or the empty string). Shared by the trim family.
 static inline kama_string kama_string__slice_owned(kama_string* self, size_t lo, size_t hi) {
     size_t n = hi - lo;
-    kama_string r; r.len = n;
-    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    kama_string r; r.kama_len = n;
+    if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
     char* buf = (char*)kama_alloc(n + 1, 1);
-    kama_copy(buf, self->data + lo, n);
+    kama_copy(buf, self->kama_data + lo, n);
     buf[n] = '\0';
-    r.data = buf; r.cap = n + 1;
+    r.kama_data = buf; r.kama_cap = n + 1;
     return r;
 }
 static inline kama_string kama_string__trimStart(kama_string* self) {
     size_t lo = 0;
-    while (lo < self->len && kama_string__is_ws(self->data[lo])) ++lo;
-    return kama_string__slice_owned(self, lo, self->len);
+    while (lo < self->kama_len && kama_string__is_ws(self->kama_data[lo])) ++lo;
+    return kama_string__slice_owned(self, lo, self->kama_len);
 }
 static inline kama_string kama_string__trimEnd(kama_string* self) {
-    size_t hi = self->len;
-    while (hi > 0 && kama_string__is_ws(self->data[hi - 1])) --hi;
+    size_t hi = self->kama_len;
+    while (hi > 0 && kama_string__is_ws(self->kama_data[hi - 1])) --hi;
     return kama_string__slice_owned(self, 0, hi);
 }
 static inline kama_string kama_string__trim(kama_string* self) {
-    size_t lo = 0, hi = self->len;
-    while (lo < hi && kama_string__is_ws(self->data[lo])) ++lo;
-    while (hi > lo && kama_string__is_ws(self->data[hi - 1])) --hi;
+    size_t lo = 0, hi = self->kama_len;
+    while (lo < hi && kama_string__is_ws(self->kama_data[lo])) ++lo;
+    while (hi > lo && kama_string__is_ws(self->kama_data[hi - 1])) --hi;
     return kama_string__slice_owned(self, lo, hi);
 }
 // Owned copy with every non-overlapping occurrence of `old` replaced by `with` (byte-literal, greedy
 // left-to-right). Two-pass: count matches, allocate exactly, fill. An empty (or too-long) `old`
-// returns a copy of self — no infinite loop. `n = len - count*old.len + count*with.len` never
-// underflows: non-overlapping matches guarantee `count*old.len <= len`.
+// returns a copy of self — no infinite loop. `n = len - count*old.kama_len + count*with.kama_len` never
+// underflows: non-overlapping matches guarantee `count*old.kama_len <= len`.
 static inline kama_string kama_string__replace(kama_string* self, kama_string old, kama_string with) {
-    if (old.len == 0 || old.len > self->len) return kama_string__copy(self);
+    if (old.kama_len == 0 || old.kama_len > self->kama_len) return kama_string__copy(self);
     size_t count = 0, j = 0;
-    while (j + old.len <= self->len) {
-        if (kama_cmp(self->data + j, old.data, old.len) == 0) { ++count; j += old.len; }
+    while (j + old.kama_len <= self->kama_len) {
+        if (kama_cmp(self->kama_data + j, old.kama_data, old.kama_len) == 0) { ++count; j += old.kama_len; }
         else ++j;
     }
     if (count == 0) return kama_string__copy(self);
-    size_t n = self->len - count * old.len + count * with.len;
-    kama_string r; r.len = n;
-    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    size_t n = self->kama_len - count * old.kama_len + count * with.kama_len;
+    kama_string r; r.kama_len = n;
+    if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
     char* buf = (char*)kama_alloc(n + 1, 1);
     size_t w = 0, i = 0;
-    while (i + old.len <= self->len) {
-        if (kama_cmp(self->data + i, old.data, old.len) == 0) {
-            if (with.len) kama_copy(buf + w, with.data, with.len);
-            w += with.len; i += old.len;
-        } else buf[w++] = self->data[i++];
+    while (i + old.kama_len <= self->kama_len) {
+        if (kama_cmp(self->kama_data + i, old.kama_data, old.kama_len) == 0) {
+            if (with.kama_len) kama_copy(buf + w, with.kama_data, with.kama_len);
+            w += with.kama_len; i += old.kama_len;
+        } else buf[w++] = self->kama_data[i++];
     }
-    while (i < self->len) buf[w++] = self->data[i++];
+    while (i < self->kama_len) buf[w++] = self->kama_data[i++];
     buf[n] = '\0';
-    r.data = buf; r.cap = n + 1;
+    r.kama_data = buf; r.kama_cap = n + 1;
     return r;
 }
 // ASCII-only case mapping — bytes >= 0x80 (signed char < 0) are left untouched, which is UTF-8-safe
 // (an ASCII byte never occurs inside a multibyte sequence). Full Unicode casing is deferred.
 static inline kama_string kama_string__toLower(kama_string* self) {
-    if (self->len == 0) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->len + 1, 1);
-    for (size_t i = 0; i < self->len; ++i) {
-        char c = self->data[i];
+    if (self->kama_len == 0) { kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }
+    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    for (size_t i = 0; i < self->kama_len; ++i) {
+        char c = self->kama_data[i];
         buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
     }
-    buf[self->len] = '\0';
-    kama_string r; r.data = buf; r.len = self->len; r.cap = self->len + 1; return r;
+    buf[self->kama_len] = '\0';
+    kama_string r; r.kama_data = buf; r.kama_len = self->kama_len; r.kama_cap = self->kama_len + 1; return r;
 }
 static inline kama_string kama_string__toUpper(kama_string* self) {
-    if (self->len == 0) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->len + 1, 1);
-    for (size_t i = 0; i < self->len; ++i) {
-        char c = self->data[i];
+    if (self->kama_len == 0) { kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }
+    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    for (size_t i = 0; i < self->kama_len; ++i) {
+        char c = self->kama_data[i];
         buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
     }
-    buf[self->len] = '\0';
-    kama_string r; r.data = buf; r.len = self->len; r.cap = self->len + 1; return r;
+    buf[self->kama_len] = '\0';
+    kama_string r; r.kama_data = buf; r.kama_len = self->kama_len; r.kama_cap = self->kama_len + 1; return r;
 }
 // Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
 // iterator hold a borrowed `UnsafePtr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
@@ -1396,11 +1396,11 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
 // that exists precisely so `.split()` need not open-code allocation.
 static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t start, ptrdiff_t len) {
     kama_string r;
-    if (start < 0 || len <= 0) { r.data = NULL; r.len = 0; r.cap = 0; return r; }   // defensive: caller (Split) always passes >=0
+    if (start < 0 || len <= 0) { r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }   // defensive: caller (Split) always passes >=0
     char* buf = (char*)kama_alloc((size_t)len + 1, 1);
     kama_copy(buf, base + start, (size_t)len);
     buf[len] = '\0';
-    r.data = buf; r.len = (size_t)len; r.cap = (size_t)len + 1;
+    r.kama_data = buf; r.kama_len = (size_t)len; r.kama_cap = (size_t)len + 1;
     return r;
 }
 
@@ -1580,20 +1580,20 @@ static inline kama_string kama_fmt_u64_radix(uint64_t v, int32_t base, int32_t w
 // an existing heap buffer (`cap>0`) is `realloc`-grown. The result stays a well-formed `kama_string` (NUL
 // terminated, `cap>len`), so ordinary string RAII frees it — the `Formatter` needs no custom destructor.
 static inline void kama_str_push(kama_string* s, const kama_string* add) {
-    size_t n = add->len;
+    size_t n = add->kama_len;
     if (n == 0) return;
-    size_t need = s->len + n + 1;                         // +1 for the NUL
-    if (s->cap == 0 || need > s->cap) {
-        size_t ncap = s->cap ? s->cap : 16;
+    size_t need = s->kama_len + n + 1;                         // +1 for the NUL
+    if (s->kama_cap == 0 || need > s->kama_cap) {
+        size_t ncap = s->kama_cap ? s->kama_cap : 16;
         while (ncap < need) ncap *= 2;
         char* nb = (char*)kama_alloc(ncap, 1);
-        if (s->len) kama_copy(nb, s->data, s->len);
-        if (s->cap) kama_free(s->data, s->cap, 1);       // free the old heap buffer; a cap==0 literal isn't freed
-        s->data = nb; s->cap = ncap;
+        if (s->kama_len) kama_copy(nb, s->kama_data, s->kama_len);
+        if (s->kama_cap) kama_free(s->kama_data, s->kama_cap, 1);       // free the old heap buffer; a cap==0 literal isn't freed
+        s->kama_data = nb; s->kama_cap = ncap;
     }
-    kama_copy(s->data + s->len, add->data, n);
-    s->len += n;
-    s->data[s->len] = '\0';
+    kama_copy(s->kama_data + s->kama_len, add->kama_data, n);
+    s->kama_len += n;
+    s->kama_data[s->kama_len] = '\0';
 }
 
 // Move a builder's buffer OUT as an owned string, leaving the field empty (`{NULL,0,0}` — a safe no-op to
@@ -1601,7 +1601,7 @@ static inline void kama_str_push(kama_string* s, const kama_string* add) {
 // An untouched buffer is still the empty literal (`cap==0`), which transfers harmlessly as a borrowed "".
 static inline kama_string kama_str_take(kama_string* s) {
     kama_string r = *s;
-    s->data = NULL; s->len = 0; s->cap = 0;
+    s->kama_data = NULL; s->kama_len = 0; s->kama_cap = 0;
     return r;
 }
 
@@ -1618,7 +1618,7 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
 #else
     extern void abort(void);
     (void)kama_raw_write(2, "kama: panic: ", 13);
-    if (msg.len) (void)kama_raw_write(2, msg.data, msg.len);
+    if (msg.kama_len) (void)kama_raw_write(2, msg.kama_data, msg.kama_len);
     (void)kama_raw_write(2, "\n", 1);
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
@@ -1633,14 +1633,14 @@ static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, 
 #endif
 
 // A `Shared<T>`'s control block (declared up beside `kama_ctrl`). ⚠️ It CHECKS its allocation: it used to
-// write `c->strong` straight through whatever kama_alloc returned, so the one path that is supposed to
+// write `c->kama_strong` straight through whatever kama_alloc returned, so the one path that is supposed to
 // answer OOM with kama's documented panic answered it with a null dereference instead. The fallible verb
 // `try new` does not come through here at all — it allocates its ctrl inline so a failure can become
 // `None` (see emitTryNewBox); this is the infallible path, where panic IS the contract.
 static inline kama_ctrl* kama_ctrl_new(void) {
     kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl), _Alignof(kama_ctrl));
     if (!c) kama_panic(kama_string_lit("out of memory", 13));
-    c->strong = 1; c->weak = 0;
+    c->kama_strong = 1; c->kama_weak = 0;
     return c;
 }
 
@@ -1662,13 +1662,13 @@ static inline kama_ctrl* kama_ctrl_new(void) {
 typedef struct kama_gmap {
     uint64_t* keys;   // 0 == empty slot
     uint64_t* vals;
-    size_t    cap;    // power of two, or 0 when unallocated
-    size_t    len;    // live entries
+    size_t    kama_cap;    // power of two, or 0 when unallocated
+    size_t    kama_len;    // live entries
 } kama_gmap;
 
-static inline void kama_gmap_init(kama_gmap* m) { m->keys = NULL; m->vals = NULL; m->cap = 0; m->len = 0; }
+static inline void kama_gmap_init(kama_gmap* m) { m->keys = NULL; m->vals = NULL; m->kama_cap = 0; m->kama_len = 0; }
 static inline void kama_gmap_free(kama_gmap* m) {
-    kama_free(m->keys, m->cap * sizeof(uint64_t), _Alignof(uint64_t)); kama_free(m->vals, m->cap * sizeof(uint64_t), _Alignof(uint64_t));
+    kama_free(m->keys, m->kama_cap * sizeof(uint64_t), _Alignof(uint64_t)); kama_free(m->vals, m->kama_cap * sizeof(uint64_t), _Alignof(uint64_t));
     kama_gmap_init(m);
 }
 
@@ -1687,30 +1687,30 @@ static inline void kama_gmap_grow(kama_gmap* m, size_t newcap) {
     m->keys = (uint64_t*)kama_alloc_zeroed(newcap * sizeof(uint64_t), _Alignof(uint64_t));
     m->vals = (uint64_t*)kama_alloc_zeroed(newcap * sizeof(uint64_t), _Alignof(uint64_t));
     if (!m->keys || !m->vals) kama_panic(kama_string_lit("out of memory", 13));
-    m->cap = newcap; m->len = 0;
-    for (size_t i = 0; i < old.cap; ++i)
+    m->kama_cap = newcap; m->kama_len = 0;
+    for (size_t i = 0; i < old.kama_cap; ++i)
         if (old.keys[i] != 0) kama_gmap_put(m, old.keys[i], old.vals[i]);
-    kama_free(old.keys, old.cap * sizeof(uint64_t), _Alignof(uint64_t)); kama_free(old.vals, old.cap * sizeof(uint64_t), _Alignof(uint64_t));
+    kama_free(old.keys, old.kama_cap * sizeof(uint64_t), _Alignof(uint64_t)); kama_free(old.vals, old.kama_cap * sizeof(uint64_t), _Alignof(uint64_t));
 }
 
 // Insert or overwrite. Grows at ~0.7 load. A 0 key is the empty sentinel and is never inserted by the
 // walker (addresses and ids are both nonzero), so no guard is needed.
 static inline void kama_gmap_put(kama_gmap* m, uint64_t k, uint64_t v) {
-    if (m->cap == 0)                             kama_gmap_grow(m, 8);
-    else if ((m->len + 1) * 10 >= m->cap * 7)    kama_gmap_grow(m, m->cap * 2);
-    size_t mask = m->cap - 1;
+    if (m->kama_cap == 0)                             kama_gmap_grow(m, 8);
+    else if ((m->kama_len + 1) * 10 >= m->kama_cap * 7)    kama_gmap_grow(m, m->kama_cap * 2);
+    size_t mask = m->kama_cap - 1;
     size_t i = (size_t)kama_gmap_hash(k) & mask;
     while (m->keys[i] != 0) {
         if (m->keys[i] == k) { m->vals[i] = v; return; }   // overwrite existing
         i = (i + 1) & mask;
     }
-    m->keys[i] = k; m->vals[i] = v; m->len++;
+    m->keys[i] = k; m->vals[i] = v; m->kama_len++;
 }
 
 // Look up `k`; on hit store its value in *out and return 1, else 0.
 static inline int kama_gmap_get(const kama_gmap* m, uint64_t k, uint64_t* out) {
-    if (m->cap == 0) return 0;
-    size_t mask = m->cap - 1;
+    if (m->kama_cap == 0) return 0;
+    size_t mask = m->kama_cap - 1;
     size_t i = (size_t)kama_gmap_hash(k) & mask;
     while (m->keys[i] != 0) {
         if (m->keys[i] == k) { *out = m->vals[i]; return 1; }
@@ -1726,35 +1726,35 @@ typedef struct kama_ser_graph {
     kama_gmap ids;      // pointee address -> id (1-based)
     void**    objs;     // node object pointers, in id order
     uint32_t* types;    // parallel: each node's compile-time type id
-    size_t    len, cap;
+    size_t    kama_len, kama_cap;
 } kama_ser_graph;
 
 static inline void kama_ser_graph_init(kama_ser_graph* g) {
-    kama_gmap_init(&g->ids); g->objs = NULL; g->types = NULL; g->len = 0; g->cap = 0;
+    kama_gmap_init(&g->ids); g->objs = NULL; g->types = NULL; g->kama_len = 0; g->kama_cap = 0;
 }
 static inline void kama_ser_graph_free(kama_ser_graph* g) {
-    kama_gmap_free(&g->ids); kama_free(g->objs, g->cap * sizeof(void*), _Alignof(void*)); kama_free(g->types, g->cap * sizeof(uint32_t), _Alignof(uint32_t));
-    g->objs = NULL; g->types = NULL; g->len = 0; g->cap = 0;
+    kama_gmap_free(&g->ids); kama_free(g->objs, g->kama_cap * sizeof(void*), _Alignof(void*)); kama_free(g->types, g->kama_cap * sizeof(uint32_t), _Alignof(uint32_t));
+    g->objs = NULL; g->types = NULL; g->kama_len = 0; g->kama_cap = 0;
 }
 // Return the existing id for `addr`, or append a new node and return its fresh 1-based id.
 static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, uint32_t type_id) {
     uint64_t id;
     if (kama_gmap_get(&g->ids, addr, &id)) return id;
-    if (g->len == g->cap) {
-        size_t nc = g->cap ? g->cap * 2 : 8;
+    if (g->kama_len == g->kama_cap) {
+        size_t nc = g->kama_cap ? g->kama_cap * 2 : 8;
         void**    no = (void**)   kama_alloc(nc * sizeof(void*), _Alignof(void*));
         uint32_t* nt = (uint32_t*)kama_alloc(nc * sizeof(uint32_t), _Alignof(uint32_t));
         if (!no || !nt) kama_panic(kama_string_lit("out of memory", 13));
-        for (size_t i = 0; i < g->len; ++i) { no[i] = g->objs[i]; nt[i] = g->types[i]; }
-        kama_free(g->objs, g->cap * sizeof(void*), _Alignof(void*)); kama_free(g->types, g->cap * sizeof(uint32_t), _Alignof(uint32_t));
-        g->objs = no; g->types = nt; g->cap = nc;
+        for (size_t i = 0; i < g->kama_len; ++i) { no[i] = g->objs[i]; nt[i] = g->types[i]; }
+        kama_free(g->objs, g->kama_cap * sizeof(void*), _Alignof(void*)); kama_free(g->types, g->kama_cap * sizeof(uint32_t), _Alignof(uint32_t));
+        g->objs = no; g->types = nt; g->kama_cap = nc;
     }
-    g->objs[g->len] = (void*)(uintptr_t)addr; g->types[g->len] = type_id; g->len++;
-    id = (uint64_t)g->len;                                  // 1-based: the root is 1
+    g->objs[g->kama_len] = (void*)(uintptr_t)addr; g->types[g->kama_len] = type_id; g->kama_len++;
+    id = (uint64_t)g->kama_len;                                  // 1-based: the root is 1
     kama_gmap_put(&g->ids, addr, id);
     return id;
 }
-static inline size_t   kama_ser_graph_count(const kama_ser_graph* g)          { return g->len; }
+static inline size_t   kama_ser_graph_count(const kama_ser_graph* g)          { return g->kama_len; }
 static inline void*    kama_ser_graph_obj(const kama_ser_graph* g, size_t i)  { return g->objs[i]; }
 static inline uint32_t kama_ser_graph_type(const kama_ser_graph* g, size_t i) { return g->types[i]; }
 
@@ -1762,19 +1762,19 @@ static inline uint32_t kama_ser_graph_type(const kama_ser_graph* g, size_t i) { 
 // handle's own pointer slot and a NULL control block (both handle dtors guard on that), then wired in pass
 // 2. The walker holds each shell with one construction-strong reference and drops it on the way out, so a
 // node no live edge reaches is freed with the walker and a forged wire cannot leak.
-typedef struct kama_de_box { void* ptr; kama_ctrl* ctrl; uint32_t type_id; } kama_de_box;
+typedef struct kama_de_box { void* ptr; kama_ctrl* kama_ctrl; uint32_t type_id; } kama_de_box;
 
 typedef struct kama_de_graph {
     kama_gmap     byid;    // wire id -> slot+1 into `boxes`
     kama_de_box** boxes;   // shells in READ order (which is also `order`'s order)
     uint64_t*     order;   // parallel: each shell's wire id
-    size_t        len, cap;
+    size_t        kama_len, kama_cap;
     int           failed;  // sticky, walker-side: the reader has its own flag
     int           code;    // a DeError tag, translated at the boundary by emitted C
 } kama_de_graph;
 
 static inline void kama_de_graph_init(kama_de_graph* g) {
-    kama_gmap_init(&g->byid); g->boxes = NULL; g->order = NULL; g->len = 0; g->cap = 0;
+    kama_gmap_init(&g->byid); g->boxes = NULL; g->order = NULL; g->kama_len = 0; g->kama_cap = 0;
     g->failed = 0; g->code = 0;
 }
 static inline void kama_de_graph_fail(kama_de_graph* g, int code) { g->failed = 1; g->code = code; }
@@ -1784,17 +1784,17 @@ static inline void kama_de_graph_fail(kama_de_graph* g, int code) { g->failed = 
 static inline int kama_de_graph_enroll(kama_de_graph* g, uint64_t id, kama_de_box* b, int dup_code) {
     uint64_t slot;
     if (id == 0 || kama_gmap_get(&g->byid, id, &slot)) { kama_de_graph_fail(g, dup_code); return 0; }
-    if (g->len == g->cap) {
-        size_t nc = g->cap ? g->cap * 2 : 8;
+    if (g->kama_len == g->kama_cap) {
+        size_t nc = g->kama_cap ? g->kama_cap * 2 : 8;
         kama_de_box** nb = (kama_de_box**)kama_alloc(nc * sizeof(kama_de_box*), _Alignof(kama_de_box*));
         uint64_t*     no = (uint64_t*)    kama_alloc(nc * sizeof(uint64_t), _Alignof(uint64_t));
         if (!nb || !no) kama_panic(kama_string_lit("out of memory", 13));
-        for (size_t i = 0; i < g->len; ++i) { nb[i] = g->boxes[i]; no[i] = g->order[i]; }
-        kama_free(g->boxes, g->cap * sizeof(kama_de_box*), _Alignof(kama_de_box*)); kama_free(g->order, g->cap * sizeof(uint64_t), _Alignof(uint64_t));
-        g->boxes = nb; g->order = no; g->cap = nc;
+        for (size_t i = 0; i < g->kama_len; ++i) { nb[i] = g->boxes[i]; no[i] = g->order[i]; }
+        kama_free(g->boxes, g->kama_cap * sizeof(kama_de_box*), _Alignof(kama_de_box*)); kama_free(g->order, g->kama_cap * sizeof(uint64_t), _Alignof(uint64_t));
+        g->boxes = nb; g->order = no; g->kama_cap = nc;
     }
-    g->boxes[g->len] = b; g->order[g->len] = id; g->len++;
-    kama_gmap_put(&g->byid, id, (uint64_t)g->len);          // slot+1, so 0 stays "absent"
+    g->boxes[g->kama_len] = b; g->order[g->kama_len] = id; g->kama_len++;
+    kama_gmap_put(&g->byid, id, (uint64_t)g->kama_len);          // slot+1, so 0 stays "absent"
     return 1;
 }
 static inline kama_de_box* kama_de_graph_lookup(const kama_de_graph* g, uint64_t id) {
@@ -1802,11 +1802,11 @@ static inline kama_de_box* kama_de_graph_lookup(const kama_de_graph* g, uint64_t
     if (!kama_gmap_get(&g->byid, id, &slot)) return NULL;
     return g->boxes[slot - 1];
 }
-static inline size_t        kama_de_graph_count(const kama_de_graph* g)         { return g->len; }
+static inline size_t        kama_de_graph_count(const kama_de_graph* g)         { return g->kama_len; }
 static inline kama_de_box*  kama_de_graph_at(const kama_de_graph* g, size_t i)  { return g->boxes[i]; }
 static inline void kama_de_graph_free(kama_de_graph* g) {
-    kama_gmap_free(&g->byid); kama_free(g->boxes, g->cap * sizeof(kama_de_box*), _Alignof(kama_de_box*)); kama_free(g->order, g->cap * sizeof(uint64_t), _Alignof(uint64_t));
-    g->boxes = NULL; g->order = NULL; g->len = 0; g->cap = 0;
+    kama_gmap_free(&g->byid); kama_free(g->boxes, g->kama_cap * sizeof(kama_de_box*), _Alignof(kama_de_box*)); kama_free(g->order, g->kama_cap * sizeof(uint64_t), _Alignof(uint64_t));
+    g->boxes = NULL; g->order = NULL; g->kama_len = 0; g->kama_cap = 0;
 }
 
 // --- Fatal diagnostics with source location (panic / assert) -----------------
@@ -1843,7 +1843,7 @@ static inline void kama_fail_loc(char* buf, size_t* p, size_t cap, const char* f
 static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
     char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
     kama_fail_puts(buf, &p, cap, "kama: panic: ");
-    for (size_t i = 0; i < msg.len && p < cap; ++i) buf[p++] = ((const char*)msg.data)[i];
+    for (size_t i = 0; i < msg.kama_len && p < cap; ++i) buf[p++] = ((const char*)msg.kama_data)[i];
     kama_fail_loc(buf, &p, cap, file, line);
     kama_fail_emit(buf, p);
 }
@@ -1853,9 +1853,9 @@ static inline void kama_assert_fail(const char* cond, kama_string msg, const cha
     char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
     kama_fail_puts(buf, &p, cap, "assertion failed");
     if (cond && *cond) { kama_fail_puts(buf, &p, cap, ": "); kama_fail_puts(buf, &p, cap, cond); }
-    if (msg.len) {
+    if (msg.kama_len) {
         kama_fail_puts(buf, &p, cap, " \xE2\x80\x94 ");   // em dash (U+2014), UTF-8
-        for (size_t i = 0; i < msg.len && p < cap; ++i) buf[p++] = ((const char*)msg.data)[i];
+        for (size_t i = 0; i < msg.kama_len && p < cap; ++i) buf[p++] = ((const char*)msg.kama_data)[i];
     }
     kama_fail_loc(buf, &p, cap, file, line);
     kama_fail_emit(buf, p);
@@ -2152,7 +2152,7 @@ static inline int kama_program_path(kama_string* out) {
     if (n > 1) {
         char* s = (char*)kama_alloc((size_t)n, 1);
         WideCharToMultiByte(65001u, 0, w, -1, s, n, (const char*)0, (int*)0);
-        out->data = s; out->len = (size_t)n - 1; out->cap = (size_t)n;                     // the from_raw shape
+        out->kama_data = s; out->kama_len = (size_t)n - 1; out->kama_cap = (size_t)n;                     // the from_raw shape
         kama_free(w, 32768u * sizeof(wchar_t), _Alignof(wchar_t)); return 1;
     }
     kama_free(w, 32768u * sizeof(wchar_t), _Alignof(wchar_t)); *out = kama_string_lit("", 0); return 0;
@@ -2194,7 +2194,7 @@ static inline int kama_env_lookup(const char* name, kama_string* out) {
     if (n > 0) {
         char* s = (char*)kama_alloc((size_t)n, 1);
         WideCharToMultiByte(65001u, 0, wval, -1, s, n, (const char*)0, (int*)0);
-        out->data = s; out->len = (size_t)n - 1; out->cap = (size_t)n;                 // the from_raw shape
+        out->kama_data = s; out->kama_len = (size_t)n - 1; out->kama_cap = (size_t)n;                 // the from_raw shape
     }
     kama_free(wval, (size_t)need * sizeof(wchar_t), _Alignof(wchar_t));
     return n > 0;

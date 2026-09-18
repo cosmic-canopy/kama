@@ -3,7 +3,7 @@
 # const-eval ladder is that a compile-time function's result is a `static const` aggregate in the emitted
 # C — computed once by the compiler, sitting in .rodata/flash, with NO runtime fill. Both properties are
 # host-checkable on the transpiled C, so we assert them here rather than trusting the exit code alone:
-#   1. BAKED       — the CRC table appears as a `static const InlineArray_uint8_256 … = { .v = { … } }`.
+#   1. BAKED       — the CRC table appears as a `static const InlineArray_uint8_256 … = { .kama_v = { … } }`.
 #   2. COMPTIME-ONLY — the `comptime fn` itself (`crcTable`) is NEVER emitted as a C symbol.
 # The subject (tests/comptime_fn_crc.kama) also runs as an ordinary fixture on the native/ASan/wasm legs
 # (its exit code asserts the baked table equals a runtime recomputation). Fails (exit 1) if either breaks.
@@ -23,7 +23,7 @@ cfile="$tmp/crc.c"
 "$KAMA" transpile "$FIXTURE" -o "$cfile" >/dev/null
 
 # 1. BAKED — the table is a compile-time-computed static const aggregate (first two entries are 0, 94).
-if ! grep -q 'static const InlineArray_uint8_256 .*CRC = { .v = { 0u, 94u,' "$cfile"; then
+if ! grep -q 'static const InlineArray_uint8_256 .*CRC = { .kama_v = { 0u, 94u,' "$cfile"; then
     echo "check-comptime: FAIL — baked CRC table not found in emitted C (comptime fn did not fold?)" >&2
     exit 1
 fi

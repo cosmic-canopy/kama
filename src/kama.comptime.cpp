@@ -141,9 +141,9 @@ bool CEmitter::ctFail(const char* what, int line)
 // suffix avoided — the declared type on the LHS carries it); float as a literal; bool as true/false.
 std::string CEmitter::ctRender(const CTValue& v) const
 {
-    // Fixed array → a C initializer for the `struct { T v[N]; }` (KAMA_FIXED_TYPE) carrier: `{ .v = {…} }`.
+    // Fixed array → a C initializer for the `struct { T kama_v[N]; }` (KAMA_FIXED_TYPE) carrier: `{ .kama_v = {…} }`.
     if (v.isArray) {
-        std::string s = "{ .v = { ";
+        std::string s = "{ .kama_v = { ";
         for (size_t k = 0; k < v.elems.size(); ++k) { if (k) s += ", "; s += ctRender(v.elems[k]); }
         s += " } }";
         return s;

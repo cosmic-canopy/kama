@@ -279,7 +279,7 @@ static inline int32_t kama_exists(const char* path) {
 // ---- directory iteration (Win32 FindFirstFileW) ----------------------------
 // DIR* analogue: a heap cursor holding the search handle + the pending entry (FindFirstFile already
 // returns the first match). Empty string = end-of-directory; kama filters "." / ".." itself.
-typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW data; int pending; } kama__dir;
+typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW kama_data; int pending; } kama__dir;
 static inline void* kama_diropen(const char* path) {
     size_t n = strlen(path);
     char* pattern = (char*)kama__sized_alloc(n + 3);                         // "<path>\*"
@@ -290,7 +290,7 @@ static inline void* kama_diropen(const char* path) {
     if (!w) return NULL;
     kama__dir* d = (kama__dir*)kama_alloc(sizeof *d, _Alignof(kama__dir));
     if (!d) { kama__wfree(w); errno = ENOMEM; return NULL; }
-    d->h = FindFirstFileW(w, &d->data); kama__wfree(w);
+    d->h = FindFirstFileW(w, &d->kama_data); kama__wfree(w);
     if (d->h == INVALID_HANDLE_VALUE) { kama_free(d, sizeof *d, _Alignof(kama__dir)); errno = ENOENT; return NULL; }
     d->pending = 1;
     return d;
@@ -301,13 +301,13 @@ static inline int32_t kama_dirclose(void* dirp) {
 }
 static inline kama_string kama_dirnext(void* dirp) {
     kama__dir* d = (kama__dir*)dirp;
-    kama_string r; r.data = NULL; r.len = 0; r.cap = 0;                     // "" = end of directory
-    if (!d->pending && !FindNextFileW(d->h, &d->data)) return r;
+    kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0;                     // "" = end of directory
+    if (!d->pending && !FindNextFileW(d->h, &d->kama_data)) return r;
     d->pending = 0;
     size_t len = 0;
-    char* s = kama__utf8(d->data.cFileName, &len);                          // kama_alloc(len + 1, 1), NUL-terminated
+    char* s = kama__utf8(d->kama_data.cFileName, &len);                          // kama_alloc(len + 1, 1), NUL-terminated
     if (!s) return r;
-    r.data = s; r.len = len; r.cap = len + 1;                                // same shape kama_string_from_raw builds
+    r.kama_data = s; r.kama_len = len; r.kama_cap = len + 1;                                // same shape kama_string_from_raw builds
     return r;
 }
 
@@ -404,37 +404,37 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 // and mis-reports it as connected. select() reports a connecting socket only on genuine resolution —
 // writefds on success, exceptfds on failure — which is exactly the "writable == connect resolved"
 // contract std::net::Poller advertises. (Bounded by FD_SETSIZE, raised above.)
-typedef struct kama__poller { WSAPOLLFD* fds; int len; int cap; } kama__poller;
+typedef struct kama__poller { WSAPOLLFD* fds; int kama_len; int kama_cap; } kama__poller;
 static inline void* kama_poller_create(void) {
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { errno = ENOMEM; return NULL; }
-    p->fds = NULL; p->len = 0; p->cap = 0; return p;
+    p->fds = NULL; p->kama_len = 0; p->kama_cap = 0; return p;
 }
 static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
     kama__poller* p = (kama__poller*)ph;
     SHORT ev = 0;
     if (interest & 1) ev = (SHORT)(ev | POLLRDNORM);
     if (interest & 2) ev = (SHORT)(ev | POLLWRNORM);
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
-    if (p->len == p->cap) {
-        int nc = p->cap ? p->cap * 2 : 8;
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
+    if (p->kama_len == p->kama_cap) {
+        int nc = p->kama_cap ? p->kama_cap * 2 : 8;
         WSAPOLLFD* nf = (WSAPOLLFD*)kama_alloc((size_t)nc * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
         if (!nf) return;
-        if (p->len) kama_copy(nf, p->fds, (size_t)p->len * sizeof(WSAPOLLFD));
-        if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
-        p->fds = nf; p->cap = nc;
+        if (p->kama_len) kama_copy(nf, p->fds, (size_t)p->kama_len * sizeof(WSAPOLLFD));
+        if (p->fds) kama_free(p->fds, (size_t)p->kama_cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
+        p->fds = nf; p->kama_cap = nc;
     }
-    p->fds[p->len].fd = (SOCKET)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
+    p->fds[p->kama_len].fd = (SOCKET)fd; p->fds[p->kama_len].events = ev; p->fds[p->kama_len].revents = 0; p->kama_len++;
 }
 static inline void kama_poller_remove(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i] = p->fds[p->len - 1]; p->len--; return; }
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i] = p->fds[p->kama_len - 1]; p->kama_len--; return; }
 }
 static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
     kama__poller* p = (kama__poller*)ph;
     fd_set rd, wr, ex;
     FD_ZERO(&rd); FD_ZERO(&wr); FD_ZERO(&ex);
-    for (int i = 0; i < p->len; i++) {
+    for (int i = 0; i < p->kama_len; i++) {
         p->fds[i].revents = 0;
         SOCKET s = p->fds[i].fd;
         if (p->fds[i].events & POLLRDNORM) FD_SET(s, &rd);
@@ -447,7 +447,7 @@ static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     if (r == 0) return 0;                      // timed out — no socket resolved
     int ready = 0;                             // recount per-fd (a failed connect sets both wr+ex)
-    for (int i = 0; i < p->len; i++) {
+    for (int i = 0; i < p->kama_len; i++) {
         SOCKET s = p->fds[i].fd;
         SHORT rev = 0;
         if (FD_ISSET(s, &rd)) rev = (SHORT)(rev | POLLRDNORM);
@@ -460,7 +460,7 @@ static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
 }
 static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) {
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (SOCKET)fd) {
         int bits = 0;
         if (p->fds[i].revents & (POLLRDNORM | POLLHUP | POLLERR)) bits |= 1;
         if (p->fds[i].revents & POLLWRNORM) bits |= 2;
@@ -471,7 +471,7 @@ static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
 static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
-    if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
+    if (p->fds) kama_free(p->fds, (size_t)p->kama_cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
     kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
@@ -663,20 +663,20 @@ static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL"
 // Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
 // reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own
 // funnel buffer (the caller frees it with kama_free and the capacity returned) — same contract as the POSIX version.
-typedef struct kama__cap { int fd; uint8_t* buf; size_t len; size_t cap; int err; } kama__cap;
+typedef struct kama__cap { int fd; uint8_t* buf; size_t kama_len; size_t kama_cap; int err; } kama__cap;
 static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
     kama__cap* c = (kama__cap*)arg;
     for (;;) {
-        if (c->len == c->cap) {
-            size_t nc = c->cap ? c->cap * 2 : 65536;
+        if (c->kama_len == c->kama_cap) {
+            size_t nc = c->kama_cap ? c->kama_cap * 2 : 65536;
             uint8_t* nb = (uint8_t*)kama_alloc(nc, 1);
             if (!nb) { c->err = 1; return 0; }
-            if (c->len) kama_copy(nb, c->buf, c->len);
-            if (c->buf) kama_free(c->buf, c->cap, 1);
-            c->buf = nb; c->cap = nc;
+            if (c->kama_len) kama_copy(nb, c->buf, c->kama_len);
+            if (c->buf) kama_free(c->buf, c->kama_cap, 1);
+            c->buf = nb; c->kama_cap = nc;
         }
-        int r = _read(c->fd, c->buf + c->len, (unsigned int)(c->cap - c->len));
-        if (r > 0)       c->len += (size_t)r;
+        int r = _read(c->fd, c->buf + c->kama_len, (unsigned int)(c->kama_cap - c->kama_len));
+        if (r > 0)       c->kama_len += (size_t)r;
         else if (r == 0) break;                            // EOF
         else             { c->err = 1; return 0; }
     }
@@ -685,20 +685,20 @@ static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
 static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
                                     uint8_t** outBuf, size_t* outLen, size_t* outCap,
                                     uint8_t** errBuf, size_t* errLen, size_t* errCap) {
-    kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.len = 0; co.cap = 0; co.err = 0;
-    kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.len = 0; ce.cap = 0; ce.err = 0;
+    kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.kama_len = 0; co.kama_cap = 0; co.err = 0;
+    kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.kama_len = 0; ce.kama_cap = 0; ce.err = 0;
     HANDLE th = CreateThread(NULL, 0, kama__cap_thread, &ce, 0, NULL);
     if (!th) { errno = EAGAIN; return -1; }   // nothing drained yet: co.buf is still NULL
     kama__cap_thread(&co);                                 // drain stdout on this thread
     WaitForSingleObject(th, INFINITE);
     CloseHandle(th);
     if (co.err || ce.err) {
-        if (co.buf) kama_free(co.buf, co.cap, 1);
-        if (ce.buf) kama_free(ce.buf, ce.cap, 1);
+        if (co.buf) kama_free(co.buf, co.kama_cap, 1);
+        if (ce.buf) kama_free(ce.buf, ce.kama_cap, 1);
         errno = EIO; return -1;
     }
-    *outBuf = co.buf; *outLen = co.len; *outCap = co.cap;
-    *errBuf = ce.buf; *errLen = ce.len; *errCap = ce.cap;
+    *outBuf = co.buf; *outLen = co.kama_len; *outCap = co.kama_cap;
+    *errBuf = ce.buf; *errLen = ce.kama_len; *errCap = ce.kama_cap;
     return 0;
 }
 
@@ -836,7 +836,7 @@ static inline void*       kama_diropen(const char* path)  { return (void*)opendi
 static inline int32_t     kama_dirclose(void* dirp)       { return (int32_t)closedir((DIR*)dirp); }
 static inline kama_string kama_dirnext(void* dirp) {
     struct dirent* e = readdir((DIR*)dirp);
-    if (!e) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
+    if (!e) { kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }
     return kama_string_from_raw((const uint8_t*)e->d_name, 0, (int32_t)strlen(e->d_name));
 }
 
@@ -899,7 +899,7 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 // async-signal-safe calls (chdir/dup2/close/execvp/_exit + a bare `environ =` pointer store) — NEVER malloc
 // or setenv — so a custom env is a fully-built envp assigned to `environ` (built in the PARENT, where malloc
 // is safe). In a multithreaded (isolate) parent only the forking thread survives in the child, and it holds
-// no lock it must release, so this is safe. Each std-fd arg is a real fd to dup2 (a pipe end or /dev/null),
+// no lock it must kama_release, so this is safe. Each std-fd arg is a real fd to dup2 (a pipe end or /dev/null),
 // or -1 to leave the inherited fd untouched. Returns 0 (pid in *outPid) or -1 (fork failed).
 // Two out-params carry the child identity: `outHandle` is the wait handle (`isize`/ptrdiff_t — a raw pid on
 // POSIX, so handle==pid here; a `(ptrdiff_t)HANDLE` on Windows) and `outPid` is the real OS pid for `.id()`.
@@ -1064,39 +1064,39 @@ static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close(
 // ---- readiness poller (poll(2)) --------------------------------------------
 // A heap `struct pollfd[]` cursor stays OPAQUE to kama (behind an `UnsafePtr`). interest bits: 1=read, 2=write.
 // ready bits: 1=readable (incl. hangup/error so the caller reads EOF/err), 2=writable (a connect resolved).
-typedef struct kama__poller { struct pollfd* fds; int len; int cap; } kama__poller;
+typedef struct kama__poller { struct pollfd* fds; int kama_len; int kama_cap; } kama__poller;
 static inline void* kama_poller_create(void) {
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { errno = ENOMEM; return NULL; }
-    p->fds = NULL; p->len = 0; p->cap = 0; return p;
+    p->fds = NULL; p->kama_len = 0; p->kama_cap = 0; return p;
 }
 static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
     kama__poller* p = (kama__poller*)ph;
     short ev = 0;
     if (interest & 1) ev = (short)(ev | POLLIN);
     if (interest & 2) ev = (short)(ev | POLLOUT);
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
-    if (p->len == p->cap) {
-        int nc = p->cap ? p->cap * 2 : 8;
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
+    if (p->kama_len == p->kama_cap) {
+        int nc = p->kama_cap ? p->kama_cap * 2 : 8;
         struct pollfd* nf = (struct pollfd*)kama_alloc((size_t)nc * sizeof(struct pollfd), _Alignof(struct pollfd));
         if (!nf) return;
-        if (p->len) kama_copy(nf, p->fds, (size_t)p->len * sizeof(struct pollfd));
-        if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(struct pollfd), _Alignof(struct pollfd));
-        p->fds = nf; p->cap = nc;
+        if (p->kama_len) kama_copy(nf, p->fds, (size_t)p->kama_len * sizeof(struct pollfd));
+        if (p->fds) kama_free(p->fds, (size_t)p->kama_cap * sizeof(struct pollfd), _Alignof(struct pollfd));
+        p->fds = nf; p->kama_cap = nc;
     }
-    p->fds[p->len].fd = (int)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
+    p->fds[p->kama_len].fd = (int)fd; p->fds[p->kama_len].events = ev; p->fds[p->kama_len].revents = 0; p->kama_len++;
 }
 static inline void kama_poller_remove(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i] = p->fds[p->len - 1]; p->len--; return; }
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i] = p->fds[p->kama_len - 1]; p->kama_len--; return; }
 }
 static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
     kama__poller* p = (kama__poller*)ph;
-    return (int32_t)poll(p->fds, (nfds_t)p->len, (int)timeoutMs);   // -1 errno; 0 timeout; >0 count
+    return (int32_t)poll(p->fds, (nfds_t)p->kama_len, (int)timeoutMs);   // -1 errno; 0 timeout; >0 count
 }
 static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
-    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) {
+    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (int)fd) {
         int bits = 0;
         if (p->fds[i].revents & (POLLIN | POLLHUP | POLLERR)) bits |= 1;
         if (p->fds[i].revents & POLLOUT) bits |= 2;
@@ -1107,7 +1107,7 @@ static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
 static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
-    if (p->fds) kama_free(p->fds, (size_t)p->cap * sizeof(struct pollfd), _Alignof(struct pollfd));
+    if (p->fds) kama_free(p->fds, (size_t)p->kama_cap * sizeof(struct pollfd), _Alignof(struct pollfd));
     kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
