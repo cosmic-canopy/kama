@@ -19435,6 +19435,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "int kama_in_panic_hook = 0;\n"
           << "int kama_argc = 0;\n"
           << "char** kama_argv = 0;\n"
+          << "int kama__argv_state = 0;\n"
           << "#endif\n";
     if (externsHeader("kama_log.h"))
         *_out << "kama_log_sink_fn kama_log_slot = 0;\n";

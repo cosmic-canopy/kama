@@ -1,0 +1,80 @@
+// Nothing draws from the program's heap before `main`. A declared `@globalAllocator` makes that measurable:
+// every allocation is a slot out of a 32-slot pool, so draining it as the FIRST statement of `main` counts
+// exactly what ran before it. It found KR-73: on Windows the runtime converted argv to UTF-8 eagerly, at
+// startup, through the funnel — two slots gone to code the program never wrote, and the same two funnel calls
+// under `--no-heap`. The conversion now runs on first use, so a program that never asks pays nothing, and
+// one that does pays ONE block (the vector and every string together) — which the second half measures.
+import { std::concurrent::Atomic, std::collections::DynamicArray };
+
+// The pool from tests/global_allocator_pool: 32 slots of 1024 bytes, a free list through each slot's first
+// word, a spin lock; every field starts at zero.
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;
+    Atomic<int32> lock;
+    Atomic<usize> bumped;
+    Atomic<usize> head;
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+}
+
+type value Point { public int32 x = 0; public int32 y = 0; public ctor at(int32 x, int32 y) { this.x = x; this.y = y; } }
+
+// Fill every free slot, then free them all; how many there were. The array holding them is one slot itself.
+fn int32 drain() {
+    DynamicArray<Owned<Point>> held = DynamicArray.withCapacity(capacity: 31);
+    int32 n = 0;
+    bool going = true;
+    while (going) {
+        Optional<Owned<Point>> t = try new Point.at(x: n, y: n);
+        match (give t) {
+            case Some(value: p): { held.add(item: give p); n = n + 1; }
+            case None: { going = false; }
+        };
+    }
+    return n;
+}
+
+// What the first `args()` costs, per platform: Windows converts the command line into one funnel block on
+// that first call; POSIX reads the argv the OS handed `main` and allocates nothing; wasm has no argv.
+@compileFor(OS_WINDOWS)
+fn int32 slotsAfterArgs() { return 30; }
+@compileFor(!OS_WINDOWS)
+fn int32 slotsAfterArgs() { return 31; }
+
+fn int32 main() {
+    int32 atEntry = drain();            // 32 - the drain's own array: nothing ran before main
+    if (atEntry != 31) { return 1; }
+    int32 n = args().count();           // the first read; the harness passes no arguments, so 0
+    int32 afterArgs = drain();
+    if (afterArgs != slotsAfterArgs()) { return 2; }
+    return 31 + n;
+}

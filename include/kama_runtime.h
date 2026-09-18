@@ -1890,9 +1890,10 @@ static inline int  kama_trace_get(void) { return kama_trace_acc; }
 
 // ---- Command-line arguments + environment (prelude floor) -------------------
 // argv/argc are stashed once by the synthesized `main` (kama.cemit) via kama_args_init BEFORE kama_main
-// runs, then read-only — so PLAIN globals (NOT KAMA_ISOLATE_LOCAL/_Thread_local): argv is process-wide,
-// every isolate must see the same vector, and it's written once on the main thread before any spawn, so
-// there is no race. The prelude binds these via `extern fn`, exactly like kama_string_from_raw. The
+// runs — so PLAIN globals (NOT KAMA_ISOLATE_LOCAL/_Thread_local): argv is process-wide, and every isolate
+// must see the same vector. On Windows the vector is REPLACED once more, by the UTF-8 conversion the first
+// reader triggers (kama__argv_ensure), so that write is guarded: the first reader converts and every other
+// waits for it, and no reader sees a half-written vector. The prelude binds these via `extern fn`, exactly like kama_string_from_raw. The
 // invocation (argv[0]) is NOT part of args(): kama_args_count/kama_args_at index argv[1..argc). Three separate
 // program-identity accessors: kama_program_invocation (argv[0] VERBATIM — exactly how it was launched),
 // kama_program_name (basename of argv[0] — "what was I invoked as", for usage text / applet dispatch,
@@ -1910,47 +1911,11 @@ static inline int  kama_trace_get(void) { return kama_trace_acc; }
 // thread before any spawn, so a single shared object is race-free — not KAMA_ISOLATE_LOCAL/per-isolate).
 extern int    kama_argc;
 extern char** kama_argv;
+extern int    kama__argv_state;   // Windows: 0 narrow CRT argv, 1 converting, 2 converted (see kama__argv_ensure)
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
-#if defined(_WIN32)
-    // argv as UTF-8. The CRT hands `main` the UTF-16 command line re-encoded through the process ANSI
-    // code page, so a non-ASCII argument — a path the user typed — arrives as mojibake, which is the same
-    // defect the filesystem seam had (kama_os.h; utf8everywhere.org). Re-read the command line wide and
-    // convert it here, once. On any failure the narrow argv stays, which is still right for ASCII.
-    // Block-scope declarations, like _setmode below, so <windows.h> never leaks: CP_UTF8 is 65001;
-    // CommandLineToArgvW lives in shell32, which `kama build` links for a Windows target.
-    {
-        extern wchar_t*  __stdcall GetCommandLineW(void);
-        extern wchar_t** __stdcall CommandLineToArgvW(const wchar_t*, int*);
-        extern void*     __stdcall LocalFree(void*);
-        extern int       __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t*, int,
-                                                       char*, int, const char*, int*);
-        int wargc = 0;
-        wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
-        if (wargv) {
-            const size_t vbytes = ((size_t)wargc + 1) * sizeof(char*);
-            char** u = (char**)kama_alloc_zeroed(vbytes, _Alignof(char*));
-            int ok = u != NULL && wargc > 0;
-            for (int i = 0; ok && i < wargc; ++i) {
-                int n = WideCharToMultiByte(65001u, 0, wargv[i], -1, (char*)0, 0, (const char*)0, (int*)0);
-                u[i] = n > 0 ? (char*)kama_alloc((size_t)n, 1) : (char*)0;
-                // A slot whose conversion failed is released HERE, while its size `n` is still known; every
-                // slot that stays set is a complete NUL-terminated string, so its size is strlen + 1 below.
-                if (u[i] && WideCharToMultiByte(65001u, 0, wargv[i], -1, u[i], n, (const char*)0, (int*)0) <= 0) {
-                    kama_free(u[i], (size_t)n, 1); u[i] = (char*)0;
-                }
-                if (!u[i]) ok = 0;
-            }
-            if (ok) { kama_argc = wargc; kama_argv = u; }
-            else if (u) {
-                extern size_t strlen(const char*);
-                for (int i = 0; i < wargc && u[i]; ++i) kama_free(u[i], strlen(u[i]) + 1, 1);
-                kama_free(u, vbytes, _Alignof(char*));
-            }
-            LocalFree(wargv);
-        }
-    }
-#endif
+    // The Windows argv conversion used to run HERE, eagerly, and drew from the funnel before `main` — see
+    // kama__argv_ensure below for why it now runs on first use instead.
 #if defined(_WIN32) && defined(KAMA_SUBSYSTEM_WINDOWS)
     // A GUI-subsystem PE (`--subsystem windows`) is given NO console, so `print`/`eprintln` write to
     // handles that go nowhere. That is the cost that stops windows-subsystem being the default. Undo the
@@ -2025,7 +1990,112 @@ static inline void kama_args_init(int argc, char** argv) {
     }
 #endif
 }
-static inline int  kama_args_count(void) { return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
+// ---- the command line as UTF-8, converted ON FIRST USE (Windows) -----------------------------------------
+// The CRT hands `main` the UTF-16 command line re-encoded through the process ANSI code page, so a non-ASCII
+// argument — a path the user typed — arrives as mojibake, the defect the filesystem seam had (kama_os.h;
+// utf8everywhere.org). This re-reads it wide and converts it ONCE, the first time anything asks (`args()`,
+// `programName()`, `programInvocation()`) — not in kama_args_init, and not with CommandLineToArgvW. Measured
+// on the Windows box at `0.9.384` (KR-73): the eager conversion drew two funnel blocks before `main`, so a
+// declared `@globalAllocator` lost two slots to code the program never wrote, and a `--no-heap` program
+// allocated at startup — the one thing the flag promises it will not. CommandLineToArgvW would have kept a
+// second, FOREIGN allocation (it returns LocalAlloc memory), so the splitting is done here by the rules it
+// implements (Microsoft, "Parsing C command-line arguments"; tools/check-winargv.sh proves the two agree on
+// every case it lists), into ONE funnel block holding the vector and every string, which lives for the
+// process as the CRT's own argv does. A program that never asks allocates nothing — what POSIX always did.
+//
+// Lone surrogates become U+FFFD, the same policy as kama__utf8 (kama_os.h) and what WideCharToMultiByte did.
+#if defined(_WIN32)
+typedef struct kama__u8sink { char* out; size_t n; } kama__u8sink;   // out NULL: count only
+static inline void kama__u8put(kama__u8sink* k, unsigned b) { if (k->out) k->out[k->n] = (char)b; k->n++; }
+static inline void kama__u8cp(kama__u8sink* k, unsigned cp) {
+    if (cp < 0x80u) { kama__u8put(k, cp); return; }
+    if (cp < 0x800u) { kama__u8put(k, 0xC0u | (cp >> 6)); kama__u8put(k, 0x80u | (cp & 0x3Fu)); return; }
+    if (cp < 0x10000u) { kama__u8put(k, 0xE0u | (cp >> 12)); kama__u8put(k, 0x80u | ((cp >> 6) & 0x3Fu)); kama__u8put(k, 0x80u | (cp & 0x3Fu)); return; }
+    kama__u8put(k, 0xF0u | (cp >> 18)); kama__u8put(k, 0x80u | ((cp >> 12) & 0x3Fu));
+    kama__u8put(k, 0x80u | ((cp >> 6) & 0x3Fu)); kama__u8put(k, 0x80u | (cp & 0x3Fu));
+}
+// One UTF-16 unit (or a surrogate pair) at s[*i], advanced past.
+static inline void kama__u8putw(kama__u8sink* k, const wchar_t* s, size_t* i) {
+    unsigned c = (unsigned)s[*i];
+    if (c >= 0xD800u && c <= 0xDBFFu && (unsigned)s[*i + 1] >= 0xDC00u && (unsigned)s[*i + 1] <= 0xDFFFu) {
+        kama__u8cp(k, 0x10000u + ((c - 0xD800u) << 10) + ((unsigned)s[*i + 1] - 0xDC00u)); *i += 2; return;
+    }
+    kama__u8cp(k, (c >= 0xD800u && c <= 0xDFFFu) ? 0xFFFDu : c); *i += 1;
+}
+// Split a command line the way CommandLineToArgvW does. Counts when `k->out` is NULL, writes otherwise;
+// `slots` (when given) receives each argument's start. Returns argc.
+//   argv[0]: no escapes at all — quoted, it runs to the next quote (or the end); bare, to the first space/tab.
+//   The rest: space/tab separate; 2n backslashes + `"` give n backslashes and the `"` toggles quoting;
+//   2n+1 backslashes + `"` give n backslashes and a literal `"`; backslashes not before a `"` are literal;
+//   inside quotes `""` is a literal `"` and quoting ENDS — measured against CommandLineToArgvW, which keeps the
+//   pre-2008 CRT rule here (`"a"" b" c` is `a"`, `b c`), where the newer CRT would stay quoted.
+static inline int kama__cmdline_split(const wchar_t* s, kama__u8sink* k, char** slots) {
+    int argc = 0; size_t i = 0;
+    if (!s[0]) return 0;
+    if (slots) slots[argc] = k->out + k->n;
+    argc++;
+    if (s[i] == L'"') { ++i; while (s[i] && s[i] != L'"') kama__u8putw(k, s, &i); if (s[i] == L'"') ++i; }
+    else { while (s[i] && s[i] != L' ' && s[i] != L'\t') kama__u8putw(k, s, &i); }
+    kama__u8put(k, 0);
+    for (;;) {
+        while (s[i] == L' ' || s[i] == L'\t') ++i;
+        if (!s[i]) break;
+        if (slots) slots[argc] = k->out + k->n;
+        argc++;
+        int inq = 0;
+        while (s[i]) {
+            const wchar_t c = s[i];
+            if (c == L'\\') {
+                size_t nb = 0; while (s[i] == L'\\') { ++nb; ++i; }
+                if (s[i] != L'"') { while (nb--) kama__u8put(k, '\\'); continue; }
+                for (size_t b = 0; b < nb / 2; ++b) kama__u8put(k, '\\');
+                if (nb % 2) { kama__u8put(k, '"'); ++i; }
+                else if (inq && s[i + 1] == L'"') { kama__u8put(k, '"'); i += 2; inq = 0; }
+                else { inq = !inq; ++i; }
+                continue;
+            }
+            if (c == L'"') {
+                if (inq && s[i + 1] == L'"') { kama__u8put(k, '"'); i += 2; inq = 0; }
+                else { inq = !inq; ++i; }
+                continue;
+            }
+            if (!inq && (c == L' ' || c == L'\t')) break;
+            kama__u8putw(k, s, &i);
+        }
+        kama__u8put(k, 0);
+    }
+    return argc;
+}
+static inline void kama__argv_ensure(void) {
+    int st = __atomic_load_n(&kama__argv_state, __ATOMIC_ACQUIRE);
+    if (st == 2) return;
+    int expected = 0;
+    if (st == 0 && __atomic_compare_exchange_n(&kama__argv_state, &expected, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        extern wchar_t* __stdcall GetCommandLineW(void);
+        const wchar_t* cmd = GetCommandLineW();
+        if (cmd) {
+            kama__u8sink count = { (char*)0, 0 };
+            const int argc = kama__cmdline_split(cmd, &count, (char**)0);
+            if (argc > 0) {
+                const size_t vbytes = ((size_t)argc + 1) * sizeof(char*);
+                char** v = (char**)kama_alloc(vbytes + count.n, _Alignof(char*));
+                if (v) {   // on any failure the narrow argv stays, which is still right for ASCII
+                    kama__u8sink w = { (char*)(v + argc + 1), 0 };
+                    kama__cmdline_split(cmd, &w, v);
+                    v[argc] = (char*)0;
+                    kama_argc = argc; kama_argv = v;
+                }
+            }
+        }
+        __atomic_store_n(&kama__argv_state, 2, __ATOMIC_RELEASE);
+        return;
+    }
+    while (__atomic_load_n(&kama__argv_state, __ATOMIC_ACQUIRE) != 2) { }   // another thread is converting
+}
+#else
+static inline void kama__argv_ensure(void) { }
+#endif
+static inline int  kama_args_count(void) { kama__argv_ensure(); return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
 // The i-th user arg (0-based over argv[1..argc)) as a FRESH owned kama_string; out-of-range -> "".
 static inline kama_string kama_args_at(int i) {
     if (i < 0 || i >= kama_args_count()) return kama_string_lit("", 0);
@@ -2038,6 +2108,7 @@ static inline kama_string kama_args_at(int i) {
 // fidelity/logging or code ported from Go's os.Args[0] / Rust's args().next(). basename -> program_name;
 // resolved path -> program_path.
 static inline int kama_program_invocation(kama_string* out) {
+    kama__argv_ensure();
     if (kama_argc < 1 || !kama_argv[0]) { *out = kama_string_lit("", 0); return 0; }
     extern size_t strlen(const char*);
     *out = kama_string_from_raw((const uint8_t*)kama_argv[0], 0, (int32_t)strlen(kama_argv[0]));
@@ -2048,6 +2119,7 @@ static inline int kama_program_invocation(kama_string* out) {
 // program was invoked as" (usage messages, busybox-style applet dispatch): `/usr/bin/app` -> `app`,
 // `.\app.exe` -> `app.exe`, a bare `app` -> `app`.
 static inline int kama_program_name(kama_string* out) {
+    kama__argv_ensure();
     if (kama_argc < 1 || !kama_argv[0]) { *out = kama_string_lit("", 0); return 0; }
     extern size_t strlen(const char*);
     const char* a = kama_argv[0];
