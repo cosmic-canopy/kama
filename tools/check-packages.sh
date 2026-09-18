@@ -24,6 +24,13 @@ fi
 if ! command -v curl >/dev/null 2>&1; then echo "check-packages: SKIP (curl not available)"; exit 0; fi
 
 tmp=$(mktemp -d)
+# `$furl`: a file:// URL for something under $tmp, spelled for a NATIVE tool. kama is a native program and runs
+# `curl` through the host shell, so on msys2 the URL must not carry an msys path: `file:///tmp/x` opens only
+# in an msys curl (/usr/bin), and the day a native one lands in /ucrt64/bin ahead of it — it arrives as a
+# dependency of cmake, measured 2026-09-18 — the download fails with curl (37). `file:///C:/msys64/tmp/x`
+# opens in both. (The `git` URLs below stay `file://$tmp/…`: git here is msys git, measured.)
+furl="file://$tmp"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) furl="file:///$(cygpath -m "$tmp")" ;; esac
 trap 'rm -rf "$tmp"' EXIT
 # Native-spelled: KAMA_STORE reaches kama through the ENVIRONMENT, which msys2 does not path-convert the
 # way it converts arguments (see kama_native_path in tools/kama-bin.sh). Left as `/tmp/…` the store landed
@@ -119,7 +126,7 @@ tar -czf "$tmp/geo2.tgz" -C "$tmp" geo2       # wrapper dir geo2/ -> stripped by
 proj2="$tmp/proj2"
 mkdir -p "$proj2/src"
 cat > "$proj2/kama.json" <<JSON
-{ "name": "c2", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "geo2": { "url": "file://$tmp/geo2.tgz" } }, "modules": { ".": { "visibility": "internal" } } }
+{ "name": "c2", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "geo2": { "url": "$furl/geo2.tgz" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$proj2/src/main.kama" <<'KAMA'
 import { geo2::area2 };
@@ -138,7 +145,7 @@ proj3="$tmp/proj3"
 mkdir -p "$proj3/src"
 cat > "$proj3/kama.json" <<JSON
 { "name": "c3", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
-  "dependencies": { "geo2": { "url": "file://$tmp/geo2.tgz", "integrity": "sha256-0000000000000000000000000000000000000000000000000000000000000000" } }, "modules": { ".": { "visibility": "internal" } } }
+  "dependencies": { "geo2": { "url": "$furl/geo2.tgz", "integrity": "sha256-0000000000000000000000000000000000000000000000000000000000000000" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$proj3/src/main.kama" <<'KAMA'
 fn int32 main() { return 0; }
