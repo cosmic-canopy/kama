@@ -15752,7 +15752,23 @@ std::string CEmitter::moveNullStmt(const std::string& cls, const std::string& ex
     if (isBindableClass(cls))
         return "(" + expr + ").obj = NULL; (" + expr + ").ctrl = NULL; (" + expr + ").fn = NULL; ("
              + expr + ").release = NULL;";
-    return "(" + expr + ").data = NULL; (" + expr + ").len = 0;";
+    std::string out = "(" + expr + ").data = NULL; (" + expr + ").len = 0;";
+    // ⚠️ `cap` is part of EMPTY, and leaving it behind is not cosmetic: every destructor that frees a buffer
+    // guards on the CAPACITY, not on the pointer — `kama_string__dtor` is `if (self->cap) kama_free(self->data,
+    // …)` and `~DynamicArray` is `if (this.cap > 0) this.alloc.deallocate(pointer: … this.data …)`. A moved-from
+    // value with `data == NULL` and `cap` intact therefore still runs its drop, and releases a NULL.
+    //
+    // That was invisible for as long as the heap was libc's, because `free(NULL)` is a documented no-op — so
+    // the program that produced it was correct by accident. With `@globalAllocator` the release goes to a POOL
+    // the user wrote, which gets a NULL pointer it never handed out: the corpus's own example pool computes a
+    // slot index from it and reads wild memory (measured 2026-09-18, `json.kama:292` — `give k` into a variant
+    // payload, then `k`'s scope drop). `kama_str_take` has always reset all three fields; this is the same
+    // reset, at the other hand-off.
+    auto ci = _classes.find(cls);
+    const bool hasCap = cls == "kama_string"
+                     || (ci != _classes.end() && ci->second.fieldNames.count("cap"));
+    if (hasCap) out += " (" + expr + ").cap = 0;";
+    return out;
 }
 
 // ---- Resource-value move analysis -----------------------------------------
