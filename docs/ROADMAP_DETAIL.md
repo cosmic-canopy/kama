@@ -255,21 +255,77 @@ clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_Globa
 `sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
 a generic type would hit it too.
 
-### A misspelled triple-component flag in a gate is silently inactive (KR-69) — found 2026-09-17 shipping the `csources` gates, `0.9.382`
+### A misspelled triple-component flag in a gate is silently inactive (KR-69) — found 2026-09-17 shipping the `csources` gates, `0.9.382`; briefed 2026-09-18 at `0.9.399`
 
 `@compileFor(OS_WINODWS)` and `@compileFor(ARCH_AARCH46)` build and pass `kama check` without a word, in a
-manifest too: every gate goes through `kamaGateLitActive`, and `kamaIsBuildConfigFlag` accepts ANY name with
-an `OS_`/`ARCH_`/`ABI_` prefix, because triples are open (kama hands `aarch64-winodws-gnu` to the C compiler,
-and zig is what refuses it). `kama check`'s covering check (`0.9.353`) does not catch it either, by its own ruling: "a gate no
-known target can activate is NOT checked and NOT an error". So a typo'd platform gate deletes the
-declaration (or, since `0.9.382`, a `csources` entry) on every build. The same class `@compileFor(WINDOWS)` was
-(fixed in the docs 2026-09-01), one level down.
+manifest too: every gate goes through `kamaGateLitActive` (`src/kama.cemit.cpp`), and `kamaIsBuildConfigFlag`
+accepts ANY name with an `OS_`/`ARCH_`/`ABI_` prefix, because triples are open (`parseTriple` normalizes
+nothing; kama hands `aarch64-winodws-gnu` to the C compiler, which is what refuses it). So a typo'd platform gate
+deletes the declaration — or, since `0.9.382`, a `csources` entry — on every build. The same class
+`@compileFor(WINDOWS)` was, one level down.
 
-Wants a ruling before code: kama has no closed table of os/arch/abi names today and deliberately so. The
-options as they stand: a closed list of known components (zig's and LLVM's are public) with an escape for a
-declared target; or a warning channel, which kama does not have on purpose; or refusing a component no
-built-in or DECLARED target names (the covering check already knows that set) — which would make an
-anonymous `--target` triple's gates unreachable until the target is declared.
+**Measured, `0.9.399` on the Windows box:**
+- **The prefix is a free pass.** One manifest project, one file, two typos: `@compileFor(WINODWS)` is refused
+  (*"references undeclared flag `WINODWS`"*) and `@compileFor(OS_WINODWS)` beside it is accepted — one error where
+  there are two defects. A rule that holds in one position and not its sibling.
+- **`kama check` cannot tell a typo from legal stub code, and says nothing about either.** `@compileFor(ARCH_RISCV64)`
+  (a real arch, no target) and `@compileFor(ARCH_AARCH46)` both report `OK (1 unit analyzed)`, plain and `--each`.
+- **What the corpus actually gates on:** `ARCH_WASM32` (16 uses here, 63 in the first consumer), `OS_WINDOWS` (13,
+  12), `OS_LINUX` (6), `OS_MACOS` (consumer, 1). Five names. `ARCH_RISCV64` appears only in SPEC and in
+  `tests/xfail/compilefor_impossible.kama`'s comment — as the EXAMPLE of what must stay legal.
+- **What kama knows today:** built-in targets give os `macos`/`windows`/`linux`/`emscripten`/`none`, abi `gnu`/`none`,
+  arch `wasm32` or the host's; the host table adds `freebsd`/`msvc`. `parseTriple` takes 2–4 components verbatim and
+  drops a vendor, so zig-style (`aarch64-macos-none`) and LLVM-style spellings both reach a flag.
+- The three namespaces are RESERVED — a project cannot declare `OS_X` under `flags` (`isReservedFlagName`) — so
+  they are kama's to validate, in every mode. No did-you-mean helper exists in the compiler today.
+
+**What constrains the ruling.** SPEC *`kama check` covers every gate* rules that *"a gate no known target can
+activate is not checked, and that is not an error. Stub code for a platform you do not support yet
+(`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for nobody and breaks nobody"*. So the row's
+third option — refuse a component no built-in or declared target names — contradicts a standing ruling, and would
+also make an anonymous `--target` triple's gates unreachable. And a warning channel is a thing kama does not have,
+on purpose. The distinction a rule needs is between a name NOBODY recognizes (`ARCH_AARCH46`) and a real component
+nothing activates yet (`ARCH_RISCV64`).
+
+**Recommended — four decisions for the maintainer:**
+
+- **D1. A name in `OS_`/`ARCH_`/`ABI_` is valid when its component is KNOWN, DECLARED or ACTIVE; otherwise it is
+  refused.** KNOWN: in kama's table of triple components. DECLARED: a component of a target the manifest declares.
+  ACTIVE: a component of THIS build's triple, so `--target xtensa-esp32-elf` validates its own `OS_ESP32` gates with
+  no table entry and no manifest. Triples stay open for BUILDING — only a gate NAME is judged — and the stub-code
+  ruling survives untouched: `ARCH_RISCV64` is known, so it still compiles for nobody and breaks nobody. One
+  definition serves every gate (`kamaGateLitActive`: the attribute, the file gate, a manifest `csources`/`cincludes`
+  gate), so they cannot disagree. GOALS #5: a gate that silently deletes code is the most implicit failure a build
+  can have; and the unprefixed typo is already refused, so this is one rule finally holding in both positions.
+- **D2. The table is the UNION of zig's `std.Target` tags and LLVM's `Triple` spellings**, pinned to a version and
+  written down beside `c_reserved` in spirit: both are public, both reach kama's flags because `parseTriple`
+  normalizes nothing, and a wider table costs nothing since an entry only ever ADMITS a name. A guard in the shape
+  of `tools/check-c-keywords.sh` holds it sorted and asserts every component of every built-in target and of the
+  host table is in it (a built-in target whose own gate kama refuses would be the embarrassing failure).
+- **D3. It applies in every mode** — a loose file as well as a manifest. Strictness today gates only UNDECLARED
+  user flags, which a loose file legitimately has no way to declare; these namespaces are kama's own, so there is
+  nothing for a loose file to be excused from. (The row's repro is a loose file.)
+- **D4. `kama check` names the gates it did not check.** One report line per gate no known target activates, with
+  its position — *"checked for no target: `@compileFor(ARCH_RISCV64)` at f.kama:3 — declare a target to check it"*.
+  Not a warning channel: `kama build` stays silent, and coverage is what that verb reports. It is what makes the
+  RESIDUAL visible — a valid-but-wrong component (`ARCH_ARM` meant as `ARCH_AARCH64`) passes any closed vocabulary,
+  and today nothing anywhere would say its code is compiled for nobody. Optional, recommended.
+
+The diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` → `OS_WINDOWS`); that is
+~25 lines, there being no such helper yet.
+
+**Red first.** `tests/xfail/compilefor_component_typo.kama` (loose file, `OS_WINODWS`; the `.msg` carries the
+suggestion), `…_manifest.d` (the source gate under a manifest), `…_csources.d` (a `csources` entry's `compileFor`),
+and one for a `file @compileFor(…)` gate — the four callers of the one rule; each needs its row in
+`tests/xfail/DIAGNOSTIC_LINES`. Positive, in one fixture: `ARCH_RISCV64` with no target still builds (the SPEC
+ruling, now pinned by a test instead of a comment); a DECLARED target's exotic component is accepted; an
+anonymous `--target` triple's own component is accepted for that build. Then SPEC *Conditional compilation* gains
+the rule, and SPEC *`kama check` covers every gate* gains D4.
+
+**Size M, and where.** One validation in one function, a ~150-string table with its guard, the declared-target
+components plumbed to the rule (the covering check already computes them from `g_manifestTargets`), the suggestion
+helper, fixtures, SPEC. It is front-end only and platform-independent, so it builds and tests on any box; the
+verdict changes on every target, so `./dev matrix` is its gate.
 
 ### A dependency cannot ship a prebuilt archive (KR-70) — found 2026-09-17 preparing the `csources` C++ work
 
