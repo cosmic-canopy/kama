@@ -75,11 +75,11 @@ if grep -q 'include "stdlib.h"' "$tmp/ext_rel.c"; then
     exit 1
 fi
 # ...and the gated `extern fn` with it: RELEASE defines its own `abs`, DEBUG calls libc's bare symbol.
-if ! grep -q '_Fcompilefor_extern__abs(' "$tmp/ext_rel.c"; then
+if ! grep -q 'k_Fcompilefor_extern__abs(' "$tmp/ext_rel.c"; then
     echo "check-compilefor: FAIL — RELEASE build is missing the @compileFor(!DEBUG) kama fallback for abs" >&2
     exit 1
 fi
-if grep -q '_Fcompilefor_extern__abs(' "$tmp/ext_dbg.c"; then
+if grep -q 'k_Fcompilefor_extern__abs(' "$tmp/ext_dbg.c"; then
     echo "check-compilefor: FAIL — DEBUG build kept the kama fallback; the gated \`extern fn\` did not win" >&2
     exit 1
 fi

@@ -16,13 +16,13 @@ SRC=tests/ecs_pattern.kama
 "$KAMA" transpile "$SRC" -o "$tmp/ecs.c" >/dev/null
 
 # The fixture is a loose file in no module, so its symbols carry the file-private scope — which since
-# §2e.26 is named after the FILE (`_Fecs_pattern`) rather than numbered by load position (`_F4`). Derived
+# §2e.26 is named after the FILE (`k_Fecs_pattern`) rather than numbered by load position (`_F4`). Derived
 # from the source name here rather than written out, because the old spelling WAS written out: a prefix
 # that stops matching makes this guard report "tickAll was not monomorphized", which reads as a codegen
 # regression when it is really a stale guard. Deriving it means a renamed fixture cannot cause that.
 # NB the `\n` in the preserved set: `tr -c` complements it, and basename's trailing newline is part of
 # tr's input, so leaving it out appends a `_` and the prefix silently matches nothing.
-P="_F$(basename "$SRC" .kama | tr -c 'A-Za-z0-9_\n' '_')"
+P="k_F$(basename "$SRC" .kama | tr -c 'A-Za-z0-9_\n' '_')"
 
 fail=0
 # 1. the contract-bounded generic monomorphized, and calls Timer__tick DIRECTLY

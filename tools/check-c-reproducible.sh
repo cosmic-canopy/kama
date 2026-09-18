@@ -20,7 +20,7 @@
 #
 #   1. the two builds emit the SAME SET OF FILENAMES
 #        — REAL. With the positional suffix restored this fails immediately and prints both listings.
-#   2. no generated name carries a positional form — not a `_<index>.c` filename, not an `_F<digits>`
+#   2. no generated name carries a positional form — not a `_<index>.c` filename, not an `k_F<digits>`
 #      symbol
 #        — REAL, and it is the assertion that survives a partial revert: a build could round-trip to the
 #          same names while still being positional if the permutation happened to be an identity, which
@@ -104,18 +104,18 @@ if LC_ALL=C grep -E '_[0-9]+\.c$' "$tmp/names.one" > "$tmp/positional" 2>/dev/nu
     exit 1
 fi
 
-# A file-private scope is `_F<file>`, never `_F<digits>`. `main.kama` is in the loose root, so it has no
+# A file-private scope is `k_F<file>`, never `k_F<digits>`. `main.kama` is in the loose root, so it has no
 # module and `priv` is exactly this population.
-if LC_ALL=C grep -ohE '_F[0-9]+__[A-Za-z_]+' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
+if LC_ALL=C grep -ohE 'k_F[0-9]+__[A-Za-z_]+' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
         | sort -u > "$tmp/numbered" && [ -s "$tmp/numbered" ]; then
     echo "check-c-reproducible: FAIL — a file-private scope is still numbered by load position:" >&2
     head -5 "$tmp/numbered" | sed 's/^/  /' >&2
     exit 1
 fi
-if ! LC_ALL=C grep -q '_Fmain__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null; then
+if ! LC_ALL=C grep -q 'k_Fmain__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null; then
     echo "check-c-reproducible: FAIL — the loose-root file's private scope is not named after it." >&2
-    echo "  Expected '_Fmain__priv' from main.kama; found:" >&2
-    LC_ALL=C grep -ohE '_F[A-Za-z0-9_]*__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
+    echo "  Expected 'k_Fmain__priv' from main.kama; found:" >&2
+    LC_ALL=C grep -ohE 'k_F[A-Za-z0-9_]*__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
         | sort -u | head -3 | sed 's/^/    /' >&2
     exit 1
 fi
@@ -146,7 +146,7 @@ build_into "$tmp/three" "$tmp/src/main.kama" "$tmp/src/a/x.kama" "$tmp/src/b/x.k
 
 # Into files, not process substitution: this is `#!/bin/sh`. `grep -Fxv -f` rather than `comm`, which is
 # locale-broken on macOS and silently reports nonsense.
-syms_of() { LC_ALL=C grep -ohE '\b_F[A-Za-z0-9_]+__[A-Za-z_]+' "$1"/*.c "$1"/*.h 2>/dev/null | sort -u; }
+syms_of() { LC_ALL=C grep -ohE '\bk_F[A-Za-z0-9_]+__[A-Za-z_]+' "$1"/*.c "$1"/*.h 2>/dev/null | sort -u; }
 syms_of "$tmp/one"   > "$tmp/syms.before"
 syms_of "$tmp/three" > "$tmp/syms.after"
 if [ ! -s "$tmp/syms.before" ]; then

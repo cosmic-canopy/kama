@@ -504,7 +504,10 @@ static std::string privateScopeFor(const std::string& unitPath)
     std::string stem = (slash == std::string::npos) ? unitPath : unitPath.substr(slash + 1);
     size_t dot = stem.find_last_of('.');
     if (dot != std::string::npos) stem.erase(dot);
-    std::string r = "_F";
+    // KR-67 stage 4: `_F` is `_`+uppercase, which C reserves to the implementation at every scope —
+    // 566 macros sit in that space on macOS alone. A file-private declaration is a name the USER
+    // owns, so it takes the user register.
+    std::string r = "k_F";
     for (char c : stem) r += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
     return r;
 }
@@ -19632,7 +19635,9 @@ std::string CEmitter::hostQualified(const std::string& module, const std::string
             prefix += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
         }
     } else if (!unitPath.empty()) {
-        prefix = privateScopeFor(unitPath).substr(2);
+        // strip the `k_F` scope marker (KR-67 stage 4; it was `_F`) — the HOST header names a file
+        // by its stem, not by kama's internal mangle.
+        prefix = privateScopeFor(unitPath).substr(3);
     }
     return prefix.empty() ? name : prefix + "_" + name;
 }

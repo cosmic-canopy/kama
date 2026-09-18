@@ -17,7 +17,7 @@
 #
 # NOT asserted: byte-identical emitted C. Per-symbol re-entry appends a module's files at several points
 # instead of one, so the relative order of survivors within a module can change, which changes emit order
-# and the `_F<file>` mangling of namespace-less imported files. Self-consistent within a build, so this
+# and the `k_F<file>` mangling of namespace-less imported files. Self-consistent within a build, so this
 # guard compares BEHAVIOUR — exit codes and stdout — never bytes.
 set -eu
 

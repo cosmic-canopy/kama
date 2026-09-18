@@ -87,20 +87,20 @@ if ! "$KAMA" build "$p/kama.json" -o "$tmp/c/app" --keep-c > "$tmp/build.log" 2>
     exit 1
 fi
 
-syms=$(grep -ohE '\b(deriv[A-Za-z_]*|_F[A-Za-z0-9_]+)__[A-Za-z_]+' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null | sort -u)
+syms=$(grep -ohE '\b(deriv[A-Za-z_]*|k_F[A-Za-z0-9_]+)__[A-Za-z_]+' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null | sort -u)
 emitted() {
     printf '%s\n' "$syms" | grep -Fxq "$1" && ok "$2" || bad "$2 — no \`$1\` in the emitted C"
 }
-# Every helper below is UNEXPORTED, so since 0.9.207 its symbol also carries its FILE (`___F<file>`) after
+# Every helper below is UNEXPORTED, so since 0.9.207 its symbol also carries its FILE (`__k_F<file>`) after
 # the module — two files of one module may each keep a private `helper`. The module prefix is still what
 # each line pins; the file segment is the per-file rung, asserted in tests/mod_private_perfile.d.
-emitted deriv___Fapp__rootHelper        "a file at the source root is scoped by the PROJECT name, with no declaration to say so"
-emitted deriv__net___Fnet__n            "a listed folder's file is scoped by its module"
-emitted deriv__net__web___Fweb__w       "a nested module composes both segments in the symbol"
-emitted deriv__network___Fk__k          "\`network\` does not collapse into \`net\`"
-emitted deriv__tidy___Fo__o             "a \`name\` override reaches the symbol, not the folder's spelling"
-emitted deriv__net___Fd__d              "an unlisted folder's file carries its nearest listed ancestor's scope"
-emitted deriv__vendored___Fv__v         "...at any depth"
+emitted deriv__k_Fapp__rootHelper        "a file at the source root is scoped by the PROJECT name, with no declaration to say so"
+emitted deriv__net__k_Fnet__n            "a listed folder's file is scoped by its module"
+emitted deriv__net__web__k_Fweb__w       "a nested module composes both segments in the symbol"
+emitted deriv__network__k_Fk__k          "\`network\` does not collapse into \`net\`"
+emitted deriv__tidy__k_Fo__o             "a \`name\` override reaches the symbol, not the folder's spelling"
+emitted deriv__net__k_Fd__d              "an unlisted folder's file carries its nearest listed ancestor's scope"
+emitted deriv__vendored__k_Fv__v         "...at any depth"
 
 # The one file set no path→module derivation can reach: the smart-pointer triad arrives as
 # `<prelude>/std/memory/*.kama`, synthetic units with NO PATH, so their module is STATED instead, in
@@ -111,7 +111,7 @@ emitted deriv__vendored___Fv__v         "...at any depth"
 # `namespace std::memory` and ctxOf's declaration rung caught them, so a compiler built with that arm
 # returning "" stayed green. With the declaration deleted, nothing else can produce this name — a
 # compiler built that way now fails to build a one-line `new int32()` program at all.
-if printf '%s\n' "$syms" | grep -qE '^_F[0-9]+__(Owned|Shared|Weak)'; then
+if printf '%s\n' "$syms" | grep -qE '^k_F[0-9]+__(Owned|Shared|Weak)'; then
     bad "the embedded triad lost its module and fell back to a file-private scope"
 elif grep -qE '\bstd__memory__Owned' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null; then
     ok "the embedded prelude module keeps the identity it states, having no path to derive one from"
@@ -120,12 +120,12 @@ else
 fi
 
 # The file-private scope is what identity REPLACES. It survives only for a loose file (§2e.27) — a
-# project's files must never land in it, and a stray `_F<file>` here means a unit missed the derivation.
+# project's files must never land in it, and a stray `k_F<file>` here means a unit missed the derivation.
 # The test is the PREFIX, not its old numbered form: since §2e.26 a private scope is named after its file
-# (`_Fapp`), so a check for `_F[0-9]` would now pass on every miss it was written to catch.
-if printf '%s\n' "$syms" | grep -q '^_F'; then
-    bad "a file in a project still carries a file-private \`_F<file>\` scope:"
-    printf '%s\n' "$syms" | grep '^_F' | head -5 | sed 's/^/        /' >&2
+# (`k_Fapp`), so a check for `k_F[0-9]` would now pass on every miss it was written to catch.
+if printf '%s\n' "$syms" | grep -q '^k_F'; then
+    bad "a file in a project still carries a file-private \`k_F<file>\` scope:"
+    printf '%s\n' "$syms" | grep '^k_F' | head -5 | sed 's/^/        /' >&2
 else
     ok "no file-private scope survives anywhere in a project build"
 fi
@@ -137,7 +137,7 @@ echo "check-modules: with no manifest, a module is still a folder"
 # ancestor of the operands' directories is the root, and a file's module is its own directory below it.
 # NOT ONE FILE HERE DECLARES A NAMESPACE, which is the whole point: this is the shape the corpus takes
 # after 2e, and until the loose arm existed a program like it could not be built at all. (Run it against
-# a compiler without that arm: `area` emits as `_F<file>__area` while `app.kama`'s import resolves the CALL
+# a compiler without that arm: `area` emits as `k_F<file>__area` while `app.kama`'s import resolves the CALL
 # to `geo__area`, so the C compiler is handed a call to a function nobody defined.)
 l="$tmp/loose-prog"
 mkdir -p "$l/geo/deep" "$l/oddly-named" "$tmp/lc"
@@ -158,14 +158,14 @@ if ! "$KAMA" build "$l/app.kama" "$l/geo/area.kama" "$l/geo/deep/nested.kama" "$
     bad "a loose program whose modules are folders does not build:"
     head -5 "$tmp/loose.log" >&2
 else
-    lsyms=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c "$tmp/lc"/*.h 2>/dev/null | sort -u)
+    lsyms=$(grep -ohE '\b(geo__[A-Za-z_]+|k_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c "$tmp/lc"/*.h 2>/dev/null | sort -u)
     lemitted() { printf '%s\n' "$lsyms" | grep -Fxq "$1" && ok "$2" || bad "$2 — no \`$1\` in the emitted C"; }
     lemitted geo__area        "a loose file's folder is its module, with no manifest and no declaration"
     lemitted geo__deep__nested "...composing every folder down from the root"
     # §2e.27, and the one rung the loose derivation deliberately does NOT reach: a file in the root
     # itself has no folder below the root to be named by, so it stays file-private. That is what makes it
     # unimportable, which is the rule 2e turns into a diagnostic.
-    printf '%s\n' "$lsyms" | grep -Fxq '_Fapp__helper' \
+    printf '%s\n' "$lsyms" | grep -Fxq 'k_Fapp__helper' \
         && ok "a file in the loose ROOT has no module, so it keeps the file-private scope (§2e.27)" \
         || bad "a file in the loose root gained a module, or its private scope is not named after it"
     # A folder whose name is not a legal kama identifier is not a module: nothing could write
@@ -179,15 +179,15 @@ fi
 
 # The invariant that makes the derivation an IDENTITY and not a position (§1b): it reads a SET, so the
 # order the operands are written in cannot reach the emitted C. This used to compare only the
-# module-scoped symbols, because the file-private scope was `_F<load index>` and moved on purpose; since
+# module-scoped symbols, because the file-private scope was `k_F<load index>` and moved on purpose; since
 # §2e.26 named it after its file, the comparison covers EVERY symbol — which is the whole claim, and it
 # was previously being made about a subset. (`tools/check-c-reproducible.sh` makes the stronger version of
 # this same claim about the generated filenames and the emitted bytes.)
 mkdir -p "$tmp/lc2"
 if "$KAMA" build "$l/oddly-named/x.kama" "$l/geo/deep/nested.kama" "$l/geo/area.kama" "$l/app.kama" \
         -o "$tmp/lc2/app" --keep-c > "$tmp/loose2.log" 2>&1; then
-    a=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c  "$tmp/lc"/*.h  2>/dev/null | sort -u)
-    b=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc2"/*.c "$tmp/lc2"/*.h 2>/dev/null | sort -u)
+    a=$(grep -ohE '\b(geo__[A-Za-z_]+|k_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c  "$tmp/lc"/*.h  2>/dev/null | sort -u)
+    b=$(grep -ohE '\b(geo__[A-Za-z_]+|k_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc2"/*.c "$tmp/lc2"/*.h 2>/dev/null | sort -u)
     [ -n "$a" ] && [ "$a" = "$b" ] \
         && ok "the operand ORDER does not reach the symbols — the derivation reads a set" \
         || bad "reordering the operands changed the emitted symbols"
