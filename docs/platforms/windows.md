@@ -180,6 +180,18 @@ Worth knowing before debugging, because each of these produced a confident wrong
 - **cmd.exe is the shell `system()` uses.** It has no `/dev/null` (use `NUL`), no `command -v` (use
   `where`), it cannot start a `#!/bin/sh` script, it reads a leading `/` as a switch, and it strips
   the outer quotes off a line that begins with one.
+- **cmd.exe's command line stops at 8,191 characters**, and every C compile and link reaches it (`system()`,
+  and the `-j` pool's `cmd /c`). `CreateProcessW` takes 32,767 and clang takes `@file` of any length, so the
+  limit is the shell's. A package with enough `csources` directories (`@kama/sodium`: 120 sources in 78, one
+  `-I` each) answered *"The command line is too long."* and could not build here at all — filed by the first
+  consumer as KB-27. Since `0.9.393` a command that would not fit moves the lists the DRIVER generated
+  (includes, inputs, objects) into response files beside the objects; a command that fits is byte-for-byte
+  what it was. `tools/check-long-command.sh` holds it down.
+- **A text-mode `std::ofstream` writes `\r\n`.** kama's own `std::fs` opens everything binary, but the driver
+  wrote `kama.lock`, the emitted C and the generated header in text mode, so a lock written here differed byte
+  for byte from the same lock written anywhere else (KB-28, `0.9.392`). Every stream the driver opens is
+  binary now; `tools/check-lf-output.sh` holds it down. ⚠️ And msys2's `grep` strips a CR at end of line
+  before matching, so `grep -c $'\r'` counts ZERO on a CRLF file — count the bytes with `tr -cd '\r' | wc -c`.
 - **`%RANDOM%` is seeded from the system clock**, so processes started in the same tick draw identical
   sequences. It is not a unique-name source for concurrent children.
 - **Concurrent appends to one file are not atomic**, unlike POSIX `O_APPEND` under `PIPE_BUF`.
