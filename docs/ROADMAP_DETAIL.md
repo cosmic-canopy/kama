@@ -255,17 +255,6 @@ clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_Globa
 `sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
 a generic type would hit it too.
 
-### Three raw-pointer expressions pass kama and fail in clang (KR-65) — found 2026-09-17 building `@globalAllocator`, `0.9.370`
-
-Each is a few lines, and each is accepted by the checker and handed to the C compiler to refuse:
-- `unsafe fn usize f() { InlineArray<uint64>#(4) s = [0; 4]; return cast<usize>(addr(of: s[0])); }` →
-  `pointer cannot be cast to type 'double'`: the cast emits `KAMA_NARROW` over a pointer. Binding the `addr` to an
-  `UnsafePtr<uint64>` local first works, so the operand's type is lost only when it is inline.
-- `UnsafePtr p = cast<UnsafePtr>(s);` with `s` an `InlineArray` → `operand of type 'InlineArray_uint8_4' where
-  arithmetic or pointer type is required`. Either lower it to the storage address or refuse it in kama.
-- `unsafe fn UnsafePtr f(UnsafePtr p) { return p + 4; }` → `KAMA_ADD`'s `_Generic` has no `void*` association.
-  Either define byte arithmetic on `UnsafePtr` or refuse it and point at `addr(of: buf[i])`.
-
 ### A misspelled triple-component flag in a gate is silently inactive (KR-69) — found 2026-09-17 shipping the `csources` gates, `0.9.382`
 
 `@compileFor(OS_WINODWS)` and `@compileFor(ARCH_AARCH46)` build and pass `kama check` without a word, in a

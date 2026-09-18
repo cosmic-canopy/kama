@@ -1211,6 +1211,17 @@ files.
 *`unsafe fn`*). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).
 
+**Pointer arithmetic is not in the language** — `p + n` on a raw pointer is an error, in both the bare and <!-- xfail: ptr_arithmetic -->
+the typed form. An offset is **`addr(of: p[i])`**, which scales by the element type (a bare `UnsafePtr`
+takes a `cast<UnsafePtr<uint8>>(…)` first), and an address that is genuinely being *computed* becomes a
+number with `cast<usize>(p)`. Carrying `+` as well would be a second spelling of the same step, and on a
+bare `UnsafePtr` a byte-stepping one that disagrees with the typed form. Comparisons stay: a carrier is
+`null`-checked and compared.
+
+**A `cast` converts between scalars and pointers, on both sides** — an aggregate is neither, so `cast<UnsafePtr>(someInlineArray)` is refused exactly as a cast TO an aggregate always was. <!-- xfail: cast_aggregate_source -->
+An aggregate's storage address is `addr(of: arr[0])`, and an element's address is an ordinary `usize` <!-- test: addr_element_to_usize -->
+(`cast<usize>(addr(of: arr[0]))`) — the shape an allocator's own bookkeeping is written in.
+
 ### Math (`std::math`) ✅
 
 Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus a

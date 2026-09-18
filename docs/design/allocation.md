@@ -71,9 +71,13 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    the bare-`new` rule). The record is SPEC *Global allocator*; what the probes and the build decided is at the end
    of §3. Filed from it: **KR-65** (three raw-pointer expressions that reach clang) and **KR-66** (reaching the
    instance).
-4. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
+4. ~~**KR-65**~~ — shipped `0.9.386`–`0.9.388`: the three raw-pointer expressions each got ONE decision. An element's
+   address now has a type, so `cast<usize>(addr(of: s[0]))` lowers (`0.9.386`); an aggregate `cast` SOURCE is refused
+   like the target always was (`0.9.387`); and pointer arithmetic is a non-goal, refused at the operator and pointed
+   at `addr(of: p[i])` (`0.9.388`). The record is SPEC *`UnsafePtr`*.
+5. **KR-50** after it: prove a serde error under `--no-heap` with a declared pool, then write the per-call
    allocator verdict (§4).
-5. **KR-58 on the Windows box, AFTER KR-49/KR-50** (maintainer, 2026-09-17: wait for their results, since a
+6. **KR-58 on the Windows box, AFTER KR-49/KR-50** (maintainer, 2026-09-17: wait for their results, since a
    declared pool may change what a `@heap` extern means; see §2b "Meets KR-49"). The brief in §2b is otherwise ready:
    decisions 2 and 3 (stack reserve, probe cost) are pure measurement and go first.
 
