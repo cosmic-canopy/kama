@@ -5514,7 +5514,10 @@ static std::string jsonEscape(const std::string& s)
 // Write `kama.lock` deterministically (sorted std::map => byte-stable => reproducible re-install).
 static bool writeLockFile(const std::string& path, const std::map<std::string, LockEntry>& pkgs)
 {
-    std::ofstream out(osp(path));
+    // BINARY, like every stream this driver opens (KB-28): a text-mode ofstream turns each `\n` into `\r\n` on
+    // Windows, so a lock written there differed byte for byte from the same lock written anywhere else — every
+    // committed kama.lock came back "modified" after a Windows install, which is the opposite of byte-stable.
+    std::ofstream out(osp(path), std::ios::binary);
     if (!out) return false;
     out << "{\n  \"lockVersion\": 1,\n  \"packages\": {";
     bool first = true;
@@ -5754,7 +5757,7 @@ static int writeHostHeaderIfExposed(CEmitter& emitter)
                         "or rename the file\n", g_hostHeaderPath.c_str());
         return 1;
     }
-    std::ofstream out(osp(g_hostHeaderPath));
+    std::ofstream out(osp(g_hostHeaderPath), std::ios::binary);   // LF on every host (KB-28)
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", g_hostHeaderPath.c_str()); return 1; }
     out << text.str();
     return 0;
@@ -5766,7 +5769,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
                         bool* externsGpu = nullptr, bool* externsIsolate = nullptr)
 {
-    std::ofstream out(osp(outPath));
+    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host (KB-28)
     if (!out) {
         fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str());
         return 1;
@@ -5804,13 +5807,13 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsGpu = nullptr,     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
                      bool* externsIsolate = nullptr) // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
 {
-    std::ofstream header(osp(headerPath));
+    std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host (KB-28)
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
 
     std::vector<std::unique_ptr<std::ofstream>> moduleFiles;
     std::vector<std::ostream*> moduleStreams;
     for (auto& cp : cPaths) {
-        auto f = std::unique_ptr<std::ofstream>(new std::ofstream(osp(cp)));
+        auto f = std::unique_ptr<std::ofstream>(new std::ofstream(osp(cp), std::ios::binary));
         if (!*f) { fprintf(stderr, "kama: error: cannot write '%s'\n", cp.c_str()); return 1; }
         moduleStreams.push_back(f.get());
         moduleFiles.push_back(std::move(f));
@@ -5862,7 +5865,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
                          externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate) != 0) return 1;
 
-    std::ofstream out(osp(outPath));
+    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host (KB-28)
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }
     { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
     out << "\n";
