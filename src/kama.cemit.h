@@ -1826,6 +1826,19 @@ private:
     // KR-67. A name kama OWNS reaches C as `k_<name>`, so no header macro can rewrite it. See the
     // definition in kama.cemit.cpp for the rule and why the C preprocessor leaves no alternative.
     static std::string kName(const std::string& name);           // a kama-owned C identifier: `near` -> `k_near`
+    // The prelude's own scope (KR-67 stage 4a). Its declarations are keyed `kama__<name>`, so a
+    // comparison against a RESOLVED prelude type must spell it this way, not bare.
+    static std::string preludeName(const std::string& name) { return std::string(kamaPreludeScope()) + name; }
+    // The inverse, for a CONTRACT-name comparison. A bound reaches the predicates either as a
+    // compiler-written literal (`satisfiesBound(t, "Copyable")`) or as a name the resolver already
+    // qualified (`kama__Copyable`) — the two were the same string until stage 4a. Comparing on the
+    // leaf accepts both, and nothing outside the prelude can be spelled `kama__<leaf>`.
+    static std::string preludeLeaf(const std::string& n)
+    { return n.compare(0, 6, kamaPreludeScope()) == 0 ? n.substr(6) : n; }
+    // The spelling a prelude declaration is RECORDED under. A compiler-written literal names it by its
+    // leaf (`"Optional"`, `"Deserializable"`); since stage 4a the tables key it in the prelude's scope.
+    // Returns the name unchanged when it is already a recorded key, so a USER type of the same leaf wins.
+    std::string preludeKey(const std::string& n) const;
     // A MEMBER of `owner`: raw when the owner DECLARES C (`type extern value` must match the header,
     // `type expose value` is a published layout), prefixed otherwise.
     static std::string kMember(const ClassInfo& owner, const std::string& name);
@@ -2699,7 +2712,7 @@ private:
     SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
     SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
     // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); returns the temp.
-    std::string emitStickyErrBox(int depth, const std::string& enumType = "DeError",
+    std::string emitStickyErrBox(int depth, const std::string& enumType = "kama__DeError",
                                  const std::string& errExpr = "r.kama_vtbl->k_errorCode(r.kama_obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun

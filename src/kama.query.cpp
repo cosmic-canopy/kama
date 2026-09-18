@@ -2312,6 +2312,10 @@ std::string CEmitter::bareNameOf(const std::string& key) const
     n = under(_nsCtx.scope);
     if (!n.empty()) return n;
     for (auto& u : _nsCtx.usings) { n = under(u); if (!n.empty()) return n; }
+    // The PRELUDE is the floor, and its scope is implicit in source (KR-67 stage 4a): a user writes
+    // `print`, never `kama::print`, so completion must offer the spelling they can type.
+    n = under(std::string(kamaPreludeScope()).substr(0, 4));   // "kama"
+    if (!n.empty()) return n;
     return key.find("__") == std::string::npos ? key : "";   // the bare floor, in scope everywhere
 }
 
