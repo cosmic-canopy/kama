@@ -5918,6 +5918,70 @@ int runCmd(const std::string& cmd)
 #endif
 }
 
+// ---- a command too long for the HOST SHELL (KB-27) -------------------------------------------------------
+// Every C compile and link goes through the host's shell — system() is `cmd /c` on Windows, and the `-j` pool
+// hands cmd the same line — and cmd.exe stops at 8,191 characters. A package with enough `csources` cannot build
+// there at all: each compile carries one `-I` per distinct csources DIRECTORY, and @kama/sodium spreads 120
+// sources over 78 of them (measured by the first consumer: 11,865 characters of `-I` before a single input).
+// cmd answers "The command line is too long.", once per job, and the build dies on a manifest that is legal
+// and builds everywhere else. POSIX has the same wall further out: `sh -c <string>` is ONE argument, and
+// Linux caps one argument at 131,072 bytes.
+//
+// The limit is the shell's, not the compiler's: clang, gcc, zig cc, emcc and ar all read `@file` of any length.
+// So a command that would not fit moves its long parts into response files — and ONLY the parts this driver
+// generated itself (the include list, the inputs, the objects): clean double-quoted paths whose tokens are
+// known, written one per line in the GNU response-file quoting every one of those tools shares. User text
+// (`cflags`, `--cc`) never leaves the command line, so nobody's shell quoting is re-tokenized. A command that
+// FITS keeps the exact bytes it always had, which is every build that works today.
+struct SpillList {
+    std::string text, rsp;            // the list as it sits inline, and where it goes when it cannot
+    std::vector<std::string> args;    // the same list as tokens
+    bool written = false;
+    // `piece` is driver-generated: tokens separated by spaces, a path in double quotes, no escapes.
+    void add(const std::string& piece) {
+        text += piece;
+        std::string cur; bool inq = false, any = false;
+        for (char c : piece) {
+            if (c == '"') { inq = !inq; any = true; }
+            else if (c == ' ' && !inq) { if (any || !cur.empty()) args.push_back(cur); cur.clear(); any = false; }
+            else cur += c;
+        }
+        if (any || !cur.empty()) args.push_back(cur);
+    }
+};
+static size_t hostCommandLimit()
+{
+#if defined(_WIN32)
+    return 8000;      // cmd.exe: 8,191, less the `cmd /c ""` the pool and runCmd's leading-quote rule wrap around it
+#else
+    return 120000;    // `sh -c <string>` is one argument; Linux's MAX_ARG_STRLEN is 131,072
+#endif
+}
+static std::string fitCommand(std::string command, std::initializer_list<SpillList*> lists, std::vector<std::string>& genFiles)
+{
+    if (command.size() <= hostCommandLimit()) return command;
+    for (SpillList* l : lists) {
+        if (l->text.empty()) continue;
+        const size_t at = command.find(l->text);
+        if (at == std::string::npos) continue;
+        if (!l->written) {
+            std::ofstream o(osp(l->rsp), std::ios::binary | std::ios::trunc);
+            for (const std::string& a : l->args) {
+                o << '"';
+                for (char c : a) { if (c == '\\' || c == '"') o << '\\'; o << c; }
+                o << "\"\n";
+            }
+            o.close();
+            l->written = true;
+            genFiles.push_back(l->rsp);   // removed with the objects, kept with them under --keep-c
+        }
+        const bool lead = l->text[0] == ' ';   // ar's list leads with its separator; the others trail it
+        command.replace(at, l->text.size(), std::string(lead ? " " : "") + "@\"" + toolPath(l->rsp) + "\"" + (lead ? "" : " "));
+        if (command.size() <= hostCommandLimit()) break;
+    }
+    return command;
+}
+
 // Run `cmds` with at most `jobs` of them in flight — the `-j` compile pool. `rcs` is sized to
 // cmds.size(): each entry is that command's exit status, or -1 if an earlier failure stopped the wave
 // before it was ever launched. Returns the status of the LOWEST-INDEXED failing command (0 if all
@@ -11376,11 +11440,13 @@ int main(int argc, char** argv)
         // Each `csources` entry's own directory, so a header BESIDE the .c is findable — from the .c
         // itself, and from the kama file that `extern "shim.h";`s it. Deduped, and AFTER the project's
         // own dirs above so a first-party header still shadows a dependency's.
+        SpillList incList;   // the one part of the prefix that grows with a package — see fitCommand (KB-27)
+        incList.rsp = stripExtension(outPath) + ".includes.rsp";
         {
             std::set<std::string> seenDirs;
             for (const CSourceRef& cs : g_csources) {
                 std::string d = dirName(cs.path);
-                if (!d.empty() && seenDirs.insert(d).second) cmd << "-I\"" << d << "\" ";
+                if (!d.empty() && seenDirs.insert(d).second) incList.add("-I\"" + d + "\" ");
             }
             // `cincludes` — a package's own include tree, resolved against its manifest. After the
             // csources dirs, so the shadowing order above still holds. A directory that is not there is
@@ -11396,9 +11462,10 @@ int main(int argc, char** argv)
                         inc.owner.empty() ? "" : (inc.owner + "`)").c_str());
                     return 2;
                 }
-                if (seenDirs.insert(inc.path).second) cmd << "-I\"" << inc.path << "\" ";
+                if (seenDirs.insert(inc.path).second) incList.add("-I\"" + inc.path + "\" ");
             }
         }
+        cmd << incList.text;
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         // Native --webgpu: find wgpu-native's webgpu.h / wgpu.h. (wasm gets its header from the port above.)
         if (!wasm && webgpu) cmd << "-I\"" << wgpuDir << "/include\" ";
@@ -11901,8 +11968,8 @@ int main(int argc, char** argv)
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
                 const std::string obj = toolPath(in->obj);   // the object AND cmd's two redirections (see toolPath)
-                cmds.push_back(prefixFor(base, in->lang) + dashC + in->tok + "-o \"" + obj + "\""
-                               + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"");
+                cmds.push_back(fitCommand(prefixFor(base, in->lang) + dashC + in->tok + "-o \"" + obj + "\""
+                                          + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles));
             }
             std::vector<int> rcs;
             int r = runCmdsParallel(cmds, jobs, rcs);
@@ -11930,8 +11997,10 @@ int main(int argc, char** argv)
                     // cannot read).
                     std::ostringstream ar;
                     ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << toolPath(linkOut) << "\"";
-                    for (auto& o : objs) ar << " \"" << toolPath(o) << "\"";
-                    rc = runCmd(ar.str());
+                    SpillList arObjs; arObjs.rsp = stripExtension(outPath) + ".objects.rsp";
+                    for (auto& o : objs) arObjs.add(" \"" + toolPath(o) + "\"");
+                    ar << arObjs.text;
+                    rc = runCmd(fitCommand(ar.str(), { &arObjs }, genFiles));
                     if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
                 } else {
                     // Link the objects with the SAME flag prefix the compiles used, not a bare compiler
@@ -11943,9 +12012,10 @@ int main(int argc, char** argv)
                     std::ostringstream ld;
                     ld << linkDriver(base.substr(0, cflagsPos)) << base.substr(cflagsEnd) << linkGc;
                     // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).
-                    for (auto& o : objs) ld << "\"" << toolPath(o) << "\" ";
-                    ld << link.str() << "-o \"" << toolPath(linkOut) << "\"";
-                    rc = runCmd(ld.str());
+                    SpillList ldObjs; ldObjs.rsp = stripExtension(outPath) + ".objects.rsp";
+                    for (auto& o : objs) ldObjs.add("\"" + toolPath(o) + "\" ");
+                    ld << ldObjs.text << link.str() << "-o \"" << toolPath(linkOut) << "\"";
+                    rc = runCmd(fitCommand(ld.str(), { &incList, &ldObjs }, genFiles));
                 }
             }
         } else {
@@ -11963,14 +12033,17 @@ int main(int argc, char** argv)
             if (rc == 0) {
                 // Under a C++ driver kama's `.c` inputs are spelled `-x c`, or it would compile them as C++.
                 // An input that already names its language (the gpu seam's `-x objective-c`) is left alone.
+                SpillList oneIns, oneObjs;
+                oneIns.rsp  = stripExtension(outPath) + ".inputs.rsp";
+                oneObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                 for (auto& in : ccInputs) {
                     if (in.lang != CLang::Kama) continue;
-                    if (cxxLinks && in.tok.compare(0, 3, "-x ") != 0) cmd << "-x c " << in.tok << "-x none ";
-                    else cmd << in.tok;
+                    if (cxxLinks && in.tok.compare(0, 3, "-x ") != 0) oneIns.add("-x c " + in.tok + "-x none ");
+                    else oneIns.add(in.tok);
                 }
-                for (auto& o : objs) cmd << "\"" << toolPath(o) << "\" ";
-                cmd << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
-                rc = runCmd(linkDriver(cmd.str()));
+                for (auto& o : objs) oneObjs.add("\"" + toolPath(o) + "\" ");
+                cmd << oneIns.text << oneObjs.text << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
+                rc = runCmd(fitCommand(linkDriver(cmd.str()), { &incList, &oneObjs, &oneIns }, genFiles));
             }
         }
 
