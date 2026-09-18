@@ -648,6 +648,65 @@ std::string deriveCxxDriver(const std::string& cc)
     return "";
 }
 
+// Which family a C driver belongs to. ASKED, not guessed from the name: `cc` is gcc on most Linux and clang
+// on macOS, a cross prefix (`aarch64-linux-gnu-gcc`) or a wrapper can be either, and the answer decides
+// warning flags that are a HARD ERROR when a compiler is handed the other family's spelling — `--cc gcc`
+// could not build a hello-world for as long as kama has documented gcc as a `cc` (KR-72).
+//
+// One `--version` per distinct `cc` string, cached: a build already spawns the compiler once per TU, and
+// `--version` is the cheapest question that answers for a wrapper. `emcc` prints "Emscripten gcc/clang-like
+// replacement" and names clang after it — clang is tested first for exactly that reason — and `zig cc`
+// prints a plain "clang version N".
+enum class CcFamily { Clang, Gcc, Unknown };
+
+std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr);   // defined below, with the other spawns
+
+CcFamily ccFamily(const std::string& cc)
+{
+    static std::map<std::string, CcFamily> cache;
+    std::map<std::string, CcFamily>::iterator it = cache.find(cc);
+    if (it != cache.end()) return it->second;
+    int rc = 0;
+    std::string out = runCmdCapture(cc + " --version 2>&1", &rc);
+    for (size_t i = 0; i < out.size(); ++i) out[i] = (char)tolower((unsigned char)out[i]);
+    // A driver that cannot be asked (a missing compiler, a wrapper with no `--version`) is UNKNOWN, and
+    // unknown takes the conservative flags below rather than clang's — the failure this row is about is a
+    // compiler being handed a spelling it does not have.
+    const CcFamily fam = rc != 0                              ? CcFamily::Unknown
+                       : out.find("clang") != std::string::npos ? CcFamily::Clang
+                       : out.find("gcc")   != std::string::npos ? CcFamily::Gcc
+                       : out.find("g++")   != std::string::npos ? CcFamily::Gcc
+                       :                                          CcFamily::Unknown;
+    cache[cc] = fam;
+    return fam;
+}
+
+// The `-W` promotions for kama's own C, in the spelling THIS driver has.
+//
+// Two silent-UB classes are hard errors on every family (the front end has no return-path / definite-
+// assignment analysis yet): a non-void function that falls off the end, and a read of an uninitialized
+// local. The third — an incompatible POINTER assignment, the C-level backstop for `UnsafeConstPtr<T>` —
+// is where the families part, and it is not a matter of spelling but of what each can express:
+//
+//   clang names the function-pointer case separately (`-Wincompatible-function-pointer-types`), so kama
+//   promotes every incompatible pointer to an error and then demotes THAT ONE back to a warning. Handing a
+//   kama `fnptr` to a C callback field is the sanctioned FFI seam (a kama callback lowers enums to `int`
+//   and handles to `void*`, which kama cannot spell in C), and clang has made it an error by default since
+//   v16, so without the demotion no callback-based binding builds.
+//
+//   gcc has ONE name for both (`-Wincompatible-pointer-types`), so those two promotions cannot coexist:
+//   measured 2026-09-18, promoting it rejects the callback seam with `-Werror=incompatible-pointer-types`
+//   naming the function-pointer assignment. kama keeps the SEAM working and leaves the pointer class a
+//   warning there — the emitter's own `rejectConstPtrWiden` is the primary check either way, and this was
+//   always the backstop.
+std::string ccWarnFlags(const std::string& cc)
+{
+    std::string w = "-Werror=return-type -Werror=uninitialized ";
+    if (ccFamily(cc) == CcFamily::Clang)
+        w += "-Werror=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types ";
+    return w;
+}
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -6181,7 +6240,7 @@ int cmdUpdate(const std::string& pinned) { return runInstaller(pinned, /*makeDef
 // Run `cmd` and capture its stdout, trimmed of trailing newlines; *exitCode (if given) receives the
 // child's exit status. "" if the process can't be spawned. This is the one place the driver needs a
 // subprocess's OUTPUT (a hasher's hex digest, a git commit), not just its status like runCmd.
-std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr)
+std::string runCmdCapture(const std::string& cmd, int* exitCode)
 {
 #ifdef _WIN32
     FILE* p = _popen(cmd.c_str(), "r");
@@ -11274,7 +11333,7 @@ int main(int argc, char** argv)
         const size_t driverEnd = compiler.size();
         cmd << compiler << crossFlags;
         const size_t stdPos = (size_t)cmd.tellp();
-        cmd << " -std=c11 -Werror=return-type -Werror=uninitialized -Werror=incompatible-pointer-types ";
+        cmd << " -std=c11 " << ccWarnFlags(compiler);
         const size_t stdEnd = (size_t)cmd.tellp();
         // `reproducible-float`: forbid the C compiler contracting `a*b + c` into a single fused
         // multiply-add. clang's default is `on`, which contracts within one expression — so the same
@@ -11318,13 +11377,6 @@ int main(int argc, char** argv)
         const size_t cflagsPos = (size_t)cmd.tellp();
         for (const auto& f : g_target.cflags) cmd << f << " ";
         const size_t cflagsEnd = (size_t)cmd.tellp();
-        // Binding a callback-based C API (WebGPU/GLFW/SDL/…) means handing a kama `fnptr` to a C
-        // callback field. At the `extern` boundary the user asserts ABI compatibility the same way a
-        // C cast would — but a kama callback lowers enums to `int` and typed handles to `void*`, which
-        // clang (error-by-default since v16) flags as an incompatible function-pointer type. kama can't
-        // name those C types, so demote it to a warning (still visible) rather than a hard error — the
-        // FFI boundary is the sanctioned unsafe seam.
-        cmd << "-Wno-error=incompatible-function-pointer-types ";
         // --shared: emit a position-independent shared library. -fvisibility=hidden hides everything
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
         // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`
@@ -11654,9 +11706,8 @@ int main(int argc, char** argv)
             if (cxxLang) p.replace(dotIncPos, 4, "-iquote . ");   // the 4 bytes of "-I. "
             if (l != CLang::Kama)
                 p.replace(stdPos, stdEnd - stdPos,
-                          cxxLang ? " -std=gnu++17 "
-                                  : " -std=gnu11 -Werror=return-type -Werror=uninitialized"
-                                    " -Werror=incompatible-pointer-types ");
+                          cxxLang ? std::string(" -std=gnu++17 ")
+                                  : " -std=gnu11 " + ccWarnFlags(compiler));
             if (cxxLang) p.replace(0, driverEnd, cxxDriver);
             return p;
         };

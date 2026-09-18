@@ -232,13 +232,26 @@ its consumer, exactly like `cflags` — with one difference that is the reason t
 `objcflags` only the Objective-C ones. The C-only warning promotions kama adds for its own C
 (`-Werror=incompatible-pointer-types` and friends) stay off C++.
 
+**Your compiler's family decides two of those promotions, and kama asks it which family it is** (one
+`--version` per build, because `cc` is gcc on most Linux and clang on macOS, and a cross prefix or a
+wrapper can be either). `-Werror=return-type` and `-Werror=uninitialized` are promoted everywhere. The
+pointer class is not, and cannot be: handing a kama `fnptr` to a C callback field is the sanctioned FFI
+seam — a kama callback lowers enums to `int` and handles to `void*`, which C sees as an incompatible
+function pointer. **clang** names that case separately, so kama promotes every incompatible pointer to an
+error and demotes the function-pointer one back to a warning. **gcc** has one name for both, so promoting
+it would reject the seam itself; kama leaves the pointer class a warning there, and kama's own refusal of a
+`const`-to-mutable pointer conversion — which happens before any C compiler sees the program — carries it. A build with
+gcc is therefore slightly laxer about C pointer mismatches and identical about everything else.
+
 **The C++ driver brings the C++ runtime.** A build holding a C++ or Objective-C++ entry compiles those
 entries, and **links**, with the C++ spelling of your C compiler — `clang` → `clang++`, `gcc` → `g++`,
 `cc` → `c++`, `zig cc` → `zig c++`, `emcc` → `em++`, keeping any prefix or version suffix
 (`aarch64-linux-gnu-gcc` → `aarch64-linux-gnu-g++`, `clang-17` → `clang++-17`). That driver links the
 right runtime on every target (`libc++` on macOS, `libstdc++` on Linux, zig's bundled libc++, emscripten's),
-so there is no `-lc++`/`-lstdc++` to name per target. (On wasm the link stays with `emcc`, which links
-C++ objects and their runtime itself.) A build **without** a C++ entry never uses it, so
+so there is no `-lc++`/`-lstdc++` to name per target. (On wasm the link stays with `emcc` — `em++`
+cannot take it, because the same invocation compiles kama's own C — and kama passes `-sDEFAULT_TO_CXX` so
+that link still binds the C++ runtime. `emcc` does not do it on its own: without that setting every
+`std::string` and `__cxa_throw` is undefined at `wasm-ld`.) A build **without** a C++ entry never uses it, so
 a program that shares a package tree with a C++ UI does not link a C++ runtime. When your C compiler has
 no C++ spelling kama knows, name one: `--cxx <compiler>` beside `--cc`, or `"cxx"` beside a target's
 `"cc"`; otherwise the build is refused by name.

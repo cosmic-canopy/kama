@@ -282,27 +282,6 @@ manifest-relative library directory (or archive path) resolved against the decla
 entry like `csources` — but whether kama should carry prebuilt binaries at all (they are per-target and
 per-toolchain, where a `csources` entry is portable) is the question to rule first.
 
-### `--cc gcc` cannot build any kama program (KR-72) — found 2026-09-17 verifying the C++ `csources` work on Windows, `0.9.383`
-
-Every kama compile command carries `-Wno-error=incompatible-function-pointer-types`, which demotes clang's
-error-by-default for a kama `fnptr` handed to a C callback field (the sanctioned FFI seam). **gcc has no
-warning by that name** — it suggests `-Wincompatible-pointer-types` — and an unknown `-Wno-error=` spelling is
-a hard error there, not an ignored flag. Measured on the Windows box, msys2 gcc 16.2:
-
-```
-$ kama build --cc gcc hello.kama -o hello.exe
-cc1.exe: error: '-Wno-error=incompatible-function-pointer-types': no option
-'-Wincompatible-function-pointer-types'; did you mean '-Wincompatible-pointer-types'?
-kama: gcc failed (exit 1)
-```
-
-`cc1plus.exe` refuses it too, so a C++ `csources` build fails the same way. **This is not Windows-specific** —
-it is any gcc driver on any host, and it was found only because Windows is where the C++ `csources` verification
-ran. kama derives `gcc`→`g++` on purpose (`deriveCxxDriver`) and docs/targets.md names gcc as a `cc`, so this is
-a supported path that has never worked. The fix is to emit the flag only for the driver family that has it
-(the same name test `deriveCxxDriver` already does, or one probe per build); the fixture needs a gcc on PATH and
-skips where there is none, like the other toolchain-dependent guards.
-
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and

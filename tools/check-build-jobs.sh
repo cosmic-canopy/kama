@@ -141,6 +141,13 @@ fi
 # and the TALLY was lossy. A distinct file per invocation cannot race.
 cat >"$tmp/ccount" <<'EOF'
 #!/bin/sh
+# `--version` is not a compile: the driver asks each distinct `--cc` string which family it belongs to,
+# once per build, because the warning flags it emits are spelled differently by clang and gcc and are a
+# hard error on the wrong one (KR-72). Answering it the way a real compiler does keeps this guard counting
+# COMPILES — the thing it is about — instead of drifting by one every time the driver asks a question.
+case " $* " in
+    *" --version "*) echo "cc (kama check-build-jobs shim) 0.0.0"; exit 0 ;;
+esac
 # $$ is this shim process's pid — one per invocation, so no two concurrent writers pick the same name.
 : > "$COUNTDIR/$$.tick"
 exit 0
