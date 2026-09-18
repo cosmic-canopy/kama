@@ -743,6 +743,7 @@ pkg_undeclared_import	-
 place_store_bare	place_store_bare.kama:6
 poly_edge_nongenerate	poly_edge_nongenerate.kama:25 poly_edge_nongenerate.kama:33
 protected_on_value	protected_on_value.kama:2
+ptr_arithmetic	ptr_arithmetic.kama:5
 public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
 raw_ptr_field_access	raw_ptr_field_access.kama:6

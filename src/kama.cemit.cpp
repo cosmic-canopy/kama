@@ -4244,6 +4244,26 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                          "`select(ifTrue:, ifFalse:)` to pick lanes").c_str(), line);
             return "0";
         }
+        // A RAW POINTER is not a number. `p + 4` emitted `KAMA_ADD(p, 4)`, whose `_Generic` has no pointer
+        // association, so the C compiler refused it with a message about a controlling expression (KR-65) —
+        // and `UnsafePtr<T> + n` failed identically, so this was never only about `void*` having no element
+        // size. SPEC calls a raw pointer an opaque CARRIER: hold it, pass it, `null`-check it, compare it.
+        // Offsetting one is `addr(of: p[i])`, which already works and scales the index by the element the
+        // way the author meant — so pointer arithmetic is a NON-GOAL, not a gap (GOALS #4, one way).
+        // Comparisons are excluded: `p == null` and `p1 < p2` are the carrier's own operators.
+        if (!isComparisonToken(token)) {
+            const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
+            auto isPtr = [](const std::string& t) { return t.size() > 1 && t.back() == '*'; };
+            if (isPtr(lt) || isPtr(rt)) {
+                unsupported(("`" + binaryOperator(token) + "` is not defined on a raw pointer — an "
+                             "`UnsafePtr<T>` carries an address, it is not a number. For the element `i` "
+                             "steps along write `addr(of: p[i])`, which scales by the element type "
+                             "(a bare `UnsafePtr` needs a `cast<UnsafePtr<uint8>>(…)` first); to do "
+                             "arithmetic on the address itself, `cast<usize>(p)` makes it a "
+                             "number").c_str(), line);
+                return "0";
+            }
+        }
         // The operand measurement (C2) goes HERE and nowhere else: this branch is entered only when
         // neither side is a user type, so a user `operator+`, an `Equatable`/`Comparable` lowering, a
         // contract value, a `sig` and `string + string` are all structurally out of reach — they return

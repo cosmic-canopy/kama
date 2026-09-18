@@ -1,0 +1,8 @@
+// A raw pointer is an opaque CARRIER (SPEC § `UnsafePtr`): hold it, pass it, `null`-check it, compare it.
+// `p + 4` used to reach the C compiler, whose `_Generic` refused it — and the typed form failed the same
+// way, so pointer arithmetic is a non-goal, not a gap (KR-65). The offset spelling is `addr(of: p[i])`.
+unsafe fn UnsafePtr<uint8> past(UnsafePtr<uint8> p) {
+    return p + 4;
+}
+
+fn int32 main() { return 0; }
