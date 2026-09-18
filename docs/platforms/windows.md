@@ -450,8 +450,12 @@ entries here. One has shipped:
 
   **`args()`, `env()` and `programPath()` followed in `0.9.218`** (`include/kama_runtime.h`): the CRT's
   `main` argv, `getenv` and `_get_pgmptr` are the ANSI re-encodings of the process's UTF-16 command line,
-  environment and image path, so `kama_args_init` re-reads the command line through `GetCommandLineW` +
-  `CommandLineToArgvW`, and the other two go through `GetEnvironmentVariableW` / `GetModuleFileNameW`
+  environment and image path, so the runtime re-reads the command line through `GetCommandLineW` and splits
+  it itself (`kama__cmdline_split`), and the other two go through `GetEnvironmentVariableW` / `GetModuleFileNameW`
+  (**since `0.9.385` the split runs on the FIRST `args()`/`programName()`, not at startup, and not through
+  `CommandLineToArgvW`** — that one allocated before `main`, through the funnel AND through `LocalAlloc`, so a
+  declared `@globalAllocator` lost two slots to it and a `--no-heap` program allocated at startup; KR-73.
+  `tools/check-winargv.sh` diffs the splitter against `CommandLineToArgvW` on 31 cases, Windows only.)
   (⚠️ not `_wget_pgmptr`: it is declared in `<stdlib.h>` and absent from mingw-w64's UCRT import
   library, so it fails at LINK — after the whole program compiled). ⚠️ No
   bash guard can witness this half: msys2 converts a native child's arguments through the ANSI code page

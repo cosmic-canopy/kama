@@ -1858,27 +1858,15 @@ the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the
 refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
 synthesized member to the user's type. The fixtures should then assert a live count.
 
-**Windows allocates before `main` (KR-73)** — found 2026-09-17 running the allocator campaign's own fixtures on
-Windows for the first time, `0.9.384`. The synthesized `main` calls `kama_args_init`, and its Windows branch
-(`include/kama_runtime.h`) re-reads the command line with `CommandLineToArgvW` and converts it to UTF-8 —
-`kama_alloc_zeroed` for the vector, `kama_alloc` per argument — because the CRT's narrow argv is the ANSI
-re-encoding and mojibake for a non-ASCII path. POSIX takes `argv` as the OS gave it and allocates nothing.
-
-Measured, one argument, so two allocations:
-- `tests/global_allocator_pool` returns 26 where it accounts for 28 (`22` expected, `20` got): its arithmetic
-  assumes the declared pool is empty when `main` starts. A probe that drains the pool as its first statement
-  reports 29 free slots of 32 (the drain's own array is the 30th), so exactly two are already gone.
-  `tools/check-noheap.sh` fails with the same fixture and the same cause.
-- A `--no-heap` program's emitted `main` still calls `kama_args_init`, and the linked binary references
-  `malloc` — so on Windows the flag does not deliver what it promises, at startup, before any user code runs.
-  Nothing catches it: the reach walk reads the C the compiler writes, and this allocation lives in a runtime
-  header the walk never sees (the same blind spot `_heapSymbols` seeds by hand).
-
-The likely fix is to convert LAZILY — on the first `args()`, `programName()`, `programPath()` or `env()` — so a
-program that never asks for them allocates nothing and matches POSIX, with a guard for the first call racing
-between isolates. Then decide what the pool fixture should assert: the honest cross-platform shape is to
-measure the baseline at entry rather than assume 32 free slots. ⚠️ Whatever is chosen, `--no-heap` on Windows
-needs a fixture of its own, because the flag's promise is exactly what broke here.
+**The verdict trusts 55 hand-placed marks at the runtime's boundary (KR-74)** — measured 2026-09-17 on the Windows
+box. `buildCallGraph` reads the C the compiler writes and never `include/*.h`, so what the runtime does is
+whatever a `@heap` mark says: one bit, no guard, and wrong three times in a week (`kama_path_meta`,
+`kama_resolve_host`, startup argv). The bit also cannot distinguish the funnel — which a declared `@globalAllocator`
+serves — the declared allocator's whole point, `0.9.377` — from a foreign heap, so a pool-backed `--no-heap` program is refused `args()` and every
+`kama_fmt_*` for allocations that come from its own pool. The design, the seven foreign names, the rejected
+alternatives (a second mark, a mark-checking guard, link-time interposition — with the platform facts) and the
+red-first plan are §6 of [docs/design/allocation.md](design/allocation.md). Mac work: it changes the verdict on
+every target.
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
