@@ -1811,6 +1811,42 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
+### An allocation fact lands on the wrong function when a synthesized body is being emitted (KR-75) — found 2026-09-18 proving KR-50, `0.9.389`
+
+`rejectIfNoHeap` records each allocation fact against `_currentFunc`, and ~30 SYNTHESIZED body emitters never set it
+(`__serialize`, `__deserialize`, `__format`, `__hash`, `__equals`, the graph `visitEdges`/`writeNode`/`wireEdges`
+trio, the bag ctors). Whatever body was emitted last keeps the name, so every fact those bodies produce is filed
+against an unrelated function. The destructor path learned this exact lesson at `0.9.x` — its comment says an
+allocation in a dtor "would have been recorded against whatever body happened to precede it" — and the fix stopped
+at the dtor.
+
+**Repro (measured, `0.9.389`).** A `@globalAllocator` pool, a `@generate(Serializable)` type, and a `main` that
+calls `deserializeJsonBuffer`. With the pool declared ABOVE the type the build is refused — *"`Pool` reaches the
+global allocator it implements, through `GlobalHeap::allocate` -> `Pool::allocate` -> `Pool::release` ->
+`GlobalHeap::allocate`"* — naming a chain through `Pool::release`, whose body is one atomic store. Move the pool
+BELOW the type and the same program builds. The verdict depends on declaration order, which is the tell.
+
+**Both directions are wrong, and the second is the serious one.**
+- FAIL-CLOSED: a correct pool is refused, with a chain that names a body that does not allocate.
+- FAIL-OPEN: the synthesized body's own entry never gets the fact, so a `@noheap` caller that reaches
+  `X__serialize` is not refused for what it allocates. `--no-heap` is a proof, and this is a hole in it.
+
+**The fix is to derive the owner, not to remember it.** Teaching each emitter to set `_currentFunc` is a rule the
+31st emitter breaks silently — the same shape that produced this defect. `buildCallGraph` already parses the emitted
+C into bodies with ranges, so the owner is available from the TEXT: record the position instead of the name, and
+resolve it against the body that contains it.
+
+⚠️ **The obvious spelling does not work, and the probe is worth keeping.** Recording `_emittedC.size()` at the call
+fails: `emitModuleContent` writes every body into an `ostringstream` (`moduleBody`) and flushes it at the end, so
+during body emission the capture does not advance and all 121 facts of a build share one offset (traced 2026-09-18).
+The position must be taken in the CURRENT sink (`_out->tellp()`, tagged with the sink pointer) and resolved when
+that buffer is flushed, against a body scan of the buffer's own text — which wants `buildCallGraph`'s pass-1 body
+parser extracted as a helper so there is one parser, not two. Facts recorded during the HEADER pass go straight to
+the captured stream, where `_emittedC.size()` IS absolute; those resolve against `_emittedC` as they do today.
+
+**Red first:** the repro above in both orders (one fixture, the pool declared above the type), and a `@noheap`
+function that reaches a synthesized `serialize` — refused, naming the serialize.
+
 ### The allocation campaign (KR-50, KR-58, KR-66) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in

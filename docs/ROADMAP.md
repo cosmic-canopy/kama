@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-75**
+**Next id: KR-76**
 
 ## The shape
 
@@ -72,6 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-75 | **An allocation fact recorded while a SYNTHESIZED body is emitted is filed against the wrong function** — `__serialize`/`__deserialize`/`__format`/`__hash`/`__equals`, the graph pair and the bag ctors write their C without setting `_currentFunc`, so `rejectIfNoHeap`'s record lands on whichever body was emitted last. Measured 2026-09-18: a `@globalAllocator` pool declared ABOVE a `@generate(Serializable)` type is refused as reaching itself, and the same program builds when the pool is moved BELOW it — the verdict depends on declaration order. The fact is also missing from the synthesized body's own entry, so a `@noheap` caller is not refused for what that body allocates. Derive the owner from the emitted TEXT (the body containing the recorded position) rather than from a variable 30 emitters must remember to set | S? | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-50 | **Allocator-aware errors** — error and primitive boxing already draw from the funnel (`0.9.367`), so they follow a declared `@globalAllocator` (`0.9.377`) with no further change; what is left is to PROVE that (a serde error under `--no-heap` with a declared pool) and to decide the PER-CALL error allocator (a contract change to serde, source-breaking) on that evidence — expected verdict: a non-goal, recorded with its reason. Allocation campaign step 4 | S? | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-74 | **`--no-heap` derives its facts for kama's own runtime instead of trusting `@heap` marks** — the reach walk reads only the C the compiler writes, so at the runtime's boundary it stops deriving and trusts 55 hand-placed `@heap` marks: one bit, no guard, missed three times in a week (`kama_path_meta`, `kama_resolve_host`, startup argv), and unable to say whether the C reaches the funnel (legal under a declared pool) or a foreign heap (never legal). Feed the shipped headers to the same scanner: funnel leaf → edge into the declared pool, foreign leaf (seven names: `getaddrinfo`, `GetEnvironmentStringsW`, `opendir`, `pthread_create`, `CreateThread`, `CreateProcessW`, and the funnel's own `malloc`) → a fact, always. The marks on `kama_*` externs go; `@heap` stays for a USER extern into C kama cannot see. Then `fmt`, strings, serde and `args()` are legal under a pool, and `resolve` is refused naming `getaddrinfo`. Brief: [allocation.md §6](design/allocation.md). **Mac** — changes the verdict on every target | M | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-66 | **A program cannot reach its `@globalAllocator` instance** — the pool is one C global only the funnel calls, so kama code cannot read its live count or high-water mark, and a module `static` cannot hold them either (per-isolate). Scheduled 2026-09-17; recommended shape: a prelude intrinsic `globalHeap<Pool>()` returning `ref Pool`, the compiler checking `Pool` is the declared type | S? | [§5](ROADMAP_DETAIL.md#s5) |
