@@ -319,6 +319,26 @@ lets a package vendor a C library whole. The same three refusals as `csources` (
 surfacing as a missing header three steps later). This is the structured route for what a raw `-I` in a
 dependency's `cflags` cannot say, and why that is refused below.
 
+### A package carries sources, not binaries
+
+**A package cannot ship a prebuilt archive, and that is a decision (2026-09-18), not a gap.** A relative `-L` in a
+dependency's `ldflags` is refused — it would resolve against the consumer's working directory — and `link` names a
+library without saying where it is. Whether a package ecosystem carries binaries splits by whether its users have
+a C toolchain. Where they do not, it is standard: Python wheels, npm's per-platform packages, NuGet's
+`runtimes/<rid>/`. Where a compiler is guaranteed, it is an anti-pattern: Cargo crates are source and a `-sys`
+crate builds its C or finds a system library, Go modules are source, Zig repackages C libraries with a source
+build. The objections are the same each time — a binary cannot be audited or reproduced, it is per-target AND
+per-toolchain (a mingw `.a`, an MSVC `.lib`, a libc++ and a libstdc++ build are four artifacts for one platform),
+and it goes stale against the ABI it was built for. kama always has a C compiler, and ships one.
+
+What answers the need instead:
+
+- **Build from source with `csources`.** `@kama/sodium` lists libsodium's 120 files rather than carrying
+  `libsodium.a`; a manifest that size builds on every host, Windows included.
+- **For what cannot be built that way** — a cmake project, a closed vendor SDK — the PACKAGE says what it needs
+  (`link`) and the ROOT project says where it is (its own `ldflags`). The root is the only party that knows the
+  machine, so this is the arrangement, not a workaround.
+
 ### `jsLibraries` and `emSettings` — the emscripten pair
 
 ```json

@@ -292,10 +292,10 @@ toolchain — it analysed macOS and wasm code on Windows — so nothing forces t
 **What constrains the ruling.** SPEC *`kama check` covers every gate* rules that *"a gate no known target can
 activate is not checked, and that is not an error. Stub code for a platform you do not support yet
 (`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for nobody and breaks nobody"*. A warning
-channel is a thing kama does not have, on purpose. The maintainer is open to lifting the stub-code allowance
-(2026-09-18), which changes what is best:
+channel is a thing kama does not have, on purpose.
 
-**Recommended — lift it, with the known set made host-independent:**
+**RULED 2026-09-18 (maintainer): the stub-code allowance is LIFTED, with the known set made host-independent** —
+"undefined should be an error, since you can just put it as a target to lift the error". D1–D4 as written:
 
 - **D1. A gate must be activatable by a target kama KNOWS, or it is an error.** Known: a host-independent CATALOG,
   a target the manifest declares, or THIS build's own triple (so `--target xtensa-esp32-elf` validates its own
@@ -319,13 +319,23 @@ Measured cost of the source break: **zero in the corpus and in the first consume
 component (`ARCH_WASM32`, `OS_WINDOWS`, `OS_LINUX`, `OS_MACOS`); `ARCH_RISCV64` and `ARCH_AARCH64` appear only in
 comments and in SPEC's own example, which is rewritten.
 
-**The fallback, if the stub-code allowance stays:** a name in the three namespaces is valid when its component is
-KNOWN-BY-SPELLING (the union of zig's `std.Target` tags and LLVM's `Triple` spellings, held by a guard like
-`tools/check-c-keywords.sh`), declared, or active; and `kama check` gains a report line naming each gate it did
-not check, which is the only way the valid-but-wrong component becomes visible. More machinery, a weaker
-guarantee.
+**Rejected with the ruling:** validating the three namespaces against a SPELLING table (the union of zig's
+`std.Target` tags and LLVM's `Triple` spellings) while keeping stub code legal — more machinery for a weaker
+guarantee, since a valid-but-wrong component passes any closed vocabulary.
 
-Either way the diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` →
+**The scope of the ruling, measured the same day — custom flags were already explicit.** Under a manifest a flag
+is declared in `kama.json` (`flags` for a boolean, `select` for a one-of-many group; `DEBUG`/`RELEASE`, `HOSTED`,
+`NOHEAP` and `SIMD128` are built in), and an undeclared name is refused in every position probed: a gate
+(`@compileFor(DEBGU)`), and the command line (`--define NOTDECLARED`). Declared flags are COVERED too — `kama
+check` found a type error behind a default-off `TESTING` and behind a `select` value, naming the configuration
+(`[--define TESTING]`, `[--select MYBUILDTYPE=SMALL]`). So the prefix was the ONLY hole, and closing it makes the
+model uniform: a name is kama's (and must be activatable by a known target) or the project's (and must be
+declared). A LOOSE file stays permissive for the project's names, by design — it reads no manifest, so there is
+no declaration site, and SPEC already says an undeclared flag there is simply inactive; `kama check` still covers
+the code behind it (it found the error behind `DEBGU` in a loose file). The three namespaces are validated in a
+loose file all the same, because they are kama's names and not the user's.
+
+The diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` →
 `OS_WINDOWS`); ~25 lines, there being no such helper yet. One definition serves every gate (`kamaGateLitActive`:
 the attribute, the file gate, a manifest `csources`/`cincludes` gate), so they cannot disagree.
 
@@ -343,33 +353,6 @@ helper, fixtures, SPEC (*Conditional compilation*, and *`kama check` covers ever
 replaced). Front-end only and platform-independent, so it builds and tests on any box; the verdict changes on
 every target, so `./dev matrix` is its gate.
 
-### A dependency cannot ship a prebuilt archive (KR-70) — found 2026-09-17 preparing the `csources` C++ work; verdict proposed 2026-09-18
-
-A package that wraps a library it cannot build from source through `csources` (a cmake project, a vendor
-SDK) has no way to hand its consumer the archive: `-L<relative>` in a dependency's `ldflags` is refused,
-correctly, because it would resolve against the consumer's working directory; `link` names a library but
-not where it is. The first engine consumer works around it in the ROOT package (RmlUi and whisper.cpp
-archives, built by their cmake half).
-
-**Proposed verdict: NON-GOAL** (no earlier decision is recorded anywhere in `docs/`; this awaits the maintainer's
-word). Whether a package ecosystem carries prebuilt binaries splits cleanly by whether its users have a C
-toolchain. Where they do not, it is standard: Python wheels, npm's per-platform packages, NuGet's
-`runtimes/<rid>/`. Where a compiler is guaranteed, it is an anti-pattern: Cargo crates are source, and a `-sys`
-crate builds its C from source or finds a system library (the 2023 attempt to ship a precompiled `serde_derive`
-was reverted); Go modules are source; Zig repackages C libraries with a source build. The objections are the same
-each time — a binary cannot be audited or reproduced, it is per-target AND per-toolchain (a mingw `.a`, an MSVC
-`.lib`, a libc++ and a libstdc++ build are four artifacts for one platform), and it goes stale against the ABI
-it was built for. kama always has a C compiler, and ships one, so it belongs to the second family — and a
-`csources` entry is portable where an archive is not.
-
-**What answers the need instead.** Build from source: `@kama/sodium` lists libsodium's 120 files rather than
-carrying `libsodium.a`, and since `0.9.393` a manifest that size builds on every host. For what genuinely cannot
-be built that way — a cmake project, a closed SDK — the PACKAGE says what it needs (`link`) and the ROOT project
-says where it is (its own `ldflags`), because the root is the only party that knows the machine: that is the
-first consumer's arrangement, not a workaround for a missing feature. A possible small improvement that carries no
-binary: when a dependency's `link` library is not found, kama names the package that asked for it instead of
-leaving the linker's "undefined reference" to speak. If the verdict is confirmed, this row is deleted and the
-paragraph above moves to `docs/packages.md`.
 
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
