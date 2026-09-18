@@ -3101,9 +3101,47 @@ expose fn int32 version() { return 3; }                                    // dl
   unique** across the program, whether kama derived the symbol or a `@linkName` fixed it — and since the `_` <!-- xfail: linkname_dup_expose -->
   join is not injective (`a_b::c` and `a::b_c` meet), two names that produce one symbol are refused, naming both.
 
+**The published header keeps the kama spelling of every parameter name**, while the implementation C
+prefixes them (§ *C names*). A C prototype's parameter names are not part of its ABI and may differ from the
+definition, and the header is documentation for the host author, compiled in the HOST's macro environment —
+which kama cannot see. So a parameter named `near` reads as `near` in the header a Windows host includes,
+and a clash there is the host's to resolve, exactly like a clash on an `expose`d field name.
+
 `expose` is distinct from `export` (module public-surface visibility) and `public`/`private` (member
 access): three boundaries, three keywords. *(The full 2.0 `expose` — richer wasm module exports and the
 scripting-host interface — is future work; the keyword is live today for the C-ABI boundary above.)*
+
+## C names ✅
+
+kama lowers to C, and the C preprocessor is not scoped: a macro from any included header rewrites a
+matching identifier anywhere it appears. One generated `<name>.gen.h` carries every `extern` header, so
+importing `std::fs` *anywhere* puts the whole OS seam in front of **every** module's names. Measured: 4,708
+macros over the shipped header set on macOS, 21,748 over one Windows TU.
+
+**So every name kama owns reaches C in a namespace no header can rewrite.** Three registers:
+
+| register | holds |
+|---|---|
+| `KAMA_…` | kama's macros |
+| `kama_…` | what the **compiler** owns — runtime types and their members, emitted members and temps, the prelude's own scope |
+| `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots, and scope-prefixed declarations |
+
+The two are disjoint by construction, not by convention: `k_` has `_` at index 1 and `kama_` has `a`, so no
+user name can ever produce a compiler-owned spelling. A user name that already starts with `k_` becomes
+`k_k_…`, and the mangling stays reversible — strip exactly one `k_`.
+
+**The declared C surface keeps its spelling**, because code on the other side depends on it: `extern fn`
+names, `type extern value` fields, `type expose value` / `expose enum` fields and values, and the parameter
+names in a published host header (§ *Exposing to a host*).
+
+None of this reaches a human: a diagnostic, a hover, a `kama query` answer and an editor completion all
+show the name as written. A C name appears only in a C compiler's own output, which means a compiler bug.
+
+**The residual, stated.** kama compiles headers it has never seen, so a user's own `extern "<vendor.h>"`
+could in principle define a macro spelled `k_…` or `kama_…`. `tools/check-c-names.sh` holds the line for
+the surface kama ships and the system headers its seam pulls in, re-measured wherever the suite runs —
+because a macro surface moves with every SDK release. A vendor header that squats on kama's registers is
+the one case this rule cannot close, and it is a bug to report rather than a hazard to live with.
 
 ## Control flow ✅
 
@@ -5622,8 +5660,13 @@ or `match` binding, or an `expose`d/`extern` symbol. Writing one is a **lexical 
 spelling.
 
 kama compiles to C, so a name that is a C keyword emits C that does not compile: `int32 switch;` becomes <!-- xfail: int_retired, double_retired -->
-`int32_t switch;`. Renaming such a name on the way out (`switch` → `k_switch`) was considered and rejected —
-reserving a spelling now and relaxing it later is source-compatible, while the reverse is not.
+`int32_t switch;`. Since every name kama owns now reaches C prefixed (§ *C names*), a renamed `switch`
+would in fact be safe — `k_switch` collides with nothing, not even a user's own `k_switch`, which
+becomes `k_k_switch`. The reservation is kept anyway, and deliberately: **reserving a spelling now and
+relaxing it later is source-compatible, while the reverse is not**, one lexer rule covers every position
+a name can appear in, and nobody needs a local called `switch`. It is the declared-C surface —
+`extern fn` names, `extern`/`expose` fields and values — that still *requires* the reservation, because
+those names are not prefixed and a C keyword there would reach the C compiler verbatim.
 
 Twenty-one of the 59 are already kama keywords, so they were never spellable. The **38** that would
 otherwise lex as identifiers are:
@@ -5673,6 +5716,12 @@ in every by-value position. An owned rvalue receiver is RAII-dropped through met
 
 ## Reserved/runtime
 
-Generated C reserves `__`-prefixed identifiers (`__base`, `__vptr`, `__ret_N`) and `Type__member` mangling.
-The runtime ([../include/kama_runtime.h](../include/kama_runtime.h)) provides `kama_string` and a
-`kama_trace`/`kama_trace_get` hook used by tests.
+Generated C uses `Type__member` mangling, and the compiler's own emitted names — the members it
+synthesizes (`kama_vptr`, `kama_base`, `kama_tag`, `kama_u`), its vtable slots (`kama_dtor`, `kama_size`,
+`kama_align`, `kama_type`) and its temporaries (`kama_ret_0`, `kama_strtmp0`) — live in the `kama_` register
+(§ *C names*). The runtime ([../include/kama_runtime.h](../include/kama_runtime.h)) provides `kama_string`
+and a `kama_trace`/`kama_trace_get` hook used by tests.
+
+A kama name is never in danger of colliding with any of these, because a name the user owns reaches C as
+`k_<name>` — so `__`-prefixed spellings and the emitter's own identifiers are not reserved *against* you.
+A local called `__ret_0` is legal kama and compiles: it emits as `k___ret_0`.

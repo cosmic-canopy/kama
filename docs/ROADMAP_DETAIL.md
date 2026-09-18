@@ -783,14 +783,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
-- **A platform header's macros collide with kama names (KR-67).** Found verifying `std::net` on Windows
-  (2026-09-17): `<iphlpapi.h>` defined `interface` and broke every `std::net` program (fixed `0.9.379`). Probing every
-  position then showed the class. Each place kama writes a user's name raw (field, parameter, local, payload field,
-  contract slot, fn-pointer local) breaks under a same-named macro, while the prefixed places (types, functions,
-  statics, enum cases) never do. It is not Windows-only (`_LP64` is predefined on Linux; `errno` is a macro
-  everywhere), and a user's own `extern` header can do it on any target. The measurements, the site inventory, the
-  recommended rule (prefix what kama owns, keep the declared C surface) with the rejected alternatives and why, and
-  the red-first plan are in [docs/design/c-names.md](design/c-names.md).
 - **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
   only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
   for a contract destination, correctly (a contract admits every kind by design, which is what makes
@@ -2090,13 +2082,13 @@ rather than here, so there is one number to keep current. Forward work:
 
 - **Every module's C preprocesses the whole OS header set (KR-68).** One generated `<name>.gen.h` carries every
   `extern` header a build touches, and every module's `.c` includes it, so importing `std::fs` ANYWHERE puts the
-  platform headers in front of EVERY module. Measured 2026-09-17 on the Windows VM while scoping KR-67:
+  platform headers in front of EVERY module. Measured 2026-09-17 on the Windows VM while scoping the C-names work (shipped `0.9.398`, SPEC § *C names*):
   preprocessing `#include "kama_os.h"` took ~263 ms against ~121 ms for `kama_runtime.h` alone (5 runs each,
   process start included), and one such TU sees 21,748 macros. ⚠️ That box is QEMU + x86_64 emulation, so read the
   RATIO and re-measure natively before acting. The shape of a fix: the OS seam behind plain prototypes with its
   bodies in one TU, keeping `static inline` only where inlining measurably pays — it trades inlining of the thin
   syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
-  shrinks the macro surface as a side effect. **Not** a fix for KR-67: a user's own `extern "<vendor.h>"` bleeds
+  shrinks the macro surface as a side effect. **Not** a fix for the name-collision class (shipped `0.9.398`, SPEC § *C names*): a user's own `extern "<vendor.h>"` bleeds
   into their own TU either way, which is why names must be safe by construction instead.
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
@@ -2544,10 +2536,15 @@ rather than here, so there is one number to keep current. Forward work:
   `string`/`Optional`/`Result`/the collections/the smart pointers; (2) synthetic children, so a struct's fields read
   as kama names and its type as the kama type; (3) LOCALS, the CALL STACK and watch expressions, which come from the
   debug info and no formatter can rewrite — that needs a name layer in the VS Code extension, between it and
-  CodeLLDB. **Moved out of LATER on 2026-09-17** because KR-67 prefixes locals as well (`near` would inspect as
-  `k_near`), so part 3 stops being polish. Part 3 consumes KR-67's name map; the compiler owns the mapping (it
-  already demangles types for its own messages, `demangleForDisplay`), so the extension never re-implements the
-  rules. ⚠️ The Windows box has no `lldb`/`gdb` installed and cannot gate this; it belongs where a debugger and
+  CodeLLDB. **Moved out of LATER on 2026-09-17** because the C-names work (shipped `0.9.390`–`0.9.398`) prefixes locals as well, so part 3 stops being
+  polish: a local the author called `near` now inspects as `k_near`, a synthesized member as `kama_vptr`, and a
+  file-private type as `k_Ffile__V`.
+  ⚠️ **That work shipped WITHOUT a name map, deliberately** — D3b required only that the
+  mangling be REVERSIBLE and compiler-owned, and `k_`/`kama_` are reversible by construction (strip exactly one
+  `k_`; a user's own `k_x` becomes `k_k_x` and still reverses). So part 3 does not consume an artifact that
+  exists; it has to CHOOSE the form — a map written beside a debug build, or a `kama` subcommand that demangles.
+  The seam either way is `demangleForDisplay`, which already strips both registers for the compiler's own
+  messages (and `bareNameOf` does the same for completion), so the extension never re-implements the rules. ⚠️ The Windows box has no `lldb`/`gdb` installed and cannot gate this; it belongs where a debugger and
   `./dev matrix` live.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute

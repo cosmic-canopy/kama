@@ -216,7 +216,18 @@ Worth knowing before debugging, because each of these produced a confident wrong
   the C, and at `0.9.376` `UdpSocket.joinMulticastV4(interface:)` failed to compile EVERY program importing
   `std::net`. So `kama_os.h` declares `if_nametoindex` itself (`0.9.377`). Before adding a Windows SDK header to
   the seam, diff its `clang -dM -E` lowercase macros against the current set. Even without it, `<windef.h>` leaves
-  `near`, `far`, `pascal` and `cdecl` defined, which is KR-67.
+  `near`, `far`, `pascal` and `cdecl` defined.
+- **A kama name can no longer be rewritten by any of that (KR-67, `0.9.390`–`0.9.398`).** Every name kama
+  owns reaches C prefixed — `k_` for what the user owns, `kama_` for what the compiler owns (SPEC § *C
+  names*) — so `float32 near`, a parameter `far`, a contract slot `min` and a local `errno` all compile
+  here now. This box is the WITNESS for that work: the hostile macros are Windows', and
+  `tests/c_macro_names.kama` carries a name from each platform's set in every position, calling through the
+  vtable and fn-pointer slots (a function-like macro only fires where a `(` follows). `tools/check-c-names.sh`
+  re-measures the premise — that nothing here defines a macro in `k_`/`kama_`/`KAMA_` — wherever the suite
+  runs, because a macro surface moves with every SDK.
+  ⚠️ What is NOT closed: the DECLARED C surface keeps its spelling by design, so an `extern fn` name, a
+  `type extern value` field or an `expose` field named `near` is still the author's problem — as it must be,
+  since the C on the other side spells it that way.
 - **IPv6 on Windows, measured 2026-09-17 (`0.9.377`, `net_ipv6` 127, `net_udp_multicast` 31):**
   * `IPV6_V6ONLY` defaults ON. With the seam's `setsockopt(…, 0)` deleted, both dual-stack cases fail (127 → 109),
     so that line is load-bearing here, where Linux and macOS would pass without it.

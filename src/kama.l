@@ -633,12 +633,19 @@ static int getToken(const char *lexeme)
  * definition AND the thunk cast), local, and an `expose`d function's bare C name. Type names, function
  * names and enum case constants are scope-prefixed and were never at risk.
  *
- * The alternative was to RENAME on collision (`switch` -> `k_switch`) and keep the spelling legal. That is
- * what an earlier draft of the design specified, and reserving was chosen over it deliberately: reserving
- * now and relaxing later is source-compatible, the reverse is not, and pre-1.0 is the only moment. It also
- * dissolves three sub-problems a rename carries — a `k_switch` clash with a user's own `k_switch`, a
- * separate rule for `expose`/`extern` names (which are a declared C ABI and could never be renamed), and
- * the risk of the C name leaking into a diagnostic, a hover or a `kama query` answer.
+ * The alternative was to RENAME on collision (`switch` -> `k_switch`) and keep the spelling legal.
+ *
+ * ⚠️ KR-67 has since made that rename REAL, for a different reason: every name kama owns now reaches C as
+ * `k_<name>`, so no header macro can rewrite it (SPEC § C names). All three sub-problems the rename used to
+ * carry are therefore gone — a user's own `k_switch` becomes `k_k_switch` and cannot clash, the declared C
+ * surface (`expose`/`extern`) is exactly the exempt set, and the C name never reaches a diagnostic, a hover
+ * or a `kama query` answer because those are keyed by the AST.
+ *
+ * The reservation is kept ANYWAY, and the reasons are now these: reserving a spelling and relaxing it later
+ * is source-compatible while the reverse is not (pre-1.0 is the only moment to choose); one lexer rule
+ * covering every position is simpler than a rule with a prefixed/unprefixed split; nobody needs a local
+ * called `switch`; and the DECLARED C SURFACE still requires it — an `extern fn` or `expose` name is not
+ * prefixed, so a C keyword there would reach the C compiler verbatim.
  *
  * Corpus cost, measured before deciding by PRINTING every match rather than counting it: zero. Every hit
  * across lib/ tests/ prelude/ examples/ bench/ is a comment.

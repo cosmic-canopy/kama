@@ -14,11 +14,12 @@
 #
 # Type names, function names and enum case constants are scope-prefixed and were never at risk.
 #
-# The alternative was to RENAME on collision (`switch` -> `k_switch`). Reserving was chosen instead:
-# reserving now and relaxing later is source-compatible while the reverse is not, and pre-1.0 is the only
-# moment. It also dissolves a `k_switch`-vs-user-`k_switch` clash rule, a separate rule for `expose`/
-# `extern` names (a declared C ABI, which could never be renamed), and any risk of the C name reaching a
-# diagnostic, a hover or a `kama query` answer.
+# The alternative was to RENAME on collision (`switch` -> `k_switch`). ⚠️ KR-67 has since made that rename
+# real for a different reason — every name kama owns reaches C as `k_<name>` so no header macro can rewrite
+# it — which dissolves all three sub-problems the rename used to carry. The reservation is kept anyway:
+# reserving now and relaxing later is source-compatible while the reverse is not, one lexer rule covers
+# every position, and the DECLARED C surface (`extern`/`expose`, which is NOT prefixed) still requires it.
+# See SPEC § C names, and tools/check-c-names.sh for the register premise.
 #
 # Three assertions. Each was checked by BREAKING the mechanism, not by reading it:
 #
