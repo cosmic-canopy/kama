@@ -279,64 +279,97 @@ deletes the declaration — or, since `0.9.382`, a `csources` entry — on every
 - The three namespaces are RESERVED — a project cannot declare `OS_X` under `flags` (`isReservedFlagName`) — so
   they are kama's to validate, in every mode. No did-you-mean helper exists in the compiler today.
 
+**"Undeclared", defined — and it is host-dependent (measured 2026-09-18).** A target is KNOWN when it is one of
+the five built-in catalog names (`MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`) or one the manifest declares under
+`targets`; a component is known when some known target's triple has it. The built-ins take the HOST's arch (only
+`WASM` fixes one), so the known set is os `macos`/`windows`/`linux`/`emscripten`/`none`, abi `gnu`/`none`, and arch
+`wasm32` plus WHATEVER MACHINE RAN THE CHECK. One file per gate, each hiding a type error, `kama check` on an
+x86_64 Windows box: `ARCH_X86_64`, `ARCH_WASM32`, `OS_LINUX`, `OS_MACOS` — error found; **`ARCH_AARCH64`,
+`OS_FREEBSD`, `ABI_MUSL` — reports OK.** So the commonest arch pair in systems code (NEON on one side, SSE on the
+other) is half-unchecked on every machine, and a different half on an arm64 Mac than here. `kama check` needs no
+toolchain — it analysed macOS and wasm code on Windows — so nothing forces the cover to follow the host.
+
 **What constrains the ruling.** SPEC *`kama check` covers every gate* rules that *"a gate no known target can
 activate is not checked, and that is not an error. Stub code for a platform you do not support yet
-(`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for nobody and breaks nobody"*. So the row's
-third option — refuse a component no built-in or declared target names — contradicts a standing ruling, and would
-also make an anonymous `--target` triple's gates unreachable. And a warning channel is a thing kama does not have,
-on purpose. The distinction a rule needs is between a name NOBODY recognizes (`ARCH_AARCH46`) and a real component
-nothing activates yet (`ARCH_RISCV64`).
+(`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for nobody and breaks nobody"*. A warning
+channel is a thing kama does not have, on purpose. The maintainer is open to lifting the stub-code allowance
+(2026-09-18), which changes what is best:
 
-**Recommended — four decisions for the maintainer:**
+**Recommended — lift it, with the known set made host-independent:**
 
-- **D1. A name in `OS_`/`ARCH_`/`ABI_` is valid when its component is KNOWN, DECLARED or ACTIVE; otherwise it is
-  refused.** KNOWN: in kama's table of triple components. DECLARED: a component of a target the manifest declares.
-  ACTIVE: a component of THIS build's triple, so `--target xtensa-esp32-elf` validates its own `OS_ESP32` gates with
-  no table entry and no manifest. Triples stay open for BUILDING — only a gate NAME is judged — and the stub-code
-  ruling survives untouched: `ARCH_RISCV64` is known, so it still compiles for nobody and breaks nobody. One
-  definition serves every gate (`kamaGateLitActive`: the attribute, the file gate, a manifest `csources`/`cincludes`
-  gate), so they cannot disagree. GOALS #5: a gate that silently deletes code is the most implicit failure a build
-  can have; and the unprefixed typo is already refused, so this is one rule finally holding in both positions.
-- **D2. The table is the UNION of zig's `std.Target` tags and LLVM's `Triple` spellings**, pinned to a version and
-  written down beside `c_reserved` in spirit: both are public, both reach kama's flags because `parseTriple`
-  normalizes nothing, and a wider table costs nothing since an entry only ever ADMITS a name. A guard in the shape
-  of `tools/check-c-keywords.sh` holds it sorted and asserts every component of every built-in target and of the
-  host table is in it (a built-in target whose own gate kama refuses would be the embarrassing failure).
-- **D3. It applies in every mode** — a loose file as well as a manifest. Strictness today gates only UNDECLARED
-  user flags, which a loose file legitimately has no way to declare; these namespaces are kama's own, so there is
-  nothing for a loose file to be excused from. (The row's repro is a loose file.)
-- **D4. `kama check` names the gates it did not check.** One report line per gate no known target activates, with
-  its position — *"checked for no target: `@compileFor(ARCH_RISCV64)` at f.kama:3 — declare a target to check it"*.
-  Not a warning channel: `kama build` stays silent, and coverage is what that verb reports. It is what makes the
-  RESIDUAL visible — a valid-but-wrong component (`ARCH_ARM` meant as `ARCH_AARCH64`) passes any closed vocabulary,
-  and today nothing anywhere would say its code is compiled for nobody. Optional, recommended.
+- **D1. A gate must be activatable by a target kama KNOWS, or it is an error.** Known: a host-independent CATALOG,
+  a target the manifest declares, or THIS build's own triple (so `--target xtensa-esp32-elf` validates its own
+  `OS_ESP32` gates). A typo is refused by construction — and so is a VALID-but-wrong component (`ARCH_ARM` meant
+  as `ARCH_AARCH64`), which no closed vocabulary can catch. No table of 150 spellings to maintain. "This code is
+  checked somewhere" stops being a hope and becomes an invariant: there is no longer a category of code that
+  compiles for nobody and is analysed by nobody. The message says what to do: *"no target kama knows has
+  `ARCH_RISCV64` — declare one under `targets` in kama.json to write code for it"*, which SPEC already notes
+  building it needs anyway; in exchange that stub code is type-checked instead of rotting.
+- **D2. The catalog stops following the host.** The built-in OSes × {`x86_64`, `aarch64`}, plus `wasm32-emscripten`
+  and the embedded family — a handful of TARGETS kama stands behind, not a vocabulary. `kama check` covers all of
+  them on every host, so the same program gets the same verdict on the Mac and the Windows box. BUILDING still
+  follows the host and its toolchain; only the COVER changes. (This half is worth doing even if D1 is refused.)
+- **D3. It applies in every mode.** A loose file has no manifest, so it gates on catalog components and on its own
+  `--target`; stub code for a platform outside the catalog wants a project, which is a fair price for a script.
+- **D4. A dependency's gates are judged against the DEPENDENCY's declared targets** — the covering check already
+  rules that "a dependency's gates are that package's obligation", so a portable library declares the platforms
+  it carries code for, in its own manifest.
 
-The diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` → `OS_WINDOWS`); that is
-~25 lines, there being no such helper yet.
+Measured cost of the source break: **zero in the corpus and in the first consumer.** Every live gate is a catalog
+component (`ARCH_WASM32`, `OS_WINDOWS`, `OS_LINUX`, `OS_MACOS`); `ARCH_RISCV64` and `ARCH_AARCH64` appear only in
+comments and in SPEC's own example, which is rewritten.
+
+**The fallback, if the stub-code allowance stays:** a name in the three namespaces is valid when its component is
+KNOWN-BY-SPELLING (the union of zig's `std.Target` tags and LLVM's `Triple` spellings, held by a guard like
+`tools/check-c-keywords.sh`), declared, or active; and `kama check` gains a report line naming each gate it did
+not check, which is the only way the valid-but-wrong component becomes visible. More machinery, a weaker
+guarantee.
+
+Either way the diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` →
+`OS_WINDOWS`); ~25 lines, there being no such helper yet. One definition serves every gate (`kamaGateLitActive`:
+the attribute, the file gate, a manifest `csources`/`cincludes` gate), so they cannot disagree.
 
 **Red first.** `tests/xfail/compilefor_component_typo.kama` (loose file, `OS_WINODWS`; the `.msg` carries the
 suggestion), `…_manifest.d` (the source gate under a manifest), `…_csources.d` (a `csources` entry's `compileFor`),
-and one for a `file @compileFor(…)` gate — the four callers of the one rule; each needs its row in
-`tests/xfail/DIAGNOSTIC_LINES`. Positive, in one fixture: `ARCH_RISCV64` with no target still builds (the SPEC
-ruling, now pinned by a test instead of a comment); a DECLARED target's exotic component is accepted; an
-anonymous `--target` triple's own component is accepted for that build. Then SPEC *Conditional compilation* gains
-the rule, and SPEC *`kama check` covers every gate* gains D4.
+one for a `file @compileFor(…)` gate — the four callers of the one rule — and `…_unknown_platform.kama`
+(`ARCH_RISCV64`, no target: refused, naming `targets`); each needs its row in `tests/xfail/DIAGNOSTIC_LINES`.
+Positive: a DECLARED riscv target makes the same gate legal AND checked (a type error behind it is now found); an
+anonymous `--target` triple's own component is accepted; and a host-independence fixture — a type error behind
+`ARCH_AARCH64` AND one behind `ARCH_X86_64` are both found by `kama check`, which is red on every machine today.
 
-**Size M, and where.** One validation in one function, a ~150-string table with its guard, the declared-target
+**Size M, and where.** One rule in one function, the catalog and the cover's enumeration, the declared-target
 components plumbed to the rule (the covering check already computes them from `g_manifestTargets`), the suggestion
-helper, fixtures, SPEC. It is front-end only and platform-independent, so it builds and tests on any box; the
-verdict changes on every target, so `./dev matrix` is its gate.
+helper, fixtures, SPEC (*Conditional compilation*, and *`kama check` covers every gate*, whose stub-code bullet is
+replaced). Front-end only and platform-independent, so it builds and tests on any box; the verdict changes on
+every target, so `./dev matrix` is its gate.
 
-### A dependency cannot ship a prebuilt archive (KR-70) — found 2026-09-17 preparing the `csources` C++ work
+### A dependency cannot ship a prebuilt archive (KR-70) — found 2026-09-17 preparing the `csources` C++ work; verdict proposed 2026-09-18
 
 A package that wraps a library it cannot build from source through `csources` (a cmake project, a vendor
 SDK) has no way to hand its consumer the archive: `-L<relative>` in a dependency's `ldflags` is refused,
 correctly, because it would resolve against the consumer's working directory; `link` names a library but
 not where it is. The first engine consumer works around it in the ROOT package (RmlUi and whisper.cpp
-archives, built by their cmake half). The structured answer is the `cincludes` shape for libraries — a
-manifest-relative library directory (or archive path) resolved against the declaring manifest, gated per
-entry like `csources` — but whether kama should carry prebuilt binaries at all (they are per-target and
-per-toolchain, where a `csources` entry is portable) is the question to rule first.
+archives, built by their cmake half).
+
+**Proposed verdict: NON-GOAL** (no earlier decision is recorded anywhere in `docs/`; this awaits the maintainer's
+word). Whether a package ecosystem carries prebuilt binaries splits cleanly by whether its users have a C
+toolchain. Where they do not, it is standard: Python wheels, npm's per-platform packages, NuGet's
+`runtimes/<rid>/`. Where a compiler is guaranteed, it is an anti-pattern: Cargo crates are source, and a `-sys`
+crate builds its C from source or finds a system library (the 2023 attempt to ship a precompiled `serde_derive`
+was reverted); Go modules are source; Zig repackages C libraries with a source build. The objections are the same
+each time — a binary cannot be audited or reproduced, it is per-target AND per-toolchain (a mingw `.a`, an MSVC
+`.lib`, a libc++ and a libstdc++ build are four artifacts for one platform), and it goes stale against the ABI
+it was built for. kama always has a C compiler, and ships one, so it belongs to the second family — and a
+`csources` entry is portable where an archive is not.
+
+**What answers the need instead.** Build from source: `@kama/sodium` lists libsodium's 120 files rather than
+carrying `libsodium.a`, and since `0.9.393` a manifest that size builds on every host. For what genuinely cannot
+be built that way — a cmake project, a closed SDK — the PACKAGE says what it needs (`link`) and the ROOT project
+says where it is (its own `ldflags`), because the root is the only party that knows the machine: that is the
+first consumer's arrangement, not a workaround for a missing feature. A possible small improvement that carries no
+binary: when a dependency's `link` library is not found, kama names the package that asked for it instead of
+leaving the linker's "undefined reference" to speak. If the verdict is confirmed, this row is deleted and the
+paragraph above moves to `docs/packages.md`.
 
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
