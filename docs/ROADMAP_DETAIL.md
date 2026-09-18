@@ -281,7 +281,7 @@ deletes the declaration — or, since `0.9.382`, a `csources` entry — on every
 
 **"Undeclared", defined — and it is host-dependent (measured 2026-09-18).** A target is KNOWN when it is one of
 the five built-in catalog names (`MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`) or one the manifest declares under
-`targets`; a component is known when some known target's triple has it. The built-ins take the HOST's arch (only
+`select.TARGET`; a component is known when some known target's triple has it. The built-ins take the HOST's arch (only
 `WASM` fixes one), so the known set is os `macos`/`windows`/`linux`/`emscripten`/`none`, abi `gnu`/`none`, and arch
 `wasm32` plus WHATEVER MACHINE RAN THE CHECK. One file per gate, each hiding a type error, `kama check` on an
 x86_64 Windows box: `ARCH_X86_64`, `ARCH_WASM32`, `OS_LINUX`, `OS_MACOS` — error found; **`ARCH_AARCH64`,
@@ -303,12 +303,12 @@ channel is a thing kama does not have, on purpose.
   as `ARCH_AARCH64`), which no closed vocabulary can catch. No table of 150 spellings to maintain. "This code is
   checked somewhere" stops being a hope and becomes an invariant: there is no longer a category of code that
   compiles for nobody and is analysed by nobody. The message says what to do: *"no target kama knows has
-  `ARCH_RISCV64` — declare one under `targets` in kama.json to write code for it"*, which SPEC already notes
+  `ARCH_RISCV64` — declare one under `select.TARGET` in kama.json to write code for it"*, which SPEC already notes
   building it needs anyway; in exchange that stub code is type-checked instead of rotting.
 - **D2. The catalog stops following the host.** The built-in OSes × {`x86_64`, `aarch64`}, plus `wasm32-emscripten`
   and the embedded family — a handful of TARGETS kama stands behind, not a vocabulary. `kama check` covers all of
   them on every host, so the same program gets the same verdict on the Mac and the Windows box. BUILDING still
-  follows the host and its toolchain; only the COVER changes. (This half is worth doing even if D1 is refused.)
+  follows the host and its toolchain; only the COVER changes.
 - **D3. It applies in every mode.** A loose file has no manifest, so it gates on catalog components and on its own
   `--target`; stub code for a platform outside the catalog wants a project, which is a fair price for a script.
 - **D4. A dependency's gates are judged against the DEPENDENCY's declared targets** — the covering check already
@@ -339,10 +339,33 @@ The diagnostic names the nearest known component within a small edit distance (`
 `OS_WINDOWS`); ~25 lines, there being no such helper yet. One definition serves every gate (`kamaGateLitActive`:
 the attribute, the file gate, a manifest `csources`/`cincludes` gate), so they cannot disagree.
 
+**Declaring a target DOES bring its gates into the cover — measured `0.9.399`.** A manifest project whose only
+riscv code is `@compileFor(ARCH_RISCV64) fn int32 stub() { return "a string"; }`: with no riscv target, `kama
+check` reports `OK (1 unit analyzed)`; with `"select": { "TARGET": { "RISCV": { "triple": "riscv64-linux-gnu" } } }`
+it reports the type error, tagged `[--target RISCV]`, in 2 configurations. That is the spelling the new
+diagnostic names, and the whole of what a user does to lift it.
+
+**Picking this up — on any machine.**
+1. `git fetch && git rebase origin/dev`, then `./dev build`. ⚠️ The binary in `out/` goes stale whenever the
+   checkout moves under it; compare `kama --version` with `VERSION` before trusting a probe (on 2026-09-18 a stale
+   one failed a trivial program with 20 clang errors).
+2. Land the red-first fixtures below and watch each fail for its own reason.
+3. The rule is ONE function: `kamaGateLitActive` (`src/kama.cemit.cpp`), beside `kamaIsBuildConfigFlag`, which is
+   what grants the prefix its free pass. It already receives the ACTIVE flag set; it needs the components known
+   targets can produce — `builtinTargets()` and `g_manifestTargets`, through `derivedTargetFlags`
+   (`src/kama.driver.cpp`) — which the covering check's configuration builder already enumerates (its
+   `declaredTargets` / `builtinTargets()` loop).
+4. D2 lives in that same enumeration: a built-in's arch is the host's (`h.arch`) today, and the COVER enumerates
+   `x86_64` and `aarch64` instead. `--target NAME` for BUILDING keeps following the host.
+5. `VERSION` bump; SPEC's two sections; every new xfail gets its `.msg` and its row in
+   `tests/xfail/DIAGNOSTIC_LINES`.
+6. Gate: `./dev test` + `./dev check` where it is built, then `./dev matrix` on the Mac — the verdict changes on
+   every target.
+
 **Red first.** `tests/xfail/compilefor_component_typo.kama` (loose file, `OS_WINODWS`; the `.msg` carries the
 suggestion), `…_manifest.d` (the source gate under a manifest), `…_csources.d` (a `csources` entry's `compileFor`),
 one for a `file @compileFor(…)` gate — the four callers of the one rule — and `…_unknown_platform.kama`
-(`ARCH_RISCV64`, no target: refused, naming `targets`); each needs its row in `tests/xfail/DIAGNOSTIC_LINES`.
+(`ARCH_RISCV64`, no target: refused, naming `select.TARGET`); each needs its row in `tests/xfail/DIAGNOSTIC_LINES`.
 Positive: a DECLARED riscv target makes the same gate legal AND checked (a type error behind it is now found); an
 anonymous `--target` triple's own component is accepted; and a host-independence fixture — a type error behind
 `ARCH_AARCH64` AND one behind `ARCH_X86_64` are both found by `kama check`, which is red on every machine today.
