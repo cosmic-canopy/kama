@@ -25176,6 +25176,19 @@ bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
 // through its `A: Allocator`, which the emitter can see all the way down to `GlobalAllocator.allocate`.
 // That is now the analysis's leaf, so `list.add(x)` inside a `@noheap` region IS rejected — while the same
 // call on an arena-backed `DynamicArray<T, BumpAllocator>` is not, because `A` is monomorphized.)
+// Record an allocation fact for the body being emitted, WITHOUT naming it: the position in the current sink is
+// taken here and the owner is derived later (resolvePendingFacts), because `_currentFunc` is not set by the ~30
+// synthesized body emitters and their facts landed on whichever body was emitted last (KR-75).
+//
+// `tellp()` answers for a buffer (`emitModuleContent`'s `ostringstream`); the captured stream has no seek, and
+// there the append IS the position, so `_emittedC.size()` is absolute and the sink is recorded as `nullptr`.
+void CEmitter::recordAllocFact(bool funnel, int line, const AllocSite& site)
+{
+    const std::streampos p = _out ? _out->tellp() : std::streampos(-1);
+    if (p == std::streampos(-1)) _pendingFacts.push_back(PendingFact{ nullptr, _emittedC.size(), line, funnel, _currentFunc, site });
+    else                         _pendingFacts.push_back(PendingFact{ _out, (size_t)p, line, funnel, _currentFunc, site });
+}
+
 void CEmitter::rejectIfNoHeap(const char* what, int line)
 {
     // A PROBE emits nothing. `--no-heap` is a promise about the code a build actually produces, and a
@@ -25192,7 +25205,7 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
     // decides — for `@noheap` as for `--no-heap`, over the same walk. (Starting a thread is not a site here; a
     // borrowed `spawn` records nothing, and a moved one records only its bundle, which the funnel allocates.)
     if (!_globalAllocator.empty()) {
-        if (!_currentFunc.empty() && !_funnelCallers.count(_currentFunc)) _funnelCallers[_currentFunc] = line;
+        recordAllocFact(/*funnel=*/true, line, AllocSite{});
         return;
     }
     // RECORD FIRST, GATE SECOND — and note the record is unconditional, taken whether or not this body
@@ -25200,8 +25213,8 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
     // annotated one, so the analysis needs the allocation facts for EVERY body, not just the gated ones.
     // First site per function wins; a function that allocates twice is no more allocating than one that
     // allocates once, and the first is the one the diagnostic should point at.
-    if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
-        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/false, /*reported=*/_noHeapActive };
+    recordAllocFact(/*funnel=*/false, line,
+                    AllocSite{ what, line, diagFile(), /*indirect=*/false, /*reported=*/_noHeapActive });
     // ⚠️ `@noheap` REFUSES HERE; `--no-heap` does NOT — the same asymmetry rejectNoHeapIndirect states below, and
     // for the same reason. The attribute proves THIS body; the flag proves the PROGRAM, which is what its entry
     // points reach, so its verdict comes from checkNoHeapTransitive. Refusing here under the flag as well made
@@ -25227,8 +25240,8 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
 void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 {
     if (_probingTemplate) return;
-    if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
-        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/true, /*reported=*/_noHeapActive };
+    recordAllocFact(/*funnel=*/false, line,
+                    AllocSite{ what, line, diagFile(), /*indirect=*/true, /*reported=*/_noHeapActive });
     // ⚠️ `@noheap` REJECTS HERE; `--no-heap` does NOT, and the asymmetry is the point. An attribute says
     // "prove THIS body", so the body is the unit and an unprovable call in it is an error wherever it sits.
     // A BUILD FLAG says "prove the PROGRAM", and a program is what `main` reaches — so the flag's answer
@@ -25291,11 +25304,15 @@ void CEmitter::noteThreadSpawn()
 //
 // What it cannot see is what is not in the text: a function a runtime MACRO defines (`KAMA_OWNED_IFACE_FUNCS`)
 // and the runtime's own C. Those are leaf facts recorded by name, as `GlobalAllocator` is.
-void CEmitter::buildCallGraph()
+// Parse the function bodies out of C text. At depth 0 the text since the last `;`/`}` is the would-be header,
+// kept free of directives and comments; a `{` after one ending in `)` opens a body named by the identifier before
+// the matching `(`. Anything else (`struct X {`, `= {`) is braces, not a function.
+//
+// Extracted from `buildCallGraph` for KR-75: the same parse answers "which body wrote this?" for a fact recorded
+// during emission, and two copies of this scanner would be two things to keep in step.
+std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool entryBodies)
 {
-    const std::string& s = _emittedC;
     const size_t n = s.size();
-    const bool pool = !_globalAllocator.empty();   // `@globalAllocator`: the funnel is an edge, not a heap fact
     auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
     auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
     // A `#`-directive starts at a line's first non-blank char and runs to an unescaped newline.
@@ -25310,59 +25327,117 @@ void CEmitter::buildCallGraph()
         size_t e = s.find("*/", i + 2);
         return e == std::string::npos ? n : e + 2;
     };
-
-    // Pass 1 — the function bodies. At depth 0 the text since the last `;`/`}` is the would-be header, kept
-    // free of directives and comments; a `{` after one ending in `)` opens a body named by the identifier
-    // before the matching `(`. Anything else (`struct X {`, `= {`) is braces, not a function.
-    struct Body { std::string name; size_t open, close; std::string params; };
-    std::vector<Body> bodies;
-    {
-        int depth = 0;
-        bool lineStart = true;
-        std::string seg;
-        Body cur;
-        for (size_t i = 0; i < n; ) {
-            const char c = s[i];
-            if (c == '\n') { lineStart = true; if (depth == 0) seg += ' '; ++i; continue; }
-            if (c == ' ' || c == '\t' || c == '\r') { if (depth == 0) seg += ' '; ++i; continue; }
-            if (lineStart && c == '#') { i = skipDirective(i); continue; }
-            lineStart = false;
-            if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
-            if (c == '"' || c == '\'') { size_t e = skipLiteral(i); if (depth == 0) seg.append(s, i, e - i); i = e; continue; }
-            if (c == '{') {
-                if (depth == 0) {
-                    cur = Body();
-                    size_t e = seg.find_last_not_of(' ');
-                    if (e != std::string::npos && seg[e] == ')') {
-                        int pd = 0; size_t p = e;
-                        for (;; --p) { if (seg[p] == ')') ++pd; else if (seg[p] == '(' && --pd == 0) break; if (p == 0) break; }
-                        size_t ne = p; while (ne > 0 && seg[ne - 1] == ' ') --ne;
-                        size_t nb = ne; while (nb > 0 && identChar(seg[nb - 1])) --nb;
-                        if (nb < ne && identStart(seg[nb])) {
-                            cur.name = seg.substr(nb, ne - nb);
-                            // A program's entry points, as the C says them: the one `main`, and every body the
-                            // host can call by symbol (`expose fn`, which `@interrupt`/`@callerThread` require).
-                            if (cur.name == "main" || seg.find("KAMA_EXPORT") != std::string::npos)
-                                _entryBodies.insert(cur.name);
-                            cur.params = seg.substr(p, e - p + 1);
-                            cur.open = i;
-                        }
+    std::vector<CBody> bodies;
+    int depth = 0;
+    bool lineStart = true;
+    std::string seg;
+    CBody cur;
+    for (size_t i = 0; i < n; ) {
+        const char c = s[i];
+        if (c == '\n') { lineStart = true; if (depth == 0) seg += ' '; ++i; continue; }
+        if (c == ' ' || c == '\t' || c == '\r') { if (depth == 0) seg += ' '; ++i; continue; }
+        if (lineStart && c == '#') { i = skipDirective(i); continue; }
+        lineStart = false;
+        if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
+        if (c == '"' || c == '\'') { size_t e = skipLiteral(i); if (depth == 0) seg.append(s, i, e - i); i = e; continue; }
+        if (c == '{') {
+            if (depth == 0) {
+                cur = CBody();
+                size_t e = seg.find_last_not_of(' ');
+                if (e != std::string::npos && seg[e] == ')') {
+                    int pd = 0; size_t p = e;
+                    for (;; --p) { if (seg[p] == ')') ++pd; else if (seg[p] == '(' && --pd == 0) break; if (p == 0) break; }
+                    size_t ne = p; while (ne > 0 && seg[ne - 1] == ' ') --ne;
+                    size_t nb = ne; while (nb > 0 && identChar(seg[nb - 1])) --nb;
+                    if (nb < ne && identStart(seg[nb])) {
+                        cur.name = seg.substr(nb, ne - nb);
+                        // A program's entry points, as the C says them: the one `main`, and every body the
+                        // host can call by symbol (`expose fn`, which `@interrupt`/`@callerThread` require).
+                        if (entryBodies && (cur.name == "main" || seg.find("KAMA_EXPORT") != std::string::npos))
+                            _entryBodies.insert(cur.name);
+                        cur.params = seg.substr(p, e - p + 1);
+                        cur.open = i;
                     }
                 }
-                ++depth; ++i; continue;
             }
-            if (c == '}') {
-                if (--depth == 0) {
-                    if (!cur.name.empty()) { cur.close = i; bodies.push_back(cur); }
-                    cur = Body(); seg.clear();
-                }
-                if (depth < 0) depth = 0;
-                ++i; continue;
-            }
-            if (depth == 0) { if (c == ';') seg.clear(); else seg += c; }
-            ++i;
+            ++depth; ++i; continue;
         }
+        if (c == '}') {
+            if (--depth == 0) {
+                if (!cur.name.empty()) { cur.close = i; bodies.push_back(cur); }
+                cur = CBody(); seg.clear();
+            }
+            if (depth < 0) depth = 0;
+            ++i; continue;
+        }
+        if (depth == 0) { if (c == ';') seg.clear(); else seg += c; }
+        ++i;
     }
+    return bodies;
+}
+
+// The body of `text` that contains each fact recorded against `sink`, and the fact filed under its name. Called
+// with a module buffer just before it is flushed, and with `_emittedC` (sink `nullptr`) for the header pass.
+// First-per-body wins, in emission order, exactly as it did when the name was remembered instead of derived.
+void CEmitter::resolvePendingFacts(const void* sink, const std::string& text, bool last)
+{
+    if (_pendingFacts.empty()) return;
+    std::vector<CBody> bodies = parseCBodies(text, /*entryBodies=*/false);
+    for (PendingFact& pf : _pendingFacts) {
+        if (pf.at == (size_t)-1) continue;
+        // On the LAST pass every fact still pending is filed under the name emission recorded, whatever sink it
+        // was measured against. The emitter swaps `_out` to a scratch buffer in eight places (a ctor prologue, a
+        // hoisted statement, the header bodies), and each is flushed into another buffer rather than resolved
+        // here — so without this a fact recorded in one would be LOST, which is a rejection that silently stops
+        // happening. Position where it is known, the old name everywhere else, and nothing dropped.
+        if (pf.sink != sink && !last) continue;
+        if (pf.sink != sink) {
+            if (!pf.owner.empty()) {
+                if (pf.funnel) { if (!_funnelCallers.count(pf.owner)) _funnelCallers[pf.owner] = pf.line; }
+                else if (!_allocSites.count(pf.owner)) _allocSites[pf.owner] = pf.site;
+            }
+            pf.at = (size_t)-1;
+            continue;
+        }
+        size_t lo = 0, hi = bodies.size();
+        while (lo < hi) { const size_t mid = (lo + hi) / 2; if (bodies[mid].open <= pf.at) lo = mid + 1; else hi = mid; }
+        // A position that lands in no body means the statement was built as a STRING and written later (the
+        // `_hoisted` list, the foreach protocol): the text it was measured against is not this buffer. There the
+        // recorded name is still the best thing known — `xfail/noheap_foreach_copy` pins a rejection that comes
+        // out of exactly that path — so it is the fallback, and the position wins wherever it resolves.
+        const bool inBody = lo > 0 && pf.at < bodies[lo - 1].close;
+        const std::string owner = inBody ? bodies[lo - 1].name : pf.owner;
+        if (owner.empty()) { pf.at = (size_t)-1; continue; }
+        if (pf.funnel) { if (!_funnelCallers.count(owner)) _funnelCallers[owner] = pf.line; }
+        else if (!_allocSites.count(owner)) _allocSites[owner] = pf.site;
+        pf.at = (size_t)-1;   // resolved: a later buffer must not match this position again
+    }
+}
+
+void CEmitter::buildCallGraph()
+{
+    // The facts recorded against the captured stream itself (the header pass writes straight to it, so the
+    // position is absolute) — every buffered one was resolved when its module was flushed.
+    resolvePendingFacts(nullptr, _emittedC, /*last=*/true);
+    const std::string& s = _emittedC;
+    const size_t n = s.size();
+    const bool pool = !_globalAllocator.empty();   // `@globalAllocator`: the funnel is an edge, not a heap fact
+    auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
+    auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
+    auto skipDirective = [&](size_t i) { while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) ++i; ++i; } return i; };
+    auto skipLiteral = [&](size_t i) {   // i at the opening quote; returns one past the closing one
+        const char q = s[i++];
+        while (i < n && s[i] != q) { if (s[i] == '\\') ++i; ++i; }
+        return i + 1;
+    };
+    auto skipComment = [&](size_t i) {   // i at `/`, which starts `//` or `/*`
+        if (s[i + 1] == '/') { while (i < n && s[i] != '\n') ++i; return i; }
+        size_t e = s.find("*/", i + 2);
+        return e == std::string::npos ? n : e + 2;
+    };
+    typedef CBody Body;
+    std::vector<Body> bodies = parseCBodies(s, /*entryBodies=*/true);
+
     std::set<std::string> defined;
     for (const Body& b : bodies) defined.insert(b.name);
 
@@ -34224,6 +34299,11 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // Restore the real stream, emit any `isolate` trampolines this module produced (they must precede the
     // bodies that reference them), then the buffered bodies.
     _out = savedModuleOut;
+    // Each buffer's facts are resolved against its OWN text, before it is flushed: a recorded position means
+    // nothing once the text is concatenated into another stream, and two buffers can hold the same offset
+    // (KR-75). Both are resolved here, while the buffers still exist and are still distinguishable.
+    resolvePendingFacts(&moduleStatics, moduleStatics.str(), /*last=*/false);
+    resolvePendingFacts(&moduleBody, moduleBody.str(), /*last=*/false);
     *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();

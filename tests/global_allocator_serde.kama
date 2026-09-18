@@ -1,20 +1,15 @@
 // A serde failure under a DECLARED pool: the `Err` and its boxed `Error` draw from the program's own storage,
-// and nothing else is touched. Two things are pinned here, both broken when this was written.
+// and nothing else is touched. Three things are pinned here, each of which was broken when this was written.
 //
-//  1. The serde error path draws from the pool and nothing else does.
+//  1. The pool is declared ABOVE the `@generate(Serializable)` type ON PURPOSE. In that order it was refused —
+//     "`Pool` reaches the global allocator it implements" — and accepted in the other, because an allocation
+//     fact recorded while a SYNTHESIZED body was emitted was filed against whichever body came last (KR-75).
 //  2. `deallocate` PANICS on a pointer it never handed out, so a regression is a named failure and not a wild
 //     read. `give`-ing a string into a variant payload used to leave the source's `cap` set, so its scope drop
 //     released a NULL — invisible under libc (`free(NULL)` is a no-op), memory corruption under a pool.
 //  3. The document is bad input (`300` does not fit an `int8`), so the reader boxes an `Error` and returns
 //     `Err`: the error path is the one that had never been run against a declared pool.
 import { std::concurrent::Atomic, std::serialization::text::json::deserializeJsonBuffer };
-
-@generate(Serializable, Deserializable)
-type value Small {
-    @field int8 n;
-    public ctor make(int8 n) { this.n = n; }
-    public fn int8 get() { return this.n; }
-}
 
 // 32 slots of 1024 bytes over storage the program owns. Every field starts at zero, which is how the instance
 // always starts: an empty free list, nothing bumped yet.
@@ -62,6 +57,13 @@ type value Small {
         this.live.store(value: this.live.load() - 1);
         this.release();
     }
+}
+
+@generate(Serializable, Deserializable)
+type value Small {
+    @field int8 n;
+    public ctor make(int8 n) { this.n = n; }
+    public fn int8 get() { return this.n; }
 }
 
 fn int32 main() {

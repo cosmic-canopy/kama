@@ -1632,6 +1632,33 @@ private:
     // makes an edge exist exactly when a call does.
     std::string _emittedC;
     void buildCallGraph();
+    // One C-body parser, used twice: by `buildCallGraph` over the whole emitted program, and by
+    // `resolvePendingFacts` over a single module buffer before it is flushed. `entryBodies` is filled only
+    // for the whole-program call (a buffer is a fragment, and `main` is found once).
+    struct CBody { std::string name; size_t open = 0, close = 0; std::string params; };
+    std::vector<CBody> parseCBodies(const std::string& s, bool entryBodies);
+    // A fact recorded WHILE a body is being emitted belongs to THAT body, and `_currentFunc` is not a
+    // reliable name for it: the ~30 SYNTHESIZED body emitters (`__serialize`, `__deserialize`, `__format`,
+    // `__hash`, `__equals`, the graph trio, the bag ctors) never set it, so their facts landed on whichever
+    // body happened to be emitted last (KR-75: a pool declared above a `@generate` type was refused as
+    // reaching itself, and the same program built when it was moved below). The owner is DERIVED instead —
+    // the position is recorded, and the body containing it says who wrote it — so a new emitter needs no
+    // discipline to be counted right.
+    //
+    // `sink` is the stream the position belongs to: `emitModuleContent` buffers every body into an
+    // `ostringstream` and flushes it at the end, so a position is meaningful only against its own buffer.
+    // A fact recorded straight onto the captured stream (the header pass) carries `sink == nullptr` and an
+    // absolute position into `_emittedC`.
+    // `owner` is the name emission believed it was in (`_currentFunc`) — the FALLBACK, not the answer. Some
+    // statements are built as strings and written later (`_hoisted`, the foreach protocol), so their recorded
+    // position lands in no body at all; there the old name is still the best thing known, and dropping the fact
+    // instead would lose a rejection the corpus pins (`xfail/noheap_foreach_copy`). The position wins wherever
+    // it resolves, which is what fixes the synthesized bodies.
+    struct PendingFact { const void* sink = nullptr; size_t at = 0; int line = 0; bool funnel = false;
+                         std::string owner; AllocSite site; };
+    std::vector<PendingFact> _pendingFacts;
+    void recordAllocFact(bool funnel, int line, const AllocSite& site);
+    void resolvePendingFacts(const void* sink, const std::string& text, bool last);
     // C symbols of every `@heap extern fn` (see collectSignatures), SEEDED with the runtime's own four
     // allocation primitives. Those are the funnel every emitted heap operation goes through — a smart
     // pointer's drop, a string's buffer, a control block — so their names are heap wherever they appear,
