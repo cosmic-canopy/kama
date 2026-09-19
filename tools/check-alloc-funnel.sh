@@ -74,4 +74,43 @@ if [ -s "$tmp/hits" ]; then
     sed 's/^/  /' "$tmp/hits" >&2
     fail "heap memory obtained or released outside the funnel — call kama_alloc(n, align) / kama_free(p, n, align) (include/kama_runtime.h), with the block's layout"
 fi
-echo "check-alloc-funnel: PASS (the C allocator is called only inside the kama_alloc/kama_free funnel: include/, prelude/, lib/, and the C the emitter writes)"
+
+# --- 2. the FOREIGN allocators the compiler knows about (KR-74) ---------------------------------------------
+# Section 1 proves the C allocator is reached only through the funnel. It cannot prove the same of the OTHER
+# way a runtime header obtains memory the program must release: a platform entry point that hands back a block
+# with its own release (`getaddrinfo`/`freeaddrinfo`, `opendir`/`closedir`, `GetEnvironmentStringsW`). Those are
+# not in NAMES and never will be — there is no closed list of them — so the compiler carries the judgement, in
+# `CEmitter::foreignAllocators` (src/kama.cemit.cpp), and treats a call to one as an allocation fact ALWAYS,
+# because no declared `@globalAllocator` can serve memory its funnel never handed out.
+#
+# A list in the compiler is a list that can go stale, which is the failure mode this whole row exists to end.
+# So it is checked the only way it can be: every name on it must still be reached from `include/`, and every
+# such name reached from `include/` must be on it. The second half is what catches "a new OS call arrived in a
+# header and nothing noticed" — the way `kama_resolve_host`'s `getaddrinfo` went unmarked for months.
+FOREIGN=$(sed -n '/kForeign = {/,/};/p' src/kama.cemit.cpp | grep -oE '"[A-Za-z_][A-Za-z0-9_]*"' | tr -d '"' | sort -u)
+[ -n "$FOREIGN" ] || fail "could not read CEmitter::foreignAllocators out of src/kama.cemit.cpp — did it move or get renamed?"
+# The platform entries a header actually calls, `//` comments and the funnel's own block stripped as above.
+HDR=$(awk '
+    /THE ALLOCATION FUNNEL\./           { funnel = 1 }
+    funnel && /static inline void  kama_copy/ { funnel = 0 }
+    { line = $0; sub(/\/\/.*/, "", line); if (!funnel) print line }' include/*.h)
+for n in getaddrinfo GetEnvironmentStringsW opendir pthread_create CreateThread CreateProcessW; do
+    reached=$(printf '%s\n' "$HDR" | grep -cE "(^|[^A-Za-z0-9_.>])$n[[:space:]]*\(" || true)
+    known=$(printf '%s\n' "$FOREIGN" | grep -cx "$n" || true)
+    if [ "$reached" -gt 0 ] && [ "$known" -eq 0 ]; then
+        fail "include/ calls \`$n\`, which hands back memory the program must release, but CEmitter::foreignAllocators does not list it — a --no-heap build would silently accept a program that reaches it"
+    fi
+    if [ "$reached" -eq 0 ] && [ "$known" -gt 0 ]; then
+        fail "CEmitter::foreignAllocators lists \`$n\`, but no header calls it any more — drop it, or the list becomes a place where stale entries hide"
+    fi
+done
+
+# --- 3. the capacity-guarded drop is still the ONLY one (KR-74) ---------------------------------------------
+# `kama_string__dtor` frees under `if (self->kama_cap)`, and the header scan is flow-insensitive, so the
+# compiler excludes it BY NAME (isCapacityGuardedDrop) or every no-heap body holding a string literal is
+# refused — SPEC promises that literal. A name is exactly the shape this row deleted 55 of, so it is allowed to
+# be one only while it is the one. A second guarded free must be a decision, not a surprise.
+guarded=$(grep -cE 'if \(self->kama_cap\)[[:space:]]*kama_free' include/*.h | awk -F: '{s+=$2} END {print s+0}')
+[ "$guarded" -eq 1 ] || fail "expected exactly ONE capacity-guarded kama_free in include/ (kama_string__dtor), found $guarded — CEmitter::isCapacityGuardedDrop names only that one, so a new one is silently a fact and will refuse programs SPEC says are legal"
+
+echo "check-alloc-funnel: PASS (the C allocator is called only inside the kama_alloc/kama_free funnel: include/, prelude/, lib/, and the C the emitter writes; the compiler's foreign-allocator list agrees with what include/ reaches; one capacity-guarded drop)"

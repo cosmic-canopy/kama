@@ -651,14 +651,25 @@ placement `new(allocator: a)` takes its block from `a`, so it is legal exactly w
 `new` is refused as the libc allocation it is ([tests/noheap_new_bump.kama](../tests/noheap_new_bump.kama)). <!-- xfail: noheap_new --> Under the whole-program flag the region itself must not come from the heap
 either: `Arena.make` draws its buffer from `GlobalAllocator`, so a `--no-heap` program backs a `BumpAllocator` with storage it owns.
 
-**C the compiler cannot read declares itself.** An `extern fn` whose C touches the heap is marked `@heap`, <!-- xfail: noheap_heap_extern -->
-and a call to it is then an allocation fact like any the compiler writes: `@heap extern fn UnsafePtr
-calloc(usize n, usize size);`. The mark is on the SYMBOL, so a redeclaration without it does not unmark the
-call. The runtime's own externs are marked when kama's C for them allocates or frees on ANY target (the
-prelude's `kama_alloc`/`kama_free` funnel, `std::fs` paths, which Windows converts on the heap, `std::process`, channels, the
-number formatters). A no-heap verdict is therefore the same on every target. An unmarked user extern is
-unchecked C, as it always was. `@heap` is refused on anything but an `extern fn`: a body's allocations are seen <!-- xfail: heap_attr_on_body, heap_attr_on_fnptr -->
-without it, and a `fnptr` has no C of its own.
+**The runtime's own C is READ, not declared.** kama ships the runtime headers, so the compiler scans them the
+way it scans the C it emits: every `static inline` body is a node in the same call graph, and what a runtime
+extern does with the heap is DERIVED. `#` lines are skipped, so **both arms of every `#if` are read** — which
+is what makes a no-heap verdict the same on every target, mechanically rather than by anyone remembering to
+say so. The scan bottoms out in two leaves. The **allocation funnel** (`kama_alloc`/`kama_free`) is an edge
+into the declared pool's entries when a program declares a global allocator, and a heap fact when it does not <!-- test: noheap_pool_fmt, noheap_pool_args -->
+— so a pool-backed program may build a string, format a number and read its arguments, all from storage it
+owns. A **foreign allocator** — one that hands back a block the program must release through a route the
+funnel never served, such as `getaddrinfo` — is a fact **always**, pool or not. <!-- xfail: noheap_pool_resolve -->
+
+**C the compiler cannot read still declares itself.** An `extern fn` into C kama does not ship is marked <!-- xfail: noheap_heap_extern -->
+`@heap`, and a call to it is then an allocation fact like any the compiler writes: `@heap extern fn UnsafePtr
+vendor_block_alloc(usize n);`. The mark is on the SYMBOL, so a redeclaration without it does not unmark the
+call. An unmarked user extern is unchecked C, as it always was — **unless its C names an allocator the
+compiler can see**: a reached `extern fn calloc` is refused whether or not anyone marked it, because the call <!-- xfail: noheap_unmarked_alloc -->
+the compiler writes spells the name. `@heap` is refused on anything but an `extern fn`: a body's allocations are seen without <!-- xfail: heap_attr_on_body, heap_attr_on_fnptr -->
+it, and a `fnptr` has no C of its own. It is also refused on a symbol **kama's own headers define** — there <!-- xfail: heap_attr_on_runtime_symbol -->
+the answer is derived, and a mark would not agree with it but override it: a mark is unconditional, so one
+placed on `kama_fmt_i64` would refuse a formatted string whose bytes came from the program's own pool.
 
 `string` is the one **intrinsic** that mints heap, and it is immutable, so every method that "changes" one <!-- xfail: noheap_string_concat, noheap_string_method, noheap_string_copy, noheap_foreach_copy -->
 returns a NEW owned string: `a + b`, `concat`, `substring`, `trim*`, `replace`, `toLower`/`toUpper`,
@@ -764,9 +775,12 @@ declaration is held to rules that follow from that: <!-- test: global_allocator_
 **No-heap.** `@noheap` and `--no-heap` keep one meaning: *never reaches the system heap*. With a declaration, the
 funnel is the pool rather than the system heap. Every allocation the no-heap gate would refuse becomes a call into
 `GlobalHeap::allocate`, and the pool's own body decides. A pool over storage it owns therefore makes boxes,
-containers, strings and error boxes legal under both. A pool that calls a `@heap` extern is refused, and the chain <!-- xfail: global_allocator_noheap_heap_pool -->
-runs through the pool (`tick -> GlobalHeap::allocate -> Pool::allocate`). `--no-heap` still refuses whatever the
-declaration does not cover: a `@heap` extern reached from anywhere, and a slot call it cannot see through.
+containers, strings and error boxes legal under both — and, because the runtime's own C is read rather than
+marked, that reaches the runtime too: a pool-backed program may format a number and read its arguments. <!-- test: noheap_pool_fmt, noheap_pool_args -->
+A pool that calls a `@heap` extern is refused, and the chain runs through the pool <!-- xfail: global_allocator_noheap_heap_pool -->
+(`tick -> GlobalHeap::allocate -> Pool::allocate`). `--no-heap` still refuses whatever the declaration does not
+cover: a `@heap` extern reached from anywhere, a slot call it cannot see through, and **a foreign allocator**,
+which no declaration can excuse — the pool never handed that block out, so it cannot take it back. <!-- xfail: noheap_pool_resolve -->
 
 The sanitizer leg's layout check (`KAMA_ALLOC_CHECK`) wraps whichever implementation is active, so a declared pool
 is held to the same promise as the default: every `deallocate` receives exactly the layout its block was allocated with.

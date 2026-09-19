@@ -8492,7 +8492,28 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
         // `@heap extern fn`: C that touches the heap, by the SYMBOL — every declaration of it names the same C,
         // so one marked declaration marks every call, including one through an unmarked redeclaration.
-        if (isExtern(fn) && hasAttr(fn->attributes, "heap")) _heapSymbols.insert(symbolOf(sig));
+        //
+        // ...but NOT on a symbol kama's own shipped headers define. There the compiler reads the C and derives
+        // the answer (KR-74), and a mark does not merely duplicate that — it OVERRIDES it, because a marked
+        // symbol is an unconditional fact while the derived one distinguishes the funnel (which a declared
+        // `@globalAllocator` serves) from a foreign heap (which nothing can). One stale mark on `kama_fmt_i64`
+        // would therefore re-refuse `"${n}"` in a pool-backed program — precisely the defect this row removed,
+        // reinstated by a line nobody checks. Two mechanisms for one fact is what the 55 deleted marks WERE, so
+        // the overlap is refused rather than resolved. Refused at the declaration, in a user's project as much
+        // as in this tree: `lib/std/fmt/fmt.kama` alone re-declared four of these, and `kama_string_from_raw`
+        // was re-declared in eight files.
+        if (isExtern(fn) && hasAttr(fn->attributes, "heap")) {
+            const std::string sym = symbolOf(sig);
+            ensureRuntimeHeaders();
+            if (_headerBodies.count(sym))
+                unsupported(("`@heap` on `" + sym + "`, which kama's own runtime headers DEFINE — whether it "
+                             "allocates is derived from that C, and from which heap. A mark cannot agree with "
+                             "that, only override it: it is an unconditional fact, so it would refuse a "
+                             "program whose allocation a declared `@globalAllocator` actually serves. Drop the "
+                             "attribute; `@heap` is for C the compiler cannot read").c_str(), fn->line);
+            else
+                _heapSymbols.insert(sym);
+        }
 
         // kama has no overloading, so a name is declared once per namespace — but this was a bare
         // assignment, so a second declaration silently REPLACED the first. For a plain function clang
@@ -25394,7 +25415,11 @@ std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool e
     auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
     auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
     // A `#`-directive starts at a line's first non-blank char and runs to an unescaped newline.
-    auto skipDirective = [&](size_t i) { while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) ++i; ++i; } return i; };
+    auto skipDirective = [&](size_t i) {   // to the first UNESCAPED newline: a `#define` is consumed whole
+        // A continuation may be CR LF. Without skipping the CR the loop stops ON the newline and the directive
+        // ends early, spilling a multi-line macro's braces into the brace counter - silent graph corruption now
+        // that KR-74 makes these bodies load-bearing. Latent here (LF only, check-lf-output.sh); one char to end it.
+        while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) { ++i; if (s[i] == '\r' && i + 1 < n) ++i; } ++i; } return i; };
     auto skipLiteral = [&](size_t i) {   // i at the opening quote; returns one past the closing one
         const char q = s[i++];
         while (i < n && s[i] != q) { if (s[i] == '\\') ++i; ++i; }
@@ -25552,9 +25577,10 @@ static bool isCapacityGuardedDrop(const std::string& body)
 // through the `kama_copy` sentinel — deliberately the SAME two markers, so the guard and the compiler cannot
 // drift apart about where the funnel ends. `kama_alloc_zeroed` sits just past the sentinel and is excluded by
 // NAME with the other two (see isFunnelName), so it needs no second window.
-std::vector<CEmitter::CHeader> CEmitter::loadRuntimeHeaders()
+void CEmitter::ensureRuntimeHeaders()
 {
-    std::vector<CHeader> out;
+    if (_headersLoaded) return;
+    _headersLoaded = true;
     for (const std::string& path : _runtimeHeaders) {
         std::ifstream f(path.c_str(), std::ios::binary);
         if (!f.good()) continue;      // an install without headers scans less; it never scans something wrong
@@ -25570,9 +25596,16 @@ std::vector<CEmitter::CHeader> CEmitter::loadRuntimeHeaders()
             if (to == std::string::npos) to = from;
             for (size_t i = from; i < to; ++i) if (h.text[i] != '\n') h.text[i] = ' ';
         }
-        out.push_back(std::move(h));
+        _headerTexts.push_back(std::move(h));
     }
-    return out;
+    // Parsed here too, so `_headerBodies` — the set `@heap` is validated against and chains render from — is
+    // known before emission asks, and the parse is not repeated at buildCallGraph time.
+    // `entryBodies` is FALSE: `main` and `KAMA_EXPORT` are the PROGRAM's roots, and a header that happened to
+    // spell either would otherwise add a root the program does not have.
+    for (const CHeader& h : _headerTexts) {
+        _headerBodyLists.push_back(parseCBodies(h.text, /*entryBodies=*/false));
+        for (const CBody& b : _headerBodyLists.back()) _headerBodies.insert(b.name);
+    }
 }
 
 // A link in a reported chain. A body read out of a shipped runtime header has no kama name behind it — the C
@@ -25603,29 +25636,23 @@ void CEmitter::buildCallGraph()
     // verdict. The other two consumers were checked and cannot be perturbed: a header body contributes no
     // `_staticReads` and can never be a `_staticWriter` or a `_destructibleOwner` (all three are filled from
     // kama source), so enlarging the region can only fail to suppress, never suppress wrongly.
-    std::vector<CHeader> headers = loadRuntimeHeaders();
+    ensureRuntimeHeaders();
 
     std::vector<CBody> bodies = parseCBodies(_emittedC, /*entryBodies=*/true);
-    std::vector<std::vector<CBody>> headerBodies;
     // `defined` spans EVERY segment before any of them is scanned: a call from emitted C into a header body
     // has to be an edge, which is the whole point, and that cannot be known while parsing one text at a time.
     std::set<std::string> defined;
     for (const CBody& b : bodies) defined.insert(b.name);
-    // `entryBodies` is FALSE for a header: `main` and `KAMA_EXPORT` are the PROGRAM's roots, and a header that
-    // happened to spell either would otherwise add a root the program does not have.
-    _headerBodies.clear();
-    for (const CHeader& h : headers) {
-        headerBodies.push_back(parseCBodies(h.text, /*entryBodies=*/false));
-        for (const CBody& b : headerBodies.back()) {
-            // A header body whose name an EMITTED body already took would merge two nodes — their edges and
-            // facts unioned under one key. Harmless for `--no-heap` (a union only ever refuses more), but
-            // `checkGlobalAllocator` would see a cycle that is not there and refuse a correct pool. Nothing
-            // collides today (header helpers are `kama__*`, the user surface is `k_*`), and it is one prelude
-            // rename away, so it is checked rather than assumed.
-            if (defined.count(b.name) && !_headerBodies.count(b.name)) continue;
-            defined.insert(b.name);
-            _headerBodies.insert(b.name);
-        }
+    // A header body whose name an EMITTED body already took would MERGE two nodes — their edges and their facts
+    // unioned under one key, because the graph is keyed by C name. Harmless for `--no-heap`, where a union only
+    // ever refuses more, but `checkGlobalAllocator` would see a cycle that is not there and refuse a correct
+    // pool in every build. Nothing collides today (header helpers are `kama__*`, the emitted user surface is
+    // `k_*`, SPEC § *C names*), and it is one prelude rename away from doing so — so the emitted body WINS and
+    // the header's is dropped from the scan entirely, which is the direction that cannot invent an edge.
+    std::set<std::string> shadowed;
+    for (const std::string& hb : _headerBodies) {
+        if (defined.count(hb)) shadowed.insert(hb);
+        else                   defined.insert(hb);
     }
     // The funnel is where the walk STOPS. Removing the three names from `defined` is what keeps a use of them
     // a leaf — a fact, or an edge into the declared pool — instead of an edge into their own bodies.
@@ -25635,8 +25662,12 @@ void CEmitter::buildCallGraph()
     // Emitted C first, so a fact it already recorded wins: it names the CONSTRUCT ("a deep `copy` of `X`"),
     // and a derived one can only name the symbol.
     scanCBodies(_emittedC, bodies, defined, std::string());
-    for (size_t i = 0; i < headers.size(); ++i)
-        scanCBodies(headers[i].text, headerBodies[i], defined, headers[i].file);
+    for (size_t i = 0; i < _headerTexts.size(); ++i) {
+        std::vector<CBody> keep;
+        keep.reserve(_headerBodyLists[i].size());
+        for (const CBody& b : _headerBodyLists[i]) if (!shadowed.count(b.name)) keep.push_back(b);
+        scanCBodies(_headerTexts[i].text, keep, defined, _headerTexts[i].file);
+    }
 }
 
 // One segment's bodies. `fixedFile` empty: the emitted C, whose lines come from the `#line` directives it
@@ -25651,7 +25682,11 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
     const bool pool = !_globalAllocator.empty();   // `@globalAllocator`: the funnel is an edge, not a heap fact
     auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
     auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
-    auto skipDirective = [&](size_t i) { while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) ++i; ++i; } return i; };
+    auto skipDirective = [&](size_t i) {   // to the first UNESCAPED newline: a `#define` is consumed whole
+        // A continuation may be CR LF. Without skipping the CR the loop stops ON the newline and the directive
+        // ends early, spilling a multi-line macro's braces into the brace counter - silent graph corruption now
+        // that KR-74 makes these bodies load-bearing. Latent here (LF only, check-lf-output.sh); one char to end it.
+        while (i < n && s[i] != '\n') { if (s[i] == '\\' && i + 1 < n) { ++i; if (s[i] == '\r' && i + 1 < n) ++i; } ++i; } return i; };
     auto skipLiteral = [&](size_t i) {   // i at the opening quote; returns one past the closing one
         const char q = s[i++];
         while (i < n && s[i] != q) { if (s[i] == '\\') ++i; ++i; }

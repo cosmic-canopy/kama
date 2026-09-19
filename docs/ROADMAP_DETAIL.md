@@ -1818,16 +1818,6 @@ the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the
 refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
 synthesized member to the user's type. The fixtures should then assert a live count.
 
-**The verdict trusts 55 hand-placed marks at the runtime's boundary (KR-74)** — measured 2026-09-17 on the Windows
-box. `buildCallGraph` reads the C the compiler writes and never `include/*.h`, so what the runtime does is
-whatever a `@heap` mark says: one bit, no guard, and wrong three times in a week (`kama_path_meta`,
-`kama_resolve_host`, startup argv). The bit also cannot distinguish the funnel — which a declared `@globalAllocator`
-serves — the declared allocator's whole point, `0.9.377` — from a foreign heap, so a pool-backed `--no-heap` program is refused `args()` and every
-`kama_fmt_*` for allocations that come from its own pool. The design, the seven foreign names, the rejected
-alternatives (a second mark, a mark-checking guard, link-time interposition — with the platform facts) and the
-red-first plan are §6 of [docs/design/allocation.md](design/allocation.md). Mac work: it changes the verdict on
-every target.
-
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
 rule is permanent. What is not is ten `std::fs` externs being heap at all: `kama__wpath` converts every UTF-8 path
@@ -2069,6 +2059,14 @@ rather than here, so there is one number to keep current. Forward work:
   syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
   shrinks the macro surface as a side effect. **Not** a fix for the name-collision class (shipped `0.9.398`, SPEC § *C names*): a user's own `extern "<vendor.h>"` bleeds
   into their own TU either way, which is why names must be safe by construction instead.
+  ⚠️ **It now has a second constraint, added at `0.9.401` when the no-heap verdict started DERIVING its runtime
+  facts (SPEC § *No-heap subset*): that analysis READS these header bodies.** What a runtime extern does with the heap is derived from its `static inline` body, so moving
+  the bodies into one TU removes the text the analysis depends on — every `std::fs`/`std::process`/`std::net`
+  allocation fact would disappear, silently and in the ACCEPTING direction. This does not block the row: the
+  scan already takes a list of texts rather than one, so that TU's source joins it as another entry. It has to
+  be done in the same commit, and `tools/check-header-scan.sh` fails loudly if it is not — it plants an
+  allocation in a staged header and requires the refusal, so a scan that quietly stopped finding bodies cannot
+  pass.
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
   `-O` level (`-O3`), or the optimization level dominates a tiny kernel.

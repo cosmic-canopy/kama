@@ -1,0 +1,12 @@
+// `@heap` says "this C touches the heap" about C the compiler CANNOT READ. On a symbol kama's own shipped
+// headers define, it is refused — the compiler reads that C and derives the answer (KR-74).
+//
+// The refusal is not tidiness about a redundant attribute. A mark is an UNCONDITIONAL fact, while the derived
+// answer distinguishes the allocation funnel — which a declared `@globalAllocator` serves — from a foreign
+// heap, which nothing can. So a mark here does not agree with the derivation, it overrides it: this one line
+// re-refuses `"${n}"` in every pool-backed `--no-heap` program, which is the exact defect the row removed.
+// Before KR-74 there were 55 such marks, and `lib/std/fmt/fmt.kama` alone re-declared four of them.
+//
+// The legal spelling is a symbol the compiler has no C for — tests/xfail/noheap_heap_extern.
+@heap extern fn string kama_fmt_i64(int64 v);
+fn int32 main() { return 0; }

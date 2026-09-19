@@ -1648,10 +1648,16 @@ private:
     std::vector<CBody> parseCBodies(const std::string& s, bool entryBodies);
     // KR-74: one runtime header, ready to scan — its text, and the name a body in it is attributed to.
     struct CHeader { std::string file, text; };
-    // Read `_runtimeHeaders`, with the ALLOCATION FUNNEL's own block blanked out of `kama_runtime.h`. See the
-    // .cpp for why blanking beats skipping (line numbers survive) and why the block must go at all (both arms
-    // of its `#if` are read, so `kama__impl_alloc` appears to call the pool AND `malloc`).
-    std::vector<CHeader> loadRuntimeHeaders();
+    // Read and parse `_runtimeHeaders` ONCE per emitter, with the ALLOCATION FUNNEL's own block blanked out of
+    // `kama_runtime.h`. See the .cpp for why blanking beats skipping (line numbers survive) and why the block
+    // must go at all (both arms of its `#if` are read, so `kama__impl_alloc` appears to call the pool AND
+    // `malloc`). Two callers want this and at different times — `collectSignatures`, to refuse a `@heap` mark
+    // on a symbol the headers define, and `buildCallGraph`, to scan them — so it is cached rather than done
+    // twice. The cost is paid only when one of them asks.
+    void ensureRuntimeHeaders();
+    bool                              _headersLoaded = false;
+    std::vector<CHeader>              _headerTexts;
+    std::vector<std::vector<CBody>>   _headerBodyLists;
     // The per-body scan: edges into `_callEdges`, allocation facts into `_allocSites`. Run once per segment —
     // the emitted C, then each header. `fixedFile` empty means the emitted C's line policy (`#line`
     // directives); otherwise it names the header and lines are COUNTED, since a header carries no directives.

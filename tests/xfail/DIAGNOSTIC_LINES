@@ -444,6 +444,7 @@ handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
 heap_attr_on_body	heap_attr_on_body.kama:4
 heap_attr_on_fnptr	heap_attr_on_fnptr.kama:4
+heap_attr_on_runtime_symbol	heap_attr_on_runtime_symbol.kama:11
 heap_handle_bare_value	heap_handle_bare_value.kama:7
 identity_char_constref_argument	identity_char_constref_argument.kama:10
 identity_char_literal	identity_char_literal.kama:12 identity_char_literal.kama:13

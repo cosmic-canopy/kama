@@ -65,8 +65,8 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    `0.9.369` with no change to the Windows branch of `kama_os.h`. Two guards needed fixing for msys2 (gawk's `-v`
    escapes, no `python3`); the san/wasm legs are the Linux box's and already ran there.
 3. ~~**KR-73**~~ — shipped `0.9.385` on the Windows box (startup allocates nothing; see §2, "Startup allocates
-   nothing"). Filed from it: **KR-72** (`--cc gcc` passes a clang-only flag) and **KR-74** (§6, the Mac's next row
-   in this campaign: the verdict derives its runtime facts instead of trusting `@heap` marks).
+   nothing"). Filed from it: **KR-72** (`--cc gcc` passes a clang-only flag, shipped `0.9.400`) and the row that
+   became §6 below — the verdict deriving its runtime facts instead of trusting `@heap` marks, shipped `0.9.401`.
 3. ~~**KR-49**~~ — shipped `0.9.377` (`@globalAllocator`) and `0.9.378` (`Shared.adopt`, the `SortedMap` root, and
    the bare-`new` rule). The record is SPEC *Global allocator*; what the probes and the build decided is at the end
    of §3. Filed from it: **KR-65** (three raw-pointer expressions that reach clang) and **KR-66** (reaching the
@@ -663,72 +663,40 @@ A `deserialize` that fails returns `Err`. `Handle.deserialize` (`slot_map.kama:2
 reader's failure today and so decodes garbage as `Ok`, is fixed to check `failed()` like every other type —
 after §1, because under today's eager rule its new box would fail any `--no-heap` build importing `SlotMap`.
 
-### 6. The verdict derives its runtime facts (KR-74) — brief for the Mac, written on the Windows box 2026-09-17
+### 6. The verdict derives its runtime facts (KR-74) — SHIPPED `0.9.401`
 
-**Why.** The walk is right and stops at the wrong place. What the compiler EMITS is judged by construction
-(`KAMA_NOHEAP_SLOT`, the member-call rule, funnel calls as edges under a pool). What the runtime headers DO is not
-judged at all: `buildCallGraph` reads `_emittedC` only, so at the boundary of `include/*.h` it stops deriving and
-trusts a hand-placed `@heap` — 43 symbols, 55 declarations, one bit each, no guard tying a mark to the body it
-describes. Measured against that in one week: `kama_path_meta` unmarked (KR-58), `kama_resolve_host` unmarked
-(it calls `getaddrinfo`, which allocates), and `kama_args_init` allocating at startup with nothing to mark (KR-73).
-And the bit cannot say the thing KR-49 made load-bearing: whether the C reaches the FUNNEL (which a declared pool
-serves) or a FOREIGN heap (which nothing can). Measured `0.9.379`: a program with a declared pool that calls
-`args()` is refused under `--no-heap` — "`kama_args_at` is `@heap`" — although every byte it allocates comes
-from the pool. The same holds for every `kama_fmt_*`, so a pool-backed program can build a string but not
-format one. For the audience the flag exists for, the verdict is the product; a verdict resting on a checklist is
-not production grade, and it will drift with every runtime change.
+**Shipped, and the record is SPEC § *No-heap subset* plus the git log.** The compiler reads `include/*.h` as
+further segments of the same call-graph scan, so what kama's own C does with the heap is derived rather than
+declared: the funnel is an edge into a declared pool's entries or else a fact, a foreign allocator is a fact
+always, and all 55 `@heap` marks are gone. `@heap` keeps one meaning — a USER extern into C kama cannot read —
+and is refused on a symbol the headers define, because a mark is unconditional and would override the derived
+answer rather than agree with it.
 
-**What.** The compiler ships those headers; it reads them.
+What is kept here, because it cost a cycle each and is not obvious from the result:
 
-1. **Feed the shipped headers to the same scanner.** `_emittedC` is assembled once per program by `EmitCapture`;
-   appending `include/*.h` (all of them — reach decides what matters) makes every `static inline` body a node with
-   edges, exactly like an emitted body. The scanner already skips `#` lines, so BOTH branches of an `#if` are read:
-   that is today's "marked if any target" rule, made mechanical. It already records a body name passed as a VALUE
-   as an edge, so a thread entry handed to `CreateThread`/`pthread_create` is reached.
-2. **Two derived leaf kinds.** The funnel (`kama_alloc`/`kama_alloc_zeroed`/`kama_free`): an edge into the declared
-   pool's entries when there is one (the existing `pool` branch), else a fact. A FOREIGN allocator: a fact,
-   always. Outside the funnel's own block, kama's headers reach one through exactly seven names — `getaddrinfo`,
-   `GetEnvironmentStringsW`, `opendir`, `pthread_create`, `CreateThread`, `CreateProcessW`, plus the funnel's own
-   `malloc` family (measured 2026-09-17, `grep` over `include/`). That list is the residual judgement, in ONE
-   place, and `tools/check-alloc-funnel.sh` already curates its C-allocator half; extend it to fail when a header
-   names a foreign allocator the compiler's list does not.
-3. **The marks go.** Every `@heap` on a `kama_*` extern in `prelude/` and `lib/` is deleted, and the hand-seeded
-   `_heapSymbols` with it. `@heap` keeps ONE meaning: a USER extern into C kama cannot read — refused under the
-   flag always, because the FFI seam is where kama genuinely cannot know (GOALS 3a). A guard refuses `@heap` on a
-   symbol the headers define, so the two mechanisms cannot overlap.
-4. **The message names the cause.** The walk already renders chains (`through main -> std::fs::exists`); a header
-   body is attributed to its file and line (headers carry no `#line`, so count newlines), and the sentence becomes
-   *"reaches `getaddrinfo` (kama_os.h: `kama_resolve_host`)"* instead of *"which is `@heap`"*.
+- **The funnel's own block must be blanked out of the scanned text.** Both arms of every `#if` are read, so
+  inside the funnel `kama__impl_alloc` appears to call `kama__global_allocate` AND `malloc`. Scanned, every
+  pool-backed program is refused by its own funnel — the exact verdict this row existed to correct. The window
+  is the two markers `tools/check-alloc-funnel.sh` already curates, shared so the two cannot drift.
+- **The dispatch-slot rule must not apply to header bodies.** The C seam has exactly one member call,
+  `l->tick(l->state)` in `kama__loop_step`; applying the rule there refuses every `--no-heap` program that
+  calls `App.run()`, naming C the author cannot edit. A runtime callback's target is handed over as a value,
+  and a body name passed as a value is already an edge, so the graph reaches it anyway.
+- **`kama_string__dtor` is not a fact.** Its free is guarded on `cap`, zero for a literal, and the scan is
+  flow-insensitive — SPEC promises `string tag = "voice";` belongs in a real-time body. Nothing is lost: a
+  string with a non-zero `cap` cannot legally exist in a no-heap region, because every operation that mints
+  one is refused at its own site. `check-alloc-funnel.sh` fails if a second guarded free ever appears.
+- **The scan runs unconditionally, not under the flag.** `checkGlobalAllocator`'s "a pool that reaches the
+  funnel" walk reads the same graph and refuses in every build; gating would make an infinite-recursion
+  refusal appear and disappear with an unrelated flag.
+- **KR-68 now depends on this.** Moving the OS seam's bodies into one TU removes the text the scan reads.
+  See its ROADMAP_DETAIL entry; `tools/check-header-scan.sh` is the tripwire.
 
-**Why not the alternatives, so they are not re-asked.**
-- *A second mark (`@allocates`) beside `@heap`.* Still a checklist, now two bits wide; the same drift, twice.
-- *A guard that checks each mark against its body.* Needs the header scan anyway — at which point the scan IS the
-  fact, and the mark is a copy of it that can go stale.
-- *Link-time interposition of `malloc`.* Catches only what is spelled `malloc`: not `LocalAlloc`, `HeapAlloc`,
-  `VirtualAlloc`, `mmap` or a resolver's internals. Not reliable for `malloc` on macOS (two-level namespace; zone
-  API) or Windows (other DLLs import the UCRT's directly; mimalloc ships a redirect DLL that patches import
-  tables). Reverses the direction kama needs: C's `free(p)` carries no size, so the pool you declared can no
-  longer be header-free; C does not handle `NULL`; the CRT allocates before `main`. Process-global and implicit,
-  so a `--shared` kama library must never do it, and it fights every tool that interposes too (ASan, LSan,
-  valgrind — and the san leg is how the funnel is PROVEN). It does nothing for a compile-time verdict. Possible
-  later as an OPT-IN for a whole-program product that wants third-party C on its allocator too, layered on the
-  funnel, scoped per platform. Not the foundation.
-
-**Size: M.** ~150 lines in `buildCallGraph` (feed the header text; attribute header bodies; the foreign list and
-the two leaf kinds), ~50 removing the mark plumbing (55 declarations, `_heapSymbols`), plumbing the include
-directory into the emitter (the driver computes it for `-I` already), the guard extension, fixtures, docs. Only
-4 `#define`s in `include/` produce a body with braces (the smart-pointer `_FUNCS` macros already moved into the
-emitter for this reason); read those four. Gate: `./dev matrix` — it changes the verdict on every target.
-
-**Red first.** `tests/noheap_pool_fmt.kama` (a pool, `"${n}"` — builds), `tests/xfail/noheap_pool_resolve.kama`
-(a pool, `resolve(host:)` — refused, the message names `getaddrinfo` and `kama_resolve_host`), a pool + `args()`
-(builds; POSIX and Windows both funnel-only after KR-73), a mutation guard that plants a `malloc(` in a scratch
-header on the include path and expects refusal, and the existing `noheap_*`/`xfail` corpus, which pins both
-directions: a program that starts being refused is either a mark that was wrong (fix the program's expectation)
-or a scanner over-approximation (fix the scanner) — measured, not guessed.
-
-**Prerequisite, done:** KR-73 (`0.9.385`) — with derived facts, `CommandLineToArgvW` would have been correctly
-refused, so the Windows argv path had to become funnel-only first.
+**Rejected then, and not to be re-asked:** a second mark beside `@heap` (a checklist twice as wide); a guard
+checking each mark against its body (it needs the scan anyway, at which point the scan IS the fact);
+link-time interposition of `malloc` (catches only what is spelled `malloc`, is process-global and implicit,
+reverses the sizing direction a header-free pool needs, and fights every tool that interposes too — the san
+leg is how the funnel is proven).
 
 ## Where this meets existing rows
 
@@ -753,6 +721,9 @@ refused, so the Windows argv path had to become funnel-only first.
 2. §2 `kama_alloc`/`kama_free` as the only primitives, and the guard (KR-48; no behaviour change; mixed pairs gone).
 3. ~~§3 replacing the default implementation (KR-49; + `Shared.adopt`, `SortedMap` root)~~ — shipped `0.9.378`.
 4. ~~§4 allocator-aware error boxing; decide the per-call question~~ — shipped `0.9.395`; per-call is a non-goal (§4).
-5. OS seam and extern coverage completed; foreign-owned list verified against the code.
+5. ~~§6 the verdict derives its runtime facts (KR-74)~~ — shipped `0.9.401`; the 55 `@heap` marks are gone and
+   the foreign-allocator list is the only residual judgement, guarded by `tools/check-alloc-funnel.sh`.
+6. §2b the Windows seam stops allocating per path (KR-58) — still open, and now measurable rather than
+   asserted: `--no-heap` derives `kama__wpath`'s allocation from the header instead of taking a mark's word.
 
 Each step: fixtures landed red first, `SPEC.md` updated in the same commit, `VERSION` bumped.
