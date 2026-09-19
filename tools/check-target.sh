@@ -258,6 +258,30 @@ for flag in "-Wl,--subsystem,windows" "-DKAMA_SUBSYSTEM_WINDOWS=1"; do
         why gui; exit 1
     fi
 done
+#     …and on Windows it must actually COMPILE, which is the half `--cc "echo"` cannot see. Everything
+#     above asserts that the two flags are EMITTED, and all of it passed while `--subsystem windows` could
+#     not build any program that touched a file or a socket: the `-D` turns on a console reattach that
+#     declares `CreateFileA` at block scope, and `std::fs`/`std::net` pull kama_os.h -> <winsock2.h> ->
+#     <windows.h>, which declares it too. clang refused `fileapi.h` itself with *conflicting types*.
+#     Filed by the first consumer (KB-29) after its first Windows bundle, which worked around it with
+#     objcopy and lost the terminal reattach. So: one real build per seam, on the one host that can.
+case "$(uname -s)" in
+  MSYS*|MINGW*|CYGWIN*)
+    for what in fs net; do
+        case "$what" in
+          fs)  imp='import { std::fs::exists };' ;;
+          net) imp='import { std::net::parseIp };' ;;
+        esac
+        printf '%s\nfn int32 main() { return 0; }\n' "$imp" > "$tmp/gui_$what.kama"
+        if ! "$KAMA" build --subsystem windows "$tmp/gui_$what.kama" -o "$tmp/gui_$what.exe" \
+             >/dev/null 2>"$tmp/gui_$what.err"; then
+            echo "check-target: FAIL — --subsystem windows cannot compile a program using std::$what" >&2
+            grep -m 3 'error' "$tmp/gui_$what.err" | sed 's/^/    /' >&2
+            exit 1
+        fi
+    done
+    ;;
+esac
 #     …and everywhere else it is an accepted NO-OP, not an error, so one cross-platform build script can
 #     carry the flag. No other object format has a subsystem field to set.
 if tryline guilinux build --release --cc "echo" "$FIXTURE" --target LINUX --subsystem windows -o "$tmp/gl" \

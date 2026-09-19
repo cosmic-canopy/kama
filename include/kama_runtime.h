@@ -1912,6 +1912,13 @@ static inline int  kama_trace_get(void) { return kama_trace_acc; }
 extern int    kama_argc;
 extern char** kama_argv;
 extern int    kama__argv_state;   // Windows: 0 narrow CRT argv, 1 converting, 2 converted (see kama__argv_ensure)
+#if defined(_WIN32) && defined(KAMA_SUBSYSTEM_WINDOWS)
+// FILE scope, and that is the whole point: the console reattach below declares `CreateFileA` itself, whose
+// `lpSecurityAttributes` is a pointer to THIS struct. A tag first named inside the block would be a
+// different type from <windows.h>'s file-scope one, so the declaration would still conflict — which is
+// exactly what the first attempt at this fix did. It defines nothing and includes nothing.
+struct _SECURITY_ATTRIBUTES;
+#endif
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
     // The Windows argv conversion used to run HERE, eagerly, and drew from the funnel before `main` — see
@@ -1940,9 +1947,19 @@ static inline void kama_args_init(int argc, char** argv) {
     // ATTACH_PARENT_PROCESS is (DWORD)-1; the STD_*_HANDLE ids are -10/-11/-12; the CreateFileA constants
     // are GENERIC_READ|GENERIC_WRITE and FILE_SHARE_READ|FILE_SHARE_WRITE with OPEN_EXISTING. All declared
     // at block scope, like _setmode/_write below, so <windows.h> never leaks into user code.
+    //
+    // ⚠️ THE TYPES MUST MATCH <windows.h> EXACTLY, because the header is often already there. A block-scope
+    // `extern` still declares an external-linkage identifier for the whole translation unit, so it must be
+    // COMPATIBLE with every other declaration of that name in it — and a program that imports `std::fs` or
+    // `std::net` pulls kama_os.h, which pulls <winsock2.h> -> <windows.h> -> <fileapi.h>. `hTemplateFile`
+    // and the return are `HANDLE` (`void*`), but `lpSecurityAttributes` is `LPSECURITY_ATTRIBUTES` — a
+    // pointer to a STRUCT, not `void*` — so spelling it `void*` made clang refuse `fileapi.h` itself with
+    // *conflicting types for 'CreateFileA'*, and `--subsystem windows` could not compile any program that
+    // touched a file or a socket. Naming the tag here forward-declares it and drags in nothing.
     {
         extern int   __stdcall AttachConsole(unsigned long);
-        extern void* __stdcall CreateFileA(const char*, unsigned long, unsigned long, void*,
+        extern void* __stdcall CreateFileA(const char*, unsigned long, unsigned long,
+                                           struct _SECURITY_ATTRIBUTES*,
                                            unsigned long, unsigned long, void*);
         extern int   __stdcall SetStdHandle(unsigned long, void*);
         extern int   _open_osfhandle(intptr_t, int);
