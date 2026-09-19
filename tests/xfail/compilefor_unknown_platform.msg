@@ -1,0 +1,1 @@
+no target kama knows has `ARCH_RISCV64` — declare one under `select.TARGET` in kama.json to write code for it

@@ -2029,6 +2029,13 @@ static std::set<std::string> g_activeFlags;
 static std::set<std::string> g_declaredFlags;
 static bool g_strictFlags = false;
 
+// Every `OS_`/`ARCH_`/`ABI_` flag some target kama KNOWS can produce: the host-independent catalog
+// (catalogTargets), every target the manifest declares, and this build's own resolved triple — so
+// `--target xtensa-esp32-elf` validates its own `OS_ESP32` gates, and a host outside the catalog stays
+// self-consistent with what it can actually build. A gate naming anything else is an error (KR-69).
+// Recomputed in resolveBuildConfig, beside the active set it is judged alongside.
+static std::set<std::string> g_knownTripleFlags;
+
 // The part of the configuration that decides what CEmitter::pruneInactiveDecls keeps — the parse cache's
 // key prefix (see parseFile). The active set alone: the declared universe and strictness change which
 // DIAGNOSTICS a gate draws, never which declarations survive.
@@ -2109,6 +2116,17 @@ static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string&
 
     const int line = (*unit->fileGate)[0] ? (*unit->fileGate)[0]->line : 1;
     bool bad = false;
+    // The NAMES first, then what the gate means. `file @compileFor(OS_WINODWS, OS_LINUX);` is two OS_
+    // components and therefore also a contradiction, but the typo is the defect the author has to fix,
+    // and a message about mutually exclusive components would send them looking for the wrong thing.
+    const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, g_declaredFlags,
+                                             g_knownTripleFlags, g_strictFlags,
+                                             [&](const std::string& m) {
+                                                 fprintf(stderr, "kama: error: %s:%d: %s\n",
+                                                         path.c_str(), line, m.c_str());
+                                                 bad = true;
+                                             });
+    if (bad) return FileGate::Malformed;
     // A file gate that can never be active excludes the file from EVERY build — dead code, and the same
     // mistake the declaration gate is refused for (CEmitter::pruneInactiveDecls).
     {
@@ -2120,13 +2138,6 @@ static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string&
             return FileGate::Malformed;
         }
     }
-    const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, g_declaredFlags, g_strictFlags,
-                                             [&](const std::string& m) {
-                                                 fprintf(stderr, "kama: error: %s:%d: %s\n",
-                                                         path.c_str(), line, m.c_str());
-                                                 bad = true;
-                                             });
-    if (bad) return FileGate::Malformed;
     return active ? FileGate::Active : FileGate::Inactive;
 }
 
@@ -2450,6 +2461,41 @@ static const std::map<std::string, TargetSpec>& builtinTargets()
     return cat;
 }
 
+// The CATALOG: the targets kama stands behind, spelled out and HOST-INDEPENDENT (KR-69 D2). A built-in
+// NAME above resolves its arch to the host's, which is right for BUILDING (`--target LINUX` on an arm
+// Mac means aarch64) and wrong for two things that must not depend on which machine asked:
+//
+//   * which triple components a gate may name — `@compileFor(ARCH_AARCH64)` was an error on an x86_64
+//     box and fine on a Mac, so half the commonest arch pair in systems code was unspellable, and a
+//     different half per machine;
+//   * which configurations `kama check` covers — the same gate reported OK on one box and an error on
+//     the other, from the same source.
+//
+// Each built-in OS on each arch kama supports, plus wasm. It is a handful of TARGETS, not a vocabulary
+// of spellings: a component it does not carry is reached by DECLARING the target (`select.TARGET`),
+// which is the same gesture building for that platform needs anyway.
+static const std::vector<TargetSpec>& catalogTargets()
+{
+    static const std::vector<TargetSpec> cat = [] {
+        std::vector<TargetSpec> v;
+        auto mk = [&](const char* arch, const char* os, const char* abi) {
+            TargetSpec t;
+            t.arch = arch; t.os = os; t.abi = abi;
+            t.name = t.arch + "-" + t.os + "-" + t.abi;
+            v.push_back(t);
+        };
+        for (const char* arch : { "x86_64", "aarch64" }) {
+            mk(arch, "macos",   "none");
+            mk(arch, "windows", "gnu");
+            mk(arch, "linux",   "gnu");
+            mk(arch, "none",    "none");   // bare metal — a real board triple gets the same OS_NONE
+        }
+        mk("wasm32", "emscripten", "none");
+        return v;
+    }();
+    return cat;
+}
+
 // The project's baked default `KAMA_LOG` spec (from the manifest `log` section), threaded to the emitter and
 // compiled into `main` so a shipped binary carries its default log filter (M5). Empty = no baked default.
 static std::string g_logDefault;
@@ -2473,7 +2519,9 @@ static void configureEmitter(CEmitter& e)
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
-    e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
+    // `@compileFor` conditional compilation — what is active, what the project declared, and what any
+    // known target could produce (the last is what makes a misspelled triple component an error, KR-69).
+    e.setBuildFlags(g_activeFlags, g_declaredFlags, g_knownTripleFlags, g_strictFlags);
     // ...and why a gate could never be active, which needs the manifest's select groups (see KR-54).
     e.setGateContradiction([](const SharedAttributeList& attrs) -> std::string {
         std::vector<GateLit> lits = gateLiterals(attrs);
@@ -5159,6 +5207,27 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     for (const auto& f : derivedTargetFlags(g_target, builtinTargets().count(g_target.name) != 0))
         g_activeFlags.insert(f);
 
+    // ...and, beside the flags this configuration ACTIVATES, the ones any known target COULD (KR-69).
+    // Through `derivedTargetFlags` deliberately: "which flags does a target produce" stays one
+    // definition, so what a gate may name can never drift from what activates it.
+    g_knownTripleFlags.clear();
+    {
+        auto known = [&](const TargetSpec& t) {
+            if (t.arch.empty() || t.os.empty() || t.abi.empty()) return;
+            for (const auto& f : derivedTargetFlags(t, true))
+                if (kamaIsTripleNamespacedFlag(f)) g_knownTripleFlags.insert(f);
+        };
+        for (const auto& t : catalogTargets()) known(t);
+        // A declared target is RESOLVED first: one that merges onto a built-in (`"WINDOWS": { "runtime":
+        // "dynamic" }`) declares no triple of its own, and its components are the built-in's.
+        for (const auto& kv : g_manifestTargets) {
+            TargetSpec t;
+            std::string terr;
+            if (resolveTarget(kv.first, g_manifestTargets, t, terr)) known(t);
+        }
+        known(g_target);
+    }
+
     // `--no-heap` is a build-configuration fact like `--release`, so it also contributes a flag. That lets
     // the STDLIB opt a declaration out of a no-heap build (`@compileFor(!NOHEAP)` on the allocating
     // `sort`), which is the only way today to make "this needs the heap" a compile error rather than a
@@ -5259,19 +5328,21 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             if (e.gate.empty()) { kept.push_back(std::move(e)); continue; }
             const std::string who = e.owner.empty() ? std::string() : " (declared by dependency `" + e.owner + "`)";
             const std::string here = "`" + std::string(key) + "` entry '" + e.path + "'" + who;
+            // The NAMES first, then what the gate means — see the same ordering in fileGateOf.
+            bool active = true;
+            std::string bad;
+            for (const GateLit& l : e.gate)
+                if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_knownTripleFlags,
+                                       g_strictFlags,
+                                       [&](const std::string& m) { if (bad.empty()) bad = m; }))
+                    active = false;
+            if (!bad.empty()) { err = here + ": " + bad; return false; }
             const std::string never = gateContradiction(e.gate);
             if (!never.empty()) {
                 err = here + ": `compileFor` " + renderGateLits(e.gate) + " can never be active — " + never
                     + ". No configuration compiles it, so it is a mistake";
                 return false;
             }
-            bool active = true;
-            std::string bad;
-            for (const GateLit& l : e.gate)
-                if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_strictFlags,
-                                       [&](const std::string& m) { if (bad.empty()) bad = m; }))
-                    active = false;
-            if (!bad.empty()) { err = here + ": " + bad; return false; }
             if (active) { kept.push_back(std::move(e)); continue; }
             if (dirs ? !dirExists(e.path) : !fileExists(e.path)) {
                 err = here + " does not exist. It is gated out of this build, and still refused: a path that "
@@ -5475,8 +5546,28 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
 
         std::vector<std::string> targets{ "" };
         if (varyTarget) {
-            for (const auto& kv : declaredTargets) targets.push_back(kv.first);
-            for (const auto& kv : builtinTargets()) if (!declaredTargets.count(kv.first)) targets.push_back(kv.first);
+            std::set<std::string> seen;                      // one candidate per TRIPLE, whatever it is called
+            for (const auto& kv : declaredTargets) {
+                targets.push_back(kv.first);
+                TargetSpec t; std::string terr;
+                if (resolveTarget(kv.first, declaredTargets, t, terr)) seen.insert(t.arch + "-" + t.os + "-" + t.abi);
+            }
+            for (const auto& kv : builtinTargets())
+                if (!declaredTargets.count(kv.first)) {
+                    targets.push_back(kv.first);
+                    seen.insert(kv.second.arch + "-" + kv.second.os + "-" + kv.second.abi);
+                }
+            // ...and the catalog's ARCH-PINNED triples, which is what makes the cover host-independent
+            // (KR-69 D2): a built-in NAME resolves its arch to the host's, so before this a type error
+            // behind `@compileFor(ARCH_AARCH64)` was found on an arm Mac and reported OK on an x86_64
+            // box — and `ARCH_X86_64` the other way round. Half of the commonest arch pair in systems
+            // code went unchecked on every machine, a different half per machine.
+            //
+            // NAMES stay first: they are what a tag tells the reader to type (`--target WASM`), and a
+            // pinned triple is only reached when no name activates the gate. Deduped by triple, so the
+            // host's own arch is not enumerated twice under two spellings.
+            for (const auto& t : catalogTargets())
+                if (seen.insert(t.arch + "-" + t.os + "-" + t.abi).second) targets.push_back(t.name);
         }
         std::vector<std::pair<std::string, std::vector<std::string>>> axes(varyGroups.begin(), varyGroups.end());
 

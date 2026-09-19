@@ -499,6 +499,16 @@ gaterej() {   # gaterej <name> <want> <what>
 
 gate gundecl '{ "path": "csrc/a.c", "compileFor": ["NOT_DECLARED"] }'
 gaterej gundecl 'references undeclared flag `NOT_DECLARED`' "an undeclared flag in a gate is refused, as in @compileFor"
+# ...and the same for the three RESERVED namespaces, which used to be a free pass here exactly as they
+# were in a source gate (KR-69): any `OS_`/`ARCH_`/`ABI_` spelling validated, so a typo silently dropped
+# the .c from every build. A name must be one some target kama knows can produce, and the message points
+# at the nearest one. This is the third caller of kamaGateLitActive; the other two have xfail fixtures.
+gate gcomp '{ "path": "csrc/a.c", "compileFor": ["OS_WINODWS"] }'
+gaterej gcomp 'no target kama knows has `OS_WINODWS` (did you mean `OS_WINDOWS`?)' \
+        "a misspelled triple component in a gate is refused, naming the nearest known one"
+gate gstub '{ "path": "csrc/a.c", "compileFor": ["ARCH_RISCV64"] }'
+gaterej gstub 'declare one under `select.TARGET`' \
+        "a correctly spelled component no target has is refused, and says how to declare one"
 gate gnever '{ "path": "csrc/a.c", "compileFor": ["DEBUG", "RELEASE"] }'
 gaterej gnever 'can never be active' "a gate no configuration can activate is refused"
 gate gkey '{ "path": "csrc/a.c", "compilefor": ["DEBUG"] }'

@@ -1,0 +1,8 @@
+// KR-69 under a MANIFEST, where the sibling rule already held: a plain `@compileFor(WINODWS)` here is
+// refused as an undeclared flag, because a manifest declares the project's flag universe. The three
+// namespaced ones escaped that check entirely — they are kama's names, so `declared` never had them and
+// the prefix short-circuited the test. Same defect, same file, one error where there were two.
+@compileFor(OS_WINODWS)
+fn int32 platformValue() { return 3; }
+
+fn int32 main() { return 0; }

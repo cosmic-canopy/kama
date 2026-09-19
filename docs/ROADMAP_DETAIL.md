@@ -240,6 +240,36 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
+### Every short `std::time::sleep` costs one scheduler tick on Windows (KR-76) — filed by the first consumer as KG-36, 2026-09-18; re-measured here at `0.9.399`
+
+`kama_sleep_ns` (`include/kama_time.h`, the `_WIN32` arm) is `Sleep((ns + 999999) / 1000000)`. The round-up
+is right and deliberate — a 1 ns sleep must not become `Sleep(0)`, which yields the rest of the timeslice
+and returns — and it is the whole of kama's Windows sleep work. Nothing raises the timer resolution, so
+every span lands on the scheduler's ~15.625 ms tick.
+
+**Measured twice, independently.** The consumer, on Windows 11 x64 (means of 100/100/50 runs at `0.9.399`):
+`sleep(1 ms)` → 16.06 ms, `sleep(8 ms)` → 16.06 ms, `sleep(16 ms)` → 26.9 ms. Re-run here on the Windows VM
+with its own probe, same shape and the same tick: **13.4 ms, 15.6 ms, 23.6 ms**. ⚠️ The absolute numbers
+differ because this box is QEMU (see the VM caveat in `docs/platforms/windows.md`); what both runs show is
+the same thing — 1 ms and 8 ms cost the same, and 16 ms costs two ticks' worth.
+
+⚠️ **This is reach, not a bug, and the row says so first.** SPEC promises *at least* `d`, and the contract
+holds at every measured point. What it costs is that a program pacing itself with `sleep` — a frame loop's
+8 ms nap, a headless client's 10 ms poll — quietly runs at half rate on Windows and at the asked rate
+everywhere else.
+
+**The ask:** a `CreateWaitableTimerExW(…, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, …)` arm inside
+`kama_sleep_ns`, falling back to `Sleep` where the flag is refused (the flag is Windows 10 1803+; the
+fallback is what makes the arm safe to take unconditionally). **Not `timeBeginPeriod(1)`**: it is
+process-global and costs power for every thread in the process, and a library has no business spending a
+caller's battery to fix its own resolution — which is also why the consumer declined to do it locally and
+waited for kama, rather than fixing the same thing twice.
+
+The header is `static inline` and freestanding-friendly, so the arm must stay inside the existing
+`#if defined(_WIN32)` block and pull nothing beyond `<windows.h>`, which that branch already includes. A
+fixture belongs beside `tests/time_wall_sleep.kama`; it asserts a mean rather than one sample, since the
+tick is what is being measured.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -254,127 +284,6 @@ clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_Globa
 `Simd<float32>#(4)`; adding a local of the type anywhere makes it build. The `SizeofNode` arm emits
 `sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
 a generic type would hit it too.
-
-### A misspelled triple-component flag in a gate is silently inactive (KR-69) — found 2026-09-17 shipping the `csources` gates, `0.9.382`; briefed 2026-09-18 at `0.9.399`
-
-`@compileFor(OS_WINODWS)` and `@compileFor(ARCH_AARCH46)` build and pass `kama check` without a word, in a
-manifest too: every gate goes through `kamaGateLitActive` (`src/kama.cemit.cpp`), and `kamaIsBuildConfigFlag`
-accepts ANY name with an `OS_`/`ARCH_`/`ABI_` prefix, because triples are open (`parseTriple` normalizes
-nothing; kama hands `aarch64-winodws-gnu` to the C compiler, which is what refuses it). So a typo'd platform gate
-deletes the declaration — or, since `0.9.382`, a `csources` entry — on every build. The same class
-`@compileFor(WINDOWS)` was, one level down.
-
-**Measured, `0.9.399` on the Windows box:**
-- **The prefix is a free pass.** One manifest project, one file, two typos: `@compileFor(WINODWS)` is refused
-  (*"references undeclared flag `WINODWS`"*) and `@compileFor(OS_WINODWS)` beside it is accepted — one error where
-  there are two defects. A rule that holds in one position and not its sibling.
-- **`kama check` cannot tell a typo from legal stub code, and says nothing about either.** `@compileFor(ARCH_RISCV64)`
-  (a real arch, no target) and `@compileFor(ARCH_AARCH46)` both report `OK (1 unit analyzed)`, plain and `--each`.
-- **What the corpus actually gates on:** `ARCH_WASM32` (16 uses here, 63 in the first consumer), `OS_WINDOWS` (13,
-  12), `OS_LINUX` (6), `OS_MACOS` (consumer, 1). Five names. `ARCH_RISCV64` appears only in SPEC and in
-  `tests/xfail/compilefor_impossible.kama`'s comment — as the EXAMPLE of what must stay legal.
-- **What kama knows today:** built-in targets give os `macos`/`windows`/`linux`/`emscripten`/`none`, abi `gnu`/`none`,
-  arch `wasm32` or the host's; the host table adds `freebsd`/`msvc`. `parseTriple` takes 2–4 components verbatim and
-  drops a vendor, so zig-style (`aarch64-macos-none`) and LLVM-style spellings both reach a flag.
-- The three namespaces are RESERVED — a project cannot declare `OS_X` under `flags` (`isReservedFlagName`) — so
-  they are kama's to validate, in every mode. No did-you-mean helper exists in the compiler today.
-
-**"Undeclared", defined — and it is host-dependent (measured 2026-09-18).** A target is KNOWN when it is one of
-the five built-in catalog names (`MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`) or one the manifest declares under
-`select.TARGET`; a component is known when some known target's triple has it. The built-ins take the HOST's arch (only
-`WASM` fixes one), so the known set is os `macos`/`windows`/`linux`/`emscripten`/`none`, abi `gnu`/`none`, and arch
-`wasm32` plus WHATEVER MACHINE RAN THE CHECK. One file per gate, each hiding a type error, `kama check` on an
-x86_64 Windows box: `ARCH_X86_64`, `ARCH_WASM32`, `OS_LINUX`, `OS_MACOS` — error found; **`ARCH_AARCH64`,
-`OS_FREEBSD`, `ABI_MUSL` — reports OK.** So the commonest arch pair in systems code (NEON on one side, SSE on the
-other) is half-unchecked on every machine, and a different half on an arm64 Mac than here. `kama check` needs no
-toolchain — it analysed macOS and wasm code on Windows — so nothing forces the cover to follow the host.
-
-**What constrains the ruling.** SPEC *`kama check` covers every gate* rules that *"a gate no known target can
-activate is not checked, and that is not an error. Stub code for a platform you do not support yet
-(`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for nobody and breaks nobody"*. A warning
-channel is a thing kama does not have, on purpose.
-
-**RULED 2026-09-18 (maintainer): the stub-code allowance is LIFTED, with the known set made host-independent** —
-"undefined should be an error, since you can just put it as a target to lift the error". D1–D4 as written:
-
-- **D1. A gate must be activatable by a target kama KNOWS, or it is an error.** Known: a host-independent CATALOG,
-  a target the manifest declares, or THIS build's own triple (so `--target xtensa-esp32-elf` validates its own
-  `OS_ESP32` gates). A typo is refused by construction — and so is a VALID-but-wrong component (`ARCH_ARM` meant
-  as `ARCH_AARCH64`), which no closed vocabulary can catch. No table of 150 spellings to maintain. "This code is
-  checked somewhere" stops being a hope and becomes an invariant: there is no longer a category of code that
-  compiles for nobody and is analysed by nobody. The message says what to do: *"no target kama knows has
-  `ARCH_RISCV64` — declare one under `select.TARGET` in kama.json to write code for it"*, which SPEC already notes
-  building it needs anyway; in exchange that stub code is type-checked instead of rotting.
-- **D2. The catalog stops following the host.** The built-in OSes × {`x86_64`, `aarch64`}, plus `wasm32-emscripten`
-  and the embedded family — a handful of TARGETS kama stands behind, not a vocabulary. `kama check` covers all of
-  them on every host, so the same program gets the same verdict on the Mac and the Windows box. BUILDING still
-  follows the host and its toolchain; only the COVER changes.
-- **D3. It applies in every mode.** A loose file has no manifest, so it gates on catalog components and on its own
-  `--target`; stub code for a platform outside the catalog wants a project, which is a fair price for a script.
-- **D4. A dependency's gates are judged against the DEPENDENCY's declared targets** — the covering check already
-  rules that "a dependency's gates are that package's obligation", so a portable library declares the platforms
-  it carries code for, in its own manifest.
-
-Measured cost of the source break: **zero in the corpus and in the first consumer.** Every live gate is a catalog
-component (`ARCH_WASM32`, `OS_WINDOWS`, `OS_LINUX`, `OS_MACOS`); `ARCH_RISCV64` and `ARCH_AARCH64` appear only in
-comments and in SPEC's own example, which is rewritten.
-
-**Rejected with the ruling:** validating the three namespaces against a SPELLING table (the union of zig's
-`std.Target` tags and LLVM's `Triple` spellings) while keeping stub code legal — more machinery for a weaker
-guarantee, since a valid-but-wrong component passes any closed vocabulary.
-
-**The scope of the ruling, measured the same day — custom flags were already explicit.** Under a manifest a flag
-is declared in `kama.json` (`flags` for a boolean, `select` for a one-of-many group; `DEBUG`/`RELEASE`, `HOSTED`,
-`NOHEAP` and `SIMD128` are built in), and an undeclared name is refused in every position probed: a gate
-(`@compileFor(DEBGU)`), and the command line (`--define NOTDECLARED`). Declared flags are COVERED too — `kama
-check` found a type error behind a default-off `TESTING` and behind a `select` value, naming the configuration
-(`[--define TESTING]`, `[--select MYBUILDTYPE=SMALL]`). So the prefix was the ONLY hole, and closing it makes the
-model uniform: a name is kama's (and must be activatable by a known target) or the project's (and must be
-declared). A LOOSE file stays permissive for the project's names, by design — it reads no manifest, so there is
-no declaration site, and SPEC already says an undeclared flag there is simply inactive; `kama check` still covers
-the code behind it (it found the error behind `DEBGU` in a loose file). The three namespaces are validated in a
-loose file all the same, because they are kama's names and not the user's.
-
-The diagnostic names the nearest known component within a small edit distance (`OS_WINODWS` →
-`OS_WINDOWS`); ~25 lines, there being no such helper yet. One definition serves every gate (`kamaGateLitActive`:
-the attribute, the file gate, a manifest `csources`/`cincludes` gate), so they cannot disagree.
-
-**Declaring a target DOES bring its gates into the cover — measured `0.9.399`.** A manifest project whose only
-riscv code is `@compileFor(ARCH_RISCV64) fn int32 stub() { return "a string"; }`: with no riscv target, `kama
-check` reports `OK (1 unit analyzed)`; with `"select": { "TARGET": { "RISCV": { "triple": "riscv64-linux-gnu" } } }`
-it reports the type error, tagged `[--target RISCV]`, in 2 configurations. That is the spelling the new
-diagnostic names, and the whole of what a user does to lift it.
-
-**Picking this up — on any machine.**
-1. `git fetch && git rebase origin/dev`, then `./dev build`. ⚠️ The binary in `out/` goes stale whenever the
-   checkout moves under it; compare `kama --version` with `VERSION` before trusting a probe (on 2026-09-18 a stale
-   one failed a trivial program with 20 clang errors).
-2. Land the red-first fixtures below and watch each fail for its own reason.
-3. The rule is ONE function: `kamaGateLitActive` (`src/kama.cemit.cpp`), beside `kamaIsBuildConfigFlag`, which is
-   what grants the prefix its free pass. It already receives the ACTIVE flag set; it needs the components known
-   targets can produce — `builtinTargets()` and `g_manifestTargets`, through `derivedTargetFlags`
-   (`src/kama.driver.cpp`) — which the covering check's configuration builder already enumerates (its
-   `declaredTargets` / `builtinTargets()` loop).
-4. D2 lives in that same enumeration: a built-in's arch is the host's (`h.arch`) today, and the COVER enumerates
-   `x86_64` and `aarch64` instead. `--target NAME` for BUILDING keeps following the host.
-5. `VERSION` bump; SPEC's two sections; every new xfail gets its `.msg` and its row in
-   `tests/xfail/DIAGNOSTIC_LINES`.
-6. Gate: `./dev test` + `./dev check` where it is built, then `./dev matrix` on the Mac — the verdict changes on
-   every target.
-
-**Red first.** `tests/xfail/compilefor_component_typo.kama` (loose file, `OS_WINODWS`; the `.msg` carries the
-suggestion), `…_manifest.d` (the source gate under a manifest), `…_csources.d` (a `csources` entry's `compileFor`),
-one for a `file @compileFor(…)` gate — the four callers of the one rule — and `…_unknown_platform.kama`
-(`ARCH_RISCV64`, no target: refused, naming `select.TARGET`); each needs its row in `tests/xfail/DIAGNOSTIC_LINES`.
-Positive: a DECLARED riscv target makes the same gate legal AND checked (a type error behind it is now found); an
-anonymous `--target` triple's own component is accepted; and a host-independence fixture — a type error behind
-`ARCH_AARCH64` AND one behind `ARCH_X86_64` are both found by `kama check`, which is red on every machine today.
-
-**Size M, and where.** One rule in one function, the catalog and the cover's enumeration, the declared-target
-components plumbed to the rule (the covering check already computes them from `g_manifestTargets`), the suggestion
-helper, fixtures, SPEC (*Conditional compilation*, and *`kama check` covers every gate*, whose stub-code bullet is
-replaced). Front-end only and platform-independent, so it builds and tests on any box; the verdict changes on
-every target, so `./dev matrix` is its gate.
 
 
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`

@@ -1,0 +1,16 @@
+// The positive half of KR-69. `@compileFor(ARCH_RISCV64)` is an ERROR with no riscv target in sight
+// (tests/xfail/compilefor_unknown_platform.kama) — and the manifest beside this file declares one, so
+// the same gate is legal here. That is the whole of what a user does to lift the error, and it is the
+// gesture BUILDING for riscv needs anyway.
+//
+// It buys more than silence: declaring the target brings the gated code into `kama check`'s cover, so
+// a type error behind this gate is now FOUND, tagged `[--target RISCV]`. tools/check-compilefor-cover.sh
+// asserts that half; this file asserts the build half — the host build keeps the complementary
+// declaration and returns 41.
+@compileFor(ARCH_RISCV64)
+fn int32 platformValue() { return 3; }
+
+@compileFor(!ARCH_RISCV64)
+fn int32 platformValue() { return 41; }
+
+fn int32 main() { return platformValue(); }

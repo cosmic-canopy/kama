@@ -1,0 +1,14 @@
+// KR-69: a triple-component name in a gate must be one some target kama KNOWS can produce. Before
+// this rule the `OS_`/`ARCH_`/`ABI_` prefix was a free pass — any name carrying it validated — so this
+// typo silently deleted the declaration on every build, and the only symptom was a missing symbol
+// somewhere else, or nothing at all when both sides were gated. One level down the same typo WAS
+// refused (`@compileFor(WINODWS)` — an undeclared flag), which is what made the hole a rule holding in
+// one position and not its sibling.
+//
+// A LOOSE file is refused too: these three namespaces are kama's names, not the project's, so they are
+// validated in every mode. The fix is to declare a target that has the component (SPEC § `kama check`
+// covers every gate).
+@compileFor(OS_WINODWS)
+fn int32 platformValue() { return 3; }
+
+fn int32 main() { return 0; }

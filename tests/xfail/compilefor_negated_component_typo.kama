@@ -1,0 +1,9 @@
+// KR-69, the negated position. `!OS_WINODWS` is activatable by every target there is — the gate is
+// satisfiable, so "must be activatable" alone would let it through — and it is the SAME typo, keeping
+// the declaration on every build instead of dropping it on all but one. The rule is therefore about
+// the NAME a known target can produce, not about whether the gate can be satisfied, and it is applied
+// wherever the name appears.
+@compileFor(!OS_WINODWS)
+fn int32 everywhereButWindows() { return 3; }
+
+fn int32 main() { return everywhereButWindows() - 3; }

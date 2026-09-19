@@ -3,9 +3,9 @@
 // value per build — so no configuration in any product of flags reaches this body.
 //
 // Refused in `pruneInactiveDecls`, where every gate passes, so `kama build`, `kama check` and the language
-// server all say it. That is the difference between this and a gate merely out of reach of every declared
-// target (`@compileFor(ARCH_RISCV64)` with no riscv target): that one is stub code for a platform this
-// project does not support yet, is checked the day the target is declared, and is NOT an error.
+// server all say it. A gate no known target can activate (`@compileFor(ARCH_RISCV64)`, no riscv target) is
+// an error too since KR-69 — compilefor_unknown_platform.kama — but a different one with a different fix:
+// declaring the target rescues it, where nothing rescues two values of one single-select group.
 @compileFor(DEBUG, RELEASE)
 fn int32 unreachableEverywhere() { return 251; }
 

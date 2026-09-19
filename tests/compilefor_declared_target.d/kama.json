@@ -1,0 +1,13 @@
+{
+  "name": "declaredtarget",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/app.kama",
+  "source": "src",
+
+  "select": {
+    "TARGET": { "RISCV": { "triple": "riscv64-linux-gnu" } }
+  },
+
+  "modules": { ".": { "visibility": "internal" } }
+}

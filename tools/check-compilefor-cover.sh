@@ -13,8 +13,10 @@
 #      is reproduced), so it must NOT report what another configuration would say;
 #   5. a legitimate one-target declaration — an extern that exists only there — still passes. This is the
 #      case that makes "just resolve names before pruning" wrong, so it is the one that must not regress;
-#   6. a gate no known target can activate is skipped in silence, and a gate that can NEVER be active is
-#      an error naming why;
+#   6. a gate no known target can activate is an ERROR saying how to lift it (KR-69, which retired the
+#      stub-code allowance), declaring the target lifts it AND covers the code, and a gate that can
+#      NEVER be active is an error naming why;
+#   6b. the cover does not follow the HOST — both arches kama supports are covered on every machine;
 #   7. `--each` and `--json` carry the cover: the same verdict, and the configuration in the envelope;
 #   8. the corpus sweep — every gated fixture in tests/ passes its own cover.
 set -eu
@@ -112,16 +114,45 @@ grep -qF "[--target" "$tmp/wasm.err" \
 "$KAMA" check "$ROOT/tests/compilefor_platform.kama" >/dev/null 2>"$tmp/plat.err" \
     || fail "the platform contract seam (one impl per target) was refused by the cover:" "$tmp/plat.err"
 
-# ---- 6: unreachable vs impossible ------------------------------------------------------------------
-# No built-in or declared target has this arch, so nothing can check it — and that is not an error:
-# stub code for a platform this project does not support yet compiles for nobody and breaks nothing.
+# ---- 6: unknown, unreachable, impossible -----------------------------------------------------------
+# No target kama knows has this arch, so nothing ever compiles the declaration and nothing ever analyses
+# it. SPEC allowed exactly that until 2026-09-18 as "stub code for a platform you do not support yet";
+# the allowance was LIFTED (KR-69), because a rule that cannot tell it from a typo buys silence in both
+# cases. The error says the one thing that lifts it.
 cat > "$tmp/unreachable.kama" <<'KAMA'
 @compileFor(ARCH_RISCV64)
 fn int32 future(Zork z) { return 0; }
 fn int32 main() { return 0; }
 KAMA
-"$KAMA" check "$tmp/unreachable.kama" >/dev/null 2>"$tmp/unreach.err" \
-    || fail "a gate no declared target can activate was treated as an error:" "$tmp/unreach.err"
+if "$KAMA" check "$tmp/unreachable.kama" >/dev/null 2>"$tmp/unreach.err"; then
+    fail "a gate no known target can activate was accepted — it is checked by nobody, so it is an error"
+fi
+grep -qF 'select.TARGET' "$tmp/unreach.err" \
+    || fail "the unknown-platform gate was refused without saying how to lift it:" "$tmp/unreach.err"
+
+# ...and DECLARING the target lifts it and brings the code into the cover, which is the exchange the
+# ruling made: the gate becomes legal AND the type error behind it is found, tagged with the target.
+decl="$tmp/declared"
+mkdir -p "$decl/src"
+cat > "$decl/kama.json" <<'JSON'
+{ "name": "riscvdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "select": { "TARGET": { "RISCV": { "triple": "riscv64-linux-gnu" } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$decl/src/app.kama" <<'KAMA'
+@compileFor(ARCH_RISCV64)
+fn int32 future(Zork z) { return 0; }
+fn int32 main() { return 0; }
+KAMA
+if "$KAMA" check "$decl/kama.json" >/dev/null 2>"$tmp/decl.err"; then
+    fail "declaring the target made the gate legal but did not bring it into the cover:" "$tmp/decl.err"
+fi
+grep -qF "[--target RISCV]" "$tmp/decl.err" \
+    || fail "the declared target's gate was covered, but not tagged with it:" "$tmp/decl.err"
+grep -qF "Zork" "$tmp/decl.err" || fail "the tagged diagnostic is not the rot itself:" "$tmp/decl.err"
+grep -qF "no target kama knows" "$tmp/decl.err" \
+    && fail "the gate was still refused as unknown after its target was declared:" "$tmp/decl.err"
+
 # ...while a gate that can never be active under ANY configuration is a typo, and says which two names.
 for pair in 'DEBUG, RELEASE:BUILD_TYPE' 'OS_LINUX, OS_WINDOWS:triple component' 'X, !X:!X'; do
     gate=${pair%%:*}; want=${pair#*:}
@@ -138,6 +169,36 @@ KAMA
     grep -qF "$want" "$tmp/never.err" \
         || fail "@compileFor($gate) was refused without naming why ($want):" "$tmp/never.err"
 done
+
+# ---- 6b: the cover does not follow the HOST --------------------------------------------------------
+# A built-in target NAME resolves its arch to the host's, so before KR-69 the cover reached only ONE of
+# the two arches kama supports — whichever machine happened to ask. A type error behind `ARCH_AARCH64`
+# was found on an arm Mac and reported OK here; `ARCH_X86_64` the other way round. Half of the commonest
+# arch pair in systems code went unchecked on every machine, and a different half per machine. Both must
+# be found, on every host — which is what makes "this code is checked somewhere" a property of the
+# program rather than of the box that ran the check.
+cat > "$tmp/arches.kama" <<'KAMA'
+@compileFor(ARCH_AARCH64) fn int32 armRot(Zork z) { return 0; }
+@compileFor(ARCH_X86_64)  fn int32 x86Rot(Nope n) { return 0; }
+fn int32 main() { return 0; }
+KAMA
+if "$KAMA" check "$tmp/arches.kama" >/dev/null 2>"$tmp/arch.err"; then
+    fail "neither arch's rot was found — the cover reaches no arch at all" "$tmp/arch.err"
+fi
+grep -qF "Zork" "$tmp/arch.err" \
+    || fail "the aarch64 gate was not covered on this host (the cover still follows it):" "$tmp/arch.err"
+grep -qF "Nope" "$tmp/arch.err" \
+    || fail "the x86_64 gate was not covered on this host (the cover still follows it):" "$tmp/arch.err"
+
+# ...and a gate on THIS build's own triple is checked too, whatever the catalog holds: `--target` is one
+# of the three ways a component becomes known (a catalog target, a declared one, this build's own).
+cat > "$tmp/board.kama" <<'KAMA'
+@compileFor(OS_ESP32)
+fn int32 boardOnly() { return 1; }
+fn int32 main() { return 0; }
+KAMA
+"$KAMA" check --target xtensa-esp32-elf "$tmp/board.kama" >/dev/null 2>"$tmp/board.err" \
+    || fail "a gate naming this build's OWN triple component was refused:" "$tmp/board.err"
 
 # ---- 7: --each and --json carry the cover ----------------------------------------------------------
 cat > "$tmp/rot1.kama" <<'KAMA'
@@ -170,4 +231,5 @@ for d in "$ROOT"/tests/file_gate.d "$ROOT"/tests/compilefor_manifest.d "$ROOT"/t
 done
 
 echo "check-compilefor-cover: PASS (every gate checked: file + decl, six axes, tags reproduce, "\
-"impossible refused, unreachable skipped, --each/--json, corpus swept)"
+"impossible and unknown-platform refused, declaring a target covers it, both arches on every host, "\
+"--each/--json, corpus swept)"

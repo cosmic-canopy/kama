@@ -741,16 +741,27 @@ private:
 // Defined in kama.cemit.cpp. See docs/targets.md.
 bool kamaIsBuildConfigFlag(const std::string& name);
 
+// The three RESERVED namespaces alone — the triple components. Split out of kamaIsBuildConfigFlag
+// (which still answers true for them) because they are the names validated against the targets kama
+// knows, while DEBUG/RELEASE/HOSTED/NOHEAP/SIMD128 are always available. Defined in kama.cemit.cpp.
+bool kamaIsTripleNamespacedFlag(const std::string& name);
+
 // Does a `@compileFor(...)` attribute list hold for this flag set? The whole gate rule — bare `FLAG`,
-// `!FLAG`, comma = AND, strict-mode validation of every name — in one place, because it has two callers
+// `!FLAG`, comma = AND, validation of every name — in one place, because it has two callers
 // on two diagnostic channels: the emitter gating a DECLARATION (CEmitter::compileForActive), and the
 // driver gating a whole FILE (`file @compileFor(FLAG);`, fileGateActive in kama.driver.cpp), which runs
-// before any emitter exists. `report` receives a rejection (an undeclared flag under strict mode, or an
-// argument that is neither `FLAG` nor `!FLAG`); the caller turns it into its own kind of diagnostic.
-// Defined in kama.cemit.cpp.
+// before any emitter exists. `report` receives a rejection (a triple component no known target has, an
+// undeclared flag under strict mode, or an argument that is neither `FLAG` nor `!FLAG`); the caller
+// turns it into its own kind of diagnostic. Defined in kama.cemit.cpp.
+//
+// `knownTriple` is every OS_/ARCH_/ABI_ flag some target kama knows can produce — the host-independent
+// catalog, every manifest-declared target, and this build's own triple (KR-69). It is a parameter of
+// every entry point here rather than a setting anyone could forget, for the reason configureEmitter
+// records about the rest of the build configuration.
 bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& active,
                           const std::set<std::string>& declared,
+                          const std::set<std::string>& knownTriple,
                           bool strict,
                           const std::function<void(const std::string&)>& report);
 // One literal of that rule, for a gate that is not an attribute list: a manifest `csources`/`cincludes`
@@ -758,6 +769,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
 bool kamaGateLitActive(const std::string& name, bool neg,
                        const std::set<std::string>& active,
                        const std::set<std::string>& declared,
+                       const std::set<std::string>& knownTriple,
                        bool strict,
                        const std::function<void(const std::string&)>& report);
 
@@ -823,14 +835,16 @@ public:
     void setSharedModule(bool on) { _sharedModule = on; }
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
-    // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), and whether
-    // strict validation is on (a manifest was loaded). Set from the driver before emission; consumed by
-    // `pruneInactiveDecls` at the top of `collectProgram` — inactive decls are dropped, and the
-    // `@compileFor` attribute is stripped from kept decls so no downstream pass ever sees it.
+    // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), every triple
+    // component some target kama knows can produce (KR-69), and whether strict validation is on (a
+    // manifest was loaded). Set from the driver before emission; consumed by `pruneInactiveDecls` at the
+    // top of `collectProgram` — inactive decls are dropped, and the `@compileFor` attribute is stripped
+    // from kept decls so no downstream pass ever sees it.
     void setBuildFlags(const std::set<std::string>& active,
                        const std::set<std::string>& declared,
+                       const std::set<std::string>& knownTriple,
                        bool strict)
-    { _activeFlags = active; _declaredFlags = declared; _strictFlags = strict; }
+    { _activeFlags = active; _declaredFlags = declared; _knownTripleFlags = knownTriple; _strictFlags = strict; }
 
     // Why a gate can NEVER be active under any configuration, or "" when some configuration could activate
     // it. A callback because the answer needs the manifest's single-select groups, which are the driver's
@@ -1775,6 +1789,7 @@ private:
     std::function<std::string(const SharedAttributeList&)> _gateContradiction;   // see setGateContradiction
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
+    std::set<std::string>                     _knownTripleFlags;         // every OS_/ARCH_/ABI_ flag a target kama knows produces
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an
                                                                          // export manifest / import naming one says "not in this
                                                                          // configuration" instead of "no such declaration".

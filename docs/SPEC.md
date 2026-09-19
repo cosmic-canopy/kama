@@ -2534,6 +2534,17 @@ document's own examples until 2026-09-01, and the first external project nearly 
 these pages; `tools/check-compilefor.sh` now greps the docs for them, because the half of that guard
 which proves the *compiler* rejects such a name is exactly what made the docs drifting invisible.
 
+⚠️ **A triple component must be one some target kama KNOWS can produce** — the built-in catalog, a
+target the manifest declares under `select.TARGET`, or this build's own `--target` triple. Anything
+else is an error naming the nearest known spelling: `@compileFor(OS_WINODWS)` is refused with *"did <!-- xfail: compilefor_component_typo -->
+you mean `OS_WINDOWS`?"*. It holds **in every mode** — a loose file as much as a manifest build, <!-- xfail: file_gate_component_typo -->
+because `OS_`/`ARCH_`/`ABI_` are reserved namespaces and therefore kama's names to validate rather
+than a project's to declare — and **wherever the name appears**, negated included: `!OS_WINODWS` is <!-- xfail: compilefor_negated_component_typo -->
+satisfied by every target there is and is the same typo, silently *keeping* the declaration
+everywhere instead of dropping it. Until 2026-09-18 the prefix was a free pass: any spelling
+validated, and the gate quietly deleted the declaration from every build, while `@compileFor(WINODWS)`
+one level down was refused — one rule holding in one position and not its sibling.
+
 - **Where** — any top-level decl: `fn`, `type`, `enum`, module `static`, and the three **bodyless** forms <!-- test: compilefor_extern -->
   — `extern "<header.h>";`, `extern fn` and `fnptr`. Gating the extern pair is what lets two platform
   backends each own their own C header: a gated-out `extern "<h>";` emits **no `#include`** and
@@ -2626,10 +2637,20 @@ with no `||`, so a covering set is computable and is what "this code is checked 
 - **Any explicit configuration flag means exactly that configuration** — `--target`, `--select`,
   `--define`, `--undefine`, `--release`/`--debug`, `--no-heap`, `--shared`. That is both the fast inner
   loop and the way a tag is reproduced: the tag *is* the command.
-- **A gate no known target can activate is not checked, and that is not an error.** Stub code for a
-  platform you do not support yet (`@compileFor(ARCH_RISCV64)` with no such target declared) compiles for
-  nobody and breaks nobody; declaring the target — which building it needs anyway — brings it into the
-  cover.
+- **The cover does not follow the host.** `kama check` reaches every target in kama's catalog on every <!-- test: compilefor_declared_target -->
+  machine — both architectures, not just the one that asked — so the same program gets the same verdict
+  on a Mac and on a Windows box. *Building* still follows the host and its toolchain; only the cover is
+  host-independent. Until 2026-09-18 a built-in target name resolved its arch to the host's, so a type
+  error behind `@compileFor(ARCH_AARCH64)` was found on an arm Mac and reported OK on an x86_64 box, and
+  `ARCH_X86_64` the other way round: half of the commonest arch pair in systems code went unchecked on
+  every machine, and a different half per machine.
+- **A gate no known target can activate is an error**, and the error says what to do about it: <!-- xfail: compilefor_unknown_platform -->
+  *"no target kama knows has `ARCH_RISCV64` — declare one under `select.TARGET` in kama.json to write
+  code for it"*. Declaring the target is what building for that platform needs anyway, and it brings the
+  code into the cover. ⚠️ SPEC said the opposite until 2026-09-18 — that such a gate is stub code for a
+  platform you do not support yet, compiling for nobody and breaking nobody. The allowance is **lifted**:
+  a rule that cannot tell that case from a misspelling (`ARCH_AARCH46`) buys silence in both, and it left
+  a category of code that compiles for nobody and is analysed by nobody. There is no longer one.
 - **A gate that can *never* be active is an error** — `@compileFor(DEBUG, RELEASE)` names two values of <!-- xfail: compilefor_impossible -->
   one single-select group, `@compileFor(X, !X)` contradicts itself, and `@compileFor(OS_LINUX, OS_WINDOWS)`
   names two values of one triple component; no configuration compiles what any of them gates. The refusal

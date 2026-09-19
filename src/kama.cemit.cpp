@@ -33083,19 +33083,67 @@ std::string kamaImplKindListText(unsigned mask)
     return out;
 }
 
-bool kamaIsBuildConfigFlag(const std::string& n)
+bool kamaIsTripleNamespacedFlag(const std::string& n)
 {
-    // SIMD128 joins these rather than the namespaced prefixes: it is derived from the triple like an
-    // ARCH_ flag, but it is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
-    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128") return true;
     return n.compare(0, 3, "OS_")   == 0
         || n.compare(0, 5, "ARCH_") == 0
         || n.compare(0, 4, "ABI_")  == 0;
 }
 
-// Under strict mode (a `kama.json` manifest was loaded) every referenced flag must be a build-config
-// name or declared in `flags`/`select` — a typo like `@compileFor(WINODWS)` is then rejected rather than
-// silently dropping the decl.
+bool kamaIsBuildConfigFlag(const std::string& n)
+{
+    // SIMD128 joins these rather than the namespaced prefixes: it is derived from the triple like an
+    // ARCH_ flag, but it is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128") return true;
+    return kamaIsTripleNamespacedFlag(n);
+}
+
+// The nearest `candidates` entry to `name` within a small edit distance, or "" — rendered ready to drop
+// into the diagnostic. A typo'd triple component is the one gate defect a reader cannot spot by staring
+// (`OS_WINODWS` reads as `OS_WINDOWS` to the eye that wrote it), so the message points at the fix.
+// Plain Levenshtein: a transposition costs 2, which is why the threshold is 2 rather than 1.
+static std::string kamaNearestFlag(const std::string& name, const std::set<std::string>& candidates)
+{
+    auto distance = [](const std::string& a, const std::string& b) {
+        std::vector<size_t> prev(b.size() + 1), cur(b.size() + 1);
+        for (size_t j = 0; j <= b.size(); ++j) prev[j] = j;
+        for (size_t i = 1; i <= a.size(); ++i) {
+            cur[0] = i;
+            for (size_t j = 1; j <= b.size(); ++j)
+                cur[j] = std::min(std::min(prev[j] + 1, cur[j - 1] + 1),
+                                  prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            prev = cur;
+        }
+        return prev[b.size()];
+    };
+    std::string best;
+    size_t bestD = 3;                              // strictly better than "too far to mean anything"
+    for (const auto& c : candidates) {
+        if (!kamaIsTripleNamespacedFlag(c)) continue;
+        size_t d = distance(name, c);
+        if (d < bestD) { bestD = d; best = c; }
+    }
+    // A short name is all prefix, so two edits can reach an unrelated namespace (`ABI_GNU` -> `ABI_NONE`
+    // is 4, but shorter pairs are not). Half the name is the floor for "this is plausibly what you meant".
+    if (!best.empty() && bestD * 2 >= name.size()) best.clear();
+    return best.empty() ? std::string() : " (did you mean `" + best + "`?)";
+}
+
+// Two validations, in the order a reader needs them.
+//
+// FIRST, and in EVERY mode: an `OS_`/`ARCH_`/`ABI_` name must be one some target kama KNOWS can produce
+// (KR-69). These three namespaces are RESERVED — a project cannot declare a flag in them — so they are
+// kama's names to validate, in a loose file as much as under a manifest. Before this the prefix was a
+// free pass: any spelling validated, so `@compileFor(OS_WINODWS)` silently deleted the declaration on
+// every build, while `@compileFor(WINODWS)` one level down was refused. The rule is about the NAME, not
+// about whether the gate can be satisfied, so `!OS_WINODWS` — activatable by every target there is — is
+// the same error; and a correctly spelled component no target has (`ARCH_RISCV64`) is an error too,
+// because a rule that cannot tell the two apart buys silence in both cases. Declaring the target lifts
+// it, and brings the code into `kama check`'s cover, which is the exchange the ruling made.
+//
+// SECOND, under strict mode (a `kama.json` manifest was loaded): every other referenced flag must be a
+// build-config name or declared in `flags`/`select` — a typo like `@compileFor(WINODWS)` is then
+// rejected rather than silently dropping the decl.
 //
 // A FREE function, and `report` is a callback, because the rule has TWO callers with different
 // diagnostic channels: the emitter's `unsupported()` for a declaration gate, and the driver's stderr for
@@ -33108,10 +33156,15 @@ bool kamaIsBuildConfigFlag(const std::string& n)
 bool kamaGateLitActive(const std::string& name, bool neg,
                        const std::set<std::string>& active,
                        const std::set<std::string>& declared,
+                       const std::set<std::string>& knownTriple,
                        bool strict,
                        const std::function<void(const std::string&)>& report)
 {
-    if (strict && !kamaIsBuildConfigFlag(name) && !declared.count(name))
+    if (kamaIsTripleNamespacedFlag(name)) {
+        if (!knownTriple.count(name))
+            report("no target kama knows has `" + name + "`" + kamaNearestFlag(name, knownTriple) +
+                   " — declare one under `select.TARGET` in kama.json to write code for it");
+    } else if (strict && !kamaIsBuildConfigFlag(name) && !declared.count(name))
         report("`@compileFor` references undeclared flag `" + name +
                "` (add it to the `flags` object in kama.json)");
     return active.count(name) ? !neg : neg;
@@ -33120,6 +33173,7 @@ bool kamaGateLitActive(const std::string& name, bool neg,
 bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& active,
                           const std::set<std::string>& declared,
+                          const std::set<std::string>& knownTriple,
                           bool strict,
                           const std::function<void(const std::string&)>& report)
 {
@@ -33134,7 +33188,8 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
             if (!arg) continue;
             // bare `FLAG` — an identifier name with no value expression.
             if (arg->name && arg->name->value && !arg->expression) {
-                if (!kamaGateLitActive(*arg->name->value, false, active, declared, strict, report)) return false;
+                if (!kamaGateLitActive(*arg->name->value, false, active, declared, knownTriple, strict, report))
+                    return false;
                 continue;
             }
             // negated `!FLAG` — a unary-not (EXCLAMATION) over an identifier (see kama.y attr_arg).
@@ -33143,7 +33198,8 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
                 if (su && su->token == EXCLAMATION && su->expression) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
                         if (id->value) {
-                            if (!kamaGateLitActive(*id->value, true, active, declared, strict, report)) return false;
+                            if (!kamaGateLitActive(*id->value, true, active, declared, knownTriple, strict, report))
+                                return false;
                             continue;
                         }
                 }
@@ -33157,7 +33213,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
 
 bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
 {
-    return kamaCompileForActive(attrs, _activeFlags, _declaredFlags, _strictFlags,
+    return kamaCompileForActive(attrs, _activeFlags, _declaredFlags, _knownTripleFlags, _strictFlags,
                                 [&](const std::string& m) { unsupported(m.c_str(), line); });
 }
 

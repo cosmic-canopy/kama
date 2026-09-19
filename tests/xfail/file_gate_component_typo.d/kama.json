@@ -1,0 +1,10 @@
+{
+  "name": "filegatetypo",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/app.kama",
+  "source": "src",
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}
