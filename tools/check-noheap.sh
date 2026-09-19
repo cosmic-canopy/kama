@@ -283,9 +283,12 @@ if ! grep -qF "heap allocation (new) is forbidden" "$tmp/nopool.err"; then
     sed 's/^/  /' "$tmp/nopool.err" >&2; exit 1
 fi
 # 7b. ...and a pool whose OWN body reaches the system heap is refused under the flag, through the funnel's entry.
+# The `malloc` here carries NO `@heap` mark, deliberately: since KR-74 a foreign allocator is a fact because the
+# compiler reads the name in the C it writes, not because a declaration claimed it. The marked spelling is
+# covered by tests/xfail/global_allocator_noheap_heap_pool, which uses a vendor symbol the compiler cannot know.
 cat > "$tmp/heappool.kama" <<'EOF'
 extern "<stdlib.h>";
-@heap extern fn UnsafePtr malloc(usize n);
+extern fn UnsafePtr malloc(usize n);
 @globalAllocator type resource Pool implements GlobalHeap {
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: malloc(n: bytes)); }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
@@ -296,7 +299,7 @@ EOF
 if "$KAMA" build --no-heap "$tmp/heappool.kama" -o "$tmp/hp.out" >/dev/null 2>"$tmp/hp.err"; then
     echo "check-noheap: FAIL — '--no-heap' accepted a global allocator that calls malloc" >&2; exit 1
 fi
-if ! grep -qF 'calls `malloc`, which is `@heap`' "$tmp/hp.err"; then
+if ! grep -qF 'reaches `malloc`, which allocates outside kama'"'"'s control' "$tmp/hp.err"; then
     echo "check-noheap: FAIL — the malloc-backed pool was rejected, but not by the walk into its body:" >&2
     sed 's/^/  /' "$tmp/hp.err" >&2; exit 1
 fi

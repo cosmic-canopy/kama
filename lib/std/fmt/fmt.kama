@@ -8,10 +8,10 @@ export { intStr, uintStr, i8Str, i16Str, i32Str, i64Str,
          u8Str, u16Str, u32Str, u64Str, f32Str, f64Str, boolStr };
 
 extern "kama_fmt.h";
-@heap extern fn string kama_fmt_i64(int64 v);
-@heap extern fn string kama_fmt_u64(uint64 v);
-@heap extern fn string kama_fmt_f64(float64 v);
-@heap extern fn string kama_fmt_f32(float32 v);
+extern fn string kama_fmt_i64(int64 v);
+extern fn string kama_fmt_u64(uint64 v);
+extern fn string kama_fmt_f64(float64 v);
+extern fn string kama_fmt_f32(float32 v);
 
 // Core conversions (widest of each class).
 unsafe fn string i64Str(int64 v)   { return kama_fmt_i64(v: v); }

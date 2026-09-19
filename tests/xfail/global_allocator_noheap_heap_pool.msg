@@ -1,1 +1,1 @@
-but this call reaches heap allocation (calls `malloc`, which is `@heap`)
+but this call reaches heap allocation (calls `vendor_block_alloc`, which is `@heap`) at

@@ -783,6 +783,14 @@ public:
     // `--target embedded`. Per-region `@noheap` on a fn is handled per-body; both funnel through
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
+    // The SHIPPED runtime headers, as paths (the driver globs `resolveRuntimeDir()/*.h` — the same directory
+    // it passes as `-I`, and it owns the directory listing, so no platform code lands here). The no-heap call
+    // graph READS them (KR-74): what kama's own C does with the heap is derived from that text rather than
+    // declared by a `@heap` mark placed against it by hand. The list is globbed, never hardcoded — a header
+    // added later must join the scan by existing, because a scan that silently misses one fails OPEN.
+    // Empty disables the header scan: an embedder with no install tree gets the pre-KR-74 verdict, which is
+    // weaker but never wrong in the unsafe direction, since every fact the headers add is a REFUSAL.
+    void setRuntimeHeaders(std::vector<std::string> paths) { _runtimeHeaders = std::move(paths); }
     // M5a: measure the strict-numeric migration. Hidden, off by default, deleted when that rule
     // lands — its whole job is to answer "how big is the corpus change" with a count instead of a
     // guess. See `noteNumericHandoff`.
@@ -1582,6 +1590,7 @@ private:
     bool                                      _strictNumericScan = false;  // `--strict-numeric`: TALLY numeric hand-offs, reject nothing
     std::set<std::string>                     _strictNumericSeen;          // dedupe: a template body is emitted once per instantiation
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
+    std::vector<std::string>                  _runtimeHeaders;           // the shipped `include/*.h`, read by the no-heap call graph (KR-74)
     bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
 
@@ -1637,6 +1646,22 @@ private:
     // for the whole-program call (a buffer is a fragment, and `main` is found once).
     struct CBody { std::string name; size_t open = 0, close = 0; std::string params; };
     std::vector<CBody> parseCBodies(const std::string& s, bool entryBodies);
+    // KR-74: one runtime header, ready to scan — its text, and the name a body in it is attributed to.
+    struct CHeader { std::string file, text; };
+    // Read `_runtimeHeaders`, with the ALLOCATION FUNNEL's own block blanked out of `kama_runtime.h`. See the
+    // .cpp for why blanking beats skipping (line numbers survive) and why the block must go at all (both arms
+    // of its `#if` are read, so `kama__impl_alloc` appears to call the pool AND `malloc`).
+    std::vector<CHeader> loadRuntimeHeaders();
+    // The per-body scan: edges into `_callEdges`, allocation facts into `_allocSites`. Run once per segment —
+    // the emitted C, then each header. `fixedFile` empty means the emitted C's line policy (`#line`
+    // directives); otherwise it names the header and lines are COUNTED, since a header carries no directives.
+    void scanCBodies(const std::string& s, const std::vector<CBody>& bodies,
+                     const std::set<std::string>& defined, const std::string& fixedFile);
+    // Bodies read out of a shipped header. They have no kama name: the C name IS the name, so a chain must
+    // render them verbatim — `demangleForDisplay` would strip `kama__utf8` to `utf8` (presenting an OS-seam
+    // helper as a prelude symbol) and rewrite `kama_string__concat` into a `::` path nobody can spell.
+    std::set<std::string> _headerBodies;
+    std::string displayBody(const std::string& cName) const;
     // A fact recorded WHILE a body is being emitted belongs to THAT body, and `_currentFunc` is not a
     // reliable name for it: the ~30 SYNTHESIZED body emitters (`__serialize`, `__deserialize`, `__format`,
     // `__hash`, `__equals`, the graph trio, the bag ctors) never set it, so their facts landed on whichever
@@ -1659,13 +1684,24 @@ private:
     std::vector<PendingFact> _pendingFacts;
     void recordAllocFact(bool funnel, int line, const AllocSite& site);
     void resolvePendingFacts(const void* sink, const std::string& text, bool last);
-    // C symbols of every `@heap extern fn` (see collectSignatures), SEEDED with the runtime's own four
-    // allocation primitives. Those are the funnel every emitted heap operation goes through — a smart
-    // pointer's drop, a string's buffer, a control block — so their names are heap wherever they appear,
-    // not only in a program that happens to import the one module declaring `kama_free` (`std::process`,
-    // which is where a kama declaration of it exists at all). Without the seed a `--no-heap` program could
-    // drop a heap-owned contract box and never reach a fact.
-    std::set<std::string> _heapSymbols{ "kama_alloc", "kama_alloc_zeroed", "kama_free" };
+    // C symbols of every `@heap extern fn` (see collectSignatures) — USER externs only, into C the compiler
+    // cannot read. It is no longer seeded: the runtime's own symbols were 55 hand-placed marks, and they are
+    // now DERIVED by reading the shipped headers (KR-74), which is why `@heap` on a symbol those headers
+    // define is refused outright rather than merged — a mark wins over a derived fact, so a stale one would
+    // silently reinstate exactly the wrong verdict this row removed.
+    std::set<std::string> _heapSymbols;
+    // THE FUNNEL. The two ways a kama program's C obtains and releases heap memory, plus the zeroing helper.
+    // Never an EDGE into its own body — the walk must stop here, not descend into `malloc` — so these names
+    // are removed from the `defined` set. With a declared `@globalAllocator` a use is an edge into the pool
+    // instead; without one it is a fact.
+    static bool isFunnelName(const std::string& id)
+    { return id == "kama_alloc" || id == "kama_alloc_zeroed" || id == "kama_free"; }
+    // A FOREIGN allocator: memory kama's funnel did not hand out and a declared pool therefore cannot serve,
+    // so reaching one is a fact ALWAYS, pool or not. Outside the funnel's own block, kama's headers reach one
+    // through exactly these names (measured over `include/` 2026-09-17, re-measured 2026-09-18). This list is
+    // the one piece of residual judgement left in the analysis, which is why it is in ONE place and why
+    // `tools/check-alloc-funnel.sh` fails when a header names a foreign allocator missing from it.
+    static const std::set<std::string>& foreignAllocators();
     std::set<std::string> _entryBodies;   // `main` and every `KAMA_EXPORT` body, read off the C — `--no-heap`'s roots
     // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER body
     // as a CANDIDATE, judged only if an entry point reaches it (`isUserBody` — the prelude and the stdlib are

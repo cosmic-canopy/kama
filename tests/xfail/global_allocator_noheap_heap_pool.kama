@@ -1,9 +1,9 @@
-// A declared pool is judged by its body: one that calls a `@heap` extern still reaches the system heap, so a `new`
+// A declared pool is judged by its body: one that calls a `@heap` extern still reaches a heap kama cannot see, so a `new`
 // inside a `@noheap` region is refused, with the chain running through the funnel into the pool.
-extern "<stdlib.h>";
-@heap extern fn UnsafePtr malloc(usize n);
+extern "<vendor_pool.h>";
+@heap extern fn UnsafePtr vendor_block_alloc(usize n);
 @globalAllocator type resource Pool implements GlobalHeap {
-    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: malloc(n: bytes)); }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: vendor_block_alloc(n: bytes)); }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }

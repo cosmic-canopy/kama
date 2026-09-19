@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <sstream>
+#include <fstream>       // the shipped runtime headers, read by the no-heap call graph (KR-74)
 #include <functional>
 #include <cctype>
 
@@ -25491,13 +25492,162 @@ void CEmitter::resolvePendingFacts(const void* sink, const std::string& text, bo
     }
 }
 
+// The seven names, and why a list is honest here. Everything else about the runtime's allocation is DERIVED
+// from the headers' own text; these are the leaves that text bottoms out in — libc and Win32 entry points
+// whose bodies kama does not ship and cannot read. A leaf has to be named by somebody, so it is named once,
+// here, rather than 43 times as a `@heap` mark on the kama declaration of each caller.
+//
+// `malloc` and friends appear only inside the funnel's own block, which is blanked before the scan, so they
+// are here for a USER header on the include path — a program that plants one gets a refusal, which is what
+// `tools/check-noheap.sh`'s mutation case proves.
+const std::set<std::string>& CEmitter::foreignAllocators()
+{
+    static const std::set<std::string> kForeign = {
+        "getaddrinfo",              // kama_os.h: kama_resolve_host — the resolver's own arena
+        "GetEnvironmentStringsW",   // kama_os.h: kama_envp_build
+        "opendir",                  // kama_os.h: kama_diropen (POSIX) — the DIR* is libc-owned
+        "pthread_create",           // kama_isolate.h: kama_isolate_spawn — the thread's stack
+        "CreateThread",             // kama_os.h: kama_capture2 (Win32)
+        "CreateProcessW",           // kama_os.h: kama_proc_spawn (Win32)
+        "malloc", "calloc", "realloc", "strdup", "_strdup", "strndup",
+        "aligned_alloc", "_aligned_malloc", "posix_memalign",
+    };
+    return kForeign;
+}
+
+// The intrinsic `string`'s RAII helper, whose free is CONDITIONAL — `if (self->kama_cap)` — and which is
+// therefore not an allocation fact on its own.
+//
+// This is the one place the derived scan is deliberately narrower than the C it reads, and the reason is a
+// promise SPEC makes: *"a string LITERAL is a borrowed view that allocates nothing, so `string tag = "voice";`
+// belongs in a real-time body"* (tests/noheap_realtime_ok.kama is the standing control). A literal's `cap` is
+// zero, so its drop frees nothing — but the scan is flow-insensitive and sees only the `kama_free` inside the
+// guard. Reading it as a fact refuses every no-heap body holding a string at all.
+//
+// Nothing is lost by excluding it, because a string with a non-zero `cap` cannot legally exist in a no-heap
+// region in the first place: every operation that MINTS one — `+`, `concat`, `substring`, `trim*`, `replace`,
+// `toLower`/`toUpper`, `truncate`, `split`, a deep `copy`, an interpolation, a by-value `foreach` — is refused
+// by the emitter at its own site. So the drop can only ever release something whose creation was already
+// rejected, and reporting it here would replace a diagnostic naming the construct the author wrote ("a deep
+// `copy` of `kama_string` allocates a new buffer") with one naming the drop they did not.
+//
+// It is a NAME, which is the shape this row exists to delete, so it is held to the same standard as the rest:
+// `tools/check-header-scan.sh` fails if `kama_string__dtor` stops being the only capacity-guarded funnel call
+// in the shipped headers, rather than letting a second one silently join it.
+static bool isCapacityGuardedDrop(const std::string& body)
+{
+    return body == "kama_string__dtor";
+}
+
+// The shipped headers, as text to scan. Read fresh per build: they are small (~290 KB for twelve) next to
+// the C a real program emits, and caching them across builds would be a second thing to invalidate.
+//
+// ⚠️ THE FUNNEL'S OWN BLOCK IS BLANKED OUT, and this is load-bearing rather than tidy. The scan reads BOTH
+// arms of every `#if` — that is how one verdict covers every target — so inside the funnel `kama__impl_alloc`
+// appears to call `kama__global_allocate` AND `malloc`. Were it scanned, a program with a declared pool would
+// reach a foreign-allocator fact through its own funnel and be refused EVERY allocation, which is the exact
+// failure this analysis exists to remove. Blanking (not deleting) keeps every later line number right.
+//
+// The window is the one `tools/check-alloc-funnel.sh` already curates — the `THE ALLOCATION FUNNEL.` banner
+// through the `kama_copy` sentinel — deliberately the SAME two markers, so the guard and the compiler cannot
+// drift apart about where the funnel ends. `kama_alloc_zeroed` sits just past the sentinel and is excluded by
+// NAME with the other two (see isFunnelName), so it needs no second window.
+std::vector<CEmitter::CHeader> CEmitter::loadRuntimeHeaders()
+{
+    std::vector<CHeader> out;
+    for (const std::string& path : _runtimeHeaders) {
+        std::ifstream f(path.c_str(), std::ios::binary);
+        if (!f.good()) continue;      // an install without headers scans less; it never scans something wrong
+        std::ostringstream buf;
+        buf << f.rdbuf();
+        CHeader h;
+        h.text = buf.str();
+        const size_t slash = path.find_last_of("/\\");
+        h.file = slash == std::string::npos ? path : path.substr(slash + 1);
+        const size_t from = h.text.find("THE ALLOCATION FUNNEL.");
+        if (from != std::string::npos) {
+            size_t to = h.text.find("static inline void  kama_copy", from);
+            if (to == std::string::npos) to = from;
+            for (size_t i = from; i < to; ++i) if (h.text[i] != '\n') h.text[i] = ' ';
+        }
+        out.push_back(std::move(h));
+    }
+    return out;
+}
+
+// A link in a reported chain. A body read out of a shipped runtime header has no kama name behind it — the C
+// name IS the name — so it is rendered verbatim. `demangleForDisplay` would actively lie about one: it strips
+// the prelude scope, turning the OS-seam helper `kama__utf8` into `utf8`, which reads as a prelude symbol the
+// author could go and find; and it rewrites an interior `__` into `::`, turning `kama_string__concat` into a
+// namespace path nobody can spell. Used by all four walks that render a chain, so the rule cannot drift.
+std::string CEmitter::displayBody(const std::string& cName) const
+{
+    return _headerBodies.count(cName) ? cName : demangleForDisplay(cName);
+}
+
 void CEmitter::buildCallGraph()
 {
     // The facts recorded against the captured stream itself (the header pass writes straight to it, so the
-    // position is absolute) — every buffered one was resolved when its module was flushed.
+    // position is absolute) — every buffered one was resolved when its module was flushed. NOTHING may be
+    // appended to `_emittedC` before this: those positions are absolute offsets into it.
     resolvePendingFacts(nullptr, _emittedC, /*last=*/true);
-    const std::string& s = _emittedC;
+
+    // KR-74: the runtime's headers are scanned too, so what kama's own C does with the heap is derived rather
+    // than trusted.
+    //
+    // UNCONDITIONALLY, and that is deliberate — gating it on `--no-heap` was the first design and it is wrong.
+    // `checkGlobalAllocator`'s "a pool that reaches the funnel" walk reads this same graph and refuses in EVERY
+    // build, not only a no-heap one, because such a pool recurses until the stack runs out. Deriving the
+    // headers only under a flag would make a genuine infinite-recursion refusal appear and disappear with an
+    // unrelated flag — the exact defect class checkNoHeapTransitive's own header records twice. One graph, one
+    // verdict. The other two consumers were checked and cannot be perturbed: a header body contributes no
+    // `_staticReads` and can never be a `_staticWriter` or a `_destructibleOwner` (all three are filled from
+    // kama source), so enlarging the region can only fail to suppress, never suppress wrongly.
+    std::vector<CHeader> headers = loadRuntimeHeaders();
+
+    std::vector<CBody> bodies = parseCBodies(_emittedC, /*entryBodies=*/true);
+    std::vector<std::vector<CBody>> headerBodies;
+    // `defined` spans EVERY segment before any of them is scanned: a call from emitted C into a header body
+    // has to be an edge, which is the whole point, and that cannot be known while parsing one text at a time.
+    std::set<std::string> defined;
+    for (const CBody& b : bodies) defined.insert(b.name);
+    // `entryBodies` is FALSE for a header: `main` and `KAMA_EXPORT` are the PROGRAM's roots, and a header that
+    // happened to spell either would otherwise add a root the program does not have.
+    _headerBodies.clear();
+    for (const CHeader& h : headers) {
+        headerBodies.push_back(parseCBodies(h.text, /*entryBodies=*/false));
+        for (const CBody& b : headerBodies.back()) {
+            // A header body whose name an EMITTED body already took would merge two nodes — their edges and
+            // facts unioned under one key. Harmless for `--no-heap` (a union only ever refuses more), but
+            // `checkGlobalAllocator` would see a cycle that is not there and refuse a correct pool. Nothing
+            // collides today (header helpers are `kama__*`, the user surface is `k_*`), and it is one prelude
+            // rename away, so it is checked rather than assumed.
+            if (defined.count(b.name) && !_headerBodies.count(b.name)) continue;
+            defined.insert(b.name);
+            _headerBodies.insert(b.name);
+        }
+    }
+    // The funnel is where the walk STOPS. Removing the three names from `defined` is what keeps a use of them
+    // a leaf — a fact, or an edge into the declared pool — instead of an edge into their own bodies.
+    defined.erase("kama_alloc"); defined.erase("kama_alloc_zeroed"); defined.erase("kama_free");
+
+    _callEdges.clear();
+    // Emitted C first, so a fact it already recorded wins: it names the CONSTRUCT ("a deep `copy` of `X`"),
+    // and a derived one can only name the symbol.
+    scanCBodies(_emittedC, bodies, defined, std::string());
+    for (size_t i = 0; i < headers.size(); ++i)
+        scanCBodies(headers[i].text, headerBodies[i], defined, headers[i].file);
+}
+
+// One segment's bodies. `fixedFile` empty: the emitted C, whose lines come from the `#line` directives it
+// carries. Otherwise a runtime header, which has none — there the file is fixed and the line is COUNTED from
+// the start of the text by a monotonic cursor (the scan visits bodies, and tokens within a body, in
+// increasing position order, so counting stays O(text) rather than O(text x refs)).
+void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodies,
+                           const std::set<std::string>& defined, const std::string& fixedFile)
+{
     const size_t n = s.size();
+    const bool header = !fixedFile.empty();
     const bool pool = !_globalAllocator.empty();   // `@globalAllocator`: the funnel is an edge, not a heap fact
     auto identStart = [](char c) { return isalpha((unsigned char)c) || c == '_'; };
     auto identChar  = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
@@ -25513,14 +25663,16 @@ void CEmitter::buildCallGraph()
         return e == std::string::npos ? n : e + 2;
     };
     typedef CBody Body;
-    std::vector<Body> bodies = parseCBodies(s, /*entryBodies=*/true);
-
-    std::set<std::string> defined;
-    for (const Body& b : bodies) defined.insert(b.name);
 
     static const std::set<std::string> kNotAType = { "return", "case", "goto", "sizeof", "else", "do", "typedef" };
-    _callEdges.clear();
     int line = 0;
+    // The counted-line cursor, used only for a header. Monotonic: it never rewinds, so every call together
+    // walks the text once.
+    size_t lineAt = 0; int lineNo = 1;
+    auto countedLine = [&](size_t pos) {
+        while (lineAt < pos && lineAt < n) { if (s[lineAt] == '\n') ++lineNo; ++lineAt; }
+        return lineNo;
+    };
     std::string file;
     // `#line N "path"` at `d` — the path as `line()` wrote it, with its `\` and `"` escapes undone.
     auto readDirective = [&](size_t d) {
@@ -25532,8 +25684,9 @@ void CEmitter::buildCallGraph()
     };
     size_t prevClose = 0;
     for (const Body& b : bodies) {
+        if (header) { file = fixedFile; line = countedLine(b.open); }
         // The directive in force when the body opens: scan the gap since the previous body for the latest one.
-        for (size_t d = s.find("#line ", prevClose); d != std::string::npos && d < b.open; d = s.find("#line ", d + 6))
+        else for (size_t d = s.find("#line ", prevClose); d != std::string::npos && d < b.open; d = s.find("#line ", d + 6))
             readDirective(d);
         prevClose = b.close;
         struct Ref { std::string name; int line; bool call; };
@@ -25559,10 +25712,11 @@ void CEmitter::buildCallGraph()
             if (c == '\n') { lineStart = true; ++i; continue; }
             if (c == ' ' || c == '\t' || c == '\r') { ++i; continue; }
             if (lineStart && c == '#') {
-                if (s.compare(i, 6, "#line ") == 0) readDirective(i);
+                if (!header && s.compare(i, 6, "#line ") == 0) readDirective(i);
                 i = skipDirective(i); continue;
             }
             lineStart = false;
+            if (header) line = countedLine(i);   // no directives here: the position IS the line
             if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
             if (c == '"' || c == '\'') { i = skipLiteral(i); prevTok = "\""; continue; }
             if (!identStart(c)) {
@@ -25582,16 +25736,28 @@ void CEmitter::buildCallGraph()
             if (!member && afterType && (next == '=' || next == ';' || next == ',' || next == '['))
                 declared.insert(id);
             if (!member && id != b.name && defined.count(id)) refs.push_back(Ref{ id, line, next == '(' });
-            // With `@globalAllocator`, the funnel is the pool: a call to it is an edge into the pool's entry, not an
-            // allocation fact (see rejectIfNoHeap for the sites whose C calls a runtime helper instead).
-            const bool funnel = id == "kama_alloc" || id == "kama_alloc_zeroed" || id == "kama_free";
-            if (pool && !member && next == '(' && funnel) {
-                refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate" : "kama__global_allocate", line, true });
+            // THE FUNNEL — the first of the two derived leaves, and BOTH its arms are handled here, which is
+            // the whole distinction the declared allocator bought (KR-49): with `@globalAllocator` the funnel
+            // IS the pool, so a use is an EDGE into the pool's entry and the pool's own body decides; without
+            // one it is a FACT, because the funnel then reaches the system heap. Either way the walk stops
+            // here and never descends into the funnel's own body — `kama_alloc` is not in `defined`, and the
+            // funnel's block is blanked out of the header text besides.
+            if (!member && next == '(' && isFunnelName(id)) {
+                if (pool)
+                    refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate" : "kama__global_allocate", line, true });
+                else if (!_allocSites.count(b.name) && !isCapacityGuardedDrop(b.name))
+                    _allocSites[b.name] = AllocSite{ "calls `" + id + "`, the runtime's allocation funnel", line, file };
                 prevTok = id; i = e; continue;
             }
-            // A call to C marked `@heap` is an allocation fact for this body — the first one, unless emission
-            // already recorded one with a better sentence (the gate names the construct; this names the symbol).
-            if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
+            // A FOREIGN allocator — the second derived leaf, and a fact ALWAYS, pool or not: this is memory the
+            // funnel did not hand out, so a declared pool neither served it nor can excuse it. Reached in
+            // kama's own headers (`kama_resolve_host` -> `getaddrinfo`) or in a user's C on the include path.
+            if (!member && next == '(' && !_allocSites.count(b.name) && foreignAllocators().count(id))
+                _allocSites[b.name] = AllocSite{
+                    "reaches `" + id + "`, which allocates outside kama's control", line, file };
+            // A call to C a USER marked `@heap` — FFI into C the compiler cannot read. The runtime's own
+            // symbols are derived above, not marked, and `@heap` on one of them is refused (see checkAttrs).
+            else if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
                 _allocSites[b.name] = AllocSite{ "calls `" + id + "`, which is `@heap`", line, file };
             if (!member && next == '(' && id == "KAMA_NOHEAP_SLOT" && !provenAt) provenAt = pdepth + 1;
             // A CALL THROUGH A MEMBER is a call the compiler cannot see the target of. C has no methods, so
@@ -25604,7 +25770,16 @@ void CEmitter::buildCallGraph()
             //
             // `(x->m)(…)` — a member behind parentheses, which is how a bindable's type-erased `fn` is cast
             // before it is called — counts too. A cast `(T)(x)` never has a member before its `)`.
-            if (member && !provenAt && !_allocSites.count(b.name)) {
+            //
+            // ⚠️ NOT in a runtime header, and the exclusion is measured rather than cautious. The rule exists to
+            // catch a slot the EMITTER synthesized, which the author can restructure — that is why its
+            // diagnostic says "make the callee allocation-free". The C seam has exactly one such call,
+            // `l->tick(l->state)` in `kama__loop_step` (kama_app.h), reached from `kama_run_loop`; applying the
+            // rule there refuses EVERY `--no-heap` program that calls `App.run()`, on every target, naming C
+            // the author cannot edit. The hole this leaves is narrow: a runtime callback's target is handed
+            // over as a VALUE, and a body name passed as a value is already an edge (above), so the target is
+            // reached through the graph rather than guessed at through the slot.
+            if (!header && member && !provenAt && !_allocSites.count(b.name)) {
                 size_t g = f;
                 if (next == ')') { ++g; while (g < b.close && isspace((unsigned char)s[g])) ++g; }
                 if ((next == '(' || (next == ')' && g < b.close && s[g] == '(')))
@@ -25776,7 +25951,7 @@ void CEmitter::checkNoHeapTransitive()
 
         std::string path;
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-            path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+            path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
 
         const AllocSite& site = _allocSites[hit];
         // A position only when there is an honest one to give — see the leaf's record for the case that
@@ -25862,7 +26037,7 @@ void CEmitter::checkOnPanicRegions()
             for (std::string n = f; !n.empty(); n = (parent.count(n) ? parent[n] : std::string())) chain.push_back(n);
             std::string path;
             for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-                path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+                path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
             ScopedStr _f(_emitDeclFile, d->second.file);
             unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (chain.size() > 1 ? path + " owns" : "it owns")
                          + " `" + d->second.name + "` (a `" + d->second.className + "`), which has a destructor — "
@@ -26000,7 +26175,7 @@ void CEmitter::checkGlobalAllocator()
         chain.front().pop_back();   // the `#` that told the revisit apart from the start
         std::string path;
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-            path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+            path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
         refuse(ci, "reaches the global allocator it implements, through " + path + " — which is itself, so the "
                "first allocation would recurse without end; a pool draws from storage it owns");
         return;
@@ -26041,7 +26216,7 @@ void CEmitter::checkForeignEntryStatics()
                 for (std::string n = f; !n.empty(); n = (parent.count(n) ? parent[n] : std::string())) chain.push_back(n);
                 std::string path;
                 for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-                    path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+                    path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
                 ScopedStr _f(_emitDeclFile, sr.second.file);
                 unsupported(("`" + kv.second.display + "` is `@foreignEntry`"
                              + (kv.second.via.empty() ? std::string() : " (bound to `" + kv.second.via + "`)")

@@ -1,1 +1,1 @@
-reaches heap allocation (calls `kama_free`, which is `@heap`)
+reaches heap allocation (calls `kama_free`, the runtime's allocation funnel)

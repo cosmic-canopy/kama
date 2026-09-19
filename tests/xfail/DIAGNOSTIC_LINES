@@ -669,13 +669,14 @@ noheap_fnptr_bind	noheap_fnptr_bind.kama:7
 noheap_fnptr_bind_arg	noheap_fnptr_bind_arg.kama:9
 noheap_fnptr_call	noheap_fnptr_call.kama:5
 noheap_foreach_copy	noheap_foreach_copy.kama:8
-noheap_heap_extern	noheap_heap_extern.kama:11
+noheap_heap_extern	noheap_heap_extern.kama:14
 noheap_interp	noheap_interp.kama:2
 noheap_method_new	noheap_method_new.kama:8
 noheap_new	noheap_new.kama:4
 noheap_on_static	noheap_on_static.kama:4
 noheap_optional_dtor	noheap_optional_dtor.kama:7
 noheap_owned_drop	noheap_owned_drop.kama:6
+noheap_pool_resolve	app.kama:53
 noheap_spawn	noheap_spawn.kama:13
 noheap_string_concat	noheap_string_concat.kama:4
 noheap_string_copy	noheap_string_copy.kama:5
@@ -686,6 +687,7 @@ noheap_transitive_method	noheap_transitive_method.kama:9
 noheap_transitive_new	noheap_transitive_new.kama:6
 noheap_try_new	noheap_try_new.kama:4
 noheap_try_new_return	noheap_try_new_return.kama:5
+noheap_unmarked_alloc	noheap_unmarked_alloc.kama:14
 null_check_safe	null_check_safe.kama:4
 null_safe_assignment	null_safe_assignment.kama:10 null_safe_assignment.kama:11
 null_safe_compare	null_safe_compare.kama:17

@@ -19,13 +19,13 @@ export { Command, Process, ExitStatus, Output, Stdio };
 extern "kama_os.h";
 // argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
 // survives the source kama-string RAII across fork). kama holds only the opaque `UnsafePtr` + scalars.
-@heap extern fn UnsafePtr   kama_argv_new(int32 n);
-@heap extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafeConstPtr<cchar> s);
-@heap extern fn void  kama_argv_free(UnsafePtr v);
-@heap extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
+extern fn UnsafePtr   kama_argv_new(int32 n);
+extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafeConstPtr<cchar> s);
+extern fn void  kama_argv_free(UnsafePtr v);
+extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
 extern fn int32 kama_pipe(UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
-@heap extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
+extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
 extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
 extern fn int32 kama_proc_exited(int32 st);
 extern fn int32 kama_proc_exit_code(int32 st);
@@ -34,15 +34,15 @@ extern fn int32 kama_proc_term_signal(int32 st);
 extern fn int32 kama_kill(isize handle, int32 sig);
 // Non-blocking release on drop: POSIX reaps-if-exited-else-detaches (waitpid WNOHANG); Windows checks then
 // CloseHandle. One platform-neutral verb so the dtor stays identical (POSIX has no handle to close).
-@heap extern fn void  kama_proc_detach(isize handle);
+extern fn void  kama_proc_detach(isize handle);
 // Concurrent stdout+stderr drain to EOF (POSIX: poll; Windows: two threads) — see kama_os.h. Fills two heap
 // buffers the caller copies out then frees with kama_free, giving back each one's capacity. Keeps run()'s kama
 // one platform-neutral path.
 // `UnsafePtr<UnsafePtr<uint8>>`, not `UnsafePtr<UnsafePtr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
 // `void**` — a real -Wincompatible-pointer-types on every `run()` build. An FFI declaration has to
 // name the C type exactly; nothing else checks it.
-@heap extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<usize> outCap, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen, UnsafePtr<usize> errCap);
-@heap extern fn void  kama_free(UnsafePtr p, usize n, usize align);
+extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<usize> outCap, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen, UnsafePtr<usize> errCap);
+extern fn void  kama_free(UnsafePtr p, usize n, usize align);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
 extern fn int32 kama_SIGTERM();

@@ -1,0 +1,1 @@
+`tick` is `@noheap`, but this call reaches heap allocation (reaches `calloc`, which allocates outside kama's control)

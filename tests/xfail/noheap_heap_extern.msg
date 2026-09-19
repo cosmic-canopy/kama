@@ -1,1 +1,1 @@
-`tick` is `@noheap`, but this call reaches heap allocation (calls `calloc`, which is `@heap`
+`tick` is `@noheap`, but this call reaches heap allocation (calls `vendor_block_alloc`, which is `@heap`)

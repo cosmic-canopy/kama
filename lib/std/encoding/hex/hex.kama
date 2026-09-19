@@ -17,7 +17,7 @@ export { encode, decode, DecodeError };
 
 // The runtime string constructor — an `extern` is a reference to a C symbol, redeclared per module with
 // the one signature every declaration in the program must share (tools/check-extern-rung.sh).
-@heap extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
 type enum DecodeError implements Error {
     InvalidCharacter(isize at), InvalidLength;

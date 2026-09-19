@@ -506,7 +506,7 @@ type view Chars implements Iterator<char> {
 // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
 // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
 // separators yield "" pieces; an empty separator yields the whole string once.
-@heap extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 type view Split implements Iterator<string> {
     UnsafePtr<uint8> data; isize len; UnsafePtr<uint8> sep; isize seplen; isize pos; bool done;
     // As with `Chars.over` — the compiler calls this for `s.split(separator:)`, in place of a six-field
@@ -550,11 +550,11 @@ type view Split implements Iterator<string> {
 // is NOT part of args() — it's programInvocation()/programName()/programPath(); indices are 0-based over user args only. The extern fns bind
 // the kama_runtime.h helpers, exactly like kama_string_from_raw above.
 extern fn int32  kama_args_count();
-@heap extern fn string kama_args_at(int32 i);
-@heap extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
-@heap extern fn bool   kama_program_name(UnsafePtr<string> dst);
-@heap extern fn bool   kama_program_path(UnsafePtr<string> dst);
-@heap extern fn bool   kama_env_lookup(UnsafeConstPtr<cchar> name, UnsafePtr<string> dst);
+extern fn string kama_args_at(int32 i);
+extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
+extern fn bool   kama_program_name(UnsafePtr<string> dst);
+extern fn bool   kama_program_path(UnsafePtr<string> dst);
+extern fn bool   kama_env_lookup(UnsafeConstPtr<cchar> name, UnsafePtr<string> dst);
 type value Args implements Iterator<string> {
     int32 pos;
     public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
@@ -666,12 +666,14 @@ unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty
 // struct). Concrete impls live at the end of the prelude, after the contracts they satisfy.
-// `@heap`: this C touches the heap, so a call to it is an allocation fact for `@noheap` and `--no-heap`
-// (SPEC *No-heap subset*). A runtime extern is marked if kama's C for it allocates or frees on ANY target, so
-// a no-heap verdict is the same on every target. They are the runtime's allocation funnel (kama_runtime.h),
-// the only place a kama program's C obtains or releases heap memory.
-@heap extern fn UnsafePtr kama_alloc(usize n, usize align);
-@heap extern fn void kama_free(UnsafePtr p, usize n, usize align);
+// These two are the runtime's allocation FUNNEL (kama_runtime.h) — the only place a kama program's C obtains
+// or releases heap memory. They carry no `@heap` mark, and neither does any other runtime extern: the compiler
+// READS the shipped headers and derives what each one does with the heap (SPEC *No-heap subset*). That is why
+// a verdict is the same on every target — both arms of every `#if` are read — and why `@heap` on one of these
+// is now an error rather than a duplicate claim: a mark would override the derived fact, and a stale one would
+// re-refuse a program whose allocation the declared pool actually serves.
+extern fn UnsafePtr kama_alloc(usize n, usize align);
+extern fn void kama_free(UnsafePtr p, usize n, usize align);
 type value GlobalAllocator implements Allocator, Sendable {   // stateless: a container over it may cross an isolate
     // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
     // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
@@ -717,21 +719,21 @@ unsafe fn UnsafePtr ptrOrNull(Optional<UnsafePtr> o) {
 // in-memory buffer write cannot fail, so `format` returns `void` — a deliberate divergence from `serialize`
 // (which has a real I/O sink + non-representable floats and so is `Result`-returning). The scalar formatters
 // bind the stdio-free runtime helpers in kama_runtime.h ("Number / char -> string"), like `kama_string_from_raw`.
-@heap extern fn string kama_fmt_i64(int64 v);
-@heap extern fn string kama_fmt_u64(uint64 v);
-@heap extern fn string kama_fmt_f64(float64 v);
-@heap extern fn string kama_fmt_f32(float32 v);
-@heap extern fn string kama_fmt_char(char cp);
+extern fn string kama_fmt_i64(int64 v);
+extern fn string kama_fmt_u64(uint64 v);
+extern fn string kama_fmt_f64(float64 v);
+extern fn string kama_fmt_f32(float32 v);
+extern fn string kama_fmt_char(char cp);
 // Formattable-specifier variants (`${x:.2}` / `${n:0x}`): fixed-precision float + base-N integer. Emitted as
 // Formatter fast-paths by the interpolation codegen (like writeChar), so the `Formattable` contract is unchanged.
-@heap extern fn string kama_fmt_f64_prec(float64 v, int32 prec, int32 width, int32 flags);
-@heap extern fn string kama_fmt_u64_radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags);
-@heap extern fn string kama_fmt_i64_width(int64 v, int32 width, int32 flags);
-@heap extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
+extern fn string kama_fmt_f64_prec(float64 v, int32 prec, int32 width, int32 flags);
+extern fn string kama_fmt_u64_radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix, int32 pad, int32 flags);
+extern fn string kama_fmt_i64_width(int64 v, int32 width, int32 flags);
+extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
 // generic — unavailable this early (the prelude is collected before any std module), so the sink is backed by
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
-@heap extern fn void kama_str_push(UnsafePtr<string> buf, const ref string src);
+extern fn void kama_str_push(UnsafePtr<string> buf, const ref string src);
 extern fn string kama_str_take(UnsafePtr<string> buf);
 type contract Formattable for value, resource, enum, intrinsic { const fn void format(ref Formatter f); }
 // The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes

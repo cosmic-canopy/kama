@@ -1,0 +1,15 @@
+// A libc allocator reached from a `@noheap` region is refused WITH NO `@heap` MARK ON IT (KR-74).
+//
+// This is new, and it is the half of the row that strengthens rather than relaxes. The proof no longer asks a
+// declaration what its C does: it reads the C. A call the compiler WRITES — which a call to an `extern fn` is,
+// whatever the author declared — names `calloc` in the emitted text, and the name of a foreign allocator is an
+// allocation fact wherever it is spelled. So the author who forgets the attribute, or who never knew about it,
+// gets the same verdict as the author who remembers.
+//
+// The companion is noheap_heap_extern: `@heap` still exists and is still load-bearing, for a symbol the
+// compiler has no such name for.
+extern "<stdlib.h>";
+extern fn UnsafePtr calloc(usize n, usize size);
+unsafe fn int32 grab() { UnsafePtr p = calloc(n: 1, size: 4); return 0; }
+@noheap fn int32 tick() { return grab(); }
+fn int32 main() { return tick(); }

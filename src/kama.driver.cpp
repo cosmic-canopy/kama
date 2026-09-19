@@ -2484,6 +2484,17 @@ static void configureEmitter(CEmitter& e)
     });
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
     e.setForeignRoots({ absolutePath(resolveStdlibDir(g_argv0)), absolutePath(storeDir()) });   // KR-38 attribution
+    // The shipped runtime headers, so the no-heap call graph can READ what kama's own C does with the heap
+    // instead of trusting a `@heap` mark placed against it by hand (KR-74). Same directory the `-I` uses, and
+    // GLOBBED rather than listed: a header added later joins the scan by existing.
+    {
+        const std::string inc = resolveRuntimeDir(g_argv0);
+        std::vector<std::string> hs;
+        for (const std::string& n : listDir(inc))
+            if (n.size() > 2 && n.compare(n.size() - 2, 2, ".h") == 0) hs.push_back(inc + "/" + n);
+        std::sort(hs.begin(), hs.end());   // a verdict must not depend on the filesystem's order
+        e.setRuntimeHeaders(std::move(hs));
+    }
     // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
     // packages claim the same conformance, so it is a callback rather than a precomputed per-unit table:
     // the walk is filesystem work the emitter has no business doing, and it runs at most once per error.

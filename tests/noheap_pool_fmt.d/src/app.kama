@@ -1,0 +1,54 @@
+// A declared `@globalAllocator` pool serves the runtime's own allocations, so a `--no-heap` program may
+// FORMAT a number: `"${n}"` reaches `kama_fmt_i64`, whose C reaches `kama_string_from_raw` and then the
+// funnel — which, with a declaration, IS the pool. Every byte comes from storage the program owns.
+//
+// This was refused until KR-74, and the reason is the whole of that row: `kama_fmt_i64` carried a `@heap`
+// mark, one bit that could say "this C touches the heap" but not WHICH heap. The compiler now reads
+// include/kama_runtime.h and derives the answer, so the funnel and a foreign allocator stop being the same
+// fact. The sibling that must still be refused is tests/xfail/noheap_pool_resolve.d, which reaches
+// `getaddrinfo` — a heap no pool can serve.
+import { std::concurrent::Atomic };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;                 // slots handed out by the bump so far
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+}
+
+fn int32 main() {
+    int32 n = 7;
+    string s = "${n}";          // the pool's storage, not the system heap
+    return cast<int32>(s.length()) + 41;   // "7" -> 1 + 41 = 42
+}

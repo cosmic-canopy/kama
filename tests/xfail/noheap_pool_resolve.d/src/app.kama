@@ -1,0 +1,56 @@
+// The other half of KR-74, and the direction that was WRONG rather than merely strict: a declared pool does
+// NOT excuse a foreign heap. `resolve` reaches `kama_resolve_host`, whose C calls `getaddrinfo` — memory the
+// resolver owns and `freeaddrinfo` releases. The funnel never hands it out, so no pool can serve it.
+//
+// ⚠️ This program BUILT before KR-74, under a pool and under `--no-heap` both: `kama_resolve_host` simply
+// carried no `@heap` mark, and nothing checked that it should. It is the wrong-accept the row exists to fix,
+// which is why the message must name `getaddrinfo` and the header body it sits in — a verdict whose reason
+// cannot be checked is the thing that let this through for months.
+//
+// The builds-fine siblings are tests/noheap_pool_fmt.d and tests/noheap_pool_args.d.
+import { std::concurrent::Atomic, std::net::resolve, std::net::SocketAddr, std::io::IoError,
+         std::collections::DynamicArray };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;                 // slots handed out by the bump so far
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+}
+
+unsafe fn int32 lookup() {
+    Result<DynamicArray<SocketAddr>, IoError> r = resolve(host: "localhost", port: 80);
+    return 0;
+}
+fn int32 main() { return lookup(); }

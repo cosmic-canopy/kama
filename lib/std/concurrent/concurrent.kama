@@ -19,7 +19,7 @@ export { Isolate, cpuCount };
 // The bundle is MOVED into the isolate (`give`), so any post-spawn use of the source is a compile error —
 // no memory is shared, which is what makes an isolate data-race-free by construction.
 extern "kama_isolate.h";
-@heap extern fn void kama_isolate_join_boxed(UnsafePtr h);
+extern fn void kama_isolate_join_boxed(UnsafePtr h);
 extern fn int32 kama_parfor_workers();
 
 // How many isolates this machine can actually run at once — the same number `parallel_for` sizes its

@@ -1,12 +1,15 @@
-// An `extern fn`'s body is C, so no gate inside it can speak; `@heap` is how its declaration says the C touches
-// the heap (KR-47). The call is then a fact like any allocation the compiler writes, and a `@noheap` region
-// that reaches it is refused through the chain. Before `@heap`, a C function that allocated was invisible to
-// the proof, however directly it was called.
+// An `extern fn`'s body is C, so no gate inside it can speak; `@heap` is how its declaration says the C
+// touches the heap (KR-47). The call is then a fact like any allocation the compiler writes, and a `@noheap`
+// region that reaches it is refused through the chain.
 //
-// `calloc` rather than `malloc`: the prelude's own `extern fn malloc` is `@heap` already, and this fixture is
-// about the attribute on a declaration the author wrote.
-extern "<stdlib.h>";
-@heap extern fn UnsafePtr calloc(usize n, usize size);
-unsafe fn int32 grab() { UnsafePtr p = calloc(n: 1, size: 4); return 0; }
+// Since KR-74 this is `@heap`'s ONLY job, and this fixture is the one that proves it still has one. The
+// runtime's own externs carry no mark — the compiler reads `include/*.h` and derives what they do — so what
+// is left for the attribute is exactly this: C the compiler cannot read. The symbol is therefore a made-up
+// VENDOR name, not `malloc`/`calloc`: a libc allocator is refused whether or not it is marked (see
+// noheap_unmarked_alloc), which would make this fixture pass for the wrong reason and leave the attribute
+// itself untested — it did, briefly, while KR-74 was landing.
+extern "<vendor_pool.h>";
+@heap extern fn UnsafePtr vendor_block_alloc(usize n);
+unsafe fn int32 grab() { UnsafePtr p = vendor_block_alloc(n: 4); return 0; }
 @noheap fn int32 tick() { return grab(); }
 fn int32 main() { return tick(); }

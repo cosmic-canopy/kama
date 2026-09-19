@@ -23,7 +23,7 @@ extern "<string.h>";
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);   // zero the moved-out source so its drop is a no-op
 
 extern "kama_channel.h";
-@heap extern fn UnsafePtr   kama_channel_new(usize elemSize, usize cap);
+extern fn UnsafePtr   kama_channel_new(usize elemSize, usize cap);
 extern fn int32 kama_channel_send(UnsafePtr ch, UnsafePtr elem);
 extern fn int32 kama_channel_recv(UnsafePtr ch, UnsafePtr dst);
 extern fn int32 kama_channel_try_pop(UnsafePtr ch, UnsafePtr dst);         // non-blocking pop, for teardown drain
@@ -31,7 +31,7 @@ extern fn void  kama_channel_add_sender(UnsafePtr ch);               // register
 extern fn void  kama_channel_add_receiver(UnsafePtr ch);
 extern fn int32 kama_channel_close_sender(UnsafePtr ch);             // returns 1 if this endpoint is the last
 extern fn int32 kama_channel_close_receiver(UnsafePtr ch);           // returns 1 if this endpoint is the last
-@heap extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the last endpoint after draining
+extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the last endpoint after draining
 
 // The outcome of a `send`. `Sent` means the value was delivered (the queue now owns the sole copy).
 // `Undelivered(item)` hands the value BACK to the caller intact — send failed because the receiver is

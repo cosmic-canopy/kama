@@ -8,12 +8,12 @@ export { Poller, Interest, Ready };
 // and services whoever is ready. Native only (the browser event loop IS the selector on the web). The
 // underlying pollfd[] stays opaque in C behind an UnsafePtr.
 extern "kama_os.h";
-@heap extern fn UnsafePtr   kama_poller_create();
-@heap extern fn void  kama_poller_add(UnsafePtr p, isize fd, int32 interest);
+extern fn UnsafePtr   kama_poller_create();
+extern fn void  kama_poller_add(UnsafePtr p, isize fd, int32 interest);
 extern fn void  kama_poller_remove(UnsafePtr p, isize fd);
 extern fn int32 kama_poller_wait(UnsafePtr p, int32 timeoutMs);
 extern fn int32 kama_poller_ready(UnsafePtr p, isize fd);
-@heap extern fn void  kama_poller_free(UnsafePtr p);
+extern fn void  kama_poller_free(UnsafePtr p);
 
 // What to watch a socket for. Feed a socket's rawHandle() to add().
 type enum Interest { Read, Write, ReadWrite }
