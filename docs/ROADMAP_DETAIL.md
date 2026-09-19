@@ -2028,19 +2028,30 @@ rather than here, so there is one number to keep current. Forward work:
   platform headers in front of EVERY module. Measured 2026-09-17 on the Windows VM while scoping the C-names work (shipped `0.9.398`, SPEC § *C names*):
   preprocessing `#include "kama_os.h"` took ~263 ms against ~121 ms for `kama_runtime.h` alone (5 runs each,
   process start included), and one such TU sees 21,748 macros. ⚠️ That box is QEMU + x86_64 emulation, so read the
-  RATIO and re-measure natively before acting. The shape of a fix: the OS seam behind plain prototypes with its
+  RATIO and re-measure natively before acting. ✅ **Re-measured natively on macOS 2026-09-18** (min of 5,
+  `clang -E`): `kama_runtime.h` 22.3 ms / 1,112 macros, `kama_os.h` 27.9 ms / 4,269 macros — so **5.6 ms and
+  ~3,200 macros per TU here, against the VM's 2x and 21,748**. The row is therefore mostly a WINDOWS win, and
+  the macro surface, not kama's own body text, is what costs: `kama_os.h` pulls **25 system headers**
+  (`<windows.h>`, `<winsock2.h>`, `<dirent.h>`, …). **So the win is getting the system `#include`s out of the
+  header, and moving the bodies to a TU is what ENABLES that** — plain prototypes over plain C types need none
+  of them. Scoping the row as "bodies out of headers" understates it and aims at the smaller half.
+  The shape of a fix: the OS seam behind plain prototypes with its
   bodies in one TU, keeping `static inline` only where inlining measurably pays — it trades inlining of the thin
   syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
   shrinks the macro surface as a side effect. **Not** a fix for the name-collision class (shipped `0.9.398`, SPEC § *C names*): a user's own `extern "<vendor.h>"` bleeds
   into their own TU either way, which is why names must be safe by construction instead.
-  ⚠️ **It now has a second constraint, added at `0.9.401` when the no-heap verdict started DERIVING its runtime
-  facts (SPEC § *No-heap subset*): that analysis READS these header bodies.** What a runtime extern does with the heap is derived from its `static inline` body, so moving
-  the bodies into one TU removes the text the analysis depends on — every `std::fs`/`std::process`/`std::net`
-  allocation fact would disappear, silently and in the ACCEPTING direction. This does not block the row: the
-  scan already takes a list of texts rather than one, so that TU's source joins it as another entry. It has to
-  be done in the same commit, and `tools/check-header-scan.sh` fails loudly if it is not — it plants an
-  allocation in a staged header and requires the refusal, so a scan that quietly stopped finding bodies cannot
-  pass.
+  **The no-heap verdict reads these bodies, and the TU it moves them to must join that scan in the same commit.**
+  Since `0.9.401` what a runtime extern does with the heap is DERIVED from its body text (SPEC § *No-heap
+  subset*), so bodies leaving the headers without the scan following them deletes every
+  `std::fs`/`std::process`/`std::net` allocation fact — silently, and in the ACCEPTING direction.
+  **This costs the row nothing.** The two are on different axes: KR-68 is per-TU C PREPROCESSING, paid N times
+  by clang, while the scan is ONE text read per kama invocation, measured at **under 0.4 ms — below the noise
+  floor** (2026-09-18: 1.72 ms vs 2.11 ms warm, min of 40, on a hello-world under `--no-heap`; an earlier
+  23.8 ms reading was cold page cache, not work). Same bytes, different path: the scanner already takes a LIST
+  of texts — that is how twelve headers became twelve segments — so `kama_os.c` is a thirteenth entry, one line
+  in the driver's glob. ⚠️ `tools/check-header-scan.sh` is the tripwire: it plants an allocation in a staged
+  header and requires the refusal, so a scan that quietly stopped finding bodies fails the gate rather than the
+  user.
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
   `-O` level (`-O3`), or the optimization level dominates a tiny kernel.
