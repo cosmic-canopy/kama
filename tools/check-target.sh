@@ -280,6 +280,25 @@ case "$(uname -s)" in
             exit 1
         fi
     done
+    #     ...and the console reattach must not EAT a redirect. It exists so a GUI exe launched from a
+    #     terminal still prints, and it used to rebind fds 0/1/2 whenever AttachConsole succeeded — but a
+    #     process launched with STARTF_USESTDHANDLES (a shell redirect, a pipe, a CI runner) was already
+    #     handed a stdout, and the parent of a redirect usually has a console too, so the attach succeeded
+    #     and the file got NOTHING. `app > log.txt` wrote 0 bytes where a console build wrote 13 (KB-30).
+    #     The console build is the control: the two must agree, whatever the number is.
+    printf 'fn int32 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
+    "$KAMA" build --subsystem windows "$tmp/gui_out.kama" -o "$tmp/gui_out.exe" >/dev/null 2>&1
+    "$KAMA" build                    "$tmp/gui_out.kama" -o "$tmp/con_out.exe" >/dev/null 2>&1
+    "$tmp/gui_out.exe" > "$tmp/gui_out.txt" 2>/dev/null || true
+    "$tmp/con_out.exe" > "$tmp/con_out.txt" 2>/dev/null || true
+    guibytes=$(wc -c < "$tmp/gui_out.txt" | tr -d ' ')
+    conbytes=$(wc -c < "$tmp/con_out.txt" | tr -d ' ')
+    if [ "$guibytes" != "$conbytes" ] || [ "$conbytes" = 0 ]; then
+        echo "check-target: FAIL — a --subsystem windows build wrote $guibytes bytes to a redirect where" >&2
+        echo "  the same program as a console build wrote $conbytes; the reattach is overriding a stdout" >&2
+        echo "  the process was handed" >&2
+        exit 1
+    fi
     ;;
 esac
 #     …and everywhere else it is an accepted NO-OP, not an error, so one cross-platform build script can

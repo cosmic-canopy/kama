@@ -1918,6 +1918,27 @@ extern int    kama__argv_state;   // Windows: 0 narrow CRT argv, 1 converting, 2
 // different type from <windows.h>'s file-scope one, so the declaration would still conflict — which is
 // exactly what the first attempt at this fix did. It defines nothing and includes nothing.
 struct _SECURITY_ATTRIBUTES;
+
+// Was this process HANDED this standard stream? `id` is one of the STD_*_HANDLE ids (-10/-11/-12).
+//
+// A GUI-subsystem process launched with STARTF_USESTDHANDLES — a shell redirect, a pipe, a CI runner, a
+// launcher capturing a log — is given real handles, and the CRT binds fds 0/1/2 from them exactly as it
+// does for a console program. One launched from Explorer is given none. The reattach below exists only
+// for the SECOND case, so it must be able to tell them apart: it used to rebind all three whenever
+// AttachConsole succeeded, and since the parent of a redirect usually has a console too, the attach
+// succeeded and the redirect got nothing. `game.exe > log.txt` wrote 0 bytes where the same program
+// built as a console exe wrote 13 (KB-30, measured 0.9.402).
+//
+// A handle is REAL when it is neither null nor INVALID_HANDLE_VALUE and `GetFileType` knows what it is —
+// disk, pipe or character device. FILE_TYPE_UNKNOWN (0) is what a closed or bogus handle answers.
+static inline void* kama__given_std_handle(unsigned long id) {
+    extern void* __stdcall GetStdHandle(unsigned long);
+    extern unsigned long __stdcall GetFileType(void*);
+    void* h = GetStdHandle(id);
+    if (h == (void*)0 || h == (void*)(intptr_t)-1) return (void*)0;
+    if (GetFileType(h) == 0u) return (void*)0;            /* FILE_TYPE_UNKNOWN */
+    return h;
+}
 #endif
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
@@ -1966,20 +1987,35 @@ static inline void kama_args_init(int argc, char** argv) {
         extern int   _dup2(int, int);
         extern int   _close(int);
         if (AttachConsole((unsigned long)-1)) {
-            void* hOut = CreateFileA("CONOUT$", 0x80000000u | 0x40000000u, 0x1u | 0x2u,
-                                     (void*)0, 3u, 0u, (void*)0);
-            void* hIn  = CreateFileA("CONIN$",  0x80000000u | 0x40000000u, 0x1u | 0x2u,
-                                     (void*)0, 3u, 0u, (void*)0);
-            if (hOut != (void*)(intptr_t)-1) {
-                int fd = _open_osfhandle((intptr_t)hOut, 0);
-                if (fd >= 0) { _dup2(fd, 1); _dup2(fd, 2); _close(fd); }
-                SetStdHandle((unsigned long)-11, hOut);
-                SetStdHandle((unsigned long)-12, hOut);
+            // PER STREAM, and only the ones nobody handed us — see kama__given_std_handle. A redirect is
+            // the one case where stdout was already going somewhere the caller chose, and overriding it
+            // is how this code silently ate `> log.txt`. The three are independent: `app > out.txt` with
+            // stderr left on the terminal must redirect ONE of them and reattach the other.
+            void* given0 = kama__given_std_handle((unsigned long)-10);
+            void* given1 = kama__given_std_handle((unsigned long)-11);
+            void* given2 = kama__given_std_handle((unsigned long)-12);
+            if (!given1 || !given2) {
+                void* hOut = CreateFileA("CONOUT$", 0x80000000u | 0x40000000u, 0x1u | 0x2u,
+                                         (void*)0, 3u, 0u, (void*)0);
+                if (hOut != (void*)(intptr_t)-1) {
+                    int fd = _open_osfhandle((intptr_t)hOut, 0);
+                    if (fd >= 0) {
+                        if (!given1) _dup2(fd, 1);
+                        if (!given2) _dup2(fd, 2);
+                        _close(fd);
+                    }
+                    if (!given1) SetStdHandle((unsigned long)-11, hOut);
+                    if (!given2) SetStdHandle((unsigned long)-12, hOut);
+                }
             }
-            if (hIn != (void*)(intptr_t)-1) {
-                int fd = _open_osfhandle((intptr_t)hIn, 0);
-                if (fd >= 0) { _dup2(fd, 0); _close(fd); }
-                SetStdHandle((unsigned long)-10, hIn);
+            if (!given0) {
+                void* hIn = CreateFileA("CONIN$", 0x80000000u | 0x40000000u, 0x1u | 0x2u,
+                                        (void*)0, 3u, 0u, (void*)0);
+                if (hIn != (void*)(intptr_t)-1) {
+                    int fd = _open_osfhandle((intptr_t)hIn, 0);
+                    if (fd >= 0) { _dup2(fd, 0); _close(fd); }
+                    SetStdHandle((unsigned long)-10, hIn);
+                }
             }
         }
     }
