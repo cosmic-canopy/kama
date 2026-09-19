@@ -2000,12 +2000,21 @@ Both types serialize as that text on every backend, as a `Uuid` does, and text t
 `DeError::Malformed`.
 
 `sleep(d: Duration)` blocks the calling thread for **at least** `d`: POSIX resumes `nanosleep` across a
-signal (without which any program that also uses `std::process` wakes early when a child exits), Windows
-rounds up to the millisecond, and a zero or negative span returns at once — so `sleep(d: deadline - now)`
-past its deadline is a no-op. ⚠️ On the web target it **busy-waits**: without ASYNCIFY (a whole-program <!-- test: time_wall_sleep -->
+signal (without which any program that also uses `std::process` wakes early when a child exits), and a
+zero or negative span returns at once — so `sleep(d: deadline - now)` past its deadline is a no-op.
+⚠️ On the web target it **busy-waits**: without ASYNCIFY (a whole-program <!-- test: time_wall_sleep -->
 cost kama will not pay for one function) a wasm function cannot yield to the host, so it spins on the
 monotonic clock, burns a core, and freezes a page on the browser's main thread. On an event loop,
 schedule instead of sleeping.
+
+**It sleeps for the span you asked for, not the platform's scheduler tick.** Windows `Sleep()` rounds to
+the next tick — ~15.625 ms by default — so a 1 ms and an 8 ms nap cost the same and a frame loop paced
+with `sleep` ran at half rate there while running correctly everywhere else. kama uses a
+high-resolution waitable timer instead, per call, falling back to `Sleep` where the OS declines it
+(the flag wants Windows 10 1803+). Deliberately **not** `timeBeginPeriod`, which raises the tick for
+the whole process — a library may not spend a caller's power to fix its own resolution. Measured
+before and after on one machine: 1 ms → 13.4 ms then 1.6 ms, 8 ms → 15.6 ms then 8.7 ms. The *at
+least* guarantee is what this preserves, not what it changes.
 
 ### Paths (`std::path`) ✅
 

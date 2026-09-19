@@ -86,10 +86,50 @@ static inline int64_t kama_now_wall_ns(void) {
     uint64_t ticks = ((uint64_t)ft.dwHighDateTime << 32) | (uint64_t)ft.dwLowDateTime;
     return ((int64_t)ticks - 116444736000000000ll) * 100ll;
 }
-// Sleep() takes whole milliseconds, so ROUND UP: a 1 ns sleep must not be Sleep(0), which yields the rest
-// of the timeslice and returns immediately — "at least this long" is the contract every caller assumes.
+// ⚠️ `Sleep()` does not sleep for what you asked — it sleeps to the next SCHEDULER TICK, ~15.625 ms by
+// default. So `sleep(1 ms)` and `sleep(8 ms)` both cost one tick and `sleep(16 ms)` costs two, and any
+// program pacing itself with `sleep` — a frame loop's 8 ms nap, a poll loop's 10 ms wait — ran at half
+// rate on Windows and at the asked rate everywhere else. Measured on this repo's Windows box before this
+// arm existed: 1 ms -> 13.4 ms, 8 ms -> 15.6 ms, 16 ms -> 23.6 ms (KR-76, reported by the first consumer).
+//
+// The contract was never broken — SPEC promises *at least* `d` — which is why this is reach rather than a
+// bug, and why the fix is here rather than in every program that noticed.
+//
+// A high-resolution waitable timer honours the span as asked, WITHOUT the process-global cost of the
+// obvious alternative. ⚠️ NOT `timeBeginPeriod(1)`: that raises the tick for the whole process (and
+// historically the whole system), burning power in every thread including ones that never sleep, and a
+// library has no business spending a caller's battery to fix its own resolution. The timer is per call
+// and affects nobody else.
+//
+// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` needs Windows 10 1803. On anything older the create FAILS
+// rather than silently degrading, which is what makes the fallback safe to write as one branch: no
+// version test, no feature probe — ask, and take `Sleep` when the answer is no.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#  define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
 static inline void kama_sleep_ns(uint64_t ns) {
     if (ns == 0) return;
+    HANDLE timer = CreateWaitableTimerExW(NULL, NULL,
+                                          CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+    if (timer != NULL) {
+        LARGE_INTEGER due;
+        // Negative = RELATIVE, in 100-ns units. Rounded UP, for the same reason the `Sleep` line below
+        // rounds up to the millisecond: "at least this long" must survive the change of unit. The clamp
+        // is against a nonsense span overflowing the sign — 2^63 hundred-ns is ~29,000 years, so nothing
+        // a caller means is lost, and `-(LONGLONG)x` on an x past LLONG_MAX is undefined.
+        uint64_t units = (ns + 99ull) / 100ull;
+        if (units > 0x7FFFFFFFFFFFFFFFull) units = 0x7FFFFFFFFFFFFFFFull;
+        due.QuadPart = -(LONGLONG)units;
+        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
+            CloseHandle(timer);
+            return;
+        }
+        CloseHandle(timer);
+    }
+    // Sleep() takes whole milliseconds, so ROUND UP: a 1 ns sleep must not be Sleep(0), which yields the
+    // rest of the timeslice and returns immediately.
     Sleep((DWORD)((ns + 999999ull) / 1000000ull));
 }
 

@@ -240,36 +240,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-### Every short `std::time::sleep` costs one scheduler tick on Windows (KR-76) — filed by the first consumer as KG-36, 2026-09-18; re-measured here at `0.9.399`
-
-`kama_sleep_ns` (`include/kama_time.h`, the `_WIN32` arm) is `Sleep((ns + 999999) / 1000000)`. The round-up
-is right and deliberate — a 1 ns sleep must not become `Sleep(0)`, which yields the rest of the timeslice
-and returns — and it is the whole of kama's Windows sleep work. Nothing raises the timer resolution, so
-every span lands on the scheduler's ~15.625 ms tick.
-
-**Measured twice, independently.** The consumer, on Windows 11 x64 (means of 100/100/50 runs at `0.9.399`):
-`sleep(1 ms)` → 16.06 ms, `sleep(8 ms)` → 16.06 ms, `sleep(16 ms)` → 26.9 ms. Re-run here on the Windows VM
-with its own probe, same shape and the same tick: **13.4 ms, 15.6 ms, 23.6 ms**. ⚠️ The absolute numbers
-differ because this box is QEMU (see the VM caveat in `docs/platforms/windows.md`); what both runs show is
-the same thing — 1 ms and 8 ms cost the same, and 16 ms costs two ticks' worth.
-
-⚠️ **This is reach, not a bug, and the row says so first.** SPEC promises *at least* `d`, and the contract
-holds at every measured point. What it costs is that a program pacing itself with `sleep` — a frame loop's
-8 ms nap, a headless client's 10 ms poll — quietly runs at half rate on Windows and at the asked rate
-everywhere else.
-
-**The ask:** a `CreateWaitableTimerExW(…, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, …)` arm inside
-`kama_sleep_ns`, falling back to `Sleep` where the flag is refused (the flag is Windows 10 1803+; the
-fallback is what makes the arm safe to take unconditionally). **Not `timeBeginPeriod(1)`**: it is
-process-global and costs power for every thread in the process, and a library has no business spending a
-caller's battery to fix its own resolution — which is also why the consumer declined to do it locally and
-waited for kama, rather than fixing the same thing twice.
-
-The header is `static inline` and freestanding-friendly, so the arm must stay inside the existing
-`#if defined(_WIN32)` block and pull nothing beyond `<windows.h>`, which that branch already includes. A
-fixture belongs beside `tests/time_wall_sleep.kama`; it asserts a mean rather than one sample, since the
-tick is what is being measured.
-
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
