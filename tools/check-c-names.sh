@@ -56,7 +56,13 @@ cat > "$tmp/system.c" <<'EOF'
 #include <math.h>
 #include <time.h>
 EOF
-if [ "$(uname -s)" != "MSYS" ] && [ "$(uname -s)" != "MINGW64_NT" ]; then
+# ⚠️ A PREFIX match, not equality: `uname -s` on msys2 is `MINGW64_NT-10.0-26200-ARM64`, never the bare
+# `MINGW64_NT` this used to compare against — so Windows took the POSIX arm, `<netinet/in.h>` was not
+# there, the preprocess died and §1 scanned ZERO macros. The floor below caught it, which is what it is
+# for; the guard shipped from a Mac and had never run here.
+case "$(uname -s)" in
+  MSYS*|MINGW*|CYGWIN*) ;;
+  *)
     cat >> "$tmp/system.c" <<'EOF'
 #include <unistd.h>
 #include <sys/types.h>
@@ -64,7 +70,8 @@ if [ "$(uname -s)" != "MSYS" ] && [ "$(uname -s)" != "MINGW64_NT" ]; then
 #include <netinet/in.h>
 #include <pthread.h>
 EOF
-fi
+    ;;
+esac
 echo 'int main(void){return 0;}' >> "$tmp/system.c"
 
 macros_of "$tmp/system.c" > "$tmp/system.macros" || true
