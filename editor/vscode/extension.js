@@ -14,6 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
+const names = require('./names');
 
 // This platform spelled the way the Makefile's `uname -s`-`uname -m` spells it, or null if we
 // can't map it (then we just fall back to the root ./kama below).
@@ -92,6 +93,51 @@ function lldbInitCommands(kama) {
   });
 }
 
+// Every C name in the program, demangled, in ONE `kama demangle` run.
+//
+// The names a debug session shows are whatever the debug info holds, and we cannot enumerate that from
+// here — so the set is taken from the SYMBOLS the compiler knows about (`kama query --symbols` over the
+// file) plus, for locals, the lexical fallback in names.js. The run is a batch over stdin because the
+// analysis costs ~140 ms once and every answer after it is a lookup.
+//
+// ⚠️ Front-loaded on purpose. The place these are needed (`onDidSendMessage`) is SYNCHRONOUS, so it
+// cannot await a child process; `createDebugAdapterTracker` may return a promise and is therefore the
+// only window in which the work can happen.
+function demangleAll(kama, file, mangled) {
+  return new Promise((resolve) => {
+    if (!mangled.length) { resolve(new Map()); return; }
+    const child = cp.spawn(kama, ['demangle', file], { stdio: ['pipe', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => resolve(new Map()));
+    child.on('close', () => {
+      const lines = out.split('\n');
+      const map = new Map();
+      mangled.forEach((m, i) => { if (lines[i] && lines[i] !== m) map.set(m, lines[i]); });
+      resolve(map);
+    });
+    child.stdin.end(mangled.join('\n') + '\n');
+  });
+}
+
+// The mangled spellings worth asking about: every symbol `kama query` reports for the file, in the C
+// spelling the emitter would give it. We cannot reconstruct that spelling reliably from the outside —
+// which is the whole reason `kama demangle` exists — so instead we feed the demangler the names the
+// DEBUG INFO will actually contain, harvested from the binary's symbol table.
+function symbolNames(binary) {
+  try {
+    const out = cp.execFileSync('nm', ['-U', binary], { encoding: 'utf8', maxBuffer: 1 << 24 });
+    const seen = new Set();
+    for (const line of out.split('\n')) {
+      const m = /\s[TtSsDd]\s+_?(k_F[A-Za-z0-9_]+|kama__[A-Za-z0-9_]+|std__[A-Za-z0-9_]+)\s*$/.exec(line);
+      if (m) seen.add(m[1]);
+    }
+    return [...seen];
+  } catch (_) {
+    return [];               // no `nm`, a stripped binary, anything: the lexical fallback still applies
+  }
+}
+
 async function debugCurrentFile() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.document.languageId !== 'kama') {
@@ -122,6 +168,10 @@ async function debugCurrentFile() {
     cwd: folder ? folder.uri.fsPath : path.dirname(file),
     sourceLanguages: ['c'],
     initCommands: await lldbInitCommands(kama),
+    // Read back by the tracker factory below. `type: 'lldb'` is CodeLLDB's, shared with every Rust,
+    // C++ and Swift session in the window, and a factory is registered per TYPE — so the marker is
+    // what keeps kama's name rewriting off somebody else's debug session.
+    kamaSession: { kama, file, program: out },
   });
 }
 
@@ -272,7 +322,28 @@ function activate(context) {
     // The one honest answer to the one-configuration-per-process limit: re-pinning on tab switch would
     // evict the parse cache and re-analyze every open closure on every switch, so the user gets a button.
     vscode.commands.registerCommand('kama.restartServer', () => client && client.restart()),
-    vscode.window.onDidChangeActiveTextEditor(refreshStatus)
+    vscode.window.onDidChangeActiveTextEditor(refreshStatus),
+    // The name layer for LOCALS, the CALL STACK and watch expressions. A data formatter cannot reach
+    // these — they come from the debug info — so this edits the DAP traffic in both directions.
+    //
+    // ⚠️ A TRACKER, not a DebugAdapterDescriptorFactory. An extension may only register a descriptor
+    // factory for a debug type IT defines, and `lldb` belongs to CodeLLDB — so the clean, documented
+    // interception point is closed to us. A tracker receives the live message object before VS Code
+    // forwards it and an in-place edit therefore lands, which is what Microsoft's own nodebook sample
+    // relies on, but the contract is "intercept", not "rewrite": if VS Code ever clones first, names
+    // quietly revert to the C spelling. That is a degradation, not a break, and it is why the rewriting
+    // rules live in names.js where they can be asserted on their own.
+    vscode.debug.registerDebugAdapterTrackerFactory('lldb', {
+      createDebugAdapterTracker(session) {
+        const mark = session.configuration && session.configuration.kamaSession;
+        if (!mark) return undefined;              // somebody else's lldb session: do not touch it
+        // The one async window there is: onDidSendMessage cannot await, so the table is resolved here
+        // and every later rewrite is a lookup.
+        return demangleAll(mark.kama, mark.file, symbolNames(mark.program))
+          .then((answers) => names.makeTracker(names.makeTable(answers)))
+          .catch(() => names.makeTracker(names.makeTable(new Map())));
+      },
+    })
   );
   startLanguageServer();
 }
