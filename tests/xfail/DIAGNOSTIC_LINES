@@ -678,6 +678,7 @@ noheap_fnptr_bind	noheap_fnptr_bind.kama:7
 noheap_fnptr_bind_arg	noheap_fnptr_bind_arg.kama:9
 noheap_fnptr_call	noheap_fnptr_call.kama:5
 noheap_foreach_copy	noheap_foreach_copy.kama:8
+noheap_generic_method_name	noheap_generic_method_name.kama:15
 noheap_heap_extern	noheap_heap_extern.kama:14
 noheap_interp	noheap_interp.kama:2
 noheap_method_new	noheap_method_new.kama:8

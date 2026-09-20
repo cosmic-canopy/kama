@@ -192,10 +192,12 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
 
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
-        auto gi = _genericTypeInsts.find(tok);
-        if (depth < 4 && gi != _genericTypeInsts.end()) {
-            const auto& args = gi->second.typeArgs;
-            auto df = _genericTypeDefaults.find(gi->second.templateKey);
+        //
+        // Factored into a lambda because a token may be the instance ITSELF or one of its MEMBERS — see
+        // the member split below, which renders the owner exactly the same way.
+        auto renderInstance = [&](const GenericTypeInst& inst) -> std::string {
+            const auto& args = inst.typeArgs;
+            auto df = _genericTypeDefaults.find(inst.templateKey);
             // A template's default is written UNQUALIFIED in the template's own scope (`DefaultHasher`)
             // while the recorded arg is resolved and qualified (`std::collections::DefaultHasher`), so an
             // unqualified default matches on its leaf. A default that IS qualified must match exactly —
@@ -229,14 +231,37 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
                     }
                     return r;
                 };
-            std::string s = demangleForDisplay(gi->second.templateKey, depth + 1);
+            std::string s = demangleForDisplay(inst.templateKey, depth + 1);
             if (n) {
                 s += "<";
                 for (size_t a = 0; a < n; ++a) s += (a ? ", " : "") + renderArg(args[a], depth + 1);
                 s += ">";
             }
-            out += s;
-            continue;
+            return s;
+        };
+
+        auto gi = _genericTypeInsts.find(tok);
+        if (depth < 4 && gi != _genericTypeInsts.end()) { out += renderInstance(gi->second); continue; }
+
+        // A MEMBER of a generic instance — `<instance>__<method>`, which is what every method, ctor and
+        // dtor symbol is. The lookup above is keyed by the instance mangle ALONE (see where
+        // `_genericTypeInsts` is filled), so a member token missed it, fell past the scope strips below,
+        // and came out of the `__`-to-`::` fallback still carrying the argument mangle: a `--no-heap`
+        // chain read `std::collections::DynamicArray_string_kama::GlobalAllocator::dtor` for what the
+        // source calls `DynamicArray<string>::dtor`. Longest match wins, for the same reason it does for
+        // file scopes: one instance mangle can be a prefix of another.
+        if (depth < 4 && tok.find("__") != std::string::npos) {
+            const GenericTypeInst* owner = nullptr;
+            size_t cut = 0;
+            for (const auto& kv : _genericTypeInsts)
+                if (tok.size() > kv.first.size() + 2 && tok.compare(0, kv.first.size(), kv.first) == 0
+                    && tok.compare(kv.first.size(), 2, "__") == 0 && (!owner || kv.first.size() > cut)) {
+                    owner = &kv.second; cut = kv.first.size();
+                }
+            if (owner) {
+                out += renderInstance(*owner) + "::" + demangleForDisplay(tok.substr(cut + 2), depth + 1);
+                continue;
+            }
         }
 
         // A FILE-PRIVATE scope names no namespace a user could write, so it is stripped rather than

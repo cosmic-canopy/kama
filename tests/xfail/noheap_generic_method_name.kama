@@ -1,0 +1,18 @@
+// A generic instance's METHOD renders with its type arguments, not with the argument mangle.
+//
+// `demangleForDisplay` looks a token up in `_genericTypeInsts`, which is keyed by the instance mangle
+// ALONE. A method symbol is `<instance>__<method>`, so it missed, fell past the scope strips, and came
+// out of the `__`-to-`::` fallback still carrying the mangle: this chain read
+// `std::collections::DynamicArray_string_kama::GlobalAllocator::dtor`. Every reader of a no-heap chain
+// saw that, and it is also the exact shape of every debugger frame inside a generic (KR-32).
+//
+// `string` rather than `int32` as the argument so the rendering has something to get wrong, and the
+// allocator left at its default so the trailing-default drop is asserted too — the mangle expands
+// `GlobalAllocator` positionally, and a demangler that did not drop it would say
+// `DynamicArray<string, GlobalAllocator>::dtor`.
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(int32 n) {
+    DynamicArray<string> l = DynamicArray.empty();
+    return n;
+}
+fn int32 main() { return tick(n: 7); }
