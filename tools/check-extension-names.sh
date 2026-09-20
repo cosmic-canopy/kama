@@ -22,7 +22,9 @@
 # DebugAdapterDescriptorFactory for a debug type it defines, and `lldb` is CodeLLDB's, so a tracker is
 # the only interception point available; a tracker is documented to OBSERVE. It works because the
 # message object is not cloned before the tracker sees it. If that ever changes, names revert to the C
-# spelling and this guard still passes. Only a live session can catch that.
+# spelling and this guard still passes. Only a live session can catch that — done 2026-09-20 on
+# VS Code 1.125.1 + CodeLLDB 1.12.3 (macOS): the Call Stack read `probe`/`main` and Variables read
+# `s = "hello"`, `pt = (x = 3, y = 4)`. Re-run that check by hand when the editor updates.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)

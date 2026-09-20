@@ -2690,11 +2690,18 @@ rather than here, so there is one number to keep current. Forward work:
   - **The DAP batch must be FRONT-LOADED**, which refines how this row was originally framed.
     `onDidSendMessage` is synchronous, so it cannot ask `kama demangle` anything; the one async window
     is `createDebugAdapterTracker`, which may return a Thenable.
-  ⚠️ **Residual risk, live.** An extension may only register a `DebugAdapterDescriptorFactory` for a
-  debug type IT defines, and `lldb` is CodeLLDB's — so the name layer is a TRACKER, which is documented
-  to observe. It works because the message object is not cloned before the tracker sees it. If that ever
-  changes, names revert to the C spelling: a degradation, not a break, and `tools/check-extension-names.sh`
-  cannot see it (it asserts the rewriting rules, not that VS Code honours them).
+  ⚠️ **Residual risk, and what it is measured at.** An extension may only register a
+  `DebugAdapterDescriptorFactory` for a debug type IT defines, and `lldb` is CodeLLDB's — so the name
+  layer is a TRACKER, which is documented to OBSERVE. It works because VS Code does not clone the
+  message before the tracker sees it, which is behaviour rather than contract.
+  ✅ **Verified live 2026-09-20 on VS Code 1.125.1 + CodeLLDB 1.12.3** (macOS): stopped in a `.kama`,
+  the Call Stack read `probe`/`main` and Variables read `s = "hello"`, `pt = (x = 3, y = 4)`. So the
+  approach is sound as shipped. If a future VS Code clones first, names revert to the C spelling — a
+  degradation, not a break — and the fallback is a descriptor-factory PROXY in front of CodeLLDB, which
+  means owning the adapter process and is why it was not the first choice.
+  ⚠️ `tools/check-extension-names.sh` cannot see that regression: it asserts the rewriting RULES, not
+  that VS Code honours them. Only a live session can, so re-run the manual check when the editor
+  updates.
   ⚠️ It also turned up a defect underneath it — a macOS parallel debug build emitted no `.dSYM`, so its
   Mach-O debug map pointed at deleted objects and the binary could not be debugged AT ALL. Fixed
   `0.9.414`; `tools/check-debug-info.sh` drives both link arms. The Windows box has no `lldb` and cannot
