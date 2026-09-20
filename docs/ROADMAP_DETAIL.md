@@ -1901,6 +1901,46 @@ The brief, with the measurements to take and the decisions to put to the maintai
     scope-cleanup / drop order / move-state with `emitScopeCleanup`) then re-run Tier 1, or guarded inline caches.
     A separate, larger project — pursue only if a real hot path (engine ECS dispatch) proves Tier 1 insufficient.
 
+### Declared reachability properties — generalizing what `--no-heap` already proves (KR-79)
+
+**Opened 2026-09-20.** `--no-heap` is not a flag that turns off an allocator. It is a **whole-program
+reachability proof**: the compiler walks the call graph it read out of the emitted C, decides whether any
+path from the region reaches an allocation, and reports the chain when one does
+(`main -> DynamicArray<string>::dtor -> GlobalAllocator::deallocate`). `@noheap` says the same thing about
+one function rather than one build. That machinery — the reach walk, the region marker, the chain-shaped
+diagnostic, the `@heap extern fn` escape for C the compiler cannot read — is general. What is specific is
+the single hardcoded predicate: *does this edge allocate*.
+
+**So kama already ships a proof engine with exactly one theorem in it.** The row is to ask which other
+properties are worth declaring, and what the surface for declaring them is.
+
+Candidates, all of which are reachability over the SAME graph and none of which needs a proof assistant:
+
+- **no panic** — nothing on this path can trap or abort. The immediate consumer is a callback that must not
+  unwind into foreign code, and an `@onPanic` handler itself.
+- **no recursion** — bounded stack. This is the one embedded and real-time users actually ask for, and it is
+  a cycle check on a graph already built. Pairs with a computed worst-case frame size later.
+- **no blocking** — no syscall that can sleep, for an audio/render callback or an interrupt handler. Needs
+  the OS seam to carry the marker, which `@heap extern fn` shows is a solved shape.
+- **no unsafe** — nothing reached is an `unsafe fn` or an extern call.
+
+**Why it is worth doing, stated against GOALS.** Each is a property a systems programmer today asserts in a
+comment and verifies by reading, which is exactly the class of claim this repo's own house rule refuses to
+trust. Each is checkable, cheap (the walk exists and measured below noise when `0.9.401` added header
+bodies to it), and reports as a chain that names the edge to fix rather than a yes/no.
+
+**Why it is NOT a proof language.** Prompted by looking at Bend 2, whose `LAWS.bend` is a file of theorems
+the compiler re-proves on every change — the same instinct, reached from dependent types. kama should not
+take dependent types, an affine no-sharing rule, or a theorem syntax: those buy properties about VALUES,
+and everything above is a property about REACHABILITY, which kama can already decide. The overlap is the
+idea that a machine-checked invariant belongs in the source rather than in a comment.
+
+**Unscoped — design first.** The open questions are the surface (one marker per property, a parameterized
+`@requires(…)`, or a region construct), whether a property is declared per function like `@noheap` or per
+build like `--no-heap` or both, how a property crosses a contract slot (the KR-39 problem, which every one
+of these inherits verbatim), and whether user-defined properties are a goal or a non-goal. Nothing is
+built until that is written down and a verdict recorded here, per the surface-item rule in AGENTS.md.
+
 ### Embedded / bare-metal MCU (Pi Pico · Arduino · ESP32) — toolchain packaging
 
 The language surface is done ([MCU_READINESS.md](MCU_READINESS.md)); what remains is build and library work,
