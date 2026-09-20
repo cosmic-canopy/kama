@@ -2023,7 +2023,7 @@ remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h
 Where kama currently stands is measured in [benchmarks/RESULTS.md](benchmarks/RESULTS.md) — read it there
 rather than here, so there is one number to keep current. Forward work:
 
-- **One `import` taxes every TU (KR-77).** Split out of KR-68 on 2026-09-18, because that row was two
+- **One `import` taxes every TU — SHIPPED `0.9.408`, and its win is UNCONFIRMED.** Split out of KR-68 on 2026-09-18, because that row was two
   problems wearing one sentence and only the expensive one had a plan. `emitIncludes`
   (`src/kama.cemit.cpp:34658`) walks every unit and UNIONS their `extern "<h>"` lines into a single
   `<name>.gen.h` that every generated `.c` includes. So the cost is not "the OS seam is heavy" but "one file's
@@ -2034,9 +2034,9 @@ rather than here, so there is one number to keep current. Forward work:
   without — 4.21 ms of pure waste, x16 innocent TUs = 67 ms per build**, on the platform where the seam is
   CHEAPEST (4,269 macros; Windows sees 21,748). It scales with module count, which is the direction real
   programs grow.
-  **Why this is the better half to do first.** It touches no header, so it costs no inlining (the performance
+  **Why it was the better half to do first.** It touches no header, so it costs no inlining (the performance
   invariant is untouched), needs no change to the `--no-heap` header scan, and cannot fail open. It is pure
-  emitter work against information the emitter already has per unit. And it may RETIRE KR-68: once the
+  emitter work against information the emitter already has per unit. And it may retire the depth half below: once the
   innocent TUs stop including the seam, the remaining depth win applies to the one TU that genuinely uses it,
   which may not clear the bar of trading away syscall-wrapper inlining. GOALS #2 (a TU that preprocesses less
   parallelizes better) and #4 / ponytail (a header carrying what a TU NEEDS is simpler than one carrying
@@ -2045,11 +2045,33 @@ rather than here, so there is one number to keep current. Forward work:
   see every extern TYPE, so a naive per-unit split breaks a `type extern value` whose layout crosses units.
   The set has to be DERIVED from the C each unit actually emits — the same "derive, don't declare" move the
   no-heap verdict made at `0.9.401` — rather than read off the `extern "<h>"` lines written in that file.
+  ✅ **As built (`0.9.408`), and what it actually bought.** The union is gone: a header reaches the shared
+  `<name>.gen.h` only when an extern TYPE, an extern ENUM or an `extern const` can put it in a shared
+  declaration; everything else is derived per TU from the text that TU emits, against the extern names kama
+  declares PLUS every `kama_`/`KAMA_` name the shipped headers define (the emitter writes references of its
+  own — a `spawn` trampoline names `kama_isolate_t`, which no kama declaration mentions).
+  ⚠️ **MEASURED, AND THE PREMISE DID NOT HOLD ON macOS: 0.32 ms per innocent TU** (interleaved A/B, min of
+  40) — about 5 ms on a 350 ms build. The preprocessed output shrinks by only 164 lines, because
+  `kama_runtime.h`, which every TU needs anyway, already pulls most of what `kama_os.h` needs here; the seam
+  adds 3,157 macros and recording macros is nearly free. **The earlier 4.21 ms estimate this row was filed on
+  was drift**, measured one arm after the other on a box whose run-to-run spread is ±13%. Interleave the arms.
+  ⚠️ **So it is a WINDOWS change, and Windows has not measured it.** There `<windows.h>` is genuinely
+  additional rather than already-included, and the VM saw a 142 ms per-TU delta against macOS's 5.6 ms. If
+  the win does not appear there either, REVERT it: what it costs is a real ordering contract, below.
+  ⚠️ **The ordering contract it introduces, every line of it measured rather than reasoned about.** Each
+  module TU must emit, in this order: the feature macros (`KAMA_ONPANIC`, `KAMA_GLOBAL_ALLOCATOR`), then
+  `kama_runtime.h`, then its own FFI headers, then the shared header. Getting it wrong is not a compile
+  error in two of the three cases — a runtime header pulled in ahead of the feature macros made
+  `global_allocator_isolates` HANG, because the TU built the default malloc funnel for a program that had
+  declared a pool. `kama_log.h` is not self-contained (it uses `size_t`), which is why `kama_runtime.h`
+  precedes the FFI headers; and the FFI headers precede the shared header because they pull system headers
+  whose functions the shared header's emitted bodies hand-declare ("cannot apply asm label to function after
+  its first use").
 - **The OS seam needs 25 system headers because it ships bodies (KR-68).** One generated `<name>.gen.h` carries every
-  ⚠️ **Re-scoped 2026-09-18: the FAN-OUT half is now KR-77, above, and should be measured before this row —
+  ⚠️ **Re-scoped 2026-09-18: the FAN-OUT half shipped separately (`0.9.408`, the entry above) and should be measured before this row —
   it may retire it.** What remains here is DEPTH. Once each TU carries only the headers it needs, the seam's
   weight is paid only by the TUs that genuinely use it, and the question becomes whether making it lighter is
-  still worth the inlining it costs. Answer that with a measurement taken AFTER KR-77, not before.
+  still worth the inlining it costs. Answer that with a measurement taken AFTER that change, not before.
   The original statement, kept because its Windows numbers are the reason the row exists: one generated
   `<name>.gen.h` carries every
   `extern` header a build touches, and every module's `.c` includes it, so importing `std::fs` ANYWHERE puts the
@@ -2067,7 +2089,7 @@ rather than here, so there is one number to keep current. Forward work:
   a TU with the seam removed still pays 18.30 ms of its 22.51, so the OS seam is 4.21 ms of it. Nothing
   examines that 18 ms, and much of `kama_runtime.h` is macro-generated inline bodies a given TU never calls.
   Left unfiled on purpose: it wants a measurement of what a TU actually USES before anyone proposes a fix,
-  and neither this row nor KR-77 needs it to proceed.
+  and neither this row nor the fan-out change needs it to proceed.
   The shape of a fix: the OS seam behind plain prototypes with its
   bodies in one TU, keeping `static inline` only where inlining measurably pays — it trades inlining of the thin
   syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
