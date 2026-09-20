@@ -53,11 +53,13 @@ expect_listing() {
 }
 
 # The output directory is checked for the ABSENCE of intermediates rather than by exact listing.
-# What legitimately lands there varies: a macOS debug link emits an `app.dSYM` bundle, and whether it
-# does depends on $KAMA_BUILD_JOBS — at -j1 the driver hands clang one combined compile+link command
-# (which runs dsymutil), while a parallel build compiles to .o first and links those (which does not).
-# tools/run-checks.sh exports KAMA_BUILD_JOBS=1, so this guard sees the .dSYM under `./dev check` and
-# not when run by hand. Debug symbols in the output directory are correct; a leftover .c is not.
+# What legitimately lands there includes an `app.dSYM` bundle: on macOS a debug build's DWARF lives in
+# a bundle beside the binary, not in the executable. It used to appear only at -j1, where the driver
+# hands clang one combined compile+link command and clang runs dsymutil itself; a parallel build
+# compiled to .o and linked those, and got none — which meant its debug map pointed at objects the
+# build had deleted and the binary could not be debugged at all. The driver now consolidates on that
+# path too, so the bundle appears at EVERY -j. Debug symbols in the output directory are correct; a
+# leftover .c is not.
 # ⚠️ `.kama-cache/` is the ONE thing a build leaves behind on purpose (KR-2): the per-TU object cache, which
 # is what makes a rebuild skip the compiles whose input did not change. It is scoped to the output binary and
 # lives inside the output directory, so the rule this guard exists for is unchanged — a build still writes
@@ -146,10 +148,19 @@ fi
 # 6. `--no-cache`: the object cache is the one thing a build leaves behind (KR-2), and this is the way out.
 #    With it the output directory holds the binary and NOTHING else — not the intermediates, and not the
 #    cache directory either. A default that cannot be turned off is a default nobody can debug around.
+#    ⚠️ Asserted as the ABSENCE of the cache and of intermediates, NOT as an exact listing. An exact
+#    listing also forbids `app.dSYM`, which is legitimate output — macOS keeps a debug build's DWARF in
+#    a bundle beside the binary, inside `dirname(-o)` where this guard's whole rule already allows it.
+#    It was an exact listing when it was written, and that only ever passed when the guard was run BY
+#    HAND: `tools/run-checks.sh` exports KAMA_BUILD_JOBS=1, which hands clang one combined compile+link
+#    command, and clang runs dsymutil itself. Measured at -j1 against a driver that emits no dSYM of its
+#    own: the bundle is there. It is now there at every -j, since the driver consolidates the debug map
+#    on the per-TU path too (a Mach-O debug map pointing at deleted objects is not debuggable).
 mkdir -p "$tmp/c6"
 printf 'fn int32 main() { return 0; }\n' > "$tmp/c6/app.kama"
 if ( cd "$tmp/c6" && "$KAMA" build app.kama --no-cache -o app >/dev/null 2>&1 ); then
-    expect_listing "$tmp/c6" "app app.kama " "case 6: --no-cache still left something in the output directory"
+    [ -e "$tmp/c6/.kama-cache" ] && bad "case 6: --no-cache still wrote the object cache"
+    expect_no_intermediates "$tmp/c6" "case 6: the --no-cache build left intermediates behind"
 else
     bad "case 6: the --no-cache build failed"
 fi
