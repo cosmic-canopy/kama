@@ -72,6 +72,26 @@ function build(kama, file, out) {
   });
 }
 
+// The LLDB command that loads kama's value formatters, so a `string` inspects as its text, an
+// `Optional` as `Some(…)`/`None`, a container by its elements and a `Shared` by its refcounts.
+//
+// ASKED OF THE COMPILER rather than derived here. The formatters ship beside the runtime headers and
+// are found exe-relative, so a per-version toolchain must load ITS OWN — they encode that compiler's
+// emitted layout (`kama_tag`, `kama_u`, the `k_` register), and a set describing a different version
+// would silently render the wrong fields. Reconstructing the path in JS would duplicate the resolution
+// that tools/check-runtime-dir.sh exists to pin, and would drift from it.
+//
+// Best-effort: an install without the file answers nonzero, and debugging without formatters is the
+// old behaviour, not a broken session. Never fail the launch over it.
+function lldbInitCommands(kama) {
+  return new Promise((resolve) => {
+    cp.execFile(kama, ['demangle', '--lldb-init'], (err, stdout) => {
+      const line = (stdout || '').trim();
+      resolve(!err && line ? [line] : []);
+    });
+  });
+}
+
 async function debugCurrentFile() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.document.languageId !== 'kama') {
@@ -101,6 +121,7 @@ async function debugCurrentFile() {
     args: [],
     cwd: folder ? folder.uri.fsPath : path.dirname(file),
     sourceLanguages: ['c'],
+    initCommands: await lldbInitCommands(kama),
   });
 }
 

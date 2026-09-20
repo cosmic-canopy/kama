@@ -69,6 +69,10 @@ jobs:
           # this directory, so a missing one breaks that module in the released toolchain only. Naming
           # them individually had already dropped kama_fmt/time/log/app/ctrl/channel/isolate/atomic.
           cp include/kama_*.h payload/include/
+          # ...and the LLDB value formatters, which the `*.h` glob above does not match. They are
+          # found exe-relative beside the headers (`kama demangle --lldb-init`), so an install
+          # without them debugs with raw C structs and no error anywhere to say why.
+          cp include/kama_lldb.py payload/include/
           # The manifest travels WITH the tree it describes. `kama` resolves the stdlib to this
           # directory, so lib/kama/kama.json is what names the project `std` and its module map —
           # copy only lib/std and every `import std::…` fails in the released toolchain while every
@@ -150,6 +154,10 @@ jobs:
           # this directory, so a missing one breaks that module in the released toolchain only. Naming
           # them individually had already dropped kama_fmt/time/log/app/ctrl/channel/isolate/atomic.
           cp include/kama_*.h payload/include/
+          # ...and the LLDB value formatters, which the `*.h` glob above does not match. They are
+          # found exe-relative beside the headers (`kama demangle --lldb-init`), so an install
+          # without them debugs with raw C structs and no error anywhere to say why.
+          cp include/kama_lldb.py payload/include/
           # The manifest travels WITH the tree it describes. `kama` resolves the stdlib to this
           # directory, so lib/kama/kama.json is what names the project `std` and its module map —
           # copy only lib/std and every `import std::…` fails in the released toolchain while every

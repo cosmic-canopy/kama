@@ -8462,7 +8462,7 @@ void usage()
         "                   active is an error. Any configuration flag of `build` (--target, --select,\n"
         "                   --define, --undefine, --release/--debug, --no-heap, --shared) checks exactly\n"
         "                   that one configuration instead)\n"
-        "  kama demangle  <in.kama>... [-- <name>...]\n"
+        "  kama demangle  <in.kama>... [-- <name>...] | --lldb-init | --lldb-init-path\n"
         "                  render EMITTED C names back to kama — a debugger frame, a local, a type, or a\n"
         "                   whole line of C-compiler output with those spellings buried in it. Every name\n"
         "                   kama owns reaches C in a prefixed register (`k_` yours, `kama_` the\n"
@@ -8471,6 +8471,11 @@ void usage()
         "                   With `-- <name>...` it answers those and exits; with none it reads stdin and\n"
         "                   answers one line per line until EOF, so one process serves a whole debug\n"
         "                   session (the analysis is paid once, each answer is a lookup).\n"
+        "                  --lldb-init prints the `command script import` line that loads the LLDB VALUE\n"
+        "                   formatters shipped with this compiler, so a `string` inspects as its text, an\n"
+        "                   `Optional` as `Some(...)`/`None`, a container by its elements and a `Shared`\n"
+        "                   by its refcounts. Put it in ~/.lldbinit, or pass it as a CodeLLDB\n"
+        "                   initCommand; --lldb-init-path prints just the path.\n"
         "  kama stats     <in.kama>... | <kama.json> [--json] [<configuration flags>]\n"
         "                  what this project IS, counted by the compiler that resolved it: lines (total /\n"
         "                   code / comment / blank, classified by the LEXER — a `//` inside a string is not\n"
@@ -9990,6 +9995,9 @@ int main(int argc, char** argv)
     // `kama query <manifest> <file>`: the manifest widens the unit set from <file>'s import closure to
     // every file the manifest owns. Set from the operand below — this used to be `--project`.
     bool        jsonOut = false;           // --json: structured output for `query` and `check`
+    // `kama demangle --lldb-init` / `--lldb-init-path`: where the value formatters are, and the command
+    // that loads them. Neither analyzes anything — they answer about the INSTALL, not about a program.
+    bool        lldbInit = false, lldbInitPath = false;
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
@@ -10055,6 +10063,8 @@ int main(int argc, char** argv)
         else if (a == "--sighelp" && i + 1 < argc)  questions.push_back({QMode::SigHelp,  argv[++i]});
         else if (a == "--search" && i + 1 < argc)   questions.push_back({QMode::Search,   argv[++i]});
         else if (a == "--json")                     jsonOut = true;                  // structured output
+        else if (a == "--lldb-init")                lldbInit = true;                 // `kama demangle` — see below
+        else if (a == "--lldb-init-path")           lldbInitPath = true;
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -10099,6 +10109,29 @@ int main(int argc, char** argv)
             return 2;
         }
         inputs.swap(loose);
+    }
+
+    // `kama demangle --lldb-init[-path]` asks about the INSTALL, not about a program: where the LLDB
+    // value formatters that ship beside the runtime headers are, and the command that loads them. So it
+    // answers before the operand rule below, which would otherwise demand a .kama file to look at.
+    //
+    // The path is resolved HERE rather than reconstructed by a caller, because it is exe-relative
+    // (`resolveRuntimeDir`, pinned by tools/check-runtime-dir.sh) and a per-version toolchain at
+    // ~/.kama/versions/<v>/bin/kama must find ITS OWN formatters, never an ambient set describing a
+    // different compiler's layout. That is the same reason the formatters ship with the compiler at all.
+    if (lldbInit || lldbInitPath) {
+        if (subcommand != "demangle") {
+            fprintf(stderr, "kama: --lldb-init is only meaningful for `kama demangle`\n");
+            return 2;
+        }
+        const std::string py = resolveRuntimeDir(argv[0]) + "/kama_lldb.py";
+        if (!fileExists(py)) {
+            fprintf(stderr, "kama: %s is missing — this install has no LLDB value formatters\n", py.c_str());
+            return 1;
+        }
+        if (lldbInitPath) printf("%s\n", py.c_str());
+        else              printf("command script import \"%s\"\n", py.c_str());
+        return 0;
     }
 
     // A unit-set command needs one form or the other, and says so rather than acting on the current
