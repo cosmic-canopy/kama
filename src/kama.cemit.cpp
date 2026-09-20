@@ -25605,6 +25605,44 @@ void CEmitter::ensureRuntimeHeaders()
     for (const CHeader& h : _headerTexts) {
         _headerBodyLists.push_back(parseCBodies(h.text, /*entryBodies=*/false));
         for (const CBody& b : _headerBodyLists.back()) _headerBodies.insert(b.name);
+        // ...and every NAME this header defines, mapped back to it (KR-77). A TU's `#include` set is derived
+        // from the text it emits, and the emitter writes references to the runtime directly — a `spawn`
+        // trampoline names `kama_isolate_t`, which no kama declaration mentions — so matching only the extern
+        // names kama source declares misses them. Matching what the HEADER defines does not.
+        for (const CBody& b : _headerBodyLists.back()) _runtimeHeaderDefines[b.name] = h.file;
+        const std::string& t = h.text;
+        // ⚠️ ONLY names in kama's own registers count — `kama_` / `KAMA_` (SPEC § *C names*, shipped `0.9.398`).
+        // These are kama's headers, so every name they OWN carries one of those prefixes, and anything else
+        // they mention belongs to libc. Without the filter this harvest is junk: `typedef struct { int h; }
+        // kama_x;` yields `h` from a naive "last identifier before the `;`", and one stray `h` in the shared
+        // header then drags `kama_os.h` back in front of every TU — measured, and it cost the whole win.
+        auto ours = [](const std::string& n) {
+            return n.size() > 4 && (n.compare(0, 5, "kama_") == 0 || n.compare(0, 5, "KAMA_") == 0);
+        };
+        auto note = [&](const std::string& n) { if (ours(n)) _runtimeHeaderDefines[n] = h.file; };
+        for (size_t i = 0; i + 1 < t.size(); ++i) {
+            // `typedef … NAME;` — the identifier before the semicolon that closes it at brace depth 0. Taking
+            // the FIRST `;` instead reads a struct member, which is the bug above.
+            if (t.compare(i, 8, "typedef ") != 0 || (i && t[i - 1] != '\n')) continue;
+            int depth = 0; size_t j = i;
+            for (; j < t.size(); ++j) {
+                if (t[j] == '{') ++depth;
+                else if (t[j] == '}') --depth;
+                else if (t[j] == ';' && depth <= 0) break;
+            }
+            if (j >= t.size() || j - i > 2000) { i = j; continue; }
+            size_t e = j; while (e > i && isspace((unsigned char)t[e - 1])) --e;
+            size_t s = e; while (s > i && (isalnum((unsigned char)t[s - 1]) || t[s - 1] == '_')) --s;
+            if (s < e) note(t.substr(s, e - s));
+            i = j;
+        }
+        for (size_t i = 0; i + 8 < t.size(); ++i) {   // `#define NAME`
+            if (t.compare(i, 8, "#define ") != 0 || (i && t[i - 1] != '\n')) continue;
+            size_t s = i + 8; while (s < t.size() && t[s] == ' ') ++s;
+            size_t e = s; while (e < t.size() && (isalnum((unsigned char)t[e]) || t[e] == '_')) ++e;
+            if (s < e) note(t.substr(s, e - s));
+            i = e;
+        }
     }
 }
 
@@ -34647,6 +34685,39 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // (KR-75). Both are resolved here, while the buffers still exist and are still distinguishable.
     resolvePendingFacts(&moduleStatics, moduleStatics.str(), /*last=*/false);
     resolvePendingFacts(&moduleBody, moduleBody.str(), /*last=*/false);
+    // The FFI headers this TU needs, derived from the text about to be written (KR-77). Emitted BEFORE any of
+    // it, and after the `#include "<name>.gen.h"` the caller already wrote, so a declaration this module calls
+    // is in scope by the time the call appears. Helpers count: they are this TU's text too.
+    {
+        std::string text = moduleStatics.str();
+        for (auto& h : _fileScopeHelpers) text += h;
+        text += moduleBody.str();
+        // ⚠️ THE FEATURE MACROS LEAD, ahead of this TU's own FFI headers. They select which implementation
+        // `kama_runtime.h` compiles, and a runtime header pulled in first would include it with them UNSET —
+        // its include guard then makes the shared header's own `#define`s arrive too late to matter. Measured:
+        // `global_allocator_isolates` HUNG, because `kama_isolate.h` came first and the TU built the DEFAULT
+        // malloc funnel while the program had declared a pool. A miscompile, not a compile error, which is
+        // why it is spelled out here rather than left to the include order to get right.
+        // THE ORDER IS THE WHOLE PROBLEM, and each line of it was measured rather than reasoned about:
+        //   1. the feature macros, which select which implementation `kama_runtime.h` compiles. A runtime
+        //      header pulled in first would include it with them UNSET, and its include guard then makes the
+        //      shared header's own `#define`s arrive too late — `global_allocator_isolates` HUNG that way,
+        //      building the default malloc funnel for a program that had declared a pool. A miscompile.
+        //   2. `kama_runtime.h`, because kama's other runtime headers are not self-contained: `kama_log.h`
+        //      uses `size_t` and expects it to already exist.
+        //   3. this TU's own FFI headers — BEFORE the shared header, because they pull system headers
+        //      (`kama_isolate.h` -> `<unistd.h>`) that must be seen before anything hand-declares one of their
+        //      functions, which the shared header's emitted bodies do: "cannot apply asm label to function
+        //      after its first use" on `global_allocator_serde`.
+        //   4. the shared header last. Its own guard makes the repeated `kama_runtime.h` a no-op.
+        if (!_moduleHeaderName.empty()) {
+            if (_featureOnPanic)     *_out << "#define KAMA_ONPANIC 1\n";
+            if (_featureGlobalAlloc) *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
+            *_out << "#include \"kama_runtime.h\"\n";
+        }
+        emitUnitIncludes(text);
+        if (!_moduleHeaderName.empty()) { *_out << "#include \"" << _moduleHeaderName << "\"\n\n"; }
+    }
     *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();
@@ -34655,23 +34726,139 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 }
 
 // FFI: emit a C `#include` per `extern "<header>";` directive, deduped.
-void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
+//
+// ⚠️ On the multi-TU path this does NOT emit them all. One generated `<name>.gen.h` carrying every header a
+// build touches means one file's `import` is charged to every TU in the program: measured 2026-09-18, a
+// 7-file program calling `std::fs::exists` in ONE file produced 17 TUs, all 17 including the OS seam, at
+// 4.21 ms of preprocessing each for the 16 that never touch it — 67 ms per build, on the platform where that
+// seam is CHEAPEST (macOS 4,269 macros; Windows 21,748). KR-77.
+//
+// The split is by WHAT A HEADER BACKS, because that decides who can need it:
+//   * an extern TYPE or an extern CONST can appear in a shared declaration — a struct field, a prototype's
+//     parameter — so its header must be in the shared header, where those declarations live;
+//   * an extern FUNCTION is only ever CALLED, and a call sits in exactly one module's body, so its header
+//     belongs in that module's `.c`.
+// Anything whose owner cannot be determined stays shared: the fallback is today's behaviour, which is slow
+// but never wrong.
+void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units, bool perUnitScoped)
 {
-    std::set<std::string> seen;
+    ensureRuntimeHeaders();   // the shipped headers name-map, used to classify below (KR-77)
+    // Pass 1 — per unit, the headers it declares and the extern names declared alongside them. A name may be
+    // declared in several units (`kama_last_error` is re-declared in six stdlib files), so this is a SET: any
+    // of those headers may be the one that declares it, and offering all of them is correct if untidy.
+    std::map<const CompilationUnit*, std::set<std::string>> perUnit;
+    std::set<std::string> all;
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
+        std::set<std::string> hs;
         for (auto& decl : *u->codeDeclarationList)
             if (auto* inc = dynamic_cast<IncludeNode*>(decl.get())) {
                 std::string h = inc->header ? *inc->header : "";
                 if (h.empty()) continue;
                 _externedHeaders.insert(h);   // record for the driver's link hints (e.g. <math.h> -> -lm)
-                if (seen.count(h)) continue;
-                seen.insert(h);
-                if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
-                else             *_out << "#include \"" << h << "\"\n";    // "my.h"
+                hs.insert(h);
+                all.insert(h);
             }
+        if (!hs.empty()) perUnit[u.get()] = hs;
+    }
+    // Pass 2 — classify. A unit that declares an extern TYPE or an extern CONST puts its headers in the
+    // shared set; a unit declaring only extern FUNCTIONS offers its headers per module, keyed by the C names
+    // those functions carry, so the module scan can ask for them by name.
+    if (perUnitScoped) {
+        for (auto& kv : perUnit) {
+            const CompilationUnit* u = kv.first;
+            bool shared = false;
+            for (auto& decl : *u->codeDeclarationList) {
+                // A TYPE is a reason to share only when a C header owns its layout — `type extern value`,
+                // `type extern enum`, and their `expose` twins, since those can appear in a declaration the
+                // shared header carries. An ordinary kama type is emitted by kama and needs no FFI header to
+                // be declared: treating every one as a reason kept `kama_os.h` shared for the whole program,
+                // because `std::fs` declares `File` and `std::io` declares an enum.
+                //
+                // Nothing else shares. A module `static` is DEFINED in its own module's `.c`, which the text
+                // scan below covers; and where its type is an extern one, that type's own unit shares the
+                // header it came from — so a header is always reached through the declaration that needs it.
+                auto externModified = [](const SharedModifierList& mods) {
+                    if (mods)
+                        for (auto& mod : *mods)
+                            if (mod->value && (*mod->value == "extern" || *mod->value == "expose")) return true;
+                    return false;
+                };
+                if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                    if (!externModified(cd->modifiers)) continue;
+                } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                    if (!externModified(ed->modifiers)) continue;
+                } else if (dynamic_cast<ExternConstNode*>(decl.get())) {
+                    // `extern const T NAME;` (KR-56). Its header must be shared because the SHARED header is
+                    // where its `_Static_assert` on the C constant's size and kind lands — the check that
+                    // makes the declaration honest, and it names the constant.
+                } else {
+                    continue;
+                }
+                shared = true; break;
+            }
+            if (shared) { _sharedExternHeaders.insert(kv.second.begin(), kv.second.end()); continue; }
+            for (auto& decl : *u->codeDeclarationList) {
+                auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
+                if (!fn || !isExtern(fn)) continue;
+                // Both spellings: the declared name and any `link` name, since either can be what the C says.
+                if (fn->name && fn->name->value) _externHeaderOf[*fn->name->value].insert(kv.second.begin(), kv.second.end());
+                const std::string ln = linkNameOf(fn);
+                if (!ln.empty()) _externHeaderOf[ln].insert(kv.second.begin(), kv.second.end());
+            }
+            // ...and, for any of this unit's headers kama SHIPS, every name that header defines. A kama
+            // declaration names only what kama source calls; the emitter also writes references of its own,
+            // and those resolve here or not at all.
+            for (const std::string& h : kv.second) {
+                const std::string bare = h.size() > 2 && h[0] == '<' ? h.substr(1, h.size() - 2) : h;
+                for (auto& nd : _runtimeHeaderDefines)
+                    if (nd.second == bare) _externHeaderOf[nd.first].insert(h);
+            }
+            _perUnitHeaders.insert(kv.second.begin(), kv.second.end());
+        }
+    } else {
+        _sharedExternHeaders = all;   // single TU: the header and the body are one file, so there is no fan-out
+    }
+    for (const std::string& h : _sharedExternHeaders) {
+        if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
+        else             *_out << "#include \"" << h << "\"\n";    // "my.h"
     }
     *_out << "\n";
+}
+
+// The headers THIS module's C needs, derived from its text. An `extern fn` crosses units — a file may import
+// and call one it never declared (measured: `decl.kama` exports `abs` from `<stdlib.h>`, `app.kama` imports
+// and calls it, and `app`'s TU names `abs` while declaring no header) — so the `extern "<h>"` lines written in
+// a file do not describe what its TU needs. The emitted text does.
+//
+// Over-including is harmless here and under-including is LOUD: a missing declaration is a clang error at the
+// next compile, never a silently wrong program. That asymmetry is why a text scan is enough, where the no-heap
+// facts needed the call graph.
+void CEmitter::emitUnitIncludes(const std::string& moduleText, bool recordAsShared)
+{
+    if (_externHeaderOf.empty()) return;
+    std::set<std::string> need;
+    const size_t n = moduleText.size();
+    for (size_t i = 0; i < n; ) {
+        const char c = moduleText[i];
+        if (!(isalpha((unsigned char)c) || c == '_')) { ++i; continue; }
+        size_t e = i;
+        while (e < n && (isalnum((unsigned char)moduleText[e]) || moduleText[e] == '_')) ++e;
+        auto it = _externHeaderOf.find(moduleText.substr(i, e - i));
+        if (it != _externHeaderOf.end()) need.insert(it->second.begin(), it->second.end());
+        i = e;
+    }
+    bool wrote = false;
+    for (const std::string& h : need) {
+        if (_sharedExternHeaders.count(h)) continue;   // already in front of every TU
+        if (h[0] == '<') *_out << "#include " << h << "\n";
+        else             *_out << "#include \"" << h << "\"\n";
+        wrote = true;
+        // The shared header's own scan records what it emitted, so a module that calls the same extern does
+        // not ask for it again — every TU already has it, and a second `#include` is noise in the output.
+        if (recordAsShared) _sharedExternHeaders.insert(h);
+    }
+    if (wrote) *_out << "\n";
 }
 
 // Single self-contained TU (transpile / single-file build): header content +
@@ -34748,23 +34935,49 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     _out = &capturedHeader;
     *_out << "/* Generated by kama. Do not edit. */\n";
     *_out << "#ifndef " << guard << "\n#define " << guard << "\n";
-    if (unitsUseOnPanic(units))   // see emit(): program-wide, since every TU includes this header
+    // Recorded, because each module's TU must repeat them ahead of its own FFI headers — see emitModuleContent.
+    _featureOnPanic     = unitsUseOnPanic(units);
+    _featureGlobalAlloc = unitsDeclareGlobalAllocator(units);
+    if (_featureOnPanic)   // see emit(): program-wide, since every TU includes this header
         *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h> (KB-25)
-    if (unitsDeclareGlobalAllocator(units))   // ...and the same for the funnel's implementation
+    if (_featureGlobalAlloc)   // ...and the same for the funnel's implementation
         *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
     *_out << "#include \"kama_runtime.h\"\n";
-    emitIncludes(units);        // FFI #include directives (before any type decls)
+    emitIncludes(units, /*perUnitScoped=*/true);   // FFI #include directives (before any type decls) — KR-77:
+                                                   // only what shared declarations need; the rest per module
     // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
     // `#line` directives with an EMPTY file name, because the emitter is constructed with no path.
     _discoveryClosed = true;
-    { ScopedFlag _hp(_inHeaderPass); emitHeaderContent(units); }
+    // Buffered for the same reason a module's content is (KR-77): this header carries BODIES, not only
+    // declarations — the prelude's static inlines, and every generic instance — and a body calls externs. So
+    // the headers it needs are derived from its own text, and an `#include` has to precede what uses it.
+    // Buffering is what makes "scan, then write includes, then write the text" possible in one pass.
+    std::ostringstream headerBody;
+    {
+        std::ostream* savedHeaderOut = _out;
+        _out = &headerBody;
+        { ScopedFlag _hp(_inHeaderPass); emitHeaderContent(units); }
+        _out = savedHeaderOut;
+        // A fact recorded while this buffer was the sink resolves against THIS text, before it is flushed —
+        // exactly as emitModuleContent does, and for the same reason (KR-75): a position means nothing once
+        // the text is concatenated into another stream.
+        resolvePendingFacts(&headerBody, headerBody.str(), /*last=*/false);
+    }
+    emitUnitIncludes(headerBody.str(), /*recordAsShared=*/true);   // what the header's own bodies call
+    *_out << headerBody.str();
     *_out << "#endif /* " << guard << " */\n";
 
     for (size_t i = 0; i < units.size(); ++i) {
         _out = capturedModules[i].get();
         _sourcePath = sourcePaths[i];   // #line in this module points to its own source
         *_out << "/* Generated by kama. Do not edit. */\n";
-        *_out << "#include \"" << headerName << "\"\n\n";
+        // ⚠️ The `#include "<name>.gen.h"` is written by emitModuleContent, not here, and AFTER this TU's own
+        // FFI headers (KR-77). A system header has to come first: `kama_isolate.h` pulls `<unistd.h>`, and
+        // including that once `kama_runtime.h` has already declared one of its functions is
+        // "cannot apply asm label to function after its first use" — glibc/SDK headers attach asm labels that
+        // must be seen at the first declaration. Emitting the derived includes after the shared header
+        // reproduced exactly that on `global_allocator_serde`.
+        _moduleHeaderName = headerName;
         emitModuleContent(units[i]);
         if (i == 0 && _sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU
     }

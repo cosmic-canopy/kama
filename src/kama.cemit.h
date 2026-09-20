@@ -1874,7 +1874,22 @@ private:
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one
     void checkExposeValues();
     static bool enumHasModifier(const EnumDeclarationNode* ed, const char* mod);   // `type extern|expose enum`   // KR-52: every `type expose value` field is public and C-representable
-    void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
+    // FFI `#include` directives. `perUnitScoped` (the multi-TU path) emits into the SHARED header only what
+    // shared declarations can need, and leaves the rest to each module's own `.c` — see the .cpp for why the
+    // split is where it is, and `emitUnitIncludes` for the deriving half (KR-77).
+    void emitIncludes(const std::vector<SharedCompilationUnit>& units, bool perUnitScoped = false);
+    // The headers a single module's emitted C needs, written into that module's `.c` just before its body is
+    // flushed. Derived from the TEXT, because an `extern fn` crosses units: a file may call one it never
+    // declared, so the `extern "<h>"` lines written in a file do not describe what its TU needs.
+    void emitUnitIncludes(const std::string& moduleText, bool recordAsShared = false);
+    std::map<std::string, std::set<std::string>> _externHeaderOf;  // extern C name -> headers that may declare it
+    std::set<std::string> _sharedExternHeaders;                    // what the shared header itself needs
+    std::set<std::string> _perUnitHeaders;                         // everything else, offered per module
+    // Every name a SHIPPED runtime header defines -> that header. Lets the per-TU scan resolve a reference
+    // the emitter wrote itself (`kama_isolate_t` in a spawn trampoline), which no kama declaration names.
+    std::map<std::string, std::string> _runtimeHeaderDefines;
+    bool _featureOnPanic = false, _featureGlobalAlloc = false;   // repeated per TU ahead of its FFI headers
+    std::string _moduleHeaderName;   // the shared `<name>.gen.h`, included by each module AFTER its own FFI headers
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
