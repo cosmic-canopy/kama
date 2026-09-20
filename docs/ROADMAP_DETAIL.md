@@ -1800,7 +1800,7 @@ to build — the C toolchain is 74 %, which is what the object cache shipped at 
 checksum or a long `&&` guard is an ordinary thing to write; at 40 terms it is seconds, and the compiler
 gives no sign why.
 
-### The allocation campaign (KR-58, KR-66) — opened 2026-09-12
+### The allocation campaign (KR-58) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1829,58 +1829,26 @@ every funnel fact in the no-heap walk is an edge into the pool, so its body deci
 `SortedMap` root now draw from `A`, and a bare `new` needs `A == GlobalAllocator`. The record is SPEC *Global
 allocator* and the design doc's §3.
 
-**Reaching the instance (KR-66)**, found writing step 3's fixtures, which had to prove the routing by exhaustion
-because nothing could read a count. Verdict: scheduled, not optional. An MCU program measures its memory, the pool
-is the only object that knows, and there is no other home for the numbers: a module `static` is per-isolate, and
-the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the prelude, returning `ref Pool`,
-refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
-synthesized member to the user's type. The fixtures should then assert a live count.
+**Reaching the instance — SHIPPED `0.9.411`.** `globalHeap::<Pool>()` gives the one instance as a place
+(`ref Pool`), checked against the declared `@globalAllocator`. The record is SPEC *Global allocator* (*Reaching the
+instance*) and the design doc's §3; `tests/global_allocator_reach{,_units}.kama` assert a live count directly, which
+is what the fixtures had to prove by exhaustion before it.
 
-**Build map** (anchors at `0.9.410`; find each by NAME, and probe before building on it).
-- *The instance.* The funnel emission writes `<Pool> kama_global_allocator = {0};` beside
-  `kama__global_allocate`/`kama__global_deallocate`, in the ENTRY TU only. ⚠️ **It is not declared in the shared
-  `.gen.h`** — verified 2026-09-19 by reading the emitted C of `tests/global_allocator_serde.kama` — so a call
-  from any other translation unit does not compile until the header pass declares it `extern`. That is the first
-  step, not an afterthought: the intrinsic is useless if it only works in the file that declares the pool.
-- *The call.* `globalHeap<Pool>()` has to answer as a PLACE, or `ref Pool` cannot bind to it and the pool is
-  copied — which for a `resource` is refused anyway, so the failure would at least be loud. `invocationReturnsPlace`
-  is the test every other place-returner goes through, and `_funcs[…].isPlaceReturn` is the flag it reads; an
-  intrinsic recognized by name (as `addr` and `sizeof` are, in `callReturnTypeRaw` and `emitInvocation`) needs the
-  same answer from both.
-- *The surface this needs already exists*, which is worth knowing before designing around its absence: `fn ref T`
-  is a declared form the stdlib uses (`SlotMap.getRefMut`, `Map.getRefMut`, every collection iterator's `next`),
-  and the emitter sets `isPlaceReturn` from `fn->isRef` for a FREE function as well as a method. So the row needs
-  no new return-kind — only an intrinsic that is recognized by name, type-checked against the declared pool, and
-  lowered to `&kama_global_allocator`.
-- ⚠️ *The spelling in this row was not kama syntax.* The turbofish is `::<T>` (`parse::<int32>(s: text)`, SPEC
-  *Parsing*), so the call is **`globalHeap::<Pool>()`** — a generic free function the emitter intercepts by name,
-  which needs no grammar change. The alternative, a `sizeof`-style keyword form taking `<T>` directly, costs a
-  grammar rule, `docs/grammar.bnf`, the keyword list and its guard, and a reserved word users can no longer use.
-  Take the first unless something forces the second.
-- ⚠️ **AND THE SHAPE IS REFUSED TODAY — probe this first, it decides the row.** Measured 2026-09-20:
-
-      static int32 g_counter;
-      fn ref int32 counter() { return g_counter; }
-      → error: a `ref T` result must borrow `this` or a `ref` parameter — returning a place into a local
-        would dangle
-
-  The check is structural root-tracing (`kama.cemit.cpp`, the chained-ref-return rule): the returned place's
-  root must be `this` or a `ref` parameter, and an intrinsic has neither — nor does the pool instance, which is
-  a C global the emitter writes rather than a module `static`. Two ways out, and they are not equivalent:
-  **(a)** exempt the intrinsic, since the emitter mints the place itself and a C global with static storage
-  duration cannot dangle — small, and it widens nothing; **(b)** teach the rule that a `static` root is safe,
-  which also makes `fn ref int32 counter()` legal for every user and is therefore a LANGUAGE SURFACE decision
-  for the maintainer, not a side effect of this row (GOALS: decide a surface item on its merits). (a) is the
-  recommendation; (b) is worth filing as its own row either way, because the diagnostic currently tells a user
-  their non-dangling program would dangle.
-- *The refusals.* `checkGlobalAllocator` already owns the declaration's rules and runs before any C is compiled;
-  "this program declares no `@globalAllocator`" and "`Pool` is not the declared one — `X` is" belong with it or at
-  the call site, naming the declared type either way. Both want a `tests/xfail/` fixture and a `DIAGNOSTIC_LINES`
-  row.
-- *The fixtures that are already waiting.* `tests/global_allocator_pool.kama` proves its routing BY EXHAUSTION
-  (the 33rd `try new` fails) because nothing can read a count, and `tests/global_allocator_serde.kama` keeps a
-  `live` counter that no kama code can reach. Both become direct assertions once this lands — that is the row's
-  own acceptance test, already written.
+Three things it turned up, none of them in the plan it was picked up with:
+- **The forward declaration is not a multi-TU concern.** The instance is emitted where the ENTRY function is, i.e.
+  AFTER every body in that TU — in the emitted C of `tests/global_allocator_serde.kama` the definition sat at line
+  7497, below `kama_main` at 7422 — so nothing could name it, the declaring file included. One `extern` in
+  `emitHeaderContent` covers both builds, because the single-file path inlines that content into the same stream.
+- **`invocationReturnsPlace` resolves a bare call through `_funcs`**, so an intrinsic with no entry there answers
+  FALSE and `ref Pool` would not bind: the place would be copied, which for a `resource` is refused. Three sites
+  had to agree, not one.
+- **The escape rule refused the intrinsic and a plain module `static` by the same line, for the same wrong reason.**
+  The maintainer's call (2026-09-20) was one predicate over both rather than a carve-out for the builtin: static
+  storage outlives every frame unconditionally, so it is the least conditional of the three roots, and every
+  comparable language treats it as the easy case (Rust's `&'static`, a Meyers singleton, a Go package-level var).
+  `static Counters g; fn ref Counters counters() { return g; }` is now legal for everyone
+  (`tests/reffn_static.kama`); a local that merely shares a static's name is still refused
+  (`tests/xfail/reffn_static_local.kama`), which is why the root resolves as a SYMBOL and not as a bare name.
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That

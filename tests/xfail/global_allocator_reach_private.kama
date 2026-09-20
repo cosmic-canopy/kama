@@ -1,0 +1,14 @@
+// The intrinsic hands back a PLACE, not a privilege: everything after it is the pool's ordinary surface,
+// so a private field stays private (KR-66). Worth pinning because the instance is the compiler's own
+// object — it emits and calls it — and a reach that bypassed access control would let any program read a
+// pool's internals it deliberately did not publish.
+import { std::concurrent::Atomic };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(64) storage;
+    Atomic<isize> live;                   // private: no `public`
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+
+fn int32 main() { return cast<int32>(globalHeap::<Pool>().live.load()); }

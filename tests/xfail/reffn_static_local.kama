@@ -1,0 +1,11 @@
+// A LOCAL that shares a module `static`'s name is still a local, and its place still dangles (KR-66).
+//
+// The sibling of tests/reffn_static.kama, and the reason the static-storage rule resolves the root as a
+// SYMBOL rather than matching a bare name: a name-only test would see `g`, find the static, and let a
+// pointer to a dead frame escape — turning a widened rule into a memory-safety hole. (Whether a local may
+// shadow a static at all is KR-57's question; this must be refused either way.)
+static int32 g;
+
+fn ref int32 shadow() { int32 g = 5; return g; }
+
+fn int32 main() { return shadow(); }

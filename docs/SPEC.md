@@ -772,6 +772,28 @@ declaration is held to rules that follow from that: <!-- test: global_allocator_
   `GlobalAllocator`, or from anything that allocates through it, calls itself. It is refused in every build, and the <!-- xfail: global_allocator_reaches_itself -->
   diagnostic names the cycle.
 
+**Reaching the instance — `globalHeap::<Pool>()`.** The pool is the only object that knows what the program has
+allocated, so a program can ask it: `globalHeap::<Pool>()` is a place (`ref Pool`) naming the one instance.
+<!-- test: global_allocator_reach, global_allocator_reach_units -->
+
+```kama
+@globalAllocator type resource Pool implements GlobalHeap {
+    Atomic<isize> live;                                       // blocks out and not yet returned
+    public fn isize liveCount() { return this.live.load(); }   // …published by the pool, like any method
+    …
+}
+
+isize n = globalHeap::<Pool>().liveCount();
+```
+
+The type argument names the declared allocator and is checked against it, so the dependency is written at the
+call site rather than resolved silently. Naming a type that is not the declared one is refused, <!-- xfail: global_allocator_reach_wrong_type -->
+and so is the call in a program that declares none. <!-- xfail: global_allocator_reach_undeclared -->
+The result is the pool's ordinary surface: a private field stays private through it. <!-- xfail: global_allocator_reach_private -->
+`Pool` itself obeys the file rung like any other name, so a pool read from another file is `export`ed and
+`import`ed there. A `fn ref Pool` of the program's own may return the place — it roots in static storage
+(see *Writing a collection in kama*, place-returning methods).
+
 **No-heap.** `@noheap` and `--no-heap` keep one meaning: *never reaches the system heap*. With a declaration, the
 funnel is the pool rather than the system heap. Every allocation the no-heap gate would refuse becomes a call into
 `GlobalHeap::allocate`, and the pool's own body decides. A pool over storage it owns therefore makes boxes,
@@ -2829,8 +2851,13 @@ be written **in the language** rather than baked into the compiler. Three builti
   a `const fn`). Taking an address is safe (either pointer is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
-  `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
-  local — it would dangle), and it's second-class (used in-place, never stored). Its read-only form is
+  `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow **`this`, a `ref` parameter, or static
+  storage** — a module `static`, or the `@globalAllocator` instance via `globalHeap::<Pool>()`. Those three
+  outlive the call; a place rooted in a **local** is refused, because it would dangle. <!-- xfail: reffn_local, reffn_static_local -->
+  A static is the least conditional of the three — `this` and a `ref` param outlive the call only because the
+  caller holds them — so `static Counters g; fn ref Counters counters() { return g; }` is legal, and a local
+  that merely shares a static's name is not. <!-- test: reffn_at, reffn_static -->
+  A place is second-class (used in-place, never stored). Its read-only form is
   **`const ref T`** — the place a `const fn` may return (§ `const fn` below).
 
 **`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the

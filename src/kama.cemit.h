@@ -3159,6 +3159,15 @@ private:
     // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
     // dropped (dropping a copy of a borrow would double-free). isPlaceReturn is the discriminator.
     bool invocationReturnsPlace(InvocationNode* iv);
+    // `globalHeap::<Pool>()` — the intrinsic naming the declared `@globalAllocator` instance (KR-66).
+    // Recognized by NAME, as `addr`/`sizeof`/`drop` are, and only in the TURBOFISH form: a plain
+    // `globalHeap()` a user happens to declare still resolves to their function. FIVE sites have to agree
+    // on the answer (emitInvocation, callReturnTypeRaw, invocationReturnsPlace, borrowArgRoot and the
+    // ref-return escape rule), which is why this is one predicate and not five string compares.
+    bool isGlobalHeapCall(ASTNode* n) const;
+    // Does a returned place root in storage that outlives every frame? True for a module `static` and for
+    // the global-allocator instance — see the ref-return rule in emitStatement.
+    bool rootHasStaticStorage(SharedExpression e) const;
     MethodInfo* placeMethodOf(const std::string& cls, const std::string& method);   // resolve through `Deref<T>`
     MethodInfo* derefAccessor(const std::string& cls, SharedExpression recv, bool* isConstPlace = nullptr);   // `derefMut` or `deref` for this receiver
     std::string derefFnName(const std::string& cls, bool wantMut);   // the C name of the half a string-built site should call

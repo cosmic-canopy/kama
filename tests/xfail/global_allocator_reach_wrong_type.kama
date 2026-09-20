@@ -1,0 +1,16 @@
+// `globalHeap::<X>()` must name the DECLARED global allocator. A program has one heap, so naming another
+// type is a statement the compiler can check — and the reason the intrinsic takes the type at all, rather
+// than silently resolving whatever pool the program happens to declare (KR-66; GOALS #5, explicit).
+import { std::concurrent::Atomic };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(64) storage;
+    Atomic<isize> live;
+    public fn isize liveCount() { return this.live.load(); }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+}
+
+type resource Other { public fn isize liveCount() { return 3; } }
+
+fn int32 main() { return cast<int32>(globalHeap::<Other>().liveCount()); }

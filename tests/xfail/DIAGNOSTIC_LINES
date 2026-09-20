@@ -434,6 +434,9 @@ global_allocator_generic	global_allocator_generic.kama:2
 global_allocator_mutable_field	global_allocator_mutable_field.kama:3
 global_allocator_no_contract	global_allocator_no_contract.kama:2
 global_allocator_noheap_heap_pool	global_allocator_noheap_heap_pool.kama:10
+global_allocator_reach_private	global_allocator_reach_private.kama:14
+global_allocator_reach_undeclared	global_allocator_reach_undeclared.kama:9
+global_allocator_reach_wrong_type	global_allocator_reach_wrong_type.kama:16
 global_allocator_reaches_itself	global_allocator_reaches_itself.kama:3
 global_allocator_two	global_allocator_two.kama:6
 global_allocator_value	global_allocator_value.kama:2
@@ -931,6 +934,7 @@ ref_temporary_nonconst	ref_temporary_nonconst.kama:14
 ref_through_weak	ref_through_weak.kama:8
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3
+reffn_static_local	reffn_static_local.kama:9
 refreturn_local	refreturn_local.kama:5
 reserved_word_as_name	reserved_word_as_name.kama:14 reserved_word_as_name.kama:15
 scope_borrow_element	scope_borrow_element.kama:20

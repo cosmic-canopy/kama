@@ -1,0 +1,88 @@
+// `globalHeap::<Pool>()` — a program READS its own heap (KR-66). Until this existed the instance had no name
+// in kama: it is a C global only the funnel calls, and a module `static` cannot stand in for it because
+// statics are per-isolate while the pool is one object process-wide. So global_allocator_pool.kama had to
+// prove its routing BY EXHAUSTION, and the `live` counter in global_allocator_serde.kama was written,
+// incremented, decremented and never read by anything.
+//
+// What is pinned here is that the count is the REAL one — the same object the funnel allocates from, read
+// through the intrinsic, before and after each event:
+//   1. a box (`new`), a container buffer and a string concat each take a block, so the count RISES;
+//   2. a scope drop returns them, so it FALLS back to exactly where it started (a leak or a double-free
+//      moves this, which is what the exhaustion proof could only see indirectly);
+//   3. the place is a BORROW, not a copy: `Pool` is a `resource`, so a copy would be refused outright.
+// The pool is the one from global_allocator_serde.kama, plus a public reader.
+import { std::concurrent::Atomic, std::collections::DynamicArray };
+
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+    Atomic<isize> live;                   // blocks handed out and not yet returned
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    // The reader this row exists for. An ordinary `public fn` — the intrinsic hands back a place, and
+    // everything after it is the type's own surface, so a pool that wants to publish nothing publishes
+    // nothing (its private fields stay private through the place, which the xfail
+    // `global_allocator_reach_private` pins).
+    public fn isize liveCount() { return this.live.load(); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.live.store(value: this.live.load() + 1);
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize p = cast<usize>(pointer);
+        if (p < this.origin() || p >= this.origin() + 32768) { panic(msg: "the pool was handed a pointer it never returned"); }
+        this.acquire();
+        usize slot = (p - this.origin()) / 1024;
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.live.store(value: this.live.load() - 1);
+        this.release();
+    }
+}
+
+type value Point { public int32 x; public ctor at(int32 x) { this.x = x; } }
+
+// A place-returning wrapper over the intrinsic. This is the shape the escape rule had to be taught: the
+// returned place roots in static storage, which outlives every frame, so it borrows neither `this` nor a
+// `ref` parameter and was refused before this row (SPEC *Writing a collection in kama*).
+fn ref Pool heap() { return globalHeap::<Pool>(); }
+
+// Blocks taken and released inside one call, so the caller sees the count come back.
+fn isize churn() {
+    Owned<Point> p = new Point.at(x: 1);
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 8);
+    d.add(item: 7);
+    return heap().liveCount();        // inside: the box + the array are live
+}
+
+fn int32 main() {
+    isize start = globalHeap::<Pool>().liveCount();        // 0 — nothing allocated yet
+    isize inner = churn();                                 // 2 — a box and a container buffer
+    isize after = heap().liveCount();                      // 0 again — both dropped at the scope end
+    if (start != 0) { return 90; }
+    if (after != start) { return 91; }                     // a leak or a double-free lands here
+    return cast<int32>(inner) * 10 + cast<int32>(after) + 3;   // 2*10 + 0 + 3 = 23
+}

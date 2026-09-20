@@ -16,15 +16,15 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-20, Linux).** `origin/dev` is `0.9.408`; this box is four commits ahead and UNPUSHED —
-`0.9.409` (one classification per operand on the arithmetic path), the KR-78 filing, and `0.9.410` (the per-TU
-object cache, KR-2). The maintainer pushes and rebases; this box never does.
+**State (2026-09-20, Linux).** `origin/dev` is `0.9.408`; this box is ahead and UNPUSHED — `0.9.409` (one
+classification per operand on the arithmetic path), the KR-78 filing, `0.9.410` (the per-TU object cache, KR-2)
+and `0.9.411` (KR-66, reaching the instance). The maintainer pushes and rebases; this box never does.
 
 The campaign itself is **done through §4**: the funnel (§2, KR-48) at `0.9.369`, the replaceable global
 allocator (§3, KR-49) at `0.9.377`–`0.9.378`, allocator-aware errors (§4, KR-50) at `0.9.394`–`0.9.395`, and the
 verdict deriving its runtime facts from the shipped headers (§6, KR-74) at `0.9.401`–`0.9.402` from the other
-box. What is left of it is **KR-66** (reaching the instance — next here) and **KR-58** (the Windows path seam —
-that box's).
+box. KR-66 (reaching the instance) shipped here at `0.9.411`, so what is left of the campaign is **KR-58**
+alone (the Windows path seam — that box's).
 
 Filed along the way and still open: **KR-57** (a binding may shadow a function), **KR-62** (`sizeof` of a generic
 instance named nowhere else), **KR-39** (a contract slot the no-heap walk cannot cross — now with a measured
@@ -74,7 +74,7 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
 3. ~~**KR-49**~~ — shipped `0.9.377` (`@globalAllocator`) and `0.9.378` (`Shared.adopt`, the `SortedMap` root, and
    the bare-`new` rule). The record is SPEC *Global allocator*; what the probes and the build decided is at the end
    of §3. Filed from it: **KR-65** (three raw-pointer expressions that reach clang) and **KR-66** (reaching the
-   instance).
+   instance, shipped `0.9.411`).
 4. ~~**KR-65**~~ — shipped `0.9.386`–`0.9.388`: the three raw-pointer expressions each got ONE decision. An element's
    address now has a type, so `cast<usize>(addr(of: s[0]))` lowers (`0.9.386`); an aggregate `cast` SOURCE is refused
    like the target always was (`0.9.387`); and pointer arithmetic is a non-goal, refused at the operator and pointed
@@ -85,13 +85,12 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    synthesized body was filed against the wrong function — KR-75). The per-call error allocator is a NON-GOAL, with
    its reason, and the `--no-heap` half is **KR-39's**, not this row's: dropping a boxed error dispatches a
    destructor through a contract, which the flag refuses whatever the heap is. All of it is written up in §4.
-6. **KR-66 is what this box takes next** (2026-09-19) — reaching the `@globalAllocator` instance, so a program
-   can read its own live count. It is the top of NOW, the shape is already ruled (`globalHeap<Pool>()` in the
-   prelude returning `ref Pool`), and the acceptance test is already written: `tests/global_allocator_pool.kama`
-   proves its routing by EXHAUSTION and `tests/global_allocator_serde.kama` keeps a `live` counter nothing can
-   reach — both become direct assertions. The build map, including the one thing that is not obvious (the
-   instance is defined in the entry TU and is NOT declared in the shared header, so a call from another unit
-   does not compile until it is), is in KR-66's paragraph in ROADMAP_DETAIL.
+6. ~~**KR-66**~~ — shipped `0.9.411`: `globalHeap::<Pool>()` hands back the instance as a place, checked against
+   the declared allocator, so a program reads its own live count (`tests/global_allocator_reach.kama`, and
+   `…_units.d` for the cross-unit case). The forward-declaration problem was bigger than the build map said — the
+   instance is emitted after every body in the entry TU, so not even the declaring file could name it — and the
+   escape rule was widened to accept STATIC STORAGE for every `fn ref T`, not carved out for the intrinsic
+   (maintainer, 2026-09-20). What each of those turned up is in KR-66's paragraph in ROADMAP_DETAIL.
 7. **KR-78 after it** — analysis is exponential in the length of an operator chain, found scoping the
    incremental-build row. Not an allocation row; it is queued here only because the same box is carrying it.
    The curve, the design (memoize per node AND substitution context) and its build map are in ROADMAP_DETAIL.
@@ -635,7 +634,8 @@ implicit (GOALS #5). What remains outside explicit per-isolate allocation is wha
   frees through a counting `A` for one `Shared`. That is the mixed-family defect of §2 one level up, and a declared
   pool would turn it from latent to live. Any other `A` takes the placement form.
 - **The fixtures prove the routing by exhaustion**, because kama code cannot reach the instance to read a count.
-  That gap is KR-66.
+  That gap was KR-66, closed at `0.9.411`: `globalHeap::<Pool>()` reads the instance, and
+  `tests/global_allocator_reach.kama` asserts the count directly.
 
 ### 4. Allocator-aware errors
 

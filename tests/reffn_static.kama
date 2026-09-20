@@ -1,0 +1,33 @@
+// A `fn ref T` may root its place in STATIC STORAGE — the third sound root, alongside `this` and a `ref`
+// parameter (KR-66 widened the rule; SPEC *Writing a collection in kama*).
+//
+// It was refused until then, and refused with a message that told the author their correct program would
+// dangle: `static int32 g; fn ref int32 counter() { return g; }` -> "a `ref T` result must borrow `this` or
+// a `ref` parameter". The rule listed the roots it had been taught, and a static was simply not among them
+// — yet it is the SAFEST of the three: `this` and a `ref` param outlive the call only because the CALLER
+// holds them, while a static outlives every frame unconditionally. Rust spells it `&'static`, C++ returns
+// one from a Meyers singleton, Go takes the address of a package-level var; none of them needs a carve-out.
+//
+// Exercised as read, write, compound assignment and a `ref` argument, like tests/reffn_at.kama does for the
+// `ref`-parameter root. The sibling that must STILL be refused is tests/xfail/reffn_local.kama (a local
+// root would dangle) and tests/xfail/reffn_static_local.kama (a local that merely shares a static's name).
+type value Counters {
+    public int32 hits;
+    public int32 misses;
+}
+
+static int32 g_ticks;
+static Counters g_counters;
+
+fn ref int32 ticks() { return g_ticks; }
+fn ref int32 hits() { return g_counters.hits; }        // a FIELD of a static root, as `this.f` is of `this`
+fn void bump(ref int32 v) { v = v + 100; }
+
+fn int32 main() {
+    ticks() = 5;
+    ticks() += 2;                  // 7
+    hits() = 1;
+    bump(v: ref hits());           // 101 — the place passes as a `ref` argument
+    g_counters.misses = 3;         // written directly, read back through the place below
+    return ticks() + hits() + g_counters.misses;   // 7 + 101 + 3 = 111
+}

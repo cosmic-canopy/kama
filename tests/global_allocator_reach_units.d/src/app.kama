@@ -1,0 +1,24 @@
+// Reading the pool from a unit that does NOT declare it — see src/pool.kama for why that is the point.
+//
+// `Pool` is imported like any other name: the turbofish argument goes through the file rung, so a pool a
+// file keeps private cannot be named from elsewhere. That is the ordinary rule applying, not a special
+// case — and it is worth pinning, because the intrinsic could have been written to resolve the declared
+// pool with no name at the call site at all.
+import { std::collections::DynamicArray, Pool };
+
+type value Point { public int32 x; public ctor at(int32 x) { this.x = x; } }
+
+fn isize churn() {
+    Owned<Point> p = new Point.at(x: 1);
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 8);
+    d.add(item: 7);
+    return globalHeap::<Pool>().liveCount();
+}
+
+fn int32 main() {
+    isize start = globalHeap::<Pool>().liveCount();   // 0
+    isize inner = churn();                            // 2 — the box and the container buffer
+    isize after = globalHeap::<Pool>().liveCount();   // 0 — both returned
+    if (start != 0 || after != 0) { return 90; }
+    return cast<int32>(inner) + 5;                    // 2 + 5 = 7
+}

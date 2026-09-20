@@ -1,0 +1,9 @@
+// `globalHeap::<T>()` in a program that declares no `@globalAllocator` names nothing (KR-66).
+// The diagnostic must say THAT, not blame the method: the receiver is typed from the declaration, so with
+// no declaration there is nothing to resolve, and the generic "cannot resolve the receiver" would point
+// the author at `liveCount` — a name that is fine.
+type resource Pool {
+    public fn isize liveCount() { return 0; }
+}
+
+fn int32 main() { return cast<int32>(globalHeap::<Pool>().liveCount()); }

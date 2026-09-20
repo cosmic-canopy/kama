@@ -7301,9 +7301,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
                 if (root.empty()) root = rootBinding(retExpr);   // non-call place (field/element/this)
             }
-            if (root != "this" && !_refParams.count(root))
-                unsupported("a `ref T` result must borrow `this` or a `ref` parameter — returning a "
-                            "place into a local would dangle", n->line);
+            // STATIC STORAGE is the third sound root, and it was the one refused. A module `static` and the
+            // `@globalAllocator` instance both outlive every frame unconditionally — strictly safer than
+            // `this` or a `ref` param, which outlive the call only because the CALLER holds them. The rule
+            // read "borrow `this` or a `ref` parameter" because those were the roots it had been taught, so
+            // `static int32 g; fn ref int32 counter() { return g; }` was refused with a message telling the
+            // author their non-dangling program would dangle (measured `0.9.410`). Every comparable language
+            // treats this as the easy case: Rust's `&'static`, C++'s Meyers singleton, a Go package-level
+            // var. Widening it here rather than exempting the intrinsic keeps ONE rule (GOALS #4) and no
+            // builtin privileged over user code.
+            if (!rootHasStaticStorage(retExpr) && root != "this" && !_refParams.count(root))
+                unsupported("a `ref T` result must borrow `this`, a `ref` parameter, or static storage — "
+                            "returning a place into a local would dangle", n->line);
             // The mirror of checkConstPlaceReturn, one step later: a WRITABLE place may not be minted from
             // a read-only one. `fn ref T f(const ref X x) { return x.n; }` would hand the caller a
             // writable alias into a const parameter, and `return this.m.getRef(k)` one into a `const ref`
@@ -24537,6 +24546,48 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
     }
 
+    // `globalHeap::<Pool>()` — THE declared `@globalAllocator` instance, as a place (KR-66). Without this a
+    // program can replace the heap but never read it: the instance is a C global only the funnel calls, and
+    // a module `static` cannot hold its counters because statics are per-isolate while the pool is one
+    // object process-wide. So the fixtures had to prove routing BY EXHAUSTION, and a `live` counter sat in
+    // tests/global_allocator_serde.kama that no kama code could read.
+    //
+    // ⚠️ POSITION IS LOAD-BEARING, both ways. AFTER the callInstOf route above, so a user who declares a
+    // real generic `globalHeap<T>()` keeps their function — the intrinsic does not steal a name that
+    // resolved. BEFORE the turbofish rejection below, which hard-errors "not a generic function" on any
+    // `::<…>` that reached it and would fire first.
+    //
+    // The type argument is a CHECK, not a parameter: the return type is the declared pool either way, and
+    // naming it at the call site is what makes the dependency explicit (GOALS #5) and what lets the
+    // compiler say so when a program names the wrong one.
+    if (isGlobalHeapCall(call)) {
+        if (badTypeArg) return "0";   // the argument itself was already refused — one diagnostic, not two
+        if (call->args && !call->args->empty())
+            unsupported("`globalHeap::<…>()` takes no arguments — it names the one declared global "
+                        "allocator instance", call->line);
+        if (_globalAllocator.empty()) {
+            unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names "
+                        "nothing — declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
+                        "(SPEC *Global allocator*)", call->line);
+            return "0";
+        }
+        if (call->identifier->nTypeArgs != 1) {
+            unsupported(("`globalHeap::<…>()` takes exactly one type argument, the declared global "
+                         "allocator — write `globalHeap::<" + _globalAllocator + ">()`").c_str(),
+                        call->line);
+            return "0";
+        }
+        const std::string want = cType(absolutizeType(deepSubstType((*call->identifier->genericArgs)[0])));
+        if (want != _globalAllocator) {
+            unsupported(("`" + want + "` is not this program's declared `@globalAllocator` — `"
+                         + _globalAllocator + "` is, and a program has ONE heap").c_str(),
+                        call->line);
+            return "0";
+        }
+        // A place is a POINTER that placeWrap derefs, exactly as a `fn ref T` call's result is.
+        return placeWrap("(&kama_global_allocator)", true);
+    }
+
     // Turbofish `f::<…>` that didn't resolve to a generic instantiation -> the target isn't a generic
     // function. Reject rather than silently drop the type arguments.
     if (call->identifier->genericArgs) {
@@ -30719,6 +30770,13 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         if (ct.empty()) return "";
         return ct + (isConst ? " const*" : "*");
     }
+    // `globalHeap::<Pool>()` -> the declared pool (KR-66). The POINTEE, with no `*`, exactly as a
+    // `fn ref T`'s `retCType` is the pointee and `placeRetSuffix` adds the star at the declaration — so
+    // `exprClass` sees a class and `globalHeap::<Pool>().live` resolves its members. A `Pool*` here would
+    // instead read as a raw pointer result and demand `unsafe` at the acquisition gate in emitInvocation.
+    // Answers even when the program declares no pool, or names the wrong one: the emission arm owns those
+    // refusals, and typing the call "" as well would bury them under a second, vaguer diagnostic.
+    if (isGlobalHeapCall(inv) && !_globalAllocator.empty()) return _globalAllocator;
     if (inv->identifier && inv->identifier->value) {
         auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
         if (f != _funcs.end()) return f->second.retCType;
@@ -31491,9 +31549,56 @@ static bool isStableStringRef(ASTNode* n)
 // value? A place receiver must NOT be materialized + dropped (it borrows — dropping a copy would
 // double-free); a value receiver (ctor / value-returning method or free fn) must be, else its heap leaks.
 // `isPlaceReturn` (on MethodInfo + FuncSig, set for `fn ref T`) is the fresh-value-vs-borrow discriminator.
+// `globalHeap::<Pool>()` — see the header. The TYPE ARGUMENT is not checked here: this answers only "is
+// this that call", so that every site agrees on the shape while exactly one site (the emitInvocation arm)
+// owns the refusals and names the declared pool in them.
+bool CEmitter::isGlobalHeapCall(ASTNode* n) const
+{
+    auto* inv = dynamic_cast<InvocationNode*>(n);
+    return inv && !inv->expression && inv->identifier && inv->identifier->value
+        && *inv->identifier->value == "globalHeap"
+        && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+        && inv->identifier->genericArgs && !inv->identifier->genericArgs->empty();
+}
+
+// Storage that outlives every frame, so a place into it can never dangle — the case the ref-return rule
+// used to refuse precisely because it is the one it need not. Two roots qualify:
+//   - the `@globalAllocator` instance, a C global the emitter mints with static storage duration; and
+//   - a module `static`, whose lifetime is the isolate's, not the frame's. Per-isolate (`_Thread_local`)
+//     is not a weakening: a place is second-class — used within the caller's enclosing statement — and an
+//     isolate cannot end mid-statement, so the storage is live for exactly as long as the place is.
+// `_moduleStatics` is keyed by QUALIFIED C symbol, so the source name goes through the same `qualify`
+// the read path uses; an unqualified miss then means a local, which is the case that would dangle.
+bool CEmitter::rootHasStaticStorage(SharedExpression e) const
+{
+    if (!e) return false;
+    if (isGlobalHeapCall(e.get())) return true;
+    // Walk to the root IDENTIFIER rather than reusing rootBinding's name: a module static is keyed by its
+    // resolved symbol, and the qualifier is part of that key (`resolveModuleVar` is what the `addr(of:)`
+    // path uses for the same lookup). A bare name string would miss a qualified one and, worse, match a
+    // LOCAL that happens to share a static's name.
+    ASTNode* n = e.get();
+    for (;;) {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { n = ma->expression.get(); continue; }
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) { if (ea->expression) { n = ea->expression.get(); continue; } }
+        break;
+    }
+    auto* id = dynamic_cast<IdentifierNode*>(n);
+    if (!id || !id->value) return false;
+    // A LOCAL wins the name. `resolveModuleVar` answers for the name alone, so without this a local
+    // sharing a static's spelling would be read as static storage and its place allowed to escape — the
+    // exact dangle this rule exists to stop. (Whether that shadowing is legal at all is KR-57's question;
+    // this rule must be right either way.)
+    if (_localTypes.count(*id->value)) return false;
+    auto* self = const_cast<CEmitter*>(this);   // resolveModuleVar is non-const; same idiom as rootIsTemporary
+    const std::string key = self->resolveModuleVar(*id->value, id->qualifier);
+    return !key.empty() && _moduleStatics.count(key) > 0;
+}
+
 bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
 {
     if (!iv) return false;
+    if (isGlobalHeapCall(iv)) return true;   // `ref Pool`, so a caller binds a borrow and never a copy
     if (iv->identifier && iv->identifier->value) {           // bare call: a free fn (or an inline ctor)
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
         return fit != _funcs.end() && fit->second.isPlaceReturn;   // a ctor isn't in _funcs -> false (a value)
@@ -32888,7 +32993,17 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             && reportDeclaredElsewhere("type", who, [&](const std::string& k) { return isTypeKey(k); },
                                        "this call", call->line))
             return "0";
-        if (!rk.empty())
+        // `globalHeap::<…>().m()` in a program with no pool. The receiver is typed from the DECLARATION, so
+        // with none there is nothing to resolve and the generic message below would blame the method — which
+        // is not what is wrong. Owned here because the receiver position is how this intrinsic is normally
+        // written (`globalHeap::<Pool>().liveCount()`), so it is the diagnostic an author actually sees; the
+        // emitInvocation arm still answers for the bare-call form. `_globalAllocator` is empty either way,
+        // so no second diagnostic can follow this one.
+        if (isGlobalHeapCall(receiver.get()) && _globalAllocator.empty())
+            unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names nothing — "
+                        "declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
+                        "(SPEC *Global allocator*)", call->line);
+        else if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "
                          "needs `Hashable`, `sort` needs `Comparable`)").c_str(), call->line, rk);
@@ -34259,6 +34374,18 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             }
     }
     if (anyConst) *_out << "\n";
+
+    // `@globalAllocator`: THE heap is ONE object, defined beside the funnel entries by
+    // emitRuntimeSlotDefinitions — which runs when the ENTRY function is emitted, i.e. AFTER every body in
+    // that TU, and in no other TU at all. So nothing could name it: not another unit, and not even the file
+    // that declares the pool (measured at `0.9.410` — in the emitted C of tests/global_allocator_serde.kama
+    // the definition sits at line 7497, below `kama_main` at 7422). The declaration goes HERE rather than in
+    // each TU's preamble because this header content is inlined by the single-file path too (emit() calls
+    // emitHeaderContent into the same stream), so one line covers both builds instead of two that can drift.
+    // NOT `KAMA_ISOLATE_LOCAL`: process-global by contract, like `kama_panic_hook` — every isolate shares
+    // the heap, which is the whole point of the singleton (SPEC *Global allocator*).
+    if (!_globalAllocator.empty())
+        *_out << "extern " << _globalAllocator << " kama_global_allocator;\n\n";
 
     // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
     // its types/impl blocks below — no module emits their bodies. Emit prototype + definition `static inline`

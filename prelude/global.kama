@@ -129,6 +129,13 @@ type contract Allocator for value {
 // it. The same two members as `Allocator`, and a sibling rather than the same contract because a bound's kind clause
 // is what makes a container's `A` copyable (widening `Allocator` to `for value, resource` broke every container).
 // SPEC *Global allocator*.
+//
+// READING the instance: `globalHeap::<Pool>()` gives the one instance as a place (`ref Pool`), so a program can
+// ask its own heap what it has handed out — an MCU measures its memory, and the pool is the only object that
+// knows. It is NOT declared here, and there is nothing to declare: the compiler recognizes the call by NAME and
+// lowers it to the instance it emitted, as it does for `addr`, `sizeof`, `panic` and `drop`. The type argument
+// is checked against the declared `@globalAllocator` — naming another type, or calling it in a program that
+// declares none, is refused. What comes back is the pool's ordinary surface, access control included.
 type contract GlobalHeap for resource {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
