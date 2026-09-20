@@ -1802,36 +1802,40 @@ gives no sign why.
 
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
-The design, the measured inventory of every allocation site, and the order live in
-[docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
-only way heap memory is obtained or released, delegating to a global allocator that defaults to
-`malloc`/`free` and that a program can replace; every raw site in emitted C, the runtime headers, the OS
-seam and the prelude moves onto them, which also ends the ~20 blocks allocated by one family and freed by
-another (correct today only because every family is libc); error boxing draws from an allocator like every
-other box; and `--no-heap` judges what the program REACHES, consistently, rather than every imported body.
-It meets KR-39 (a provable callee behind a contract slot) and tier 1 of the devirtualization ladder (KR-23):
-both are "judge what is actually reached", and they should share one reach walk.
+What it did, in one paragraph: `kama_alloc`/`kama_free` became the only way heap memory is obtained or
+released, delegating to a global allocator that defaults to `malloc`/`free` and that a program can
+replace; every raw site in emitted C, the runtime headers, the OS seam and the prelude moved onto them,
+which also ended the ~20 blocks allocated by one family and freed by another (correct before only because
+every family was libc); error boxing draws from an allocator like every other box; and `--no-heap` judges
+what the program REACHES, consistently, rather than every imported body. What it did NOT close is KR-39
+(a provable callee behind a contract slot), which it turned from theoretical into measured — see the
+serde note under *Non-goals* below; it shares its reach walk with tier 1 of the devirtualization ladder
+(KR-23).
+
+⚠️ **`docs/design/allocation.md` was DELETED when the last row shipped** (`0.9.412`), by the maintenance
+rule for `docs/design/`. This section and SPEC are its record; the reasoning behind each step is in the
+git log, and the verdicts it was the only home for are kept below rather than lost with it.
 
 **Step 1 shipped** (`0.9.347`–`0.9.348`). `--no-heap` judges what the entry points reach, over a call graph
 read from the emitted C, and C the compiler cannot read declares itself with `@heap extern fn`. Its record is
-SPEC *No-heap subset*, docs/targets.md (the section-GC contract) and the design doc's §1.
+SPEC *No-heap subset*, docs/targets.md (the section-GC contract).
 
 **Step 2 shipped** (`0.9.366`–`0.9.369`). One funnel, `kama_alloc(n, align)`/`kama_free(p, n, align)`,
 carrying each block's LAYOUT because the `Allocator` contract promises it (`allocate(bytes, align)`/`deallocate(pointer,
 bytes, align)`); `tools/check-alloc-funnel.sh` keeps the C allocator inside it, and the san leg's `KAMA_ALLOC_CHECK`
-proves every release hands back its exact layout. The record is SPEC (*Allocator*, `sizeof(ptr:)`/`alignof(ptr:)`) and
-the design doc's §2. Verified on Linux, wasm and Windows (2026-09-17: the Windows branch of `kama_os.h` needed no
+proves every release hands back its exact layout. The record is SPEC (*Allocator*, `sizeof(ptr:)`/`alignof(ptr:)`).
+Verified on Linux, wasm and Windows (2026-09-17: the Windows branch of `kama_os.h` needed no
 change; two guards did, for msys2's gawk and its missing python3).
 
 **Step 3 shipped** (`0.9.377`–`0.9.378`). `@globalAllocator type resource Pool implements GlobalHeap`
 replaces the funnel's default: one instance, `= {0}` in the entry TU, shared by every isolate. With a declaration
 every funnel fact in the no-heap walk is an edge into the pool, so its body decides. `Shared.adopt` and the
 `SortedMap` root now draw from `A`, and a bare `new` needs `A == GlobalAllocator`. The record is SPEC *Global
-allocator* and the design doc's §3.
+allocator*.
 
 **Reaching the instance — SHIPPED `0.9.411`.** `globalHeap::<Pool>()` gives the one instance as a place
 (`ref Pool`), checked against the declared `@globalAllocator`. The record is SPEC *Global allocator* (*Reaching the
-instance*) and the design doc's §3; `tests/global_allocator_reach{,_units}.kama` assert a live count directly, which
+instance*); `tests/global_allocator_reach{,_units}.kama` assert a live count directly, which
 is what the fixtures had to prove by exhaustion before it.
 
 Three things it turned up, none of them in the plan it was picked up with:
@@ -1850,10 +1854,35 @@ Three things it turned up, none of them in the plan it was picked up with:
   (`tests/reffn_static.kama`); a local that merely shares a static's name is still refused
   (`tests/xfail/reffn_static_local.kama`), which is why the root resolves as a SYMBOL and not as a bare name.
 
-**The Windows path seam shipped** (`0.9.416`). `kama__wpath` converts into a caller-owned
-`kama__wpathbuf` on the stack, so the ten `std::fs` path externs allocate on no target and a `--no-heap`
-program may `stat`, `rename`, `remove`, `createDir`, `removeDir` and `File.open`. The record, with the
-measurements and what stays heap, is SPEC *No-heap subset* and the design doc's §2b.
+**The Windows path seam shipped** (`0.9.416`), and closed the campaign. `kama__wpath` converts into a
+caller-owned `kama__wpathbuf` on the stack, so the ten `std::fs` path externs allocate on no target and a
+`--no-heap` program may `stat`, `rename`, `remove`, `createDir`, `removeDir` and `File.open`. The record
+is SPEC *No-heap subset*; the measurements and the ⚠️ `KAMA_NOINLINE` stack rule are in
+[docs/platforms/windows.md](platforms/windows.md), because they are Windows facts rather than language
+ones. `readDir`, `readFile`, `createDirAll` and `removeDirAll` stay heap on every target, for reasons of
+their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
+
+**Non-goals the campaign settled** — kept here because the design doc that decided them is gone:
+
+- **A per-call error allocator is a NON-GOAL.** The question was whether `Serializable`/`Deserializable`
+  should carry `Result<T, Owned<Error, A>>` so a caller can put errors in the same arena as the values.
+  It should not: the error box already follows the program's DECLARED allocator, so the case this serves
+  is narrower than it looks — a program wanting its errors in a different arena from its global pool,
+  when `@globalAllocator` exists precisely so one pool answers for everything. Against that, the contract
+  change is source-breaking for every hand-written serde in every consumer, and it puts an allocator
+  parameter in the signature of the most-implemented contract kama has. If a per-arena error is ever
+  wanted, it is wanted for fallible APIs in general and belongs to a design for those, not to serde.
+  ⚠️ What that left unproven is **KR-39**, and this is its first concrete consumer: the same serde
+  fixture under `--no-heap` is still refused, because dropping a boxed error dispatches a destructor
+  through a contract the walk cannot resolve — the pool is irrelevant to that verdict. KR-39's row used
+  to say it waited on this one; the dependency ran the other way.
+- **A per-isolate override of the DEFAULT allocator is a NON-GOAL.** What it would redirect is exactly
+  what crosses isolates by construction — a spawn bundle allocated in the parent is freed in the child,
+  strings and boxes travel over channels, a channel's ring is shared by both ends — so each would be
+  freed into the wrong allocator, which is the hazard the singleton exists to prevent; and it would make
+  allocation implicit (GOALS #5). What remains outside explicit per-isolate allocation is what has no
+  `A` at all (`string`, `Formatter`, `Owned<Error>`, runtime internals); if that ever matters, the answer
+  is giving those an `A`, not an implicit override.
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
