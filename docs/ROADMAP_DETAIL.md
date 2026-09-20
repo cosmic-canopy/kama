@@ -1800,7 +1800,7 @@ to build — the C toolchain is 74 %, which is what the object cache shipped at 
 checksum or a long `&&` guard is an ordinary thing to write; at 40 terms it is seconds, and the compiler
 gives no sign why.
 
-### The allocation campaign (KR-58) — opened 2026-09-12
+### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
 The design, the measured inventory of every allocation site, and the order live in
 [docs/design/allocation.md](design/allocation.md). In one paragraph: `kama_alloc`/`kama_free` become the
@@ -1850,16 +1850,10 @@ Three things it turned up, none of them in the plan it was picked up with:
   (`tests/reffn_static.kama`); a local that merely shares a static's name is still refused
   (`tests/xfail/reffn_static_local.kama`), which is why the root resolves as a SYMBOL and not as a bare name.
 
-**The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
-when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
-rule is permanent. What is not is ten `std::fs` externs being heap at all: `kama__wpath` converts every UTF-8 path
-to a heap UTF-16 string on Windows, where POSIX passes the bytes straight through. One of the ten, `kama_path_meta`
-(`stat`), was never marked, so `--no-heap` accepts a program that allocates on Windows (probed `0.9.369`). A stack
-buffer sized to the NT path limit removes the heap from all ten, and the marks come off. A heap fallback for a long
-path would keep them, which is why the long-path case decides the design. The seven one-platform externs were judged
-on 2026-09-17: all honestly allocate (owned strings, unbounded command lines, a growing reap list) and stay marked.
-The brief, with the measurements to take and the decisions to put to the maintainer before code, is §2b of
-[docs/design/allocation.md](design/allocation.md).
+**The Windows path seam shipped** (`0.9.416`). `kama__wpath` converts into a caller-owned
+`kama__wpathbuf` on the stack, so the ten `std::fs` path externs allocate on no target and a `--no-heap`
+program may `stat`, `rename`, `remove`, `createDir`, `removeDir` and `File.open`. The record, with the
+measurements and what stays heap, is SPEC *No-heap subset* and the design doc's §2b.
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.

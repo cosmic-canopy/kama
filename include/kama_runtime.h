@@ -59,6 +59,30 @@ _Static_assert(sizeof(double) == 8, "kama: float64 maps to C double and must be 
 #  endif
 #endif
 
+// A function whose FRAME IS LARGE must not be folded into its caller, and that is a correctness property
+// here rather than a tuning knob. kama_os.h's Windows path wrappers each hold a ~64 KB wide-path buffer
+// (kama__wpathbuf), and `std::fs::removeDirAll` / `createDirAll` RECURSE — once per directory level. Were
+// such a buffer inlined into the recursing frame, a ~32-deep tree would exhaust a 2 MB stack inside
+// `rm -rf`: at runtime, with no diagnostic. gcc declines the inline on its own (`--param
+// large-stack-frame`, 256 bytes), but kama's C is built by gcc, clang and `zig cc` across several -O
+// levels, and a stack-overflow property should not rest on anyone's default. Saying it costs one call per
+// syscall — unmeasurable beside the syscall — and bounds peak stack at ONE such frame whatever the depth.
+//
+// It carries `unused` alongside the `noinline`, and not for tidiness. A function marked this way is
+// `static` rather than `static inline`, because `noinline` on an `inline` function is a contradiction gcc
+// reports (-Wattributes) — and a plain `static` that this TU never calls is -Wunused-function. kama's own
+// builds pass neither flag, but these headers SHIP and are compiled by whoever includes them. Measured
+// clean on gcc and clang at -Wall -Wextra, and still emitting a real call rather than an inlined body.
+#ifndef KAMA_NOINLINE
+#  if defined(__GNUC__) || defined(__clang__)
+#    define KAMA_NOINLINE __attribute__((noinline, unused))
+#  elif defined(_MSC_VER)
+#    define KAMA_NOINLINE __declspec(noinline)
+#  else
+#    define KAMA_NOINLINE
+#  endif
+#endif
+
 // `.as<T>()`'s identity fallback: does a boxed error's vtbl name the type `T`? A byte compare rather than
 // `strcmp` because this header calls no libc (see the includes above). The pointer compare that precedes
 // it is not enough on its own — a prelude enum's vtbl is `static` in the shared header, one copy per unit

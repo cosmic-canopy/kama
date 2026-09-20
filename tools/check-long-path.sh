@@ -73,6 +73,11 @@ if [ "$rc" -ne 0 ]; then
         12|13)   echo "  readDir failed, or did not list the file it should have" >&2 ;;
         14|15|16) echo "  rename inside the deep directory failed" >&2 ;;
         17|18|19) echo "  remove/removeDirAll could not tear the tree down" >&2 ;;
+        20|21|22) echo "  File.open in Append mode failed on the deep path" >&2 ;;
+        23|24|25|26) echo "  the 64-LEVEL tree (depth, not length) could not be built or removed" >&2 ;;
+        127) echo "  the probe CRASHED (127). On Windows this is the stack: the fs wrappers hold a" >&2
+             echo "  ~64 KB kama__wpathbuf each and must stay KAMA_NOINLINE, or recursion through" >&2
+             echo "  createDirAll/removeDirAll accumulates them and overruns a 2 MB stack." >&2 ;;
         *)  echo "  unrecognized probe exit code" >&2 ;;
     esac
     echo "  (the codes are enumerated in $FIXTURE)" >&2

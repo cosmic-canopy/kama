@@ -661,6 +661,14 @@ into the declared pool's entries when a program declares a global allocator, and
 owns. A **foreign allocator** — one that hands back a block the program must release through a route the
 funnel never served, such as `getaddrinfo` — is a fact **always**, pool or not. <!-- xfail: noheap_pool_resolve -->
 
+Because that verdict is derived rather than declared, it reads the seam as written — so **`std::fs`'s
+PATH calls allocate on no target and a no-heap program may use them**: `exists`, `stat`, `rename`, <!-- test: noheap_flag_fs -->
+`remove`, `createDir`, `removeDir` and `File.open` in every `OpenMode`, with no pool declared. Windows
+converts UTF-8 to UTF-16 into a caller-owned stack buffer to earn that (the heap conversion it replaced
+was a fact on Linux and wasm too, since both arms are read). The **directory and whole-file** calls are
+not, for reasons of their own and on every target: `readDir` owns a `DIR*`/cursor, `readFile` and <!-- xfail: noheap_flag_fs_readdir -->
+`removeDirAll` own a growing buffer, and `createDirAll` takes a `substring` for each parent.
+
 **C the compiler cannot read still declares itself.** An `extern fn` into C kama does not ship is marked <!-- xfail: noheap_heap_extern -->
 `@heap`, and a call to it is then an allocation fact like any the compiler writes: `@heap extern fn UnsafePtr
 vendor_block_alloc(usize n);`. The mark is on the SYMBOL, so a redeclaration without it does not unmark the

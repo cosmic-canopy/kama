@@ -1,10 +1,13 @@
 # Allocation — one funnel, a replaceable global allocator, allocator-aware errors, a reach-based `--no-heap`
 
-**Status:** §1 (KR-47) SHIPPED at `0.9.347`–`0.9.348`, the recording gap it exposed at `0.9.353`–`0.9.354`,
-§5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth** (§2's prerequisite) at `0.9.366`, and **the layout
-funnel + an aligned `Allocator`** (KR-61) at `0.9.367`, and **the whole funnel** (§2, KR-48) at `0.9.369` — verified
-on Linux, wasm and Windows, and **the replaceable global allocator** (§3, KR-49) at `0.9.377`–`0.9.378`. §4 not
-started. Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
+**Status: COMPLETE** at `0.9.416`. Every section shipped — §1 (KR-47) at `0.9.347`–`0.9.348`, the recording
+gap it exposed at `0.9.353`–`0.9.354`, §5 (`Handle`, KR-51) at `0.9.355`, **sizes that tell the truth**
+(§2's prerequisite) at `0.9.366`, **the layout funnel + an aligned `Allocator`** (KR-61) at `0.9.367`,
+**the whole funnel** (§2, KR-48) at `0.9.369` — verified on Linux, wasm and Windows — **the replaceable
+global allocator** (§3, KR-49) at `0.9.377`–`0.9.378`, **allocator-aware errors** (§4, KR-50) at
+`0.9.394`–`0.9.395`, **the verdict deriving its runtime facts** (§6, KR-74) at `0.9.401`–`0.9.402`,
+**reaching the instance** (KR-66) at `0.9.411`, and **the Windows path seam** (§2b, KR-58) at `0.9.416`.
+Opened 2026-09-12 at `0.9.320` during KR-12 (`std::uuid`), when a
 hand-written `Deserializable` had to box an error and that one box turned out to be unaccountable to every
 mechanism kama has for memory: no `Allocator` saw it, `--no-heap` rejected it for merely being imported,
 and no program could redirect it. This doc is deleted when the rows below ship, as the maintenance rule
@@ -16,15 +19,21 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-20, Linux).** `origin/dev` is `0.9.408`; this box is ahead and UNPUSHED — `0.9.409` (one
-classification per operand on the arithmetic path), the KR-78 filing, `0.9.410` (the per-TU object cache, KR-2)
-and `0.9.411` (KR-66, reaching the instance). The maintainer pushes and rebases; this box never does.
+**State (2026-09-20, Windows box).** ✅ **THE CAMPAIGN IS COMPLETE.** Rebased onto the Linux box's
+`0.9.411` and finished with `0.9.416` (KR-58, the Windows path seam) — the last row it was waiting on.
+Every section has shipped: the funnel (§2, KR-48) at `0.9.369`, the replaceable global allocator (§3,
+KR-49) at `0.9.377`–`0.9.378`, allocator-aware errors (§4, KR-50) at `0.9.394`–`0.9.395`, the verdict
+deriving its runtime facts from the shipped headers (§6, KR-74) at `0.9.401`–`0.9.402`, reaching the
+instance (KR-66) at `0.9.411`, and §2b at `0.9.416`.
 
-The campaign itself is **done through §4**: the funnel (§2, KR-48) at `0.9.369`, the replaceable global
-allocator (§3, KR-49) at `0.9.377`–`0.9.378`, allocator-aware errors (§4, KR-50) at `0.9.394`–`0.9.395`, and the
-verdict deriving its runtime facts from the shipped headers (§6, KR-74) at `0.9.401`–`0.9.402` from the other
-box. KR-66 (reaching the instance) shipped here at `0.9.411`, so what is left of the campaign is **KR-58**
-alone (the Windows path seam — that box's).
+⚠️ **The san and wasm legs are OWED for `0.9.416`** and are the Linux box's. A heap fact is
+target-independent — both arms of every `#if` are read — so `tests/noheap_flag_fs.d` is Linux's and
+wasm's fixture too, although only the Windows branch of `kama_os.h` changed. This box has no containers
+and ran `./dev test` + `./dev check` only.
+
+**This doc is now deletable** by the maintenance rule for `docs/design/` — the rows it carried have all
+shipped and their records are in SPEC, `docs/targets.md` and the git log. Left in place for one cycle so
+the matrix run above has something to fail against; delete it once that is green.
 
 Filed along the way and still open: **KR-57** (a binding may shadow a function), **KR-62** (`sizeof` of a generic
 instance named nowhere else), **KR-39** (a contract slot the no-heap walk cannot cross — now with a measured
@@ -91,12 +100,13 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    instance is emitted after every body in the entry TU, so not even the declaring file could name it — and the
    escape rule was widened to accept STATIC STORAGE for every `fn ref T`, not carved out for the intrinsic
    (maintainer, 2026-09-20). What each of those turned up is in KR-66's paragraph in ROADMAP_DETAIL.
-7. **KR-78 after it** — analysis is exponential in the length of an operator chain, found scoping the
+7. ~~**KR-58** on the Windows box~~ — shipped `0.9.416`; the record is §2b, and it **closes the campaign**.
+   Waiting for KR-49 was right, though not for the reason given: a declared pool turned out to get `std::fs`
+   under `--no-heap` on its own, which NARROWED the row to the default case rather than changing what it had
+   to build. Two halves of the brief had also been overtaken by KR-74 — see §2b.
+8. **KR-78 next** — analysis is exponential in the length of an operator chain, found scoping the
    incremental-build row. Not an allocation row; it is queued here only because the same box is carrying it.
    The curve, the design (memoize per node AND substitution context) and its build map are in ROADMAP_DETAIL.
-8. **KR-58 on the Windows box, AFTER KR-49** (maintainer, 2026-09-17: wait for their results, since a
-   declared pool may change what a `@heap` extern means; see §2b "Meets KR-49"). The brief in §2b is otherwise ready:
-   decisions 2 and 3 (stack reserve, probe cost) are pure measurement and go first.
 
 **The agreed order** is the top of the NOW table in `docs/ROADMAP.md`: ~~KR-47 reach-based `--no-heap`~~ (shipped) →
 ~~the recording gap~~ (shipped `0.9.353`, and the `new`-verb gate with it at `0.9.354`) → ~~**KR-51** `Handle`~~
@@ -436,98 +446,87 @@ block — self-tested on planted calls. And the san leg compiles with `KAMA_ALLO
 block's layout in a header and panics when a release passes a different one, so a green `./dev test san` proves
 every free in the corpus returned its exact size and alignment.
 
-### 2b. The Windows seam stops allocating per path (KR-58) — brief, not started
+### 2b. The Windows seam stops allocating per path (KR-58) — SHIPPED `0.9.416`
 
-Written 2026-09-17 on the Windows box at `0.9.369`, from reading `include/kama_os.h` and one probe. It is the Windows
-box's row once KR-49/KR-50 have landed on the other machine.
+Briefed 2026-09-17 at `0.9.369`, built 2026-09-20 at `0.9.408`. The eleven-month-old shape of this
+section was a brief; what follows is the record, and the two places the brief was overtaken are marked
+⚠️ because both were load-bearing when it was written.
 
-**What is true today.** `kama__wpath` converts every UTF-8 path to a heap UTF-16 string (`kama__wide` → a
-`kama__sized_alloc` block), and past 248 characters makes a SECOND heap block for the `GetFullPathNameW` result with
-the `\\?\` prefix. POSIX passes the bytes straight through. The externs whose only heap on any target is that
-conversion are the TEN below, not the eleven the row first said:
+**What it does.** `kama__wpath(utf8, &b)` converts UTF-8 into a caller-owned `kama__wpathbuf` — a
+`wchar_t[32776]` (NT limit 32767 + `\?\UNC\` + NUL, 64 KB) declared in the calling wrapper's frame —
+and returns a pointer into it. Nothing is allocated and nothing is freed. The ten path externs
+(`kama_open_read`/`_create`/`_append` via `kama__wopen`, `kama_unlink`, `kama_path_meta`, `kama_mkdir`,
+`kama_rmdir`, `kama_is_symlink` and `kama_exists` via `kama__attrs`, `kama_rename`) now allocate on
+**no** target, and `--no-heap` admits `std::fs::exists`, `stat`, `rename`, `remove`, `createDir`,
+`removeDir` and `File.open` in every `OpenMode`, with no pool declared
+([tests/noheap_flag_fs.d](../../tests/noheap_flag_fs.d)).
 
-| extern | Windows body | mark today |
-|---|---|---|
-| `kama_open_read` / `_create` / `_append` | `kama__wopen` → `_wopen` | `@heap` |
-| `kama_unlink` | `_wunlink` | `@heap` |
-| `kama_mkdir` / `kama_rmdir` | `_wmkdir` / `_wrmdir` | `@heap` |
-| `kama_is_symlink` / `kama_exists` | `kama__attrs` → `GetFileAttributesW` | `@heap` |
-| `kama_rename` | two paths → `MoveFileExW` | `@heap` |
-| **`kama_path_meta`** | `_wstat64` | ⚠️ **none — a missed mark** |
+That mattered on every platform, not just Windows: the no-heap walk reads **both arms of every `#if`**,
+so one Windows `malloc` made `std::fs` a heap fact on Linux and wasm too.
 
-⚠️ **`kama_path_meta` is a soundness hole on Windows today.** The `@heap` audit (§1, "Extern allocation") missed it,
-so `std::fs::stat` is judged heap-free: probed, a `--no-heap` program whose `main` matches on `stat(path: p)` BUILDS
-and runs, while the same program calling `exists` is refused naming `kama_exists`. Nothing ties a mark to the C body
-it describes, and this is the proof that the manual audit is not enough (see "Open" below).
+**⚠️ Two things the brief said that the tree had already overtaken.** Both were checked at `0.9.408`
+rather than believed, which is the only reason they were not acted on:
 
-`kama_diropen` stays `@heap` whatever this row does: its cursor is a heap block on Windows, and POSIX `opendir`
-allocates. Its `<path>\*` pattern buffer can still move to the stack with the rest, for free.
+1. *"…and the marks come off"* — they were already off. **KR-74** (`308b7df3`, `0.9.401`) stripped every
+   `@heap` mark from the runtime externs and derives the fact by reading the header. A mark on a symbol
+   kama's own headers define is now a hard error. This row is C work only.
+2. *"`kama_path_meta` is a soundness hole — `--no-heap` accepts `std::fs::stat`"* — closed by the same
+   change. Derivation catches it through `kama__wpath`; probed at `0.9.408`, `stat` was refused naming
+   `main -> std::fs::stat -> kama_path_meta -> wfree -> sized_free`. The "Open (maintainer)" item the
+   brief ended on — *no guard ties a mark to the header body it describes* — is answered by KR-74 having
+   removed the marks, so there is no longer a mark to tie.
 
-**The seven one-platform externs, judged** (the row's second half) — all honest, none changes here:
-- `kama_args_at`, `kama_program_invocation`/`_name`/`_path`, `kama_env_lookup`: each RETURNS a fresh owned
-  `kama_string` natively; the wasm stubs return literals. Allocating is what they are for. Not stopping would take
-  a borrowed-view surface, which is a language question and not this row.
-- `kama_proc_spawn` (Windows): the command line and environment block are unbounded, and spawning is `@heap` on
-  every target anyway (`kama_argv_new`, `kama_envp_build`). Stays.
-- `kama_proc_detach` (POSIX): the reaper's pid list grows. Not a Windows task; leave it to the other boxes.
+**One tier, not two — and the long path is what forces the only extra frame.** Zig's
+`sliceToPrefixedFileW` returns a `PathSpace` by value and is the model. Rust, Go and .NET all keep a
+heap fallback past a small stack buffer, which kama **cannot**: a reachable allocation is a heap fact
+whether or not it is taken, so a fallback forfeits the entire row. That disqualifies three of the four
+industry answers by construction and leaves only the frame size to decide, which the measurements below
+settled in favour of one buffer everywhere.
 
-So the row narrows to: **the ten path externs stop allocating on Windows, and their marks come off** (making
-`kama_path_meta`'s missing mark moot by removing the cause).
+Past 248 characters the path still needs `GetFullPathNameW` and a `\?\` prefix. `GetFullPathNameW` does
+**not** document whether `lpBuffer` may overlap `lpFileName`, so converting in place would be a guess
+about undocumented behaviour. `kama__wpath_long` is a `KAMA_NOINLINE` helper holding its own scratch
+buffer and copying the result back — which also keeps the second 64 KB off the frame of every short
+path, the case that is ~always taken.
 
-**Proposed shape: a caller-owned wide path buffer on the stack.** Zig's `sliceToPrefixedFileW` does this, returning
-a `PathSpace { data: [PATH_MAX_WIDE:0]u16, len }` by value. Rust and Go allocate. A sketch, to be measured before it is
-committed to:
+**⚠️ `KAMA_NOINLINE` on the wrappers is a correctness property, not a tuning knob.** `createDirAll` and
+`removeDirAll` recurse once per directory level. A 64 KB buffer folded into the recursing frame would
+exhaust a 2 MB stack at depth ~32 — at runtime, inside `rm -rf`, with no diagnostic. gcc declines that
+inline on its own (`--param large-stack-frame`, 256 bytes), and the emitted binary confirms it
+(`std__fs__removeDirAll` frame: **488 bytes**; `kama_unlink`: a separate 65,608-byte frame behind
+`___chkstk_ms`). It is said explicitly anyway, because kama's C is built by gcc, clang and `zig cc`
+across several `-O` levels and a stack-overflow property must not rest on anyone's default. Forcing
+`always_inline` was measured to crash the long-path probe with exit 127, so the guard is not vacuous.
 
-```c
-typedef struct kama__wpathbuf { wchar_t w[32767 + 8 + 1]; } kama__wpathbuf;   // NT limit + `\\?\UNC\` + NUL
-static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b);      // NULL + errno on failure
-// kama_unlink: kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1; return _wunlink(w);
-```
+**The measurements, taken before the code (Windows, `0.9.408`, the QEMU VM — same-run ratios only):**
 
-- The UTF-8 → UTF-16 conversion writes into `b->w` (a UTF-8 path of `n` bytes needs ≤ `n` code units). Past the
-  buffer's capacity it fails with `ENAMETOOLONG`, which Win32 would refuse anyway. For a long path, convert into the
-  buffer, then `GetFullPathNameW` into a second local or in place with `memmove` room. Settle which by reading the
-  API's aliasing rules; do not guess.
-- `kama__wfree` and its errno save/restore go away for paths (deletion). `kama__wide` stays for `proc_spawn`.
-- **Frame cost:** ~64 KB per path, ~128 KB in `kama_rename`. A >4 KB frame gets `__chkstk` probing on Windows.
+| Question | Answer |
+|---|---|
+| Stack available where fs calls run | `GetCurrentThreadStackLimits`: **2 MB** on main *and* on a `pthread_create(&t, NULL, …)` worker — winpthreads inherits the exe's `SizeOfStackReserve = 0x200000`. One buffer is 3% of that; `kama_rename`'s two are 6%. |
+| Cost against the malloc/free pair it replaces | **Cheaper.** 61 ns/op heap vs **22 ns/op** stack, three rounds, `___chkstk_ms` present in the disassembly — **2.7×**. Every Windows fs call gets that, not only a `--no-heap` build. |
+| `ENAMETOOLONG` as a named `IoError` case | **No.** POSIX already surfaces it as `Other(code)`, so a named case would change behaviour on both platforms for no caller who asked. A path past the buffer fails `ENAMETOOLONG`, which Win32 would refuse anyway. |
 
-**Decide before code (maintainer, with measurements):**
-1. **One tier vs two.** (A) The full 32K buffer in every wrapper: the simplest, one way. (B) A `MAX_PATH` stack buffer
-   for the common case, falling back to the heap for a long path: REJECTED, because the marks could not come off and
-   the row would not close. (C) A small buffer, with the 32K buffer only inside a `noinline` long-path helper: the same
-   worst case, a small common frame, more code. **Recommend A** unless the measurements below show a cost.
-2. **Is ~128 KB safe on every thread kama runs fs calls on?** Measure, don't assume: the exe's `SizeOfStackReserve`
-   (`objdump -p out.exe | grep -i stackreserve`; MinGW ld and MSVC link differ), and the stack winpthreads gives
-   `pthread_create(&t, NULL, …)` in `kama_isolate.h`. Worker `spawn` goes through that. Then run a probe: `exists` on a
-   ~30K-character path from a spawned worker.
-3. **The cost of the probe.** Time `exists` on a short path in a loop, before and after. The current path pays a
-   `malloc`/`free` pair, the new one pays page probes. Bracket the timing with the clock-jump check (see
-   `docs/platforms/windows.md`: this VM's timings are not Windows facts, so only a same-run ratio means anything).
-4. **`ENAMETOOLONG` in `IoError`.** Check whether `lastError()` maps it to a named case or `Other(code)`. Add a case
-   only if the enum already carries its POSIX siblings.
+**What is still heap, and why — asserted, not asserted in prose.** `readDir` owns a cursor (a heap
+`kama__dir` on Win32; POSIX `opendir` hands back a libc-owned `DIR*`, which the compiler knows as a
+FOREIGN allocator, so it is a fact even with a pool declared). `readFile` and `removeDirAll` own a
+growing buffer; `createDirAll` takes a `substring` per parent. The one whose refusal comes from the seam
+this row rewrote is `readDir`, and it is pinned by
+[tests/xfail/noheap_flag_fs_readdir.d](../../tests/xfail/noheap_flag_fs_readdir.d).
 
-**Tests, red first:**
-- A `--no-heap` flag fixture (the `tests/noheap_flag_*.d` form) whose `main` reaches `stat`, `exists`, `rename`,
-  `remove`, `createDir`, `removeDir`, and a `File.open` in each `OpenMode`. RED today (it names `kama_open_read` etc.),
-  green once the marks come off. First probe which of those kama functions allocate for reasons of their own (a
-  `File` value, a `Result`'s error). Only a function whose sole heap is the extern belongs in the fixture, and the
-  rest are recorded here.
-- The marks change the no-heap verdict on EVERY target, because a mark is target-independent. So the fixture is
-  also Linux's and wasm's, and the maintainer's matrix on the Linux box is part of the gate.
-- `tools/check-long-path.sh` (stat/exists/rename/createDirAll/removeDirAll, and so `kama_is_symlink`) and
-  `tools/check-path-unicode.sh` must stay green on Windows. Confirm the long-path probe also covers `File.open` in
-  Append mode and `remove` past 260 characters, and add the cases it lacks.
+**A program with a declared pool did not need this row** — probed: a `@globalAllocator` + `exists`
+program built under `--no-heap` at `0.9.408`, because the funnel is then an edge into the pool. KR-58 is
+about the DEFAULT, which is every ordinary program, and about an fs call that should not allocate at all.
 
-**Meets KR-49 — re-read before building.** Once a program can declare `@globalAllocator`, a `@heap` extern whose
-C allocates through the FUNNEL (as `kama__wpath` does, via `kama__sized_alloc`) reaches the declared pool, not the
-system heap, while a `malloc` inside foreign C still reaches the system heap. §1's single `@heap` mark cannot tell
-those apart. If KR-49 splits it, a program with a pool may already get `std::fs` legally under `--no-heap` without
-this row. KR-58 still matters for the DEFAULT (no pool declared), which is every program today, and for an fs call
-that should not allocate at all. Check what KR-49 shipped with before writing the fixture.
+**Deletions it carried.** `kama__wfree` and its errno save/restore leave the path wrappers entirely
+(`kama__wide`/`kama__wfree` stay for `kama_proc_spawn`); `kama_rename` loses the unwind that freed its
+first conversion when the second failed; and `kama_diropen`'s narrow `<path>\*` block goes, the pattern
+now being appended to the converted wide path — which also ends its reliance on `GetFullPathNameW`
+preserving a trailing `*`.
 
-**Open (maintainer):** no guard ties an `@heap` mark to the header body it describes, and `kama_path_meta` shows the
-manual audit misses. A guard would parse each `static inline` variant in `include/` and follow `kama_*` helpers,
-probably size L. File it as its own row or accept the gap. Do not fold it into KR-58.
+**The seven one-platform externs**, judged 2026-09-17 and unchanged: `kama_args_at`,
+`kama_program_invocation`/`_name`/`_path` and `kama_env_lookup` each RETURN a fresh owned `kama_string`,
+which is what they are for; `kama_proc_spawn` has an unbounded command line and is `@heap` on every
+target anyway; `kama_proc_detach`'s reaper pid list grows. All stay.
 
 ### 3. Replacing the default implementation
 
@@ -737,7 +736,8 @@ leg is how the funnel is proven).
 4. ~~§4 allocator-aware error boxing; decide the per-call question~~ — shipped `0.9.395`; per-call is a non-goal (§4).
 5. ~~§6 the verdict derives its runtime facts (KR-74)~~ — shipped `0.9.401`; the 55 `@heap` marks are gone and
    the foreign-allocator list is the only residual judgement, guarded by `tools/check-alloc-funnel.sh`.
-6. §2b the Windows seam stops allocating per path (KR-58) — still open, and now measurable rather than
-   asserted: `--no-heap` derives `kama__wpath`'s allocation from the header instead of taking a mark's word.
+6. ~~§2b the Windows seam stops allocating per path (KR-58)~~ — shipped `0.9.416`. The path conversion
+   is a caller-owned stack buffer, so `std::fs`'s path calls allocate on no target and `--no-heap` admits
+   them. KR-74 had already removed the marks the brief meant to drop, which left it C work only.
 
 Each step: fixtures landed red first, `SPEC.md` updated in the same commit, `VERSION` bumped.

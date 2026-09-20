@@ -1,0 +1,20 @@
+// The line KR-58 did NOT move, and the twin of tests/noheap_flag_fs.d. That fixture proves a `--no-heap`
+// program may stat, rename and open a file, because the Windows path conversion stopped allocating. This
+// one proves the row stopped there and claimed nothing further: `readDir` still allocates, on every
+// target, for two reasons neither of which a stack buffer can reach — the Win32 branch owns a heap
+// `kama__dir` cursor holding the search handle, and POSIX `opendir` hands back a libc-owned `DIR*`, which
+// the compiler knows as a FOREIGN allocator (a block released through a route the funnel never served,
+// so it is a heap fact even for a program that declares a pool).
+//
+// Without this fixture the boundary is only prose. `readFile`, `createDirAll` and `removeDirAll` are
+// refused too, but for reasons of their OWN in kama code — an owning DynamicArray, `parent`'s substring,
+// `join` — which the existing container and string fixtures already cover. `readDir` is the one whose
+// refusal comes from the OS seam this row rewrote, so it is the one worth pinning here.
+import { std::fs::readDir, std::io::IoError, std::collections::DynamicArray };
+
+fn int32 main() {
+    return match (readDir(path: "nh")) {
+        case Ok(value: names): cast<int32>(names.length());
+        case Err(error: e): 1;
+    };
+}

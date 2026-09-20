@@ -1,0 +1,69 @@
+// The payoff of KR-58: a `--no-heap` program does real filesystem work. Every call here reaches an OS
+// seam that allocates on NO platform — POSIX passes the path bytes straight through, and the Windows
+// branch now converts UTF-8 -> UTF-16 into a caller-owned stack buffer instead of a heap block
+// (include/kama_os.h, `kama__wpathbuf`). Before that it was refused on EVERY target, not just Windows:
+// the no-heap walk reads both arms of an `#if` so one verdict covers them all, so a Linux build was
+// refused for C only Windows compiles.
+//
+// ⚠️ NO `@globalAllocator` here, deliberately. A program that declares a pool ALREADY got std::fs under
+// `--no-heap` before this row, because the funnel is then an edge into the pool rather than a heap fact
+// (tests/noheap_pool_fmt.d). This fixture is about the DEFAULT — which is every ordinary program.
+//
+// Its xfail twin is tests/xfail/noheap_flag_fs_readdir.d: `readDir` is still refused, honestly, because
+// a DIR* cursor is a real allocation on both platforms.
+//
+// Every path is a string LITERAL — borrowed bytes. `join`/`parent` mint an owned string and would be
+// refused here, which is why `createDirAll` and `removeDirAll` are not in this fixture.
+import { std::fs::File, std::fs::OpenMode, std::fs::exists, std::fs::stat,
+         std::fs::createDir, std::fs::removeDir, std::fs::rename, std::fs::remove,
+         std::io::IoError };
+
+fn bool ok(Result<Unit, IoError> r) {
+    return match (r) { case Ok(value: u): true; case Err(error: e): false; };
+}
+
+// Write four bytes through the `Writer` primitive, from an InlineArray window — no DynamicArray, so no
+// owning buffer. Returns false on any failure; the File drops (and closes) at the end of the block.
+fn bool put(const ref string path, OpenMode mode) {
+    InlineArray<uint8>#(4) chunk = [107ui8, 97ui8, 109ui8, 97ui8];   // "kama"
+    match (File.open(path: path, mode: mode)) {
+        case Err(error: e): { return false; }
+        case Ok(value: f): {
+            borrow chunk.view() as v {
+                return match (f.write(bytes: v)) {
+                    case Ok(value: n):  n == cast<isize>(4);
+                    case Err(error: e2): false;
+                };
+            }
+        }
+    };
+}
+
+fn int32 main() {
+    if (!ok(r: createDir(path: "nh"))) { return 1; }
+    if (!exists(path: "nh"))           { return 2; }
+
+    if (!put(path: "nh/a", mode: OpenMode::Write))  { return 3; }
+    if (!put(path: "nh/a", mode: OpenMode::Append)) { return 4; }
+
+    // Read mode too, so all three OpenModes are reached; the handle closes when it drops.
+    match (File.open(path: "nh/a", mode: OpenMode::Read)) {
+        case Err(error: e): { return 5; }
+        case Ok(value: f): { }
+    };
+
+    int32 sz = match (stat(path: "nh/a")) {
+        case Ok(value: m): (m.isDir ? 6 : ((m.size == cast<usize>(8)) ? 0 : 7));
+        case Err(error: e): 8;
+    };
+    if (sz != 0) { return sz; }
+
+    if (!ok(r: rename(from: "nh/a", to: "nh/b"))) { return 9; }
+    if (exists(path: "nh/a"))  { return 10; }
+    if (!exists(path: "nh/b")) { return 11; }
+
+    if (!ok(r: remove(path: "nh/b")))    { return 12; }
+    if (!ok(r: removeDir(path: "nh")))   { return 13; }
+    if (exists(path: "nh"))              { return 14; }
+    return 42;
+}

@@ -1,0 +1,1 @@
+through `main` -> `std::fs::readDir` -> `kama_dirclose`

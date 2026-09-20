@@ -177,6 +177,17 @@ run *kama: Restart Server*. (The `include/` copy is what lets the snapshot resol
 Worth knowing before debugging, because each of these produced a confident wrong answer once:
 
 - **`long` is 32-bit** (LLP64). `strtol` silently saturates above `INT32_MAX`; use `strtoll`.
+- **Every path handed to the OS is converted, and the conversion lives on the STACK** (`kama__wpathbuf`
+  in `include/kama_os.h` — a `wchar_t[32776]`, 64 KB, one per fs wrapper and two in `kama_rename`). POSIX
+  has no such step, so this is the only platform where an `fs` call has a large frame. Two facts measured
+  at `0.9.408` and worth not re-deriving: **a kama-built exe reserves 2 MB**, and a worker from
+  `pthread_create(&t, NULL, …)` gets the same 2 MB because winpthreads inherits `SizeOfStackReserve` —
+  so a buffer is 3% of a stack, not a risk. And the stack form is **2.7× faster** than the `malloc`/`free`
+  pair it replaced (22 ns/op vs 61), so this is not a cost paid for the no-heap property.
+  ⚠️ **Those wrappers are `KAMA_NOINLINE` and must stay so.** `createDirAll`/`removeDirAll` recurse once
+  per directory level; fold a 64 KB buffer into the recursing frame and a ~32-deep tree overruns the
+  stack, at runtime, inside `rm -rf`. `tools/check-long-path.sh` builds a 64-level tree for exactly this
+  and reports exit **127** when it regresses (which is what a crash looks like here — see below).
 - **A GUI-subsystem process has valid std HANDLES and unbound CRT fds, and `AttachConsole` widens the
   gap.** `print` goes through `_write(fd, …)`; the fd is what matters and the handle lies about it.
   Launched from a terminal, a `--subsystem windows` build starts with `GetStdHandle(-11)` **null** and

@@ -171,41 +171,76 @@ static inline char* kama__utf8(const wchar_t* w, size_t* outLen) {
     if (outLen) *outLen = (size_t)n - 1;
     return s;
 }
-// A PATH, long-path aware. Past 248 characters (MAX_PATH minus the 12 CreateDirectoryW reserves for an 8.3
-// name — the threshold Rust and Go use) the path is made absolute and normalized by GetFullPathNameW
-// (`/` -> `\`, `..` collapsed — which Win32 already does lexically, so nothing changes meaning) and given
-// the `\\?\` prefix (`\\?\UNC\` for a share). Every W call here honours that prefix with LongPathsEnabled=0
-// (probed: docs/platforms/windows.md), so no registry setting is asked of the user. A shorter path passes
-// through untouched, so the common case is exactly what it was.
-static inline wchar_t* kama__wpath(const char* utf8) {
-    wchar_t* w = kama__wide(utf8, -1);
-    if (!w) return NULL;
-    if (wcslen(w) < 248 || (w[0] == L'\\' && w[1] == L'\\' && w[2] == L'?' && w[3] == L'\\')) return w;
-    DWORD full = GetFullPathNameW(w, 0, NULL, NULL);                        // required size, incl. NUL
-    wchar_t* v = full ? (wchar_t*)kama__sized_alloc(((size_t)full + 8) * sizeof(wchar_t)) : NULL;   // + `\\?\UNC\`
-    if (!v) { kama__sized_free(w); errno = full ? ENOMEM : ENOENT; return NULL; }
-    DWORD got = GetFullPathNameW(w, full, v + 4, NULL);                     // excludes the NUL on success
-    kama__sized_free(w);
-    if (got == 0 || got >= full) { kama__sized_free(v); errno = ENOENT; return NULL; }
-    if (v[4] == L'\\' && v[5] == L'\\') {                                    // \\srv\share\x -> \\?\UNC\srv\share\x
-        memmove(v + 8, v + 6, ((size_t)got - 2 + 1) * sizeof(wchar_t));
-        memcpy(v, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));
-    } else {
-        memcpy(v, L"\\\\?\\", 4 * sizeof(wchar_t));
-    }
-    return v;
-}
-// Releasing may clobber errno; the wrappers below free their wide copy AFTER the call whose errno they return.
-// Every wide path/string above is a sized block, so this is the one release for all of them.
+// Releasing may clobber errno; kama_proc_spawn frees its wide strings AFTER the call whose errno it returns.
+// Every wide string from kama__wide is a sized block, so this is the one release for all of them.
 static inline void kama__wfree(void* p) { int e = errno; kama__sized_free(p); errno = e; }
+
+// ---- a PATH, on the CALLER'S STACK -------------------------------------------
+// A path conversion ALLOCATES NOTHING. It used to mint a heap UTF-16 string per call (and a second block
+// past 248 characters), which made every `std::fs` call on Windows a heap fact — and therefore on EVERY
+// target, since the no-heap walk reads both arms of an `#if` so one verdict covers them all. A path call
+// that allocates on no platform now allocates on none, so `--no-heap` admits `std::fs::exists`, `stat`,
+// `rename`, `remove`, `createDir`, `removeDir` and `File.open` (the directory and whole-file calls stay
+// heap for reasons of their own: a DIR* cursor, an owning buffer). This is Zig's `PathSpace` shape.
+// Rust, Go and .NET all keep a heap fallback for a long path, which kama cannot: a reachable allocation
+// is a heap fact whether or not it is taken, so a fallback would forfeit the whole point.
+//
+// Measured on this seam before it was written (Windows, `0.9.408`): main and every worker thread
+// (`pthread_create(&t, NULL, …)` in kama_isolate.h — winpthreads inherits SizeOfStackReserve) get 2 MB,
+// so one buffer is 3% of a stack and kama_rename's two are 6%. And it is not merely affordable, it is
+// CHEAPER than what it replaces: 22 ns/op against 61 ns for the malloc/free pair, same run, `___chkstk_ms`
+// present in the disassembly — 2.7x. Every Windows fs call gets that, not only a `--no-heap` build.
+#define KAMA__WPATH_CAP 32776      /* NT limit 32767 + `\\?\UNC\` (8) + NUL */
+typedef struct kama__wpathbuf { wchar_t w[KAMA__WPATH_CAP]; } kama__wpathbuf;   /* 65552 bytes */
+
+// Past 248 characters (MAX_PATH minus the 12 CreateDirectoryW reserves for an 8.3 name — the threshold
+// Rust and Go use) the path is made absolute and normalized by GetFullPathNameW (`/` -> `\`, `..`
+// collapsed — which Win32 already does lexically, so nothing changes meaning) and given the `\\?\` prefix
+// (`\\?\UNC\` for a share). Every W call here honours that prefix with LongPathsEnabled=0 (probed:
+// docs/platforms/windows.md), so no registry setting is asked of the user.
+//
+// ⚠️ THE SCRATCH IS A SEPARATE FRAME ON PURPOSE. GetFullPathNameW does not document whether `lpBuffer`
+// may overlap `lpFileName`, so converting in place would be a guess about undocumented behaviour. It
+// writes into this helper's own buffer and the result is copied back, which also keeps the second 64 KB
+// off the frame of every SHORT path — the case that is ~always taken.
+KAMA_NOINLINE static wchar_t* kama__wpath_long(kama__wpathbuf* b) {
+    kama__wpathbuf t;
+    DWORD got = GetFullPathNameW(b->w, KAMA__WPATH_CAP - 8, t.w + 8, NULL);  // excludes the NUL on success
+    if (got == 0 || got >= KAMA__WPATH_CAP - 8) { errno = ENOENT; return NULL; }
+    wchar_t* start; size_t len;
+    if (t.w[8] == L'\\' && t.w[9] == L'\\') {          // \\srv\share\x -> \\?\UNC\srv\share\x
+        memcpy(t.w + 2, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));   // lands just before the path past its `\\`
+        start = t.w + 2; len = 8 + ((size_t)got - 2);
+    } else {                                           // C:\x -> \\?\C:\x
+        memcpy(t.w + 4, L"\\\\?\\", 4 * sizeof(wchar_t));
+        start = t.w + 4; len = 4 + (size_t)got;
+    }
+    memcpy(b->w, start, (len + 1) * sizeof(wchar_t));   // distinct buffers, so a copy and not a move
+    return b->w;
+}
+
+// UTF-8 -> UTF-16 into `b`, returning `b->w` (never a fresh block) or NULL with errno set. Invalid UTF-8
+// is EINVAL, as it was; a path too long for the NT namespace is ENAMETOOLONG, which Win32 would refuse
+// anyway. Both surface through IoError::Other(code), which is what POSIX already does for ENAMETOOLONG.
+static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, b->w, KAMA__WPATH_CAP);
+    if (n <= 0) { errno = GetLastError() == ERROR_INSUFFICIENT_BUFFER ? ENAMETOOLONG : EINVAL; return NULL; }
+    if ((size_t)(n - 1) < 248 || (b->w[0] == L'\\' && b->w[1] == L'\\' && b->w[2] == L'?' && b->w[3] == L'\\'))
+        return b->w;                                   // the common case: no second pass, no branch taken
+    return kama__wpath_long(b);
+}
 
 // ---- files (wide CRT low-level I/O) -----------------------------------------
 // _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data. The `_w*` CRT
 // family is preferred over raw Win32 for the file calls because it sets `errno` itself, so kama_last_error()
 // stays the single error channel with no GetLastError mapping.
-static inline int32_t kama__wopen(const char* path, int flags) {
-    wchar_t* w = kama__wpath(path); if (!w) return -1;
-    int fd = _wopen(w, flags, _S_IREAD | _S_IWRITE); kama__wfree(w); return (int32_t)fd;
+//
+// ⚠️ Every wrapper that holds a kama__wpathbuf is KAMA_NOINLINE — see the macro's note in kama_runtime.h.
+// It is a stack-overflow guard, not a tuning knob: `removeDirAll` recurses per directory level, and a
+// 64 KB buffer folded into that frame would blow a 2 MB stack at depth ~32, inside `rm -rf`, at runtime.
+KAMA_NOINLINE static int32_t kama__wopen(const char* path, int flags) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    return (int32_t)_wopen(w, flags, _S_IREAD | _S_IWRITE);
 }
 static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
 static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
@@ -213,9 +248,9 @@ static inline int32_t   kama_open_append(const char* path) { return kama__wopen(
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, (unsigned int)n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, (unsigned int)n); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)fd); }
-static inline int32_t   kama_unlink(const char* path) {
-    wchar_t* w = kama__wpath(path); if (!w) return -1;
-    int r = _wunlink(w); kama__wfree(w); return (int32_t)r;
+KAMA_NOINLINE static int32_t kama_unlink(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    return (int32_t)_wunlink(w);
 }
 
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
@@ -231,10 +266,10 @@ static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* ou
     *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
     return 0;
 }
-static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
-                                     int64_t* outMtimeNs, int32_t* outReadOnly) {
-    wchar_t* w = kama__wpath(path); if (!w) return -1;
-    struct _stat64 st; int r = _wstat64(w, &st); kama__wfree(w);
+KAMA_NOINLINE static int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
+                                            int64_t* outMtimeNs, int32_t* outReadOnly) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    struct _stat64 st; int r = _wstat64(w, &st);
     if (r != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
@@ -244,17 +279,17 @@ static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_
 // Directory creation, rename and existence. `_wmkdir` takes no mode on Windows; `MoveFileExW` with
 // REPLACE_EXISTING is what makes rename overwrite as POSIX's does (plain MoveFileW fails on an existing
 // destination, which would have made the same kama call behave differently per platform).
-static inline int32_t kama_mkdir(const char* path) {
-    wchar_t* w = kama__wpath(path); if (!w) return -1;
-    int r = _wmkdir(w); kama__wfree(w); return (int32_t)r;
+KAMA_NOINLINE static int32_t kama_mkdir(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    return (int32_t)_wmkdir(w);
 }
-static inline int32_t kama_rmdir(const char* path) {
-    wchar_t* w = kama__wpath(path); if (!w) return -1;
-    int r = _wrmdir(w); kama__wfree(w); return (int32_t)r;
+KAMA_NOINLINE static int32_t kama_rmdir(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    return (int32_t)_wrmdir(w);
 }
-static inline DWORD kama__attrs(const char* path) {
-    wchar_t* w = kama__wpath(path); if (!w) return INVALID_FILE_ATTRIBUTES;
-    DWORD a = GetFileAttributesW(w); kama__wfree(w); return a;
+KAMA_NOINLINE static DWORD kama__attrs(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return INVALID_FILE_ATTRIBUTES;
+    return GetFileAttributesW(w);
 }
 // Is this path a symlink (a reparse point here), WITHOUT following it? The distinction only matters to a
 // recursive delete, which must not walk through a link and empty a directory somewhere else.
@@ -263,13 +298,17 @@ static inline int32_t kama_is_symlink(const char* path) {
     if (a == INVALID_FILE_ATTRIBUTES) return 0;
     return (a & FILE_ATTRIBUTE_REPARSE_POINT) ? 1 : 0;
 }
-static inline int32_t kama_rename(const char* from, const char* to) {
-    wchar_t* wf = kama__wpath(from); if (!wf) return -1;
-    wchar_t* wt = kama__wpath(to);   if (!wt) { kama__wfree(wf); return -1; }
-    BOOL ok = MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
-    DWORD e = ok ? 0 : GetLastError();
-    kama__wfree(wf); kama__wfree(wt);
-    if (!ok) { errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES; return -1; }
+// The one wrapper holding TWO buffers (128 KB — 6% of the 2 MB every thread gets, measured). The unwind
+// that freed the first conversion when the second failed is gone with the allocations.
+KAMA_NOINLINE static int32_t kama_rename(const char* from, const char* to) {
+    kama__wpathbuf bf, bt;
+    wchar_t* wf = kama__wpath(from, &bf); if (!wf) return -1;
+    wchar_t* wt = kama__wpath(to,   &bt); if (!wt) return -1;
+    if (!MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+        DWORD e = GetLastError();
+        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
+        return -1;
+    }
     return 0;
 }
 static inline int32_t kama_exists(const char* path) {
@@ -280,17 +319,23 @@ static inline int32_t kama_exists(const char* path) {
 // DIR* analogue: a heap cursor holding the search handle + the pending entry (FindFirstFile already
 // returns the first match). Empty string = end-of-directory; kama filters "." / ".." itself.
 typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW kama_data; int pending; } kama__dir;
-static inline void* kama_diropen(const char* path) {
-    size_t n = strlen(path);
-    char* pattern = (char*)kama__sized_alloc(n + 3);                         // "<path>\*"
-    if (!pattern) { errno = ENOMEM; return NULL; }
-    memcpy(pattern, path, n); pattern[n] = '\\'; pattern[n + 1] = '*'; pattern[n + 2] = '\0';
-    wchar_t* w = kama__wpath(pattern);                                       // GetFullPathNameW keeps a trailing `*`
-    kama__wfree(pattern);
-    if (!w) return NULL;
+// The `<path>\*` search pattern is appended to the CONVERTED path, not built as a narrow string first —
+// which deletes the block that form needed (and its ENOMEM bail). The buffer already reserves room: the
+// prefix and NUL it is sized for are what the two extra code units come out of. `\*` after the long-path
+// pass rather than before is equivalent — it used to rely on GetFullPathNameW preserving a trailing `*`,
+// and now nothing has to. tools/check-long-path.sh exercises readDir at 359 characters, which proves it.
+//
+// This still ALLOCATES — the cursor below is a heap block, and POSIX `opendir` owns its DIR* — so
+// `readDir` and `removeDirAll` remain heap facts on every target. That is honest and is asserted by
+// tests/xfail/noheap_flag_fs_readdir.d.
+KAMA_NOINLINE static void* kama_diropen(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return NULL;
+    size_t n = wcslen(w);
+    if (n + 3 > KAMA__WPATH_CAP) { errno = ENAMETOOLONG; return NULL; }
+    w[n] = L'\\'; w[n + 1] = L'*'; w[n + 2] = L'\0';
     kama__dir* d = (kama__dir*)kama_alloc(sizeof *d, _Alignof(kama__dir));
-    if (!d) { kama__wfree(w); errno = ENOMEM; return NULL; }
-    d->h = FindFirstFileW(w, &d->kama_data); kama__wfree(w);
+    if (!d) { errno = ENOMEM; return NULL; }
+    d->h = FindFirstFileW(w, &d->kama_data);
     if (d->h == INVALID_HANDLE_VALUE) { kama_free(d, sizeof *d, _Alignof(kama__dir)); errno = ENOENT; return NULL; }
     d->pending = 1;
     return d;

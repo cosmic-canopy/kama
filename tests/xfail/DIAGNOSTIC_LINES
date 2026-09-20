@@ -672,6 +672,7 @@ noheap_dtor_override	noheap_dtor_override.kama:12
 noheap_error_box	noheap_error_box.kama:10
 noheap_field_dtor	noheap_field_dtor.kama:15
 noheap_flag_container	app.kama:14 app.kama:16
+noheap_flag_fs_readdir	app.kama:16
 noheap_flag_reached_dispatch	app.kama:24
 noheap_flag_reached_helper	app.kama:6
 noheap_fnptr_bind	noheap_fnptr_bind.kama:7

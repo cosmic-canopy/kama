@@ -15,7 +15,8 @@
 // `kama_diropen` is the one site with an explicit `char[MAX_PATH]` and an ENOMEM bail. That is the most
 // VISIBLE ceiling, not the first one reached — the probe never gets that far. Both are fixed by the same
 // wide seam; the ordering claim was simply wrong, and is recorded here so it is not re-derived.
-import { std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
+import { std::fs::File, std::fs::OpenMode,
+         std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove, std::fs::readDir,
          std::fs::writeFile, std::fs::readFile,
          std::io::IoError, std::collections::DynamicArray,
@@ -79,9 +80,25 @@ fn int32 main() {
     };
     if (rd != 0) { return rd; }
 
+    // ---- APPEND to the deep file -------------------------------------------------------------
+    // The one OpenMode the rest of this probe never reaches: `writeFile` opens Write and `readFile`
+    // opens Read, so `kama_open_append` had no >260-character witness at all until KR-58 added one.
+    // Four more bytes take the file to 18, which the stat below then checks.
+    int32 ap = match (File.open(path: f, mode: OpenMode::Append)) {
+        case Err(error: e): 20;
+        case Ok(value: af): {
+            DynamicArray<uint8> more = bytesOf(s: "-end");
+            := match (af.writeAll(bytes: more)) {
+                case Ok(value: n):   (n == cast<isize>(4) ? 0 : 21);
+                case Err(error: e2): 22;
+            };
+        }
+    };
+    if (ap != 0) { return ap; }
+
     // ---- stat the deep FILE (size, not a directory) ------------------------------------------
     int32 stFile = match (stat(path: f)) {
-        case Ok(value: m): (m.isDir ? 9 : ((m.size == cast<usize>(14)) ? 0 : 10));
+        case Ok(value: m): (m.isDir ? 9 : ((m.size == cast<usize>(18)) ? 0 : 10));   // 14 written + 4 appended
         case Err(error: e): 11;
     };
     if (stFile != 0) { return stFile; }
@@ -118,6 +135,34 @@ fn int32 main() {
         case Ok(value: u): { }
     };
     if (exists(path: root)) { return 19; }
+
+    // ---- DEPTH, not length: the fs wrappers' frames must not accumulate ----------------------
+    // A separate axis from everything above, and the reason it is here is KR-58. The Windows seam now
+    // converts a path into a ~64 KB kama__wpathbuf on the CALLER'S STACK instead of the heap. Those
+    // wrappers are KAMA_NOINLINE precisely so the buffer cannot be folded into a caller's frame — and
+    // `createDirAll` and `removeDirAll` RECURSE, once per level. Were one folded in, ~32 levels would
+    // exhaust a 2 MB stack: at runtime, inside `rm -rf`, with no diagnostic anywhere. gcc declines that
+    // inline on its own today (`--param large-stack-frame`), which is exactly why this exists — the
+    // property must not rest on an optimizer default across gcc, clang and `zig cc`.
+    //
+    // 64 levels of a THREE-character component, so the total stays near 256 and this case tests depth
+    // without re-testing length: the guard is portable on purpose and must go green on macOS, whose
+    // PATH_MAX is 1024. Measured after the change (Windows): removeDirAll's own frame is 488 bytes.
+    string rroot = join(path: work, with: "rc");
+    string rdeep = copy rroot;
+    int32 k = 0;
+    while (k < 64) { rdeep = join(path: rdeep, with: "abc"); k = k + 1; }
+
+    match (createDirAll(path: rdeep)) {
+        case Err(error: e): { return 23; }
+        case Ok(value: u): { }
+    };
+    if (!exists(path: rdeep)) { return 24; }
+    match (removeDirAll(path: rroot)) {
+        case Err(error: e): { return 25; }
+        case Ok(value: u): { }
+    };
+    if (exists(path: rroot)) { return 26; }
 
     return 0;
 }
