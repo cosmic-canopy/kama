@@ -19,6 +19,9 @@
     "vscode-languageclient": "^9.0.1"
   },
   "contributes": {
+    "breakpoints": [
+      { "language": "kama" }
+    ],
     "languages": [
       {
         "id": "kama",

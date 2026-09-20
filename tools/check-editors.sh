@@ -163,6 +163,19 @@ grep -qF -- 'hx --grammar build' "$DOC" || bad "docs/editors.md no longer tells 
 #    that makes the whole design work.
 grep -qF -- 'kama.local.json' "$DOC" || bad "docs/editors.md no longer documents kama.local.json as the build-configuration channel"
 
+# 7b. BREAKPOINTS. VS Code refuses to set a breakpoint in a file whose language no extension has
+#    declared breakpointable — the gutter simply does not take the click, with no error anywhere. So
+#    `contributes.breakpoints` is what makes F5 debugging possible AT ALL for `.kama`, and it was absent
+#    for as long as the extension has existed: the whole flow only ever worked for someone who had
+#    turned on `debug.allowBreakpointsEverywhere`, which is why nothing noticed. Nothing else in this
+#    repo can see it — the launch config, the build and the adapter are all downstream of a breakpoint
+#    the user was never allowed to place.
+if ! grep -qF -- '"breakpoints"' "$ROOT/editor/vscode/package.json"; then
+    bad "editor/vscode/package.json no longer contributes breakpoints — VS Code will refuse to set one in a .kama file, silently"
+elif ! tr -d ' \n' < "$ROOT/editor/vscode/package.json" | grep -qF -- '"breakpoints":[{"language":"kama"}'; then
+    bad "editor/vscode/package.json contributes breakpoints, but not for the \`kama\` language"
+fi
+
 # 8. The Explorer file icon. Three things have to hold together and each fails silently on its own: the
 #    manifest has to REFERENCE an icon, the referenced file has to EXIST (a broken path just shows the
 #    generic file glyph — VS Code logs nothing an author would notice), and the PNG has to carry an ALPHA
