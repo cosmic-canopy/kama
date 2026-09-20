@@ -1852,6 +1852,27 @@ synthesized member to the user's type. The fixtures should then assert a live co
   and the emitter sets `isPlaceReturn` from `fn->isRef` for a FREE function as well as a method. So the row needs
   no new return-kind — only an intrinsic that is recognized by name, type-checked against the declared pool, and
   lowered to `&kama_global_allocator`.
+- ⚠️ *The spelling in this row was not kama syntax.* The turbofish is `::<T>` (`parse::<int32>(s: text)`, SPEC
+  *Parsing*), so the call is **`globalHeap::<Pool>()`** — a generic free function the emitter intercepts by name,
+  which needs no grammar change. The alternative, a `sizeof`-style keyword form taking `<T>` directly, costs a
+  grammar rule, `docs/grammar.bnf`, the keyword list and its guard, and a reserved word users can no longer use.
+  Take the first unless something forces the second.
+- ⚠️ **AND THE SHAPE IS REFUSED TODAY — probe this first, it decides the row.** Measured 2026-09-20:
+
+      static int32 g_counter;
+      fn ref int32 counter() { return g_counter; }
+      → error: a `ref T` result must borrow `this` or a `ref` parameter — returning a place into a local
+        would dangle
+
+  The check is structural root-tracing (`kama.cemit.cpp`, the chained-ref-return rule): the returned place's
+  root must be `this` or a `ref` parameter, and an intrinsic has neither — nor does the pool instance, which is
+  a C global the emitter writes rather than a module `static`. Two ways out, and they are not equivalent:
+  **(a)** exempt the intrinsic, since the emitter mints the place itself and a C global with static storage
+  duration cannot dangle — small, and it widens nothing; **(b)** teach the rule that a `static` root is safe,
+  which also makes `fn ref int32 counter()` legal for every user and is therefore a LANGUAGE SURFACE decision
+  for the maintainer, not a side effect of this row (GOALS: decide a surface item on its merits). (a) is the
+  recommendation; (b) is worth filing as its own row either way, because the diagnostic currently tells a user
+  their non-dangling program would dangle.
 - *The refusals.* `checkGlobalAllocator` already owns the declaration's rules and runs before any C is compiled;
   "this program declares no `@globalAllocator`" and "`Pool` is not the declared one — `X` is" belong with it or at
   the call site, naming the declared type either way. Both want a `tests/xfail/` fixture and a `DIAGNOSTIC_LINES`
