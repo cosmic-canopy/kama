@@ -707,6 +707,88 @@ std::string ccWarnFlags(const std::string& cc)
     return w;
 }
 
+// ---- The per-TU object cache (KR-2) ------------------------------------------------------------------
+//
+// A kama build re-emits every translation unit's C on every build and then compiles all of them, so an
+// edit to one file paid for the whole program. Measured on a 61-TU project: `kama check` is 0.09 s and the
+// full build 0.35 s, so the C toolchain is ~74 % of it — and a one-line edit to one module changes exactly
+// ONE emitted .c (a comment-only edit changes none, because emission is deterministic; that is what
+// check-c-reproducible.sh holds down). So the object of every other TU was about to be recompiled
+// byte-for-byte identically.
+//
+// A bundled install already had this: `zig cc` carries its own content-addressed cache (4.13 s cold, 0.11 s
+// after editing one file). A SLIM install uses the system clang or gcc, which has none, and that is the gap
+// this closes.
+//
+// ⚠️ The emitted .c is NOT the whole input, and comparing it alone would be a silent miscompile waiting to
+// happen: a TU also depends on kama's shipped runtime headers, on the generated shared header, and on any
+// header a user reached through `extern "my.h"`. So the compile asks the compiler itself — `-MMD` writes
+// the real dependency list — and the stamp records a content hash of every file on it, plus the exact
+// command and the compiler's own `--version`. A toolchain upgrade, a flag change, an edited FFI header and
+// an edited kama source all miss, and nothing else does.
+uint64_t fileHash64(const std::string& path)
+{
+    // Memoized per path for one build: 61 TUs share `kama_runtime.h` and the generated header, and hashing
+    // those once each is the difference between the cache costing nothing and costing milliseconds.
+    static std::map<std::string, uint64_t> memo;
+    std::map<std::string, uint64_t>::iterator it = memo.find(path);
+    if (it != memo.end()) return it->second;
+    uint64_t h = 1469598103934665603ULL;             // FNV-1a 64
+    FILE* f = fopen(osp(path).c_str(), "rb");
+    if (!f) { memo[path] = 0; return 0; }            // missing: hash 0, which never matches a real file
+    char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        for (size_t i = 0; i < n; ++i) { h ^= (unsigned char)buf[i]; h *= 1099511628211ULL; }
+    fclose(f);
+    if (h == 0) h = 1;                               // 0 is reserved for "not readable"
+    memo[path] = h;
+    return h;
+}
+
+// The files `-MMD` recorded for one object: a make rule, `obj: a.c b.h \` continued over lines.
+std::vector<std::string> readDepFile(const std::string& depPath)
+{
+    std::vector<std::string> deps;
+    FILE* f = fopen(osp(depPath).c_str(), "rb");
+    if (!f) return deps;
+    std::string text; char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+    fclose(f);
+    const size_t colon = text.find(':');
+    if (colon == std::string::npos) return deps;
+    std::string cur;
+    for (size_t i = colon + 1; i <= text.size(); ++i) {
+        const char c = i < text.size() ? text[i] : ' ';
+        if (c == '\\' && i + 1 < text.size() && (text[i + 1] == '\n' || text[i + 1] == '\r')) { ++i; continue; }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { if (!cur.empty()) { deps.push_back(cur); cur.clear(); } }
+        else cur += c;
+    }
+    return deps;
+}
+
+// The stamp beside a cached object: the command, the compiler's version, and `<hash> <path>` per dependency.
+// Written after a successful compile, read before the next one. Text, so a stale cache is inspectable rather
+// than opaque.
+std::string cacheStampText(const std::string& cmd, const std::string& ccVersion, const std::string& depPath)
+{
+    std::vector<std::string> deps = readDepFile(depPath);
+    if (deps.empty()) return "";                     // no dependency list -> nothing may be reused
+    std::ostringstream st;
+    st << "cmd " << cmd << "\n" << "cc " << ccVersion << "\n";
+    for (const std::string& d : deps) st << fileHash64(d) << " " << d << "\n";
+    return st.str();
+}
+
+std::string readFileText(const std::string& path)
+{
+    FILE* f = fopen(osp(path).c_str(), "rb");
+    if (!f) return "";
+    std::string text; char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+    fclose(f);
+    return text;
+}
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -8346,6 +8428,10 @@ void usage()
         "                             [--cxx <compiler>]  the C++ driver for C++/Objective-C++ `csources`, when\n"
         "                              it cannot be derived from --cc (clang→clang++, gcc→g++, zig cc→zig c++)\n"
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
+        "                             [--no-cache]  do not reuse or write `.kama-cache/` beside the output.\n"
+        "                              The per-unit object cache is on by default: a rebuild recompiles only\n"
+        "                              the units whose C, compile command, compiler version or `-MMD`\n"
+        "                              dependencies changed. See docs/targets.md.\n"
         "                             [--dynamic-runtime]  link the runtime as a DLL instead of statically.\n"
         "                              Windows only in effect (elsewhere libc IS the system, so there is no\n"
         "                              non-system runtime to choose about); a target's `runtime` key in\n"
@@ -9861,6 +9947,11 @@ int main(int argc, char** argv)
     std::vector<std::string> links;        // -l libraries (FFI)
     bool        emitLines  = true;
     bool        keepC      = false;
+    // The per-TU object cache is ON by default, like every other language's (Rust's `target/`, Go's
+    // `$GOCACHE`, zig's). `--no-cache` is the way out: a build that must not read a previous one's objects
+    // (a bisect, a toolchain being debugged) says so, and gets exactly the old behaviour — compile
+    // everything, keep nothing.
+    bool        noCache    = false;
     bool        webgpu     = false;
     bool        release    = false;        // debug by default
     bool releaseExplicit   = false;        // was --release/--debug passed? (sugar must not beat a manifest default)
@@ -9916,6 +10007,7 @@ int main(int argc, char** argv)
         else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
+        else if (a == "--no-cache")               noCache = true;
         else if (a == "--webgpu")                 webgpu = true;
         else if (a == "--shared")                 shared = true;
         // Opt IN to a DLL runtime. A no-op — not an error — on a target with no non-system runtime to
@@ -12108,21 +12200,49 @@ int main(int argc, char** argv)
 #endif
         int rc;
         const std::string base = cmd.str();
+        // The object cache lives beside the output, in the directory that already takes every generated
+        // file — so it is scoped to this binary, needs no eviction policy, and goes when the user deletes
+        // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
+        // could not identify all opt out; a cache that cannot tell one toolchain from another is the one
+        // failure mode worth refusing outright.
+        const std::string ccVersion = noCache ? std::string()
+                                              : runCmdCapture(compiler + " --version 2>&1");
+        const bool useCache = !noCache && !stopsAtObject && !ccVersion.empty();
+        const std::string cacheDir = dirName(outPath) + "/.kama-cache/" + baseName(stripExtension(outPath));
+        if (useCache && !dirExists(cacheDir)) makeDirs(cacheDir);
         // Compile each input on its own `-c` job, `jobs` at a time, appending its object to `objs`.
         auto compileEach = [&](const std::vector<const CcInput*>& inputs, int jobs,
                                std::vector<std::string>& objs) {
-            std::vector<std::string> cmds, mine;
+            std::vector<std::string> cmds, mine, stamps;
             // A compile-only job needs `-c`, which the flags already carry for OBJECT/STATIC.
             const std::string dashC = stopsAtObject ? "" : "-c ";
             for (const CcInput* in : inputs) {
-                mine.push_back(in->obj);
-                genFiles.push_back(in->obj);
+                // A cached object lives in the cache directory and SURVIVES the build; an uncached one is
+                // beside the output and is removed with the rest of the generated files, as it always was.
+                const std::string objPath = useCache ? cacheDir + "/" + baseName(in->obj) : in->obj;
+                if (!useCache) genFiles.push_back(objPath);
+                objs.push_back(objPath);           // every input contributes its object, compiled or reused
+                const std::string dep   = objPath + ".d";
+                const std::string stamp = objPath + ".stamp";
                 // Capture each job's streams separately — not `2>&1` — because stream identity matters:
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
-                const std::string obj = toolPath(in->obj);   // the object AND cmd's two redirections (see toolPath)
-                cmds.push_back(fitCommand(prefixFor(base, in->lang) + dashC + in->tok + "-o \"" + obj + "\""
-                                          + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles));
+                const std::string obj = toolPath(objPath);   // the object AND cmd's two redirections (see toolPath)
+                const std::string cmdStr =
+                    fitCommand(prefixFor(base, in->lang) + dashC
+                               + (useCache ? "-MMD -MF \"" + toolPath(dep) + "\" " : "")
+                               + in->tok + "-o \"" + obj + "\""
+                               + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles);
+                // A HIT is the previous build's stamp still describing this one: the same command, the same
+                // compiler, and every file the compiler said this object depends on still hashing the same.
+                // The stamp is rebuilt from the dependency list the LAST compile wrote — a dependency that
+                // has since been added cannot hide, because the .c is on that list too and it moved first.
+                if (useCache && fileExists(objPath) && !readFileText(stamp).empty()
+                    && cacheStampText(cmdStr, ccVersion, dep) == readFileText(stamp))
+                    continue;
+                mine.push_back(objPath);
+                cmds.push_back(cmdStr);
+                stamps.push_back(useCache ? stamp : std::string());
             }
             std::vector<int> rcs;
             int r = runCmdsParallel(cmds, jobs, rcs);
@@ -12132,8 +12252,15 @@ int main(int argc, char** argv)
                 if (rcs[i] < 0) { remove(osp(mine[i] + ".out").c_str()); remove(osp(mine[i] + ".err").c_str()); continue; }
                 replayAndRemove(mine[i] + ".out", stdout);
                 replayAndRemove(mine[i] + ".err", stderr);
+                // Stamp only what actually compiled, and only where the compiler wrote a dependency list:
+                // no stamp means the next build recompiles, which is the safe direction to fail in.
+                if (rcs[i] == 0 && !stamps[i].empty()) {
+                    const std::string text = cacheStampText(cmds[i], ccVersion, mine[i] + ".d");
+                    if (!text.empty()) { FILE* f = fopen(osp(stamps[i]).c_str(), "wb");
+                                         if (f) { fwrite(text.data(), 1, text.size(), f); fclose(f); } }
+                    else remove(osp(stamps[i]).c_str());
+                }
             }
-            objs.insert(objs.end(), mine.begin(), mine.end());
             return r;
         };
         if (perTU) {

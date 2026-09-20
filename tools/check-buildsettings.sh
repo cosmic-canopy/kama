@@ -297,7 +297,11 @@ mkdir -p "$tmp/langs/csrc"; for f in a.c a.cpp b.m c.mm; do : > "$tmp/langs/csrc
 tmpw="$tmp"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmpw=$(cygpath -m "$tmp") ;; esac
 line() { grep -e " -o $tmpw/langs/$1\$" -e " -o $tmpw/langs/$1 " "$tmp/o" | head -1; }
-if "$KAMA" build "$tmp/langs/kama.json" -j 2 --cc "$tmp/bin/x86-gcc" -o "$tmp/langs/app" >"$tmp/o" 2>"$tmp/e"; then
+# `--no-cache`: this case is about the per-language FLAGS, and it finds each command by the object path it
+# writes. The object cache (KR-2) puts objects under `.kama-cache/<binary>/` instead, which would make every
+# lookup here a miss for a reason that has nothing to do with what it asserts. check-obj-cache.sh owns the
+# cache's own behaviour.
+if "$KAMA" build "$tmp/langs/kama.json" -j 2 --no-cache --cc "$tmp/bin/x86-gcc" -o "$tmp/langs/app" >"$tmp/o" 2>"$tmp/e"; then
     kc=$(line app.o); c=$(line csrc__self__a.c.o); cxx=$(line csrc__self__a.cpp.o)
     m=$(line csrc__self__b.m.o); mm=$(line csrc__self__c.mm.o); ld=$(line app)
     case "$kc" in x86-gcc\ *-std=c11*) ok "kama's own C: the C driver, ISO c11" ;; *) bad "kama's own C command: $kc" ;; esac

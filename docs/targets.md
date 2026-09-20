@@ -632,6 +632,26 @@ The root is the manifest's `"out"` key, defaulting to `out`. An explicit `-o` ov
 A **loose `.kama` file with no manifest** is unaffected — `kama build hello.kama` still writes `./hello`
 beside the source. `out/` is a project's concept, and one file is not a project.
 
+### `.kama-cache/` — rebuilds skip what did not change
+
+A build keeps each translation unit's object in `.kama-cache/<binary>/` beside the output, and the next build
+reuses the ones whose input did not change. It is **on by default**, like Rust's `target/` or Go's build
+cache; `--no-cache` turns it off and restores the old behaviour exactly — compile everything, keep nothing.
+
+Measured on a 61-unit project: a cold build is 0.37 s, an unchanged rebuild 0.15 s, and a rebuild after
+editing one function body 0.17 s. An edit that changes a DECLARATION (adding a function, changing a
+signature) rewrites the shared header every unit includes, so that rebuild is a cold one — the same
+behaviour a C project with a shared header has.
+
+What makes an object stale is decided by the compiler, not guessed: each compile passes `-MMD`, and the
+cache re-checks the content of every file on the dependency list the compiler wrote, plus the exact command
+and the compiler's own `--version`. So an edited `extern "…"` C header, a changed `cflags`, a kama upgrade
+that touches a runtime header and a switch from clang to gcc all rebuild what they must.
+
+Two shapes have no per-unit objects to cache, and get nothing from it: a **`--release`** build (the program
+folds into one unity translation unit) and any build pinned to `-j 1`. A **`zig cc`** toolchain brings its
+own content-addressed cache, which is why kama clamps it to one invocation and stays out of its way.
+
 ## Platform notes
 
 - **macOS → anything**: fine with zig or a sysroot.

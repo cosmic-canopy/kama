@@ -58,9 +58,14 @@ expect_listing() {
 # (which runs dsymutil), while a parallel build compiles to .o first and links those (which does not).
 # tools/run-checks.sh exports KAMA_BUILD_JOBS=1, so this guard sees the .dSYM under `./dev check` and
 # not when run by hand. Debug symbols in the output directory are correct; a leftover .c is not.
+# ⚠️ `.kama-cache/` is the ONE thing a build leaves behind on purpose (KR-2): the per-TU object cache, which
+# is what makes a rebuild skip the compiles whose input did not change. It is scoped to the output binary and
+# lives inside the output directory, so the rule this guard exists for is unchanged — a build still writes
+# nothing outside `dirname(-o)`, and nothing at all into the SOURCE tree. `--no-cache` restores the old
+# behaviour exactly, and case 6 below holds that down: with it, not even the cache directory appears.
 expect_no_intermediates() {
     _dir=$1; _what=$2
-    _got=$(find "$_dir" \( -name '*.c' -o -name '*.gen.h' -o -name '*.o' -o -name '*.c.tmp' \) -print | tr '\n' ' ')
+    _got=$(find "$_dir" -name '.kama-cache' -prune -o \( -name '*.c' -o -name '*.gen.h' -o -name '*.o' -o -name '*.c.tmp' \) -print | tr '\n' ' ')
     [ -z "$_got" ] || bad "$_what
     leftover intermediates: $_got"
 }
@@ -138,5 +143,16 @@ else
     bad "case 5: the multi-unit build failed"
 fi
 
+# 6. `--no-cache`: the object cache is the one thing a build leaves behind (KR-2), and this is the way out.
+#    With it the output directory holds the binary and NOTHING else — not the intermediates, and not the
+#    cache directory either. A default that cannot be turned off is a default nobody can debug around.
+mkdir -p "$tmp/c6"
+printf 'fn int32 main() { return 0; }\n' > "$tmp/c6/app.kama"
+if ( cd "$tmp/c6" && "$KAMA" build app.kama --no-cache -o app >/dev/null 2>&1 ); then
+    expect_listing "$tmp/c6" "app app.kama " "case 6: --no-cache still left something in the output directory"
+else
+    bad "case 6: the --no-cache build failed"
+fi
+
 if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "check-clean-tree: PASS (a build writes only its output: -o, no--o, FAILED, --keep-c, multi-unit)"
+echo "check-clean-tree: PASS (a build writes only its output: -o, no--o, FAILED, --keep-c, multi-unit, --no-cache)"

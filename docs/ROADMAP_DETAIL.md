@@ -1771,7 +1771,7 @@ files with 800 functions is 0.18 s). A chain of integer LITERALS is fast, becaus
 is what pays.
 
 **Why.** `typeOfExpr` answers by recursing into its operand's subtree, and the arithmetic path asks it at
-every level, so each node re-walks everything below it. `0.9.401` cut the per-node asks from three to one
+every level, so each node re-walks everything below it. `0.9.409` cut the per-node asks from three to one
 (the raw-pointer check added at `0.9.388` was the third, and it had made the path 1.4× slower — 0.26 s at
 `0.9.378`, 0.37 s at `0.9.400`, 0.24 s after). That moves the CONSTANT. The shape is still exponential.
 
@@ -1782,9 +1782,9 @@ generic. The key is (node, substitution signature) — the same pair `_callInst`
 instantiation's call site from another's.
 
 **Why it matters, beyond the pathological case.** This is the reason a 61-file synthetic project measured
-24 s to CHECK and 25 s to BUILD, which reads as "the front end is 97 % of a build" and would have sent KR-2
+24 s to CHECK and 25 s to BUILD, which reads as "the front end is 97 % of a build" and would have sent the incremental-build row
 after the wrong thing entirely. With the chain written flat the same project is 0.09 s to check and 0.35 s
-to build — the C toolchain is 74 %, which is what KR-2 is actually about. A polynomial, a hash mix, a
+to build — the C toolchain is 74 %, which is what the object cache shipped at `0.9.410` actually attacks. A polynomial, a hash mix, a
 checksum or a long `&&` guard is an ordinary thing to write; at 40 terms it is seconds, and the compiler
 gives no sign why.
 
