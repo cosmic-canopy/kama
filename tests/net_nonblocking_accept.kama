@@ -1,21 +1,30 @@
 // std::net non-blocking accept — a non-blocking listener with nothing pending returns Err(WouldBlock); after
 // a client connects (loopback handshake completes into the backlog), accept() returns the connection.
 // Single process, deadlock-free. Returns 55.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError,
+         std::time::Duration, std::time::sleep };
 
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
 
-// The queued connection appears once the handshake lands; tolerate a brief WouldBlock window (no sleep prim).
+// The queued connection appears once the handshake lands, so the WouldBlock window has to be tolerated.
+// ⚠️ WAIT on a WALL-CLOCK deadline, never on an iteration count. This used to spin 2,000,000 times with
+// no sleep — the comment said "no sleep prim", which stopped being true at `0.9.406` — and a spin budget
+// measures the wrong thing: it is a race between how fast this loop burns its allowance and how fast the
+// kernel completes a handshake, so the busier the machine the likelier it loses. It did, under the full
+// parallel suite, returning this function's 63 (budget exhausted) instead of 55. Sleeping also YIELDS,
+// which hands the CPU to the very handshake being waited on. Same shape as the sibling
+// tests/net_nonblocking_connect.kama, which bounds its Poller.wait loop the same way.
 fn int32 acceptQueued(ref TcpListener l) {
     int32 tries = 0;
     int32 result = 63;
     bool done = false;
-    while (!done && tries < 2000000) {
+    while (!done && tries < 5000) {                    // up to ~5s, against a handshake needing microseconds
         Result<TcpStream, IoError> ra = l.accept();
         match (ra) {
             case Ok(value: s):  { result = 55; done = true; }
             case Err(error: e): { if (!isWouldBlock(e: e)) { result = 64; done = true; } }
         };
+        if (!done) { sleep(d: Duration.fromMillis(ms: 1i64)); }
         tries = tries + 1;
     }
     return result;
