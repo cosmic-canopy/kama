@@ -299,6 +299,19 @@ case "$(uname -s)" in
         echo "  the process was handed" >&2
         exit 1
     fi
+    #     ⚠️ THE OTHER HALF IS NOT GUARDED HERE, DELIBERATELY, AND THAT IS WORTH READING BEFORE YOU ADD IT.
+    #     The assertion above passes whether the reattach works or not — a redirect takes the skip branch
+    #     either way — so it stayed green through the whole of KB-31, during which a GUI build launched
+    #     from a TERMINAL printed nothing at all. The missing case needs a process whose stdout is a real
+    #     console, and no agent or CI shell here has one: three arrangements were tried and each was
+    #     measured VACUOUS — it reported success against a deliberately broken header —
+    #       * `cmd //c …` from msys2: /usr/bin/cmd is a shell shim, not cmd.exe (exit 127);
+    #       * `/c/Windows/System32/cmd.exe /c …` inheriting this shell's stdio: HANGS;
+    #       * `powershell -Command Start-Process cmd -WindowStyle Hidden -Wait`: runs, and the child's
+    #         stdout is not a console, so the CRT binds fd 1 and the bug does not appear.
+    #     A check that cannot be shown RED is the thing this repo refuses (see check-c-names §3), so it is
+    #     a written-down BY-HAND check instead: docs/platforms/windows.md § "Things that are true on
+    #     Windows and nowhere else" carries the recipe that did reproduce it, and the proof it reproduces.
     ;;
 esac
 #     …and everywhere else it is an accepted NO-OP, not an error, so one cross-platform build script can

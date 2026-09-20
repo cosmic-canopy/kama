@@ -177,6 +177,32 @@ run *kama: Restart Server*. (The `include/` copy is what lets the snapshot resol
 Worth knowing before debugging, because each of these produced a confident wrong answer once:
 
 - **`long` is 32-bit** (LLP64). `strtol` silently saturates above `INT32_MAX`; use `strtoll`.
+- **A GUI-subsystem process has valid std HANDLES and unbound CRT fds, and `AttachConsole` widens the
+  gap.** `print` goes through `_write(fd, …)`; the fd is what matters and the handle lies about it.
+  Launched from a terminal, a `--subsystem windows` build starts with `GetStdHandle(-11)` **null** and
+  `_get_osfhandle(1)` **-2**; `AttachConsole(ATTACH_PARENT_PROCESS)` then INSTALLS a std handle as a side
+  effect, so any handle test placed after it reads back the handle the attach just made and concludes
+  the process was handed a stdout. That is how KB-30's fix made KB-31: the rebind was skipped exactly
+  where it was needed, and the program printed nothing. Decide on `_get_osfhandle`, never on
+  `GetStdHandle`.
+  ⚠️ **NO AUTOMATED GUARD COVERS THE TERMINAL CASE** — it needs a process whose stdout is a real console,
+  and no agent or CI shell here has one (`check-target.sh` records the three arrangements that were tried
+  and measured vacuous). **This is the by-hand check, and it does reproduce:** build one program three
+  ways, then from a *console-attached* PowerShell run each under a fresh console and read the result back
+  from a file, because the screen cannot be read:
+
+  ```powershell
+  # `Start-Process cmd … -Wait` WITHOUT -NoNewWindow and WITHOUT -WindowStyle Hidden.
+  # Both of those flags stop it reproducing — measured.
+  Start-Process cmd -ArgumentList "/c","$d\gui.exe","$d\out.txt" -Wait ; Get-Content "$d\out.txt"
+  ```
+
+  A probe that writes `GetStdHandle`/`GetFileType`/`_get_osfhandle(1)` plus the result of `_write(1,…)`
+  to that file is what turns "it printed nothing" into a diagnosis. Fixed, fd 1 goes -2 → a real
+  descriptor and `_write` returns the byte count; broken, it stays -2 and `_write` returns -1 with
+  ERROR_INVALID_HANDLE (6). Check `GetConsoleCP()` before trusting a shell to be console-attached:
+  `GetConsoleWindow()` returns 0 under a pseudoconsole even when there IS one, which is what made two
+  earlier attempts conclude, wrongly, that no agent shell could test this at all.
 - **cmd.exe is the shell `system()` uses.** It has no `/dev/null` (use `NUL`), no `command -v` (use
   `where`), it cannot start a `#!/bin/sh` script, it reads a leading `/` as a switch, and it strips
   the outer quotes off a line that begins with one.

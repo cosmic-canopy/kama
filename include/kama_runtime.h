@@ -1919,25 +1919,31 @@ extern int    kama__argv_state;   // Windows: 0 narrow CRT argv, 1 converting, 2
 // exactly what the first attempt at this fix did. It defines nothing and includes nothing.
 struct _SECURITY_ATTRIBUTES;
 
-// Was this process HANDED this standard stream? `id` is one of the STD_*_HANDLE ids (-10/-11/-12).
+// Does this process already have a working fd here? `fd` is 0, 1 or 2.
 //
-// A GUI-subsystem process launched with STARTF_USESTDHANDLES — a shell redirect, a pipe, a CI runner, a
-// launcher capturing a log — is given real handles, and the CRT binds fds 0/1/2 from them exactly as it
-// does for a console program. One launched from Explorer is given none. The reattach below exists only
-// for the SECOND case, so it must be able to tell them apart: it used to rebind all three whenever
-// AttachConsole succeeded, and since the parent of a redirect usually has a console too, the attach
-// succeeded and the redirect got nothing. `game.exe > log.txt` wrote 0 bytes where the same program
-// built as a console exe wrote 13 (KB-30, measured 0.9.402).
+// ⚠️ THE QUESTION IS ABOUT THE FD, NOT THE WIN32 HANDLE, and the difference is the whole of KB-31.
+// `print` goes through kama_raw_write -> `_write(fd, ...)`; it never touches a HANDLE. In a
+// GUI-subsystem process the two disagree: launched from a terminal, the CRT leaves fd 1 UNBOUND (-2)
+// while a console handle is available. Worse, `AttachConsole` POPULATES the std handles as a side
+// effect — so a handle test placed after the attach (which is where it has to go) reads back the
+// handle the attach just installed, concludes the process was handed a stdout, and skips the rebind
+// precisely when it is needed. That is what KB-30's fix did, and it made a `--subsystem windows`
+// build silent in a terminal where the pre-0.9.405 unconditional rebind printed. Measured both ways
+// at 0.9.406: `_get_osfhandle(1)` = -2 and `_write` = -1/ERROR_INVALID_HANDLE with the handle test,
+// fd = 260 and `_write` = 16 without it.
 //
-// A handle is REAL when it is neither null nor INVALID_HANDLE_VALUE and `GetFileType` knows what it is —
-// disk, pipe or character device. FILE_TYPE_UNKNOWN (0) is what a closed or bogus handle answers.
-static inline void* kama__given_std_handle(unsigned long id) {
-    extern void* __stdcall GetStdHandle(unsigned long);
-    extern unsigned long __stdcall GetFileType(void*);
-    void* h = GetStdHandle(id);
-    if (h == (void*)0 || h == (void*)(intptr_t)-1) return (void*)0;
-    if (GetFileType(h) == 0u) return (void*)0;            /* FILE_TYPE_UNKNOWN */
-    return h;
+// Asking about the fd answers BOTH cases with one test, which is why it is the right question and not
+// merely the fixed one:
+//   * a redirect or a pipe — the CRT binds the fd from the inherited handle, so it is real, and the
+//     rebind is skipped and the caller's `> log.txt` survives (that is KB-30, and it still holds);
+//   * a terminal launch — the fd is unbound whatever the handle says, so the rebind runs;
+//   * Explorer, no console at all — the fd is unbound, and `AttachConsole` fails, so nothing happens.
+//
+// -2 is what the UCRT answers for an unassociated fd 0/1/2; -1 is a bad descriptor.
+static inline int kama__fd_is_bound(int fd) {
+    extern intptr_t _get_osfhandle(int);
+    intptr_t h = _get_osfhandle(fd);
+    return h != (intptr_t)-1 && h != (intptr_t)-2;
 }
 #endif
 static inline void kama_args_init(int argc, char** argv) {
@@ -1986,14 +1992,18 @@ static inline void kama_args_init(int argc, char** argv) {
         extern int   _open_osfhandle(intptr_t, int);
         extern int   _dup2(int, int);
         extern int   _close(int);
-        if (AttachConsole((unsigned long)-1)) {
-            // PER STREAM, and only the ones nobody handed us — see kama__given_std_handle. A redirect is
-            // the one case where stdout was already going somewhere the caller chose, and overriding it
-            // is how this code silently ate `> log.txt`. The three are independent: `app > out.txt` with
-            // stderr left on the terminal must redirect ONE of them and reattach the other.
-            void* given0 = kama__given_std_handle((unsigned long)-10);
-            void* given1 = kama__given_std_handle((unsigned long)-11);
-            void* given2 = kama__given_std_handle((unsigned long)-12);
+        // ⚠️ READ BEFORE `AttachConsole`, because the attach installs std handles as a side effect and
+        // so cannot be asked afterwards what the process arrived with. The fds it does not touch, but
+        // deciding first is what keeps that true of any test added here later.
+        //
+        // PER STREAM, and only the ones that have no working fd. A redirect is the one case where
+        // stdout was already going somewhere the caller chose, and overriding it is how this code
+        // silently ate `> log.txt`. The three are independent: `app > out.txt` with stderr left on the
+        // terminal must redirect ONE of them and reattach the other.
+        const int given0 = kama__fd_is_bound(0);
+        const int given1 = kama__fd_is_bound(1);
+        const int given2 = kama__fd_is_bound(2);
+        if ((!given0 || !given1 || !given2) && AttachConsole((unsigned long)-1)) {
             if (!given1 || !given2) {
                 void* hOut = CreateFileA("CONOUT$", 0x80000000u | 0x40000000u, 0x1u | 0x2u,
                                          (void*)0, 3u, 0u, (void*)0);
