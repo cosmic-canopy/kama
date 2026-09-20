@@ -16,18 +16,22 @@ This campaign spans several sessions and may move between hosts, so everything a
 git: this doc and the rows in `docs/ROADMAP.md`. Nothing depends on an assistant's local memory or on a
 scratch directory.
 
-**State (2026-09-17, Linux).** `dev` is `origin/dev` (`0.9.365`, the other machine's KR-1 `std::time`) plus this
-campaign's UNPUSHED commits — the maintainer pushes, and pulls onto the Windows box to verify KR-48:
-- the handoff doc; `0.9.366` (`deallocate` gets the size `allocate` was given: a `__size` vtable slot,
-  `sizeof(ptr:)`, a bindable that releases through the box it came from); KR-61/KR-62 filed;
-- `0.9.367` (KR-61: `Allocator` carries `align`, the funnel is `kama_alloc(n, align)`/`kama_free(p, n, align)`,
-  every emitted site, `kama_runtime.h`, prelude and stdlib moved; the dead concrete smart-pointer macros deleted);
-- `0.9.368` (found on the way: a worker spawned from two modules had its trampoline in only one TU);
-- `0.9.369` (the OS seam, channel, isolate and app headers moved; `check-alloc-funnel.sh`; `KAMA_ALLOC_CHECK` on
-  the san leg). Gate figures are in each commit message.
-Still filed: **KR-57** (shadowing a function), **KR-58** (the Windows seam allocates a wide path per file-system
-call), **KR-62** (`sizeof` of a generic instance named nowhere else). A new roadmap row takes the `Next id:`
-counter at the top of `docs/ROADMAP.md`, and bumps it.
+**State (2026-09-20, Linux).** `origin/dev` is `0.9.408`; this box is four commits ahead and UNPUSHED —
+`0.9.409` (one classification per operand on the arithmetic path), the KR-78 filing, and `0.9.410` (the per-TU
+object cache, KR-2). The maintainer pushes and rebases; this box never does.
+
+The campaign itself is **done through §4**: the funnel (§2, KR-48) at `0.9.369`, the replaceable global
+allocator (§3, KR-49) at `0.9.377`–`0.9.378`, allocator-aware errors (§4, KR-50) at `0.9.394`–`0.9.395`, and the
+verdict deriving its runtime facts from the shipped headers (§6, KR-74) at `0.9.401`–`0.9.402` from the other
+box. What is left of it is **KR-66** (reaching the instance — next here) and **KR-58** (the Windows path seam —
+that box's).
+
+Filed along the way and still open: **KR-57** (a binding may shadow a function), **KR-62** (`sizeof` of a generic
+instance named nowhere else), **KR-39** (a contract slot the no-heap walk cannot cross — now with a measured
+consumer, see §4), and **KR-78** (analysis is exponential in an operator chain — not an allocation row). A new
+roadmap row takes the `Next id:` counter at the top of `docs/ROADMAP.md`, and bumps it in the same edit; two
+boxes collided on `KR-76` on 2026-09-18 and on `KR-77` on 2026-09-19, which is what the counter is for —
+the exponential-chain row is **KR-78** for that reason.
 
 **The order changed on 2026-09-15/16 (maintainer), and KR-39 is no longer next.** Reading the emitter for
 KR-39 answered its own question: devirtualizing in emission cannot reach serde, because the slot calls live in
@@ -81,7 +85,17 @@ contract emits no dispatch at all (its implementations own nothing, so the slot 
    synthesized body was filed against the wrong function — KR-75). The per-call error allocator is a NON-GOAL, with
    its reason, and the `--no-heap` half is **KR-39's**, not this row's: dropping a boxed error dispatches a
    destructor through a contract, which the flag refuses whatever the heap is. All of it is written up in §4.
-6. **KR-58 on the Windows box, AFTER KR-49** (maintainer, 2026-09-17: wait for their results, since a
+6. **KR-66 is what this box takes next** (2026-09-19) — reaching the `@globalAllocator` instance, so a program
+   can read its own live count. It is the top of NOW, the shape is already ruled (`globalHeap<Pool>()` in the
+   prelude returning `ref Pool`), and the acceptance test is already written: `tests/global_allocator_pool.kama`
+   proves its routing by EXHAUSTION and `tests/global_allocator_serde.kama` keeps a `live` counter nothing can
+   reach — both become direct assertions. The build map, including the one thing that is not obvious (the
+   instance is defined in the entry TU and is NOT declared in the shared header, so a call from another unit
+   does not compile until it is), is in KR-66's paragraph in ROADMAP_DETAIL.
+7. **KR-78 after it** — analysis is exponential in the length of an operator chain, found scoping the
+   incremental-build row. Not an allocation row; it is queued here only because the same box is carrying it.
+   The curve, the design (memoize per node AND substitution context) and its build map are in ROADMAP_DETAIL.
+8. **KR-58 on the Windows box, AFTER KR-49** (maintainer, 2026-09-17: wait for their results, since a
    declared pool may change what a `@heap` extern means; see §2b "Meets KR-49"). The brief in §2b is otherwise ready:
    decisions 2 and 3 (stack reserve, probe cost) are pure measurement and go first.
 

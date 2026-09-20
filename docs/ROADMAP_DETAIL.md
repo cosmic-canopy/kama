@@ -1756,7 +1756,7 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-### Analysis is exponential in the length of an operator chain (KR-78) — found 2026-09-18 scoping KR-2, `0.9.400`
+### Analysis is exponential in the length of an operator chain (KR-78) — found 2026-09-18 scoping the incremental-build row (shipped `0.9.410`), `0.9.400`
 
 `kama check` on one file whose `main` is a chain of calls joined by `+`, nothing else in the program:
 
@@ -1780,6 +1780,18 @@ classifier's answer depends on the ambient substitution (`_typeSubst`), the vari
 current class, which is exactly why the same AST node answers differently in two instantiations of one
 generic. The key is (node, substitution signature) — the same pair `_callInst` already uses to tell one
 instantiation's call site from another's.
+
+**Build map** (anchors at `0.9.410`). `typeOfExpr` is the function to memoize and `CEmitter::analyze` is where
+the cost shows up (the timing line splits it out: `analyze=4040.96` of `total=4070.69` on the 40-file case).
+⚠️ Measure the CACHE, not just the clock: a memo that answers differently from the live call is a miscompile,
+so the first commit should be the key — build the substitution signature, assert in a debug build that a hit
+equals a fresh computation, and only then keep the answer. The corpus is the instrument either way: `./dev
+matrix` exercises every generic instantiation the stdlib has, and a wrong key shows up as a changed diagnostic
+or a changed emitted C, not as a slow build.
+
+⚠️ **Do not re-measure with the old numbers in hand.** `0.9.409` changed the constant (three asks per operand
+down to one), so the table above is the PRE-`0.9.409` curve. Re-take it before and after the memo on the same
+machine, or the improvement will be double-counted.
 
 **Why it matters, beyond the pathological case.** This is the reason a 61-file synthetic project measured
 24 s to CHECK and 25 s to BUILD, which reads as "the front end is 97 % of a build" and would have sent the incremental-build row
@@ -1823,6 +1835,31 @@ is the only object that knows, and there is no other home for the numbers: a mod
 the instance has no name in kama. Recommended shape: `globalHeap<Pool>()` in the prelude, returning `ref Pool`,
 refused unless `Pool` is the declared `@globalAllocator`. It is explicit at the call site, and it adds no
 synthesized member to the user's type. The fixtures should then assert a live count.
+
+**Build map** (anchors at `0.9.410`; find each by NAME, and probe before building on it).
+- *The instance.* The funnel emission writes `<Pool> kama_global_allocator = {0};` beside
+  `kama__global_allocate`/`kama__global_deallocate`, in the ENTRY TU only. ⚠️ **It is not declared in the shared
+  `.gen.h`** — verified 2026-09-19 by reading the emitted C of `tests/global_allocator_serde.kama` — so a call
+  from any other translation unit does not compile until the header pass declares it `extern`. That is the first
+  step, not an afterthought: the intrinsic is useless if it only works in the file that declares the pool.
+- *The call.* `globalHeap<Pool>()` has to answer as a PLACE, or `ref Pool` cannot bind to it and the pool is
+  copied — which for a `resource` is refused anyway, so the failure would at least be loud. `invocationReturnsPlace`
+  is the test every other place-returner goes through, and `_funcs[…].isPlaceReturn` is the flag it reads; an
+  intrinsic recognized by name (as `addr` and `sizeof` are, in `callReturnTypeRaw` and `emitInvocation`) needs the
+  same answer from both.
+- *The surface this needs already exists*, which is worth knowing before designing around its absence: `fn ref T`
+  is a declared form the stdlib uses (`SlotMap.getRefMut`, `Map.getRefMut`, every collection iterator's `next`),
+  and the emitter sets `isPlaceReturn` from `fn->isRef` for a FREE function as well as a method. So the row needs
+  no new return-kind — only an intrinsic that is recognized by name, type-checked against the declared pool, and
+  lowered to `&kama_global_allocator`.
+- *The refusals.* `checkGlobalAllocator` already owns the declaration's rules and runs before any C is compiled;
+  "this program declares no `@globalAllocator`" and "`Pool` is not the declared one — `X` is" belong with it or at
+  the call site, naming the declared type either way. Both want a `tests/xfail/` fixture and a `DIAGNOSTIC_LINES`
+  row.
+- *The fixtures that are already waiting.* `tests/global_allocator_pool.kama` proves its routing BY EXHAUSTION
+  (the 33rd `try new` fails) because nothing can read a count, and `tests/global_allocator_serde.kama` keeps a
+  `live` counter that no kama code can reach. Both become direct assertions once this lands — that is the row's
+  own acceptance test, already written.
 
 **The Windows seam allocates per path (KR-58)**, found marking the runtime's externs `@heap`. An extern is marked
 when kama's C for it touches the heap on ANY target, so a no-heap verdict does not change between targets. That
