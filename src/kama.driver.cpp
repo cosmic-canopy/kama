@@ -12415,6 +12415,60 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+        // MACH-O DEBUG INFO: consolidate the debug map into a .dSYM, or a debug build cannot be debugged.
+        //
+        // On ELF the linker copies DWARF out of each `.o` into the executable and the objects are done
+        // with. Mach-O does not: the linker writes a DEBUG MAP, a table of paths pointing back at the `.o`
+        // files, and `dsymutil` is what walks it and builds the `.dSYM` bundle. clang runs dsymutil for
+        // you when ONE invocation compiles and links — which is the arm above — but never when it is
+        // handed objects, which is the `perTU` arm. kama deletes its intermediates, so the map was left
+        // pointing at files that no longer exist:
+        //
+        //     error: debug map object file "…/app.o" containing debug info does not exist,
+        //            debug info will not be loaded
+        //
+        // and lldb then had no line table, no locals, and no source-line breakpoints — `br set -f
+        // app.kama -l 20` answered "no locations (pending)". `perTU` is `outStatic || nJobs > 1`, and
+        // nJobs defaults to the core count, so on macOS this was EVERY ordinary multi-TU debug build,
+        // which is every program with an `import` — including the one the VS Code extension's F5 builds.
+        // Everything KR-32 is about sits downstream of this: there is no point naming a local well when
+        // the debugger cannot read one.
+        //
+        // ⚠️ `perTU` ONLY, and the suite is what proved it has to be. The single-invocation arm has
+        // already run dsymutil — clang does it for you there — against objects it wrote into $TMPDIR and
+        // deleted on the way out, so a SECOND run re-reads the same debug map, finds those temps gone,
+        // and warns once per TU:
+        //
+        //     warning: (arm64) /var/folders/…/T/array_sum-d4511f.o unable to open object file
+        //     warning: no debug symbols in executable (-arch arm64)
+        //
+        // run_tests.sh fails a fixture that builds with warnings, so this turned 838 of them red. It is
+        // only the `perTU` arm whose objects kama owns and which are still on disk here. `stopsAtObject`
+        // is excluded because an object or an archive carries its DWARF directly and is not a debug map.
+        //
+        // A failure here FAILS THE BUILD. A debug build whose debug info silently did not survive is the
+        // exact defect this closes, and it is invisible until someone tries to set a breakpoint.
+        // The HOST must be macOS too: `dsymutil` comes with the Apple toolchain, and a cross build
+        // targeting macOS from elsewhere has no reason to have one. That build's debug map is still
+        // dangling, but refusing it here would fail a link that otherwise worked for a tool the host was
+        // never going to have.
+        // ...and only if the link actually produced a file. `--cc <stub>` is how several guards inspect
+        // the command line without running a compiler (check-buildsettings.sh drives a shell script that
+        // echoes its arguments and exits 0), so a "successful" link there leaves no binary at all. There
+        // is nothing to consolidate, and failing would break a legitimate shape.
+        if (perTU && !release && !stopsAtObject && !wasm && g_target.isMacOS() && hostTarget().os == "macos"
+            && fileExists(outPath)) {
+            std::ostringstream ds;
+            ds << "dsymutil \"" << outPath << "\"";
+            int drc = runCmd(ds.str());
+            if (drc != 0) {
+                fprintf(stderr, "kama: dsymutil failed (exit %d) — the debug build has no usable debug\n"
+                                "  info, so breakpoints and locals will not work. Build --release if you\n"
+                                "  do not need to debug it.\n", drc);
+                return drc;
+            }
+        }
+
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
         if (runMode) {
