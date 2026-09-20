@@ -1,10 +1,16 @@
 // names.js — the kama name layer for the debugger, as pure functions over DAP messages.
 //
-// A data formatter owns a value's CHILDREN and SUMMARY (include/kama_lldb.py does that). It cannot
-// rename the value itself: the name of a local, the name of a stack frame and the type shown beside
-// them all come from the debug info, which is the emitted C. So LOCALS still read `k_near`, the CALL
-// STACK still reads `k_Fapp__Pair_int32__make`, and nothing LLDB-side can change that. Rewriting them
-// means sitting between VS Code and the debug adapter and editing the DAP traffic.
+// What is left after LLDB has done everything it can. `include/kama_lldb.py` owns values, and its
+// `frame-format` hook owns frame names — so a plain `lldb` and every non-VS-Code editor already get
+// readable stacks. Two things it cannot reach, and they are what this file is for:
+//
+//   * a LOCAL's name. `frame variable` prints the DWARF name and LLDB has no hook to rewrite it.
+//   * the GENERIC ARGUMENTS in a frame name. The LLDB hook is lexical — `Pair_int32::make` — because
+//     rendering `Pair<int32>::make` needs the resolved program, which only `kama demangle` has. So
+//     this layer upgrades what that one produced rather than replacing it, and the table is indexed
+//     by BOTH spellings so the two meet.
+//
+// Both require sitting between VS Code and the debug adapter and editing the DAP traffic.
 //
 // ⚠️ NO `vscode` IMPORT, DELIBERATELY. Everything here is a plain function over plain objects so it can
 // be run by node and asserted — see tools/check-extension-names.sh. The extension has no test harness of
@@ -48,13 +54,27 @@ function lexical(name) {
 // demangle` said; anything absent falls through to `lexical`.
 function makeTable(answers) {
   const map = answers instanceof Map ? answers : new Map(Object.entries(answers || {}));
+  // ⚠️ ALSO index by the LEXICAL form, because the name may already be half-demangled by the time it
+  // gets here. `include/kama_lldb.py` renames frames LLDB-side, which is what gives a plain `lldb` and
+  // every non-VS-Code editor a readable call stack — so a `stackTrace` response can arrive carrying
+  // `Pair_int32::make` rather than `k_Fapp__Pair_int32__make`. Keyed only by the mangled spelling, the
+  // lookup would miss and the generic arguments would never be rendered: the LLDB layer's floor would
+  // silently become the ceiling. The two layers have to meet on a common key.
+  const alias = new Map();
+  for (const [mangled, display] of map) {
+    const lex = lexical(mangled);
+    if (lex !== display && !map.has(lex)) alias.set(lex, display);
+  }
   // display -> mangled, built on first use. Only the request direction needs it, and most sessions
   // never type a watch expression or a function breakpoint at all.
   let reverse = null;
   const one = (name) => {
     if (typeof name !== 'string' || !name) return name;
     const hit = map.get(name);
-    return hit !== undefined ? hit : lexical(name);
+    if (hit !== undefined) return hit;
+    const lex = alias.get(name);
+    if (lex !== undefined) return lex;
+    return lexical(name);
   };
   return {
     name: one,
@@ -70,7 +90,12 @@ function makeTable(answers) {
       // WHOLE-STRING first. A function breakpoint is a rendered name in its entirety —
       // `Pair<int32>::make` — and it is not an identifier at all, so the head rule below would make
       // `k_Pair<int32>::make` out of it. A watch expression is the other shape and falls through.
-      if (reverse === null) reverse = new Map([...map].map(([k, v]) => [v, k]));
+      if (reverse === null) {
+        reverse = new Map([...map].map(([k, v]) => [v, k]));
+        // A user typing a function breakpoint types what they SEE, which may be either layer's
+        // rendering, so both resolve back to the one symbol the adapter knows.
+        for (const [lex, display] of alias) if (!reverse.has(lex)) reverse.set(lex, reverse.get(display));
+      }
       const whole = reverse.get(expr);
       if (whole !== undefined) return whole;
       const m = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(expr);

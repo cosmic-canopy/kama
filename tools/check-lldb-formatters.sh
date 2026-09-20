@@ -75,7 +75,7 @@ BPLINE=22   # the `return` — every local above it is live by then
 
 lldb -b -o "$init" \
      -o "br set -f probe.kama -l $BPLINE" \
-     -o run -o 'frame variable' "$tmp/probe" > "$tmp/out" 2>&1 || true
+     -o run -o 'frame variable' -o 'bt' "$tmp/probe" > "$tmp/out" 2>&1 || true
 
 grep -q 'kama: value formatters loaded' "$tmp/out" \
     || fail "the formatter module did not load" "$tmp/out"
@@ -110,4 +110,17 @@ for raw in 'kama_data = ' 'kama_len = ' 'kama_tag = ' 'k_x = 3' 'k_data = 0x'; d
 done
 echo "  ok: none of the C lowering is visible"
 
-echo "check-lldb-formatters: OK (a real lldb over a real binary renders kama values as kama)"
+# --- FRAME NAMES, which are LLDB's half of the name problem ---------------------------------------
+# `frame-format` takes a `${script.frame:…}` hook, so the CALL STACK is fixable without an editor: a
+# plain `lldb`, a terminal `bt` and every editor that is not VS Code get readable frames from this. It
+# is lexical — it cannot render `Pair<int32>` — and an editor running the name layer upgrades it; this
+# is the floor, not the ceiling.
+want 'a frame reads as the kama function'   'probe(near=1)'
+want '...and the entry point is `main`'     '`main()'
+# ⚠️ The hook replaces ${function.name-with-args} for EVERY frame in the process, not just kama's, so
+# a frame belonging to anything else must come through untouched — including its `+ offset`.
+grep -qE 'dyld`start \+ [0-9]+' "$tmp/out" \
+    || fail "a non-kama frame lost its default rendering — the frame-format hook is not passing foreign frames through" "$tmp/out"
+echo "  ok: a non-kama frame is untouched"
+
+echo "check-lldb-formatters: OK (a real lldb over a real binary renders kama values AND frames as kama)"

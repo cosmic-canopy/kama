@@ -14,14 +14,17 @@
 #
 # `kama demangle --lldb-init` prints the whole line. The VS Code extension passes it as an initCommand.
 #
-# NOTE ON WHAT THIS CANNOT DO. A formatter owns the CHILDREN and the SUMMARY of a value. It cannot rename
-# the value itself, so a frame's locals still read `k_near` and the call stack still reads
-# `k_Fapp__Pair_int32__make` — those come from the debug info, and rewriting them needs a layer between
-# the editor and the debug adapter (KR-32 part 3), fed by `kama demangle`.
+# WHAT IS HERE, AND WHAT IS NOT. A formatter owns a value's CHILDREN and SUMMARY, and `frame-format`
+# owns how a FRAME is printed — so values and the call stack are both fixable here, with no editor in
+# the loop. What is not fixable here is the name of a LOCAL: `frame variable` prints the DWARF name and
+# LLDB offers no hook to rewrite it, so `k_near` needs a layer between the editor and the debug adapter
+# (`editor/vscode/names.js`), which also upgrades these frames from the lexical rendering below to the
+# full one that `kama demangle` can produce.
 
 import lldb
 
 CATEGORY = 'kama'
+PRELUDE_SCOPE = 'kama__'   # what qualify() puts in front of every prelude declaration
 
 # Read at most this many bytes for a string summary. A corrupt or uninitialized `kama_len` is a number
 # like 14472985476293984456 (measured, stopping at a function's entry before its locals are live), and
@@ -459,6 +462,55 @@ class StructSynth:
 
 
 # ---------------------------------------------------------------------------------------------------
+# frame names — the CALL STACK, without an editor
+# ---------------------------------------------------------------------------------------------------
+#
+# A frame's name is the C symbol out of the debug info, so a backtrace reads `k_Fapp__Pair_int32__make`.
+# LLDB demangles C++ and Rust itself because it knows those schemes; it cannot know kama's. But
+# `frame-format` accepts `${script.frame:<module>.<fn>}`, which calls back here per frame — so this is
+# fixable WITHOUT an editor in the loop, and a plain `lldb`, a terminal `bt` and any editor that is not
+# VS Code all get readable frames from it.
+#
+# ⚠️ It is LEXICAL, not the front end. It cannot render a generic instance's arguments — `Pair_int32`
+# rather than `Pair<int32>` — because the argument spellings and the dropped defaults live in the
+# resolved program, which only `kama demangle` has. An editor that runs the name layer upgrades these
+# to the full rendering; this is the floor, not the ceiling.
+#
+# ⚠️ It must leave EVERY non-kama frame exactly as it found it. This hook replaces
+# `${function.name-with-args}` in the format string, so it is asked about libc, dyld and any other
+# language in the process too.
+
+def _demangle_frame(name):
+    """The lexical half of `kama demangle`, for a symbol. Mirrors names.js `lexical()`."""
+    if not name:
+        return name
+    if name == 'kama_main':
+        return 'main'
+    if name.startswith('k_F'):                      # a file-private scope: `k_F<stem>__<rest>`
+        cut = name.find('__')
+        if cut > 0:
+            return name[cut + 2:].replace('__', '::')
+        return name
+    if name.startswith(PRELUDE_SCOPE):              # the prelude's scope is implicit in source
+        return name[len(PRELUDE_SCOPE):].replace('__', '::')
+    if '__' in name:                                # a module path
+        return name.replace('__', '::')
+    return name                                     # not kama's: hand it back untouched
+
+
+def frame_name(frame, internal_dict):
+    name = frame.GetFunctionName() or ''
+    shown = _demangle_frame(name)
+    if shown == name:
+        return name                                 # not ours (or nothing to do): default rendering
+    args = []
+    for v in frame.get_arguments():
+        val = v.GetSummary() or v.GetValue()
+        args.append('%s=%s' % (_strip(v.GetName() or '?'), val) if val else _strip(v.GetName() or '?'))
+    return '%s(%s)' % (shown, ', '.join(args))
+
+
+# ---------------------------------------------------------------------------------------------------
 # registration
 # ---------------------------------------------------------------------------------------------------
 #
@@ -520,4 +572,19 @@ def __lldb_init_module(debugger, internal_dict):
         _add(debugger, 'synthetic', shape, '-l %s.StructSynth' % m)
 
     debugger.HandleCommand('type category enable ' + CATEGORY)
+
+    # FRAME NAMES. This is LLDB's own default frame-format with `${function.name-with-args}` — and only
+    # that — swapped for the hook above, so every other part of a backtrace line (the index, the pc, the
+    # module, the file:line, the [opt]/[inlined]/[artificial] markers) renders exactly as it always did.
+    # Copied from `settings show frame-format` rather than hand-written, because anything hand-written
+    # here silently degrades a backtrace for every language in the process, not just kama's.
+    debugger.HandleCommand(
+        'settings set frame-format "frame #${frame.index}: '
+        '{${ansi.fg.cyan}${frame.pc}${ansi.normal} }{${module.file.basename}{`}}'
+        '{${script.frame:' + __name__ + '.frame_name}{${frame.no-debug}${function.pc-offset}}}'
+        '{ at ${ansi.fg.cyan}${line.file.basename}${ansi.normal}:${ansi.fg.yellow}${line.number}'
+        '${ansi.normal}{:${ansi.fg.yellow}${line.column}${ansi.normal}}}${frame.kind}'
+        '{${function.is-optimized} [opt]}{${function.is-inlined} [inlined]}'
+        '{${frame.is-artificial} [artificial]}\n"')
+
     print('kama: value formatters loaded')

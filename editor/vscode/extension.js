@@ -138,6 +138,26 @@ function symbolNames(binary) {
   }
 }
 
+// What `kama demangle` should analyze for this session. A demangler answers for the program it was
+// given, so this wants the same operand a build takes: the project's `kama.json` when there is one,
+// else a `.kama` file. `"kama": "<path>"` states it outright; `"kama": true` discovers it.
+function kamaOperand(config, folder) {
+  if (typeof config.kama === 'string') {
+    return path.isAbsolute(config.kama) || !folder
+      ? config.kama
+      : path.join(folder.uri.fsPath, config.kama);
+  }
+  const root = folder ? folder.uri.fsPath : undefined;
+  if (root) {
+    const manifest = path.join(root, 'kama.json');
+    try { fs.accessSync(manifest, fs.constants.R_OK); return manifest; } catch (_) { /* no manifest */ }
+  }
+  // No manifest and nothing stated: the file in front of the user is the best available answer.
+  const ed = vscode.window.activeTextEditor;
+  if (ed && ed.document.languageId === 'kama') return ed.document.fileName;
+  return root || '';
+}
+
 async function debugCurrentFile() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.document.languageId !== 'kama') {
@@ -167,11 +187,10 @@ async function debugCurrentFile() {
     args: [],
     cwd: folder ? folder.uri.fsPath : path.dirname(file),
     sourceLanguages: ['c'],
-    initCommands: await lldbInitCommands(kama),
-    // Read back by the tracker factory below. `type: 'lldb'` is CodeLLDB's, shared with every Rust,
-    // C++ and Swift session in the window, and a factory is registered per TYPE — so the marker is
-    // what keeps kama's name rewriting off somebody else's debug session.
-    kamaSession: { kama, file, program: out },
+    // The SAME opt-in a user's own launch.json writes. Everything else — the formatters, the name
+    // layer's session marker — is filled in by the configuration provider below, so this command and a
+    // hand-written configuration take one code path and cannot drift into behaving differently.
+    kama: file,
   });
 }
 
@@ -333,6 +352,39 @@ function activate(context) {
     // relies on, but the contract is "intercept", not "rewrite": if VS Code ever clones first, names
     // quietly revert to the C spelling. That is a degradation, not a break, and it is why the rewriting
     // rules live in names.js where they can be asserted on their own.
+    // ⚠️ THE ENTRY POINT FOR A REAL PROJECT. The command above debugs "the file I am looking at",
+    // which is not how a project is debugged — a project has arguments, an environment, a working
+    // directory and a built binary, and says so in a `launch.json`. The ▶ button runs one of those and
+    // CANNOT invoke an extension command, so without this hook a project's own configuration launches
+    // a session with no value formatters and no name layer: raw C structs and mangled names, looking
+    // exactly like the real thing. That is the failure this closes.
+    //
+    // A DebugConfigurationProvider may be registered for a debug type the extension does NOT own —
+    // unlike a DebugAdapterDescriptorFactory, which is what forced the tracker below to be a tracker.
+    //
+    // OPT-IN BY AN EXPLICIT KEY, never by sniffing: `"kama": true` (or a path to the manifest / entry
+    // file). `type: 'lldb'` is shared with every Rust, C++ and Swift session in the window, and a
+    // provider registered for it is asked about all of them.
+    //
+    //     { "type": "lldb", "request": "launch", "program": "${workspaceFolder}/build/app",
+    //       "kama": true }
+    //
+    // ...WithSubstitutedVariables, because `program` is what the symbol table is read from and it is
+    // still `${workspaceFolder}/…` in the earlier hook.
+    vscode.debug.registerDebugConfigurationProvider('lldb', {
+      async resolveDebugConfigurationWithSubstitutedVariables(folder, config) {
+        if (!config || !config.kama) return config;          // not ours: hand it back untouched
+        const kama = findKama();
+        const source = kamaOperand(config, folder);
+        // Appended, not assigned: a user's own initCommands are theirs to keep.
+        const init = await lldbInitCommands(kama);
+        if (init.length) config.initCommands = (config.initCommands || []).concat(init);
+        if (!config.sourceLanguages) config.sourceLanguages = ['c'];
+        config.kamaSession = { kama, file: source, program: config.program };
+        return config;
+      },
+    }),
+
     vscode.debug.registerDebugAdapterTrackerFactory('lldb', {
       createDebugAdapterTracker(session) {
         const mark = session.configuration && session.configuration.kamaSession;

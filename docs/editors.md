@@ -54,6 +54,25 @@ because a debugger reads the emitted C:
   can rewrite, so the extension rewrites them in the debug-adapter traffic using `kama demangle`. That
   half *is* VS Code-only.
 
+### Debugging a project, not just the open file
+
+F5 debugs the file in front of you. A project has arguments, an environment and a built binary, and
+says so in its own `launch.json` — **add `"kama": true`** and the extension fills in the rest:
+
+```jsonc
+{ "type": "lldb", "request": "launch",
+  "program": "${workspaceFolder}/build/app",
+  "args": ["--port", "8080"],
+  "kama": true }
+```
+
+That one key loads the value formatters and starts the name layer, so a configuration you wrote gets
+exactly what F5 gets. Point it at a specific program with `"kama": "src/main.kama"` (or a `kama.json`)
+when the manifest is not at the workspace root — that operand is what the demangler analyzes.
+
+⚠️ The opt-in is explicit on purpose. `type: "lldb"` is CodeLLDB's and is shared with every Rust, C++
+and Swift session in the window; without the key, kama touches none of them.
+
 Outside a debugger, `kama demangle <file> -- <name>` turns one C name back — for a crash log, an
 `objdump`, or a C-compiler error from `--keep-c`. See [SPEC.md](SPEC.md) § *C names* for why a name
 reaches C prefixed at all.

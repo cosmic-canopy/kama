@@ -45,6 +45,14 @@ grep -q 'registerDebugAdapterTrackerFactory' "$ROOT/editor/vscode/extension.js" 
     || { echo "check-extension-names: FAIL — extension.js no longer registers a debug adapter tracker" >&2; exit 1; }
 grep -q 'kamaSession' "$ROOT/editor/vscode/extension.js" \
     || { echo "check-extension-names: FAIL — the launch config no longer marks the session, so the tracker would rewrite every lldb session in the window" >&2; exit 1; }
+# A PROJECT debugs from its own launch.json, and the ▶ button that runs one cannot invoke an extension
+# command. Without this provider such a session gets no formatters and no name layer — raw C structs and
+# mangled names, looking exactly like a working session. It is the difference between "the debugger
+# shows kama" being true for a toy and true for a project.
+grep -q 'registerDebugConfigurationProvider' "$ROOT/editor/vscode/extension.js" \
+    || { echo "check-extension-names: FAIL — extension.js no longer registers a debug configuration provider, so a project's own launch.json gets neither formatters nor demangled names" >&2; exit 1; }
+grep -q 'resolveDebugConfigurationWithSubstitutedVariables' "$ROOT/editor/vscode/extension.js" \
+    || { echo "check-extension-names: FAIL — the provider must resolve WithSubstitutedVariables; \`program\` is still \${workspaceFolder}/… in the earlier hook and the symbol table cannot be read from it" >&2; exit 1; }
 
 cat > "$tmp/t.js" <<'JS'
 const assert = require('assert');
@@ -120,6 +128,12 @@ const fb = { type: 'request', command: 'setFunctionBreakpoints', seq: 13,
              arguments: { breakpoints: [{ name: 'Pair<int32>::make' }] } };
 tr.onWillReceiveMessage(fb);
 eq(fb.arguments.breakpoints[0].name, 'k_Fapp__Pair_int32__make', 'a function breakpoint is mangled back');
+
+// --- the two layers must MEET. kama_lldb.py renames frames LLDB-side, so a stackTrace response can
+// --- arrive already lexically demangled; keyed only by the mangled spelling the table would miss it
+// --- and the generic arguments would never render — the LLDB floor would become the ceiling.
+eq(table.frame('Pair_int32::make'), 'Pair<int32>::make', 'a half-demangled frame still upgrades');
+eq(table.mangle('Pair_int32::make'), 'k_Fapp__Pair_int32__make', '...and still resolves back for a breakpoint');
 
 // --- hostile input: a tracker that throws takes the debug session with it ------------------------
 for (const bad of [undefined, null, 'a string, as some hosts send', 42, {}, { type: 'response' }]) {
