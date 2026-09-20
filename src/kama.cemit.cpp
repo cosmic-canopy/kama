@@ -4322,8 +4322,15 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // Offsetting one is `addr(of: p[i])`, which already works and scales the index by the element the
         // way the author meant — so pointer arithmetic is a NON-GOAL, not a gap (GOALS #4, one way).
         // Comparisons are excluded: `p == null` and `p1 < p2` are the carrier's own operators.
+        // ⚠️ ONE classification per operand for the whole primitive path, because `typeOfExpr` RECURSES into
+        // its operand's subtree: on a chain (`f(…) + f(…) + …`) every extra call at a node re-walks
+        // everything below it, so the cost is exponential in the chain's LENGTH, not linear. This path
+        // asked three times per operand — the pointer check below, the sub-`int` result type, and
+        // `arithCType` — which measured 1.4× slower than asking twice (35-call chain: 0.26 s at `0.9.378`,
+        // 0.37 s at `0.9.400`, when the pointer check made it three). Asking once is the fix for that and
+        // cuts the base for every chain; the exponential itself is a separate row.
+        const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
         if (!isComparisonToken(token)) {
-            const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
             auto isPtr = [](const std::string& t) { return t.size() > 1 && t.back() == '*'; };
             if (isPtr(lt) || isPtr(rt)) {
                 unsupported(("`" + binaryOperator(token) + "` is not defined on a raw pointer — an "
@@ -4358,9 +4365,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // sub-`int` COMPARISONS are untouched, which is why the bucket had to be split to size this.
         std::string resT;
         if (!isComparisonToken(token)) {
-            const std::string lt = typeOfExpr(lhs);
             if (token == LTLT || token == GTGT) resT = lt;
-            else if (!lt.empty() && lt == typeOfExpr(rhs)) resT = lt;
+            else if (!lt.empty() && lt == rt) resT = lt;
             if (!(cNumBits(resT) && cNumBits(resT) < 32 && !cNumFloat(resT))) resT.clear();
         }
         const std::string open  = resT.empty() ? "(" : "(" + resT + ")(";
@@ -4378,8 +4384,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // A shift's type is its LEFT operand's alone; the amount is widened to `long long` either way.
         auto lit32 = [](const SharedExpression& e) { return dynamic_cast<Int32Node*>(e.get()) != nullptr; };
         const std::string known = vec ? std::string()
-            : (token == LTLT || token == GTGT) ? arithCType(typeOfExpr(lhs), false, typeOfExpr(lhs), false)
-            : arithCType(typeOfExpr(lhs), lit32(lhs), typeOfExpr(rhs), lit32(rhs));
+            : (token == LTLT || token == GTGT) ? arithCType(lt, false, lt, false)
+            : arithCType(lt, lit32(lhs), rt, lit32(rhs));
         const bool knownInt = !known.empty() && !cNumFloat(known);
         if (!vec && (token == LTLT || token == GTGT)) {
             const std::string l = emitExpression(lhs), r = emitExpression(rhs);
