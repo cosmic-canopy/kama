@@ -2153,9 +2153,15 @@ rather than here, so there is one number to keep current. Forward work:
   `kama_runtime.h`, which every TU needs anyway, already pulls most of what `kama_os.h` needs here; the seam
   adds 3,157 macros and recording macros is nearly free. **The earlier 4.21 ms estimate this row was filed on
   was drift**, measured one arm after the other on a box whose run-to-run spread is ±13%. Interleave the arms.
-  ⚠️ **So it is a WINDOWS change, and Windows has not measured it.** There `<windows.h>` is genuinely
-  additional rather than already-included, and the VM saw a 142 ms per-TU delta against macOS's 5.6 ms. If
-  the win does not appear there either, REVERT it: what it costs is a real ordering contract, below.
+  ✅ **AND ON WINDOWS IT DOES HOLD — measured 2026-09-20, so the change STAYS.** Same program, same method
+  (interleaved A/B, min of 40), on the Windows VM: an innocent TU preprocesses in **132 ms with the fix and
+  237 ms without — 104.5 ms saved per TU, 1.79x**, on a 17-TU program where 16 TUs are innocent. Beside the
+  timing, the deterministic half, which no VM noise can touch: **7,029 preprocessed lines / 855 macros with,
+  65,652 / 21,749 without.** macOS differed by 164 lines; Windows differs by 58,623. So the union really was
+  charging every TU the whole of `<windows.h>`, and macOS's 0.32 ms was the platform where the seam is
+  already-included rather than a verdict on the change. ⚠️ **The absolute times are QEMU-inflated** (that box
+  emulates x64, and 132 ms to preprocess a trivial TU is not a Windows fact) — the RATIO and the line counts
+  are the finding, which is also why the deterministic pair is recorded beside the clock.
   ⚠️ **The ordering contract it introduces, every line of it measured rather than reasoned about.** Each
   module TU must emit, in this order: the feature macros (`KAMA_ONPANIC`, `KAMA_GLOBAL_ALLOCATOR`), then
   `kama_runtime.h`, then its own FFI headers, then the shared header. Getting it wrong is not a compile
