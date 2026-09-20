@@ -156,7 +156,7 @@ void CEmitter::line(int srcLine)
 // `Tmpl<arg, arg>`, with trailing DEFAULTED args dropped so `Map<int32, int32>` doesn't read as
 // `Map<int32, int32, DefaultHasher, GlobalAllocator>`. `depth` bounds the recursion through nested args:
 // a diagnostic must never be the thing that hangs the compiler.
-std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) const
+std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool cRegister) const
 {
     auto identChar = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
     std::string out;
@@ -183,12 +183,6 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
         // way into the pool's body. The reader declared against the contract, so the chain names its member.
         if (tok == "kama__global_allocate")   { out += "GlobalHeap::allocate"; continue; }
         if (tok == "kama__global_deallocate") { out += "GlobalHeap::deallocate"; continue; }
-
-        // The PRELUDE's scope is IMPLICIT in source — nobody writes `kama::Immutable`, they write
-        // `Immutable` — so it is stripped before the interior-`__`-to-`::` rewriting below would turn it
-        // into a namespace the reader cannot spell (KR-67 stage 4a). Done here, after the two funnel names
-        // above, which render as something else entirely.
-        if (tok.compare(0, 6, kamaPreludeScope()) == 0 && tok.size() > 6) tok = tok.substr(6);
 
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
@@ -264,6 +258,19 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
             }
         }
 
+        // The PRELUDE's scope is IMPLICIT in source — nobody writes `kama::Immutable`, they write
+        // `Immutable` — so it is stripped before the interior-`__`-to-`::` rewriting below would turn it
+        // into a namespace the reader cannot spell (KR-67 stage 4a).
+        //
+        // ⚠️ AFTER the two generic lookups above, not before them. It used to run first, and it is a
+        // LEADING-PREFIX strip, so it destroyed the key those lookups use: `kama__Optional_string` became
+        // `Optional_string`, missed `_genericTypeInsts`, and rendered as `Optional_string` instead of
+        // `Optional<string>` — every prelude generic, which is `Optional` and `Result`. No diagnostic
+        // could see it, because a message names a type from the SOURCE spelling the author wrote; it
+        // surfaced the moment `kama demangle` began asking about names taken from emitted C. The funnel
+        // names above still come first: they render as something else entirely.
+        if (tok.compare(0, 6, kamaPreludeScope()) == 0 && tok.size() > 6) tok = tok.substr(6);
+
         // A FILE-PRIVATE scope names no namespace a user could write, so it is stripped rather than
         // rendered. Since §2e.26 the spelling is derived from the file's name (`_Fmain`) instead of its
         // position (`_F4`), so there is no pattern to match on — the registry the emitter filled while
@@ -288,6 +295,20 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
                 && tok.compare(s.size(), 2, "__") == 0 && (!priv || s.size() > priv->size()))
                 priv = &s;
         if (priv) { out += demangleForDisplay(tok.substr(priv->size() + 2), depth + 1); continue; }
+
+        // THE USER REGISTER, for emitted C only (`kama demangle`, KR-32). Every table above has missed,
+        // so this token is not a declaration kama minted a key for — in emitted C that leaves a field, a
+        // parameter, a local or a binding, which is exactly the set `kName()` prefixes on the way out
+        // (SPEC § *C names*). Strip EXACTLY one `k_`, which is what makes the mangling reversible: a
+        // binding the author really called `k_near` is emitted `k_k_near` and comes back `k_near`.
+        //
+        // ⚠️ Gated on `depth` as well as on the flag, and it must stay that way. The scope strips above
+        // recurse on what is left after the scope, and what is left is a DECLARATION's leaf, which was
+        // never `kName()`-prefixed: a type the author called `k_Box` in `kk.kama` is emitted
+        // `k_Fkk__k_Box`, and the file-scope strip hands `k_Box` back to this function. Stripping there
+        // too would rename the author's own type. The two cases are indistinguishable by spelling — only
+        // by whether a table claimed the token — so the recursion depth is the discriminator.
+        if (cRegister && depth == 0 && tok.size() > 2 && tok.compare(0, 2, "k_") == 0) tok.erase(0, 2);
 
         // Leading underscores are reserved-identifier territory — measure the token's real start.
         size_t lead = tok.find_first_not_of('_');

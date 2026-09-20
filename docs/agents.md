@@ -276,6 +276,32 @@ blank line inside a multi-line string is code) and include facts no text tool ha
 | per-module lines + **export counts** | which module is quietly becoming the API |
 | the largest declarations | where the weight is, by real line span |
 
+## `kama demangle` — reading a name that came out of the C
+
+kama lowers to C, and the C preprocessor is not scoped, so every name kama owns reaches C in a prefixed
+register: `k_` for the ones you wrote, `kama_` for the compiler's own ([SPEC.md](SPEC.md) § *C names*). A
+generic type additionally carries its arguments mangled into the name. None of that is meant to reach you
+— a diagnostic, a hover and a `kama query` answer all show the name as written — but three things read it
+straight out of the binary and cannot: **a debugger**, a **C compiler's own error output** (`--keep-c`),
+and anything reading a crash log or an `objdump`.
+
+```sh
+kama demangle app.kama -- k_Fapp__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama < names.txt                     # a line in, a line out, until EOF
+```
+
+Names are rewritten **in place**, so a whole line survives its surroundings —
+`int32_t k_Fapp__Pair_int32__sum(k_Fapp__Pair_int32* self)` comes back as
+`int32_t Pair<int32>::sum(Pair<int32>* self)`. Paste the compiler error, not just the identifier.
+
+It takes the operands `check` takes, because **it is not a lexical rule**: rendering
+`std__collections__DynamicArray_int32_kama__GlobalAllocator` back to `DynamicArray<int32>` — argument
+spellings restored, the allocator left at its default dropped — needs the resolved program, so it runs the
+same analysis. That is also why it reads a **batch** over stdin: the analysis is paid once per process and
+each answer after it is a lookup, which is what lets one process serve a whole debug session. Give it the
+same file set the binary was built from; it answers for the program it analyzed, so a name from some other
+program comes back as much-demangled-as-it-can-be rather than wrong.
+
 ## Cost
 
 Every invocation re-parses and re-analyzes the prelude and every imported `std::` module, so there

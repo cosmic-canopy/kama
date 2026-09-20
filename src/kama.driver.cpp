@@ -8462,6 +8462,15 @@ void usage()
         "                   active is an error. Any configuration flag of `build` (--target, --select,\n"
         "                   --define, --undefine, --release/--debug, --no-heap, --shared) checks exactly\n"
         "                   that one configuration instead)\n"
+        "  kama demangle  <in.kama>... [-- <name>...]\n"
+        "                  render EMITTED C names back to kama — a debugger frame, a local, a type, or a\n"
+        "                   whole line of C-compiler output with those spellings buried in it. Every name\n"
+        "                   kama owns reaches C in a prefixed register (`k_` yours, `kama_` the\n"
+        "                   compiler's) and a generic instance carries its arguments mangled into the\n"
+        "                   name; this turns `k_Fapp__Pair_int32__make` back into `Pair<int32>::make`.\n"
+        "                   With `-- <name>...` it answers those and exits; with none it reads stdin and\n"
+        "                   answers one line per line until EOF, so one process serves a whole debug\n"
+        "                   session (the analysis is paid once, each answer is a lookup).\n"
         "  kama stats     <in.kama>... | <kama.json> [--json] [<configuration flags>]\n"
         "                  what this project IS, counted by the compiler that resolved it: lines (total /\n"
         "                   code / comment / blank, classified by the LEXER — a `//` inside a string is not\n"
@@ -10052,9 +10061,11 @@ int main(int argc, char** argv)
         else                                      inputs.push_back(cliPath(a));
     }
 
-    // `-- <args>` are forwarded to the program `kama run` launches; they mean nothing to build/transpile.
-    if (!runMode && !progArgs.empty()) {
-        fprintf(stderr, "kama: `-- <args>` is only meaningful for `kama run`\n"); usage(); return 2;
+    // `-- <args>` are forwarded to the program `kama run` launches, and are the names `kama demangle`
+    // answers when it is not being fed over stdin. They mean nothing to build/transpile.
+    if (!runMode && subcommand != "demangle" && !progArgs.empty()) {
+        fprintf(stderr, "kama: `-- <args>` is only meaningful for `kama run` and `kama demangle`\n");
+        usage(); return 2;
     }
 
     // ---- classify the operands (§2g.32) -------------------------------------------------------------
@@ -10708,6 +10719,70 @@ int main(int argc, char** argv)
         if (errs) printf("\n⚠️  %zu error%s — the program does not analyze cleanly, so the resolved numbers "
                          "(instantiations, conformances) are partial. Run `kama check`.\n",
                          errs, errs == 1 ? "" : "s");
+        return 0;
+    }
+
+    if (subcommand == "demangle") {
+        // KR-32: render EMITTED C names back to the kama that produced them — a debugger frame
+        // (`k_Fapp__Pair_int32__make`), a local (`k_near`), a type (`kama__Optional_string`), or a whole
+        // line of clang output with those spellings buried in it.
+        //
+        // WHY A SUBCOMMAND AND NOT A MAP WRITTEN BESIDE THE BUILD (ruled 2026-09-20). A map is a record,
+        // and a record can diverge from the binary being debugged: a stale one renames a frame to
+        // something plausible and WRONG, silently, which is worse than not renaming it. This re-derives
+        // from source every time, so it cannot go stale, needs no build artifact, and answers for names
+        // no map would have thought to hold.
+        //
+        // WHY IT RUNS THE FRONT END. `demangleForDisplay` is not a lexical rule — it reads
+        // `_genericTypeInsts`, `_genericTypeDefaults`, `_opaqueDisplay` and the two scope registries to
+        // turn `std__collections__DynamicArray_int32_kama__GlobalAllocator` back into
+        // `DynamicArray<int32>`, dropping the argument left at its default. A debugger's locals are full
+        // of generic instances, so a purely lexical strip of `k_`/`kama_` would leave the interesting
+        // half unreadable. So this takes the input `check` takes and runs the same `analyze()` into a
+        // discarded sink, then answers off the populated tables.
+        //
+        // ...which is why it is BATCHED. One analysis of a real program is ~140ms and one answer off the
+        // finished tables is a map lookup, so a process per name would be unusable at a debugger's
+        // repaint rate. One process per debug session, fed over stdin.
+        //
+        // NOT `check`'s gate-cover loop (KR-54): that analyzes a program once per configuration to find
+        // diagnostics this one hides. A name is a name under every configuration, and the debugger is
+        // attached to ONE build. One analysis.
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false)) return 1;
+        CEmitter idx(input);
+        configureEmitter(idx);
+        { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+        timingDump("demangle", input);
+
+        // `-- <name>...` answers those and exits — the shape a human uses on a clang error. With none,
+        // read stdin until EOF, one line in and one line out, which is the shape the editor uses.
+        if (!progArgs.empty()) {
+            for (const auto& a : progArgs) printf("%s\n", idx.demangleEmitted(a).c_str());
+            return 0;
+        }
+        // Unbounded: `fgets` stops at its buffer, so a line longer than it arrives in pieces. A watch
+        // expression or a pasted compiler error is not length-limited and must not be truncated into a
+        // different, still-plausible name.
+        std::string lineIn;
+        auto readLine = [&]() -> bool {
+            lineIn.clear();
+            char buf[4096];
+            while (fgets(buf, sizeof buf, stdin)) {
+                lineIn += buf;
+                if (lineIn.back() == '\n') break;
+            }
+            if (!lineIn.empty() && lineIn.back() == '\n') lineIn.pop_back();
+            if (!lineIn.empty() && lineIn.back() == '\r') lineIn.pop_back();   // a CRLF writer
+            return !lineIn.empty() || !feof(stdin);
+        };
+        while (readLine()) {
+            printf("%s\n", idx.demangleEmitted(lineIn).c_str());
+            // ⚠️ The caller is BLOCKED on this line. stdout to a pipe is block-buffered, so without the
+            // flush the answer sits in this process's buffer and both sides wait forever.
+            fflush(stdout);
+        }
         return 0;
     }
 

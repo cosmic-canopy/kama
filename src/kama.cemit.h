@@ -1261,6 +1261,16 @@ public:
         auto it = _builtinFileByName.find(unit);
         return it == _builtinFileByName.end() ? unit : it->second;
     }
+
+    // Render a line of EMITTED C — a debugger's frame label, a local's name, a clang error — back to the
+    // kama that produced it. `kama demangle` (KR-32) is the only caller.
+    //
+    // The difference from the compiler's own message rendering is one rule: this one also strips the USER
+    // REGISTER, the `k_` that `kName()` adds on the way into C. A diagnostic must NOT do that — every
+    // analysis map is keyed by the kama spelling, so a message that names `k_near` is naming a binding the
+    // author really did spell `k_near`. In emitted C that same token is a binding called `near`. Only the
+    // caller knows which register the text is in, so only the caller may ask.
+    std::string demangleEmitted(const std::string& text) const { return demangleForDisplay(text, 0, true); }
 private:
     // prelude/builtin.kama and its name -> span table, both owned by the driver (the table is a process
     // -wide static, scanned once). See setBuiltinDoc.
@@ -3508,7 +3518,10 @@ private:
     // on (an unimported name, an unknown type). See Diagnostic::subject.
     void unsupported(const char* rawWhat, int srcLine, const std::string& subject);
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
-    std::string demangleForDisplay(const std::string& msg, int depth = 0) const;
+    // `cRegister` additionally strips the user register `k_` off a token no table claimed — true only for
+    // text that came out of EMITTED C, never for a diagnostic. See demangleEmitted() above, and the
+    // fallback branch in the .cpp for why it is gated on depth as well as on the flag.
+    std::string demangleForDisplay(const std::string& msg, int depth = 0, bool cRegister = false) const;
     // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the
     // classes; exprEnumType keeps the enums. See the .cpp.
     std::string callReturnTypeRaw(InvocationNode* inv);

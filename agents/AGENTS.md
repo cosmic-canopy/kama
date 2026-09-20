@@ -44,6 +44,20 @@ Reach for `--search` first. It is the only mode that takes a name rather than a 
 it is usually the cheapest way in. **Never invent a function signature** — `--search` to find it,
 then `--complete` or `--type` to read its real parameter names.
 
+## A name with `k_` or `kama_` in it came out of the C
+
+kama lowers to C, so every name it owns reaches C in a prefixed register and a generic carries its
+arguments mangled into the name. You only ever see one by reading the generated C, a C compiler's error,
+or a crash log — a diagnostic, a hover and a `kama query` answer all show the name as written. Do not
+try to unpick it by hand, and do not grep the source for it; ask:
+
+```sh
+kama demangle <file> -- k_Fapp__Pair_int32__make   # -> Pair<int32>::make
+```
+
+Names are rewritten in place, so paste the whole error line, not just the identifier. With no `--` it
+reads a line per line from stdin until EOF.
+
 ## Verify with `kama build`, not `kama check`
 
 ```sh
