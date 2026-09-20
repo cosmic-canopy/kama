@@ -119,9 +119,10 @@ wrote them rather than in the C the compiler emitted.
    to copy.
 2. Open a `.kama`, set a breakpoint, press **F5** — or run **"kama: Debug Current File"** from the
    command palette. The extension builds a debug binary and launches it.
-   ⚠️ Use one of those two, **not** the ▶ button in the Run and Debug view: that button always runs a
-   `launch.json` configuration and cannot invoke an extension command, so it would launch a session
-   without the value formatters or the name layer.
+   The ▶ button in the Run and Debug view is a different route: it runs a `launch.json`
+   configuration and cannot invoke an extension command, so it only does anything once your project
+   has one. It does not need a kama-specific key — a configuration in a project with a `kama.json`
+   gets the same formatters and the same demangled names ([Editors](editors.md) § *Debugging*).
 3. Execution stops **in your `.kama` source**; the Variables panel shows your locals and the Call Stack
    shows kama frames.
 
