@@ -57,21 +57,24 @@ because a debugger reads the emitted C:
 ### Debugging a project, not just the open file
 
 F5 debugs the file in front of you. A project has arguments, an environment and a built binary, and
-says so in its own `launch.json` — **add `"kama": true`** and the extension fills in the rest:
+says so in its own `launch.json` — **which needs nothing added to it**:
 
 ```jsonc
 { "type": "lldb", "request": "launch",
   "program": "${workspaceFolder}/build/app",
-  "args": ["--port", "8080"],
-  "kama": true }
+  "args": ["--port", "8080"] }
 ```
 
-That one key loads the value formatters and starts the name layer, so a configuration you wrote gets
-exactly what F5 gets. Point it at a specific program with `"kama": "src/main.kama"` (or a `kama.json`)
-when the manifest is not at the workspace root — that operand is what the demangler analyzes.
+A configuration launched from a project with a `kama.json` gets the value formatters and the name
+layer automatically, so it shows exactly what F5 shows. Two keys exist for the cases detection cannot
+reach: `"kama": "src/main.kama"` (or a path to a `kama.json`) names the operand the demangler should
+analyze when the manifest is somewhere unusual, and `"kama": false` opts out.
 
-⚠️ The opt-in is explicit on purpose. `type: "lldb"` is CodeLLDB's and is shared with every Rust, C++
-and Swift session in the window; without the key, kama touches none of them.
+⚠️ **Detection alone never rewrites a name.** `type: "lldb"` is CodeLLDB's, shared with every Rust,
+C++ and Swift session in the window, and a workspace can hold a kama project beside one of those.
+Loading the value formatters is harmless to a foreign session — the type patterns match kama's own
+manglings and nothing else — but renaming is gated a second time on the launched binary actually
+carrying kama symbols, because a lexical demangler would happily rewrite a C++ stack.
 
 Outside a debugger, `kama demangle <file> -- <name>` turns one C name back — for a crash log, an
 `objdump`, or a C-compiler error from `--keep-c`. See [SPEC.md](SPEC.md) § *C names* for why a name

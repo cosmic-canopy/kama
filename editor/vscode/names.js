@@ -16,6 +16,9 @@
 // be run by node and asserted — see tools/check-extension-names.sh. The extension has no test harness of
 // any kind, and this is the one part of it with real logic to get wrong.
 
+const fs = require('fs');
+const path = require('path');
+
 // ---------------------------------------------------------------------------------------------------
 // The table
 // ---------------------------------------------------------------------------------------------------
@@ -182,4 +185,50 @@ function makeTracker(table, opts) {
   };
 }
 
-module.exports = { lexical, makeTable, makeTracker, isCompilerOwned };
+
+// ---------------------------------------------------------------------------------------------------
+// Which sessions are kama's, and what `kama demangle` should analyze for them
+// ---------------------------------------------------------------------------------------------------
+//
+// Here rather than in extension.js for the same reason as everything else in this file: it can be run
+// by node and asserted. It takes the open file as an argument instead of reaching for
+// `vscode.window.activeTextEditor`, which is the only thing that tied it to the editor.
+
+// The nearest `kama.json` at or above `from`, stopping at `stop` (exclusive of going past it).
+function findManifest(from, stop) {
+  let dir = from;
+  for (let i = 0; i < 24 && dir; i++) {
+    const m = path.join(dir, 'kama.json');
+    try { fs.accessSync(m, fs.constants.R_OK); return m; } catch (_) { /* keep walking */ }
+    if (stop && dir === stop) break;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return '';
+}
+
+function kamaOperand(config, folder, openKamaFile) {
+  if (typeof config.kama === 'string') {
+    return path.isAbsolute(config.kama) || !folder
+      ? config.kama
+      : path.join(folder.uri.fsPath, config.kama);
+  }
+  const root = folder ? folder.uri.fsPath : undefined;
+  // Beside the binary first, then the workspace root: a workspace may hold several projects, and the
+  // one being launched is the one whose manifest is above its own output.
+  if (config.program) {
+    const found = findManifest(path.dirname(config.program), root);
+    if (found) return found;
+  }
+  if (root) {
+    const found = findManifest(root, root);
+    if (found) return found;
+  }
+  // Nothing discoverable. Only meaningful when the config SAID it is kama — then the file in front of
+  // the user is the best answer available; otherwise this is not a kama project and we say so with ''.
+  if (config.kama && openKamaFile) return openKamaFile;
+  return '';
+}
+
+module.exports = { lexical, makeTable, makeTracker, isCompilerOwned, findManifest, kamaOperand };

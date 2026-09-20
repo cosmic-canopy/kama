@@ -52,12 +52,16 @@ shows `strong=N weak=M` above its pointee. A struct's fields read as you declare
 locals, the call stack, watch expressions — are put back into kama spelling by the extension, because
 those come from the debug info rather than from a value.
 
-**Debugging a project.** F5 debugs the open file. For a project with its own `launch.json`, add
-`"kama": true` to the configuration and it gets the same formatters and the same demangled names:
+**Debugging a project.** F5 debugs the open file. A project with its own `launch.json` needs nothing
+added — if it has a `kama.json`, its configurations get the same formatters and the same demangled
+names automatically:
 
 ```jsonc
-{ "type": "lldb", "request": "launch", "program": "${workspaceFolder}/build/app", "kama": true }
+{ "type": "lldb", "request": "launch", "program": "${workspaceFolder}/build/app" }
 ```
+
+Use `"kama": "src/main.kama"` to point at the program explicitly when the manifest is somewhere
+detection cannot find it, or `"kama": false` to opt a configuration out.
 
 Outside VS Code, `kama demangle --lldb-init` prints the one line that loads the value formatters into
 any `lldb` — which also gives a terminal `bt` readable frame names — and `kama demangle <file> -- <name>` turns a single C name (from a crash log, or a

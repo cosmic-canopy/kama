@@ -53,10 +53,15 @@ grep -q 'registerDebugConfigurationProvider' "$ROOT/editor/vscode/extension.js" 
     || { echo "check-extension-names: FAIL — extension.js no longer registers a debug configuration provider, so a project's own launch.json gets neither formatters nor demangled names" >&2; exit 1; }
 grep -q 'resolveDebugConfigurationWithSubstitutedVariables' "$ROOT/editor/vscode/extension.js" \
     || { echo "check-extension-names: FAIL — the provider must resolve WithSubstitutedVariables; \`program\` is still \${workspaceFolder}/… in the earlier hook and the symbol table cannot be read from it" >&2; exit 1; }
+# The name layer must be gated a SECOND time on the binary's own symbols. Detection keys off a
+# `kama.json` in the workspace, and a workspace can hold a kama project beside a Rust or C++ one — whose
+# stack the lexical fallback would happily rewrite, since most C++ symbols contain `__`.
+grep -q 'syms === null ? !mark.explicit : syms.length === 0' "$ROOT/editor/vscode/extension.js" \
+    || { echo "check-extension-names: FAIL — the tracker no longer gates on the binary carrying kama symbols, so a foreign binary in a workspace that merely contains a kama.json would have its stack rewritten" >&2; exit 1; }
 
 cat > "$tmp/t.js" <<'JS'
 const assert = require('assert');
-const { lexical, makeTable, makeTracker, isCompilerOwned } = require(process.argv[2]);
+const { lexical, makeTable, makeTracker, isCompilerOwned, kamaOperand } = require(process.argv[2]);
 let n = 0;
 const eq = (got, want, what) => { assert.deepStrictEqual(got, want, what + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); n++; };
 
@@ -134,6 +139,33 @@ eq(fb.arguments.breakpoints[0].name, 'k_Fapp__Pair_int32__make', 'a function bre
 // --- and the generic arguments would never render — the LLDB floor would become the ceiling.
 eq(table.frame('Pair_int32::make'), 'Pair<int32>::make', 'a half-demangled frame still upgrades');
 eq(table.mangle('Pair_int32::make'), 'k_Fapp__Pair_int32__make', '...and still resolves back for a breakpoint');
+
+// --- WHICH SESSIONS ARE KAMA'S. Detection, not a key you have to know to add: a key you must add is
+// --- itself a way for a project to debug with mangled names. `type: "lldb"` is shared with every
+// --- Rust, C++ and Swift session in the window, so a false positive here reaches someone else's.
+const os = require('os'), fsx = require('fs'), px = require('path');
+const tmp = fsx.mkdtempSync(px.join(os.tmpdir(), 'kamaop-'));
+fsx.mkdirSync(px.join(tmp, 'proj', 'build'), { recursive: true });
+fsx.mkdirSync(px.join(tmp, 'plain', 'build'), { recursive: true });
+fsx.writeFileSync(px.join(tmp, 'proj', 'kama.json'), '{"name":"p"}');
+const folder = (n) => ({ uri: { fsPath: px.join(tmp, n) } });
+
+eq(kamaOperand({ program: px.join(tmp, 'proj/build/app') }, folder('proj'), ''),
+   px.join(tmp, 'proj', 'kama.json'),
+   'a kama project is DETECTED with no key in the launch config');
+eq(kamaOperand({ program: px.join(tmp, 'plain/build/app') }, folder('plain'), ''), '',
+   'a project with no kama.json is left alone');
+eq(kamaOperand({ kama: 'src/main.kama', program: px.join(tmp, 'plain/build/app') }, folder('plain'), ''),
+   px.join(tmp, 'plain', 'src/main.kama'),
+   'an explicit relative path still wins, for a manifest detection cannot find');
+eq(kamaOperand({ program: px.join(tmp, 'plain/build/app') }, undefined, ''), '',
+   'no workspace folder and no key: nothing to go on, so nothing is claimed');
+eq(kamaOperand({ kama: true, program: px.join(tmp, 'plain/build/app') }, folder('plain'), '/x/open.kama'),
+   '/x/open.kama',
+   'with an explicit opt-in and nothing discoverable, the open file is the operand');
+eq(kamaOperand({ program: px.join(tmp, 'plain/build/app') }, folder('plain'), '/x/open.kama'), '',
+   '...but an open .kama alone never opts a foreign project in');
+fsx.rmSync(tmp, { recursive: true, force: true });
 
 // --- hostile input: a tracker that throws takes the debug session with it ------------------------
 for (const bad of [undefined, null, 'a string, as some hosts send', 42, {}, { type: 'response' }]) {

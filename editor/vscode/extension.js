@@ -15,6 +15,7 @@ const fs = require('fs');
 const cp = require('child_process');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 const names = require('./names');
+const { kamaOperand } = names;
 
 // This platform spelled the way the Makefile's `uname -s`-`uname -m` spells it, or null if we
 // can't map it (then we just fall back to the root ./kama below).
@@ -124,6 +125,9 @@ function demangleAll(kama, file, mangled) {
 // spelling the emitter would give it. We cannot reconstruct that spelling reliably from the outside —
 // which is the whole reason `kama demangle` exists — so instead we feed the demangler the names the
 // DEBUG INFO will actually contain, harvested from the binary's symbol table.
+// ⚠️ Returns NULL when the question could not be asked at all (no `nm`, unreadable binary) and an
+// empty array when it was asked and the answer is "no kama symbols". The caller needs those apart:
+// "definitely not a kama binary" is grounds to leave the session alone, and "could not tell" is not.
 function symbolNames(binary) {
   try {
     const out = cp.execFileSync('nm', ['-U', binary], { encoding: 'utf8', maxBuffer: 1 << 24 });
@@ -134,30 +138,13 @@ function symbolNames(binary) {
     }
     return [...seen];
   } catch (_) {
-    return [];               // no `nm`, a stripped binary, anything: the lexical fallback still applies
+    return null;
   }
 }
 
 // What `kama demangle` should analyze for this session. A demangler answers for the program it was
 // given, so this wants the same operand a build takes: the project's `kama.json` when there is one,
 // else a `.kama` file. `"kama": "<path>"` states it outright; `"kama": true` discovers it.
-function kamaOperand(config, folder) {
-  if (typeof config.kama === 'string') {
-    return path.isAbsolute(config.kama) || !folder
-      ? config.kama
-      : path.join(folder.uri.fsPath, config.kama);
-  }
-  const root = folder ? folder.uri.fsPath : undefined;
-  if (root) {
-    const manifest = path.join(root, 'kama.json');
-    try { fs.accessSync(manifest, fs.constants.R_OK); return manifest; } catch (_) { /* no manifest */ }
-  }
-  // No manifest and nothing stated: the file in front of the user is the best available answer.
-  const ed = vscode.window.activeTextEditor;
-  if (ed && ed.document.languageId === 'kama') return ed.document.fileName;
-  return root || '';
-}
-
 async function debugCurrentFile() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.document.languageId !== 'kama') {
@@ -362,25 +349,35 @@ function activate(context) {
     // A DebugConfigurationProvider may be registered for a debug type the extension does NOT own —
     // unlike a DebugAdapterDescriptorFactory, which is what forced the tracker below to be a tracker.
     //
-    // OPT-IN BY AN EXPLICIT KEY, never by sniffing: `"kama": true` (or a path to the manifest / entry
-    // file). `type: 'lldb'` is shared with every Rust, C++ and Swift session in the window, and a
-    // provider registered for it is asked about all of them.
+    // DETECTED, NOT DECLARED. A key you must know to add is itself a way for a project to debug with
+    // mangled names, so a launch configuration in a project that has a `kama.json` gets all of this
+    // with nothing written in it. `"kama": "<path>"` still names the operand outright when the
+    // manifest is somewhere this cannot find, and `"kama": false` opts out.
     //
-    //     { "type": "lldb", "request": "launch", "program": "${workspaceFolder}/build/app",
-    //       "kama": true }
+    //     { "type": "lldb", "request": "launch", "program": "${workspaceFolder}/build/app" }
+    //
+    // ⚠️ `type: 'lldb'` is CodeLLDB's, shared with every Rust, C++ and Swift session in the window, so
+    // detection alone is not grounds to REWRITE anything. Loading the value formatters is harmless to a
+    // foreign session — the type regexes match kama's own manglings and nothing else — but the NAME
+    // layer would rewrite a foreign symbol containing `__`. The name half is therefore gated a second
+    // time, in the tracker below, on the binary itself carrying kama symbols.
     //
     // ...WithSubstitutedVariables, because `program` is what the symbol table is read from and it is
     // still `${workspaceFolder}/…` in the earlier hook.
     vscode.debug.registerDebugConfigurationProvider('lldb', {
       async resolveDebugConfigurationWithSubstitutedVariables(folder, config) {
-        if (!config || !config.kama) return config;          // not ours: hand it back untouched
+        if (!config || config.kama === false) return config;        // explicit opt-out
+        const explicit = config.kama !== undefined && config.kama !== null;
+        const ed = vscode.window.activeTextEditor;
+        const open = ed && ed.document.languageId === 'kama' ? ed.document.fileName : '';
+        const source = kamaOperand(config, folder, open);
+        if (!explicit && !source) return config;   // no manifest anywhere: not a kama project
         const kama = findKama();
-        const source = kamaOperand(config, folder);
         // Appended, not assigned: a user's own initCommands are theirs to keep.
         const init = await lldbInitCommands(kama);
         if (init.length) config.initCommands = (config.initCommands || []).concat(init);
         if (!config.sourceLanguages) config.sourceLanguages = ['c'];
-        config.kamaSession = { kama, file: source, program: config.program };
+        config.kamaSession = { kama, file: source, program: config.program, explicit };
         return config;
       },
     }),
@@ -389,9 +386,18 @@ function activate(context) {
       createDebugAdapterTracker(session) {
         const mark = session.configuration && session.configuration.kamaSession;
         if (!mark) return undefined;              // somebody else's lldb session: do not touch it
+        // ⚠️ THE SECOND GATE, and what makes detection safe. This runs after the preLaunchTask, so the
+        // binary exists and its symbol table answers "is this kama's" definitively.
+        //   symbols found -> rewrite.
+        //   asked, none   -> a foreign binary in a workspace that merely contains a kama.json. Leave it
+        //                    entirely alone: the lexical fallback would rewrite any symbol containing
+        //                    `__`, which is most of a C++ or Rust stack.
+        //   could not ask -> no `nm`. Honour an explicit opt-in; decline a detected one.
+        const syms = symbolNames(mark.program);
+        if (syms === null ? !mark.explicit : syms.length === 0) return undefined;
         // The one async window there is: onDidSendMessage cannot await, so the table is resolved here
         // and every later rewrite is a lookup.
-        return demangleAll(mark.kama, mark.file, symbolNames(mark.program))
+        return demangleAll(mark.kama, mark.file, syms || [])
           .then((answers) => names.makeTracker(names.makeTable(answers)))
           .catch(() => names.makeTracker(names.makeTable(new Map())));
       },
