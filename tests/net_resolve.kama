@@ -85,12 +85,12 @@ fn int32 main() {
     // may put `::1` first — the localhost trap `connectHost` exists for — and one on ::1 alone is reached too,
     // WHEN the name resolves to `::1` at all. Where it does not (Debian/Ubuntu, above) there is no V6 address to
     // try, so the flag is owed only by a host that has one: requiring it there tested the hosts file, not kama.
-    uint16 port = cast<uint16>(47661);
+    uint16 port = cast<uint16>(47666);            // unique across tests/ — see tools/check-fixture-ports.sh
     match (TcpListener.bind(host: "127.0.0.1", port: port)) {
         case Err(error: e): { }
         case Ok(value: listener): { if (dialName(port: port)) { r = r + 64; } }
     };
-    uint16 port6 = cast<uint16>(47662);
+    uint16 port6 = cast<uint16>(47667);           // ditto
     match (TcpListener.bind(host: "::1", port: port6)) {
         case Err(error: e): { }
         case Ok(value: listener): { if (!localhostV6 || dialName(port: port6)) { r = r + 128; } }
