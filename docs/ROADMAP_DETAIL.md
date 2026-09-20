@@ -2560,6 +2560,16 @@ rather than here, so there is one number to keep current. Forward work:
   mangling be REVERSIBLE and compiler-owned, and `k_`/`kama_` are reversible by construction (strip exactly one
   `k_`; a user's own `k_x` becomes `k_k_x` and still reverses). So part 3 does not consume an artifact that
   exists; it has to CHOOSE the form — a map written beside a debug build, or a `kama` subcommand that demangles.
+  ⛔ **RULED 2026-09-20 (maintainer): a `kama demangle` SUBCOMMAND, not a map.** A map is a record that can
+  diverge from the binary being debugged, and a stale one misnames a frame SILENTLY rather than failing — the
+  same class of defect the derived no-heap verdict removed at `0.9.401`. The subcommand re-derives from source
+  at debug time, so it cannot go stale, needs no build artifact, and answers for names no map would hold.
+  ⚠️ **It must run the front end, because `demangleForDisplay` is STATEFUL** — it reads `_opaqueDisplay`,
+  `_genericTypeInsts` and `_genericTypeDefaults` to render `std__collections__DynamicArray_int32_kama__GlobalAllocator`
+  back to `DynamicArray<int32>`, and a generic instance is exactly what a debugger's locals are full of. A
+  purely lexical strip of `k_`/`kama_` would leave those unreadable. So it takes the same input `check` does
+  and runs `analyze()` (the same pass, into a discarded sink), then answers from the populated tables —
+  BATCHED over stdin, one process per debug session, because the extension repaints locals at every stop.
   The seam either way is `demangleForDisplay`, which already strips both registers for the compiler's own
   messages (and `bareNameOf` does the same for completion), so the extension never re-implements the rules. ⚠️ The Windows box has no `lldb`/`gdb` installed and cannot gate this; it belongs where a debugger and
   `./dev matrix` live.
