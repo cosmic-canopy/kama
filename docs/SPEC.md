@@ -3206,7 +3206,31 @@ names, `type extern value` fields, `type expose value` / `expose enum` fields an
 names in a published host header (§ *Exposing to a host*).
 
 None of this reaches a human: a diagnostic, a hover, a `kama query` answer and an editor completion all
-show the name as written. A C name appears only in a C compiler's own output, which means a compiler bug.
+show the name as written.
+
+**Where one does reach you, `kama demangle` turns it back.** Three things read names straight out of the
+binary and cannot be taught otherwise — a debugger, a C compiler's own output under `--keep-c`, and a
+crash log or `objdump`:
+
+```sh
+kama demangle app.kama -- k_Fapp__Pair_int32__make     # -> Pair<int32>::make
+```
+
+It is a subcommand rather than a name map written beside the build, because a map is a record and a
+record can diverge from the binary being debugged — a stale one renames a frame to something plausible
+and wrong, silently. It runs the front end, because the reverse of `DynamicArray_int32_kama__GlobalAllocator`
+is `DynamicArray<int32>` and the argument spellings (and the dropped default) live in the resolved
+program, not in the text of the name. Names are rewritten in place, so a whole line of C survives its
+surroundings, and stdin is read as a batch so one process serves a whole debug session.
+
+The **reversibility rule above is what makes it possible**: strip exactly one `k_`. Only a token no
+table claimed is stripped, because a declaration's own leaf was never prefixed — a type the author
+called `k_Box` in `kk.kama` is emitted `k_Fkk__k_Box` and demangles to `k_Box`, while a local called
+`k_near` is emitted `k_k_near` and demangles to `k_near`.
+
+Values are a separate matter from names: `kama demangle --lldb-init` prints the command that loads the
+LLDB formatters shipped beside the runtime headers, after which a `string` inspects as its text and an
+`Optional` as `Some(…)`/`None` rather than as the lowering.
 
 **The residual, stated.** kama compiles headers it has never seen, so a user's own `extern "<vendor.h>"`
 could in principle define a macro spelled `k_…` or `kama_…`. `tools/check-c-names.sh` holds the line for

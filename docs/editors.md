@@ -39,6 +39,25 @@ Advertised by `kama lsp` today, in every editor:
 | semantic highlighting | `textDocument/semanticTokens/full` |
 | auto-import quick fix on an unimported name | `textDocument/codeAction` (`quickfix`) |
 
+## Debugging
+
+VS Code's F5 builds a debug binary and launches CodeLLDB; the emitted C carries `#line`, so execution
+stops in the `.kama`. What you *inspect* reads as kama too, and that takes two things beyond `#line`,
+because a debugger reads the emitted C:
+
+- **Values** — [`include/kama_lldb.py`](../include/kama_lldb.py), shipped beside the runtime headers and
+  loaded by `kama demangle --lldb-init`. A `string` shows its text, an `Optional` shows `Some(…)`/`None`,
+  a `DynamicArray` or `Map` shows its elements, a `Shared` shows `strong=N weak=M` above its pointee, and
+  a struct's fields read as declared. This is not VS Code-specific: the same line in `~/.lldbinit` gives a
+  plain `lldb` all of it.
+- **Names** — locals, the call stack and watch expressions come from the debug info, which no formatter
+  can rewrite, so the extension rewrites them in the debug-adapter traffic using `kama demangle`. That
+  half *is* VS Code-only.
+
+Outside a debugger, `kama demangle <file> -- <name>` turns one C name back — for a crash log, an
+`objdump`, or a C-compiler error from `--keep-c`. See [SPEC.md](SPEC.md) § *C names* for why a name
+reaches C prefixed at all.
+
 Rename refuses a symbol the project does not own (a `std` or dependency declaration), and renaming a
 parameter also rewrites its argument labels at every call site. Go-to-definition does **not** refuse
 those — it opens them read-only, `Optional`/`Result`/`Ordering` and the smart-pointer triad included.

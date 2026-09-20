@@ -171,9 +171,17 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 - **Debug / Release configs.** `kama build` defaults to debug (`-g -O0`, `#line` on, asserts on);
   `--release` opts into optimized (`-O2`/`-Oz`, `-DNDEBUG`, stripped, no `#line`).
 - **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.kama`, step, and inspect the call
-  stack + locals — enabled by the `#line` directives mapping generated C back to `.kama` and by locals
-  keeping their kama names. The VSCode extension ships a CodeLLDB launch config + Build Debug/Release
-  tasks. WASM debugging works in the browser via emscripten source maps.
+  stack + locals. Three separate things make that true, and each had to be built: the `#line`
+  directives map the generated C back to `.kama`; **LLDB value formatters** ([`kama_lldb.py`](../include/kama_lldb.py),
+  loaded by `kama demangle --lldb-init`) render a `string` as its text, an `Optional` as `Some(…)`/`None`,
+  a container by its elements and a `Shared` by its refcounts, instead of the C lowering; and a **name
+  layer** in the extension puts locals, the call stack and watch expressions back into kama spelling,
+  since those come from the debug info and no formatter can reach them. The VSCode extension ships a
+  CodeLLDB launch config + Build Debug/Release tasks. WASM debugging works in the browser via
+  emscripten source maps.
+  > Every name kama owns reaches C in a prefixed register (§ *C names* in [SPEC.md](SPEC.md)), so
+  > "locals keep their kama names" is a property of that layer, not of the lowering. This bullet
+  > claimed it for a long time before anything made it so.
 
 ## Working principles (see `.claude/skills/`)
 

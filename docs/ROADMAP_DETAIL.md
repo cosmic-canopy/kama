@@ -2643,34 +2643,33 @@ rather than here, so there is one number to keep current. Forward work:
 - **Workspace-internal dependencies — one follow-on.** Workspaces work today ([packages.md](packages.md)).
   What is left: version reconciliation on publish — `kama publish` substituting a registry version for a
   workspace path dep.
-- **The debugger shows emitted-C names and values (KR-32).** Breakpoints and stepping are already
-  kama-source-level (the emitted C carries `#line`, and F5 launches CodeLLDB — `editor/vscode/extension.js`), but
-  everything INSPECTED reads as C: a `string` is `kama_string {data,len,cap}`, an `Optional<T>` its tagged union, a
-  type `_Ffile__V`, a frame `_Ffile__V__make`, an enum value `_Ffile__Mode_CopyFile`. Three parts, and only the
-  first was ever scoped: (1) LLDB type summaries / synthetic providers (CodeLLDB runs Python formatters) for
-  `string`/`Optional`/`Result`/the collections/the smart pointers; (2) synthetic children, so a struct's fields read
-  as kama names and its type as the kama type; (3) LOCALS, the CALL STACK and watch expressions, which come from the
-  debug info and no formatter can rewrite — that needs a name layer in the VS Code extension, between it and
-  CodeLLDB. **Moved out of LATER on 2026-09-17** because the C-names work (shipped `0.9.390`–`0.9.398`) prefixes locals as well, so part 3 stops being
-  polish: a local the author called `near` now inspects as `k_near`, a synthesized member as `kama_vptr`, and a
-  file-private type as `k_Ffile__V`.
-  ⚠️ **That work shipped WITHOUT a name map, deliberately** — D3b required only that the
-  mangling be REVERSIBLE and compiler-owned, and `k_`/`kama_` are reversible by construction (strip exactly one
-  `k_`; a user's own `k_x` becomes `k_k_x` and still reverses). So part 3 does not consume an artifact that
-  exists; it has to CHOOSE the form — a map written beside a debug build, or a `kama` subcommand that demangles.
-  ⛔ **RULED 2026-09-20 (maintainer): a `kama demangle` SUBCOMMAND, not a map.** A map is a record that can
-  diverge from the binary being debugged, and a stale one misnames a frame SILENTLY rather than failing — the
-  same class of defect the derived no-heap verdict removed at `0.9.401`. The subcommand re-derives from source
-  at debug time, so it cannot go stale, needs no build artifact, and answers for names no map would hold.
-  ⚠️ **It must run the front end, because `demangleForDisplay` is STATEFUL** — it reads `_opaqueDisplay`,
-  `_genericTypeInsts` and `_genericTypeDefaults` to render `std__collections__DynamicArray_int32_kama__GlobalAllocator`
-  back to `DynamicArray<int32>`, and a generic instance is exactly what a debugger's locals are full of. A
-  purely lexical strip of `k_`/`kama_` would leave those unreadable. So it takes the same input `check` does
-  and runs `analyze()` (the same pass, into a discarded sink), then answers from the populated tables —
-  BATCHED over stdin, one process per debug session, because the extension repaints locals at every stop.
-  The seam either way is `demangleForDisplay`, which already strips both registers for the compiler's own
-  messages (and `bareNameOf` does the same for completion), so the extension never re-implements the rules. ⚠️ The Windows box has no `lldb`/`gdb` installed and cannot gate this; it belongs where a debugger and
-  `./dev matrix` live.
+- **The debugger shows kama, not the emitted C — SHIPPED `0.9.412`–`0.9.415`, kept for what it
+  established.** Record: SPEC § *C names* (the `kama demangle` surface), [GOALS.md](GOALS.md) §
+  *Production-grade build & debugging*, `editor/vscode/README.md`. Three layers, because no one of them
+  can reach what the others do: `include/kama_lldb.py` renders VALUES (LLDB owns a value's children and
+  summary); `editor/vscode/names.js` rewrites NAMES in the DAP traffic (locals, the call stack and watch
+  come from the debug info, which no formatter touches); and `kama demangle` is what either can ask,
+  because reversing a generic instance needs the resolved program.
+  ⛔ **A SUBCOMMAND, not a name map** (maintainer, 2026-09-20) — a map is a record that can diverge from
+  the binary being debugged, and a stale one misnames a frame SILENTLY.
+  Four findings worth not rediscovering, each measured rather than assumed:
+  - **An LLDB category defined `--language c` never applies.** Every provider registers, the category
+    lists as enabled, and `frame variable` still prints raw structs. The category must be unscoped.
+  - **A summary REPLACES a value's children** unless added with `-e`.
+  - **Matching `^k_` catches only loose files.** `qualify()` has four scope shapes, and an exported
+    module type (`std__collections__…`) carries no `k_` in its type name at all — only in its members.
+  - **The DAP batch must be FRONT-LOADED**, which refines how this row was originally framed.
+    `onDidSendMessage` is synchronous, so it cannot ask `kama demangle` anything; the one async window
+    is `createDebugAdapterTracker`, which may return a Thenable.
+  ⚠️ **Residual risk, live.** An extension may only register a `DebugAdapterDescriptorFactory` for a
+  debug type IT defines, and `lldb` is CodeLLDB's — so the name layer is a TRACKER, which is documented
+  to observe. It works because the message object is not cloned before the tracker sees it. If that ever
+  changes, names revert to the C spelling: a degradation, not a break, and `tools/check-extension-names.sh`
+  cannot see it (it asserts the rewriting rules, not that VS Code honours them).
+  ⚠️ It also turned up a defect underneath it — a macOS parallel debug build emitted no `.dSYM`, so its
+  Mach-O debug map pointed at deleted objects and the binary could not be debugged AT ALL. Fixed
+  `0.9.414`; `tools/check-debug-info.sh` drives both link arms. The Windows box has no `lldb` and cannot
+  gate any of this.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.

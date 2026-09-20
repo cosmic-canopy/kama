@@ -37,8 +37,8 @@ and gives you, as you type and with **no build required**:
 
 ## Debugging (breakpoints, call stack, locals)
 
-kama compiles to C with `#line` directives back to your `.kama`, and locals keep their kama names —
-so a debug build is breakpoint-debuggable like any native program.
+kama compiles to C with `#line` directives back to your `.kama`, so a debug build is
+breakpoint-debuggable like any native program — and what you inspect reads as kama, not as the C.
 
 1. Open a `.kama` file and set a breakpoint in the gutter.
 2. Press **F5** (or run *"kama: Debug Current File"*). The build task runs
@@ -46,7 +46,16 @@ so a debug build is breakpoint-debuggable like any native program.
 3. Execution stops **in the `.kama` source**; Variables shows locals and params, and the Call Stack
    shows kama frames.
 
-Object fields appear as `self->field` and `this` as `self` — the C lowering, fully inspectable.
+Values are rendered by the formatters that ship with the compiler, so a `string` shows its text, an
+`Optional` shows `Some(…)` or `None`, a `DynamicArray` or `Map` shows its elements, and a `Shared`
+shows `strong=N weak=M` above its pointee. A struct's fields read as you declared them. Names —
+locals, the call stack, watch expressions — are put back into kama spelling by the extension, because
+those come from the debug info rather than from a value.
+
+Outside VS Code, `kama demangle --lldb-init` prints the one line that loads the value formatters into
+any `lldb`, and `kama demangle <file> -- <name>` turns a single C name (from a crash log, or a
+`--keep-c` compiler error) back into its kama spelling.
+
 For the browser target, build with `--target wasm` and debug in the browser via the emitted source maps.
 
 ## Build configuration (the status bar)
