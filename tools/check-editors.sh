@@ -176,6 +176,24 @@ elif ! tr -d ' \n' < "$ROOT/editor/vscode/package.json" | grep -qF -- '"breakpoi
     bad "editor/vscode/package.json contributes breakpoints, but not for the \`kama\` language"
 fi
 
+# 7c. NO hand-written launch configuration for debugging a `.kama`. The ▶ button in the Run and Debug
+#    view always runs a `launch.json` entry and CANNOT invoke an extension command, so such a config is
+#    a strictly worse session that looks like the real one: a launch config can name a program, but it
+#    cannot load the LLDB value formatters (`initCommands` from `kama demangle --lldb-init`) or mark the
+#    session for the name layer. The repo had one, and it cost four debugging cycles — it presents as
+#    "the formatters and the name layer are both broken", because losing BOTH at once is exactly what
+#    launching the wrong way looks like. The entry points are F5 and "kama: Debug Current File".
+#
+#    Narrow on purpose: a config for debugging the COMPILER (a C++ program) is legitimate and is not
+#    what this refuses. The signature refused is an lldb launch whose program is derived from the
+#    ACTIVE FILE, which is only ever a .kama debug session.
+LAUNCH="$ROOT/.vscode/launch.json"
+if [ -f "$LAUNCH" ] && grep -qF -- '${fileBasenameNoExtension}' "$LAUNCH"; then
+    bad ".vscode/launch.json debugs the active file — delete it. The ▶ button runs it instead of the
+       extension, and it can load neither the value formatters nor the name layer, so the session
+       silently shows raw C structs and mangled names. Use F5 / \"kama: Debug Current File\"."
+fi
+
 # 8. The Explorer file icon. Three things have to hold together and each fails silently on its own: the
 #    manifest has to REFERENCE an icon, the referenced file has to EXIST (a broken path just shows the
 #    generic file glyph — VS Code logs nothing an author would notice), and the PNG has to carry an ALPHA

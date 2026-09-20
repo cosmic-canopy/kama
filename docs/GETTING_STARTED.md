@@ -109,17 +109,26 @@ the F5 debugging below.
 
 ## 6. Debug in VSCode (breakpoints, call stack, locals)
 
-kama debug builds embed `#line` directives back to your `.kama` and keep your variable names, so you get
-real source-level debugging.
+kama debug builds embed `#line` directives back to your `.kama`, and the extension puts your own names
+and values back on top of them, so you get real source-level debugging: a `string` shows its text, an
+`Optional` shows `Some(…)`/`None`, a container shows its elements, and locals and frames read as you
+wrote them rather than in the C the compiler emitted.
 
 1. Install the **kama** VSCode extension (the `.vsix` from Releases, or `editor/vscode/` from source).
    It auto-installs **CodeLLDB** (`vadimcn.vscode-lldb`) and wires up **F5** — no `launch.json`/`tasks.json`
    to copy.
-2. Open a `.kama`, set a breakpoint, press **F5**. The extension builds a debug binary and launches it.
+2. Open a `.kama`, set a breakpoint, press **F5** — or run **"kama: Debug Current File"** from the
+   command palette. The extension builds a debug binary and launches it.
+   ⚠️ Use one of those two, **not** the ▶ button in the Run and Debug view: that button always runs a
+   `launch.json` configuration and cannot invoke an extension command, so it would launch a session
+   without the value formatters or the name layer.
 3. Execution stops **in your `.kama` source**; the Variables panel shows your locals and the Call Stack
    shows kama frames.
 
-> Prefer to wire it yourself? The repo's [`.vscode/`](../.vscode) has an equivalent `tasks.json` + `launch.json`.
+> Prefer to build from a task? The repo's [`.vscode/tasks.json`](../.vscode/tasks.json) has debug and
+> release build tasks for the current file. There is deliberately no `launch.json` beside it: a launch
+> configuration can only name a program, so it cannot load the value formatters or start the name layer,
+> and a hand-written one is a strictly worse session that looks like the real thing.
 
 ### Debug in the browser (WebAssembly)
 
