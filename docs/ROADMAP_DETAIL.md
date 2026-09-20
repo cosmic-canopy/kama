@@ -1756,6 +1756,38 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
+### Analysis is exponential in the length of an operator chain (KR-78) — found 2026-09-18 scoping KR-2, `0.9.400`
+
+`kama check` on one file whose `main` is a chain of calls joined by `+`, nothing else in the program:
+
+| calls in the chain | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| `kama check` | 0.01 s | 0.03 s | 0.06 s | 0.11 s | 0.21 s | 0.37 s |
+
+Every five terms roughly DOUBLES it. The same shape inside a 40-file project: a 40-term chain is 2.4 s, and
+the identical 40 calls written as 40 separate statements are **0.05 s** — so it is the chain, not the calls,
+not the files, not the import list (each was varied independently: 40 files with one import is 0.28 s, 10
+files with 800 functions is 0.18 s). A chain of integer LITERALS is fast, because it folds; a chain of CALLS
+is what pays.
+
+**Why.** `typeOfExpr` answers by recursing into its operand's subtree, and the arithmetic path asks it at
+every level, so each node re-walks everything below it. `0.9.401` cut the per-node asks from three to one
+(the raw-pointer check added at `0.9.388` was the third, and it had made the path 1.4× slower — 0.26 s at
+`0.9.378`, 0.37 s at `0.9.400`, 0.24 s after). That moves the CONSTANT. The shape is still exponential.
+
+**The fix is memoization, and the subtlety is what the key must be.** A bare node→type map is wrong: the
+classifier's answer depends on the ambient substitution (`_typeSubst`), the variant target type and the
+current class, which is exactly why the same AST node answers differently in two instantiations of one
+generic. The key is (node, substitution signature) — the same pair `_callInst` already uses to tell one
+instantiation's call site from another's.
+
+**Why it matters, beyond the pathological case.** This is the reason a 61-file synthetic project measured
+24 s to CHECK and 25 s to BUILD, which reads as "the front end is 97 % of a build" and would have sent KR-2
+after the wrong thing entirely. With the chain written flat the same project is 0.09 s to check and 0.35 s
+to build — the C toolchain is 74 %, which is what KR-2 is actually about. A polynomial, a hash mix, a
+checksum or a long `&&` guard is an ordinary thing to write; at 40 terms it is seconds, and the compiler
+gives no sign why.
+
 ### The allocation campaign (KR-58, KR-66) — opened 2026-09-12
 
 The design, the measured inventory of every allocation site, and the order live in
