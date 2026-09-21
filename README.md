@@ -1,7 +1,38 @@
-# kama
+<p align="center">
+  <img src="site/assets/logo.png" alt="kama" width="160" height="160">
+</p>
 
-> **The memory-safe, no-GC systems language that keeps traditional OOP — and compiles to
-> readable, portable C.**
+<h1 align="center">kama</h1>
+
+<p align="center">
+  <b>鎌 · Japanese farming tool, and weapon</b><br>
+  The memory-safe, no-GC systems language that keeps traditional OOP —
+  and compiles to readable, portable C.
+</p>
+
+<p align="center">
+  <a href="https://kama-lang.org"><b>kama-lang.org</b></a> ·
+  <a href="https://kama-lang.org/docs/getting-started/">Getting started</a> ·
+  <a href="https://kama-lang.org/docs/tour/">Tour</a> ·
+  <a href="https://kama-lang.org/docs/spec/">Spec</a>
+</p>
+
+## Install
+
+```sh
+curl -fsSL https://kama-lang.org/install.sh | sh     # macOS / Linux
+```
+
+```powershell
+irm https://kama-lang.org/install.ps1 | iex          # Windows (PowerShell)
+```
+
+Then:
+
+```sh
+kama build hello.kama -o hello && ./hello     # native
+kama build hello.kama --target wasm           # -> hello.html + .js + .wasm
+```
 
 **A C-family language with C#-like syntax, no garbage collector, and no runtime beside the compiled
 binary — it transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
@@ -12,12 +43,8 @@ the browser as WebAssembly.
 > and compiles to readable C you can build and debug like any C program. **Status: the
 > language is feature-complete, on the road to 1.0** (see [VERSION](VERSION)).
 >
-> ```sh
-> tools/cdev make                       # build the compiler (containerized toolchain)
-> tools/cdev exec ./kama build hello.kama -o hello && ./hello   # native
-> tools/cdev exec ./kama build hello.kama --target wasm         # -> hello.html + .js + .wasm
-> ```
 > New here? Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
+> Building the compiler itself instead? See **[Toolchain](#toolchain)** below.
 
 ## What makes kama kama
 

@@ -70,12 +70,7 @@ writeFileSync(path.join(out, 'index.html'), shell({
     benchJavaRss: bench.javaRss,
     benchKamaSize: bench.kamaSize != null ? bench.kamaSize.toFixed(0) : '?',
     benchGoSize: bench.goSize != null ? (bench.goSize / 1024).toFixed(1) : '?',
-    // The gaps sentence, built from the measured rows — see bench.mjs. Reads "trails C by 18% on
-    // alloc and C++ by 7% on map", or says outright that there is nothing left to admit.
-    benchGaps: bench.gaps.length
-      ? 'kama trails ' + bench.gaps.map(g =>
-          `<b>${g.name}</b> by ${bench.pct(g.ratio)} on <code>${g.w}</code>`).join(', and ') + '.'
-      : 'kama is at or ahead of C and C++ on every native workload here.',
+    benchGaps: bench.standing,
     benchOffGraph: bench.offGraph || '',
     benchArch: `${bench.env.kernel || ''} ${bench.env.arch || ''}`.trim(),
     benchDate: bench.env.generated || '',

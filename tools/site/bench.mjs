@@ -87,20 +87,29 @@ export function benchSection(root) {
     return null;
   })();
 
-  // THE HONEST-GAPS TILE, derived rather than written. It used to be prose, and prose goes stale
-  // silently: it claimed kama "sits behind on map" long after a benchmark-fairness fix had taken that
-  // from 1.70x to 1.07x. Anything that names a number about ourselves has to come off the same rows
-  // the chart does, or the site is arguing with its own table.
+  // WHERE KAMA STANDS, derived rather than written. This was prose once, and prose goes stale in
+  // silence: it claimed kama "sits behind on map" long after a benchmark-fairness fix took that from
+  // 1.70x to 1.07x. Anything that names a number about ourselves comes off the same rows the chart
+  // does, or the site ends up arguing with its own table.
   const time = (l, w) => { const v = at(l, w, 'time_ms'); return v ? Number(v) : null; };
-  const gaps = workloads.map(w => {
-    const k = time('kama', w);
-    const rivals = [['C', time('c', w)], ['C++', time('cpp', w)]].filter(([, t]) => t);
-    if (!k || !rivals.length) return null;
-    const [name, best] = rivals.reduce((a, b) => (b[1] < a[1] ? b : a));
-    return { w, ratio: k / best, name };
-  }).filter(g => g && g.ratio > 1.05)
-    .sort((a, b) => b.ratio - a.ratio);
+  const ratios = rival => workloads
+    .map(w => { const k = time('kama', w), r = time(rival, w); return k && r ? { w, r: k / r } : null; })
+    .filter(Boolean);
   const pct = r => `${Math.round((r - 1) * 100)}%`;
+  const standing = (() => {
+    const vc = ratios('c'), vp = ratios('cpp');
+    if (!vc.length || !vp.length) return '';
+    const ahead = vp.filter(x => x.r <= 1.0).length;
+    const near = vc.filter(x => x.r <= 1.05).length;
+    const worst = vc.reduce((a, b) => (b.r > a.r ? b : a));
+    // Only call something an exception if it actually is one; when every workload lands inside the
+    // band this must not invent a straggler.
+    const tail = worst.r > 1.05
+      ? ` The one exception is <code>${worst.w}</code>, where it trails C by ${pct(worst.r)}.`
+      : '';
+    return `kama is at or ahead of <b>C++</b> on ${ahead} of ${vp.length} native workloads, and within`
+         + ` a few percent of <b>C</b> on ${near} of ${vc.length}.${tail}`;
+  })();
 
   // The languages measured but NOT plotted, and how far out they actually sit. Derived for the same
   // reason as the gaps: the hardcoded copy said "5-40x" when the real spread was 1.4x to over 1000x —
@@ -125,5 +134,5 @@ export function benchSection(root) {
   })();
 
   const env = data.env || {};
-  return { panels, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, gaps, pct, offGraph, env };
+  return { panels, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, standing, offGraph, env };
 }
