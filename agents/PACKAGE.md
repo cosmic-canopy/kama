@@ -62,7 +62,8 @@ is inert — so a root type may name every sibling that touches it.
 
 ## Publishing
 
-`kama publish kama.json --registry <url>` uploads an immutable version (a re-publish of the same version
-is refused); the tarball excludes `.git/`, `.kama/`, `out/` and `kama.lock`. Before the first publish:
+`kama publish kama.json --registry <dir-or-file-uri>` writes an immutable version into a registry — a
+directory (or `file://` URI) you then serve or push, not an upload endpoint — and a re-publish of the same
+version is refused; the tarball excludes `.git/`, `.kama/`, `out/` and `kama.lock`. Before the first publish:
 `--license mit` at seed time (or `"license"` in the manifest and a `LICENSE` file), a README that says
 what is vendored and why, and the `tests/` gate green on every target the package claims.

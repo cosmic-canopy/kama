@@ -64,14 +64,16 @@ Without it you will confidently miss the callers that matter. The scope is an OP
 ### "Is my change correct?"
 
 ```sh
-kama build src/app.kama      # the type check. Do this.
-kama run                     # build the manifest entry and run it
+kama check kama.json         # names, ownership, and type errors by kind and width. Do this first.
+kama build kama.json         # then compile and link — it adds what only the C compiler sees
+kama run kama.json           # build the manifest entry and run it
 ```
 
-`kama check` is faster and weaker: it resolves names and matches named arguments, but an expression
-type error such as `int32 x = "oops";` passes it. A green `check` means "names resolve", not "this
-compiles". When a build fails, `kama query <file> --diagnostics` gives you the analysis errors
-structured; type errors come from the C compiler and are reported against the `.kama` file and line.
+Name the manifest, not `src/app.kama`: a file operand is a loose build, which reads no manifest, so the
+project's own imports do not resolve. `kama check` rejects `int32 x = "oops";` and `int8 a = big;` in
+kama's own words; where it cannot be certain of a type it says nothing, so a green `check` is followed by
+a `build` before you call the change done. `kama query <file> --diagnostics` gives the same analysis
+errors structured on stdout.
 
 ### "Did the compiler even see my symbol?"
 
@@ -96,7 +98,7 @@ kama query kama.json src/app.kama --search Widget --json | jq -r '.results[] | "
 **Coordinates are 1-based LINE and 0-based COLUMN.** Not both 1-based, not both 0-based. If a query
 returns `no type` where you expected a hit, try one column left before concluding anything.
 
-**Each invocation re-analyzes the prelude and every imported `std::` module** — a fixed ~0.05–0.35 s
+**Each invocation re-analyzes the prelude and every imported `std::` module** — a fixed few hundredths of a second
 per process depending on imports, whether or not you use a symbol from them. Answering a question off
 that analysis costs well under a millisecond, so the analysis *is* the cost of a query.
 
@@ -104,7 +106,7 @@ So ask several questions in one go rather than shelling out per identifier in a 
 repeatable and combinable, answered in argv order from one analysis:
 
 ```sh
-kama query src/app.kama --def 24:9 --type 24:9 --refs 24:9   # ~0.23s; as three processes, ~0.68s
+kama query src/app.kama --def 24:9 --type 24:9 --refs 24:9   # one analysis; three processes pay three
 ```
 
 Each answer is preceded by a `## <question>` line; under `--json` you get one `"mode":"batch"`

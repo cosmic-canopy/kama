@@ -122,7 +122,7 @@ if [ "$rc" -ne 0 ]; then
         ?7) echo "  step: the built program ran but did not return 42 — the WRONG modules were compiled" >&2 ;;
         ?8) echo "  step: \`kama pkg install <app>/kama.json\` could not be spawned, or exited nonzero." >&2
             echo "        This is what the pre-0.9.303 junction bug looked like: \`The system cannot find the" >&2
-            echo "        path specified.\` / \`kama install: cannot link dependency 'helper'\`" >&2 ;;
+            echo "        path specified.\` / \`kama pkg install: cannot link dependency 'helper'\`" >&2 ;;
         ?9) echo "  step: install reported SUCCESS but .kama/deps/helper is not there — a silent half-install," >&2
             echo "        which the loud ?8 above is not. (A link that exists but does not RESOLVE is ?4" >&2
             echo "        instead: the build through it fails.)" >&2 ;;

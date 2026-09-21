@@ -7,4 +7,4 @@ type resource Box {
     public ctor make(string x) { this.a = give x; }
     public fn isize len() { return this.a.length(); }
 }
-fn isize main() { string x = "he" + "llo"; Box b = Box.make(x: copy x); return b.len() + x.length(); }  // 5 + 5 = 10
+fn int32 main() { string x = "he" + "llo"; Box b = Box.make(x: copy x); return cast<int32>(b.len() + x.length()); }  // 5 + 5 = 10

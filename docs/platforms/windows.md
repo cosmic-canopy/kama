@@ -301,7 +301,7 @@ Worth knowing before debugging, because each of these produced a confident wrong
   so the identical, correct command reads `…app.c ` on POSIX and `…app.c" ` here. Match on a
   quote-stripped copy, or the ordering assertion fails on the platform whose quotes survived.
 - **`_fullpath` does not resolve reparse points**, where POSIX `realpath` resolves symlinks. Directory
-  junctions (`mklink /J`, how `kama install` materializes `.kama/deps/<name>`) therefore stayed
+  junctions (`mklink /J`, how `kama pkg install` materializes `.kama/deps/<name>`) therefore stayed
   unresolved, and every "which package owns this file?" test answered differently than on macOS.
   `absolutePath` opens a handle and asks `GetFinalPathNameByHandle`, which is the only API that knows.
 - **`-lfoo` prefers the DLL import library over the static archive.** mingw-w64 installs both
@@ -480,7 +480,7 @@ entries here. One has shipped:
     on the grounds that `osp()` wraps it "like everything else". It does not: **`osp()` applies at the
     Win32 file-call edge and can do nothing for a command line handed to a shell**, and cmd.exe is
     MAX_PATH-bound however the path is spelled. A path dependency under a 265-character project failed
-    with `The system cannot find the path specified.` / `kama install: cannot link dependency`, while the
+    with `The system cannot find the path specified.` / `kama pkg install: cannot link dependency`, while the
     byte-identical project at a short path linked fine. `kama_win_make_junction` (`kama.winpath.cpp`) now
     does it with `CreateDirectoryW` + `DeviceIoControl`, taking the verbatim spelling and spawning no
     process; replacement is `RemoveDirectoryW`, which on a junction removes the LINK and never the

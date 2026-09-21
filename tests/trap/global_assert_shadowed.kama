@@ -1,0 +1,10 @@
+// `global::assert` reaches the floor's trapping builtin even where this file declares its own `assert` —
+// the half of tests/global_floor_builtins.kama that must abort. Until 0.9.420 `global::assert` did not
+// resolve at all ("`global` is not a type or module in reach here").
+fn void assert(bool cond, string msg) { }            // this file's own: never traps
+
+fn int32 main() {
+    assert(cond: false, msg: "ignored by design");
+    global::assert(cond: false, msg: "the floor's");   // traps here
+    return 0;
+}

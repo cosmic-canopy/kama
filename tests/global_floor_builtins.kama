@@ -1,0 +1,22 @@
+// The floor builtins the compiler lowers itself — `panic`, `assert`, `debugAssert`, `addr`, `drop` — obey
+// the floor's scoping like every other floor name (FLOOR.md; `envOr` in tests/global_alias.kama):
+// `global::X` is always the builtin, and a bare `X` is the builtin only when nothing in reach takes the name.
+//
+// Both halves were broken until 0.9.420. `global::assert(…)` was refused ("`global` is not a type or module
+// in reach here") although FLOOR.md used it as THE example of `global::`; and a user's own
+// `fn void assert(bool cond, string msg)` was accepted and then never called — every bare `assert` lowered
+// to the trap, so this program aborted on the first line of `main`.
+//
+// The trapping half (`global::assert(cond: false, …)` beside a user `assert`) is tests/trap/global_assert_shadowed.
+static int32 hits = 0;
+
+fn void assert(bool cond, string msg) { if (!cond) { hits = hits + 1; } }   // counts, never traps
+fn int32 drop(int32 n) { return n * 2; }                                     // an ordinary function
+
+fn int32 main() {
+    assert(cond: false, msg: "counted, not fatal");      // this file's own `assert`
+    assert(cond: false, msg: "again");
+    global::assert(cond: 1 < 2, msg: "the floor's, and it holds");
+    global::debugAssert(cond: true, msg: "");
+    return drop(n: 20) + hits;                             // 40 + 2 = 42
+}

@@ -1189,12 +1189,27 @@ bool isNumericLiteral(const ASTNode* n)
 // get to choose it. `1i32 << 31` is an `int32` whose value is INT32_MIN, which SPEC guarantees and
 // `tests/num_cast.kama:21` asserts; reading it as a literal instead made the fold's 2147483648 look like
 // a constant that does not fit an `int32`, and rejected the fixture.
+//   …with one exception: an UNSUFFIXED literal shifted by a literal count whose result FITS an `int32`.
+// Nothing there states a width, and the value is the same at every width it could be emitted in, so
+// `isize b = 1 << 16;` is the author writing 65536 where an `isize` goes, exactly as `2 + 3` is 5 —
+// refusing it ("cannot be given a `int32`") while accepting `2 + 3` sent SPEC's own arena examples to spell
+// the constant out. The FIT is the load-bearing half: the shift is still emitted at the left operand's
+// `int32`, so admitting `uint64 b = 1 << 40;` here would trade a clear refusal for a runtime trap. That one
+// keeps its diagnostic, and `1i64 << 40` is how it is written. `1i32 << 31` is suffixed and keeps its type.
+static bool isSmallLiteralShift(const BinaryExpressionNode* b)
+{
+    auto* l = dynamic_cast<const Int32Node*>(b->LHS.get());
+    auto* r = dynamic_cast<const Int32Node*>(b->RHS.get());
+    if (!l || !r || !l->unsuffixed || r->value < 0 || r->value > 30 || l->value < 0) return false;
+    const long long v = (b->token == LTLT) ? ((long long)l->value << r->value) : ((long long)l->value >> r->value);
+    return v <= 2147483647LL;
+}
 bool isLiteralExpr(const ASTNode* n)
 {
     if (!n) return false;
     if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isLiteralExpr(u->expression.get());
     if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n)) {
-        if (b->token == LTLT || b->token == GTGT) return false;
+        if (b->token == LTLT || b->token == GTGT) return isSmallLiteralShift(b);
         return isLiteralExpr(b->LHS.get()) && isLiteralExpr(b->RHS.get());
     }
     // A ternary whose BOTH arms are literals is itself a literal for typing purposes — every value it can
@@ -2807,6 +2822,21 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
     return exprDiverges(n);
 }
 
+// Is this call one of the floor builtins the compiler lowers ITSELF — `panic`, `assert`, `debugAssert`,
+// `addr`, `drop`? `global::X` always is; a bare `X` is unless a declaration in reach takes the name — the
+// floor's shadowing rule, the same one `envOr` follows (FLOOR.md). (`sizeof`/`alignof`/`bitcast` are
+// reserved words, so nothing can take theirs.)
+bool CEmitter::isFloorBuiltinCall(const IdentifierNode* id) const
+{
+    if (!id || !id->value) return false;
+    const std::string& nm = *id->value;
+    if (nm != "panic" && nm != "assert" && nm != "debugAssert" && nm != "addr" && nm != "drop") return false;
+    const SharedStringList& q = id->qualifier;
+    if (q && q->size() == 1 && *(*q)[0] == "global") return true;
+    if (q && !q->empty()) return false;
+    return !_funcs.count(const_cast<CEmitter*>(this)->resolveFuncImpl(nm, nullptr));
+}
+
 // `panic(...)` — the one call the language knows never returns.
 bool CEmitter::exprDiverges(const ASTNode* n) const
 {
@@ -2814,8 +2844,7 @@ bool CEmitter::exprDiverges(const ASTNode* n) const
     // A BARE call keeps its name in `identifier`; `expression` is the RECEIVER and is null for one.
     if (!inv || inv->expression || !inv->identifier || !inv->identifier->value) return false;
     if (*inv->identifier->value != "panic") return false;
-    const SharedStringList& q = inv->identifier->qualifier;
-    return !q || q->empty() || (q->size() == 1 && *(*q)[0] == "global");   // `panic` or `global::panic`
+    return isFloorBuiltinCall(inv->identifier.get());   // `panic` or `global::panic`, and not a user's own
 }
 
 // Is there a `break` that would escape THIS loop? Nested loops swallow their own, and a `break` inside a
@@ -4555,8 +4584,18 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findBinaryOperator(token, lc, rc, &owner);
     if (!mi) {
-        unsupported(("no operator '" + binaryOperator(token) + "' for operand type '"
-                     + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(token) + "` on the type").c_str(), line);
+        // A `null` operand was already refused with the reason that matters (the type is never null); a
+        // second error about a missing operator would only point away from it.
+        if (dynamic_cast<NullNode*>(lhs.get()) || dynamic_cast<NullNode*>(rhs.get())) return "0";
+        // A comparison is never an operator declaration in kama — it comes from a contract, and writing
+        // `operator==` is itself an error — so the advice names the contract.
+        const std::string ty = lUser ? lc : rc;
+        const std::string fix = !isComparisonToken(token)
+            ? "define `operator" + binaryOperator(token) + "` on the type"
+            : (token == EQEQ || token == NOTEQ)
+                ? "implement `Equatable<This>` on `" + ty + "` (or `@generate(Equatable)`)"
+                : "implement `Comparable<This>` on `" + ty + "`";
+        unsupported(("no operator '" + binaryOperator(token) + "' for operand type '" + ty + "' — " + fix).c_str(), line);
         return "0";
     }
     canAccess(owner, mi->visibility, mi->cName, line);
@@ -7130,7 +7169,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     } else {
                         unsupported(("`new` allocates on the heap — wrap it in `Owned<" + octy
                                      + ">`/`Shared<" + octy + ">`, or drop `new` for a stack value "
-                                     "(`" + ty + " v = " + octy + "(...)`)").c_str(), n->line);
+                                     "(`" + ty + " v = " + octy + ".<ctor>(...)`)").c_str(), n->line);
                     }
                 } else if (stackCtor) {
                     // STACK value, constructed in place (`Box b = Box(id: 5)`).
@@ -19405,7 +19444,7 @@ std::string CEmitter::rawPointeeCType(SharedExpression e)
     if (!e) return "";
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
         if (inv->identifier && inv->identifier->value && *inv->identifier->value == "addr"
-            && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+            && isFloorBuiltinCall(inv->identifier.get()) && !inv->expression
             && inv->args && inv->args->size() == 1) {
             SharedExpression of = (*inv->args)[0]->expression;
             std::string pc = exprClass(of);
@@ -21003,7 +21042,8 @@ std::string CEmitter::borrowArgRoot(SharedExpression e) const
 {
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
         std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
-        if (callee == "addr" && inv->args && inv->args->size() == 1)     // addr(of: this.data[i]) -> this
+        if (callee == "addr" && !inv->expression && isFloorBuiltinCall(inv->identifier.get())
+            && inv->args && inv->args->size() == 1)                      // addr(of: this.data[i]) -> this
             return borrowArgRoot((*inv->args)[0]->expression);
         if (inv->expression)                                             // this.dataPtr() -> this
             if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
@@ -24466,7 +24506,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // outside an `unsafe fn` would be reported twice.
     {
         const bool isAddr = call->identifier && call->identifier->value && *call->identifier->value == "addr"
-                         && !call->expression;
+                         && !call->expression && isFloorBuiltinCall(call->identifier.get());
         std::string rc = isAddr ? std::string() : callReturnTypeRaw(call);
         if (!rc.empty() && rc.size() > 1 && rc.back() == '*' && !isViewCType(rc)
             && !isClass(rc) && !isInterface(rc))
@@ -24740,7 +24780,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // address of a local, store it, return — which reproduces `stack-use-after-scope` under ASan with no
     // `View` involved and no marker anywhere in the program (finding 2). Addressing a live value is safe;
     // it is the raw pointer that comes BACK, and outlives it, that is not.
-    if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
+    if (name == "addr" && isFloorBuiltinCall(call->identifier.get())
         && call->args && call->args->size() == 1) {
         rejectRawOutsideUnsafe("`addr(of: …)`", call->line);
         SharedExpression a = (*call->args)[0]->expression;
@@ -24791,7 +24831,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // (dev-only checks; `assert` stays always-on). Recoverable errors use `Result<T,E>` — these are for
     // "this is a bug that can't continue".
     bool bareCall = (!call->identifier->qualifier || call->identifier->qualifier->empty());
-    if (bareCall && (name == "panic" || name == "assert" || name == "debugAssert")) {
+    // They are FLOOR names, so they obey the floor's scoping (FLOOR.md): `global::assert` is always the
+    // builtin, and a bare `assert` is the builtin only when nothing the program declares takes the name.
+    // Both halves were missing: `global::assert(…)` was "`global` is not a type or module in reach", and a
+    // user's own `fn void assert(bool cond, string msg)` was accepted and then never called — every bare
+    // call was lowered to the trap regardless.
+    if (isFloorBuiltinCall(call->identifier.get()) && (name == "panic" || name == "assert" || name == "debugAssert")) {
         auto argByName = [&](const char* want) -> SharedExpression {
             if (call->args) for (auto& a : *call->args)
                 if (a && a->name && a->name->value && *a->name->value == want) return a->expression;
@@ -24845,7 +24890,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // `drop(place)` — run the destructor of a place's value (for a library owner over `UnsafePtr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
     // resolved via exprClass (so `drop(this.deref())` reaches the pointee `T` through a `ref T` return).
-    if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
+    if (name == "drop" && isFloorBuiltinCall(call->identifier.get()) && call->args && call->args->size() == 1) {
         ArgumentNode* a0 = (*call->args)[0].get();
         SharedExpression a = a0->expression;
         const std::string label = (a0 && a0->name && a0->name->value) ? *a0->name->value : "";
@@ -26453,6 +26498,13 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         unsupported("`main` may not be `unsafe` — it encloses the whole program, so the marker would put "
                     "every line in the trusted region. Move the raw work into a helper `unsafe fn` and "
                     "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn->line);
+
+    // `main` has ONE signature, `fn int32 main()`: its result is the exit status, and arguments come from
+    // `args()`. A `fn void main()` used to pass `kama check` and then fail in clang on the synthesized
+    // `return (int)kama_main();` — a program kama accepted that the C compiler refused.
+    if (isEntry && (cType(fn->returnType) != "int32_t" || (fn->parameters && !fn->parameters->empty())))
+        unsupported("`main` is declared `fn int32 main()` — it returns the exit status (0 for success) and "
+                    "takes no parameters; command-line arguments come from `args()`", fn->line);
 
     // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,
     // a collection, or an `Owned`/`Shared`/`Weak` smart pointer) carries RAII/refcount state that
@@ -30775,7 +30827,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // keep it from becoming a writable one. Typed by `lvalueCType`, with the fallbacks below for the places it
     // does not type.
     if (inv->identifier && inv->identifier->value && *inv->identifier->value == "addr" && !inv->expression
-        && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+        && isFloorBuiltinCall(inv->identifier.get())
         && inv->args && inv->args->size() == 1 && (*inv->args)[0] && (*inv->args)[0]->expression) {
         SharedExpression a = (*inv->args)[0]->expression;
         std::string ct = lvalueCType(a);

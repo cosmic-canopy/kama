@@ -58,14 +58,15 @@ kama demangle <file> -- k_Fapp__Pair_int32__make   # -> Pair<int32>::make
 Names are rewritten in place, so paste the whole error line, not just the identifier. With no `--` it
 reads a line per line from stdin until EOF.
 
-## Verify with `kama build`, not `kama check`
+## Verify with `kama check`, then `kama build`
 
 ```sh
-kama build <file>      # the real check: compiles, and reports type errors
-kama run               # build the manifest entry and run it
-kama check <file>      # FAST SUBSET — see below
+kama check kama.json   # fast: names, ownership, and type errors by kind and width — no C compiler
+kama build kama.json   # compiles and links, so it also reports what only the C compiler sees
+kama run kama.json     # build the manifest entry and run it
 ```
 
+Name the `kama.json`: a `.kama` operand is a loose build that reads no manifest, so project imports fail.
 `kama check` is the one command that also looks at code THIS build leaves out: it analyzes whatever
 further configurations your `@compileFor` gates need, so a wasm-only or release-only file cannot rot
 unnoticed, and tags anything it finds with the flags that reproduce it (`[--target WASM]`). Pass a

@@ -264,7 +264,7 @@ fn int32 main() {
                           runFrom: join(path: work, with: "run4"));
     if (r4 != 0) { return r4; }
     // (v) the same pair at the bottom of the deep tree — `.kama/deps/helper` past 260. RED before 0.9.303:
-    // `kama install: cannot link dependency 'helper'`, and with the link absent nothing builds through it.
+    // `kama pkg install: cannot link dependency 'helper'`, and with the link absent nothing builds through it.
     int32 r5 = runDepCase(kama: kama, dir: depDeep, outName: outName, caseId: 70,
                           runFrom: join(path: work, with: "run5"));
     if (r5 != 0) { return r5; }

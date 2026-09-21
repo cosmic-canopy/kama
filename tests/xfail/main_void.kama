@@ -1,0 +1,3 @@
+// `main` has one signature, `fn int32 main()`. A `fn void main()` used to pass `kama check` and then fail in
+// clang on the synthesized `return (int)kama_main();` — accepted by kama, refused by the C compiler.
+fn void main() { println(s: "never built"); }

@@ -595,8 +595,8 @@ static const std::map<std::string, SrcRange>& builtinDocIndex()
 
 // The native WebGPU SDK root: wgpu-native's prebuilt drop (include/webgpu/{webgpu,wgpu}.h + a
 // lib/libwgpu_native.* under it). Fetched on demand by tools/fetch-webgpu.sh into a gitignored dir;
-// $KAMA_WGPU_DIR overrides. NOT vendored (multi-MB, MPL-2.0) — the repo stays lean and MIT: we only
-// link the unmodified prebuilt, so its file-level copyleft never reaches our sources.
+// $KAMA_WGPU_DIR overrides. NOT vendored because it is multi-MB — the repo stays lean. Its license is
+// MIT OR Apache-2.0, as permissive as kama's.
 std::string resolveWgpuDir()
 {
     if (const char* d = getenv("KAMA_WGPU_DIR")) return d;
@@ -6990,7 +6990,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     // is the command that acts on the whole thing, so a member that is not there is its problem.
     std::string wsErr;
     const std::set<std::string> wsMembers = workspaceMembers(base, &wsErr);
-    if (!wsErr.empty()) { fprintf(stderr, "kama install: %s\n", wsErr.c_str()); return 2; }
+    if (!wsErr.empty()) { fprintf(stderr, "kama pkg install: %s\n", wsErr.c_str()); return 2; }
 
     // Range deps (git+version) select the highest matching tag. Because the BFS resolves each node on
     // first sight, a *later*, tighter requestor of the same name can invalidate an already-fetched tag.
@@ -7005,13 +7005,13 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
 
     for (int attempt = 0; ; ++attempt) {
         if (attempt >= MAX_ATTEMPTS) {
-            fprintf(stderr, "kama install: version resolution did not converge (too many range conflicts)\n");
+            fprintf(stderr, "kama pkg install: version resolution did not converge (too many range conflicts)\n");
             return 1;
         }
         // Rebuild both views from scratch so they can never drift from the manifest/lock.
         runCmd(rmRfCmd(viewDir));
         runCmd(rmRfCmd(devViewDir));
-        if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
+        if (!makeDirs(viewDir)) { fprintf(stderr, "kama pkg install: cannot create %s\n", viewDir.c_str()); return 1; }
 
         // `requestor` is a display name for diagnostics; `requestorDir` is the directory of the manifest
         // that declared this dep — what a path spec is actually relative to.
@@ -7115,7 +7115,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 if (ci != chosen.end()) {
                     bool chosenRange = accReq.count(r.name) > 0;
                     if (chosenRange != incomingRange) {   // one is an exact/url/path pin, the other a range
-                        fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s mix an exact pin "
+                        fprintf(stderr, "kama pkg install: dependency conflict on '%s': %s and %s mix an exact pin "
                                 "and a version range — use the same form\n",
                                 r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
                         return 1;
@@ -7124,17 +7124,17 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         // Intersect the two ranges and re-select the highest tag satisfying both.
                         VersionReq req;
                         if (!parseVersionReq(r.spec.version, req)) {
-                            fprintf(stderr, "kama install: dependency '%s' (required by %s) has an invalid "
+                            fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) has an invalid "
                                     "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
                             return 1;
                         }
                         VersionReq merged = intersect(accReq[r.name], req);
                         SemVer sv; VerPick pick; bool matched = false; std::string terr;
                         if (!selectVersion(r.name, r.spec, merged, matched, sv, pick, terr)) {
-                            fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1;
+                            fprintf(stderr, "kama pkg install: %s\n", terr.c_str()); return 1;
                         }
                         if (!matched) {
-                            fprintf(stderr, "kama install: dependency conflict on '%s': %s requires \"%s\" and %s "
+                            fprintf(stderr, "kama pkg install: dependency conflict on '%s': %s requires \"%s\" and %s "
                                     "requires \"%s\" — no published version satisfies both\n",
                                     r.name.c_str(), chosenBy[r.name].c_str(), reqStr[r.name].c_str(),
                                     r.requestor.c_str(), r.spec.version.c_str());
@@ -7148,7 +7148,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         continue;   // chosen version still satisfies the tighter range → dedup
                     }
                     if (!sameSpec(ci->second, r.spec)) {
-                        fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s require different "
+                        fprintf(stderr, "kama pkg install: dependency conflict on '%s': %s and %s require different "
                                 "sources (no version reconciliation yet — pin both to the same git/rev or url)\n",
                                 r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
                         return 1;
@@ -7161,7 +7161,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 // siblings it imports, and so able to be lifted out and still build.
                 if (!r.spec.path.empty() && r.requestor != "<root manifest>" &&
                     !(wsMembers.count(absolutePath(r.requestorDir)) && wsMembers.count(r.spec.pathAbs))) {
-                    fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
+                    fprintf(stderr, "kama pkg install: path dependency '%s' (required by %s) is only allowed at the "
                             "top level, or between two members of one kama_workspace.json — a fetched "
                             "package cannot reference a local path reproducibly\n",
                             r.name.c_str(), r.requestor.c_str());
@@ -7175,7 +7175,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     bool isReg = isRegistryDep(r.spec);
                     VersionReq req;
                     if (!parseVersionReq(r.spec.version, req)) {
-                        fprintf(stderr, "kama install: dependency '%s' (required by %s) has an invalid "
+                        fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) has an invalid "
                                 "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
                         return 1;
                     }
@@ -7185,7 +7185,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     SemVer sv; VerPick pick; bool reused = false;
                     std::vector<std::string> regBases = isReg ? registryBasesFor(r.name, r.spec) : std::vector<std::string>{};
                     if (isReg && regBases.empty()) {
-                        fprintf(stderr, "kama install: no registry configured for '%s' (required by %s) — set "
+                        fprintf(stderr, "kama pkg install: no registry configured for '%s' (required by %s) — set "
                                 "\"registry\" on the dependency or a \"registries\" default\n",
                                 r.name.c_str(), r.requestor.c_str());
                         return 1;
@@ -7208,10 +7208,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (!reused) {
                         bool matched = false; std::string terr;
                         if (!selectVersion(r.name, r.spec, req, matched, sv, pick, terr)) {
-                            fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1;
+                            fprintf(stderr, "kama pkg install: %s\n", terr.c_str()); return 1;
                         }
                         if (!matched) {
-                            fprintf(stderr, "kama install: dependency '%s' (required by %s): no %s version "
+                            fprintf(stderr, "kama pkg install: dependency '%s' (required by %s): no %s version "
                                     "satisfies \"%s\"\n", r.name.c_str(), r.requestor.c_str(),
                                     isReg ? "registry" : "git tag", r.spec.version.c_str());
                             return 1;
@@ -7222,7 +7222,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         if (isReg && lk != oldLock.end() && lk->second.source == "registry"
                                 && lk->second.version == semVerStr(sv) && !lk->second.integrity.empty()
                                 && lk->second.integrity != pick.integrity) {
-                            fprintf(stderr, "kama install: dependency confusion on '%s'@%s: the lock pinned "
+                            fprintf(stderr, "kama pkg install: dependency confusion on '%s'@%s: the lock pinned "
                                     "integrity %s (from %s) but %s serves %s — refusing to install different "
                                     "bytes under the same version\n",
                                     r.name.c_str(), semVerStr(sv).c_str(), lk->second.integrity.c_str(),
@@ -7243,7 +7243,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
 
                 LockEntry e; std::string storePath, ferr;
                 if (!resolveOne(r.name, r.spec, r.requestorDir, oldLock, e, storePath, ferr)) {
-                    fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
+                    fprintf(stderr, "kama pkg install: %s\n", ferr.c_str()); return 1;
                 }
                 // The lock lives at the ROOT, so a path it records must be root-relative to mean anything.
                 // A root-declared dep already is — keep its spelling verbatim, so an existing lock stays
@@ -7260,14 +7260,14 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 std::string importName = importNameOf(r.name);
                 auto iu = importUsedBy.find(importName);
                 if (iu != importUsedBy.end() && iu->second != r.name) {
-                    fprintf(stderr, "kama install: import-name collision on '%s': both '%s' and '%s' import as "
+                    fprintf(stderr, "kama pkg install: import-name collision on '%s': both '%s' and '%s' import as "
                             "'%s' — two scopes cannot expose the same name\n",
                             importName.c_str(), iu->second.c_str(), r.name.c_str(), importName.c_str());
                     return 1;
                 }
                 importUsedBy[importName] = r.name;
                 if (r.dev && !madeDevDir) {
-                    if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
+                    if (!makeDirs(devViewDir)) { fprintf(stderr, "kama pkg install: cannot create %s\n", devViewDir.c_str()); return 1; }
                     madeDevDir = true;
                 }
                 // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
@@ -7278,13 +7278,13 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 if (fileExists(childManifest)) {
                     std::map<std::string, DepSpec> childDeps; std::string cerr, childReq;
                     if (!loadManifestDeps(childManifest, childDeps, cerr, nullptr, nullptr, &childReq)) {
-                        fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
+                        fprintf(stderr, "kama pkg install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
                     }
                     // The fetched package's `kama` range against THIS compiler. Refused here, once per
                     // package, so a tree that installs is a tree this compiler can build — the build-time
                     // check (resolveBuildConfig) is for a view a newer manifest has since outgrown.
                     if (!kamaReqSatisfied(childReq, "`" + r.name + "`", cerr)) {
-                        fprintf(stderr, "kama install: %s\n", cerr.c_str()); return 2;
+                        fprintf(stderr, "kama pkg install: %s\n", cerr.c_str()); return 2;
                     }
                     for (auto& ck : childDeps) { directNames.push_back(ck.first);
                         // storePath is where THIS package's manifest lives — the dir its own path specs
@@ -7293,7 +7293,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
                 }
                 if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
-                    fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
+                    fprintf(stderr, "kama pkg install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
                 }
                 e.dependencies = directNames;
                 lock[r.name] = e;
@@ -7310,7 +7310,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         if (rc != 0) return rc;
 
         if (!writeLockFile(base + "/kama.lock", lock)) {
-            fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str()); return 1;
+            fprintf(stderr, "kama pkg install: cannot write %s/kama.lock\n", base.c_str()); return 1;
         }
 
         // Dep path-overrides (M5.3, patch-style): the canonical lock is now written and untouched. Redirect
@@ -7356,7 +7356,7 @@ int cmdInstall(const std::string& projectDir)
     std::string base = projectDir.empty() ? "." : projectDir;
     std::string manifest = base + "/kama.json";
     if (!fileExists(manifest)) {
-        fprintf(stderr, "kama install: no kama.json in %s\n", base.c_str());
+        fprintf(stderr, "kama pkg install: no kama.json in %s\n", base.c_str());
         return 2;
     }
     std::map<std::string, LockEntry> oldLock;
@@ -7364,7 +7364,7 @@ int cmdInstall(const std::string& projectDir)
     if (fileExists(lockPath)) {
         std::string lerr;
         if (!parseLockFile(lockPath, oldLock, lerr)) {
-            fprintf(stderr, "kama install: %s: %s\n", lockPath.c_str(), lerr.c_str());
+            fprintf(stderr, "kama pkg install: %s: %s\n", lockPath.c_str(), lerr.c_str());
             return 2;
         }
     }
@@ -7823,9 +7823,10 @@ void agentsUsage()
 int cmdAgentsList()
 {
     printf("AGENTS.md is read natively by most agent tools (Codex, Cursor, Windsurf, Gemini CLI,\n"
-           "Zed, Aider, Warp, VS Code/Copilot, Jules, Junie, Amp, RooCode, goose, opencode, Devin,\n"
-           "Kilo, Factory, Augment, ...). `kama agents install` writes it and nothing else is needed.\n\n"
-           "These tools read something else, so they get a POINTER to AGENTS.md — never a copy:\n\n");
+           "Zed, Aider, Warp, Jules, Amp, RooCode, goose, opencode, Devin, Kilo, Factory, Augment,\n"
+           "...). `kama agents install` writes it and nothing else is needed.\n\n"
+           "These tools read their own file first (some also read AGENTS.md in newer versions), so\n"
+           "they get a POINTER to AGENTS.md — never a copy:\n\n");
     printf("  %-12s %-34s %s\n", "--tool", "writes", "note");
     printf("  %-12s %-34s %s\n", "------", "------", "----");
     for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) {
@@ -8406,16 +8407,17 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     // (7) The next step, which differs by kind — a library has nothing to run, and a monorepo root has
     // nothing of its own to build.
     const std::string cd = (dir == ".") ? "" : "cd " + dir + " && ";
-    if (kind == SeedKind::Executable)   printf("  next: %skama run\n", cd.c_str());
+    if (kind == SeedKind::Executable)   printf("  next: %skama run kama.json\n", cd.c_str());
     else if (kind == SeedKind::Library) printf("  next: %skama check src/%s.kama\n", cd.c_str(), ident.c_str());
     else printf("  next: %skama check %s/src/%s.kama\n", cd.c_str(), members[0].c_str(),
                 importNameOf(members[0]).c_str());
     return 0;
 }
 
-void usage()
+// The usage text goes to `out`: stderr when it explains a refusal, stdout when it was asked for.
+void usage(FILE* out = stderr)
 {
-    fprintf(stderr,
+    fprintf(out,
         "usage:\n"
         "  kama transpile <in.kama> [-o out.c] [--no-line] [--dev]\n"
         "  kama build     <in.kama>... [-o out] [--target <name-or-triple>] [--release|--debug] [--shared]\n"
@@ -8442,8 +8444,8 @@ void usage()
         "                              still works from a terminal. Windows only in effect; a target's\n"
         "                              `subsystem` key in kama.json says the same thing per-project.\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
-        "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
-        "                  (build the entry .kama — explicit <file>, else the manifest \"entry\" — and run it; native-only)\n"
+        "  kama run       <kama.json>|<file> [--release|--debug] [--dev] [--define NAME]... [-- <program args>]\n"
+        "                  (build the project's \"entry\" — or a loose .kama file — and run it; native-only)\n"
         "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
         "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
@@ -8482,10 +8484,10 @@ void usage()
         "                   a comment), declarations by kind, generic templates vs the monomorphs actually\n"
         "                   emitted, the unsafe and FFI surfaces, what `@compileFor` leaves out of THIS\n"
         "                   build, per-module lines + exports, dependencies, and the largest declarations\n"
-        "  kama query     <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
+        "  kama query     [<kama.json>] <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
-        "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
-        "                   imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
+        "                   | --sighelp L:C | --diagnostics | --coverage; a leading <kama.json> widens from\n"
+        "                   <file>'s imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
         "                   Modes are repeatable and combinable — asked together they are answered in order\n"
         "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
@@ -9644,6 +9646,12 @@ int main(int argc, char** argv)
         return 0;
     }
     if (argc < 2) { usage(); return 2; }
+    // Asked for, the usage is the answer: stdout, exit 0. (These used to fall through to the operand
+    // check and print "kama help: name what to help — one or more .kama files …".)
+    if (argc == 2 && (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
+        usage(stdout);
+        return 0;
+    }
 
     std::string subcommand = argv[1];
     g_argv0 = argv[0];               // the exe-relative resolvers' anchor (runtime headers, stdlib, prelude)

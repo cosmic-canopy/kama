@@ -1,0 +1,1 @@
+is declared `fn int32 main()`

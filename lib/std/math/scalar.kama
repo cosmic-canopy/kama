@@ -60,12 +60,14 @@ extern fn float64 kama_hypot(float64 x, float64 y);   extern fn float32 kama_hyp
 
 // The per-width dispatch seam, and the extension point: one method per operation, because that method
 // IS the per-type body. `implements Real for MyType { … }` and every function below works on it.
+// Every member is `const fn`, like every other stdlib protocol: none changes its receiver, so a `const`
+// value — or a `const ref` parameter — can take its square root.
 type contract Real<T is This> for value, intrinsic {
-    fn T sqrt();  fn T cbrt();  fn T sin();   fn T cos();   fn T tan();
-    fn T asin();  fn T acos();  fn T atan();  fn T exp();   fn T log();
-    fn T log2();  fn T log10(); fn T floor(); fn T ceil();  fn T round();
-    fn T trunc(); fn T abs();
-    fn T pow(T y);  fn T fmod(T y);  fn T atan2(T x);  fn T hypot(T y);
+    const fn T sqrt();  const fn T cbrt();  const fn T sin();   const fn T cos();   const fn T tan();
+    const fn T asin();  const fn T acos();  const fn T atan();  const fn T exp();   const fn T log();
+    const fn T log2();  const fn T log10(); const fn T floor(); const fn T ceil();  const fn T round();
+    const fn T trunc(); const fn T abs();
+    const fn T pow(T y);  const fn T fmod(T y);  const fn T atan2(T x);  const fn T hypot(T y);
 }
 
 type intrinsic <float64> implements Real<This> {

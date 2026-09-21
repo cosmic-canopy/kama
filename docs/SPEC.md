@@ -592,7 +592,7 @@ a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `al
 import { std::collections::DynamicArray, std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 65536);                               // caller-owned; drops last
+    Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
     DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
     Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());  // named arg skips H
     // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
@@ -934,7 +934,7 @@ import { std::collections::Arena, std::collections::BumpAllocator };
 type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } }
 
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 4096);                     // drops last (outlives the box)
+    Arena arena = Arena.make(capacity: 1 << 12);                  // drops last (outlives the box)
     Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node.make(v: 42);
     Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7);   // pointee AND ctrl from the arena
     // n/s dtor deallocate() is a no-op; the objects live in the arena; the Arena frees the region.
@@ -1541,7 +1541,7 @@ are all conversions. What is **not** a conversion, and needs no cast:
 | | |
 |---|---|
 | a literal, typed by its destination — or by the other operand | `int8 a = 100;` · `float32 f = 3;` · `v < 10` on a `uint8` |
-| arithmetic over literals, which is still the literal | `int8 a = 2 + 3;` |
+| arithmetic over literals, which is still the literal — including a shift of an unsuffixed literal whose value fits an `int32` | `int8 a = 2 + 3;` · `isize n = 1 << 16;` |
 | arithmetic on one type, which yields that type | `a + b` on two `uint8`s |
 | a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
 | a literal handed to a generic `T`, which takes the width its typed siblings bind | `pick(a: 0, b: n)` on an `isize n` |

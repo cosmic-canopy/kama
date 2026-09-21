@@ -1,0 +1,18 @@
+// A shift of an UNSUFFIXED literal whose value fits an `int32` is a literal, typed by its destination —
+// like `2 + 3`. It used to be refused (`isize b = 1 << 16;` → "cannot be given a `int32`") while `2 + 3` was
+// accepted, which sent the spec's own arena examples to spell 65536 out. A shift past `int32` is still
+// refused (it is emitted at the left operand's width; write `1ui64 << 40`), and a SUFFIXED left operand
+// states its own width: `1i32 << 31` is an `int32` (tests/num_cast.kama).
+fn isize half(isize n) { return n / 2; }
+
+fn int32 main() {
+    isize cap = 1 << 16;                 // 65536, an isize
+    uint64 big = 1ui64 << 40;            // past int32: the width is written, on the left
+    int8 small = 1 << 6;                 // 64 fits an int8
+    isize h = half(n: 1 << 4);           // an argument is a destination too: 8
+    int32 r = 0;
+    if (cap == 65536) { r = r + 10; }
+    if (big == 1099511627776ui64) { r = r + 10; }
+    if (small == 64) { r = r + 10; }
+    return r + cast<int32>(h) + 4;       // 30 + 8 + 4 = 42
+}

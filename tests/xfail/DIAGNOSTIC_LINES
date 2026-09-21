@@ -271,7 +271,7 @@ dup_method	dup_method.kama:9
 dup_module_fn	b.kama:3
 dup_type_same_file	dup_type_same_file.kama:5
 elem_method_const	elem_method_const.kama:12
-empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
+empty_custom_alloc	empty_custom_alloc.kama:13
 enum_attribute_unknown	enum_attribute_unknown.kama:3
 enum_bare_spelling	enum_bare_spelling.kama:4
 enum_boundary_no_width	enum_boundary_no_width.kama:2
@@ -401,7 +401,7 @@ generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2
 generic_arity	generic_arity.kama:4
 generic_bare_use	generic_bare_use.kama:4
 generic_bound_unsat	generic_bound_unsat.kama:11
-generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11 generic_ctor_incomplete_field.kama:16
+generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11
 generic_ctor_uninferable	generic_ctor_uninferable.kama:9
 generic_enum_field	generic_enum_field.kama:3
 generic_enum_implements_unmet	generic_enum_implements_unmet.kama:6
@@ -588,6 +588,7 @@ local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
+main_void	main_void.kama:3
 match_arm_member_type_mismatch	match_arm_member_type_mismatch.kama:17
 match_arm_stale_target	match_arm_stale_target.kama:10 match_arm_stale_target.kama:9
 match_bad_variant	match_bad_variant.kama:7
@@ -1105,4 +1106,4 @@ when_on_contract_member	when_on_contract_member.kama:3
 when_on_intrinsic	when_on_intrinsic.kama:3
 when_unknown_param	when_unknown_param.kama:7 when_unknown_param.kama:9
 widen_local	widen_local.kama:1
-withcapacity_custom_alloc	withcapacity_custom_alloc.kama:12 withcapacity_custom_alloc.kama:7
+withcapacity_custom_alloc	withcapacity_custom_alloc.kama:12

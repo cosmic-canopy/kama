@@ -3053,6 +3053,7 @@ private:
     // Fall-off-the-end analysis: a non-void function must return on every path (or diverge).
     void checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what);
     bool alwaysExits(const SharedStatement& s) const;   // provably returns or diverges (one-sided: no => "cannot prove")
+    bool isFloorBuiltinCall(const IdentifierNode* id) const;
     bool exprDiverges(const ASTNode* n) const;          // a `panic(...)` call
     bool hasLoopBreak(const SharedStatement& s) const;  // a `break` escaping THIS loop
     bool isLiteralTrue(const SharedExpression& e) const;
