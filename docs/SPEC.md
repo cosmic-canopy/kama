@@ -58,9 +58,12 @@ fat value that is one of two things, chosen automatically:
   build a new buffer, e.g. `concat`).
 
 ```kama
-string s = "ab";                    // borrowed literal — no alloc
-string t = s.concat(other: "cd");   // heap-owned, RAII-freed at scope exit
-bool eq = s.equals(other: t);   isize len = s.length();
+fn int32 main() {
+    string s = "ab";                    // borrowed literal — no alloc
+    string t = s.concat(other: "cd");   // heap-owned, RAII-freed at scope exit
+    bool eq = s.equals(other: t);   isize len = s.length();
+    return 0;
+}
 ```
 
 You never spell the borrowed-vs-owned distinction; the type carries it, and RAII frees exactly the owned
@@ -80,10 +83,13 @@ never blur:
   while the string is.
 
 ```kama
-string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
-int32 n = 0;
-foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
-uint8 first = s[0];                     // 65 ('A'), a byte
+fn int32 main() {
+    string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
+    int32 n = 0;
+    foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
+    uint8 first = s[0];                     // 65 ('A'), a byte
+    return 0;
+}
 ```
 
 **`char`** is a distinct primitive — a Unicode scalar value backed by `uint32` (not a numeric type, so it
@@ -125,12 +131,12 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   ","))`. Go `strings.Split` semantics (consecutive/trailing separators yield `""`; an empty separator
   yields the whole string once). Collect into a `DynamicArray<string>` explicitly if you need random access.
 
-```kama
+```kama fragment
 string path = "/usr/local/bin";
 foreach (string part in path.split(separator: "/")) { … }   // "", "usr", "local", "bin"
 string greet = "Hello, " + name + "!";
 if (greet.toLower().contains(substring: "hello")) { … }
-match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; }
+match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; };
 ```
 
 ### Formatting & string interpolation ✅
@@ -139,7 +145,7 @@ Rendering a value as text goes through **one** contract, `Formattable` (prelude,
 survives `--no-std`) — the display twin of `Serializable`:
 
 ```kama
-type contract Formattable for value, resource, intrinsic { fn void format(ref Formatter f); }
+type contract Formattable for value, resource, enum, intrinsic { const fn void format(ref Formatter f); }
 ```
 
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
@@ -152,7 +158,7 @@ no `Result`) — an in-memory write can't fail, unlike `serialize` over an I/O s
 ```kama
 type value Point implements Formattable {
     int32 x; int32 y;
-    public fn void format(ref Formatter f) {
+    public const fn void format(ref Formatter f) {
         f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
         f.writeStr(s: ", "); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");
     }
@@ -163,12 +169,12 @@ type value Point implements Formattable {
 to a `Formatter` build (a `writeStr` per literal chunk, `expr.format(ref f)` per hole), statically type-checked,
 **no runtime reflection**:
 
-```kama
+```kama fragment
 string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who[0].format into one buffer
 ```
 
 - **Holes are restricted** to an identifier with `.field` / `[index]` accessors (`${user.name}`, `${items[i]}`).
-  Anything with an operator or call must be bound first (`let sum = a + b; "…${sum}"`) — logic stays out of
+  Anything with an operator or call must be bound first (`int32 sum = a + b; "…${sum}"`) — logic stays out of
   string literals (Rust RFC 2795's restraint).
 - **Escape** a literal `${` as `\${`; a lone `$` (not before `{`) stays literal.
 - **Verbatim** strings never interpolate — `@"raw ${x}"` is literal (the raw escape hatch).
@@ -199,8 +205,12 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   the same sink (so nesting composes, one allocation):
 
   ```kama
-  @generate(Formattable) type value Stat { public int32 hp; public bool alive; }
-  string s = "${Stat.of(hp: 30i32, alive: true)}";   // "Stat { hp: 30, alive: true }"
+  @generate(Formattable, of) type value Stat { public int32 hp; public bool alive; }
+  fn int32 main() {
+      Stat st = Stat.of(hp: 30i32, alive: true);
+      string s = "${st}";   // "Stat { hp: 30, alive: true }"
+      return 0;
+  }
   ```
 
   Strings render **raw/unquoted** (uniform single-contract dispatch — no special-case). A hand-written
@@ -216,7 +226,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   **parts** and its rendered **holes** (each hole run through `Formattable`) and hands them to a function
   `fn R name(ref Template t)`, which decides how they combine — so a tag is just a function you can define:
 
-  ```kama
+  ```kama fragment
   fn string html(ref Template t) { /* literals verbatim, holes HTML-escaped — XSS-safe */ }
 
   string page = html"<b>${user}</b>";            // ${user} escaped, <b> kept raw
@@ -241,17 +251,23 @@ a **place** (an lvalue): you can write a field through it (`a[i].x = v`), index 
 bounds-checked. (Reading `a[i]` still yields a copy.)
 
 ```kama
-FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, zero-initialized
-a[0] = 10;  a[1] = 20;                          // bounds-checked []
-int32 first = a[0];
-foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
-foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
+import { std::collections::FixedArray, std::collections::DynamicArray };
+@generate(of) type value Point { public int32 x; public int32 y; }
 
-DynamicArray<Point> ps = DynamicArray.empty();             // growable
-ps.add(item: p);   isize n = ps.length();   Point q = ps[0];
+fn int32 main() {
+    FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, zero-initialized
+    a[0] = 10;  a[1] = 20;                          // bounds-checked []
+    int32 first = a[0];
+    foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
+    foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
 
-string s = "ab";                                // borrowed literal (no alloc)
-string t = s.concat(other: "cd");               // heap-owned, RAII-freed
+    DynamicArray<Point> ps = DynamicArray.empty();             // growable
+    ps.add(item: Point.of(x: 1, y: 2));   isize n = ps.length();   Point q = ps[0];
+
+    string s = "ab";                                // borrowed literal (no alloc)
+    string t = s.concat(other: "cd");               // heap-owned, RAII-freed
+    return 0;
+}
 ```
 
 All collections own their storage and free it via RAII (with element-destructor chaining). Only the
@@ -278,14 +294,20 @@ escape check keeps them from being stored, and **the window rule below keeps the
 buffer**, so neither can dangle — without a borrow checker, and without lifetimes.
 
 ```kama
-DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
-borrow verts.viewMut() as all {                         // a WINDOW — `verts` is frozen inside it
-    View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
-    foreach (ref float32 x in mid) { x = x * 2.0; }     // mutate-through: writes back to `verts`
-    isize n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
+fn void uploadToGpu(ConstView<float32> window) { }
+
+fn int32 main() {
+    DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
+    borrow verts.viewMut() as all {                         // a WINDOW — `verts` is frozen inside it
+        View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
+        foreach (ref float32 x in mid) { x = x * 2.0; }     // mutate-through: writes back to `verts`
+        isize n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
+    }
+    uploadToGpu(window: verts.slice(from: 0, count: 3));    // a read-only subrange down — no copy, no window needed
+    verts.add(item: 1.0);                                   // mutable again: the window has closed
+    return 0;
 }
-uploadToGpu(window: verts.slice(from: 0, count: 3));    // a read-only subrange down — no copy, no window needed
-verts.add(item: 1.0);                                   // mutable again: the window has closed
 ```
 
 #### The window — `borrow h.mint() as v { … }` ✅
@@ -294,7 +316,7 @@ A view borrows storage it does not own, so kama answers *how long is this view v
 scope** — not a lifetime annotation, and not a programmer's promise. A **`borrow` block is that extent**,
 and it is purely lexical: one C block plus one initializer per binding, no runtime cost.
 
-```kama
+```kama fragment
 borrow d.view() as v { … }        // `Viewable<ConstView<T>>` grants `view()`; `ViewableMut<View<T>>` grants `viewMut()`
 borrow m.values() as vals { … }   // `ValuesIterable<I>` grants `values()` — `Map` has no `view()`
 borrow buf.span() as s { … }      // a user contract's own grant
@@ -369,7 +391,7 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   returns — the return type self-selects, so a marked contract cannot over-grant, and a member returning
   `int32` mints nothing.
 
-  ```kama
+  ```kama fragment
   @viewable type contract Viewable<V>    for resource, value, view { fn V view(); }      // the read-only window
   @viewable type contract ViewableMut<V> for resource, value, view { fn V viewMut(); }   // the writable one
 
@@ -420,7 +442,7 @@ thin wrapper over `Map<K, Unit, H, A>`), over a key `K: Hashable + Equatable` (t
 allocator — see "Custom allocators" below). These two key contracts are in the **prelude**:
 
 ```kama
-type contract Hashable  for value, resource, enum, intrinsic { fn uint64 hash(); }
+type contract Hashable  for value, resource, enum, intrinsic { const fn uint64 hash(); }
 type contract Equatable<T is This> for value, resource, enum, intrinsic { const fn bool equals(const ref T other); }
 ```
 
@@ -438,21 +460,24 @@ integer's is scalar (a conformance on a **primitive** — `this` is the scalar i
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
 `type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
-`type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
+`type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable<This>`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
 is not enough), the same rule as `foreach`.
 
 ```kama
 import { std::collections::Map, std::collections::Set };
 
-Map<string, int32> counts = Map.empty();
-counts.put(key: "a", value: 1);
-counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
-int32 v = match (counts.get(key: "a")) { case Some(value: x): x; case None: 0; };   // 2
-counts.remove(key: "a");   bool has = counts.contains(key: "b");   isize n = counts.length();
+fn int32 main() {
+    Map<string, int32> counts = Map.empty();
+    counts.put(key: "a", value: 1);
+    counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
+    int32 v = match (counts.get(key: "a")) { case Some(value: x): x; case None: 0; };   // 2
+    counts.remove(key: "a");   bool has = counts.contains(key: "b");   isize n = counts.length();
 
-Set<string> seen = Set.empty();
-seen.add(key: "x");   bool member = seen.contains(key: "x");
+    Set<string> seen = Set.empty();
+    seen.add(key: "x");   bool member = seen.contains(key: "x");
+    return 0;
+}
 ```
 
 `foreach (K k in map)` / `foreach (K k in set)` iterates the keys (a by-value key iterator, present for a
@@ -541,7 +566,7 @@ default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`H
 *and* the smart pointers name them, and they survive `--no-std`. The concrete strategy types `Arena`/`BumpAllocator`
 stay in `std::collections`.
 
-```kama
+```kama fragment
 type contract Allocator for value {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);  // None on OOM/exhaustion — fallible seam (never panics)
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
@@ -566,10 +591,13 @@ a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `al
 ```kama
 import { std::collections::DynamicArray, std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
-Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
-DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
-Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());  // named arg skips H
-// ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 65536);                               // caller-owned; drops last
+    DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
+    Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());  // named arg skips H
+    // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
+    return 0;
+}
 ```
 
 **Fallible seam (✅ shipped, MCU step 5).** `allocate` returns `Optional<UnsafePtr>` — `None` on OOM/exhaustion,
@@ -595,11 +623,11 @@ drift: the placement form (`try new(allocator: a) T.make(…)`), the on-type tur
 `Some`'s payload type from — a local, an argument, or the function's return type — which is what makes a
 fallible factory the ordinary shape.
 
-```kama
+```kama fragment
 Optional<Owned<Box>> b = try new Box.make(v: 7);
-match (b) { case Some(value: x): use(x); case None: /* OOM — recover, don't trap */ }
+match (b) { case Some(value: x): use(box: ref x); case None: { /* OOM — recover, don't trap */ } };
 
-fn Optional<Owned<Mesh>> load(string path) { return try new Mesh.parse(path: path); }   // return position
+fn Optional<Owned<Mesh>> load(string path) { return try new Mesh.parse(path: give path); }   // return position
 
 // Placement: the block comes from the arena, and `None` is how an EXHAUSTED arena answers — no trap.
 Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Circle.make(r: 5);
@@ -731,7 +759,7 @@ attribute a bodyless form accepts is `@linkName("…")` on an `extern fn` — it
 body, and an `extern fn` is the one bodyless form that has one (*FFI — calling C*); on a `fnptr` it is <!-- xfail: linkname_on_fnptr -->
 rejected, as it is on an ordinary `fn`, whose C name is kama's to choose. <!-- xfail: linkname_on_fn -->
 
-```kama
+```kama fragment
 @noheap fn int32 tick(int32 n) { /* new / "${x}" / spawn here is a compile error */ ... }
 
 type value Mixer {                                     // ...and the same gate on a member
@@ -745,7 +773,7 @@ Every heap block a kama program's C obtains or releases goes through one funnel,
 and that includes each box, container buffer, string, error box and `spawn` bundle. It defaults to the platform
 allocator. A program replaces that default with a **declaration**:
 
-```kama
+```kama fragment
 import { std::concurrent::Atomic };
 
 @globalAllocator type resource Pool implements GlobalHeap {
@@ -784,7 +812,7 @@ declaration is held to rules that follow from that: <!-- test: global_allocator_
 allocated, so a program can ask it: `globalHeap::<Pool>()` is a place (`ref Pool`) naming the one instance.
 <!-- test: global_allocator_reach, global_allocator_reach_units -->
 
-```kama
+```kama fragment
 @globalAllocator type resource Pool implements GlobalHeap {
     Atomic<isize> live;                                       // blocks out and not yet returned
     public fn isize liveCount() { return this.live.load(); }   // …published by the pool, like any method
@@ -869,7 +897,7 @@ thread the player cannot see: the mixer dies and the game goes silent. `@onPanic
 control returns to the region's prologue, which returns the value the region declared. The mixer glitches
 and degrades. <!-- test: onpanic_bounds, onpanic_nested, onpanic_void -->
 
-```kama
+```kama fragment
 @foreignEntry @noheap @onPanic(recover: 1)      // a TickFn returns 1 to keep the loop running
 fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any depth, returns 1
 ```
@@ -902,10 +930,16 @@ the box, so its dtor releases through the **same** allocator — letting a boxed
 arena and be bulk-reclaimed on `reset()`:
 
 ```kama
-Arena arena = Arena.make(capacity: 1 << 12);                  // drops last (outlives the box)
-Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node.make(v: 42);
-Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7);   // pointee AND ctrl from the arena
-// n/s dtor deallocate() is a no-op; the objects live in the arena; the Arena frees the region.
+import { std::collections::Arena, std::collections::BumpAllocator };
+type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } }
+
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);                     // drops last (outlives the box)
+    Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node.make(v: 42);
+    Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7);   // pointee AND ctrl from the arena
+    // n/s dtor deallocate() is a no-op; the objects live in the arena; the Arena frees the region.
+    return 0;
+}
 ```
 
 The allocator must be spelled on the box type (`Owned<T, A>` / `Shared<T, A>`, explicit over implicit — a
@@ -944,7 +978,7 @@ ownership transfer) in the emitted C of the serialization graph lowering, so tha
 **auto-deref**, RAII-freed. The kama surface stays pointer-free; the raw pointer is confined to the library.
 Use it for heap objects, recursive data structures, and polymorphic ownership.
 
-```kama
+```kama fragment
 Owned<Counter> c = new Counter.make(start: 40);     // `new` heap-boxes the ELEMENT type
 c.bump();  int32 n = c.get();                        // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
@@ -974,6 +1008,7 @@ cast<UnsafePtr>(this.p), bytes: n, align: a);`. Not libc `free`: kama's heap goe
 program may replace, and the sanitizer leg checks every release against the layout its block was allocated with.
 
 ```kama
+type resource World { int32 x; public ctor make() { this.x = 0; } }
 unsafe fn UnsafePtr<World> install(Owned<World> w) { return w.release(); }   // the host's userdata now owns it
 unsafe fn void teardown(UnsafePtr<World> raw) { Owned<World> back = Owned.adopt(raw: raw); }   // dropped here
 ```
@@ -990,7 +1025,7 @@ retain, and **`give` still moves the handle** — the ref transfers and the sour
 argument and drops it at function end — `fn int32 use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int32
 peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
 
-```kama
+```kama fragment
 Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
 Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` moves the handle (s consumed)
@@ -1004,7 +1039,7 @@ memberwise, a `Copyable`-resource element is deep-copied via its own `copy` ctor
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
 `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy** <!-- xfail: copy_value -->
-**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable<T is This> { ctor copy(ref T source); }`)
+**nominally** — `implements Copyable<This>(bare: …)` (the prelude contract `Copyable<T is This> { ctor copy(ref T source); }`)
 plus a **public `copy` constructor** (a lone `copy` ctor without the `implements` does *not* make a type
 copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
 is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes <!-- xfail: self_returning_static_fn -->
@@ -1014,21 +1049,28 @@ ctor must spell that `ref` itself: a parameter's ref-constness is part of the si
 so `ctor copy(const ref This source)` does not conform even when it never writes through the source. That costs
 nothing at the call: a `Copyable` resource element still copies out of a `const ref` container, since the one <!-- test: copy_resource_const_ref -->
 `__copy` funnel casts the const place. Copying never consumes
-it. Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off moves)
-or `Copyable(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
+it. Opting in **requires declaring the bare-hand-off default**: `Copyable<This>(bare: give)` (a bare hand-off moves)
+or `Copyable<This>(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
 overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are markers only
 in expression position, they're **contextual keywords** — usable as member names, so the opt-in ctor is
 literally named `copy`.
 
 ```kama
-type resource Res implements Copyable(bare: copy) {   // a bare hand-off deep-copies
+import { std::collections::DynamicArray };
+
+type resource Res implements Copyable<This>(bare: copy) {   // a bare hand-off deep-copies
     DynamicArray<int32> items;
     ~Res() { }
-    public ctor copy(ref Res source) { return Res.make(v: source.items[0]); }     // the Copyable ctor
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public ctor copy(ref Res source) { this.items = copy source.items; }     // the Copyable ctor
 }
-Res b = copy a;   // deep copy — a stays valid, b has its own buffer
-Res c = give b;   // move — b consumed
-Res d = a;        // bare — follows the declared default (here: deep-copy)
+fn int32 main() {
+    Res a = Res.make();
+    Res b = copy a;   // deep copy — a stays valid, b has its own buffer
+    Res c = give b;   // move — b consumed
+    Res d = a;        // bare — follows the declared default (here: deep-copy)
+    return 0;
+}
 ```
 
 **Auto-deref — the `Deref<T>` / `DerefMut<T>` contracts.** The standard smart pointers forward member
@@ -1051,17 +1093,20 @@ rather than a compiler intrinsic; `Owned`/`Shared` implement both halves.
 
 ```kama
 type value Point { public int32 x; public int32 y; public const fn int32 sum() { return this.x + this.y; }
-                   public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; } }
+                   public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
 type value BoxP implements Deref<Point>, DerefMut<Point> {
     Point inner;
-    public ctor make(Point p) { BoxP r; r.inner = p; return give r; }
+    public ctor make(Point p) { this.inner = p; }
     public const fn const ref Point deref() { return this.inner; }
     public fn ref Point derefMut() { return this.inner; }
 }
-BoxP b = BoxP.make(p: Point.make(x: 30, y: 12));
-int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__derefMut(&b))  (42)
-int32 x = b.x;       // auto-deref -> BoxP__derefMut(&b)->x           (30)
-b.x = 1;             // a write goes through `derefMut()`; with only `Deref<Point>` it is refused
+fn int32 main() {
+    BoxP b = BoxP.make(p: Point.make(x: 30, y: 12));
+    int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__derefMut(&b))  (42)
+    int32 x = b.x;       // auto-deref -> BoxP__derefMut(&b)->x           (30)
+    b.x = 1;             // a write goes through `derefMut()`; with only `Deref<Point>` it is refused
+    return 0;
+}
 ```
 
 **The give/copy behavior matrix.** **Every owning kind is movable**; a bare hand-off follows the kind's
@@ -1100,7 +1145,7 @@ narrowed by the rule above.
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy retains
 (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
-```kama
+```kama fragment
 Shared<Tex> a = new Tex.make(id: 7);
 Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
 b.use();  int32 n = a.id;
@@ -1112,7 +1157,7 @@ it **breaks reference cycles** that `Shared` alone would leak. You can't derefer
 dead) — **upgrade** it with the checked `tryUpgrade()`, which returns an `Optional<Shared<T>>` you must
 `match` on, so the dead case is impossible to ignore:
 
-```kama
+```kama fragment
 Weak<Tex> w = s.downgrade();                  // make a weak ref from a Shared (does not keep Tex alive)
 int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
     case Some(value: up): up.id;                     // alive: use the upgraded Shared
@@ -1157,8 +1202,11 @@ fn int32 main() { return add(b: 20, a: 10); }   // named args; reordered to decl
 
 ```kama
 fn void divmod(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
-slot int32 quotient; slot int32 rem;
-divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
+fn int32 main() {
+    slot int32 quotient; slot int32 rem;
+    divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
+    return 0;
+}
 ```
 
 **`const ref T x` is a read-only borrow, and it is what a literal or a temporary may bind to.** Neither
@@ -1197,12 +1245,13 @@ extern fn UnsafePtr  malloc(usize n);     // UnsafePtr = void* (opaque pointer/h
 extern fn void free(UnsafePtr p);
 extern fn float64 sqrt(float64 x);  // libm auto-links when a program `extern "<math.h>";`s (pay-for-use)
 
-fn int32 main() {
+unsafe fn int32 demo() {          // calling an `extern fn` is the unsafe seam
     UnsafePtr p = malloc(n: 64);
     if (p == null) { return 1; }  // hold / null-check / compare — but no deref yet
     free(p: p);
     return cast<int32>(sqrt(x: 1764.0));   // 42
 }
+fn int32 main() { return demo(); }   // safe code may call an `unsafe fn`
 ```
 
 **The FFI rule (one sentence): declare C types/functions by `extern`-including their header.** An `extern`
@@ -1398,7 +1447,11 @@ shared-nothing isolate model means `Atomic<T>` is the one shared-mutable seam (s
 side (`std.fmt.parseInt` is Zig's placement too).
 
 ```kama
-Result<int32, ParseError> r = parse::<int32>(s: text);
+import { std::fmt::parse, std::fmt::ParseError };
+fn Result<int32, ParseError> readCount(string text) {
+    Result<int32, ParseError> r = parse::<int32>(s: text);
+    return r;
+}
 ```
 
 **A parse fails, it does not come up absent**, so the result is `Result`, not `Optional` — GOALS #3d draws
@@ -1526,7 +1579,7 @@ The size type is **signed**, which is the part that is easy to get wrong. The in
 cannot be negative, so make it unsigned — but unsigned does not *prevent* the invalid state, it makes it
 *unrepresentable*, so an erroneous negative becomes an enormous positive instead of an obvious `-1`:
 
-```kama
+```kama fragment
 usize len = 0;   usize last = len - 1;    // 18446744073709551615 — silently
 isize len = 0;   isize last = len - 1;    // -1, which fails `< length` and trips a bounds check
 ```
@@ -1560,7 +1613,7 @@ for a missing import instead of a different spelling.
 **The rule holds through a binding.** A `foreach` element and a `match`-arm payload are typed values like
 any other, so both of these are errors wanting a cast — they are not a hole the rule quietly skips:
 
-```kama
+```kama fragment
 foreach (int64 x in xs) { int8 n = x; }                              // error, not 44
 int8 n = match (big()) { case Some(value: c): c; case None: 0i8; };  // error, not 44
 ```
@@ -1579,7 +1632,7 @@ kinds of type that a C backend would otherwise let blur together.
 
 **A plain `enum` is not an integer, and not another `enum`.** Its values are named variants, so:
 
-```kama
+```kama fragment
 type enum A : uint8  { A0, A1, A2 }
 type enum B : uint8  { B0, B1, B2 }
 
@@ -1604,7 +1657,7 @@ the one operator that stays; everything else goes through `match`.
 **`char` is one Unicode codepoint, not a number.** `s[i]` is a `uint8` (a byte); `.chars()` yields
 codepoints. The two never cross implicitly, in either direction:
 
-```kama
+```kama fragment
 char c = 'a';   uint32 u = 65ui32;
 uint32 n = c;   // error — cast<uint32>(c)
 char d = u;     // error — cast<char>(u)
@@ -1626,7 +1679,7 @@ structurally and is unaffected.
 however alike their fields, and a value of one is never accepted where the other is declared — in a
 local initializer, an assignment, an argument, a `return`, or an operator's operand: <!-- xfail: class_identity_value, class_identity_operator -->
 
-```kama
+```kama fragment
 type value Mat4 { … }   type value Vec4 { … }
 Vec4 v = …;
 Mat4 m = v;             // error — unrelated types; convert explicitly, or take a contract both implement
@@ -1809,19 +1862,21 @@ backends layer UTF-8 on top): the read-only `ConstView<uint8>` where the callee 
 primitive (contracts carry no default methods: a contract is purely an interface, so conformance is total and every body lives in the implementing type — helpers compose over the primitive); `StringWriter`/`SliceReader` are the in-memory impls and
 `BufWriter<W>`/`BufReader<R>` the buffering layer (each **owns** its inner sink/source by value — kama forbids
 stored borrows). `std::fs::File` implements both, and a reliable network stream is
-`type contract ReliableStream implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
+`type contract ReliableStream for resource implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
 the web `WsConnection` are drop-in `Reader`/`Writer`s. The upshot: the serde backends and `fmt` stream over a
 file or a socket with no transport-specific code (`deserializeJsonStream<T>(from: someReader)`), and unbounded data moves
 in bounded memory. (Datagram endpoints — `UdpSocket`, WebTransport — are message-oriented, not byte streams, so
 they take the same view buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
-import { std::fs::readFile, std::fs::writeFile };
+import { std::fs::writeFile, std::collections::DynamicArray };
 fn int32 main() {
-    match writeFile(path: "out.txt", data: "hi") {
-        case Ok: {}
+    DynamicArray<uint8> data = DynamicArray.empty();
+    data.add(item: 104ui8);                              // "h" — a file is bytes
+    match (writeFile(path: "out.txt", bytes: data)) {
+        case Ok(value: n): {}
         case Err(error: e): { return 1; }
-    }
+    };
     return 0;
 }
 ```
@@ -1834,7 +1889,7 @@ Windows (Winsock + CRT) both ship; under wasm the virtual FS works, sockets need
 `-lws2_32` on Windows (pay-for-use, like `-lm` for `<math.h>`). `examples/httpd/` is a ~200-line static-file
 HTTP server built on these three modules.
 
-**FFI data — all controlled, no `unsafe fn` needed:**
+**FFI data — all controlled; the only `unsafe fn` is the one every C call needs:**
 
 ```kama
 extern "<stdlib.h>";                       // a C #include
@@ -1843,12 +1898,13 @@ extern fn div_t div(int32 numer, int32 denom);
 
 extern fn float64 frexp(float64 value, UnsafePtr<int32> exp);
 
-fn int32 main() {
+unsafe fn int32 demo() {                   // calling an `extern fn` is the unsafe seam
     div_t r = div(numer: 17, denom: 5);    // r.quot=3, r.rem=2  (field access on a C struct)
     int32 e = 0;
     frexp(value: 1764.0, exp: addr(of: e));// addr(of: x) = &x  — controlled out-param
     return r.quot + r.rem + e;             // 5 + 11 = 16
 }
+fn int32 main() { return demo(); }
 ```
 
 `type extern value Foo { ... }` is an **external** struct provided by an included header / linked code —
@@ -1869,7 +1925,7 @@ a subset of the header's fields. Signedness is not compared — a C enum field i
 implementation, and `int32` is how a binding spells it. The check is a C11 `_Static_assert`, because the C
 compiler, not kama, reads the header's layout — so it fails at `kama build`, not at `kama check`.
 `addr(of: x)` takes the address of a
-real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields an
+real local (out-params, descriptor pointers) — a *controlled* op, though its result is a raw pointer and so lives in an `unsafe fn`. `s.cstr()` yields an
 `UnsafeConstPtr<cchar>` — C's `const char*`, read-only (`cchar` is C's `char`, a pointee only — see *Numbers*).
 
 **A struct crossing by value.** A struct passed or returned BY VALUE through an `extern fn` or an `expose fn` needs
@@ -1909,7 +1965,7 @@ as a field of a `type extern value` or `type expose value`, or as an `InlineArra
   writes no values; the emitted C uses those constants, so the numbers are the header's by construction. Binding a
   C enum is naming it:
 
-  ```kama
+  ```kama fragment
   extern "vulkan.h";
   type extern enum VkFormat : int32 { VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM }
   cfg.format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;   // C: `cfg.format = VK_FORMAT_R8G8B8A8_UNORM;`
@@ -1937,7 +1993,7 @@ binds an enum's: kama writes no value, a use emits the C name, so the number is 
 spelling covers both shapes a C API uses — a typed `static const` (webgpu.h's bit flags) and a `#define` (GLFW's
 keys) — and bit flags compose with the ordinary integer operators:
 
-```kama
+```kama fragment
 extern "webgpu.h";
 extern const uint64 WGPUBufferUsage_Uniform;      // static const WGPUBufferUsage WGPUBufferUsage_Uniform = 0x40;
 extern const uint64 WGPUBufferUsage_CopyDst;
@@ -1983,11 +2039,15 @@ crosses an isolate.
 | `Date` | `DATE` | a **day** with no time: a birthday, a due date. Years 0000–9999, the range RFC 3339 text can write. |
 
 ```kama
-Date due = match (Date.make(year: 2026, month: 9ui8, day: 16ui8)) { case Ok(value: d): d; case Err(error: e): { return 1; } };
-Timestamp t = unixNow();
-Date today = t.date();                       // plus hour() minute() second() nanosecond() weekday(), in UTC
-int64 left = due.daysSince(earlier: today);
-string text = "${t}";                        // 2026-09-16T14:03:07.123Z
+import { std::time::Date, std::time::Timestamp, std::time::unixNow };
+fn int32 main() {
+    Date due = match (Date.make(year: 2026, month: 9ui8, day: 16ui8)) { case Ok(value: d): d; case Err(error: e): { return 1; } };
+    Timestamp t = unixNow();
+    Date today = t.date();                       // plus hour() minute() second() nanosecond() weekday(), in UTC
+    int64 left = due.daysSince(earlier: today);
+    string text = "${t}";                        // 2026-09-16T14:03:07.123Z
+    return 0;
+}
 ```
 
 - **One timestamp type.** There is no field-holding `DateTime` beside `Timestamp`: two types for one
@@ -2055,10 +2115,14 @@ earns its keep through `OsString` encoding concerns kama does not have. The name
 modern successor API converged on (Rust, `pathlib`, C#), not the shell tools' `dirname`/`basename`.
 
 ```kama
-Optional<string> dir  = parent(path: "/a/b/c.txt");     // Some("/a/b")
-Optional<string> name = fileName(path: "/a/b/c.txt");   // Some("c.txt")
-Optional<string> ext  = extension(path: "/a/b.tar.gz"); // Some("gz") — the LAST dot, WITHOUT the dot
-string full = join(path: "/srv", with: "www");          // "/srv/www"
+import { std::path::join, std::path::parent, std::path::fileName, std::path::extension };
+fn int32 main() {
+    Optional<string> dir  = parent(path: "/a/b/c.txt");     // Some("/a/b")
+    Optional<string> name = fileName(path: "/a/b/c.txt");   // Some("c.txt")
+    Optional<string> ext  = extension(path: "/a/b.tar.gz"); // Some("gz") — the LAST dot, WITHOUT the dot
+    string full = join(path: "/srv", with: "www");          // "/srv/www"
+    return 0;
+}
 ```
 
 **Five deliberate answers**, each a place a mainstream implementation surprises someone: <!-- test: path_basic -->
@@ -2082,12 +2146,15 @@ runtime branch.
 **seeded** generator first, OS entropy as the convenience, and neither one is a secret.
 
 ```kama
-Rng g = Rng.seeded(seed: 42ui64);                       // the same stream on every platform, forever
-uint64 raw = g.next();                                  // xoshiro256**
-int32 die  = range(rng: g, lo: 1, hi: 7);               // a value in [1, 7), unbiased — T from the bounds
-isize pick = g.below(n: xs.length());                   // an index in [0, n)
-borrow xs.viewMut() as v { shuffle(items: v, rng: g); } // Fisher–Yates over any View, move-only safe
-Rng h = Rng.fromEntropy();                              // seeded by the OS — a different stream each run
+import { std::random::Rng, std::random::range, std::random::shuffle, std::collections::DynamicArray };
+fn void demo(ref DynamicArray<int32> xs) {
+    Rng g = Rng.seeded(seed: 42ui64);                       // the same stream on every platform, forever
+    uint64 raw = g.next();                                  // xoshiro256**
+    int32 die  = range(rng: g, lo: 1, hi: 7);               // a value in [1, 7), unbiased — T from the bounds
+    isize pick = g.below(n: xs.length());                   // an index in [0, n)
+    borrow xs.viewMut() as v { shuffle(items: v, rng: g); } // Fisher–Yates over any View, move-only safe
+    Rng h = Rng.fromEntropy();                              // seeded by the OS — a different stream each run
+}
 ```
 
 **Seeded is primary**, because a deterministic stream is what most callers want: a game replays a match
@@ -2134,11 +2201,16 @@ digest is an `InlineArray<uint8>#(N)` — 20 or 32 bytes on the stack, no alloca
 present in a `--no-heap` build.
 
 ```kama
-InlineArray<uint8>#(32) d = sha256(bytes: v);          // one shot
-Sha1 h = Sha1.make();                                    // streaming: any number of updates, one finish
-h.update(bytes: key.view());
-h.update(bytes: guid.view());
-string accept = b64Encode(bytes: h.finish().view());     // RFC 6455's Sec-WebSocket-Accept
+import { std::digest::sha256::sha256, std::digest::sha1::Sha1, std::encoding::base64::encode as b64Encode,
+         std::collections::DynamicArray, std::collections::ConstView };
+fn string demo(ConstView<uint8> v, ref DynamicArray<uint8> key, ref DynamicArray<uint8> guid) {
+    InlineArray<uint8>#(32) d = sha256(bytes: v);          // one shot
+    Sha1 h = Sha1.make();                                    // streaming: any number of updates, one finish
+    h.update(bytes: key.view());
+    h.update(bytes: guid.view());
+    string accept = b64Encode(bytes: h.finish().view());     // RFC 6455's Sec-WebSocket-Accept
+    return accept;
+}
 ```
 
 **Why a digest is in `std` when ciphers are not.** TLS, ciphers, key exchange and signatures are a
@@ -2161,13 +2233,19 @@ two ways: `v7`, time-ordered and the default for a key, and `v4`, for an id that
 made.
 
 ```kama
-Uuid id  = Uuid.v7();                               // later ids compare greater
-Uuid tok = Uuid.v4();                               // 122 random bits, no timestamp
-string s = "${id}";                                 // "01932c07-a4b2-7c3e-8f1a-5b6c7d8e9f00"
-Result<Uuid, UuidError> r = Uuid.parse(text: s);    // either case in, strict 8-4-4-4-12
-InlineArray<uint8>#(16) raw = id.bytes();           // network order: a binary column, a wire field
-Optional<int64> ms = id.unixMillis();               // Some for a v7, None for anything else
-Map<Uuid, Account> byId = Map.empty();              // Hashable, Comparable, Sendable, serde-ready
+import { std::uuid::Uuid, std::uuid::UuidError, std::collections::Map };
+type value Account { public int64 balance; }
+
+fn int32 main() {
+    Uuid id  = Uuid.v7();                               // later ids compare greater
+    Uuid tok = Uuid.v4();                               // 122 random bits, no timestamp
+    string s = "${id}";                                 // "01932c07-a4b2-7c3e-8f1a-5b6c7d8e9f00"
+    Result<Uuid, UuidError> r = Uuid.parse(text: s);    // either case in, strict 8-4-4-4-12
+    InlineArray<uint8>#(16) raw = id.bytes();           // network order: a binary column, a wire field
+    Optional<int64> ms = id.unixMillis();               // Some for a v7, None for anything else
+    Map<Uuid, Account> byId = Map.empty();              // Hashable, Comparable, Sendable, serde-ready
+    return 0;
+}
 ```
 
 **Why v7 is the default.** A v7 is a 48-bit Unix-millisecond prefix, 12 bits of sub-millisecond time and
@@ -2211,10 +2289,15 @@ hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(Con
 import — the same `as` any colliding pair uses.
 
 ```kama
-string t = encode(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
-Result<DynamicArray<uint8>, DecodeError> b = decode(text: t);
-string u = encodeUrl(bytes: v);                                 // § 5 alphabet, UNPADDED — what a JWT carries
-string h = hexEncode(bytes: v);                                 // "666f6f626172", lowercase
+import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,
+         std::encoding::base64::DecodeError, std::encoding::hex::encode as hexEncode,
+         std::collections::DynamicArray, std::collections::ConstView };
+fn void demo(ConstView<uint8> v) {
+    string t = encode(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
+    Result<DynamicArray<uint8>, DecodeError> b = decode(text: t);
+    string u = encodeUrl(bytes: v);                                 // § 5 alphabet, UNPADDED — what a JWT carries
+    string h = hexEncode(bytes: v);                                 // "666f6f626172", lowercase
+}
 ```
 
 **Five deliberate answers:** <!-- test: encoding_base64, encoding_hex -->
@@ -2295,13 +2378,18 @@ log level, never an abort). Import it — the module is the discovery unit; it i
 ```kama
 import { std::log::logInfo, std::log::logWarn, std::log::logError, std::log::logDebug, std::log::logTrace, std::log::logEnabled, std::log::setLogSink, std::log::LogLevel };
 
+@generate(Formattable, of) type value Mix { public int32 voices; public float32 gain; }
+fn string dumpState() { return "voices=8 gain=0.5"; }
+
 fn int32 main() {
-    logInfo(tag: "boot", msg: "starting ${version()}");   // tag may be "" (untagged)
+    string version = "1.2.0";
+    Mix state = Mix.of(voices: 8, gain: 0.5f32);
+    logInfo(tag: "boot", msg: "starting ${version}");   // tag may be "" (untagged)
     logWarn(tag: "net", msg: "returning");
-    logDebug(tag: "audio", msg: "mix ${dumpState()}");    // dumpState() runs ONLY if the record passes (v2)
+    logDebug(tag: "audio", msg: "mix ${state}");        // state.format() runs ONLY if the record passes (v2)
     if (logEnabled(level: LogLevel::Debug, tag: "audio")) {   // logEnabled remains — for guarding a whole block
-        prepareDump();
-        logDebug(tag: "audio", msg: "mix ${dumpState()}");
+        string dump = dumpState();                      // a hole takes no call, so bind it first
+        logDebug(tag: "audio", msg: "mix ${dump}");
     }
     return 0;
 }
@@ -2344,8 +2432,12 @@ output stays clean), colored on a tty. Install your own — the filter runs upst
 *enabled* records:
 
 ```kama
+import { std::log::setLogSink };
 fn void mySink(int32 level, string tag, string msg) { /* route to a file / engine console / telemetry */ }
-setLogSink(s: mySink);   // set once at startup, before spawning isolates — like setPanicHandler
+fn int32 main() {
+    setLogSink(s: mySink);   // set once at startup, before spawning isolates — like setPanicHandler
+    return 0;
+}
 ```
 
 Modeled on `setPanicHandler` (a runtime-held slot), **not** a stored `Logger` object: a kama resource can't be
@@ -2358,8 +2450,8 @@ the Info default (no argv/env on bare metal).
 a guard with the **message built inside** it — so a filtered-out record never assembles its (possibly
 expensive) message:
 
-```kama
-logDebug(tag: "audio", msg: "mix ${dumpState()}");   // dumpState() runs ONLY if the record passes the filter
+```kama fragment
+logDebug(tag: "audio", msg: "mix ${state}");   // state.format() runs ONLY if the record passes the filter
 ```
 
 Two axes reach zero cost. **Level, compile-time:** under **`--release`** a `Debug`/`Trace` call is stripped
@@ -2392,20 +2484,26 @@ without holding an `UnsafePtr`. That is what keeps `A: Allocator` a perfectly sa
 `allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
 
 ```kama
+import { std::collections::FixedArray };
+
 unsafe fn int32 sum(UnsafePtr<int32> p) {
     p[0] = 10;  p[1] = 32;       // raw store  (p[0] is *p)
     return p[0] + p[1];          // raw read
 }
-
-fn int32 caller(UnsafePtr<int32> p) {
-    return sum(p: p);            // calling an unsafe fn needs no ceremony — the signature is the boundary
-    // p[0] = 1;                 // ERROR here: "raw pointer access requires an `unsafe fn`"
+unsafe fn int32 answer() {       // no raw pointer in its signature, so a safe caller may call it
+    InlineArray<int32>#(2) buf = [0; 2];
+    return sum(p: addr(of: buf[0]));
+}
+fn int32 caller() {
+    return answer();             // calling an unsafe fn needs no ceremony — the signature is the boundary
+    // UnsafePtr<int32> p;       // ERROR here: "local `p` is a raw pointer, so it requires an `unsafe fn`"
 }
 
-FixedArray<float32> verts = ...;
-UnsafeConstPtr<float32> data = verts.dataPtr();   // SAFE to obtain — Rust's as_ptr; `dataPtrMut()` is as_mut_ptr
-usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()` — one way, `length() * sizeof(T)`
-// ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
+unsafe fn void upload(const ref FixedArray<float32> verts) {
+    UnsafeConstPtr<float32> data = verts.dataPtr();   // a `const fn` — Rust's as_ptr; `dataPtrMut()` is as_mut_ptr
+    usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()` — one way, `length() * sizeof(T)`
+    // ... pass (data, n) to a C upload fn
+}
 ```
 
 A pointer to a struct is read the same way, through its element: `p[0].x`. The pointer itself has no fields, so
@@ -2553,7 +2651,7 @@ Tag a whole **declaration**; the compiler keeps or drops it for the active build
 in-body branching** — no `static if`, no `#ifdef`/`comptime-if` soup. Build-mode (`DEBUG`/`RELEASE`)
 and platform (`OS_WINDOWS`/`ARCH_WASM32`/…) are the **same primitive**: a decl-level keep/drop gate.
 
-```kama
+```kama fragment
 @compileFor(DEBUG)   fn void traceState(int32 s) { ... }   // gone entirely in a release build
 @compileFor(!RELEASE) static int32 assertsRun;             // present in any non-release build
 @compileFor(OS_WINDOWS, TELEMETRY) fn void ping() { ... }  // comma = AND (both flags active)
@@ -2605,7 +2703,7 @@ one level down was refused — one rule holding in one position and not its sibl
   `type` impls; exactly one survives per build. This is the tag-type abstraction boundary — one
   mechanism, not a second platform system.
 
-```kama
+```kama fragment
 type contract Clock for value { fn int32 tick(); }
 @compileFor(!ARCH_WASM32) type value NativeClock implements Clock { ... }   // native build keeps this
 @compileFor(ARCH_WASM32)  type value WasmClock   implements Clock { ... }   // wasm build keeps this
@@ -2623,8 +2721,8 @@ The same primitive applied to a whole **compilation unit**, written as its **fir
 ```kama
 file @compileFor(!ARCH_WASM32);     // this file is not part of a wasm build at all
 
-import { std::io::print };
-fn int32 platformValue() { ... }
+import { std::fs::exists };
+fn int32 platformValue() { return 1; }
 ```
 
 It exists because a package build compiles **every `.kama` under its `source` root**, whatever the import
@@ -2846,7 +2944,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   and a pool that trusts `bytes` would be corrupted. For a class with virtual members they read the
   most-derived layout through the object's vtable; for every other `T` they are exactly `sizeof(T)`/`alignof(T)`.
   Read them **before** `drop(ptr:)`, which ends the object's life:
-  ```kama
+  ```kama fragment
   usize bytes = sizeof(ptr: this.p);
   usize align = alignof(ptr: this.p);
   drop(ptr: this.p);
@@ -2923,14 +3021,17 @@ A **lane batch**: N numbers the CPU operates on as one value. It is an intrinsic
 per `(T, N)`, lowering to a C `vector_size` typedef — so `a + b` is one machine instruction, not a loop.
 
 ```kama
-Simd<float32>#(4) a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
-Simd<float32>#(4) k = [10.0f32; 4];                        // the fill form IS a splat
-Simd<float32>#(4) c = a * k + a;                           // elementwise; C's own operators
-float32          x = c.lane(index: 2);                    // a bounds-checked lane read
-Simd<float32>#(4) p = c.abs();
-Simd<float32>#(4) lo = c.min(rhs: k);                      // also `max(rhs:)`
-Simd<float32>#(4) rt = c.sqrt();                           // also `floor()` / `ceil()` — FLOAT lanes only
-InlineArray<float32>#(4) back = c.toArray();               // back to addressable memory
+fn int32 main() {
+    Simd<float32>#(4) a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
+    Simd<float32>#(4) k = [10.0f32; 4];                        // the fill form IS a splat
+    Simd<float32>#(4) c = a * k + a;                           // elementwise; C's own operators
+    float32          x = c.lane(index: 2);                    // a bounds-checked lane read
+    Simd<float32>#(4) p = c.abs();
+    Simd<float32>#(4) lo = c.min(rhs: k);                      // also `max(rhs:)`
+    Simd<float32>#(4) rt = c.sqrt();                           // also `floor()` / `ceil()` — FLOAT lanes only
+    InlineArray<float32>#(4) back = c.toArray();               // back to addressable memory
+    return 0;
+}
 ```
 
 - **`sqrt`/`floor`/`ceil` exist on float lanes only.** They are libm on each lane (`kama_math.h`, which
@@ -2962,11 +3063,14 @@ InlineArray<float32>#(4) back = c.toArray();               // back to addressabl
   all, which are these three:
 
 ```kama
-Simd<float32>#(4) rev = a.shuffle(pattern: [3, 2, 1, 0]);        // an arbitrary permutation
-Simd<float32>#(4) mix = a.blend(rhs: b, pattern: [0, 5, 2, 7]);  // two vectors: 0..3 from a, 4..7 from b
-Mask<float32>#(4) gt  = a.greaterThan(rhs: b);                   // a lane mask, as a VALUE
-Simd<float32>#(4) pick = gt.select(ifTrue: a, ifFalse: b);
-float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
+fn float32 lanes(Simd<float32>#(4) a, Simd<float32>#(4) b) {
+    Simd<float32>#(4) rev = a.shuffle(pattern: [3, 2, 1, 0]);        // an arbitrary permutation
+    Simd<float32>#(4) mix = a.blend(rhs: b, pattern: [0, 5, 2, 7]);  // two vectors: 0..3 from a, 4..7 from b
+    Mask<float32>#(4) gt  = a.greaterThan(rhs: b);                   // a lane mask, as a VALUE
+    Simd<float32>#(4) pick = gt.select(ifTrue: a, ifFalse: b);
+    float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
+    return total;
+}
 ```
 
 - **A shuffle pattern must be a literal**, and that is the hardware talking: `__builtin_shufflevector` <!-- xfail: simd_shuffle_runtime -->
@@ -2991,7 +3095,7 @@ can, by degrading to scalars. It says the target has 128-bit vectors *in its bas
 x86-64, mandatory NEON on AArch64, wasm with `-msimd128`), so a library can pick a different **algorithm**
 rather than hoping the fallback is fast enough (`tests/simd128_flag`):
 
-```kama
+```kama fragment
 @compileFor(SIMD128)   fn int32 sum4(InlineArray<int32>#(4) a) { … Simd<int32>#(4) … }
 @compileFor(!SIMD128)  fn int32 sum4(InlineArray<int32>#(4) a) { … a scalar loop … }
 ```
@@ -3015,8 +3119,11 @@ kama has no naked function pointers. **`fnptr`** declares an explicit, named fun
 fnptr int32 Comparator(int32 a, int32 b);       // an explicit function-pointer TYPE
 fn int32 cmp(int32 a, int32 b) { return a - b; }
 
-Comparator c = cmp;                             // bind by name (positional, type-checked) — used directly
-int32 r = c(a: 9, b: 2);                        // named invoke through the pointer
+fn int32 main() {
+    Comparator c = cmp;                             // bind by name (positional, type-checked) — used directly
+    int32 r = c(a: 9, b: 2);                        // named invoke through the pointer
+    return 0;
+}
 ```
 
 A bare **function name used as a value** is its function pointer (Rust-like), so binding and passing need no
@@ -3036,11 +3143,15 @@ slot is legal inside a no-heap region — the escape hatch for the blind seam. S
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:
 
 ```kama
-type value Vec2 { public int32 x; public int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
+@generate(of) type value Vec2 { public int32 x; public int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
-DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — zero-cost
-int32 n = d(self: ref u, o: ref v);
+fn int32 main() {
+    Vec2 u = Vec2.of(x: 1, y: 2);   Vec2 v = Vec2.of(x: 3, y: 4);
+    DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — zero-cost
+    int32 n = d(self: ref u, o: ref v);
+    return 0;
+}
 ```
 
 **`BindableFunctionPtr<Sig>`** — a callable that *captures* a receiver so you don't pass it each call. Unlike
@@ -3051,16 +3162,20 @@ other object — by its constructor, `BindableFunctionPtr.bind`, whose signature
 
 ```kama
 fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
-type value Scaler { int32 k; public ctor make(int32 k){ Scaler r; r.k = k; return give r; }
+type value Scaler { int32 k; public ctor make(int32 k){ this.k = k; }
                public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
+fn int32 sub(int32 a, int32 b) { return a - b; }
 
-Owned<Scaler>  s  = new Scaler.make(k: 3);     // (constructed as Owned)
-BindableFunctionPtr<Compare> c  = BindableFunctionPtr.bind(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
-Shared<Scaler> s2 = new Scaler.make(k: 2);
-BindableFunctionPtr<Compare> c2 = BindableFunctionPtr.bind(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
-BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) — so this type "accepts either"
+fn int32 main() {
+    Owned<Scaler>  s  = new Scaler.make(k: 3);     // (constructed as Owned)
+    BindableFunctionPtr<Compare> c  = BindableFunctionPtr.bind(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
+    Shared<Scaler> s2 = new Scaler.make(k: 2);
+    BindableFunctionPtr<Compare> c2 = BindableFunctionPtr.bind(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
+    BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) — so this type "accepts either"
 
-int32 r = c(a: 9, b: 2);                 // -> Scaler::apply(boundObj, 9, 2) = (9-2)*3 = 21
+    int32 r = c(a: 9, b: 2);                 // -> Scaler::apply(boundObj, 9, 2) = (9-2)*3 = 21
+    return 0;
+}
 ```
 
 An `Owned` `obj:` **moves in** (the bindable becomes the sole owner); a `Shared` `obj:` is **retained**
@@ -3080,10 +3195,10 @@ its object): returning one from a factory transfers ownership; the captured obje
 signature is one kama's `fnptr` doesn't spell identically — most commonly `const`-qualified parameters —
 name the callback via a header `typedef` and **cast** to it at the edge:
 
-```kama
+```kama fragment
 extern "<stdlib.h>";
 extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
-fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);
+@callerThread fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);   // qsort calls back on this thread
 extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);
 ...
 Comparator c = cmp;
@@ -3107,6 +3222,7 @@ already knows the module by `host_tick`:
 
 ```kama
 // gameplay.kama — a hot-reload module (note: no `main`)
+type value World { public float32 time; }
 expose unsafe fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }   // dlsym("gameplay_update")
 expose fn int32 version() { return 3; }                                    // dlsym("gameplay_version")
 @linkName("host_tick") expose fn int32 tick() { return 41; }   // dlsym("host_tick"); there is no `gameplay_tick`
@@ -3256,7 +3372,7 @@ is done with `if` / `else if`. There is no `switch` statement: `match` on an enu
 **Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
 `{ … }` block — never a bare statement, and never an empty `;`:
 
-```kama
+```kama fragment
 if (n > 0) { return 1; }        // ok — and a one-line body is fine, the rule is about the braces
 if (n > 0) return 1;            // ERROR: the body of `if` must be braced
 if (n > 0);                     // ERROR: binds the branch to nothing
@@ -3271,7 +3387,9 @@ cannot silently acquire a second statement.
 The one exemption is **`else if`**. The `else` arm accepts a block *or* another `if`, so a chain stays flat:
 
 ```kama
-if (n > 100) { return 4; } else if (n > 10) { return 3; } else { return 0; }
+fn int32 rank(int32 n) {
+    if (n > 100) { return 4; } else if (n > 10) { return 3; } else { return 0; }
+}
 ```
 
 That `if` **is** the branch — it cannot grow a sibling statement the way a bare body can — and requiring
@@ -3340,7 +3458,7 @@ simply renamed — the field is assigned BY NAME and renaming it emits the wrong
 lesser evil: the field then holds 0, and 0 *is* `WGPUBufferBindingType_BindingNotUsed`, so an explicitly
 built bind-group entry for a uniform buffer or a sampler is **inert** rather than under-specified.
 
-```kama
+```kama fragment
 type extern value WGPUBufferBindingLayout {
     public UnsafePtr nextInChain;
     public uint32    type;              // the literal C name — no escape, no rename
@@ -3358,12 +3476,12 @@ configure(type: WGPUBufferBindingType_Uniform);
 A `type contract` **must** declare its implementers: `type contract C for <kinds> { … }`. The clause takes
 any combination of the **five implementable kinds**, comma-separated, meaning *any of these*:
 
-```kama
-type contract Rankable for value;                                  // one kind
-type contract Iterator<T> for value, view, resource;               // a borrowing iterator is a view, a
+```kama fragment
+type contract Rankable for value { … }                             // one kind
+type contract Iterator<T> for value, view, resource { … }          // a borrowing iterator is a view, a
                                                                    //   generating one is a value, and one
                                                                    //   that OWNS its source is a resource
-type contract Hashable for value, resource, enum, intrinsic;       // anything that can be a Map key
+type contract Hashable for value, resource, enum, intrinsic { … }  // anything that can be a Map key
 ```
 
 `contract` is **not** among them: a contract implementing a contract is *refinement*, a different axis,
@@ -3426,12 +3544,15 @@ mismatched member reached *through* the contract does not fail, it silently does
 ```kama
 type value Counter {
     int32 value;                                     // fields are private by default
-    public ctor make(int32 start) { Counter r; r.value = start; return give r; }   // named ctor (`public` to call from outside)
+    public ctor make(int32 start) { this.value = start; }   // named ctor (`public` to call from outside)
     public fn void add(int32 n) { value = value + n; } // method (implicit self)
     public fn int32 get() { return value; }
 }
-Counter c = Counter.make(start: 40);   // stack value — dot-on-type construction, not `new`
-c.add(n: 2);                            // a `value` copies on hand-off
+fn int32 main() {
+    Counter c = Counter.make(start: 40);   // stack value — dot-on-type construction, not `new`
+    c.add(n: 2);                            // a `value` copies on hand-off
+    return 0;
+}
 ```
 
 Fields, methods (take an implicit `self`), named constructors, field initializers (run in the ctor),
@@ -3455,9 +3576,10 @@ A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or a
 declared **`type resource`** and is move-only:
 
 ```kama
+import { std::collections::DynamicArray };
 type resource Buffer {
-    DynamicArray<byte> data;                                 // owns heap → resource; fields stay private
-    public ctor make(int32 n) { … }
+    DynamicArray<uint8> data;                                // owns heap → resource; fields stay private
+    public ctor make(int32 n) { this.data = DynamicArray.empty(); }
     public fn isize size() { return this.data.length(); }
 }
 ```
@@ -3484,8 +3606,11 @@ type resource Buffer {
     public ctor make(int32 size) { this.size = size; }        // the value under construction is `this`
     public ctor withCapacity(int32 n) { return Buffer.make(size: n); }   // reuse = an ordinary call
 }
-Buffer b = Buffer.make(size: 8);          // dot-on-type: construction
-Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an owning handle
+fn int32 main() {
+    Buffer b = Buffer.make(size: 8);          // dot-on-type: construction
+    Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an owning handle
+    return 0;
+}
 ```
 
 - **Dot-on-type is construction, and only that.** `Type.name(…)` constructs; `Type::staticFn()` and
@@ -3569,7 +3694,7 @@ without the caller knowing the name the author chose (`empty`, `zero`, `closed`,
 that elected one, `value` or `resource`, and it is what makes the `when [A: default]` bound usable from
 kama rather than only by the compiler's field fill:
 
-```kama
+```kama fragment
 ctor fresh() when [A: default] { this.item = A.default(); }
 ```
 
@@ -3665,7 +3790,7 @@ Symmetrically, a **const receiver** — a `const` local, a `const`/`const ref` p
 `const fn`, or a `const ref T` place (below) — may call only `const fn` methods. That gate is the point of the marker: it is what lets a
 caller hold a value immutably and still use it.
 
-```kama
+```kama fragment
 type value Counter {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
@@ -3693,8 +3818,8 @@ root-const rule alone cannot see. The same form is available on a free function 
 (below), and a `const ref T` result must borrow `this` or a `ref`/`const ref` parameter, exactly as a <!-- xfail: const_ref_over_local -->
 `ref T` must.
 
-```kama
-type resource Bag implements Indexed {
+```kama fragment
+type resource Bag {
     DynamicArray<Counter> items;
     public const fn const ref Counter at(isize i) { return this.items[i]; }   // read-only place
     public fn ref Counter atMut(isize i) { return this.items[i]; }           // the writable twin
@@ -3782,7 +3907,7 @@ see the scope the value will live in. **`slot` means only this.** A contract's r
 which is always spelled with `vtable`/`vtbl`. That is the whole of it, and it is the only kind of local a kama
 program may leave without a value:
 
-```kama
+```kama fragment
 slot File f;                          // a HOLE: an `out` argument will fill it
 openInto(path: p, dst: out f);        // now it is live, and drops normally from here
 ```
@@ -3833,14 +3958,17 @@ the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` —
 type enum SizeError implements Error { TooSmall; public const fn string message() { return "size must be positive"; } }
 type resource Buffer {
     int32 size;
-    private ctor make(int32 size) { Buffer r; r.size = size; return give r; }        // trivial, infallible
+    private ctor make(int32 size) { this.size = size; }                                // trivial, infallible
     public ctor Result<Buffer, SizeError> create(int32 size) {
         if (size <= 0) { return Result::Err(error: SizeError::TooSmall); }            // fail before it exists
         return Result::Ok(value: Buffer.make(size: size));                           // delegate to the base ctor
     }
     ~Buffer() { /* … */ }
 }
-Result<Owned<Buffer>, SizeError> b = new Buffer.create(size: 8);   // fallible `new` -> Result<Owned<T>, E>
+fn int32 main() {
+    Result<Owned<Buffer>, SizeError> b = new Buffer.create(size: 8);   // fallible `new` -> Result<Owned<T>, E>
+    return 0;
+}
 ```
 
 A type with a *meaningful* inert state may instead start valid-but-inert and expose a `bring_up():
@@ -3879,7 +4007,7 @@ table.
 
 A derived type's constructor **must install its base**, as its **first statement**:
 
-```kama
+```kama fragment
 public ctor make(int32 x, int32 y)
 {
     this.base = Base.make(x: x);     // FIRST — the base's own ctor runs
@@ -3913,7 +4041,7 @@ stand in: `@generate(zero)`/`of` require a transparent `value`, and a `value` is
 An extensible type states **how many levels may still be added below it**, and a deriving type states
 **at most one less** — or is `final`, which *is* a budget of 0 and the only spelling for it:
 
-```kama
+```kama fragment
 type virtual(maxDepth: 2) resource Root { … }
 type virtual(maxDepth: 1) resource Mid extends Root { … }
 type final                resource Leaf extends Mid { … }
@@ -3936,7 +4064,7 @@ A derived type may not redeclare a method it inherits. The only way to redefine 
 `protected virtual` (*may* override) or `protected abstract` (*must* override) — the type designer decides
 what is overridable, which is what `protected` + `virtual`/`abstract` is for.
 
-```kama
+```kama fragment
 type virtual(maxDepth: 1) resource B { public fn int32 h() { return 1; } }   // no seam offered
 type final resource D extends B {
     public fn int32 h() { return 2; }        // ✗ shadows B.h() — which body runs would depend
@@ -3961,7 +4089,7 @@ The hierarchy's public surface is fixed at its **root**. A derived type may add 
 **private** helpers, and **override the protected seams the base sanctioned** (`virtual` = may,
 `abstract` = must) — it may not add a public method, and it may not declare `implements`. <!-- xfail: derived_widens_public -->
 
-```kama
+```kama fragment
 type final resource Exposer extends Base {
     public ctor make() { … }                                // ✓ ctors are exempt
     protected override fn int32 secretHook() { return 2; }  // ✓ a seam the base sanctioned
@@ -4019,7 +4147,7 @@ diagnostic rather than a syntax error. `tools/check-no-inheritance.sh` builds th
 **Owning a derived through a base handle (upcast).** A `Shared`/`Owned` over a derived class widens to one
 over a base class (or a contract it satisfies) — the IS-A relationship, Liskov-style:
 
-```kama
+```kama fragment
 Shared<Circle> c = new Circle.make();
 Shared<Shape>  s = c;          // upcast — retain (both handles share one Circle)
 Owned<Circle>  u = new Circle.make();
@@ -4043,10 +4171,10 @@ is how a bound gets to *construct* rather than only to call — `ctor T fromWide
 (`tests/contract_requires_ctor.kama`).
 
 ```kama
-type contract Shape { fn int64 area(); }               // a public guarantee (a "type placeholder")
+type contract Shape for value, resource { fn int64 area(); }   // a public guarantee (a "type placeholder")
 type value Circle implements Shape {                   // a value satisfies a contract, too
     int64 r;
-    public ctor make(int64 r) { Circle c; c.r = r; return give c; }
+    public ctor make(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }           // a method satisfying Shape MUST be `public`
 }
 fn int64 measure(Shape sh) { return sh.area(); }       // accept "any shape" — by value = zero-copy dispatch
@@ -4056,7 +4184,7 @@ A contract is represented as a fat pointer `{obj, vtbl}` (an implementation deta
 something you spell). Both a `value` and a `resource` may `implements` any number of contracts; a method that
 satisfies a contract method **must be declared `public`** (the contract is public — a hidden implementer
 would be reachable through the contract but not by name). A contract may **refine** another (`type contract
-Animated : Drawable { … }`) for capability layering, without inheritance.
+Animated for value, resource implements Drawable { … }`) for capability layering, without inheritance.
 
 **Passing a contract — by value vs. `ref`/`out`** (mirrors C#'s `ref` rule exactly):
 
@@ -4085,7 +4213,7 @@ object. `Owned<Shape>` is move-only; `Shared<Shape>` retains/releases (`Weak<Sha
 Optional<Shared<Shape>>`). Because the handle is an ordinary value type, it **stores** — as a field or a
 function return:
 
-```kama
+```kama fragment
 type resource Holder { Shared<Shape> shape;  public fn int64 area() { return this.shape.area(); } }
 fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square.make(s: s); return give o; }
 ```
@@ -4099,13 +4227,13 @@ A **primitive** is a type kind like any other, and it declares conformance the s
 prelude's per-primitive impls collapse from 64 blocks to roughly 8. Inside the block `This` is the target
 being decorated, resolved per member of the set.
 
-```kama
-type contract Hashable for value, resource, enum, intrinsic { fn uint64 hash(); }
+```kama fragment
+type contract Hashable for value, resource, enum, intrinsic { const fn uint64 hash(); }
 
 type intrinsic <string> implements Hashable {        // a primitive gains a contract, in pure kama
-    public fn uint64 hash() {
+    public const fn uint64 hash() {
         uint64 h = 2166136261ui64;                   // FNV-1a
-        int32 i = 0;
+        isize i = 0;
         while (i < this.length()) { h = (h ^ cast<uint64>(this[i])) * 16777619ui64; i = i + 1; }
         return h;
     }
@@ -4132,7 +4260,7 @@ contract-supplied method is **not part of the primitive's own API** — it is re
 never off the bare value. Without this, any package declaring `type intrinsic <int32> implements
 Weighable` would put `.weight()` on every `int32` in the program, including code that never heard of it.
 
-```kama
+```kama fragment
 int32 l = 3; int32 r = 7;
 l.compareTo(other: r);                       // ERROR — `compareTo` is Comparable's, not int32's
 
@@ -4152,7 +4280,7 @@ wrote.
 borrow or as an owning box, from any expression — a literal, a local, a field, a call or method result, a
 cast, arithmetic — and in any position that takes a contract value: <!-- test: contract_intrinsic_box -->
 
-```kama
+```kama fragment
 Hashable h = 3;                  // a BORROW — a fat pointer over block-scoped storage. Cannot escape:
 fn void f(Hashable h) { … }      // the same escape check that governs every contract value applies.
 Owned<Hashable> o = 42;          // an OWNING box — the form that can be a field, an element, a return.
@@ -4185,7 +4313,11 @@ type value Vec2 {
     public float64 x;  public float64 y;   // all-public transparent value → `@generate(of)` gives `Vec2.of(x:, y:)`
     public static fn float64 dot(Vec2 left, Vec2 right) { return left.x*right.x + left.y*right.y; }
 }
-float64 d = Vec2::dot(left: a, right: b);
+fn int32 main() {
+    Vec2 a = Vec2.of(x: 1.0, y: 2.0);   Vec2 b = Vec2.of(x: 3.0, y: 4.0);
+    float64 d = Vec2::dot(left: a, right: b);
+    return 0;
+}
 ```
 
 A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch <!-- xfail: static_this -->
@@ -4196,6 +4328,7 @@ A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstr
 handles, ring/DMA buffers, flash tables.
 
 ```kama
+type value Uart { public uint32 data; }  // a peripheral's register block
 static uint32 tick = 0;                 // deterministic const init at reset
 static bool     data_ready;             // no initializer → zero-init
 static InlineArray<uint8>#(256) rx_buf;  // a zero-initialized buffer
@@ -4297,13 +4430,14 @@ runtime cost (const-eval 6b-3). It extends the `comptime` axis to *computation*:
 compile-time *value*; a `comptime fn` produces one. A comptime function is necessarily `static` (it has no
 runtime `this` to read), so the bare `comptime fn` form is the whole story — no extra marker.
 
-```kama
+```kama fragment
 comptime fn InlineArray<uint8>#(256) crcTable() {           // top-level compile-time function
     InlineArray<uint8>#(256) t = [0; 256];
     for (int32 i = 0; i < 256; i = i + 1) {
         uint8 c = cast<uint8>(i);
-        for (int32 k = 0; k < 8; k = k + 1)
+        for (int32 k = 0; k < 8; k = k + 1) {
             c = ((c & 1) != 0) ? cast<uint8>((c >> 1) ^ 0x8C) : cast<uint8>(c >> 1);
+        }
         t[i] = c;
     }
     return t;
@@ -4387,7 +4521,7 @@ fn void render() {
 existing `@name(args)` mechanism, extended from serialization to functions + statics). Each emits a C
 `__attribute__((...))` **only** on the declaration it annotates; un-annotated code is byte-identical.
 
-```kama
+```kama fragment
 @section(".isr_vector") static hardware UnsafePtr<uint32> vtor;   // -> __attribute__((section(".isr_vector")))
 
 @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { … }   // -> __attribute__((interrupt, used))
@@ -4468,10 +4602,10 @@ concrete-type ergonomics (`+`, `*`, `[]`) stay operator members.** So `Equatable
 a `Map`/`Set` key.
 
 ```kama
-type value Cents implements Equatable, Comparable {
+type value Cents implements Equatable<This>, Comparable<This> {
     public int32 v;
-    public fn bool equals(ref Cents other) { return this.v == other.v; }          // `==` / `!=`
-    public fn Ordering compareTo(ref Cents other) {                               // `<` `>` `<=` `>=`
+    public const fn bool equals(const ref Cents other) { return this.v == other.v; }          // `==` / `!=`
+    public const fn Ordering compareTo(const ref Cents other) {                               // `<` `>` `<=` `>=`
         if (this.v < other.v) { return Ordering::Less; }
         if (this.v > other.v) { return Ordering::Greater; }
         return Ordering::Equal;
@@ -4479,7 +4613,7 @@ type value Cents implements Equatable, Comparable {
 }
 ```
 
-Both contracts **borrow** their operand (`ref This`) — a comparison never consumes or copies it. `!=` is
+Both contracts **borrow** their operand (`const ref This`) — a comparison never consumes or copies it. `!=` is
 `!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
 **explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated <!-- xfail: operator_missing -->
 structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
@@ -4518,11 +4652,18 @@ User-defined generics, **monomorphized** (one specialized copy per concrete type
 boxing; identical layout and cost to the built-in collections).
 
 ```kama
-type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ Pair<A, B> r; r.a = a; r.b = b; return give r; } }
+import { std::collections::DynamicArray };
+type contract Shape for value, resource { fn int64 area(); }
+
+type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ this.a = a; this.b = b; } }
 fn T max<T: Comparable<T>>(T a, T b) { return a > b ? a : b; }   // generic fn — args INFERRED from the call
-Pair<int32, string> p = Pair.make(a: 1, b: "x");       // generic type (args inferred from the LHS)
-int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
-DynamicArray<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
+
+fn int32 main() {
+    Pair<int32, bool> p = Pair.make(a: 1, b: true);         // generic type (args inferred from the LHS)
+    int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
+    DynamicArray<Shared<Shape>> scene = DynamicArray.empty();   // nested generics, no space (the `>>` split)
+    return 0;
+}
 ```
 
 - **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int32, int32>>`) — nested
@@ -4536,8 +4677,11 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   the type — `Box::<int32>.make(...)` / `new Box::<int32>.make(...)` (turbofish on the type, uniform).
   ```kama
   fn T zero<T>() { return cast<T>(0); }   // T appears only in the return — inference can't see it
-  int32 x = zero::<int32>();              // turbofish supplies it
-  int64 y = zero::<int64>();
+  fn int32 main() {
+      int32 x = zero::<int32>();          // turbofish supplies it
+      int64 y = zero::<int64>();
+      return 0;
+  }
   ```
 - **Contract bounds** — `fn sort<T: Comparable>(…)`, `type value Map<K: Hashable + Comparable, V>`. `+` means
   **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param value;
@@ -4556,7 +4700,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   **A bound is what the body may call, and nothing else.** Reaching a member the bounds do not declare is
   an error at the DECLARATION, naming the bound that is missing rather than the method that is not there:
 
-  ```kama
+  ```kama fragment
   fn T largest<T>(T a, T b) { return a.compareTo(other: b) == Ordering::Greater ? a : b; }
   // error: `T` has no bound providing `compareTo` — an unbounded type parameter promises nothing,
   //        so bound it with a contract that declares `compareTo`: `<T: …>`
@@ -4592,7 +4736,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 - **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime(int32 N)`, in its
   own trailing list, supplied at a use site with `#(4)`. `<…>` holds types; `#(…)` holds values. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:
-  ```kama
+  ```kama fragment
   type value Fixed<B: FixedBacking<B>> comptime(int32 F) {          // storage AND fraction, both parameters
       comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8, msg: "…");
       public B raw;
@@ -4620,7 +4764,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   `implements Comparable<This>`) and needs no declaration, because nothing is erased there. A **contract**
   may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
 
-  ```kama
+  ```kama fragment
   type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }
 
   type value Duration implements Comparable<This> { … }     // conformance: always `This`
@@ -4652,8 +4796,8 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   It has **full value + bound parity** with a plain contract: usable as a static bound
   `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct calls) *and* as a dynamic fat-pointer value
   `fn drain(Iterator<int32> it)` (vtable dispatch). A type opts in with `implements Iterator<int32>`.
-  ```kama
-  type contract Iterator<T> { fn Optional<T> next(); }
+  ```kama fragment
+  type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }
   type value IntRange implements Iterator<int32> { /* … fn Optional<int32> next() … */ }
   fn int32 sum<I: Iterator<int32>>(I it) { /* it.next() → static IntRange__next(&it) */ }
   ```
@@ -4668,7 +4812,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   named one; the `:` is unambiguous at use sites (contract bounds appear only in *declarations*). Defaults +
   named overrides resolve to one canonical positional tuple **before** monomorphization, so the omitted,
   named, and fully-spelled forms all dedup to a single specialized instance.
-  ```kama
+  ```kama fragment
   type value Wrap<T, U = int32> { public T first; public U second; /* … */ }
   Wrap<bool>          a = Wrap.make(a: true,  b: 7);     // U defaults to int32
   Wrap<bool, float64> c = Wrap.make(a: true,  b: 3.5);   // U overridden positionally
@@ -4743,9 +4887,12 @@ carry payloads, and the enum may be generic):
 
 ```kama
 type enum Color { Red, Green = 5, Blue }     // plain: Red=0, Green=5, Blue=6
-Color c = Color::Blue;                        // variants are scope-resolved with ::
-
 type enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (payloads)
+
+fn int32 main() {
+    Color c = Color::Blue;                    // variants are scope-resolved with ::
+    return 0;
+}
 ```
 
 **A member's value is a compile-time integer expression.** It may combine integer literals, the enum's
@@ -4796,6 +4943,7 @@ instance takes them **per instance**: a `when [...]` gate on a method or on an `
 against that instance's own arguments.
 
 ```kama
+type contract Tag for value, resource, enum { fn int32 tag(); }
 type enum Maybe<T> implements Tag when [T: Tag] {
     Has(T v), Nope;
     public const fn bool has() { return match (this) { case Has(v: v): true; case Nope: false; }; }
@@ -4843,9 +4991,9 @@ leaving one **unbound** (`…/match_label_missing.kama`) — a pattern names eve
 construction supplies every one. The label is also a *reference* to the field, so hover, go-to-definition
 and rename reach it. Pinned by `tests/match_named_bindings.kama`.
 
-```kama
+```kama fragment
 int32 area = match (sh) {                     // expression position — yields a value
-    case Circle(radius: r):         cast<int32>(r * r * 3);
+    case Circle(r: r):              cast<int32>(r * r * 3);
     case Rect(w: width, h: height): cast<int32>(width * height);
 };
 
@@ -4864,15 +5012,18 @@ end in `:=` or **diverge** (`return` / `break` / `continue`); in particular a bl
 since it would leave the match's value unset:
 
 ```kama
-string label = match (reading) {
-    case Some(value: c): {
-        string name = "mild";
-        if (c < 0)  { name = "freezing"; }
-        if (c > 30) { name = "hot"; }
-        := name;                              // the arm's value (must be last)
-    }
-    case None: "unknown";
-};
+fn string describe(Optional<int32> reading) {
+    string label = match (reading) {
+        case Some(value: c): {
+            string name = "mild";
+            if (c < 0)  { name = "freezing"; }
+            if (c > 30) { name = "hot"; }
+            := name;                              // the arm's value (must be last)
+        }
+        case None: "unknown";
+    };
+    return label;
+}
 ```
 
 The `match` subject can be a variable, a method call, a static-method call, a free-function call
@@ -4894,8 +5045,8 @@ The prelude provides two tagged-union types, so error handling needs no exceptio
 Both are ordinary tagged unions consumed by `match`, so the caller is *forced* to handle the empty/error
 case (exhaustiveness):
 
-```kama
-fn Optional<int32> find(DynamicArray<int32> xs, int32 target) { … }
+```kama fragment
+fn Optional<int32> find(const ref DynamicArray<int32> xs, int32 target) { … }
 
 int32 idx = match (find(xs: list, target: 7)) {
     case Some(value: i): i;
@@ -4925,7 +5076,7 @@ There is one keyword for depending on another module — `import` (it replaced `
   } }
 ```
 
-```kama
+```kama fragment
 // geometry/src/graphics/texture.kama   — in module `geometry::graphics`, because of WHERE IT IS
 export { Texture, scale };             // the public surface, at a glance — mirrors `import`
 
@@ -4941,8 +5092,9 @@ import {
 };
 fn int32 main() {
     Texture t = ...;                    // imported, bare
-    phys::Body b = ...;                 // alias-qualified
+    PhysBody b = ...;                   // renamed with `as`
     int32 n = scale(x: 3);
+    return n;
 }
 ```
 
@@ -5074,7 +5226,7 @@ The rule holds through a generic type parameter too — `T.deserialize(...)` for
 
 On a **generic type** both forms take a turbofish, and the same `.`-vs-`::` split applies:
 
-```kama
+```kama fragment
 Box::<int32>.make(v: 5)     // ctor   — dot
 Box::<int32>::tag()         // static — colon-colon
 ```
@@ -5118,7 +5270,7 @@ long-lived service isolates — which is what makes it honest for one to block.
 
 **There are two spawn forms, and what separates them is who owns the join.**
 
-```kama
+```kama fragment
 import { std::concurrent::Isolate };
 
 scope { spawn worker(p: give payload); }     // the SCOPE owns the join — at its closing brace
@@ -5185,14 +5337,18 @@ needs them.
 
 ```kama
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
+fn void producer(Sender<int32> tx) { tx.send(item: 1); }
 
-Channel<int32> ch = Channel.bounded(capacity: 4);
-Sender<int32>   tx = ch.sender();
-Receiver<int32> rx = ch.receiver();
+fn int32 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 4);
+    Sender<int32>   tx = ch.sender();
+    Receiver<int32> rx = ch.receiver();
 
-Isolate h = spawn producer(tx: give tx);     // the sender is moved into the isolate
+    Isolate h = spawn producer(tx: give tx);     // the sender is moved into the isolate
 
-Optional<int32> v = rx.recv();               // blocks; None once closed AND drained
+    Optional<int32> v = rx.recv();               // blocks; None once closed AND drained
+    return 0;
+}
 ```
 
 `send(item:)` returns `SendResult<T> { Sent, Undelivered(T item) }` — a channel whose receivers are
@@ -5254,7 +5410,7 @@ A `scope { }` block joins every child spawned inside it at its closing brace. It
 tasks: deterministic lifetimes, no orphans, and — because a child is guaranteed to be joined before
 the scope exits — a child may safely borrow from the enclosing scope.
 
-```kama
+```kama fragment
 scope {
     spawn writer(s: give sa);     // a bare `spawn` inside a scope is a deferred-join child
     spawn writer(s: give sb);
@@ -5300,7 +5456,10 @@ safe **by disjointness** — two workers never touch the same element — so it 
 borrow checker.
 
 ```kama
-parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }   // closing brace is the barrier
+import { std::collections::DynamicArray, std::concurrent::cpuCount };
+fn void doubleAll(ref DynamicArray<int32> xs) {
+    parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }   // closing brace is the barrier
+}
 ```
 
 **`workers:` is mandatory — there is no default.** kama has no optional parameters (a user `fn` cannot
@@ -5339,7 +5498,7 @@ unaffected. When you genuinely need all N running at once — a pool whose membe
 to the enclosing `scope { }`. That second half is the whole point: the children run *alongside* the
 statements after it.
 
-```kama
+```kama fragment
 scope {
     parallel_spawn (ref Worker w in workers) { w.run(); }   // K = workers.length()
     {
@@ -5402,9 +5561,12 @@ two answer different halves of the same question and neither is complete alone.
 ```kama
 import { std::concurrent::Atomic, std::concurrent::MemoryOrder };
 
-Atomic<int32> counter = Atomic.make(value: 0);
-counter.fetchAdd(delta: 1);
-int32 now = counter.load();
+fn int32 main() {
+    Atomic<int32> counter = Atomic.make(value: 0);
+    counter.fetchAdd(delta: 1);
+    int32 now = counter.load();
+    return 0;
+}
 ```
 
 `load` / `store` / `swap` / `compareExchange` / `fetchAdd` / `fetchSub`, all sequentially consistent
@@ -5648,16 +5810,25 @@ import { std::serialization::text::json::serializeJsonBuffer, std::serialization
 // by-value (tree): a resource reaching no Shared/Weak round-trips on the stack — an Owned child included
 @generate(Serializable, Deserializable)
 type resource User { @field(name: "user_name") string name; @field int32 age;
-    public ctor make(string name, int32 age) { User r; r.name = give name; r.age = age; return give r; } }
-string j = serializeJsonBuffer(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
-Result<User, DeError> u = deserializeJsonBuffer::<User>(src: give j);            // by value
+    public ctor make(string name, int32 age) { this.name = give name; this.age = age; } }
 
 // graph (heap): reaches a Shared -> what you pass IS the root; cycles rebuilt through the Weak back-edge
 @generate(Serializable, Deserializable)
-type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
-string wire = serializeJsonBuffer(v: a);                                       // {"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}
-Result<Shared<Node>, DeError> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire);   // read back as a handle
-// the whole graph is read before anything is usable; a dangling id is DeError::UnresolvedReference
+type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back;
+    public ctor make(int32 id) { this.id = id; this.next = Optional::None; this.back = Optional::None; } }
+
+fn int32 main() {
+    Result<string, Owned<Error>> r = serializeJsonBuffer(v: User.make(name: "ada", age: 36));   // Ok: {"user_name":"ada","age":36}
+    string j = match (give r) { case Ok(value: x): give x; case Err(error: e): ""; };
+    Result<User, Owned<Error>> u = deserializeJsonBuffer::<User>(src: give j);                   // by value
+
+    Shared<Node> a = new Node.make(id: 1);
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: a);   // Ok: {"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}
+    string wire = match (give w) { case Ok(value: x): give x; case Err(error: e): ""; };
+    Result<Shared<Node>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire);   // read back as a handle
+    // the whole graph is read before anything is usable; a dangling id is DeError::UnresolvedReference
+    return 0;
+}
 ```
 
 ## Building & debugging ✅

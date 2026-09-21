@@ -8,9 +8,9 @@
 # one of the two CORRECT spellings, so the wrong one was never typed and nothing ever checked the claim.
 #
 # That is the house rule from AGENTS.md aimed at the docs: a prose claim that something is rejected is
-# unguarded without a `tests/xfail/` fixture. `tests/idioms_kama_way.kama` compiles the docs' POSITIVE
-# examples, which is why the tour cannot rot — but you cannot put a REJECTED snippet in a fixture that must
-# compile, so the negative half had no instrument at all until this one.
+# unguarded without a `tests/xfail/` fixture. `check-doc-snippets.sh` compiles the docs' POSITIVE examples
+# — every ```kama block on the site — but you cannot put a REJECTED snippet in a block that must compile,
+# so the negative half had no instrument at all until this one.
 #
 # It is a LINK check, in two halves, and the second is the one that matters:
 #

@@ -7,19 +7,22 @@ vocabulary + access-control rules below are enforced by the compiler. This doc i
 
 ## The `type` marker
 
-Every type declaration begins with the reserved keyword **`type`**, followed by a *kind* — exactly
-parallel to `fn` on every function. This makes declarations greppable and self-describing (`grep -n
-'^type '`). The kind words `value` / `resource` / `view` / `contract` (and the qualifiers `virtual` /
-`abstract` / `final`) appear *only* right after `type`, so they are **contextual, not reserved** — they
-stay ordinary identifiers everywhere else (`int32 value = 5;`, a field or method named `resource`, etc.).
-The one exception is `enum`, which is a reserved keyword because it predates the `type` marker — nothing
-else can be spelled in that position, so reserving it costs nothing. Only `type` and `enum` are keywords.
+Every type declaration begins with **`type`**, followed by a *kind* — exactly parallel to `fn` on every
+function. This makes declarations greppable and self-describing (`grep -n '^type '`). The kind words
+`value` / `resource` / `view` / `contract` / `intrinsic` appear *only* right after `type`, so they are
+**contextual, not reserved** — they stay ordinary identifiers everywhere else (`int32 value = 5;`, a field
+or method named `resource`, etc.). `type` itself is contextual too: it leads a declaration only where one
+can begin, and may name a field or a local (C headers name fields `type`). The exceptions are `enum`,
+which is reserved because it predates the `type` marker, and the qualifiers `virtual` / `abstract` /
+`final`, which are reserved words.
 
-```kama
-type value Name    { … }   // owns nothing — copies
-type resource Name { … }   // owns / has identity — moves, RAII-dropped
-type view Name     { … }   // borrows a range it doesn't own — a stack-only slice/span
-type contract Name { … }   // a public-only guarantee (an interface)
+```kama fragment
+type value Name     { … }            // owns nothing — copies
+type resource Name  { … }            // owns / has identity — moves, RAII-dropped
+type view Name      { … }            // borrows a range it doesn't own — a stack-only slice/span
+type contract Name for value { … }   // a public-only guarantee (an interface)
+type enum Name      { … }            // one of a closed set of variants — a sum type
+type intrinsic <int32> implements C { … }   // gives a built-in type a contract's methods
 ```
 
 ## Why reframe
@@ -58,15 +61,21 @@ stricter cousin of a "value type" — where a C# `struct` can smuggle a heap ref
 shares that object), a kama `value` owns **nothing**, so its copy has no hidden shared ownership.
 
 ```kama
+import { std::math::sqrt };
+
 type value Vec2 {
     public float32 x;       // fields choose visibility per field
     public float32 y;
-    public fn float32 length() { float32 q = this.x*this.x + this.y*this.y; return sqrt(x: q); }
+    public ctor make(float32 x, float32 y) { this.x = x; this.y = y; }
+    public const fn float32 length() { float32 q = this.x*this.x + this.y*this.y; return sqrt(x: q); }
 }
 
 type value Rect {
     float32 x; float32 y; float32 w; float32 h;   // private (default) — guards its own invariant
-    public fn bool contains(Vec2 p) { ... }
+    public ctor make(float32 x, float32 y, float32 w, float32 h) { this.x = x; this.y = y; this.w = w; this.h = h; }
+    public const fn bool contains(Vec2 p) {
+        return p.x >= this.x && p.x < this.x + this.w && p.y >= this.y && p.y < this.y + this.h;
+    }
 }                                          // still copies freely — it owns nothing
 ```
 
@@ -85,9 +94,12 @@ A `resource` is moved by default and RAII-dropped. It becomes destructible by de
 members (`Owned`/`Shared`/`Weak`/collections).
 
 ```kama
+import { std::collections::DynamicArray };
+
 type resource Buffer {
-    DynamicArray<byte> data;                       // owned → Buffer is a resource; fields stay private
-    public fn isize size() { return this.data.length(); }
+    DynamicArray<uint8> data;                      // owned → Buffer is a resource; fields stay private
+    public ctor empty() { this.data = DynamicArray.empty(); }
+    public const fn isize size() { return this.data.length(); }
 }
 
 type resource Token { }   // owns nothing, but move-only by *identity* — a capability / linear token
@@ -110,16 +122,20 @@ declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view Ec
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
 (`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonDeserializer`).
 
-```kama
+```kama fragment
 type view View<T> {                               // a slice/span over a buffer it borrows
-    UnsafePtr<T> data; int32 len;                       // fields are private-only (the raw UnsafePtr must not leak)
-    public View(UnsafePtr<T> data, int32 len) { this.data = data; this.len = len; }
-    public unsafe ref T operator[](int32 i) { /* bounds-checked */ return this.data[i]; }
+    UnsafePtr<T> data; isize len;                 // fields are private-only (the raw UnsafePtr must not leak)
+    unsafe ctor over(UnsafePtr<T> at, isize count) { this.data = at; this.len = count; }   // always private
+    public const fn isize length() { return this.len; }
+    public unsafe ref T operator[](isize i) { /* bounds-checked */ return this.data[i]; }
 }
 
 DynamicArray<float32> verts = …;
 uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownership transfer — a read-only `ConstView`
 ```
+
+A view's constructor is **always private**: a view is handed out by the container that owns the buffer
+(`viewMut()`, `slice(...)`), never built from an arbitrary pointer at a call site.
 
 - **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
   it has an invariant (a borrowed `UnsafePtr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
@@ -151,6 +167,42 @@ type contract Animated for value, resource implements Drawable { fn void step(fl
 - **Explicit** satisfaction only (a type declares it satisfies a contract) — never structural/implicit.
 - **Granularity:** keep contracts small; an API requires the **narrowest** one it needs. Contracts
   **refine** each other (capability layering) *without* class inheritance.
+- A contract that mentions its implementing type pins it: `type contract Comparable<T is This>`, written
+  `implements Comparable<This>` at the conformer.
+
+### `enum` — one of a closed set of variants
+
+An `enum` is a sum type: a value is exactly one of its variants, and a variant may carry named fields.
+`match` is the only way to take one apart, and it is exhaustive.
+
+```kama
+type enum Shape implements Error {
+    Circle(float64 radius), Rect(float64 w, float64 h), Empty;
+    public const fn string message() { return "a shape"; }
+}
+```
+
+- It owns nothing of its own — only what its payloads own. So it **copies** like a `value`, unless a
+  variant's payload holds a resource, in which case it **moves** like one.
+- A variant is not a type: `Rect` is a name in `Shape`'s scope, reached as `Shape::Rect(w: …, h: …)`.
+- It takes methods, contracts, named `ctor`s and `friend` grants like any other kind, and is sealed.
+  `Optional<T>` and `Result<T, E>` are ordinary generic enums from the prelude.
+
+### `intrinsic` — how a built-in joins the model
+
+`int32`, `float64`, `bool`, `char` and `string` are built in; `intrinsic` is the kind that lets kama code
+give them contracts, so no conformance is hard-coded in the compiler. It declares no type and no state —
+only methods — and one block covers a whole set of targets:
+
+```kama fragment
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
+    public const fn uint64 hash() { return cast<uint64>(this); }     // the prelude's own
+}
+```
+
+- `this` is the primitive value; `This` is each target in turn.
+- It is how `int32` is `Hashable`, `Comparable<This>`, `Sendable` and `Formattable` — in
+  `prelude/global.kama`, where go-to-definition lands.
 
 ## Polymorphism: substitutability, not reuse
 
@@ -187,6 +239,9 @@ dtor for owned hierarchies).
 ## The lever cheat-sheet
 
 - Owns something / needs identity? → **`resource`**. Else → **`value`**.
+- A fixed set of alternatives, some carrying data? → an **`enum`** (and `match` on it).
+- A borrowed window onto someone else's buffer? → a **`view`**.
+- A built-in type needs a contract? → an **`intrinsic`** block.
 - Reuse an algorithm across types? → a **generic** (zero-cost; bound it with a contract if it needs
   behavior). Don't inherit for reuse.
 - Need to swap implementations? → a **contract** (works on `value` too, and cheaper — *don't* reach
@@ -207,10 +262,13 @@ protected† = only inside a `virtual`/`abstract resource`):
 | method (non-virtual) | **private**, public | **private**, public, protected† | **private**, public | public-only, no body |
 | operator | **private**, public | **private**, public | **private**, public | public-only (if required) |
 | static method | **private**, public | **private**, public, protected† | **private**, public | — |
-| constructor | private, **public** | private, **public**, protected | private, **public** | — |
+| constructor | **private**, public | **private**, public, protected† | **private** only | may be *required* (public) |
 | destructor | ⛔ (→ resource) | ✅ 0..1 (RAII-called) | ⛔ (→ resource) | ⛔ |
 | virtual / abstract | ⛔ | ✅ **protected-only** | ⛔ (sealed) | ⛔ (it *is* the abstraction) |
 | final | ⛔ (already sealed) | ✅ (seal an override / a subclass branch) | ⛔ (already sealed) | ⛔ |
+
+An `enum`'s methods and constructors follow the `value` column (a variant's payload fields are its
+data, not members). An `intrinsic` block declares methods only.
 
 Eight rules make the grid memorable:
 
@@ -226,7 +284,8 @@ Eight rules make the grid memorable:
 6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values and views are sealed → use contracts; a
    contract already *is* the abstraction).
 7. **`contract`** = all-public signatures (methods, and optionally a `ctor`/`static fn` requirement),
-   no fields, no bodies, no dtor; may refine other contracts. `friend` grants apply as elsewhere.
+   no fields, no bodies, no dtor; may refine other contracts. A `friend` grant on a contract is an error <!-- xfail: friend_on_contract -->
+   — every member is already public.
 8. **`view`** codegens like a `value` (inline, bit-copied, sealed, no `~dtor`) but adds two guards:
    **private-only fields** and the **second-class borrow** rule — a parameter/local/return-that-borrows-
    `this`, never a field, collection element, or `enum` payload (see the `view` section above).
@@ -234,9 +293,11 @@ Eight rules make the grid memorable:
 ### Extensibility qualifiers
 
 - plain `resource` = **sealed** (the default).
-- **`virtual resource`** = an extensible base (vtable + shared implementation); subclasses `override`.
-- **`abstract resource`** = extensible + non-instantiable; an `abstract` method (no body) forces the
-  enclosing type to be `abstract`.
+- **`type virtual(maxDepth: N) resource`** = an extensible base (vtable + shared implementation);
+  subclasses `extends` it and `override`. `maxDepth` is the hierarchy's declared depth budget — how many
+  levels may derive below this base — so a hierarchy cannot grow deep by accident.
+- **`type abstract(maxDepth: N) resource`** = extensible + non-instantiable; an `abstract` method (no body)
+  forces the enclosing type to be `abstract`.
 - **`final`** = seal a `virtual` method (no further `override`) or a subclass branch. Redundant on a
   plain resource (already sealed).
 
@@ -246,9 +307,13 @@ Because public-virtual is banned, a `contract` method that must vary per subclas
 **public non-virtual** method that delegates to a **protected virtual/abstract** customization point:
 
 ```kama
-type abstract resource Polygon : Shape {
+type contract Shape for resource { fn float32 area(); }
+
+type abstract(maxDepth: 1) resource Polygon implements Shape {
+    public ctor make() { }                                    // a subclass installs it as its base
     public fn float32 area() { return this.computeArea(); }   // public, non-virtual: the stable face
     protected abstract fn float32 computeArea();              // the protected customization point
+    ~Polygon() { }
 }
 ```
 
@@ -269,10 +334,10 @@ takes a marker.
 - **`resource` without a copy contract** (move-only) → **move** on a bare hand-off (the source is
   consumed); `give` is optional emphasis; `copy` is an error — nothing to copy with — until it opts in. <!-- xfail: copy_value -->
 - **`resource` with a copy contract** → it **must declare its bare default** at opt-in:
-  `implements Copyable(bare: give)` (bare **moves**) or `Copyable(bare: copy)` (bare **deep-copies** via
-  its public nullary `copy()`). A bare `implements Copyable` *without* `(bare: …)` is a compile error. <!-- xfail: copyable_no_bare_default -->
+  `implements Copyable<This>(bare: give)` (bare **moves**) or `Copyable<This>(bare: copy)` (bare
+  **deep-copies** via its public `ctor copy(ref This source)`). Without `(bare: …)` it is a compile error. <!-- xfail: copyable_no_bare_default -->
   `give x` moves, `copy x` deep-copies — a marker always overrides the declared default.
-- **`Shared`/`Weak`** (shared ownership, `implements Copyable(bare: copy)`) → a bare hand-off **retains**
+- **`Shared`/`Weak`** (shared ownership, `implements Copyable<This>(bare: copy)`) → a bare hand-off **retains**
   (refcount++); `copy` is the explicit retain; **`give` moves the handle** — the ref transfers and the
   source is consumed (how a `Shared` returns from a factory without a spurious retain/drop).
 - **`contract`** → **no hand-off of its own.** A `contract` holds no state and isn't instantiable, so a

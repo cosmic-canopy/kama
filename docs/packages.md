@@ -473,7 +473,7 @@ kama pkg add kama.json utils --path ../utils        # a sibling checkout
 Import a dependency by its package name; the build only lets you import what the manifest
 declares (an undeclared import is a hard error — no phantom dependencies):
 
-```kama
+```kama fragment
 import { geo::area };
 ```
 

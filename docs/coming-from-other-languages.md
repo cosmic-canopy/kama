@@ -43,7 +43,7 @@ public.)
 
 ## `out` fills, `ref` borrows
 
-```kama
+```kama fragment
 fn void split(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
 
 slot int32 q; slot int32 r;
@@ -58,7 +58,7 @@ borrow from a fill.
 
 ## A free function's bounds go in its type-parameter list
 
-```kama
+```kama fragment
 fn int32 showIt<W: Shown>(W x) { return x.show(); }
 ```
 
@@ -66,9 +66,9 @@ Not `fn showIt<W>(W x) when [W: Shown]`. A `when [...]` clause expresses **condi
 generic *type's* method — "this method exists only when `T` is `Copyable`". A free function has no
 "sometimes": its bounds are absolute, so they belong in the declaration.
 
-## `@generate` requires every field to be marked
+## `@generate(Serializable)` requires every field to be marked
 
-```kama
+```kama fragment
 @generate(Serializable)
 type value Point {
     @field int32 x;
@@ -77,13 +77,14 @@ type value Point {
 }
 ```
 
-Serde in most languages defaults to "all fields". kama makes you say, so that **adding a field can never
+Serde in most languages defaults to "all fields". kama makes you say (for the serialization pair — a
+`@generate(Formattable)` or `Equatable` walks every field unless one is `@skip`), so that **adding a field can never
 silently start serializing it** — the failure mode where a cache, a token or a password joins your wire
 format because someone added a member. Explicit over implicit ([GOALS.md](GOALS.md) #5).
 
 ## Named arguments are not friction
 
-```kama
+```kama fragment
 println(s: "hello");
 FixedArray.make(size: 4);
 split(a: 17, b: 5, q: out q, r: out r);
@@ -94,7 +95,7 @@ no function overloading, and why a call site reads without jumping to the declar
 
 ## `.` constructs, `::` resolves scope
 
-```kama
+```kama fragment
 Box.make(v: 10)            // ctor, T inferred from the argument
 Box::<int32>.make(v: 10)   // ctor, T explicit — dot after the turbofish
 Plain::tag()               // static function on a type
@@ -113,8 +114,8 @@ there is nothing to infer from.
   whole construct yields a value.
 - **No `null` in the safe surface.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
   safe type is a compile error. `null` exists only for `UnsafePtr<T>` at the FFI boundary. <!-- xfail: null_safe_compare, null_safe_assignment -->
-- **No exceptions.** A constructor cannot fail — fallible acquisition is a `static`/`ctor` factory
-  returning `Result`.
+- **No exceptions.** A constructor that can fail says so in its signature — `public ctor
+  Result<File, IoError> open(…)` — and fails before the object exists, so a half-built value never escapes.
 - **A `string` is UTF-8 bytes.** `length()` is bytes, `s[i]` is a `uint8`, and `.chars()` is the explicit
   opt-in for codepoints; `foreach (char c in s)` is a deliberate type error. Casing and whitespace are
   **ASCII-only** by design (as in Zig) — Unicode-correct casing is a package, not `std`.
