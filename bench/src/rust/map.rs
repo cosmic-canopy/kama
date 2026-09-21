@@ -2,7 +2,7 @@ use std::collections::HashMap;
 fn main() {
     const N: i64 = 100000;
     const PASSES: i64 = 10;
-    let mut m: HashMap<i32, i64> = HashMap::new();
+    let mut m: HashMap<i32, i64> = HashMap::with_capacity((N * 2) as usize);   // pre-sized
     for i in 0..N { m.insert(i as i32, i * 2); }
     let mut sum: u64 = 0;
     for _ in 0..PASSES {

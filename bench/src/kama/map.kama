@@ -1,12 +1,29 @@
 // Hash-map throughput: insert N int keys, then look every key up PASSES times in a scrambled
 // (bijective LCG-strided) order. Deterministic checksum -> exit code (cross-language cross-check).
+//
+// ⚠️ EVERY LANGUAGE PRE-SIZES, where its standard library offers the API. C++ (`reserve`) and Go
+// (`make(m, n)`) always did; kama, Rust, C# and Java did not, so those four were paying an
+// incremental grow-from-small rehash storm that the other two skipped — and the published number
+// read as a map-design gap when most of it was that asymmetry. Measured 2026-09-21, min of 4 runs of
+// the measure step alone: kama 8.10 -> 5.03 ms against a C++ 4.78 ms, i.e. 1.70x -> ~1.05x, from this
+// one line.
+//
+// ⚠️ MEASURE THE MEASURE STEP, not `bench/run all`. A number taken straight after `all` rebuilt the
+// compiler and eleven languages reads high — kama came out 6.46 ms that way against 5.03 ms from a
+// quiet `bench/run run map`, a 28% error, entirely in the flattering-to-C++ direction here. Build
+// first, then measure separately, and take the min of several.
+//
+// Lua, Python and JavaScript/TypeScript have NO capacity API for their built-in table/dict/Map, so
+// they cannot pre-size and are the one honest asymmetry left. Do not "fix" that by removing the
+// reserves — dropping them everywhere would measure growth policy instead, which is a different
+// question and one `map_kernel` (fixed prealloc, identical algorithm) already controls for.
 import { std::collections::Map };
 
 fn int32 main()
 {
     int32 N = 100000;
     int32 PASSES = 10;
-    Map<int32, int64> m = Map.empty();
+    Map<int32, int64> m = Map.withCapacity(capacity: cast<isize>(N) * 2);   // pre-sized: see the header
     int32 i = 0;
     while (i < N) { m.put(key: i, value: cast<int64>(i) * 2i64); i = i + 1; }
 
