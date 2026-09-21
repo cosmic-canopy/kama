@@ -31,7 +31,7 @@ A surprising amount of the bare-metal core is already in place:
 - **A runtime that leans only on freestanding headers** — `kama_runtime.h` includes just
   `<stdint.h>`/`<stdbool.h>`/`<stddef.h>`; the panic/bounds-check path writes to fd 2 and traps (no `<stdio.h>`
   pulled into user code). The `std::fmt`/`Formattable` number formatters live here too and stay header-clean:
-  integer/char/bool/string formatting is a pure digit/serializeJsonBuffer loop (no libc), and float formatting declares
+  integer/char/bool/string formatting is a pure digit-encoding loop (no libc), and float formatting declares
   `snprintf` at **block scope** (like `malloc`/`memcpy`) — so no header leaks, though a `-nostdlib` build that
   *formats a float* still needs a `snprintf` symbol (integer/string formatting is fully freestanding).
 - **A pluggable allocator seam** — the `Allocator` contract + `GlobalAllocator` (prelude), caller-owned `Arena`/

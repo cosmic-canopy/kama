@@ -1709,16 +1709,16 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     - **Can a synthesized conformance attach to the intrinsic fat `Shared<Contract>`? MOOT** — the corrected
       design keeps the triad method-free and recognizes edges by identity, so nothing is attached to it.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
-  impl + `serializeJsonBuffer`/`deserializeJsonBuffer`. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
+  impl + its own `serialize<Format>Buffer`/`deserialize<Format>Buffer` pair. (`std::encoding::base64` shipped `0.9.197` as its own small module, with
   `::hex` beside it — SPEC § *Encoding*.)
 - **A back end's ENTRY POINTS are a convention, not a contract** — the defect the line above quietly
   describes. `Serializer`/`Deserializer`/`Serializable`/`Deserializable` are real contracts
-  ([prelude/global.kama:207](../prelude/global.kama)), but `serializeJsonBuffer`/`deserializeJsonBuffer`/`deserializeJsonStream` are **bare free
-  functions**, duplicated per back end (`json.kama:198,538,546`, `binary.kama:253,263,270`) with nothing
+  ([prelude/global.kama:207](../prelude/global.kama)), but each back end's `serialize…Buffer`/`deserialize…Buffer`/`…Stream` are **bare free
+  functions**, duplicated per back end (`text/json/json.kama`, `binary/kbin/*.kama`) with nothing
   checking that a back end supplies them or that their signatures agree. "A drop-in twin of the JSON back
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
-  measurement (`serializeJsonBuffer`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
+  measurement (json vs binary, before `0.9.265` put the format in every entry-point name). Take it with the std-lib cleanup pass, not before.
 - **Serde naming — SHIPPED `0.9.292`.** Every level is one axis now and every leaf is a format:
   `std::serialization::text::json` and `std::serialization::binary::kbin`, with
   `KbinNamedSerializer`/`KbinNumberedSerializer`/`KbinPositionalSerializer` beside `JsonSerializer`.

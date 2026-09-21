@@ -67,7 +67,7 @@ You never spell the borrowed-vs-owned distinction; the type carries it, and RAII
 ones. There is no separate capital-`String` collection type.
 
 **UTF-8 everywhere.** A `string` is **UTF-8 bytes**; `length()` is the **byte** length (O(1)), and literals
-serializeJsonBuffer `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
+encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
 never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
@@ -2202,23 +2202,23 @@ Go, Rust and Zig leave UUIDs to a package, and the ubiquity of that package is t
 
 ### Encoding (`std::encoding`) ✅
 
-`import { std::encoding::base64::serializeJsonBuffer, std::encoding::base64::deserializeJsonBuffer, std::encoding::base64::encodeUrl,
-std::encoding::base64::decodeUrl, std::encoding::hex::serializeJsonBuffer as hexEncode, std::encoding::hex::deserializeJsonBuffer as
-hexDecode };` — two submodules, `base64` and `hex`, each exporting `serializeJsonBuffer(ConstView<uint8>) -> string` and
-`deserializeJsonBuffer(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
+`import { std::encoding::base64::encode, std::encoding::base64::decode, std::encoding::base64::encodeUrl,
+std::encoding::base64::decodeUrl, std::encoding::hex::encode as hexEncode, std::encoding::hex::decode as
+hexDecode };` — two submodules, `base64` and `hex`, each exporting `encode(ConstView<uint8>) -> string` and
+`decode(string) -> Result<DynamicArray<uint8>, DecodeError>`. That is the shape Go (`encoding/base64` +
 `encoding/hex`), Rust (`base64` + `hex`), Zig and Python all converged on; only C# prefixes
 (`Convert.ToBase64String`). Both export the same two names, so a file that wants both renames at the
 import — the same `as` any colliding pair uses.
 
 ```kama
-string t = serializeJsonBuffer(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
-Result<DynamicArray<uint8>, DecodeError> b = deserializeJsonBuffer(text: t);
+string t = encode(bytes: v);                                    // "Zm9vYmFy" — RFC 4648 § 4, padded
+Result<DynamicArray<uint8>, DecodeError> b = decode(text: t);
 string u = encodeUrl(bytes: v);                                 // § 5 alphabet, UNPADDED — what a JWT carries
 string h = hexEncode(bytes: v);                                 // "666f6f626172", lowercase
 ```
 
 **Five deliberate answers:** <!-- test: encoding_base64, encoding_hex -->
-1. **Two named pairs, not flags.** `serializeJsonBuffer`/`deserializeJsonBuffer` is the standard alphabet with `=` padding;
+1. **Two named pairs, not flags.** `encode`/`decode` is the standard alphabet with `=` padding;
    `encodeUrl`/`decodeUrl` is the URL-safe alphabet without it. A call site reads which wire format it
    speaks. (The RFC's padded URL-safe form is `urlSafe` plus a stripped `=` tail; a third named pair would be a second spelling of two that exist.)
 2. **Decoding is strict**, as in Rust and Go and unlike Python: a byte outside the alphabet is
@@ -2230,11 +2230,11 @@ string h = hexEncode(bytes: v);                                 // "666f6f626172
    some bytes silently would have to decide which, and that decision is not its.
 4. **Hex writes lowercase and reads either case.** An odd digit count is `InvalidLength`. This is byte
    *encoding*, not integer *formatting* — `${x}` and `parseRadix` cover the number.
-5. **A deserializeJsonBuffer fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
+5. **A decode fails, it does not come up absent** — `Result`, never `Optional`, the `parse` line.
 
 Both directions allocate their result, so they are `@compileFor(!NOHEAP)` and absent from a `--no-heap`
 build, as `sort` is. The byte substrate is `ConstView<uint8>` in and `DynamicArray<uint8>` out; a `string`'s
-bytes reach `serializeJsonBuffer` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
+bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b in s)`.
 
 ### Command-line arguments + environment ✅
 
@@ -5454,7 +5454,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
   `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
   `@field(id: N)` / `@deprecated` / `@skip`, and one
-  entry pair per backend, `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the derive
+  entry pair per backend and source, e.g. `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src:)` (table below). A **hand-written `serialize`/`deserialize` wins** — the derive
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
   `beginObject`/`field`/`variant`/…) + `DeError`. That token vocabulary is the WHOLE protocol — an object graph
@@ -5466,9 +5466,9 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   per-backend graph code. What only the compiler can do (reflect over a node's fields, and dedup by object
   identity) stays with it; everything above that is the ordinary vocabulary.
   **Four back ends ship, and the three binary ones differ by ADDRESSING, not by medium** — so they live in one
-  module, `std::serialization::binary::kbin`, and each entry point names its addressing (none owns a bare `serializeJsonBuffer`,
-  because none is the default). Every binary form is byte-oriented: `serializeJsonBuffer` yields a `DynamicArray<uint8>` and
-  `deserializeJsonBuffer` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
+  module, `std::serialization::binary::kbin`, and each entry point names its addressing (`serializeKbinNamedBuffer`,
+  `…NumberedBuffer`, `…PositionalBuffer` — none is the default). Every binary form is byte-oriented: its `serialize…Buffer`
+  yields a `DynamicArray<uint8>` and its `deserialize…Buffer` takes bytes, not a `string`, since binary isn't valid UTF-8. All four stream over the same
   `Writer`/`Reader` substrate, so any of them flows to a file or socket.
 
   **Entry points are `serialize…`/`deserialize…`, and name the FORMAT and the SOURCE.** The verb matches the

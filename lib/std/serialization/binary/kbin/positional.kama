@@ -39,9 +39,8 @@ import {
 };
 
 // All three BINARY back ends live in this one module — they differ by addressing, not by medium, so a
-// separate module per addressing would have split one idea three ways. KBIN keeps the unqualified
-// `serializeJsonBuffer`/`deserializeJsonBuffer` (it was here first, and nothing outside the tree has to change); the other two carry
-// their addressing in the entry-point name.
+// separate module per addressing would have split one idea three ways. Each carries its addressing in its
+// entry-point name (`serializeKbinPositionalBuffer`, …); none owns an unqualified name.
 //
 // NAMING: `{Addressing}{Medium}Serializer` — the axes that actually distinguish the back ends, rather than
 // `…Writer`/`…Reader`, which collide with the `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>`
@@ -79,7 +78,7 @@ type resource KbinPositionalSerializer<W: Writer> implements Serializer {
     public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's POS into this writer's owned sink, then flush — the streaming twin of
-    // `serializeJsonBuffer`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
+    // `serializeKbinPositionalBuffer`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
         Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -313,7 +312,7 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalBuffer<T: Deserializable<T>>
     return T.deserialize(r: r);
 }
 
-// Decode from any `Reader` (a file, socket, …) — the streaming twin of `deserializeJsonBuffer`.
+// Decode from any `Reader` (a file, socket, …) — the streaming twin of `deserializeKbinPositionalBuffer`.
 fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);

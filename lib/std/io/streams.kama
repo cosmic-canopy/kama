@@ -81,7 +81,7 @@ fn Result<string, IoError> readAll(Reader r) {
 }
 
 // The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8
-// string via `finish()`. This is the sink behind serde's `serializeJsonBuffer -> string` sugar and fmt's to-string.
+// string via `finish()`. This is the sink behind serde's `serializeJsonBuffer -> string` and fmt's to-string.
 type resource StringWriter implements Writer {
     DynamicArray<uint8> buf;
 
@@ -110,7 +110,7 @@ type resource StringWriter implements Writer {
 
     // Move the accumulated bytes out as a raw `DynamicArray<uint8>`, leaving the writer empty. The byte-oriented
     // twin of `finish()` — for a binary sink whose output is not valid UTF-8 (embedded nulls, arbitrary bytes),
-    // so it must NOT go through `string`. Used by the binary serializer's `serializeJsonBuffer -> DynamicArray<uint8>`.
+    // so it must NOT go through `string`. Used by the binary serializers' `serializeKbin…Buffer -> DynamicArray<uint8>`.
     public fn DynamicArray<uint8> takeBytes() {
         DynamicArray<uint8> taken = DynamicArray.empty();
         isize n = this.buf.length();
@@ -122,7 +122,7 @@ type resource StringWriter implements Writer {
 }
 
 // The in-memory `Reader`: reads out of an owned byte source (a `string`'s UTF-8 bytes). This is the source
-// behind serde's `deserializeJsonBuffer(string)` sugar. Single-pass, fully streamable, bounded memory in the reader's own
+// behind serde's `deserializeJsonBuffer(string)`. Single-pass, fully streamable, bounded memory in the reader's own
 // buffer (the source itself is held whole — that is the caller's `string`, by design for the sugar path).
 type resource SliceReader implements Reader {
     string src;

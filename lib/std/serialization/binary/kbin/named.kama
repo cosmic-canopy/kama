@@ -3,7 +3,7 @@
 // SAME format-agnostic `Serializer`/`Deserializer` token model (no compiler changes). Self-describing and
 // little-endian: every value is one TAG byte + a fixed-width LE payload, so `skipValue` works without a schema
 // and the format stays forward-compatible (unknown fields skip cleanly). Binary output is raw bytes (embedded
-// nulls, non-UTF-8), so `serializeJsonBuffer` yields a `DynamicArray<uint8>` and `deserializeJsonBuffer` takes bytes — NOT a `string`.
+// nulls, non-UTF-8), so `serializeKbinNamedBuffer` yields a `DynamicArray<uint8>` and `deserializeKbinNamedBuffer` takes bytes — NOT a `string`.
 //
 // TAG TABLE (1 byte):
 //   0x01 I8   0x02 I16  0x03 I32  0x04 I64        (LE two's-complement)
@@ -31,7 +31,7 @@ import {
 
 // One module holds all three BINARY addressings — they differ by how a field is addressed, not by
 // medium, so a module per addressing would have split one idea three ways. Each entry point NAMES its
-// addressing: none of the three owns the unqualified `serializeJsonBuffer`, because none of them is the default.
+// addressing: none of the three owns an unqualified `serializeBuffer`, because none of them is the default.
 //
 // NAMING: `{Addressing}{Medium}Serializer` — not `…Writer`/`…Reader`, which collided with the
 // `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>` used "Writer" for two unrelated
@@ -51,7 +51,7 @@ extern fn uint64 kama_f64_bits(float64 v);
 extern fn float64 kama_f64_from_bits(uint64 b);
 
 // Serializes KBIN straight into an owned `W: Writer` sink (a file, socket, buffered writer, or the in-memory
-// `StringWriter` behind `serializeJsonBuffer`). Owns its sink by value (kama forbids stored borrows). A failed byte write
+// `StringWriter` behind `serializeKbinNamedBuffer`). Owns its sink by value (kama forbids stored borrows). A failed byte write
 // LATCHES the sticky `err`/`code`; the generated `serialize` surfaces it once at the end.
 type resource KbinNamedSerializer<W: Writer> implements Serializer {
     W sink;
@@ -66,12 +66,12 @@ type resource KbinNamedSerializer<W: Writer> implements Serializer {
         this.code = SerError::NotRepresentable;
     }
 
-    // Borrow the underlying sink (e.g. so `serializeJsonBuffer` can `takeBytes()` its concrete StringWriter). W-agnostic.
+    // Borrow the underlying sink (e.g. so `serializeKbinNamedBuffer` can `takeBytes()` its concrete StringWriter). W-agnostic.
     public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
     public fn ref W innerRefMut() { return this.sink; }
 
     // Stream a `Serializable` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
-    // `serializeJsonBuffer` sugar (a generic free fn can't instantiate `KbinNamedSerializer<W>`, so this is an instance method the
+    // `serializeKbinNamedBuffer` sugar (a generic free fn can't instantiate `KbinNamedSerializer<W>`, so this is an instance method the
     // caller builds at a concrete site). Mirrors JsonSerializer.encodeValue.
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
@@ -265,7 +265,7 @@ fn Result<T, Owned<Error>> deserializeKbinNamedBuffer<T: Deserializable<T>>(Dyna
     return T.deserialize(r: r);
 }
 
-// Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully
+// Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `deserializeKbinNamedBuffer`. Drains the reader fully
 // into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
 fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();

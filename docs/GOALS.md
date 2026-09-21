@@ -33,7 +33,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    memory. Heap and buffers are reached only through safe abstractions: **collections** (`FixedArray<T>`/
    `DynamicArray<T>`/`string`) and the **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
    `Weak<T>`). These are compiler-known intrinsics whose unsafe internals (raw pointers,
-   `malloc`/`free`) live ONLY in `kama_runtime.h` — the Rust-`Vec`/Swift-`FixedArray` model: unsafe core, safe
+   `malloc`/`free`) live ONLY in `kama_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe
    API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
    **`unsafe fn`** + `UnsafePtr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
    (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape. (Self-hosting the
