@@ -119,9 +119,10 @@
 
     <article class="tile"><span class="kanji">型</span>
       <h3>Ownership is the type</h3>
-      <p>Every declaration says what it is: a <code>value</code> copies, a <code>resource</code>
-      moves and drops, a <code>view</code> borrows, a <code>contract</code> is the guarantee.
-      One greppable marker, no guessing.</p>
+      <p>Every declaration names its kind, and there are <b>exactly five</b>: a <code>value</code>
+      copies, a <code>resource</code> moves and drops, a <code>view</code> borrows, an
+      <code>enum</code> is a closed set you must match exhaustively, and a <code>contract</code> is
+      the guarantee. One greppable marker, no guessing.</p>
     </article>
 
     <article class="tile"><span class="kanji">果</span>
@@ -210,10 +211,10 @@
   </div>
 
   <p class="note">
-    What is <em>not</em> inherited is the ownership model. Every type declares what it owns — a
-    <code>value</code> copies, a <code>resource</code> moves and drops, a <code>view</code> borrows, a
-    <code>contract</code> is the guarantee — and that one decision is what buys memory safety without a
-    garbage collector and without a borrow checker, while leaving ordinary OOP intact.
+    What is <em>not</em> inherited is the ownership model. Every type declares what it owns, across the
+    same five kinds — <code>value</code>, <code>resource</code>, <code>view</code>, <code>enum</code>,
+    <code>contract</code> — and that one decision is what buys memory safety without a garbage collector
+    and without a borrow checker, while leaving ordinary OOP intact.
     <a href="/docs/type-model/">Read the type model →</a>
   </p>
 </section>
@@ -261,16 +262,16 @@
       for the same program in Go.</p>
     </article>
     <article class="tile"><h3>Honest gaps</h3>
-      <p>kama trails C slightly on <code>alloc</code> and sits behind on <code>map</code>, which compares
-      <em>library design</em>, not codegen — C has no stdlib hash map to enter there.
-      <code>map_kernel</code> runs one algorithm in every language.</p>
+      <p>{{benchGaps}} Every other native workload here is within a few percent either way.
+      <code>map</code> compares <em>library design</em>, not codegen — C has no stdlib hash map to enter
+      there — while <code>map_kernel</code> runs one hand-rolled algorithm in every language and lands at
+      C parity.</p>
     </article>
   </div>
 
   <p class="note">
     Measured on {{benchArch}} in a pinned container, {{benchDate}} — every language must return the same
-    checksum or the run fails. C#, Java, Lua and Python are in the data but off this graph: at 5–40× they
-    would flatten the cluster above. See the
+    checksum or the run fails. {{benchOffGraph}} See the
     <a href="/docs/benchmarks/">full benchmark tables</a> for every language, peak memory, binary size,
     compile time, the WebAssembly track, and the caveats that come with each.
   </p>

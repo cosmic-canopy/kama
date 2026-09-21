@@ -87,6 +87,43 @@ export function benchSection(root) {
     return null;
   })();
 
+  // THE HONEST-GAPS TILE, derived rather than written. It used to be prose, and prose goes stale
+  // silently: it claimed kama "sits behind on map" long after a benchmark-fairness fix had taken that
+  // from 1.70x to 1.07x. Anything that names a number about ourselves has to come off the same rows
+  // the chart does, or the site is arguing with its own table.
+  const time = (l, w) => { const v = at(l, w, 'time_ms'); return v ? Number(v) : null; };
+  const gaps = workloads.map(w => {
+    const k = time('kama', w);
+    const rivals = [['C', time('c', w)], ['C++', time('cpp', w)]].filter(([, t]) => t);
+    if (!k || !rivals.length) return null;
+    const [name, best] = rivals.reduce((a, b) => (b[1] < a[1] ? b : a));
+    return { w, ratio: k / best, name };
+  }).filter(g => g && g.ratio > 1.05)
+    .sort((a, b) => b.ratio - a.ratio);
+  const pct = r => `${Math.round((r - 1) * 100)}%`;
+
+  // The languages measured but NOT plotted, and how far out they actually sit. Derived for the same
+  // reason as the gaps: the hardcoded copy said "5-40x" when the real spread was 1.4x to over 1000x —
+  // Python on `math` is three orders of magnitude off, which "40x" quietly flattered.
+  const offGraph = (() => {
+    const others = [...new Set(data.rows
+      .filter(r => r.track === 'native' && !LANGS.includes(r.lang))
+      .map(r => r.lang))];
+    const ratios = [];
+    for (const l of others)
+      for (const w of workloads) {
+        const a = time(l, w), b = time('kama', w);
+        if (a && b) ratios.push(a / b);
+      }
+    if (!others.length || !ratios.length) return null;
+    const names = others.map(l => ({ csharp: 'C#', java: 'Java', lua: 'Lua', python: 'Python' }[l] || l));
+    const lo = Math.min(...ratios), hi = Math.max(...ratios);
+    const fmt = r => (r >= 100 ? `${Math.round(r / 100) * 100}\u00d7` : `${r.toFixed(1)}\u00d7`);
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+         + ` are in the data but off this graph: from ${fmt(lo)} to over ${fmt(hi)} they would flatten`
+         + ` the cluster above.`;
+  })();
+
   const env = data.env || {};
-  return { panels, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, env };
+  return { panels, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, gaps, pct, offGraph, env };
 }
