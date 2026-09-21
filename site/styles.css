@@ -180,6 +180,47 @@ body:not(.home) .topnav { border-bottom: 1px solid var(--line-2); }
   padding: .7rem .9rem; max-width: 100%; overflow-x: auto;
 }
 
+/* Rotating claims under the install line. Five lines share one box, each visible for 3s of a 15s
+   loop. No JS: a keyframe per item with a staggered delay does the whole thing, so it cannot break
+   and needs nothing loaded. The box RESERVES its height (two lines' worth, since the longer claims
+   wrap on a phone) rather than being sized by whichever line is showing — otherwise every switch
+   would nudge the page. */
+.rotator {
+  /* ⚠️ `width: 100%` is load-bearing, not tidiness. `.hero-copy` is a flex COLUMN with
+     `align-items: flex-start`, so every child is shrink-to-fit — and this box's children are all
+     `position: absolute`, which leaves it with no in-flow content and therefore zero content width.
+     The absolute spans then inherit a 0-wide containing block and wrap one character per line, which
+     renders the claims VERTICALLY. */
+  position: relative; width: 100%; margin: 0; min-height: 3.1em;
+  font: 600 .95rem/1.55 var(--font-ui); color: #fff;
+}
+.rotator span {
+  position: absolute; inset: 0; opacity: 0;
+  animation: rotate-claim 15s linear infinite;
+}
+.rotator span:nth-child(1) { animation-delay:  0s; }
+.rotator span:nth-child(2) { animation-delay:  3s; }
+.rotator span:nth-child(3) { animation-delay:  6s; }
+.rotator span:nth-child(4) { animation-delay:  9s; }
+.rotator span:nth-child(5) { animation-delay: 12s; }
+@keyframes rotate-claim {
+  0%   { opacity: 0; transform: translateY(.35em); }
+  2%   { opacity: 1; transform: none; }
+  18%  { opacity: 1; transform: none; }
+  20%  { opacity: 0; transform: translateY(-.35em); }
+  100% { opacity: 0; transform: translateY(.35em); }
+}
+/* ⚠️ MUST come after the rules above, not in the reduced-motion block near the top of this file.
+   These selectors have the same specificity as those, so the later declaration wins — sited earlier,
+   every line here was silently overridden and the rotator kept animating. */
+@media (prefers-reduced-motion: reduce) {
+  /* Show the first claim and stop. A rotator is motion nobody asked for; the other four stay in the
+     DOM for a screen reader, they just do not move. */
+  .rotator { min-height: 0; }
+  .rotator span { animation: none; position: static; opacity: 0; }
+  .rotator span:first-child { opacity: 1; }
+}
+
 /* ------------------------------------------------------------------ home sections */
 .band { border-bottom: 1px solid var(--line-2); }
 .claim {

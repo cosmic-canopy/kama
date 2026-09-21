@@ -1,7 +1,7 @@
 <header class="hero">
 {{scene}}
   <div class="hero-copy">
-    <p class="eyebrow"><span class="tick"></span>鎌 · the sickle language</p>
+    <p class="eyebrow"><span class="tick"></span>鎌 · Japanese farming tool, and weapon</p>
     <h1>Cut the bloat.<br><em>Keep the edge.</em></h1>
     <p class="lede">
       No garbage collector. No exceptions. No half-dozen ways to say the same thing. <strong>kama</strong>
@@ -14,6 +14,16 @@
       <a class="btn" href="/docs/tour/">Take the tour</a>
     </div>
     <code class="hero-cmd">$ curl -fsSL https://kama-lang.org/install.sh | sh</code>
+    <!-- Rotating claims. CSS-only on purpose: no JS to fail, no layout shift (the box is sized to the
+         tallest line at every breakpoint), and `prefers-reduced-motion` collapses it to the first
+         line instead of cycling. All five stay in the DOM, so a screen reader gets every claim. -->
+    <p class="rotator" role="list">
+      <span role="listitem">The first AI-first, human-friendly language</span>
+      <span role="listitem">The ultimate type designer&rsquo;s language</span>
+      <span role="listitem">The opt-in, pay-for-what-you-use language</span>
+      <span role="listitem">The safe, explicit-over-implicit language</span>
+      <span role="listitem">The modern systems language</span>
+    </p>
   </div>
 </header>
 
