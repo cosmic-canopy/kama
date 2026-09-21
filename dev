@@ -122,6 +122,19 @@ case "$task" in
     ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)   # kama-bin.sh is SOURCED and needs $ROOT
     . "$ROOT/tools/kama-bin.sh"
     tmp=$(mktemp -d); rc=0
+    # The proc_* fixtures drive tests/support/procutil, which run_tests.sh builds and exports once. Without
+    # it here they failed with their own "helper missing" exit codes, every time, which read as a
+    # std::process regression. Same build, same variables.
+    case " $* " in *" proc_"*|*" tests/proc_"*)
+      pu="$tmp/procutil"
+      case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) pu="$tmp/procutil.exe" ;; esac
+      "$KAMA" build tests/support/procutil.kama -o "$pu" >/dev/null 2>&1 || { echo "FAIL procutil (helper build failed)"; exit 1; }
+      export KAMA_PROCUTIL_BASE="$(basename "$pu")"
+      case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) export KAMA_PROCUTIL="$(cygpath -w "$pu")" KAMA_PROCUTIL_DIR="$(cygpath -w "$tmp")" ;;
+        *)                    export KAMA_PROCUTIL="$pu" KAMA_PROCUTIL_DIR="$tmp" ;;
+      esac ;;
+    esac
     for n in "$@"; do
       n=${n%.kama}; n=${n#tests/}
       src="tests/$n.kama"; exp="tests/$n.expect"

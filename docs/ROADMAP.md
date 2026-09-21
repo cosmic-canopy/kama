@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-80**
+**Next id: KR-87**
 
 ## The shape
 
@@ -90,6 +90,11 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-57 | **A binding may take the name of a function in scope** — SPEC says kama has no shadowing, but `fn int32 use(int32 helper) { return helper + helper(); }` builds and runs; with a bare PRELUDE function (`args`, `print`) the emitted C local shadows the C function and clang refuses what kama accepted. Refuse the binding like every other shadowing, not rename it in C | S? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-62 | **A generic instance named only inside `sizeof`/`alignof` is never instantiated** — `usize s = sizeof(DynamicArray<int64>);` (or `Simd<float32>#(4)`) with no other use of the type reaches clang as an undeclared identifier; kama accepted it. Register the instance when the operand is resolved, as a local declaration does | S? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-68 | **The OS seam needs 25 system headers because it ships bodies** — ⚠️ **re-scoped 2026-09-18 after its fan-out half was split out and shipped (`0.9.408`); measure AFTER that, which may retire this one.** ✅ **MEASURED ON WINDOWS 2026-09-20, and the fan-out half is KEPT** — the revert condition is not met, by a wide margin. The same 7-file/17-TU program, same method (interleaved A/B, min of 40), on the Windows VM: an innocent TU preprocesses in **132 ms with the fix against 237 ms without — 104.5 ms saved per TU, and 1.79x**. Deterministic and noise-free beside it: **7,029 preprocessed lines / 855 macros with, 65,652 / 21,749 without**, where macOS differed by 164 lines. So the union was charging every TU the whole of `<windows.h>`, which is the cost both halves were filed for, and macOS's 0.32 ms was the platform where it does not bite rather than the verdict. ⚠️ The ABSOLUTE numbers are QEMU-inflated (this box emulates x64) — the ratio and the line counts are the finding. What is left here is DEPTH, not fan-out: `kama_os.h` pulls `<windows.h>`/`<winsock2.h>`/`<dirent.h>`/… only because its `static inline` bodies need them, and plain prototypes over plain C types would need none. Re-measured natively (macOS): `kama_os.h` 27.9 ms / 4,269 macros vs `kama_runtime.h` 22.3 ms / 1,112 — so **5.6 ms per TU here against the Windows VM's 2x and 21,748 macros: mostly a WINDOWS win**. Costs inlining of the thin syscall wrappers (the performance invariant applies), so the tradeoff is measured on a native box before any code. ⚠️ **The `--no-heap` verdict READS those bodies** (`0.9.401`) — the TU they move to joins that scan in the same commit, at no cost (measured below noise); `tools/check-header-scan.sh` is the tripwire. ⚠️ Separately measured and unrowed: `kama_runtime.h` is the DOMINANT per-TU cost on macOS (~18 of 22.5 ms), bigger than the OS seam | M? | [§9](ROADMAP_DETAIL.md#s9) |
+| KR-80 | **`friend` accessor holes** — a grant to a generic free function is accepted and inert; type arguments on the accessor are ignored (`friend Box<int64>[v]` admits `Box<int32>`); the member list cannot name the `copy` ctor, an operator or a `comptime` member | S? | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-81 | **`"${this.f}"` is a parse error** — the hole grammar wants an identifier head and `this` is a keyword, so the natural spelling inside a method is refused while `${p.x}` works | S | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-82 | **Text files are bytes-only** — no `string`↔bytes conversion outside `std::io` internals and no `readText`/`writeText`, so writing a string to a file is a hand loop | S | [§1](ROADMAP_DETAIL.md#s1) |
+| KR-83 | **Extended `asm` (operand constraints) and `@naked` functions** — SPEC called them "tracked follow-ons" with no row; they are the MCU seam's remaining half | — | [§5](ROADMAP_DETAIL.md#s5) |
+| KR-85 | **`int32 d = 1i32 << 31;` is refused** although `1i32 << 31` is INT32_MIN by SPEC — the initializer's range check folds a suffixed shift unbounded | S? | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — tooling & ecosystem
 
@@ -103,6 +108,8 @@ Most of this gates on the repo going public.
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-84 | **`kama describe --json`** — the language surface as data, the other half of `kama query --json` (GOALS §7) | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-86 | **A stray empty `a.o` appears in the repo root during `./dev check`** — committed once by accident; no single guard reproduces it | [§10](ROADMAP_DETAIL.md#s10) |
 
 ## FUTURE — the big arcs, in this order
 

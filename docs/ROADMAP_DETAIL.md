@@ -240,12 +240,50 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
+### Text files are bytes-only (KR-82) — found 2026-09-21 writing the tour's stdlib walk
+
+`std::fs::writeFile` and `readFile` take and return `DynamicArray<uint8>`, and there is no conversion
+between a `string` and its bytes in either direction outside `std::io`'s internals — so writing a string to
+a file is a hand loop over `s[i]` (tests/io_lines.kama's `bytesOf`), and reading one back goes through a
+`Reader` and `readAll`. Every comparator has the one-call form (Go `os.WriteFile([]byte(s))`, Rust
+`fs::write(path, s)` / `read_to_string`). Wants: `string.bytes()` (a `ConstView<uint8>`), a checked
+`string` from UTF-8 bytes returning `Result`, and `readText`/`writeText` in `std::fs`.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
+
+### `friend` accessor holes (KR-80) — found 2026-09-21 in the docs audit, `0.9.417`
+
+Three shapes the corresponding-instance work (`0.9.300`, item 2 below) did not cover, all probed:
+- **A generic FREE FUNCTION as the accessor is accepted and inert.** `friend reader[v];` naming
+  `fn int32 reader<T>(ref Box<T> b)` compiles, and the call inside `reader` is still "'v' is private". It is
+  not refused as unknown either, so the grant is silently nothing.
+- **Type arguments on the accessor are ignored.** `friend Box<int64>[v]` lets `Box<int32>` in. Either the
+  arguments mean something (the grant is to that instance) or they are refused; ignored is neither.
+- **The member list takes plain identifiers only**, so the `copy` ctor, an operator and a `comptime`
+  member cannot be granted (the parse error even says `copy` CAN name a binding). SPEC says a type's
+  `comptime` members are visibility-controlled, so a grant should reach them.
+Protected members, destructors and statics were checked and behave. SPEC § *Access control* names the
+three holes and links here.
+
+### A string hole cannot name a field through `this` (KR-81) — found 2026-09-21, `0.9.417`
+
+`"${this.id}"` is a parse error — "unexpected THIS, expecting IDENTIFIER" — because the hole grammar takes an
+identifier with member/index accessors and `this` is a keyword. Every other field path works (`${p.x}`,
+`${xs[0]}`), so inside a method the natural spelling is the one refused, and the workaround is a local
+(`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
+of a hole's path; nothing else about the hole rule changes.
+
+### A suffixed shift cannot initialize its own width (KR-85) — found 2026-09-21, `0.9.420`
+
+`int32 d = 1i32 << 31;` is refused ("cannot be initialized with 2147483648") although SPEC and
+`tests/num_cast.kama` say `1i32 << 31` IS the `int32` INT32_MIN — the comparison form the fixture uses
+passes; the initializer does not. The destination range check folds the shift as an unbounded integer
+instead of at the left operand's width. Present at `0.9.419`, before the literal-shift change.
 
 ### A generic instance named only in `sizeof`/`alignof` is never instantiated (KR-62) — found 2026-09-16, `0.9.366`
 
@@ -1999,6 +2037,13 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.
 
+- **Extended `asm` and `@naked` (KR-83).** `asm("…")` ships as one volatile, full-barrier string with no
+  operands (SPEC *Inline assembly*) — enough for `wfi`/`cpsid`/`dsb`, not for reading a register into a kama
+  local or for a context switch. The two missing pieces are **operand constraints** (the GCC extended-asm
+  `"=r"(x)` shape, spelled with named arguments) and **`@naked` functions** (no prologue/epilogue — an RTOS
+  context switch or a reset handler written in kama). SPEC called both "tracked follow-ons" with no row until
+  the docs audit; this is the row. Scope it against a real board's needs before choosing a spelling.
+
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
@@ -2481,6 +2526,17 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+- **`kama describe --json` (KR-84)** — GOALS §7's "other half" of self-description: the language surface
+  itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an
+  agent or an editor reads it rather than scraping KEYWORDS.md. `kama query --json` is the program half and
+  ships. Unscheduled; GOALS.md names this row.
+- **A stray empty `a.o` appears in the repo root during `./dev check` (KR-86)** — found 2026-09-21. It was
+  COMMITTED once by accident (`0.9.402`, removed in the docs audit), and it came back at 17:33:58 during a
+  `./dev check`, 20 s in, with no agent running. Running each guard alone in series flagged three
+  (`check-buildsettings`, `check-debug-info`, `check-target`) and none reproduces alone, so it is either an
+  interaction between parallel guards or a detached child outliving its guard. 0 bytes, so no real C
+  compiler wrote it. `check-clean-tree.sh` cannot see it: it checks its own builds, not the root.
 
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
