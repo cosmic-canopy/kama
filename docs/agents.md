@@ -23,7 +23,8 @@ kama agents print --package               # the package half, for a library that
 
 The content lives in **`AGENTS.md`, once**. Every other file is a pointer, never a copy, so there is
 one thing to edit and nothing to keep in sync. `AGENTS.md` is an
-[open cross-tool standard](https://agents.md) read natively by 25+ agents.
+[open cross-tool standard](https://agents.md) that most coding agents read natively; `kama agents
+list` shows the ones kama knows and which of them need a pointer file.
 
 A project whose manifest says `"kind": "library"` also gets **`AGENTS.package.md`** beside it — the half
 only a package that will be published needs: the `"kama"` floor, `tests/` as one program, vendoring a C
@@ -73,8 +74,14 @@ or a dependency — only code the package owns.
 $ kama query tests/query/shapes.kama --symbols
 6:11 value Point
 7:17 field x
+8:17 field y
 8:34 ctor Point.at
+11:14 resource Widget
+12:10 field origin
+13:16 ctor Widget.make
+14:20 method Widget.originX
 17:9 function midpoint
+24:9 function main
 ```
 
 ### `--complete L:C` — candidates, with real signatures
@@ -101,6 +108,7 @@ $ kama query tests/query/shapes.kama --refs 6:11
 tests/query/shapes.kama:6:11
 tests/query/shapes.kama:12:4
 tests/query/shapes.kama:13:21
+…                                  (ten in all — every spelling of `Point`, declaration included)
 
 $ kama query tests/query/shapes.kama --sighelp 18:26
 sig=Point.at(x: int32, y: int32) -> Point active=1
@@ -118,9 +126,9 @@ shows up as `-` rather than waiting to be noticed.
 
 ```console
 $ kama query tests/query/shapes.kama --coverage
-4:10 shapes unresolved
 6:5 value -
 6:11 Point decl:value
+7:17 x decl:field
 ```
 
 ### `--json`
@@ -259,7 +267,7 @@ just those) and prints a human table, or `--json` for a machine:
 
 ```sh
 kama stats kama.json          # the report
-kama stats kama.json --json   # {lines,types,functions,generics,ffi,gates,modules,largest}
+kama stats kama.json --json   # {schema,mode,file,lines,types,functions,generics,ffi,gates,modules,largest,errors}
 ```
 
 Reach for it before reading a codebase you do not know, and instead of `wc -l`/`cloc` — the numbers come
@@ -305,13 +313,15 @@ program comes back as much-demangled-as-it-can-be rather than wrong.
 ## Cost
 
 Every invocation re-parses and re-analyzes the prelude and every imported `std::` module, so there
-is a fixed floor per process — roughly 0.05 s for a file with no imports, 0.33 s for one importing
-`std::collections` plus `std::fmt` and `std::math`, whether or not a symbol from them is used.
+is a fixed floor per process — on an Apple-silicon Mac at `0.9.419`, about 0.03 s for a file with no
+imports and 0.07 s for one importing from `std::collections`, `std::fmt` and `std::math`, whether or
+not a symbol from them is used.
 
-**Answering a question off the built index costs 0.03–1.33 ms against that ~210 ms floor**, so the
+**Answering a question off the built index costs well under a millisecond against that floor**, so the
 cost of a query is essentially the cost of *starting* one. Ask everything about a file in a single
-invocation rather than shelling out per identifier: three questions in one process is ~0.23 s, the
-same three as separate processes is ~0.68 s, and the gap widens linearly with every question you add.
+invocation rather than shelling out per identifier: three questions in one process cost the same as one,
+while the same three as separate processes cost three floors, and the gap widens linearly with every
+question you add.
 (The floor itself is tracked in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §9 — the fix is a cached front end.)
 
 ## Why not the LSP?

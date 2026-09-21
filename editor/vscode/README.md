@@ -1,7 +1,8 @@
 # kama for VS Code
 
-Syntax highlighting, a language server (live diagnostics, go-to-definition, rename, completion)
-and zero-config breakpoint debugging for the [kama](https://kama-lang.org) language (`.kama`).
+Syntax highlighting, the kama language server (live diagnostics, go-to-definition, rename,
+completion, an auto-import fix) and zero-config breakpoint debugging for the
+[kama](https://kama-lang.org) language (`.kama`).
 
 ## Requirements
 
@@ -34,6 +35,7 @@ and gives you, as you type and with **no build required**:
 - the **document outline** (Ctrl-Shift-O / breadcrumbs) and **workspace symbols** (Ctrl-T)
 - **semantic highlighting** layered over the TextMate grammar — the resolver knows which names are
   types, fields, locals or parameters, which a regex cannot
+- an **auto-import quick fix** (Ctrl-.) on a name you have not imported yet
 
 ## Debugging (breakpoints, call stack, locals)
 
@@ -41,8 +43,10 @@ kama compiles to C with `#line` directives back to your `.kama`, so a debug buil
 breakpoint-debuggable like any native program — and what you inspect reads as kama, not as the C.
 
 1. Open a `.kama` file and set a breakpoint in the gutter.
-2. Press **F5** (or run *"kama: Debug Current File"*). The build task runs
-   `kama build ${file} -o …` (debug default: `-g -O0`), then CodeLLDB launches it.
+2. Press **F5** (or run *"kama: Debug Current File"*). The extension builds a debug binary
+   (`-g -O0`) and CodeLLDB launches it. A file inside an executable project is built as that
+   project — `kama build <kama.json>`, into the project's `out/f5/` — so its imports resolve; a file
+   with no project around it is built alone.
 3. Execution stops **in the `.kama` source**; Variables shows locals and params, and the Call Stack
    shows kama frames.
 

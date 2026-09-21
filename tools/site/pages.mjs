@@ -32,7 +32,7 @@ export const PAGES = [
   { src: 'docs/editors.md',            url: '/docs/editors/',         nav: 'Editor setup',     group: 'Guides',
     blurb: 'One language server, eight editors: VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate, Zed.' },
   { src: 'docs/agents.md',             url: '/docs/agents/',          nav: 'AI agents',        group: 'Guides',
-    blurb: 'Ask the compiler instead of guessing: kama query, the AGENTS.md kama ships, and why `check` is not the type check.' },
+    blurb: 'Ask the compiler instead of guessing: kama query, the AGENTS.md kama ships, and what `check` does and does not catch.' },
   { src: 'docs/targets.md',            url: '/docs/targets/',         nav: 'Targets',          group: 'Guides',
     blurb: 'Native, WebAssembly and cross-compilation — target triples and how to get a toolchain.' },
   { src: 'docs/mcu.md',                url: '/docs/mcu/',             nav: 'Microcontrollers', group: 'Guides',

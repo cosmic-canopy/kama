@@ -500,10 +500,10 @@ any `os=none` triple on the host arch.
 ## Output kinds
 
 ```sh
-kama build app.kama                            # EXE (default)
-kama build app.kama --shared                   # SHARED  -> .dylib / .so / .dll
-kama build lib.kama --select OUTPUT=STATIC     # STATIC  -> libapp.a
-kama build lib.kama --select OUTPUT=OBJECT     # OBJECT  -> app.o
+kama build app.kama                            # EXE (default)  -> app
+kama build app.kama --shared                   # SHARED  -> app.dylib / app.so / app.dll
+kama build app.kama --select OUTPUT=STATIC     # STATIC  -> libapp.a
+kama build app.kama --select OUTPUT=OBJECT     # OBJECT  -> app.o
 ```
 
 The extension follows the **target**, so a Windows build from a Mac produces `.dll`, not `.dylib`. A
@@ -651,6 +651,25 @@ that touches a runtime header and a switch from clang to gcc all rebuild what th
 Two shapes have no per-unit objects to cache, and get nothing from it: a **`--release`** build (the program
 folds into one unity translation unit) and any build pinned to `-j 1`. A **`zig cc`** toolchain brings its
 own content-addressed cache, which is why kama clamps it to one invocation and stays out of its way.
+
+## Environment variables
+
+Every variable the toolchain reads, in one place. None is needed for an ordinary build.
+
+| variable | read by | effect |
+|---|---|---|
+| `KAMA_BUILD_JOBS` | `kama build` | parallel C compiles when `-j` is not given (default: the core count) |
+| `KAMA_PATH` | module resolution | extra `:`-separated roots searched for an `import`, after the manifest and before the bundled stdlib |
+| `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
+| `KAMA_PTHREAD_POOL` | wasm builds | isolate worker slots to pre-warm (default 0) |
+| `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |
+| `KAMA_VERSION` | the `kama` selector, `install.sh` | run (or install) this toolchain version, `vX.Y.Z` ([packages.md](packages.md#toolchain-versions)) |
+| `KAMA_NO_SELECT` | the `kama` selector | run the binary you invoked, ignoring every pin |
+| `KAMA_STORE` | `kama pkg` | the shared package store (default `~/.kama/store`) |
+| `KAMA_HOME` / `KAMA_NO_STD` | `install.sh` | install prefix (default `~/.kama`); skip the bundled stdlib |
+| `KAMA_LSP_MAX_FILES` | `kama lsp` | the cap on a guessed, manifest-less project ([editors.md](editors.md)) |
+| `KAMA_TIMING` | every analysis | `1` prints one `kama-timing:` line per analysis to stderr; `2` adds one per unit |
+| `KAMA_PRUNE_TRACE` / `KAMA_NO_PRUNE` | module resolution | report what import pruning decided / turn pruning off — diagnosis only |
 
 ## Platform notes
 

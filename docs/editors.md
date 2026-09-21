@@ -39,6 +39,13 @@ Advertised by `kama lsp` today, in every editor:
 | semantic highlighting | `textDocument/semanticTokens/full` |
 | auto-import quick fix on an unimported name | `textDocument/codeAction` (`quickfix`) |
 
+**What the server treats as one program.** A file inside a project — under the `source` root of a
+`kama.json` — is analyzed with that project, however large. A file no manifest owns is analyzed with every
+`.kama` under its workspace root, a *guess* that is capped at 500 files: past that, unrelated files (a test
+corpus, each with its own `main`) would be analyzed as one program and rename would reach the wrong ones.
+The fix for a large tree is a `kama.json`, which removes the cap; `KAMA_LSP_MAX_FILES` raises it instead
+for a tree you know is one program (`0` = no limit).
+
 ## Debugging
 
 VS Code's F5 builds a debug binary and launches CodeLLDB; the emitted C carries `#line`, so execution
@@ -118,7 +125,7 @@ and not every editor has all three:
 | **VS Code** | all | TextMate grammar (shipped in the extension) **+ semantic tokens** |
 | **Sublime Text** | all | the same TextMate grammar — see below |
 | **Neovim** | all | semantic tokens **+ tree-sitter** (optional, via nvim-treesitter) |
-| **Vim** (coc.nvim) | all | semantic tokens **+ tree-sitter** (optional, via nvim-treesitter) |
+| **Vim** (coc.nvim) | all | semantic tokens only (nvim-treesitter is Neovim-only) |
 | **Emacs** (eglot) | all | semantic tokens only |
 | **Kate** | all | semantic tokens only |
 | **Helix** | all | tree-sitter grammar **+ semantic tokens** |
@@ -244,12 +251,14 @@ outline.*
 eglot is built in from Emacs 29. In your init file:
 
 ```elisp
-(add-to-list 'auto-mode-alist '("\\.kama\\'" . prog-mode))
+(define-derived-mode kama-mode prog-mode "kama")
+(add-to-list 'auto-mode-alist '("\\.kama\\'" . kama-mode))
 (with-eval-after-load 'eglot
   (add-to-list 'eglot-server-programs '(kama-mode . ("kama" "lsp"))))
 ```
 
-If you use a dedicated major mode rather than `prog-mode`, name it in both places. `M-x eglot` in a `.kama`
+The first line gives `.kama` a mode of its own for eglot to key on; if you use a richer major mode, name
+it in the last two lines instead. `M-x eglot` in a `.kama`
 buffer starts the server; `eglot-ensure` in a mode hook makes it automatic.
 
 lsp-mode users: register with `lsp-register-client` and `(lsp-stdio-connection '("kama" "lsp"))`.
@@ -320,7 +329,7 @@ for. The grammar lives in a subdirectory of the compiler repo, which is what `su
 ```toml
 [[grammar]]
 name = "kama"
-source = { git = "https://github.com/cosmic-canopy/kama", rev = "b4a8b2870916836425793f3db015c7a9d4176e25", subpath = "tree-sitter-kama" }
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "593729866f459cf402ab83df66696981bd4474a9", subpath = "tree-sitter-kama" }
 ```
 
 If you are working on the grammar itself, point it at your checkout instead — a local path needs no git, no

@@ -129,6 +129,18 @@ if [ -f "$ZED_TOML" ]; then
             fi
         fi
     fi
+    # 2e. HELIX PINS THE SAME GRAMMAR, IN TWO PLACES. Helix builds from a `[[grammar]]` rev too — once in the
+    #     shipped editor/helix/languages.toml and once in the snippet docs/editors.md tells users to paste —
+    #     and nothing held either down: by 0.9.417 the two disagreed with each other AND with Zed's, while the
+    #     doc claimed the file existed "so it cannot rot silently". Both must equal Zed's rev, which §2c/§2d
+    #     already prove is the current grammar; one rule, checked once.
+    for f in "$ROOT/editor/helix/languages.toml" "$DOC"; do
+        hrev=$(sed -n 's/.*cosmic-canopy\/kama", rev = "\([0-9a-f]*\)".*/\1/p' "$f" | head -1)
+        if [ -z "$hrev" ]; then bad "${f#$ROOT/} has no Helix [[grammar]] rev to check"
+        elif [ -n "$rev" ] && [ "$hrev" != "$rev" ]; then
+            bad "${f#$ROOT/} pins the Helix grammar at $hrev but Zed pins $rev — set both to $rev"
+        fi
+    done
 fi
 
 # 3. Each snippet has to teach the editor about `.kama` — none of them ship a kama file type.

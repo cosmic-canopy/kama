@@ -15,13 +15,15 @@ const fs = require('fs');
 const cp = require('child_process');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 const names = require('./names');
-const { kamaOperand } = names;
+const { kamaOperand, findManifest } = names;
 
 // This platform spelled the way the Makefile's `uname -s`-`uname -m` spells it, or null if we
 // can't map it (then we just fall back to the root ./kama below).
 function platformDir() {
   const os = { darwin: 'Darwin', linux: 'Linux' }[process.platform];
-  const arch = { arm64: 'arm64', x64: 'x86_64' }[process.arch];
+  // `uname -m` says `arm64` on macOS but `aarch64` on Linux — the build dir is `out/Linux-aarch64/`.
+  const arm = process.platform === 'linux' ? 'aarch64' : 'arm64';
+  const arch = { arm64: arm, x64: 'x86_64' }[process.arch];
   return os && arch ? os + '-' + arch : null;
 }
 
@@ -66,9 +68,9 @@ function findKama() {
   return 'kama' + EXE;
 }
 
-function build(kama, file, out) {
+function build(kama, operand, out) {
   return new Promise((resolve) => {
-    cp.execFile(kama, ['build', file, '-o', out], (err, stdout, stderr) => {
+    cp.execFile(kama, ['build', operand, '-o', out], (err, stdout, stderr) => {
       resolve({ ok: !err, message: (stderr || stdout || (err && err.message) || '').trim() });
     });
   });
@@ -153,23 +155,38 @@ async function debugCurrentFile() {
   }
   await ed.document.save();
   const file = ed.document.fileName;
-  const out = file.replace(/\.kama$/i, '');
+  const folder = vscode.workspace.getWorkspaceFolder(ed.document.uri);
   const kama = findKama();
+
+  // A file inside an executable project is built AS the project: `kama build <file>` is a loose build,
+  // which reads no manifest, so any `import` of the project's own modules fails to resolve. The program
+  // F5 debugs is then the project's entry, built into the project's own `out/`.
+  const manifest = findManifest(path.dirname(file), folder ? folder.uri.fsPath : undefined);
+  let operand = file;
+  let out = file.replace(/\.kama$/i, '');
+  if (manifest) {
+    try {
+      const m = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      if (m.kind === 'executable') {
+        operand = manifest;
+        out = path.join(path.dirname(manifest), 'out', 'f5', (m.name || 'app') + EXE);
+      }
+    } catch (_) { /* unreadable manifest: fall back to the file, and let kama report it */ }
+  }
 
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'kama: building debug build…' },
-    () => build(kama, file, out)
+    () => build(kama, operand, out)
   );
   if (!result.ok) {
     vscode.window.showErrorMessage('kama build failed: ' + (result.message || 'see terminal'));
     return;
   }
 
-  const folder = vscode.workspace.getWorkspaceFolder(ed.document.uri);
   await vscode.debug.startDebugging(folder, {
     type: 'lldb',                       // CodeLLDB (shipped via this extension's pack)
     request: 'launch',
-    name: 'kama: ' + path.basename(file),
+    name: 'kama: ' + path.basename(operand === file ? file : path.dirname(operand)),
     program: out,
     args: [],
     cwd: folder ? folder.uri.fsPath : path.dirname(file),
@@ -177,7 +194,7 @@ async function debugCurrentFile() {
     // The SAME opt-in a user's own launch.json writes. Everything else — the formatters, the name
     // layer's session marker — is filled in by the configuration provider below, so this command and a
     // hand-written configuration take one code path and cannot drift into behaving differently.
-    kama: file,
+    kama: operand,
   });
 }
 

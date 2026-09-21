@@ -392,6 +392,7 @@ declares its siblings the same way it declares anything else — as a path depen
   "name": "net",
   "version": "0.1.0",
   "kind": "library",
+  "modules": { ".": { "visibility": "public" } },
   "dependencies": { "config": { "path": "../config" } }
 }
 ```
@@ -441,9 +442,6 @@ That `kama check` is also each member's portability gate: with no configuration 
 `@compileFor` and file gate the member contains, so a wasm-only or Windows-only file is analyzed even on
 a Linux runner (SPEC *Conditional compilation*). Nothing cross-compiles — it is kama's own analysis.
 
-Without either key nothing breaks — the tooling infers the file set as before. These keys buy precision
-and remove the cap. If you have a large tree that genuinely is one program and you'd rather not declare
-it, `KAMA_LSP_MAX_FILES` raises the inference cap (`0` = no limit).
 
 ## Adding a dependency
 
@@ -461,7 +459,9 @@ kama pkg add kama.json utils --path ../utils        # a sibling checkout
 {
   "name": "myapp",
   "version": "0.1.0",
+  "kind": "executable",
   "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
   "dependencies": {
     "geo":   { "git": "https://example.com/geo.git", "rev": "v1.0.0" },
     "mathx": { "url": "https://example.com/mathx-1.2.0.tar.gz" },
@@ -683,7 +683,7 @@ under `--dev`:
 kama pkg add --dev kama.json testkit --git https://example.com/testkit.git --rev v1.0.0
 kama pkg install kama.json   # also materializes .kama/dev-deps
 kama run kama.json --dev     # dev-dependencies on the import path
-kama build src/app.kama --dev
+kama build kama.json --dev
 ```
 
 A production build that tries to import a dev-dependency fails to resolve it — the boundary
@@ -728,7 +728,7 @@ entry it declares *extends* the valid flag universe.
                   "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } } },
   "overrides":  { "geometry": { "path": "../geometry" } },           // install-time (kama pkg install)
   "registries": { "default": ["file:///srv/mirror"] },              // install-time (kama pkg install)
-  "toolchain":  "1.3.0"                                              // selector (which compiler runs)
+  "toolchain":  "v1.3.0"                                             // selector (which compiler runs)
 }
 ```
 
@@ -770,25 +770,27 @@ Resolution order, highest priority first:
 1. **Local override** — a `"toolchain"` field in `kama.local.json` beside the project's `kama.json`.
    Gitignored and dev-local, for testing this checkout under a different version without touching the
    committed pin.
-2. **Project pin** — a `"toolchain"` field in the project's `kama.json` (found by walking up from
-   the current directory). This makes the toolchain version a reproducible build input, alongside
-   the source, `kama.json`, and `kama.lock`.
+2. **Project pin** — a `"toolchain"` field in the `kama.json` the command names (`kama build
+   app/kama.json` runs app's pinned compiler, wherever you run it from; nothing walks up from the
+   current directory). This makes the toolchain version a reproducible build input, alongside the
+   source, `kama.json`, and `kama.lock`. A loose `.kama` file is not a project and inherits no pin.
 3. **`KAMA_VERSION`** environment variable — a one-off override for the current command, without
    editing any file (handy for a project that has no pin, or to test a build under another version).
 4. **Global default** — recorded in `~/.kama/default`, used when nothing else applies.
 
 ```sh
-kama toolchain list              # installed versions, the default (*), and what this dir resolves to
-kama toolchain install 1.3.0     # add a version alongside (doesn't change the default)
-kama toolchain default 1.3.0     # set the global default
-kama toolchain pin 1.3.0         # pin THIS project — writes "toolchain": "1.3.0" into kama.json
-kama toolchain uninstall 1.2.0   # remove a version (refuses to remove the current default)
+kama toolchain list                        # installed versions, the default (*), what this dir resolves to
+kama toolchain install v1.3.0              # add a version alongside (doesn't change the default)
+kama toolchain default v1.3.0              # set the global default
+kama toolchain pin v1.3.0 kama.json        # pin that project — writes "toolchain": "v1.3.0" into it
+kama toolchain uninstall v1.2.0            # remove a version (refuses to remove the current default)
 
-kama update                      # install the latest and make it the default
-kama update --version 1.3.0      # install a specific version and make it the default
+kama update                                # install the latest and make it the default
+kama update --version v1.3.0               # install a specific version and make it the default
 ```
 
-A pin or selection to a version you don't have installed fails with a clear message telling you to
+A version is always spelled as its release tag, `v` included — it names the download and the
+directory under `~/.kama/versions/`. A pin or selection to a version you don't have installed fails with a clear message telling you to
 run `kama toolchain install <v>` — it never silently falls back to another version.
 
 ### What compiler a package needs — `kama`

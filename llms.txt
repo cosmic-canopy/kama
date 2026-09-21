@@ -11,12 +11,13 @@ examples read the test fixtures.
 
 ## Language
 - [Tour](docs/tour.md): the guided introduction — the whole language in one read, every
-  snippet compiled. Start here if you are new.
+  snippet checked by the compiler. Start here if you are new.
 - [Specification](docs/SPEC.md): the full language reference — types, the
-  `value`/`resource`/`contract` ownership model, generics, sum types + `match`, operators,
+  six type kinds (`value`/`resource`/`view`/`enum`/`contract`/`intrinsic`), generics, sum types + `match`, operators,
   smart pointers, collections, concurrency, FFI, build/debug. Start here for semantics.
 - [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
-  `resource` moves, `contract` is the guarantee; the `type` marker + access-control rules.
+  `resource` moves, `view` borrows, `enum` is a sum type, `contract` is the guarantee, `intrinsic`
+  gives a built-in a contract; the `type` marker + access-control rules.
 - [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `src/kama.y` by
   `tools/gen-grammar`.
 - [Keyword reference](docs/KEYWORDS.md): every reserved word and what it does.
@@ -52,14 +53,15 @@ examples read the test fixtures.
 - [Agent guide](docs/agents.md): **start here if you are an agent.** `kama query` answers from what
   the compiler RESOLVED rather than what a grep guessed — `--search NAME` finds a symbol by name
   across a package, `--complete` gives real signatures with parameter names, and `--json` wraps every
-  mode in one envelope. Also: why `kama build`, not `kama check`, is the type check.
+  mode in one envelope. Also: what `kama check` catches (names, ownership, and type mismatches by kind and width) and what only `kama build` adds.
 - `kama agents install` writes an `AGENTS.md` into a project (plus `--claude` / `--all-tools`
   pointers for tools that read something else). `kama agents print` emits it to stdout.
 
 ## Status
 The **language feature set is complete** (see `VERSION`; on the road to 1.0). Implemented:
 functions, primitives, control flow, named-parameter calls, `ref`/`out`; the **ownership type
-model** (every declaration is `type value` / `type resource` / `type contract`); **RAII**
+model** (every type declares one of six kinds: `type value` / `resource` / `view` / `enum` /
+`contract` / `intrinsic`); **RAII**
 destruction (no GC); single inheritance + **virtual dispatch**; **contracts** (interfaces via
 fat-pointer vtables); **enums and tagged unions** with value-producing, exhaustive **`match`**
 (there is no `switch`); **`Optional<T>`/`Result<T,E>`** as the no-exceptions, no-`null` error
@@ -69,10 +71,12 @@ turbofish `f::<T>()`); **operator overloading** + full static methods; the full
 **collections** (`FixedArray`/`DynamicArray`/`InlineArray`/`Simd`/`Map`/`Set`/`Deque`/`PriorityQueue`/
 sorted containers/`View<T>`/`string`, bounds-checked + RAII); the **`give`/`copy`** by-value
 ownership model with compile-time use-after-move checking; **`const`-correctness**; **access
-control** (private-by-default, `public`/`protected`/`friend`); **namespaces** + multi-file
-builds; **C FFI** (`extern`, `UnsafePtr`, raw memory confined to an explicit `unsafe { }` block);
+control** (private-by-default, `public`/`protected`, member-granular `friend` grants); **modules**
+(a module is a folder; per-symbol `import`/`export`) + multi-file builds; **C FFI** (`extern`,
+`expose`, `UnsafePtr`, raw memory confined to an `unsafe fn`);
 **function pointers** (`fnptr`, `Type::method`, `BindableFunctionPtr`); **string interpolation**
-+ format specifiers; **serialization** (`@generate`, by-value + object graph + polymorphic);
++ format specifiers; opt-in **serialization** (`@generate`, JSON + three binary formats, by-value +
+object graph + polymorphic);
 **shared-nothing concurrency** (isolates, typed channels, structured `scope`, `Atomic<T>`,
 immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time evaluation**
 (`comptime` constants and `comptime fn`); **conditional compilation** (`@compileFor`); and the
@@ -82,5 +86,5 @@ breakpoint debugging in an IDE and in browser DevTools. Tooling: a project seed 
 toolchain manager (`kama pkg`, `kama toolchain`, `kama publish`) and a language server (`kama lsp`)
 serving eight editors.
 
-The remaining work before the 1.0 tag is documentation and release polish, not language
+The remaining work before the 1.0 tag is stdlib reach and release polish, not language
 features — see [docs/ROADMAP.md](docs/ROADMAP.md).
