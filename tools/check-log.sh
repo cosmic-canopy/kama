@@ -192,6 +192,23 @@ for want in "KEEPME" "DROPDEBUG" "DROPTRACE"; do
     grep -qF "$want" "$tmp/strip.dbg.c" || { echo "check-log: FAIL — a non-release build dropped $want (should be runtime-gated, not stripped)" >&2; exit 1; }
 done
 
+# --- 9. std::log beside std::process compiles and runs --------------------------------------------------
+# kama_log.h declared `setenv` at block scope; kama_os.h (std::process) later pulled in <stdlib.h>, whose
+# Darwin `setenv` carries an asm label clang refuses to apply after a first unlabelled declaration. Every
+# program importing BOTH failed in clang on macOS while each alone was fine — no fixture imported the two.
+cat > "$tmp/logproc.kama" <<'KAMA'
+import { std::log::logInfo, std::process::Command };
+fn int32 main() {
+    Command c = Command.make(program: "true");
+    logInfo(tag: "proc", msg: "built a command");
+    return 0;
+}
+KAMA
+"$KAMA" build "$tmp/logproc.kama" -o "$tmp/logproc" >/dev/null 2>"$tmp/logproc.err" || {
+    echo "check-log: FAIL — a program importing std::log and std::process did not build" >&2
+    sed 's/^/  /' "$tmp/logproc.err" | head -8 >&2; exit 1; }
+"$tmp/logproc" >/dev/null 2>&1 || { echo "check-log: FAIL — the std::log + std::process program exited nonzero" >&2; exit 1; }
+
 # --- 5. embedded lowers freestanding ------------------------------------------
 "$KAMA" transpile --target embedded "$tmp/log.kama" -o "$tmp/emb.c" >/dev/null 2>"$tmp/emb.err" || {
     echo "check-log: FAIL — --target embedded transpile failed" >&2; sed 's/^/  /' "$tmp/emb.err" >&2; exit 1; }

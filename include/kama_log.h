@@ -19,6 +19,14 @@
 // <stdlib.h>/<unistd.h> never leak and the header stays freestanding clean.
 
 #include <stdint.h>
+// The one exception to block-scope declarations. Darwin's <stdlib.h> gives `setenv` an asm label
+// (`__DARWIN_ALIAS`), and clang refuses to apply a label to a function already declared without one —
+// so the block-scope `setenv` below, seen first, broke every TU that later included <stdlib.h>
+// (kama_os.h does, for std::process): a program importing std::log AND std::process did not compile on
+// macOS. Declaring it the SDK's way first makes the later block-scope redeclaration agree.
+#if defined(__APPLE__)
+#include <stdlib.h>
+#endif
 
 // ---- Sink slot ---------------------------------------------------------------
 // A replaceable pointer (NOT set-once — the default console sink is the C fallback below, and a user override
