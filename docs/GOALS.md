@@ -13,13 +13,12 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 1. **Self-hosting eventually.** Developers should not need extra tooling; the compiler should ultimately
    be written in kama and bootstrap through the C transpiler. *Long-term — requires strings, collections,
    maps, file I/O, and tagged unions in the language first.*
-   - *Tied to this:* the built-in containers/smart-pointers are compiler intrinsics with hand-tuned
-     **C** runtime bodies. Generics unify the *surface* but keep those C bodies. **Reimplementing them
-     as kama generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`UnsafePtr`)
-     is a possible *later* step. It buys nothing for runtime performance (monomorphization makes both
-     identical) and isn't needed for the language to be complete — its payoff is *this* goal,
-     self-hosting (a kama stdlib for a kama compiler). The generics engine is built so this is a
-     no-rework continuation (swap a generic type's body source from C-macro to kama), never a redo.
+   - *Tied to this, and done:* the containers and smart pointers are **kama generic library types** —
+     `lib/std/collections/`, `lib/std/memory/` — written in the Rust-`Vec` "unsafe core, safe API" model
+     over `unsafe fn`/`UnsafePtr`, not compiler intrinsics with C bodies. It bought nothing for runtime
+     performance (monomorphization makes both identical) and was not needed for the language to be
+     complete — its payoff is *this* goal,
+     self-hosting (a kama stdlib for a kama compiler).
 
 2. **Fast compiles: single-pass, parallelizable.** Parsing stays essentially single-pass. Speed comes
    from per-file parallelism — parse + emit each translation unit independently, then compile the
@@ -51,7 +50,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    own signature, and a caller cannot invoke it without holding an `UnsafePtr`. That is what keeps
    `A: Allocator` a perfectly safe **bound**.
 
-   Concretely, this costs **235 of 787 public stdlib members — 30%** reading `public unsafe fn`. That is
+   Concretely, this costs about **a quarter of the public stdlib members** reading `public unsafe fn`. That is
    the honest price and it is deliberate: those members touch raw memory today, so the marker relocates
    existing unsafety to the declaration rather than adding any.
 
@@ -92,7 +91,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    substitutability, and `type virtual`/`abstract resource` is only for sharing *implementation* up an
    owned hierarchy. Hand-offs follow **"every kind is movable; the default is declared, a marker
    overrides"**: each kind has a natural bare hand-off (move for `Owned`/`resource`, retain for
-   `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable(bare: give|copy)`),
+   `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable<This>(bare: give|copy)`),
    and `give`/`copy` override it. The kind words `value`/`resource`/`view`/`contract` are
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
    everywhere else. **`type enum`** is the fifth kind — a plain variant set or a tagged union — and takes
@@ -103,17 +102,17 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    from outside. Two hidden kinds had no spelling, and giving them one deleted the mechanism that had been
    papering over the gap rather than fencing it. *(Full model in `docs/TYPE_MODEL.md`.)*
 
-3d. **No exceptions — fallibility is a value.** There is no `throw`/`try`/`catch` and no stack unwinding.
-   A operation that can fail returns its outcome as a value: **`Optional<T>`** (absence) or **`Result<T, E>`**
+3d. **No exceptions — fallibility is a value.** There is no `throw`/`catch` and no stack unwinding (`try`
+   exists only as `try new` / `try cast`, which yield an `Optional` instead of trapping).
+   An operation that can fail returns its outcome as a value: **`Optional<T>`** (absence) or **`Result<T, E>`**
    (failure), which `match` forces the caller to handle. This has a direct consequence for construction:
-   **constructors are infallible** — trivial, in-place field setup that cannot fail (which is also why the
-   ctor keeps its in-place `void ctor(T*)` ABI: there is nothing to signal). **Fallible resource acquisition
-   is a `static fn` factory returning `Result<T, E>`** (`Buffer::create(size:) -> Result<Owned<Buffer>, E>`):
-   the fallible work lives there, and on failure it returns `Err` *before* the resource exists — so no
-   half-constructed object can escape and the invariant "if you hold one, it's valid" holds by construction.
+   **a constructor that can fail says so in its return type** — `public ctor Result<Buffer, BufErr>
+   open(size:)` — and returns `Err` *before* the object exists, so no half-constructed object can escape
+   and the invariant "if you hold one, it's valid" holds by construction. A constructor that cannot fail
+   declares no return type at all. (A self-returning `static fn` is refused as a disguised constructor:
+   there is one way to build a thing.)
    A type with a *meaningful* inert state may instead start valid-but-inert and expose a
-   `bring_up(): Result<…>`. (This composes static methods + `Result` + `Owned` + RAII;
-   see `tests/fallible_factory`.)
+   `bring_up(): Result<…>`. (See `tests/ctor_fallible_complete.kama`.)
 
 3e. **No lifetime tracking — no borrow checker.** kama does not track lifetimes or prove at compile time
    that a borrow outlives its referent (the machinery Rust pays for `&`-safety). Safety comes from
@@ -144,9 +143,9 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 7. **Self-describing.** The grammar (`kama.y`) is the single source of truth — the compiler embodies
    the BNF. Generate machine-readable grammar/spec from it (`docs/grammar.bnf` via `tools/gen-grammar`)
    so the language always describes itself. `kama query --json` already exposes what the compiler
-   resolved **about a program** ([agents.md](agents.md)); a future `kama describe --json` is the other
-   half — the language surface itself (keywords, types, builtins, grammar), independent of any source
-   file.
+   resolved **about a program** ([agents.md](agents.md)); `kama describe --json` is the other half,
+   scheduled as [KR-84](ROADMAP.md) — the language surface itself (keywords, types, builtins, grammar),
+   independent of any source file.
 
 8. **MIT licensed.** Permissive and embeddable — see `LICENSE`.
 
@@ -169,7 +168,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 ## Production-grade build & debugging
 
 - **Debug / Release configs.** `kama build` defaults to debug (`-g -O0`, `#line` on, asserts on);
-  `--release` opts into optimized (`-O2`/`-Oz`, `-DNDEBUG`, stripped, no `#line`).
+  `--release` opts into optimized (`-O3` native, `-Oz` wasm, `-DNDEBUG`, stripped, no `#line`).
 - **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.kama`, step, and inspect the call
   stack + locals. Three separate things make that true, and each had to be built: the `#line`
   directives map the generated C back to `.kama`; **LLDB value formatters** ([`kama_lldb.py`](../include/kama_lldb.py),
@@ -195,6 +194,6 @@ feature is decided on its merits against these goals rather than deferred until 
 
 ## Current status
 
-**The language feature set is complete.** What remains before the 1.0 tag is documentation and
-release polish, not language work. This section is intentionally brief so it doesn't drift — the
+**The language feature set is complete.** What remains before the 1.0 tag is the stdlib reach the
+maintainer wants in the first release, and release polish — not language work. This section is intentionally brief so it doesn't drift — the
 feature reference is `docs/SPEC.md` and the forward plan is `docs/ROADMAP.md`.

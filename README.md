@@ -55,9 +55,12 @@ the browser as WebAssembly.
   (`Owned`/`Shared`/`Weak`) and **collections** (`FixedArray`/`DynamicArray`/`string`), all bounds-checked
   and RAII-managed. Use-after-move is a compile error. Raw pointers live only inside an
   explicit, greppable `unsafe fn` at the C/FFI seam.
-- **Ownership is the type axis.** Every type is a `type value` (owns nothing, copies), a
-  `type resource` (owns/has identity, moves), or a `type contract` (an interface). One
-  greppable `type` marker, parallel to `fn`.
+- **Ownership is the type axis.** Every type declares its kind: `type value` (owns nothing,
+  copies), `type resource` (owns or has identity, moves), `type view` (borrows, stack-only),
+  `type enum` (a sum type), `type contract` (an interface), or `type intrinsic` (gives a built-in
+  a contract). One greppable `type` marker, parallel to `fn`.
+- **Opt-in, compile-time serialization.** `@generate(Serializable, Deserializable)` and a mark on
+  every field — JSON and three binary formats, object graphs included, no runtime reflection.
 - **Modern, explicit surface.** Named parameters only, monomorphized generics (with
   turbofish `f::<T>()`), tagged unions with exhaustive `match` (no `switch`, no fallthrough),
   operator overloading, `Optional`/`Result` instead of exceptions or `null`.
@@ -98,28 +101,27 @@ footguns. That triangle is the reason to reach for kama.
 
 ## Toolchain
 
-The build toolchain is **containerized** for reproducibility — same result under **podman**
-(preferred) or **docker**. The image is the official Emscripten SDK (emcc + node) plus
-bison/flex/clang for building the compiler itself.
+Building the compiler needs bison ≥ 2.7, flex and clang (`brew install bison` on macOS — the
+system bison is too old). `./dev` is the one entry point; every test task builds the binary it is
+about to test:
 
 ```sh
-tools/cdev build-image      # one-time: build the kama-dev toolchain image
-tools/cdev make             # build the kama compiler
-tools/cdev test             # run the end-to-end test suite
-tools/cdev exec <cmd...>    # run any command in the toolchain
-tools/cdev sh               # interactive shell in the toolchain
+./dev build          # build the compiler for this host
+./dev test           # the native fixture suite
+./dev test wasm      # the wasm/node suite (in the container on macOS)
+./dev matrix         # every leg plus every guard — the pre-commit gate
+./dev help           # the full list
 ```
 
-Override the engine with `KAMA_ENGINE=docker`. A host-native build also works with bison
-≥ 2.7, flex, and clang (`brew install bison` on macOS — the system bison is too old); just
-run `make`.
+The sanitizer and wasm legs run in a container — **podman** (preferred) or **docker**
+(`KAMA_ENGINE=docker`) — built from the official Emscripten SDK image plus bison/flex/clang.
 
 ## Using the compiler
 
 ```sh
 # Start a project (manifest, starter source, .gitignore, README). Interactive on a terminal;
 # a script or CI gets the defaults. --kind library|monorepo for the other shapes:
-kama seed myapp && cd myapp && kama run
+kama seed myapp && cd myapp && kama run kama.json
 
 # Transpile kama to C (no C compiler invoked):
 kama transpile hello.kama -o hello.c
@@ -127,7 +129,7 @@ kama transpile hello.kama -o hello.c
 # Build a native executable:
 kama build hello.kama -o hello && ./hello
 
-# Build a multi-file program (files with no `namespace` are file-private):
+# Build several loose files as one program (each file's `export { … }` is its public surface):
 kama build graphics.kama physics.kama main.kama -o app && ./app
 
 # Build for the browser (WASM). Default output is an HTML harness:
@@ -138,14 +140,19 @@ kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless:
 kama build hello.kama --release
 
 # Build the project entry (from kama.json "entry") and run it in one step:
-kama run                      # native-only; `kama run <file>` also works
+kama run kama.json            # native-only; `kama run <file>` also works
+
+# Type-check without invoking a C compiler (what an editor or CI wants):
+kama check kama.json
 ```
 
-Options: `--release`/`--debug` (default debug: `-g -O0`), `--target <name-or-triple>`
+Options: `-o <path>`, `-j <jobs>`, `--release`/`--debug` (default debug: `-g -O0`), `--target <name-or-triple>`
 (`HOST` (default), `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`, or an `<arch>-<os>-<abi>` triple —
 cross-compiling works with `--cc "zig cc"`), `--select GROUP=VALUE` (build-configuration groups, e.g.
 `OUTPUT=STATIC` for a static library), `--define NAME` (a `@compileFor` flag), `--webgpu`
-(link Emscripten's WebGPU port), `--cc <compiler>`, `--no-line` (omit `#line`), `--keep-c`.
+(link Emscripten's WebGPU port), `--cc`/`--cxx <compiler>`, `--link <lib>`, `--shared`, `--no-heap`
+(prove the program never allocates), `--dev` (dev-dependencies on the import path), `--no-line` (omit
+`#line`), `--keep-c`, `--no-cache`.
 Targets, cross-compilation and toolchain setup: **[targets & toolchains](docs/targets.md)**.
 
 For multi-file / dependency projects — `kama seed`, the `kama.json` manifest, `kama pkg add`/`install`,
@@ -154,17 +161,18 @@ build output collects under `out/<triple>/<debug|release>/` rather than beside y
 
 ## Debugging
 
-Generated C carries `#line` directives back to the original `.kama`, so a native `-g` build
-is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
-`-g -gsource-map` build steps through `.kama` in browser devtools. A VSCode extension
-(`editor/vscode/`) ships a CodeLLDB launch config and Build tasks.
+Generated C carries `#line` directives back to the original `.kama`, so a native debug build
+is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a debug wasm build steps
+through `.kama` in browser devtools. The VS Code extension (`editor/vscode/`) adds F5 through
+CodeLLDB with kama's own names and values in the Variables panel, and `kama demangle` turns a
+generated symbol from a crash log back into its kama name.
 
 ## Editor support
 
 The compiler is its own language server: `kama lsp` serves diagnostics, hover, go-to-definition,
-find-references, project-wide rename, completion, signature help and semantic highlighting. VS Code has a
-packaged extension; Neovim, Vim, Emacs, Sublime Text, Helix and Kate need a few lines of config —
-see **[editor setup](docs/editors.md)**.
+find-references, project-wide rename, completion, signature help, semantic highlighting, an outline,
+workspace symbols and an auto-import quick fix. VS Code has a packaged extension; Neovim, Vim, Emacs,
+Sublime Text, Helix, Kate and Zed need a few lines of config — see **[editor setup](docs/editors.md)**.
 
 ## Layout
 
@@ -172,24 +180,34 @@ see **[editor setup](docs/editors.md)**.
   - `kama.l`, `kama.y` — Flex lexer and Bison grammar (the language front end)
   - `kama.ast.h`, `kama.forward.h` — AST
   - `kama.cemit.{h,cpp}` — the C-emitting backend
-  - `kama.driver.cpp` — CLI (`transpile` / `build`)
+  - `kama.comptime.cpp` — the compile-time evaluator
+  - `kama.lsp.cpp`, `kama.query.cpp` — the language server and `kama query`
+  - `kama.driver.cpp` — the CLI: `build`, `run`, `check`, `transpile`, `seed`, `pkg`, `publish`,
+    `toolchain`, `update`, `query`, `lsp`, `demangle`, `stats`, `agents`
 - `include/` — the headers that SHIP: generated C `#include`s them, and an install puts them in
   `<prefix>/include`. Not compiler sources — a different audience entirely.
   - `kama_runtime.h` — the small runtime included by generated C
-  - `kama_os.h` — cross-platform OS/IO bindings header (POSIX + Windows), pulled in only by `std::io`/`std::fs`/`std::net`
-- `lib/std/` — the self-hosted standard library (`memory`, `collections`, `io`, `fs`, `net`)
+  - `kama_os.h` — cross-platform OS/IO bindings (POSIX + Windows), pulled in only by the modules that use it
+  - one header per runtime seam a module needs (`kama_log.h`, `kama_time.h`, `kama_channel.h`, …)
+- `prelude/` — the always-in-scope floor, embedded in the binary ([FLOOR.md](docs/FLOOR.md))
+- `lib/std/` — the self-hosted standard library: `app`, `ascii`, `collections`, `concurrent`, `digest`,
+  `encoding`, `fmt`, `fs`, `gpu`, `io`, `log`, `math`, `memory`, `net`, `num`, `path`, `process`,
+  `ptr`, `random`, `serialization`, `time`, `uuid`
 - `out/` — every build artifact, under `out/<os>-<arch>/` so a host and a container build coexist.
   The same `out/` a `kama seed` project gets, which is the point ([targets.md](docs/targets.md)).
 - `.scratch/` — gitignored, for throwaway language probes and local benchmark logs
-- `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
+- `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes); `tools/check-*.sh` — the guards
 - `examples/` — worked programs (e.g. `httpd/`, a static-file server in Kama)
-- `Dockerfile`, `tools/cdev` — containerized toolchain
+- `bench/` — the cross-language benchmarks behind [docs/benchmarks](docs/benchmarks/RESULTS.md)
+- `editor/`, `tree-sitter-kama/` — the VS Code extension, per-editor configs, and the grammar
+- `seed/`, `agents/` — what `kama seed` and `kama agents` write, embedded in the binary
+- `mcu/` — bare-metal startup and board support ([mcu.md](docs/mcu.md))
+- `Dockerfile`, `tools/cdev`, `./dev` — the build entry point and its container
 - `./dev serve` — preview the site locally, served by the Kama-written `examples/httpd` (dogfooding; → http://localhost:8080)
 - `docs/` — `SPEC.md` (language reference), `tour.md` (the guided introduction),
   `grammar.bnf` (generated from `src/kama.y`), `TYPE_MODEL.md`, `KEYWORDS.md`, `FLOOR.md`,
   `ROADMAP.md` (what's next), `editors.md`, `packages.md`, `targets.md`, `mcu.md`,
-  `*_READINESS.md` (per-domain gap analyses), `benchmarks/`, and `design/` (in-flight design
-  notes — deleted once the work ships and its record lands in the docs above)
+  `*_READINESS.md` (per-domain gap analyses), and `benchmarks/`
 - `site/`, `tools/site/` — kama-lang.org: static assets plus the generator that renders the
   docs above into the published site (`./dev site`, `./dev serve`)
 - `llms.txt`, `docs/GOALS.md` — LLM-discovery entry point and design philosophy

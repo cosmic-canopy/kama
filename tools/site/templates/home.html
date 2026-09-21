@@ -108,7 +108,7 @@
       <h3>Safe without a borrow checker</h3>
       <p>No null and no raw pointers in the safe surface. Ownership carries the safety — smart
       pointers, bounds-checked collections, and compile-time use-after-move detection. Raw memory
-      lives inside an explicit <code>unsafe</code> block.</p>
+      lives inside an explicit, greppable <code>unsafe fn</code>.</p>
     </article>
 
     <article class="tile"><span class="kanji">名</span>
@@ -187,7 +187,7 @@
     <article class="tile lineage"><span class="kanji">形</span>
       <h3>C#</h3>
       <p><strong>Kept:</strong> the shape of the syntax you already read, and real object orientation —
-      single inheritance, interfaces, namespaces, generics that read like generics rather than like
+      single inheritance, interfaces, modules, generics that read like generics rather than like
       template metaprogramming.</p>
       <p class="left-behind"><strong>Left:</strong> the garbage collector, and the runtime that has to
       come with it.</p>
@@ -245,7 +245,7 @@
 
   <p class="lede section-lede">
     kama compiles to C and is built by the <em>same clang</em> as the C baseline, so parity with C is
-    the design rather than a discovery. These are all nine native workloads — no subset, no favourites —
+    the design rather than a discovery. These are all {{benchWorkloadCount}} native workloads — no subset, no favourites —
     each panel scaled to its own slowest bar. Lower is better; times are medians in milliseconds.
   </p>
 
@@ -286,7 +286,7 @@
 
   <div class="grid grid-3">
     <article class="tile"><h3>Native</h3>
-      <p>Linux, macOS and Windows on x64 and arm64, plus real cross-compilation to any
+      <p>Linux (x64, arm64), macOS (universal) and Windows (x64) toolchains, plus real cross-compilation to any
       <code>&lt;arch&gt;-&lt;os&gt;-&lt;abi&gt;</code> triple. Executables or static libraries.</p>
       <p class="tile-link"><a href="/docs/targets/">Targets &amp; toolchains →</a></p>
     </article>
@@ -312,7 +312,7 @@
     </a>
     <a class="card" href="/docs/tour/">
       <h3>Language tour</h3>
-      <p>The whole language in one read, every snippet taken from a compiled fixture.</p>
+      <p>The whole language in one read, every snippet checked by the compiler in the test suite.</p>
     </a>
     <a class="card" href="/docs/spec/">
       <h3>Specification</h3>

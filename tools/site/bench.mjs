@@ -131,5 +131,9 @@ export function benchSection(root) {
   })();
 
   const env = data.env || {};
-  return { panels, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, standing, offGraph, env };
+  // "all nine native workloads" was prose; it is the number of plotted workloads, so it is read off the data.
+  const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  const workloadCount = WORDS[workloads.length] || String(workloads.length);
+
+  return { panels, workloadCount, kamaRss: rss('kama'), javaRss, kamaSize: sizeKB('kama'), goSize, standing, offGraph, env };
 }

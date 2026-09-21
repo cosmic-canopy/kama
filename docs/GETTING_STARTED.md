@@ -33,10 +33,12 @@ specific release.
 
 **Manual install:** download the package for your platform from the
 [Releases](https://github.com/cosmic-canopy/kama/releases) page, extract it, and add its `bin/` to your
-PATH — `kama` finds its runtime header and stdlib relative to the binary, so it runs from any directory:
+PATH — `kama` finds its runtime header and stdlib relative to the binary, so it runs from any directory.
+Packages are named `kama-<platform>-vX.Y.Z` — `linux-x64`, `linux-arm64`, `macos-universal`,
+`windows-x64` — with a `-bundled` variant that carries its own C compiler:
 
 ```sh
-tar xzf kama-<os>-<arch>-vX.Y.Z.tar.gz -C ~/.kama --strip-components=1
+tar xzf kama-linux-x64-vX.Y.Z.tar.gz -C ~/.kama --strip-components=1
 export PATH="$HOME/.kama/bin:$PATH"
 kama --version
 ```
@@ -49,8 +51,8 @@ make
 ./kama --version
 ```
 
-> You also need a host **C compiler** (`clang`) on your PATH — kama emits C and hands it to clang. For
-> the WebAssembly target you need **Emscripten** (`emcc`).
+> kama emits C and hands it to a C compiler: `clang`, `gcc` or `cc` on your PATH, or the `zig cc` the
+> bundled package carries. For the WebAssembly target you need **Emscripten** (`emcc`).
 
 ## 2. Write a program
 
@@ -61,16 +63,21 @@ fn int32 add(int32 a, int32 b) { return a + b; }
 
 fn int32 main()
 {
-    int32 x = add(a: 40, b: 2);   // named arguments
-    return x;                    // exit code
+    string name = "kama";
+    int32 x = add(a: 40, b: 2);        // every argument is named at the call site
+    println(s: "hello from ${name}: ${x}");
+    return x;                          // the exit code
 }
 ```
+
+`${…}` splices a value into a string at compile time; `println` needs no import. The
+[tour](tour.md) covers the rest of the language in one read.
 
 ## 3. Build & run
 
 ```sh
 kama build hello.kama -o hello    # debug build (default)
-./hello; echo $?                    # -> 42
+./hello; echo $?                    # prints "hello from kama: 42", then the exit code 42
 
 kama build hello.kama --release   # optimized, stripped, dead-code pruned
 kama build hello.kama --target wasm -o hello.js   # WebAssembly
@@ -85,9 +92,9 @@ One file needs no ceremony. The moment you want a second one, a dependency, or a
 rename across files, you want a **project** — a directory with a `kama.json`:
 
 ```sh
-kama seed myapp        # asks for a name, a version, and a kind; every answer has a default
+kama seed myapp        # asks for a name, a version, a kind, and whether to write AGENTS.md
 cd myapp
-kama run               # builds src/app.kama and runs it
+kama run kama.json     # builds the project's entry (src/app.kama) and runs it
 ```
 
 `kama seed` writes the manifest, a starter source file, a `.gitignore` and a README stub. It prompts only
@@ -100,9 +107,9 @@ Build output lands under `out/<triple>/<debug|release>/`, which is the one line 
 ## 5. Set up your editor
 
 The compiler is its own language server, so you get live diagnostics, hover, go-to-definition,
-find-references, project-wide rename, completion and signature help in any editor with a generic LSP
-client — VS Code, Neovim, Vim, Emacs, Sublime Text, Helix and Kate. Each is a few lines pointing at
-`kama lsp`: see **[editor setup](editors.md)**.
+find-references, project-wide rename, completion, signature help, an outline, workspace symbol search and
+an auto-import quick fix in any editor with an LSP client — VS Code, Neovim, Vim, Emacs, Sublime Text,
+Helix, Kate and Zed. Each is a few lines pointing at `kama lsp`: see **[editor setup](editors.md)**.
 
 VS Code has a packaged extension that also brings syntax highlighting, a build-configuration picker, and
 the F5 debugging below.
@@ -152,7 +159,9 @@ kama build app.kama --target wasm -o app.html   # debug is the default; emits ap
 
 ## Next
 
+- The language in one read: [the tour](tour.md)
 - Language reference: [docs/SPEC.md](SPEC.md) · grammar: [docs/grammar.bnf](grammar.bnf)
+- Projects, dependencies and publishing: [packages](packages.md)
 - Editor setup: [docs/editors.md](editors.md)
 - Examples: [tests/](../tests/) (each `.kama` is a runnable program)
 - Design goals: [GOALS.md](GOALS.md)

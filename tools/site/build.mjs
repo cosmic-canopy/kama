@@ -66,6 +66,7 @@ writeFileSync(path.join(out, 'index.html'), shell({
     sample: highlight(sample, 'kama', words),
     version,
     benchPanels: bench.panels,
+    benchWorkloadCount: bench.workloadCount,
     benchKamaRss: bench.kamaRss,
     benchJavaRss: bench.javaRss,
     benchKamaSize: bench.kamaSize != null ? bench.kamaSize.toFixed(0) : '?',

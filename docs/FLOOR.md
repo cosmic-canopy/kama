@@ -18,8 +18,11 @@ the source now: such an alias is refused where it is written. Typing `global::` 
 whole surface — which is why the qualifier waited for a language server: without completion it would have
 been a spelling with no discovery payoff.
 
-Everything here lives in [`prelude/global.kama`](../prelude/global.kama) over
-[`kama_runtime.h`](../include/kama_runtime.h). The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
+Everything here is declared in [`prelude/global.kama`](../prelude/global.kama) and
+[`prelude/builtin.kama`](../prelude/builtin.kama) over [`kama_runtime.h`](../include/kama_runtime.h), except the
+handful the compiler lowers itself because they need the call site — `panic`, `assert`, `debugAssert` (the
+source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop` — which behave as floor names all
+the same. The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
 a semantics index. See also [SPEC.md](SPEC.md) for the language.
 
 ## What is floor, and what is an `import`
@@ -35,7 +38,7 @@ optional backend is an import:
 | Feature | Always-on half (prelude / `kama_runtime.h`) | Opt-in half |
 | --- | --- | --- |
 | Formatting | the `Formattable` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
-| Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts + `@generate` synthesis | `std::serialization::{binary,json}` — the byte backends |
+| Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts, `SerError`/`DeError`, + `@generate` synthesis | `std::serialization::text::json` and `std::serialization::binary::kbin` — the wire backends |
 | Memory | `Owned`/`Shared`/`Weak` + `HeapOwner`/`Deref`/`Copyable`, which drive `new`/`give`/`copy` | *(none — entirely floor)* |
 | Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams |
 
@@ -53,8 +56,12 @@ Two tiers of "built-in" follow from that:
 
 - **Prelude** — embedded in the compiler binary, always in scope, present under `--no-std`:
   `prelude/global.kama` (`Optional`/`Result`/`Unit`/`string` and the core contracts) plus the
-  `Owned`/`Shared`/`Weak` triad. `import std::memory` is a no-op, satisfied by the prelude.
+  `Owned`/`Shared`/`Weak` triad, which needs no import although it lives in module `std::memory`.
 - **On-disk `std::*`** — an explicit `import`, absent under `--no-std`: everything else.
+
+`--no-std` is an **install flavour**, not a compiler flag: `install.sh --no-std` (or `KAMA_NO_STD=1`) installs
+the compiler without the bundled `lib/std`, which is what a bare-metal toolchain ships. What stays is
+this page.
 
 Among those, the compiler knows about some more than others. It lowers syntax directly into the prelude
 globals and the memory triad; it knows `std::concurrent` and `std::serialization` by name (the channel and
@@ -80,7 +87,7 @@ For *bugs and broken invariants* — "this can't continue." Recoverable errors s
 ## Console I/O — the print family
 
 Diagnostics that **keep running**: write text to the standard streams. String-only — formatting rides
-interpolation (`println("x = ${x}")`). Unbuffered line writes. On `--target embedded` there is no fd, so both
+interpolation (`println(s: "x = ${x}")`). Unbuffered line writes. On `--target embedded` there is no fd, so both
 streams route to the overridable weak `kama_log_sink` (default no-op; a firmware author pipes it to UART/RTT).
 
 | Signature | Stream | Notes |
@@ -97,7 +104,7 @@ like anywhere else in the value model.
 available, needs no import, survives `--no-std`, and writes immediately — it is for diagnostics that must
 work when nothing else does. `std::io`'s `stdin()`/`stdout()`/`stderr()` are ordinary `Reader`/`Writer`
 *values*, so they **compose**: `pump(from: file, to: out)`, `BufWriter.make(inner: out)`,
-`encodeTo(v, into: out)`, a function that takes a `Writer` and does not care whether it is a socket, a
+`serializeJsonStream(v: cfg, to: out)`, a function that takes a `Writer` and does not care whether it is a socket, a
 file or the terminal. Use print to *say* something; use the handles to *plumb* something.
 
 ## Command-line arguments + environment
@@ -121,10 +128,15 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 [TYPE_MODEL.md](TYPE_MODEL.md) for full semantics.
 
 - **Sum types:** `Optional<T>` (`Some`/`None`), `Result<T, E>` (`Ok`/`Err`).
-- **Core contracts:** `Deref<T>`, `HeapOwner<T>`, `Movable`, `Copyable`, `Hashable`, `Equatable`,
-  `Comparable` (+ `Ordering`), `Error`, `Iterator<T>`/`IteratorMut<T>`/`Iterable<T>`, `Viewable<V>`,
-  `Allocator`
-  (+ `GlobalAllocator`), `Serializable`/`Deserializable`/`Serializer`/`Deserializer`.
+- **Core contracts:** `Deref<T>`/`DerefMut<T>`, `HeapOwner<T>`, `Movable`, `Copyable<T is This>`,
+  `Hashable`, `Equatable<T is This>`, `Comparable<T is This>` (+ `Ordering`), `Error`,
+  `Iterator<T>`/`IteratorMut<T>`, `Iterable<T>`/`IterableMut<T>`, `Viewable<V>`/`ViewableMut<V>`,
+  `Sendable` (may cross an isolate), `Immutable`, `Allocator`, `GlobalHeap` (the contract a
+  `@globalAllocator` implements; `GlobalAllocator` is the default `value` behind it),
+  `Serializable`/`Deserializable`/`Serializer`/`Deserializer` (+ `SerError`, `DeError`, `FieldKey`).
+- **String iteration:** `Chars` (from `.chars()`) and `Split` (from `.split(separator:)`), both views.
+- **Raw memory and the compile-time-sized types:** `UnsafePtr<T>`, `UnsafeConstPtr<T>` (and `ptrOrNull`),
+  `InlineArray<T>#(N)`, `Simd<T>#(N)`, and `BindableFunctionPtr<Sig>` behind `fnptr`.
 - **Text rendering (`std::fmt` core):** the `Formattable` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
