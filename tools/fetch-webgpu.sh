@@ -6,8 +6,8 @@
 #   tools/fetch-webgpu.sh                 # latest release, host OS/arch
 #   WGPU_NATIVE_VERSION=v25.0.2.1 tools/fetch-webgpu.sh   # pin a tag for reproducibility
 #
-# License note: wgpu-native is MPL-2.0 (file-level copyleft). We link the UNMODIFIED prebuilt, so it
-# never reaches our sources — kama stays MIT. The lib is not vendored; this script fetches it.
+# License note: wgpu-native is dual-licensed MIT OR Apache-2.0, at the user's choice. It is fetched rather
+# than vendored only because it is several MB; a program that redistributes it ships its license notice.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

@@ -4,9 +4,9 @@
 #
 #   bench/run build-image     build the kama-bench toolchain image (heavy, ~3-4 GB)
 #   bench/run build           compile kama + every language into bench/build/
-#   bench/run run [workload]  measure time/RSS/size (default: all 4 workloads)
+#   bench/run run [workload]  measure time/RSS/size (default: all nine workloads)
 #   bench/run report          render docs/benchmarks/RESULTS.md from results
-#   bench/run all             build-image (if needed) + build + run + report
+#   bench/run all             build + run + report (the image must already exist: build-image)
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.

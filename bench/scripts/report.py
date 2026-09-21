@@ -4,6 +4,10 @@
 Builds time / peak-RSS / artifact-size tables for the native and wasm tracks, and
 runs the fairness gate: every language must produce the same exit-code checksum as
 kama for a given workload (a mismatch means the algorithms diverged).
+
+`report.py --from-json` re-renders RESULTS.md from the committed results.json (its rows,
+compile times and toolchain record) without measuring anything — for a prose-only change
+to this file. It runs on the host; the toolchain line still describes the container run.
 """
 import csv, json, os, subprocess, sys, datetime
 
@@ -26,22 +30,29 @@ RUNTIME = {"kama": "self-contained", "c": "self-contained", "cpp": "self-contain
            "lua": "source (+ Lua)", "python": "source (+ Python)",
            "js": "source (+ node)", "ts": "source (+ node)", "kama-wasm": "+ wasm/JS host"}
 
-# Compile time (bench/build/compile.tsv): lang -> (compile_ms, artifacts). Interpreted langs absent.
-COMPILE = {}
-_ctp = os.path.join(ROOT, "bench/build/compile.tsv")
-if os.path.exists(_ctp):
-    with open(_ctp) as f:
-        for r in csv.DictReader(f, delimiter="\t"):
-            COMPILE[r["lang"]] = (r["compile_ms"], r["artifacts"])
+FROM_JSON = "--from-json" in sys.argv[1:]
 
 def sh(*a):
     try: return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
     except Exception: return "?"
 
+# Compile time (bench/build/compile.tsv): lang -> (compile_ms, artifacts). Interpreted langs absent.
+COMPILE = {}
 rows = []
-with open(TSV) as f:
-    for r in csv.DictReader(f, delimiter="\t"):
-        rows.append(r)
+if FROM_JSON:
+    with open(OUT_JSON) as f:
+        _saved = json.load(f)
+    rows = _saved["rows"]
+    COMPILE = {l: (c["compile_ms"], c["artifacts"]) for l, c in _saved["compile"].items()}
+else:
+    _ctp = os.path.join(ROOT, "bench/build/compile.tsv")
+    if os.path.exists(_ctp):
+        with open(_ctp) as f:
+            for r in csv.DictReader(f, delimiter="\t"):
+                COMPILE[r["lang"]] = (r["compile_ms"], r["artifacts"])
+    with open(TSV) as f:
+        for r in csv.DictReader(f, delimiter="\t"):
+            rows.append(r)
 
 def get(track, lang, w, field):
     for r in rows:
@@ -79,17 +90,28 @@ def rss_table(track, langs):
         out.append("| " + w + " | " + " | ".join(cells) + " |")
     return "\n".join(out)
 
+def sizes(track, l):
+    """workload -> artifact bytes, for every workload this language built."""
+    out = {}
+    for w in WORKLOADS:
+        v = get(track, l, w, "size_bytes")
+        if v and v not in ("0", "NA"):
+            out[w] = int(v)
+    return out
+
+def kb(n): return f"{n / 1024.0:.1f} KB"
+
 def size_table(track, langs):
-    out = ["| lang | package size | kind |", "|---|---|---|"]
+    # One column per question: the size of the smallest program (fib — every language has it), and
+    # the spread across all workloads, since a program that pulls in the stdlib collections is larger.
+    out = [f"| lang | package size (`{WORKLOADS[0]}`) | range across workloads | kind |", "|---|---|---|---|"]
     for l in langs:
-        sz = None
-        for w in WORKLOADS:
-            v = get(track, l, w, "size_bytes")
-            if v and v not in ("0", "NA", None):
-                sz = int(v); break
-        if sz is None:
+        s = sizes(track, l)
+        if WORKLOADS[0] not in s:
             continue
-        out.append(f"| {LABEL[l]} | {sz / 1024.0:.1f} KB | {RUNTIME.get(l, '')} |")
+        lo, hi = min(s.values()), max(s.values())
+        rng = kb(lo) if kb(lo) == kb(hi) else f"{kb(lo)} – {kb(hi)}"
+        out.append(f"| {LABEL[l]} | {kb(s[WORKLOADS[0]])} | {rng} | {RUNTIME.get(l, '')} |")
     return "\n".join(out)
 
 def compile_table(langs):
@@ -115,7 +137,17 @@ for w in WORKLOADS:
     status = "✓ all match" if not mism else "✗ MISMATCH: " + ", ".join(mism)
     gate_lines.append(f"- `{w}`: checksum = {ref} (exit code) — {status}")
 
-env = {
+def ms(lang, w, track="native"):
+    return get(track, lang, w, "time_ms") or "?"
+
+# Which workloads each compiled language sits out (so the `binaries built` column explains itself).
+def skipped(track, lang):
+    return [w for w in WORKLOADS if get(track, lang, w, "time_ms") is None]
+_skips = [f"{LABEL[l]} skips " + ", ".join(f"`{w}`" for w in skipped("native", l))
+          for l in ("kama", "c", "cpp", "rust", "go") if skipped("native", l)]
+SKIP_NOTE = ("; " + "; ".join(_skips)) if _skips else ""
+
+env = _saved["env"] if FROM_JSON else {
     "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
     "arch": sh("uname", "-m"),
     "kernel": sh("uname", "-s"),
@@ -146,6 +178,11 @@ C-`-O2` vs Rust-`-O3` differs ~20%, but at equal `-O3` C and Rust are identical)
 1. kama (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
 2. **peak RSS**, **compile time**, and **package size** (the low-footprint / self-contained goal),
 3. on the WASM track, **kama→wasm vs hand-written JS/TS** under the same node.
+
+**Methodology — pre-sizing:** in `map`, every language whose standard map has a capacity API pre-sizes
+it for the keys it will insert (kama `Map.withCapacity`, C++ `reserve`, Rust `with_capacity`, Go
+`make(m, n)`, C# and Java constructor capacity). Lua, Python and JS have no such API for their built-in
+table/dict/`Map`, so they grow from small — the one asymmetry left in that row.
 
 **Methodology — run isolated:** these are short workloads, so **parallel load badly skews them** — run the
 bench with nothing else competing for CPU/IO. (The `/work` bind mount, virtiofs/9p on macOS/Windows, adds
@@ -190,10 +227,10 @@ diverged:
 - **dispatch** — 8×10⁶ virtual calls over a **heterogeneous, heap-owned collection** of mixed
   concrete types built at runtime, so the concrete type is *not* knowable at the call site and the
   call **cannot be devirtualized** — a true dynamic-dispatch measurement. Each language uses its
-  idiomatic owning collection (kama `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
+  idiomatic owning collection (kama `DynamicArray<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
   `Vec<Box<dyn>>`, C array of heap `Shape*`, Go `[]interface`, C#/Java `Shape[]`).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
-  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `List<int32>`,
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `DynamicArray<int32>`,
   C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
 - **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
   (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
@@ -205,8 +242,8 @@ diverged:
   multiply), the same fixed 262 144-slot preallocation, no stdlib map anywhere. Insert 100 000 keys, then
   look every key up 10× in a scrambled (bijective LCG) order. Because the algorithm, hash, and capacity
   are pinned, **this is the row that answers "is kama on par with C?"** — the AOT cluster
-  (kama/C/C++/Rust) should converge, exactly as it does on the compute kernels. (TS is absent: its
-  `tsconfig.json` covers only the six compute workloads.)
+  (kama/C/C++/Rust) should converge, exactly as it does on the compute kernels. (TS is absent here and in
+  `map`/`math`: its `tsconfig.json` compiles only fib/pi/collatz/dispatch/alloc/fnptr.)
 - **map** — the hash-map **library-design** row: the same workload, but each language uses its *idiomatic*
   map — kama `Map<int32, int64>`, C++ `unordered_map`, Rust `HashMap`, Go `map`, C# `Dictionary`, Java
   `HashMap` (boxed), Lua table, Python `dict`, JS `Map`. **⚠️ This measures map DESIGN, not codegen** —
@@ -215,15 +252,13 @@ diverged:
   `map_kernel` runs, in every language at once; entering that bespoke, preallocated structure here and
   ranking it against everyone else's general-purpose library maps would read as a codegen win when the
   actual finding is the trivial "a purpose-built preallocated map beats a general-purpose one".
-  kama's real peer here is Rust's `HashMap`, which also grows from small.
-  For the record, kama's two design choices and what each costs (measured, 100 k×10, `-O3`): a **stronger
-  default hash** (splitmix64, two dependent 64-bit multiplies vs one) — give C the same hash and it goes
-  2.9 → 5.7 ms; and **no preallocation by default** (grows from 8, rehashing on a bulk insert) — give kama
-  a single-multiply hash and it goes 8.7 → 3.3 ms ≈ C. Both knobs ship (`Map.withCapacity` /
-  `Map.reserve`, and the pluggable `H: Hasher` slot whose `FastHasher` *is* C's single Fibonacci multiply),
-  so a kama program that wants C's tradeoff can write `Map<int32, int64, FastHasher>.withCapacity(...)`.
-  They are deliberately NOT used here: tuning one language's row while the others stay idiomatic would
-  just tilt the mismatch the other way. That is what `map_kernel` is for.
+  Every map that can be pre-sized is (see *Methodology — pre-sizing*), so what remains is hash and
+  layout: kama {ms("kama", "map")} ms, C++ `unordered_map` {ms("cpp", "map")} ms, Rust `HashMap` {ms("rust", "map")} ms.
+  kama keeps its **stronger default hash** (splitmix64, two dependent 64-bit multiplies) here; the
+  pluggable `H: Hasher` slot's `FastHasher` is `map_kernel`'s single Fibonacci multiply, so a program
+  that wants that tradeoff writes `Map<int32, int64, FastHasher>`. It is deliberately NOT used here:
+  tuning one language's hash while the others stay idiomatic would tilt the row. That is what
+  `map_kernel` is for.
 - **math** — 2×10⁶ iterations of the `std::math` hot ops an engine leans on: `Vec4` add/sub/scale, `dot`,
   `Mat4*Vec4`, `Mat4*Mat4`, and the `Quat` Hamilton product. Every input is a small integer-valued
   float32 so all intermediates are **exactly representable** (`|v| < 2^24`) — the checksum is therefore
@@ -244,14 +279,16 @@ diverged:
 ## NATIVE — package size
 
 _What you ship: a **self-contained** binary needs no runtime; managed/interpreted rows are the
-assembly/source only and additionally require the noted runtime (.NET / JVM / interpreter)._
+assembly/source only and additionally require the noted runtime (.NET / JVM / interpreter). The size
+column is each language's `{WORKLOADS[0]}` artifact; the range spans every workload it built. C# and
+Java ship one multi-workload assembly, so their size is the same everywhere._
 
 {size_table("native", NATIVE)}
 
 ## NATIVE — compile time
 
 _Wall-clock to compile that language's bench artifacts (single build, not averaged). The compiled
-languages build **one binary per workload** (`binaries built` = 6); C# and Java build **one**
+languages build **one binary per workload** (`binaries built` — {len(WORKLOADS)} workloads{SKIP_NOTE}); C# and Java build **one**
 multi-workload binary that dispatches on `args[0]`. kama's figure is transpile-to-C **plus** clang.
 Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
@@ -266,6 +303,8 @@ Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 {rss_table("wasm", WASM)}
 
 ## WASM track — module size
+
+_The size column is each language's `{WORKLOADS[0]}` artifact; the range spans every workload it built._
 
 {size_table("wasm", WASM)}
 
@@ -297,10 +336,11 @@ _kama→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS
 os.makedirs(os.path.dirname(OUT_MD), exist_ok=True)
 with open(OUT_MD, "w") as f:
     f.write(md)
-with open(OUT_JSON, "w") as f:
-    json.dump({"env": env, "rows": rows,
-               "compile": {l: {"compile_ms": ms, "artifacts": n} for l, (ms, n) in COMPILE.items()}},
-              f, indent=2)
+if not FROM_JSON:
+    with open(OUT_JSON, "w") as f:
+        json.dump({"env": env, "rows": rows,
+                   "compile": {l: {"compile_ms": c, "artifacts": n} for l, (c, n) in COMPILE.items()}},
+                  f, indent=2)
 
 print(f"wrote {OUT_MD}")
 print("fairness gate:", "PASS" if ok else "FAIL (checksum mismatch — see RESULTS.md)")

@@ -79,8 +79,9 @@ out/triangle                                    # a 512×512 window: the same sp
 ```
 
 `--webgpu` on a native build links the fetched wgpu-native lib (via an rpath) + GLFW; `$KAMA_WGPU_DIR`
-overrides the SDK location. wgpu-native is MPL-2.0 (file-level copyleft) — we link the **unmodified
-prebuilt**, so kama stays MIT.
+overrides the SDK location. wgpu-native is dual-licensed **MIT or Apache-2.0**, at your choice — the same
+permissive terms as kama. It is fetched rather than vendored only because it is several MB; a program
+that ships the library ships its license notice with it.
 
 > The hardcoded WebGPU enum constants (formats, sTypes, load/store ops) target the upstream
 > `webgpu.h` both backends track; if a native run renders wrong or aborts, reconcile those few

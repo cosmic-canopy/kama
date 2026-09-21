@@ -22,9 +22,9 @@ mini-language (the boundary Rust's `format!` also draws), and a named intermedia
 inference reads.
 
 A `match` **subject** used to be a third row here, and is not one any more: `match (classify(x: 1))` works,
-for every call shape and for a plain (payload-less) enum as well as a tagged union. The forms that still
-want a bound local are a *nested* value-producing `match` and a *variant-producing ternary* — see
-[SPEC.md](SPEC.md) § *Known limitations*.
+for every call shape and for a plain (payload-less) enum as well as a tagged union, and so does a
+variant-producing ternary. The one form that still wants a bound local is a *nested* value-producing
+`match` — see [SPEC.md](SPEC.md) § *Known limitations*.
 
 ## A `resource`'s fields are always private
 

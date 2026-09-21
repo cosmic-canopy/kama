@@ -1134,6 +1134,9 @@ enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; o
 any live scope — keeps both name resolution and move tracking unambiguous). **Every** binding is covered,
 not just a declaration —
 a `for` counter, a `foreach` variable and a `match` payload binding are each refused the same three ways. <!-- xfail: binder_shadow_for_local, binder_shadow_foreach_local, binder_shadow_foreach_param, binder_shadow_foreach_field, binder_shadow_match_local, binder_shadow_match_field -->
+⚠️ One hole is open: a binding may still take the name of a **function** in scope
+(`fn int32 use(int32 helper) { return helper + helper(); }` builds), and over a bare prelude function the C
+compiler refuses what kama accepted — [KR-57](ROADMAP.md).
 A pattern's *label* names the variant's field and is unrestricted (`case V4(a: o1)`); it is the binding
 beside it that must be fresh.
 Sibling scopes may reuse a name freely (they never coexist), whatever binds it — two sequential `for` loops <!-- test: local_scope_sibling_match, local_scope_sibling_foreach, local_scope_for_init, local_scope_sibling_const -->
@@ -1854,8 +1857,8 @@ and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POS
 Windows) so both platforms take the same code path. wasm has no process model.
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
-`type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<usize, IoError>` +
-`flush`) and `type contract Reader` (`read(View<uint8>) -> Result<usize, IoError>`, `Ok(0)` = EOF). Buffers
+`type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<isize, IoError>` +
+`flush`) and `type contract Reader` (`read(View<uint8>) -> Result<isize, IoError>`, `Ok(0)` = EOF). Buffers
 are always views (a non-owning span — zero-copy sub-slicing, no charset assumptions: binary-native, text
 backends layer UTF-8 on top): the read-only `ConstView<uint8>` where the callee only reads (`write`,
 `send`), the writable `View<uint8>` where it fills (`read`, `recv`). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
@@ -2105,6 +2108,26 @@ high-resolution waitable timer instead, per call, falling back to `Sleep` where 
 the whole process — a library may not spend a caller's power to fix its own resolution. Measured
 before and after on one machine: 1 ms → 13.4 ms then 1.6 ms, 8 ms → 15.6 ms then 8.7 ms. The *at
 least* guarantee is what this preserves, not what it changes.
+
+### Application loop (`std::app`) and web transports (`std::net::web`) ✅
+
+**`std::app`** is the frame loop a game or an interactive tool runs, written once for both hosts:
+`run(tick: t, state: s)` calls `t(state)` until it returns 0 — a plain `while` natively, and on wasm
+emscripten's main loop, which **yields to the browser between ticks** so asynchronous I/O makes progress (a
+busy `while` on the web never sees an event). `quit(code:)` ends the program correctly on both; a plain
+exit is ignored on the web while the loop keeps the runtime alive. `TickFn` is `@callerThread` — the tick
+runs on the thread that called `run`, so a module `static` it touches is the caller's. On the web `run`
+does not return.
+
+**`std::net::web`** is the browser half of `std::net`, for a wasm program talking to a server:
+- **`WsConnection`** — a WebSocket, `connect(url:)`, with `state()` (`WsState { Connecting, Open, Closing,
+  Closed }`). It is a `Reader`/`Writer`, so a serializer or `pump` streams over it as over a `TcpStream`;
+  `write` sends one binary message and `read` returns the next message's bytes. Non-blocking only — the
+  browser is event-driven — so `read` is `Err(WouldBlock)` until data arrives and `Ok(0)` once the peer
+  closed. Closes on drop.
+- **`WtConnection`** — WebTransport datagrams, `connect(url:)`, `state()` (`WtState`), and
+  `send`/`recv`/`sendTo`/`recvFrom` in the `UdpSocket` shape: message-oriented, so not a `Reader`/`Writer`.
+  Where WebTransport is unavailable (Safari/iOS, Node), `WsConnection` is the reliable fallback.
 
 ### Paths (`std::path`) ✅
 
@@ -2574,7 +2597,7 @@ p): … }` binds an `UnsafePtr` and never spells the word — the payload's decl
 in the function.
 
 **`extern` has no scalar exemption.** `extern fn int32 kama_close_socket(isize fd)` names no pointer and is
-a double-close primitive by effect; 87 of the 188 stdlib extern declarations are pointer-free. Danger at
+a double-close primitive by effect; roughly half the stdlib's extern declarations are pointer-free. Danger at
 this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it
 can — so a type-based carve-out would look like a rule and behave like a hole.
 
@@ -2643,7 +2666,7 @@ unsafe fn void idle() {
   runs." It is allowed anywhere inside an `unsafe fn` (not gated to `--target embedded`).
 - Curated named helpers (`wfi()`, `disable_interrupts()`, `barrier()`) are an ordinary **library** built
   on this primitive — the unsafe-core / safe-API-as-library model. Extended asm with operand constraints
-  and `@naked` functions are tracked follow-ons.
+  and `@naked` functions are [KR-83](ROADMAP.md).
 
 ### Conditional compilation — `@compileFor(FLAG)` ✅
 
@@ -2845,9 +2868,10 @@ optimization/stripping behavior without redeclaring it. `kama.local.json` overri
 machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. The practical
 toolchain setup is in [targets.md](targets.md).
 
-`kama.json` is the seed of the future package-management manifest (deps/versions). It is parsed by the
-compiler driver (C++), not by the language's own JSON library — the compiler is not self-hosted, so its
-build-time config can't run kama-level code.
+`kama.json` is the project manifest — modules, dependencies, targets and build settings
+([packages.md](packages.md), [targets.md](targets.md)). It is parsed by the compiler driver (C++), not by the
+language's own JSON library — the compiler is not self-hosted, so its build-time config can't run kama-level
+code.
 
 ### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
@@ -3442,10 +3466,11 @@ every function, so declarations are greppable and self-describing:
   See *`type intrinsic`* below.
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
-`view` / `contract` are **contextual, not reserved** — because they appear only right after `type`, they
+`view` / `contract` / `intrinsic` are **contextual, not reserved** — because they appear only right after `type`, they
 remain ordinary identifiers everywhere else (`int32 value = 5;`). `enum` is the one kind word that IS a
 reserved keyword, for the historical reason that it predates the `type` marker; that costs nothing, since
-nothing else could be spelled there. Only `type` and `enum` are keywords.
+nothing else could be spelled there. The qualifiers `virtual` / `abstract` / `final` are reserved words;
+`type` itself is contextual (below).
 
 **`type` may still NAME a binding** — a field, a local, a module `static`, a parameter or a method — and
 be read, written and passed like any other name. It is a **contextual keyword**: it leads a declaration
@@ -4856,8 +4881,8 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   a plain-old-data struct. A `type resource` keeps **all fields private** (ownership stays encapsulated); a
   `type contract` has no fields at all (an interface owns nothing; state lives in the implementing type).
 - **Overridable methods are written `protected`** (public polymorphism is a `contract`'s job); a type opts
-  into extension as a `type virtual resource`/`type abstract resource` and seals as a plain `resource`/`type
-  final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an extensible `resource`.
+  into extension as a `type virtual(maxDepth: N) resource`/`type abstract(maxDepth: N) resource` and seals as
+  a plain `resource`/`type final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an extensible `resource`.
 - **`~dtor` ⟺ `resource`** — a destructor is allowed only on a `resource` (a `value` owns nothing).
 - **`friend`** grants are granular and owner-declared: `friend <accessor>[members];` (or `[...]` for all
   privates), where the accessor is a type, a free function, or a `Type::method` (a named `ctor` included) —
@@ -4877,8 +4902,13 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   **inert** — the code it names is not being compiled, so it grants nothing — which is what lets a root
   module grant to siblings a given consumer never imports. A grant naming an unknown symbol inside a module
   that IS in the program stays a compile error. <!-- xfail: friend_present_module_typo -->
+  A grant names **members** — fields, methods, named `ctor`s and `static fn`s — and a type of any kind may
+  write one, an `enum` included; a `contract` may not, since every member is already public. <!-- xfail: friend_on_contract -->
+  ⚠️ Three holes are open ([KR-80](ROADMAP.md)): a grant to a **generic free function** is accepted and
+  never takes effect; **type arguments on the accessor** are ignored (`friend Box<int64>[v]` also admits
+  `Box<int32>`); and the member list cannot name the `copy` ctor, an operator, or a `comptime` member.
 
-See `docs/KEYWORDS.md` for the full kind × visibility table.
+See [TYPE_MODEL.md](TYPE_MODEL.md) § *Access control* for the full kind × visibility table.
 
 ## Enums & `match` ✅
 
@@ -5921,7 +5951,7 @@ FFI binding emit a C field literally called `type` without inventing a name
 (`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table
 (`tests/contextual_slot.kama`); `file` leads the file gate below and is otherwise an ordinary name
 (`tests/contextual_file.kama`) — `File file = …` is the spelling a user reaches for first, and measured,
-the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The kind words `value` / `resource` / `view` / `intrinsic` are not
+the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The kind words `value` / `resource` / `view` / `contract` / `intrinsic` are not
 keywords at all — they lex as identifiers.
 
 `this` and the primitive type names are keywords like any other: they cannot be redeclared.
@@ -5962,6 +5992,11 @@ which also holds the reserved table equal to the two C standards' sets.
 
 Everything below **hard-errors** (never miscompiles) and has a clean workaround. Two kinds:
 
+(Three open defects are NOT of that kind — kama accepts the program and the C compiler or the clock
+refuses it — and each is a roadmap row rather than a rule: a binding named like a function in scope
+([KR-57](ROADMAP.md)); a generic instance named only inside `sizeof`/`alignof` ([KR-62](ROADMAP.md)); and
+analysis time exponential in the length of an operator chain ([KR-78](ROADMAP.md)).)
+
 **By-design rules** — an rvalue can't be borrowed/reseated soundly, so these stay errors, not "unbuilt":
 - **An inline `new` (or owned value) borrowed by a `ref`/`out` or contract parameter** — an inline `new` is
   consumed **by value** (the callee/caller becomes the owner). To borrow it (`ref`/`out`) or reseat a
@@ -5978,8 +6013,8 @@ Everything below **hard-errors** (never miscompiles) and has a clean workaround.
   during the discovery pass (a function-level pre-scan supplies the param/local types) and reused at emit.
   A **call** subject works too, for every call shape and for a plain (payload-less) enum as well as a
   tagged union — `match (classify(x: 1))`, `match (g.grade(score: 70))`, `match (Grader::always())`
-  (`tests/match_call_plain_enum.kama`). The still-deferred forms are a *nested* value-producing `match` or
-  a *variant-producing ternary* directly as a subject; bind those to a typed local
+  (`tests/match_call_plain_enum.kama`). A *variant-producing ternary* as a subject works as well. The
+  still-deferred form is a *nested* value-producing `match` directly as a subject; bind it to a typed local
   (`Optional<int32> o = …; match (o) …`).
 
 (Target-typed inline construction works in initializers, `return`, `operator[]` place-stores,
@@ -5990,7 +6025,8 @@ in every by-value position. An owned rvalue receiver is RAII-dropped through met
 
 ## Reserved/runtime
 
-Generated C uses `Type__member` mangling, and the compiler's own emitted names — the members it
+Generated C names are prefixed and module-qualified — `k_F<file>__Type__member` for a file-private
+declaration (§ *C names* has the whole scheme, and `kama demangle` reverses it) — and the compiler's own emitted names — the members it
 synthesizes (`kama_vptr`, `kama_base`, `kama_tag`, `kama_u`), its vtable slots (`kama_dtor`, `kama_size`,
 `kama_align`, `kama_type`) and its temporaries (`kama_ret_0`, `kama_strtmp0`) — live in the `kama_` register
 (§ *C names*). The runtime ([../include/kama_runtime.h](../include/kama_runtime.h)) provides `kama_string`
