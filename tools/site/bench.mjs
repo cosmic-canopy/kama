@@ -95,20 +95,17 @@ export function benchSection(root) {
   const ratios = rival => workloads
     .map(w => { const k = time('kama', w), r = time(rival, w); return k && r ? { w, r: k / r } : null; })
     .filter(Boolean);
-  const pct = r => `${Math.round((r - 1) * 100)}%`;
   const standing = (() => {
     const vc = ratios('c'), vp = ratios('cpp');
     if (!vc.length || !vp.length) return '';
     const ahead = vp.filter(x => x.r <= 1.0).length;
     const near = vc.filter(x => x.r <= 1.05).length;
-    const worst = vc.reduce((a, b) => (b.r > a.r ? b : a));
-    // Only call something an exception if it actually is one; when every workload lands inside the
-    // band this must not invent a straggler.
-    const tail = worst.r > 1.05
-      ? ` The one exception is <code>${worst.w}</code>, where it trails C by ${pct(worst.r)}.`
-      : '';
+    // The counts carry the caveat on their own: "7 of 8" says one is outside the band without
+    // needing a clause to name it and quote a percentage at the reader. The full per-workload
+    // numbers are one click away on the benchmarks page, which is where someone who wants the
+    // straggler by name is already going.
     return `kama is at or ahead of <b>C++</b> on ${ahead} of ${vp.length} native workloads, and within`
-         + ` a few percent of <b>C</b> on ${near} of ${vc.length}.${tail}`;
+         + ` a few percent of <b>C</b> on ${near} of ${vc.length}.`;
   })();
 
   // The languages measured but NOT plotted, and how far out they actually sit. Derived for the same

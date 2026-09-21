@@ -3279,7 +3279,7 @@ That `if` **is** the branch — it cannot grow a sibling statement the way a bar
 `match` are unaffected: they already require a block (a `match` arm's `case P: expr;` is an expression, not
 a statement body).
 
-## Type declarations — `value` / `resource` / `view` / `contract` / `enum` ✅
+## Type declarations — `value` / `resource` / `view` / `contract` / `enum` / `intrinsic` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on
 every function, so declarations are greppable and self-describing:

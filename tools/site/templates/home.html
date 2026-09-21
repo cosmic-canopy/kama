@@ -119,10 +119,11 @@
 
     <article class="tile"><span class="kanji">型</span>
       <h3>Ownership is the type</h3>
-      <p>Every declaration names its kind, and there are <b>exactly five</b>: a <code>value</code>
-      copies, a <code>resource</code> moves and drops, a <code>view</code> borrows, an
-      <code>enum</code> is a closed set you must match exhaustively, and a <code>contract</code> is
-      the guarantee. One greppable marker, no guessing.</p>
+      <p>Every declaration names its kind, and there are <b>six</b>: a <code>value</code> copies, a
+      <code>resource</code> moves and drops, a <code>view</code> borrows, an <code>enum</code> is a
+      closed set you match exhaustively, a <code>contract</code> is the guarantee, and an
+      <code>intrinsic</code> gives a built-in primitive a contract&rsquo;s methods. One greppable
+      marker, no guessing.</p>
     </article>
 
     <article class="tile"><span class="kanji">果</span>
@@ -211,10 +212,10 @@
   </div>
 
   <p class="note">
-    What is <em>not</em> inherited is the ownership model. Every type declares what it owns, across the
-    same five kinds — <code>value</code>, <code>resource</code>, <code>view</code>, <code>enum</code>,
-    <code>contract</code> — and that one decision is what buys memory safety without a garbage collector
-    and without a borrow checker, while leaving ordinary OOP intact.
+    What is <em>not</em> inherited is the ownership model. Every type names its kind, and what it owns
+    follows from that — <code>value</code>, <code>resource</code>, <code>view</code>, <code>enum</code>,
+    <code>contract</code>, <code>intrinsic</code> — and that one decision is what buys memory safety
+    without a garbage collector and without a borrow checker, while leaving ordinary OOP intact.
     <a href="/docs/type-model/">Read the type model →</a>
   </p>
 </section>

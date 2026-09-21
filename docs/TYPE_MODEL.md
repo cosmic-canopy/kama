@@ -1,7 +1,8 @@
-# kama type model — `value` / `resource` / `contract`
+# kama type model — `value` / `resource` / `view` / `enum` / `contract` / `intrinsic`
 
-Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type view` /
-`type contract`); the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
+Every type declaration is introduced by a `type` marker, followed by one of **six** kind words
+(`type value` / `type resource` / `type view` / `type enum` / `type contract` / `type intrinsic`); the
+vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
 — see also [GOALS.md §3c](GOALS.md).
 
 ## The `type` marker
@@ -38,8 +39,17 @@ kama makes ownership the **declared nature** of a type, so the designer picks th
 | **`view`** | nothing — *borrows* a range | **copy** (a borrow; stack-only, can't escape) | contracts only |
 | **`contract`** | — (a public-only guarantee, no state) | — | *is* the polymorphism / substitutability lever |
 | **`enum`** | nothing, beyond its variant payloads | **copy** (or move, if a payload owns) | contracts, via a tag-dispatched vtable |
+| **`intrinsic`** | — (declares no new type) | — (the primitive's own) | how a **built-in** satisfies a contract |
 
 These are the *nature* nouns. `virtual` / `abstract` / `final` are **qualifiers** (below), not kinds.
+
+`intrinsic` is the odd one and belongs here anyway: it is the kind a **primitive** is. It declares
+nothing new — it decorates existing built-in types with a contract's methods, one block covering a whole
+set of widths (`type intrinsic <int8, int16, int32, int64> implements Hashable { … }`). You write one
+only to give a built-in a conformance; you *name* it constantly, because every contract's mandatory
+`for` clause lists the kinds allowed to implement it, and primitives are spelled `intrinsic` there:
+`type contract Hashable for value, resource, enum, intrinsic`. See [SPEC.md](SPEC.md)
+§ *`type intrinsic`*.
 
 ### `value` — owns nothing, copied
 
