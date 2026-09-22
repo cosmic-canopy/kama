@@ -1,0 +1,94 @@
+// std::encoding::utf8 — the CHECKED bytes-to-text direction, against every way RFC 3629 narrowed UTF-8.
+//
+// ⚠️ This module closes a hole, it is not only an ergonomic addition. `string`'s UTF-8 invariant is what
+// `.chars()` assumes and what `substring` traps to preserve, and the runtime argued it held because
+// "every other string operation preserves it by construction". `std::io::readAll` was the exception: it
+// built a `string` out of arbitrary reader bytes, so a file of `\xff\xfe\x80hello` became an 8-byte
+// `string` whose `.chars()` yielded 5 bogus codepoints (measured at 0.9.431). `readAll`, `readLine` and
+// `fs::readText` all route through `decode`/`validate` now — see tests/io_bad_utf8.kama for that half.
+//
+// There is deliberately no `encode`: a `string` IS UTF-8 bytes, so that direction is `s.bytes()`, a
+// borrow, and a second spelling of a no-op would be a second way to do one thing. That is why this module
+// is asymmetric where `base64` and `hex` are not — they compute something; this does not.
+//
+// A rejection carries WHERE, so each case below asserts the offset, not just the failure. Exit 0, or the
+// number of the first case that misbehaved.
+import { std::encoding::utf8::decode, std::encoding::utf8::validate, std::encoding::utf8::Utf8Error,
+         std::collections::DynamicArray };
+
+fn DynamicArray<uint8> buf(InlineArray<uint8>#(4) src, isize n) {
+    DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
+    isize i = 0;
+    while (i < n) { b.add(item: src[i]); i = i + 1; }
+    return give b;
+}
+
+// `validate` and `decode` must AGREE — one is the no-allocation half of the other, and a disagreement
+// would mean a caller who only checks gets a different answer from one who converts.
+unsafe fn int32 check(const ref DynamicArray<uint8> b, bool wantOk, isize wantAt) {
+    bool v = false;
+    borrow b.view() as bv { v = validate(bytes: bv); }
+    if (v != wantOk) { return 1; }
+    borrow b.view() as bv {
+        Result<string, Utf8Error> d = decode(bytes: bv);
+        return match (give d) {
+            case Ok(value: s):  wantOk ? 0 : 2;
+            case Err(error: e): match (e) { case Invalid(at: a): (!wantOk && a == wantAt) ? 0 : 3; };
+        };
+    }
+}
+
+fn int32 main() {
+    // Well-formed: ASCII, 2-byte, 3-byte and 4-byte leads all round-trip.
+    DynamicArray<uint8> ok2 = buf(src: [104ui8, 195ui8, 169ui8, 0ui8], n: 3);          // "hé"
+    if (check(b: ref ok2, wantOk: true, wantAt: -1) != 0) { return 10; }
+    DynamicArray<uint8> ok3 = buf(src: [226ui8, 130ui8, 172ui8, 0ui8], n: 3);          // "€"
+    if (check(b: ref ok3, wantOk: true, wantAt: -1) != 0) { return 11; }
+    DynamicArray<uint8> ok4 = buf(src: [240ui8, 159ui8, 152ui8, 128ui8], n: 4);        // "😀" U+1F600
+    if (check(b: ref ok4, wantOk: true, wantAt: -1) != 0) { return 12; }
+
+    // 1. A byte that is never a lead — 0xFF, and a bare continuation byte in lead position.
+    DynamicArray<uint8> lone = buf(src: [104ui8, 255ui8, 0ui8, 0ui8], n: 2);
+    if (check(b: ref lone, wantOk: false, wantAt: 1) != 0) { return 20; }
+    DynamicArray<uint8> cont = buf(src: [128ui8, 0ui8, 0ui8, 0ui8], n: 1);
+    if (check(b: ref cont, wantOk: false, wantAt: 0) != 0) { return 21; }
+
+    // 2. OVERLONG — C0 80 encodes U+0000 in two bytes. The classic NUL smuggle past a C string check,
+    //    and the reason a validator that only counts continuation bytes is a security bug.
+    DynamicArray<uint8> over = buf(src: [192ui8, 128ui8, 0ui8, 0ui8], n: 2);
+    if (check(b: ref over, wantOk: false, wantAt: 0) != 0) { return 30; }
+    DynamicArray<uint8> over3 = buf(src: [224ui8, 128ui8, 175ui8, 0ui8], n: 3);        // E0 80 AF = '/'
+    if (check(b: ref over3, wantOk: false, wantAt: 0) != 0) { return 31; }
+
+    // 3. A UTF-16 SURROGATE half — ED A0 80 is U+D800, which is not a scalar value and may not be encoded.
+    DynamicArray<uint8> sur = buf(src: [237ui8, 160ui8, 128ui8, 0ui8], n: 3);
+    if (check(b: ref sur, wantOk: false, wantAt: 0) != 0) { return 40; }
+
+    // 4. TRUNCATED — a 3-byte lead with only one continuation byte present.
+    DynamicArray<uint8> trunc = buf(src: [226ui8, 130ui8, 0ui8, 0ui8], n: 2);
+    if (check(b: ref trunc, wantOk: false, wantAt: 0) != 0) { return 50; }
+
+    // 5. ABOVE U+10FFFF — F4 90 80 80 is U+110000, one past the last scalar.
+    DynamicArray<uint8> big = buf(src: [244ui8, 144ui8, 128ui8, 128ui8], n: 4);
+    if (check(b: ref big, wantOk: false, wantAt: 0) != 0) { return 60; }
+
+    // The offset is where the bad sequence BEGINS, not where the scan noticed — 3 good bytes then a bad
+    // lead reports 3, which is what a caller reporting "byte N of this file" needs.
+    DynamicArray<uint8> late = buf(src: [97ui8, 98ui8, 99ui8, 255ui8], n: 4);
+    if (check(b: ref late, wantOk: false, wantAt: 3) != 0) { return 70; }
+
+    // Empty is vacuously valid and decodes to "" without touching the (unreadable) data pointer.
+    DynamicArray<uint8> none = DynamicArray::<uint8>.empty();
+    if (check(b: ref none, wantOk: true, wantAt: -1) != 0) { return 80; }
+
+    // Round trip: a string's own bytes always decode back to it.
+    string src = "héllo wörld 😀";
+    Result<string, Utf8Error> back = decode(bytes: src.bytes());
+    int32 rc = match (give back) {
+        case Ok(value: s):  s.equals(other: src) ? 0 : 90;
+        case Err(error: e): 91;
+    };
+    if (rc != 0) { return rc; }
+
+    return 0;
+}

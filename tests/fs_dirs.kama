@@ -4,7 +4,7 @@
 import { std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::stat, std::fs::exists,
          std::fs::createDir, std::fs::createDirAll, std::fs::removeDir, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove,
-         std::fs::readDir, std::fs::writeFile, std::fs::readFile,
+         std::fs::readDir, std::fs::writeFile, std::fs::writeText, std::fs::readFile,
          std::io::IoError, std::io::writeAll, std::collections::DynamicArray,
          std::path::join, std::time::Timestamp, std::time::Duration, std::time::unixNow };
 
@@ -12,24 +12,17 @@ fn bool ok(Result<Unit, IoError> r) {
     return match (r) { case Ok(value: u): true; case Err(error: e): false; };
 }
 
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> d = DynamicArray.empty();
-    isize i = 0;
-    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
-    return give d;
-}
-
 // Append twice through OpenMode::Append and report the resulting size.
 fn isize appendTwice(const ref string path) {
     isize total = -1;
-    DynamicArray<uint8> chunk = bytesOf(s: "abcd");
+    string chunk = "abcd";
     match (File.open(path: path, mode: OpenMode::Append)) {
         case Err(error: e): { return -1; }
-        case Ok(value: f): { match (f.writeAll(bytes: chunk)) { case Ok(value: n): { } case Err(error: e2): { return -2; } }; }
+        case Ok(value: f): { match (f.write(bytes: chunk.bytes())) { case Ok(value: n): { } case Err(error: e2): { return -2; } }; }
     };
     match (File.open(path: path, mode: OpenMode::Append)) {
         case Err(error: e): { return -3; }
-        case Ok(value: f): { match (f.writeAll(bytes: chunk)) { case Ok(value: n): { } case Err(error: e2): { return -4; } }; }
+        case Ok(value: f): { match (f.write(bytes: chunk.bytes())) { case Ok(value: n): { } case Err(error: e2): { return -4; } }; }
     };
     match (stat(path: path)) {
         case Err(error: e): { return -5; }
@@ -56,8 +49,7 @@ fn int32 main() {
 
     // A file: write, stat, and check the two new Metadata fields.
     string f1 = join(path: root, with: "one.txt");
-    DynamicArray<uint8> body = bytesOf(s: "hello");
-    match (writeFile(path: f1, bytes: body)) { case Ok(value: n): { r = r + 8; } case Err(error: e): { } };
+    match (writeText(path: f1, text: "hello")) { case Ok(value: n): { r = r + 8; } case Err(error: e): { } };
 
     Timestamp now = unixNow();
     match (stat(path: f1)) {

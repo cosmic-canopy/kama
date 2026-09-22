@@ -240,15 +240,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-### Text files are bytes-only (KR-82) — found 2026-09-21 writing the tour's stdlib walk
-
-`std::fs::writeFile` and `readFile` take and return `DynamicArray<uint8>`, and there is no conversion
-between a `string` and its bytes in either direction outside `std::io`'s internals — so writing a string to
-a file is a hand loop over `s[i]` (tests/io_lines.kama's `bytesOf`), and reading one back goes through a
-`Reader` and `readAll`. Every comparator has the one-call form (Go `os.WriteFile([]byte(s))`, Rust
-`fs::write(path, s)` / `read_to_string`). Wants: `string.bytes()` (a `ConstView<uint8>`), a checked
-`string` from UTF-8 bytes returning `Result`, and `readText`/`writeText` in `std::fs`.
-
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)

@@ -37,6 +37,9 @@
         },
         "hex": {
           "visibility": "public"
+        },
+        "utf8": {
+          "visibility": "public"
         }
       }
     },

@@ -20,7 +20,7 @@
 // process ANSI code page. A kama string is UTF-8 by definition (lib/std/path/path.kama), so these
 // names were mojibake before they reached the filesystem — at ANY length, with no MAX_PATH involved.
 import { core::args, std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
-         std::fs::rename, std::fs::readDir, std::fs::writeFile, std::fs::readFile,
+         std::fs::rename, std::fs::readDir, std::fs::writeFile, std::fs::writeText, std::fs::readFile,
          std::io::IoError, std::collections::DynamicArray,
          std::path::join };
 
@@ -33,13 +33,6 @@ fn string cjk()      { return "\u{65E5}\u{672C}\u{8A9E}"; }
 fn string emoji()    { return "\u{1F600}"; }
 // The name the GUARD creates with the shell, before this probe runs — same bytes, different writer.
 fn string shellMade(){ return "\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}-shell.txt"; }
-
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> d = DynamicArray.empty();
-    isize i = 0;
-    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
-    return give d;
-}
 
 // Is `want` among the directory's entries, byte for byte? 0 = yes.
 //
@@ -78,8 +71,8 @@ fn int32 main() {
     // ---- 2. a file whose name mixes 2-byte and 4-byte characters ------------------------------
     string fname = cyrillic() + emoji() + ".txt";
     string f = join(path: dir, with: fname);
-    DynamicArray<uint8> payload = bytesOf(s: "unicode");
-    isize wrote = match (writeFile(path: f, bytes: payload)) {
+    string payload = "unicode";
+    isize wrote = match (writeText(path: f, text: payload)) {
         case Ok(value: w): w;
         case Err(error: e): 0;
     };

@@ -6,7 +6,8 @@
 // agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
 // Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
 
-import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView };
+import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView,
+         std::encoding::utf8::validate };
 
 export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines, writeAll, pump, readAll };
 
@@ -73,16 +74,23 @@ fn Result<isize, IoError> pump(Reader from, Writer to) {
 // boundary for readers that want whole-source access — serde's `deserialize…Stream` entry points read all
 // first. Buffers the whole source BY DESIGN (matches Go `encoding/json`'s buffer-a-value model); genuine
 // record-streaming is a separate future API.
+//
+// ⚠️ It VALIDATES, and the doc line above is the reason: the bytes come off a reader, so they are outside
+// input, and "an owned UTF-8 string" was a claim nothing checked until 0.9.432. `validate` is the
+// no-allocation half of `std::encoding::utf8` precisely so this costs one scan and no second buffer.
 fn Result<string, IoError> readAll(Reader r) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: r, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    borrow sw.view() as v {
+        if (!validate(bytes: v)) { return Result::Err(error: IoError::InvalidInput); }
+    }
     return Result::Ok(value: sw.finish());
 }
 
 // The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8
 // string via `finish()`. This is the sink behind serde's `serializeJsonBuffer -> string` and fmt's to-string.
-type resource StringWriter implements Writer {
+type resource StringWriter implements Writer, Viewable<ConstView<uint8>> {
     DynamicArray<uint8> buf;
 
     public ctor make() {
@@ -102,9 +110,29 @@ type resource StringWriter implements Writer {
     // How many bytes have accumulated so far.
     public const fn isize length() { return this.buf.length(); }
 
+    // A read-only window over what has accumulated so far — the mint `Viewable<ConstView<uint8>>` grants,
+    // so `borrow sw.view() as v { … }` opens a window on the buffer without copying it. `readAll` uses it
+    // to validate before materializing; a caller inspecting its own output wants it too.
+    public unsafe const fn ConstView<uint8> view() { return this.buf.view(); }
+
     // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
+    //
+    // ⚠️ The bytes must BE text. That is not a new rule — `takeBytes()` below already exists as the
+    // byte-oriented twin "for a binary sink whose output is not valid UTF-8 … so it must NOT go through
+    // `string`" — but nothing enforced it, so writing arbitrary bytes here produced an ill-formed
+    // `string` and `.chars()` then read garbage out of it.
+    //
+    // It is a `debugAssert`, not a `Result`, and the split is deliberate. These bytes are the CALLER'S
+    // OWN output, so invalid UTF-8 here is a bug in the calling code — it reached for `finish()` when it
+    // meant `takeBytes()` — and kama traps on a contract violation (`substring` on a split character) the
+    // same way it errors on bad INPUT (`readAll`, `readLine`, `parse`). Being release-stripped also keeps
+    // the serialize-to-string path exactly as fast as it was, which the performance invariant requires.
     public unsafe fn string finish() {
         if (this.buf.length() == 0) { return ""; }
+        borrow this.buf.view() as v {
+            debugAssert(cond: validate(bytes: v),
+                        msg: "StringWriter.finish: the accumulated bytes are not valid UTF-8 — use takeBytes() for a binary sink");
+        }
         return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: this.buf.length());
     }
 
@@ -262,7 +290,11 @@ type resource BufReader<R: Reader> implements Reader {
                 if (this.fill == 0) {
                     // End of input: a final unterminated line is still a line; nothing at all is None.
                     if (!any) { return Result::Ok(value: Optional::None); }
-                    return Result::Ok(value: Optional::Some(value: bytesToString(bytes: ref line)));
+                    Result<string, IoError> rs = bytesToString(bytes: ref line);
+                    return match (give rs) {
+                        case Ok(value: s):  Result::Ok(value: Optional::Some(value: give s));
+                        case Err(error: e): Result::Err(error: e);          // the line was not UTF-8
+                    };
                 }
             }
             while (this.pos < this.fill) {
@@ -274,7 +306,11 @@ type resource BufReader<R: Reader> implements Reader {
                     if (len > 0 && line[len - 1] == 13ui8) {                         // ...and takes a CR with it
                         Optional<uint8> cr = line.pop();
                     }
-                    return Result::Ok(value: Optional::Some(value: bytesToString(bytes: ref line)));
+                    Result<string, IoError> rs = bytesToString(bytes: ref line);
+                    return match (give rs) {
+                        case Ok(value: s):  Result::Ok(value: Optional::Some(value: give s));
+                        case Err(error: e): Result::Err(error: e);          // the line was not UTF-8
+                    };
                 }
                 line.add(item: c);
             }
@@ -283,12 +319,23 @@ type resource BufReader<R: Reader> implements Reader {
     }
 }
 
-// The accumulated bytes as an owned string. Shared by `readLine` and anything else that builds text a
-// byte at a time; empty in, empty out (`kama_string_from_raw` would be handed a pointer into an empty
-// buffer otherwise, which `DynamicArray`'s own indexing correctly refuses).
-unsafe fn string bytesToString(const ref DynamicArray<uint8> bytes) {
-    if (bytes.length() == 0) { return ""; }
-    return kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length());
+// The accumulated bytes as an owned string — CHECKED. Shared by `readLine` and anything else that builds
+// text a byte at a time; empty in, empty out (`kama_string_from_raw` would be handed a pointer into an
+// empty buffer otherwise, which `DynamicArray`'s own indexing correctly refuses).
+//
+// ⚠️ THE CHECK IS THE POINT, and it closes a hole rather than adding a convenience. These bytes come off
+// a READER — a file, a socket, a pipe — so they are outside input, and nothing validated them: a file of
+// `\xff\xfe\x80hello` read through this produced an 8-byte `string` whose `.chars()` yielded 5 bogus
+// codepoints (measured, 0.9.431). `string`'s UTF-8 invariant is what `.chars()` assumes and what
+// `substring` traps to preserve; this was the way in. Bad input is an ERROR here, not a trap, because it
+// is a fact about someone else's bytes rather than a bug in the caller — the same split `parse` already
+// makes against `substring`.
+unsafe fn Result<string, IoError> bytesToString(const ref DynamicArray<uint8> bytes) {
+    if (bytes.length() == 0) { return Result::Ok(value: ""); }
+    borrow bytes.view() as v {
+        if (!validate(bytes: v)) { return Result::Err(error: IoError::InvalidInput); }
+    }
+    return Result::Ok(value: kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length()));
 }
 
 // Every LINE of a `Reader`, as a `foreach`-able iterator: the spelling every comparator has (Rust's

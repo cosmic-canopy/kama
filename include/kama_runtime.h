@@ -1411,7 +1411,7 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
     buf[self->kama_len] = '\0';
     kama_string r; r.kama_data = buf; r.kama_len = self->kama_len; r.kama_cap = self->kama_len + 1; return r;
 }
-// Is `base[start .. start+len)` well-formed UTF-8? Answers -1 for yes, or the byte OFFSET (relative to
+// Is `src[start .. start+len)` well-formed UTF-8? Answers -1 for yes, or the byte OFFSET (relative to
 // `start`) where the first ill-formed sequence BEGINS — the shape of Rust's `Utf8Error::valid_up_to`,
 // which is what a caller needs to report where a file went wrong rather than just that it did.
 //
@@ -1430,9 +1430,9 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
 //
 // `ptrdiff_t` in and out, like every other offset into a string — kama's size type is `isize`, so taking
 // them narrower would put a cast on every caller.
-static inline ptrdiff_t kama_utf8_bad_offset(const uint8_t* base, ptrdiff_t start, ptrdiff_t len) {
+static inline ptrdiff_t kama_utf8_bad_offset(const uint8_t* src, ptrdiff_t start, ptrdiff_t len) {
     if (start < 0 || len < 0) return 0;                 // defensive: a bad range is not valid text
-    const uint8_t* p = base + start;
+    const uint8_t* p = src + start;
     size_t n = (size_t)len, i = 0;
     while (i < n) {
         uint8_t c = p[i];

@@ -18,7 +18,7 @@
 import { core::args, core::print, std::fs::File, std::fs::OpenMode,
          std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove, std::fs::readDir,
-         std::fs::writeFile, std::fs::readFile,
+         std::fs::writeFile, std::fs::writeText, std::fs::readFile,
          std::io::IoError, std::collections::DynamicArray,
          std::path::join };
 
@@ -27,13 +27,6 @@ import { core::args, core::print, std::fs::File, std::fs::OpenMode,
 // a mktemp base clears 260 on Windows while staying inside macOS's 1024 PATH_MAX.
 fn string comp(int32 i) {
     return "d${i}" + "_23456789_123456789_123456789_12345678";
-}
-
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> d = DynamicArray.empty();
-    isize i = 0;
-    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
-    return give d;
 }
 
 fn int32 main() {
@@ -67,8 +60,8 @@ fn int32 main() {
 
     // ---- write / read a file at the bottom ---------------------------------------------------
     string f = join(path: deep, with: "leaf.txt");
-    DynamicArray<uint8> payload = bytesOf(s: "kama-long-path");
-    isize wrote = match (writeFile(path: f, bytes: payload)) {
+    string payload = "kama-long-path";
+    isize wrote = match (writeText(path: f, text: payload)) {
         case Ok(value: w): w;
         case Err(error: e): cast<isize>(-1);
     };
@@ -87,8 +80,8 @@ fn int32 main() {
     int32 ap = match (File.open(path: f, mode: OpenMode::Append)) {
         case Err(error: e): 20;
         case Ok(value: af): {
-            DynamicArray<uint8> more = bytesOf(s: "-end");
-            := match (af.writeAll(bytes: more)) {
+            string more = "-end";
+            := match (af.write(bytes: more.bytes())) {
                 case Ok(value: n):   (n == cast<isize>(4) ? 0 : 21);
                 case Err(error: e2): 22;
             };

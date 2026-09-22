@@ -38,7 +38,7 @@
 //     kama: C:/msys64/tmp/tmp.xxx/w\???-??????\kama.json does not exist
 // (the manifest operand is checked before the output directory, so this is the FIRST ceiling here; the
 // roadmap's `cannot create output directory` was measured with a lone .kama file as the operand).
-import { core::args, core::print, std::fs::exists, std::fs::createDirAll, std::fs::writeFile,
+import { core::args, core::print, std::fs::exists, std::fs::createDirAll, std::fs::writeFile, std::fs::writeText,
          std::io::IoError, std::collections::DynamicArray, std::path::join,
          std::process::Command, std::process::Process, std::process::ExitStatus };
 
@@ -49,17 +49,9 @@ fn string cyrillic() { return "\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}"; }
 // Exactly 40 characters, same recipe as longpath_probe: seven of them plus a mktemp base clears 260.
 fn string comp(int32 i) { return "d${i}" + "_23456789_123456789_123456789_12345678"; }
 
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> d = DynamicArray.empty();
-    isize i = 0;
-    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
-    return give d;
-}
-
 fn bool put(const ref string path, const ref string text) {
-    DynamicArray<uint8> b = bytesOf(s: text);
     isize want = text.length();
-    return match (writeFile(path: path, bytes: b)) {
+    return match (writeText(path: path, text: text)) {
         case Ok(value: w): (w == want);
         case Err(error: e): false;
     };

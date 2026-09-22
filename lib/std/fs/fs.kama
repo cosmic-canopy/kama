@@ -11,9 +11,10 @@ import {
     std::path::parent,
     std::path::join,
     std::ptr::nonNull,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
 };
 
-export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove,
+export { File, OpenMode, Metadata, readFile, writeFile, readText, writeText, stat, readDir, remove,
          createDir, createDirAll, removeDir, removeDirAll, rename, exists };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
@@ -183,6 +184,46 @@ fn Result<isize, IoError> writeFile(const ref string path, const ref DynamicArra
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
     return match (r) {
         case Ok(value: f):  f.writeAll(bytes: bytes);
+        case Err(error: e): Result::Err(error: e);
+    };
+}
+
+// Read an entire file as TEXT — the one-call form every comparator has (Rust `fs::read_to_string`, Go
+// `os.ReadFile` + a conversion, Python `open().read()`). Before it, writing or reading a string meant a
+// hand loop over `s[i]` into a `DynamicArray`, because the byte API was the only API.
+//
+// ⚠️ It VALIDATES, so a binary file read as text is `Err(InvalidInput)` rather than an ill-formed
+// `string` that `.chars()` later reads garbage out of. That is Rust's `read_to_string` (`InvalidData`)
+// and Python's `decode` (raises), and it is the invariant kama already claims for `string`. A caller who
+// wants the bytes whatever they are has `readFile`, which is unchanged.
+unsafe fn Result<string, IoError> readText(const ref string path) {
+    Result<DynamicArray<uint8>, IoError> r = readFile(path: path);
+    return match (r) {
+        case Err(error: e): Result::Err(error: e);
+        case Ok(value: b):  textOf(bytes: ref b);
+    };
+}
+
+// The decode half of `readText`, split out because a `borrow` window is a statement and a `match` arm
+// wants an expression. `Utf8Error` carries WHERE the bytes stopped being text; `IoError` has no variant
+// that can hold an offset, so the position is lost at this boundary — a caller that needs it reads the
+// file with `readFile` and calls `std::encoding::utf8::decode` itself.
+unsafe fn Result<string, IoError> textOf(const ref DynamicArray<uint8> bytes) {
+    borrow bytes.view() as v {
+        Result<string, Utf8Error> d = decode(bytes: v);
+        return match (give d) {
+            case Ok(value: s):  Result::Ok(value: give s);
+            case Err(error: u): Result::Err(error: IoError::InvalidInput);
+        };
+    }
+}
+
+// Create/truncate a file and write a string's UTF-8 bytes to it. No conversion and no copy: `bytes()` is
+// a borrow of the string's own storage, which is what made this a one-liner rather than a second loop.
+unsafe fn Result<isize, IoError> writeText(const ref string path, const ref string text) {
+    Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
+    return match (r) {
+        case Ok(value: f):  f.write(bytes: text.bytes());
         case Err(error: e): Result::Err(error: e);
     };
 }

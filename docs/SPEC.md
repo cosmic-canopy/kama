@@ -1791,7 +1791,7 @@ fn int32 main() {
 A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
-`Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`stat`/`readDir`/`remove`,
+`Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
 `isDir`, `modified` (a `std::time::Timestamp`, one-second resolution) and `readOnly` (the recorded
 permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
@@ -1801,6 +1801,28 @@ permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpSt
 (the CVE-2022-21658 shape) — and says in its doc comment what it still cannot promise (atomicity against
 a racing writer, which needs `openat`). `exists` returns a `bool`, and is a snapshot: to *use* a file, open
 it and handle the error.
+
+**Text files (`readText` / `writeText`).** The one-call form for a file that holds text, beside the
+byte-level `readFile`/`writeFile` that keep working unchanged: `readText(path:) -> Result<string, IoError>`
+and `writeText(path:, text:) -> Result<isize, IoError>` (the byte count, and it create/truncates like
+`writeFile`). `writeText` copies nothing on the way in — `text.bytes()` is a borrow of the string's own
+storage. <!-- test: fs_text -->
+
+⚠️ **`readText` validates, and so does every other path that builds a `string` out of foreign bytes** —
+`std::io::readAll` and `BufReader.readLine`, which are where the reading actually happens. Invalid UTF-8
+is `Err(InvalidInput)`, not an ill-formed `string`: `string`'s UTF-8 invariant is what `.chars()` assumes
+and what `substring` traps to preserve, and until `0.9.433` `readAll` was a way around it (a binary file
+read as text yielded bogus codepoints from entirely safe code). Bad *input* is an error, the same way <!-- test: fs_text -->
+`parse` returns one; bad *output* written into a `StringWriter` is a caller bug, so `finish()` carries a
+release-stripped `debugAssert` naming `takeBytes()` instead. `readFile` still accepts any bytes — "these
+bytes are not text" is a fact about the file, not a reason to refuse it.
+
+The checked conversion itself is **`std::encoding::utf8`**: `decode(bytes:) -> Result<string, Utf8Error>`
+and `validate(bytes:) -> bool` over a `ConstView<uint8>`, with `Utf8Error::Invalid(at:)` carrying the byte
+offset where the text stopped being well-formed (Rust's `valid_up_to`). Rejection is full RFC 3629 — a
+non-lead byte, a truncated tail, an overlong encoding, a UTF-16 surrogate, and anything above U+10FFFF.
+There is deliberately **no `encode`**: a `string` *is* UTF-8 bytes, so that direction is `s.bytes()`.
+<!-- test: encoding_utf8 -->
 
 **Names (`std::net`).** `resolve(host:, port:) -> Result<DynamicArray<SocketAddr>, IoError>` asks the
 system resolver for **every** address a name has, IPv4 and IPv6, in the resolver's own (RFC 6724) order and

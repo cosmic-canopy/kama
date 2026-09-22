@@ -1,0 +1,66 @@
+import { std::collections::ConstView };
+export { decode, validate, Utf8Error };
+
+// UTF-8 — bytes to text, CHECKED. The one direction that needs code: a `string` IS UTF-8 bytes, so the
+// encode direction is `s.bytes()` (a borrow, free) and this module deliberately does not offer a second
+// spelling of it. That asymmetry is the point rather than an omission — `base64` and `hex` have an
+// `encode` because they compute one; here there is nothing to compute.
+//
+// ⚠️ THIS CLOSES A HOLE, it is not only an ergonomic addition. `string`'s UTF-8 invariant is what
+// `.chars()` assumes and what `substring` traps to preserve, and the runtime argues it holds because
+// "every other string operation preserves it by construction". That argument had a gap: `std::io::readAll`
+// builds a `string` out of arbitrary reader bytes, so a file of `\xff\xfe\x80hello` became an 8-byte
+// `string` whose `.chars()` yielded 5 bogus codepoints (measured, 0.9.431). `readAll`, `StringWriter.finish`
+// and `bytesToString` all route through `decode` now, so the safe surface has no way in.
+//
+// Validation is FULL, not a byte scan. A lead byte in a continuation position, a truncated tail, an
+// OVERLONG encoding (the classic `\xC0\x80` NUL smuggle), a UTF-16 surrogate (U+D800..DFFF is not a
+// scalar value) and anything above U+10FFFF are each refused — the five ways RFC 3629 narrowed UTF-8.
+// Skipping any of them is how a "validator" becomes a security bug.
+//
+// Erroring rather than repairing is the same choice Rust (`String::from_utf8` -> `Result`) and Python
+// (`bytes.decode` raises) make, and kama already made it by claiming the invariant. A lossy U+FFFD
+// variant is a separate, named function if one is ever wanted; it is not this one, because silently
+// substituting a replacement character corrupts data and kama has no stderr warning channel to say so.
+
+// The runtime string constructor and the validator — an `extern` is a reference to a C symbol,
+// redeclared per module with the one signature every declaration in the program must share
+// (tools/check-extern-rung.sh).
+extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+extern fn isize  kama_utf8_bad_offset(UnsafeConstPtr<uint8> src, isize start, isize len);
+
+type enum Utf8Error implements Error {
+    // The byte offset where the first ill-formed sequence BEGINS — Rust's `Utf8Error::valid_up_to`.
+    // A caller reporting a bad file wants to say where, not just that.
+    Invalid(isize at);
+
+    public const fn string message() {
+        return match (this) {
+            case Invalid(at: a): "invalid UTF-8 at byte ${a}";
+        };
+    }
+}
+
+// Is this run of bytes well-formed UTF-8? Total, allocates nothing, and is what `decode` asks first.
+// A caller that only needs the verdict (a content sniffer, a validator at a boundary) should use this
+// rather than decoding and dropping the result.
+unsafe fn bool validate(ConstView<uint8> bytes) {
+    if (bytes.isEmpty()) { return true; }                    // vacuously; and `dataPtr` on empty is not read
+    return kama_utf8_bad_offset(src: bytes.dataPtr(), start: 0, len: bytes.length()) < 0;
+}
+
+// The bytes as an owned `string`, or where they stopped being UTF-8.
+//
+// NOT `@compileFor(!NOHEAP)`, unlike `base64::decode` and `hex::decode` beside it, and the difference is
+// that this one has a STDLIB consumer: `std::fs::readText` calls it, and a declaration-level gate is
+// refused at the IMPORT, so gating it made every `--no-heap` program that touches `std::fs` fail to
+// build (caught by tests/noheap_flag_fs.d). It allocates exactly as `std::io::readAll` and
+// `std::fs::readFile` do, and like them it is refused at the USE by the no-heap walk — which is the
+// stdlib's convention for an allocating function something else builds on. `validate` allocates nothing
+// and is available everywhere.
+unsafe fn Result<string, Utf8Error> decode(ConstView<uint8> bytes) {
+    if (bytes.isEmpty()) { return Result::Ok(value: ""); }   // empty in, empty out — nothing to copy
+    isize bad = kama_utf8_bad_offset(src: bytes.dataPtr(), start: 0, len: bytes.length());
+    if (bad >= 0) { return Result::Err(error: Utf8Error::Invalid(at: bad)); }
+    return Result::Ok(value: kama_string_from_raw(src: bytes.dataPtr(), start: 0, len: bytes.length()));
+}
