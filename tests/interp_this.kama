@@ -1,0 +1,59 @@
+// A hole may name `this` (KR-81). The hole grammar took an identifier head, and `this` is a keyword, so
+// inside a method the NATURAL spelling was the one refused — "unexpected THIS, expecting IDENTIFIER" — while
+// `${p.x}` on the same field from outside worked. The workaround was a local that says nothing
+// (`int32 n = this.id; "${n}"`), which docs/TOUR.md's own destructor example had to use.
+//
+// `this` is the only keyword admitted as a head, and nothing else about the hole rule changes: the
+// `.field` / `[index]` accessors are the same left-recursive arms, so a nested path and an index come with
+// it. Exit code is a bitset of the checks that passed (63 = all six).
+type value Inner implements Formattable {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; return this; }
+    public const fn void format(ref Formatter f) { f.writeStr(s: "&"); f.writeI64(v: cast<int64>(this.n)); }
+}
+
+type value Node implements Formattable {
+    public int32 id;
+    public Inner inner;
+    public ctor make(int32 id) { this.id = id; this.inner = Inner.make(n: 9i32); return this; }
+
+    // the plain field path — the spelling KR-81 refused
+    public const fn string one() { return "id=${this.id}"; }
+
+    // a nested path: the DOT arm is left-recursive on the hole, so it composes with no new rule
+    public const fn string nested() { return "inner=${this.inner.n}"; }
+
+    // the whole receiver, which is what `${p}` does for any other value: routed through `format` below
+    public const fn string whole() { return "me=${this}"; }
+
+    // two `this` holes in one literal, and a `this` hole beside an ordinary one
+    public const fn string mixed(int32 k) { return "${this.id}/${k}/${this.inner.n}"; }
+
+    // a format spec still applies to a `this` hole
+    public const fn string spec() { return "${this.id:04}"; }
+
+    public const fn void format(ref Formatter f) { f.writeStr(s: "N"); f.writeI64(v: cast<int64>(this.id)); }
+}
+
+// an INDEX hole off `this` — the LEFT_BRACKET arm, also unchanged
+type value Bag {
+    public InlineArray<int32>#(3) xs;
+    public ctor make() { this.xs = [11i32, 22i32, 33i32]; return this; }
+    public const fn string at1() { return "x1=${this.xs[1]}"; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Node nd = Node.make(id: 7i32);
+
+    if (nd.one().equals(other: "id=7")) { r = r + 1; }
+    if (nd.nested().equals(other: "inner=9")) { r = r + 2; }
+    if (nd.whole().equals(other: "me=N7")) { r = r + 4; }
+    if (nd.mixed(k: 5i32).equals(other: "7/5/9")) { r = r + 8; }
+    if (nd.spec().equals(other: "0007")) { r = r + 16; }
+
+    Bag b = Bag.make();
+    if (b.at1().equals(other: "x1=22")) { r = r + 32; }
+
+    return r;   // 63
+}

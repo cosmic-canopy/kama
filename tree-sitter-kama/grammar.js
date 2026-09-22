@@ -1320,12 +1320,14 @@ module.exports = grammar({
         '}',
       ),
 
-    // RESTRICTED to an identifier with `.field` / `[index]` accessors. No operators, no calls — kama.l
-    // errors on anything else, and tests/xfail/interp_hole_operator.kama is one of the files the
-    // whole-corpus oracle requires to fail. Whitespace inside the hole IS ignored (kama.l:247).
+    // RESTRICTED to an identifier — or `this` (KR-81) — with `.field` / `[index]` accessors. No operators,
+    // no calls: kama.l errors on anything else, and tests/xfail/interp_hole_operator.kama is one of the
+    // files the whole-corpus oracle requires to fail. Whitespace inside the hole IS ignored (kama.l:341).
+    // `this` is the ONE keyword admitted as a head — the lexer already returns THIS from the hole state,
+    // and src/kama.y's `interp_hole` takes it; see tests/interp_this.kama.
     interpolation_expression: ($) =>
       seq(
-        $.identifier,
+        choice($.identifier, $.this_expression),
         repeat(
           choice(
             seq('.', $.identifier),

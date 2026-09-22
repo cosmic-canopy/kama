@@ -173,9 +173,12 @@ to a `Formatter` build (a `writeStr` per literal chunk, `expr.format(ref f)` per
 string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who[0].format into one buffer
 ```
 
-- **Holes are restricted** to an identifier with `.field` / `[index]` accessors (`${user.name}`, `${items[i]}`).
-  Anything with an operator or call must be bound first (`int32 sum = a + b; "…${sum}"`) — logic stays out of
-  string literals (Rust RFC 2795's restraint).
+- **Holes are restricted** to an identifier — or **`this`** — with `.field` / `[index]` accessors
+  (`${user.name}`, `${items[i]}`, `${this.id}`). Anything with an operator or call must be bound first
+  (`int32 sum = a + b; "…${sum}"`) — logic stays out of string literals (Rust RFC 2795's restraint).
+  `this` is the only keyword admitted as a head, and it carries the same accessors as any other
+  (`${this.inner.n}`, `${this.xs[0]}`); a bare `${this}` formats the receiver, exactly as `${p}` does for
+  any other value. <!-- test: interp_this -->
 - **Escape** a literal `${` as `\${`; a lone `$` (not before `{`) stays literal.
 - **Verbatim** strings never interpolate — `@"raw ${x}"` is literal (the raw escape hatch).
 - A **`char`-typed hole** renders as its character (`${c}` → the glyph) via a `writeChar` fast-path — the

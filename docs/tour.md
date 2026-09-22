@@ -175,7 +175,7 @@ type resource Handle
 {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
-    ~Handle() { int32 n = this.id; println(s: "closing ${n}"); }
+    ~Handle() { println(s: "closing ${this.id}"); }
 }
 
 fn int32 main()

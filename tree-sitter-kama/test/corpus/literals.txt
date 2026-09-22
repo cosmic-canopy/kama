@@ -334,3 +334,62 @@ fn void main()
         (variable_declarator
           (identifier)
           (float_literal))))))
+
+================================================================================
+An interpolation hole may name `this`
+================================================================================
+
+fn void main()
+{
+    string a = "${this}";
+    string b = "${this.id} and ${this.inner.n} and ${this.xs[0]}";
+    string c = "${this.id:04}";
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (interpolation
+              (interpolation_expression
+                (this_expression))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (interpolation
+              (interpolation_expression
+                (this_expression)
+                (identifier)))
+            (string_content)
+            (interpolation
+              (interpolation_expression
+                (this_expression)
+                (identifier)
+                (identifier)))
+            (string_content)
+            (interpolation
+              (interpolation_expression
+                (this_expression)
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (interpolation
+              (interpolation_expression
+                (this_expression)
+                (identifier))
+              (format_spec))))))))

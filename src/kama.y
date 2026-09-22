@@ -686,7 +686,9 @@ literal
 /* String interpolation `"a ${x} b ${y} c"`. The lexer emits: a literal chunk (ISTR_CHUNK) before each hole
    and a final tail chunk, with the hole's identifier/member/index tokens in between. `interp_body` gathers
    CHUNK hole (CHUNK hole)* (parts.size()==holes.size()); `interp_expr` appends the trailing tail chunk so
-   parts.size()==holes.size()+1. Holes are restricted to an identifier with `.field`/`[index]` accessors. */
+   parts.size()==holes.size()+1. Holes are restricted to an identifier — or `this` — with `.field`/`[index]`
+   accessors. `this` is the one keyword admitted as a head: inside a method a hole naming `this.id` is the
+   natural spelling, and refusing it forced a local that says nothing (KR-81). */
 interp_expr
   : interp_body ISTR_CHUNK   { $1->parts.push_back($2); $$ = $1; }
   ;
@@ -702,6 +704,7 @@ interp_body
   ;
 interp_hole
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | THIS         { $$ = std::make_shared<ThisAccessNode>(SCANNER_CODEGENCONTEXT); }
   | interp_hole DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   ;

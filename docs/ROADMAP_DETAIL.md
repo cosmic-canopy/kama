@@ -270,14 +270,6 @@ Three shapes the corresponding-instance work (`0.9.300`, item 2 below) did not c
 Protected members, destructors and statics were checked and behave. SPEC § *Access control* names the
 three holes and links here.
 
-### A string hole cannot name a field through `this` (KR-81) — found 2026-09-21, `0.9.417`
-
-`"${this.id}"` is a parse error — "unexpected THIS, expecting IDENTIFIER" — because the hole grammar takes an
-identifier with member/index accessors and `this` is a keyword. Every other field path works (`${p.x}`,
-`${xs[0]}`), so inside a method the natural spelling is the one refused, and the workaround is a local
-(`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
-of a hole's path; nothing else about the hole rule changes.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

@@ -102,7 +102,7 @@
       "patterns": [
         { "include": "#escapes" },
         {
-          "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier with .field/[index] accessors and an optional format spec",
+          "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier, or `this`, with .field/[index] accessors and an optional format spec",
           "name": "meta.interpolation.kama",
           "begin": "\\$\\{",
           "end": "\\}",
@@ -110,6 +110,7 @@
           "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
           "patterns": [
             { "comment": "format specifier :.2 / :0x / :+06 — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[-+.0-9A-Za-z]+" },
+            { "comment": "`this` is a legal hole head (KR-81) — colour it as the keyword it is, not as a variable", "name": "variable.language.this.kama", "match": "\\bthis\\b" },
             { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
             { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
             { "name": "constant.numeric.kama", "match": "[0-9]+" }

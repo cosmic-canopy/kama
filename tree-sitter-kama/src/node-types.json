@@ -4771,6 +4771,10 @@
         {
           "type": "integer_literal",
           "named": true
+        },
+        {
+          "type": "this_expression",
+          "named": true
         }
       ]
     }
