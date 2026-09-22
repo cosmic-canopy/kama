@@ -278,6 +278,20 @@ identifier with member/index accessors and `this` is a keyword. Every other fiel
 (`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
 of a hole's path; nothing else about the hole rule changes.
 
+### A module-scoped declaration reaches C outside kama's registers (KR-88) — found 2026-09-22 moving the floor into module `core`, `0.9.426`
+
+SPEC § *C names* says every name kama owns reaches C in one of three registers — `KAMA_` macros, `kama_` for the
+compiler, `k_` for the user, "including scope-prefixed declarations" — and that the registers are disjoint by
+construction. Measured with `--keep-c` on `tests/ns_basic.d`: a module's declarations emit as
+`nsbasic__graphics__Texture`, `nsbasic__graphics__scale`; the stdlib's as `std__math__sqrt__float64`; `core`'s, since
+`0.9.426`, as `core__println`. Only FILE-private names take `k_F<file>__…`. So a project named like the start of a C
+macro (`FILE`, a vendor prefix) is exposed exactly as § *C names* says nothing can be.
+
+Unprobed: how many of the measured 4,708 macOS / 21,748 Windows macros a legal project name can reach (a project
+name is a kama identifier, so lowercase-leading ones are the realistic risk). Then either prefix module scopes
+(`k_<project>__…` — `kama demangle` and the lldb formatters read these names) or restate the SPEC claim with the
+measured exposure. `tools/check-c-names.sh` holds only the three registers today.
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
