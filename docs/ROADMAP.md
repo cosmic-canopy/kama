@@ -62,7 +62,7 @@ first stable release ships with the reach to match.
 **The last source-breaking item has shipped.** Compile-time values left the generic list in `0.9.141`:
 `<…>` holds types, `comptime(int32 N)` declares values, `#(4)` passes them ([SPEC.md](SPEC.md)
 *Generics*). Everything remaining on this list is additive and can land in any 1.x EXCEPT KR-87 (the floor becomes
-an importable module, decided 2026-09-22), which is a source break and so lands before the tag. Beyond it, the tag waits only on how much stdlib reach the maintainer wants in the first release.
+module `core` and module paths live only in `import`, decided 2026-09-22), which is a source break and so lands before the tag. Beyond it, the tag waits only on how much stdlib reach the maintainer wants in the first release.
 Ordering the rows below is the maintainer's call.
 
 **Size** is a batching hint, not a commitment: **S** fits beside others in one session · **M** is about a
@@ -72,7 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-87 | **The floor becomes an importable module; no name is in scope unless declared or imported** — the last implicit namespace goes: the runtime capabilities (`print` family, `args`, `env`, `envOr`, `program*`, `setPanicHandler`) are imported (`import { global::println };`) or written qualified (`global::println(…)`), so "no shadowing" holds with NO exception and a future capability can never break a program. Language types the syntax lowers into (`Optional`/`Result`/`Owned`/`Shared`/`Weak`/`Unit` and their variants) stay in scope as RESERVED names, like `string`. Decided 2026-09-22 with the maintainer, along with the rule for what is a reserved word: **greppability** — a word may be contextual only if every keyword use has a fixed neighbouring token a one-line grep anchors on. Source break before 1.0 (~33 corpus files, 8 docs pages, hello-world). Closes KR-57 by construction. Design pass first | M | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-87 | **The floor becomes module `core`; no name is in scope unless declared or imported; a module path is written only in `import`** — the runtime capabilities (`print` family, `args`, `env`, `envOr`, `program*`, `setPanicHandler`, + `Args`/`PanicHandler`) become the ordinary module `core` (`import { core::println };`, survives `--no-std`); the qualified side door (`a::b::X` for ANY export of a module once one symbol of it is imported — a qualified glob) retires, and `global::` with it (`global` stays a reserved project name). Every other prelude type and contract stays in scope as a RESERVED name, like `string`. Decided 2026-09-22 with the maintainer, with the reserved-word rule (**greppability**; `slot` stays contextual). Source break before 1.0. Closes KR-57 by construction | L | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-7 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |

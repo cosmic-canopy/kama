@@ -278,7 +278,7 @@ identifier with member/index accessors and `this` is a keyword. Every other fiel
 (`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
 of a hole's path; nothing else about the hole rule changes.
 
-### The floor becomes an importable module (KR-87) — decided 2026-09-22 with the maintainer, `0.9.425`
+### The floor becomes module `core`; a module path is written only in `import` (KR-87) — decided 2026-09-22 with the maintainer, `0.9.425`
 
 **The rule it serves.** Two universally easy rules, with no punch-through exceptions: *a name is in scope only if
 it is declared in your module or imported*, and *no binding may shadow a name in scope*. Today the floor (FLOOR.md)
@@ -291,25 +291,56 @@ source break, while exempting the floor leaves one name with two meanings in one
 | group | names | use | disposition |
 |---|---|---|---|
 | call-site intrinsics | `addr` `drop` `panic` `assert` `debugAssert` (+ `sizeof` `alignof` `bitcast`) | ~690 calls | **SHIPPED `0.9.425`** — reserved words, legal only in call position |
-| language types | `Optional`/`Some`/`None`, `Result`/`Ok`/`Err`, `Owned`/`Shared`/`Weak`, `Unit` | 140–300 files each | stay in scope, as RESERVED names (the category of `string`) — the syntax produces them (`new` → `Owned`, `try` → `Optional`), so importing them would be ceremony |
-| runtime capabilities | `print` `println` `eprint` `eprintln` `args` `env` `envOr` `programName` `programPath` `programInvocation` `setPanicHandler` | 33 files (1.4%) | **import or qualify**: `import { global::println };` or `global::println(…)` |
+| language types + contracts | `Optional`/`Some`/`None`, `Result`/`Ok`/`Err`, `Owned`/`Shared`/`Weak`, `Unit`, `Ordering`, and every prelude contract and its helper types | 140–300 files each (types) | stay in scope, as RESERVED names (the category of `string`) — the syntax produces or lowers into each one, so importing them would be ceremony |
+| runtime capabilities | `print` `println` `eprint` `eprintln` `args` `env` `envOr` `programName` `programPath` `programInvocation` `setPanicHandler` | 33 files (1.4%) | **import**, from the ordinary module `core`: `import { core::println };` — with `Args` and `PanicHandler`, the two types only they use |
 
-**Design questions for the pass (answer before code):**
-- `global` becomes an importable module name; today `import { global::println }` fails ("cannot resolve module
-  'global'"). It must survive `--no-std`, as the floor does now. Is the name `global` right for a module users
-  import from, or does it want a better one (the `global::` qualifier shipped with the LSP, M4.8)?
-- The diagnostic for a bare `println(…)` must name the fix (`import { global::println }`) — this is the line an
-  agent reads, so it is the one that makes the break cheap.
-- Which prelude TYPES and contracts count as "language" (always in scope, reserved) versus library. The line is
-  "the syntax lowers into it"; the contracts interpolation and `@generate` lower into (`Formattable`,
-  `Serializable`, `Equatable`, …) need a per-name verdict.
-- FLOOR.md's "importing to call `assert`/`println` would be terrible" is reversed for the capabilities; the
-  intrinsics half of it is already moot (they are keywords). GOALS/FLOOR/SPEC wording, the site's hello-world, and
-  `agents/AGENTS.md` + `seed/` examples all change — those last two are EMBEDDED, so a VERSION bump.
-- KR-57 lands in the same arc: with nothing implicit, "a binding may not take the name of a function in scope"
-  needs no exception. Renames it forces: `std::net::udp`'s public `interfaceIndex:` label, `std::process`'s
-  `args` parameter (and `Command`'s `args` field if fields count — they are reachable bare in a method), two
-  fixtures (`tests/query/scopes.kama`'s `sum`, `tests/ser_roundtrip_nested.kama`'s `main` parameter).
+**The design pass (maintainer, 2026-09-22) — six rulings.**
+
+1. **The module is `core`, not `global`.** `global` is overloaded — C#'s `global::` means "the root namespace", not
+   a module one imports from. `core` was already a reserved, EMPTY project root (`kama.driver.cpp` rejects it as a
+   package name). Rust's `core` is "what survives `no_std`", which is exactly the constraint here; Rust keeps I/O out
+   of its `core`, kama's binds runtime globals its C runtime owns, so the word keeps its definition and not Rust's
+   contents. `core` survives `--no-std`; `import { core::` is where the LSP lists it.
+2. **Every other prelude type and contract stays in scope, reserved.** Measured per name, each is something the
+   syntax lowers into: `foreach` → `Iterator`; interpolation → `Formattable`/`Formatter`/`Template`; `==`/`<` →
+   `Equatable`/`Comparable`/`Ordering`; `@generate` → `Serializable`/`Deserializable`/`Serializer`/`Deserializer`/
+   `FieldKey`/`SerError`/`DeError`/`Hashable`; `new`/`copy`/deref → `Allocator`/`GlobalAllocator`/`HeapOwner`/
+   `Copyable`/`Deref`/`DerefMut`/`Movable`; isolates → `Sendable`/`Immutable`; `@globalAllocator` → `GlobalHeap`;
+   `try` → `Error`; `Chars`/`Split` are what `string`'s methods return. Only `Args` (what `args()` returns) and
+   `PanicHandler` (what `setPanicHandler` takes) belong to the capabilities, so they move with them. A "reserved
+   but still must be imported" third category was rejected.
+3. **A module path is written only in `import`.** Today importing ONE symbol loads the module, and every export of
+   it is then spellable qualified (`nsbasic::graphics::scale(x: 3)` beside `import { nsbasic::graphics::Texture }`)
+   — a qualified glob, which is what `tests/mod_alias.d`'s own comment says GOALS rejects for the whole-module alias.
+   Measured in code (import blocks, comments, strings and xfails excluded): 80 sites in 14 files, 46 of them the
+   feature's own fixture `reach_controls_qualified.d`, 20 `std::memory::Owned` in kbin — nothing written as ordinary
+   code relies on it. After: every name is reached ONE way, imported by name, with `as` for a clash (as `ns_basic.d`
+   already does with `Texture as PhysTexture`); `::` stays for type-scoped names (`Color::Blue`). Precedent: ES
+   modules' `import { x } from "m"`. (SPEC §Modules said "kama has no module-qualified call"; it was false until now.)
+4. **`global::` retires with it.** Its last job was reaching the floor past a shadowing local, which no-shadowing
+   makes unspellable, and `global::assert` is a second spelling of a keyword. `global` stays a RESERVED project name,
+   like `std` and `core`, and its only code is the migration diagnostic.
+5. **Fields count for KR-57.** A field is reachable bare in a method, so it may not share a name with a function
+   in scope, nor with a method of its own type (`std::process::Command` has both a field and a method `args`).
+   Swift refuses the latter; Java/C# allow it; Rust can because a field is always `self.x`.
+6. **`slot` stays contextual.** A binding named `slot`/`give`/`copy` is followed by an operator or punctuation,
+   never by a name, so the anchor is the word + an identifier — with ONE exception shared by all three: `in` in a
+   foreach header (`foreach (int32 slot in xs)`). The table below records it.
+
+**The diagnostics — the lines an agent reads, so the ones that make the break cheap:**
+- bare `println(…)`, nothing imported: ``'println' is not in scope — it is in module core: add `import { core::println };` ``
+- `geo::area()` outside an import: ``a module path is written only in an `import` — add `import { geo::area };` and call `area(…)` ``
+- `global::X`: ``` `global::` was retired — add `import { core::X };` ```, or for an intrinsic ``'assert' is a keyword — write `assert(…)` ``
+
+**The work, in commits:** `core` importable (additive) → bare capabilities refused + the 33 files, docs,
+hello-world, `agents/` and `seed/` migrated → qualified paths and `global::` retired (resolver, grammar's
+`intrinsic_callee`, the 14 files, the qualified-door fixtures, LSP completion) → language type names reserved if a
+probe shows they are not → KR-57 → SPEC/FLOOR/KEYWORDS closeout. FLOOR.md's "importing to call `assert`/`println`
+would be terrible" is reversed for the capabilities and moot for the intrinsics.
+
+KR-57's renames: `std::net::udp`'s public `interfaceIndex:` label, `std::process`'s `args` parameter and
+`Command`'s `args` field, two fixtures (`tests/query/scopes.kama`'s `sum`, `tests/ser_roundtrip_nested.kama`'s
+`main` parameter).
 
 **The reserved-word rule — greppability (maintainer, 2026-09-22).** A word is reserved everywhere unless every
 KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword use can always be
@@ -321,8 +352,8 @@ contextual words:
 | `type` | `type resource Foo {` | `type` + a kind word | passes |
 | `file` | `file @compileFor(X);` (line 1) | `file @` | passes |
 | `truncate` | `truncate<int8>(x)` | `truncate<` (a method is `.truncate(`) | passes |
-| `give` / `copy` | `give x`, `copy x` | marker + space + a name; a binding named `give` is never followed by a bare name | passes |
-| `slot` | `slot T x;` | only the multi-token shape `slot <type> <name>;` | **weak — decide in the pass** (reserving it costs `tests/contextual_slot.kama`) |
+| `give` / `copy` | `give x`, `copy x` | marker + space + a name other than `in`; a binding named `give` is never followed by a bare name | passes |
+| `slot` | `slot T x;` | `slot` + space + a name other than `in` (the same anchor as `give`/`copy`) | passes — **stays contextual** (ruling 6) |
 
 By the same rule `out` stays reserved (no anchor: `out T x` and `q: out quotient`), and so do the intrinsics.
 Write the rule into SPEC *kama's keywords* when this lands.
