@@ -441,6 +441,9 @@ modifier
   | IMMUTABLE      /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
+/* A grant's path is a module RELATION, like an import entry, not a use — so it is the one place besides
+   `import` a module path may be written (KR-87), and it leaves the list checkModulePaths judges. That is
+   what keeps a grant to a module absent from this program inert rather than an unresolvable import. */
 friend_declaration
   : FRIEND qualified_identifier LEFT_BRACKET friend_member_list RIGHT_BRACKET SEMICOLON
 
@@ -1048,7 +1051,7 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
-    /* A call-site intrinsic (`addr(of: x)`, `global::assert(…)`). The node is the one a plain call builds —
+    /* A call-site intrinsic (`addr(of: x)`, `assert(…)`). The node is the one a plain call builds —
        an IdentifierNode carrying the spelling — so every pass that recognises an intrinsic by name is
        untouched; the grammar only stops the word from being anything else. */
   | intrinsic_callee LPAREN argument_list_opt RPAREN

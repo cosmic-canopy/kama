@@ -1,3 +1,0 @@
-// KR-46: a `static`'s type argument, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-static Optional<geo::HidErr> gs;
-fn int32 main() { return 0; }

@@ -2232,64 +2232,6 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
     else if (ClassInfo* rt = implTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
 }
 
-void CEmitter::addNamespaceSymbols(const std::string& path, const QueryCtx& qc,
-                                   std::vector<CompletionItem>& out)
-{
-    std::vector<PathSeg> segs = splitPath(path);
-    if (segs.empty()) return;
-    // `global::` — the floor, explicitly. This is the completion payoff the alias was deferred for
-    // (see docs/SPEC.md § Modules): the always-in-scope surface is otherwise undiscoverable, because
-    // there is no module to `import` and therefore nothing to type that would list it.
-    if (segs.size() == 1 && segs[0].name == "global") {
-        QueryScope guard(this);
-        _nsCtx = NsCtx{};                       // no own scope, no usings: bareNameOf yields ONLY floor keys
-        // Only the UNIT carries over: it is what tells a library C-ABI binding from the user's own FFI.
-        // Bindings and the enclosing type's members are deliberately dropped — `global::` names neither.
-        QueryCtx floorCtx;
-        floorCtx.unit = qc.unit;
-        addNamesInScope(floorCtx, {}, out);
-        out.erase(std::remove_if(out.begin(), out.end(), [](const CompletionItem& c) {
-            return c.kind == CompletionKind::Keyword;   // `global::while` is not a thing
-        }), out.end());
-        return;
-    }
-    std::string dotted;
-    for (auto& s : segs) dotted += (dotted.empty() ? "" : ".") + s.name;
-    std::string ns = mangleNs(dotted);
-    if (segs.size() == 1) {                       // a 1-segment head may be a module alias
-        auto a = _nsCtx.aliases.find(segs[0].name);
-        if (a != _nsCtx.aliases.end()) ns = a->second;
-    }
-    if (!_namespaces.count(ns)) return;
-    const std::string prefix = ns + "__";
-    // One level deep: `std::` offers `collections`, not `collections::DynamicArray`.
-    auto leaf = [&](const std::string& key, std::string& name) {
-        if (key.compare(0, prefix.size(), prefix) != 0) return false;
-        name = key.substr(prefix.size());
-        return name.find("__") == std::string::npos && !name.empty();
-    };
-    std::set<std::string> seen;
-    auto add = [&](const std::string& key, CompletionKind kind, const std::string& detail) {
-        std::string name;
-        if (!leaf(key, name) || !seen.insert(name).second) return;
-        out.push_back(CompletionItem{ name, kind, detail, dotted });
-    };
-    for (auto& kv : _classes) {
-        if (kv.second.isGenericInst || kv.second.isIntrinsicColl || kv.second.isExternStruct) continue;
-        add(kv.first, kv.second.isVariant ? CompletionKind::Type : CompletionKind::Type, "");
-    }
-    for (auto& kv : _genericTypes)      add(kv.first, CompletionKind::Type, "");
-    for (auto& kv : _enums)             add(kv.first, CompletionKind::Type, "enum");
-    for (auto& kv : _interfaces)        { if (!kv.second.isGenericInst) add(kv.first, CompletionKind::Contract, ""); }
-    for (auto& kv : _genericContracts)  add(kv.first, CompletionKind::Contract, "");
-    for (auto& kv : _funcs)             add(kv.first, CompletionKind::Function, "");
-    for (auto& n : _namespaces) {                    // nested modules (`std::` -> `collections`)
-        std::string name;
-        if (!leaf(n, name) || !seen.insert(name).second) continue;
-        out.push_back(CompletionItem{ name, CompletionKind::Module, "", dotted });
-    }
-}
-
 // ---- M4.3: bare names ---------------------------------------------------------------------------------
 
 // The bare spelling `key` would answer to at this cursor, or "" if it is unreachable from here. This is the
@@ -2547,8 +2489,9 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
     if (ctx.trigger == CompletionTrigger::Scope) {
         QueryCtx sqc = enclosingCallable(unit, ctx.line, ctx.column);
         std::string key = resolvePathAsType(ctx.receiver);
+        // Only a TYPE's scope completes here: a module path is written only in an `import` (KR-87), so
+        // `geo::` in code has nothing legal to offer — the import list is where its symbols complete.
         if (!key.empty()) addScopeMembers(key, sqc, out);
-        else              addNamespaceSymbols(ctx.receiver, sqc, out);
         std::sort(out.begin(), out.end(), [](const CompletionItem& a, const CompletionItem& b) {
             if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
             return a.label < b.label;

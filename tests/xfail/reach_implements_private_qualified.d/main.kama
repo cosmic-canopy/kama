@@ -1,3 +1,0 @@
-// KR-46: an `implements` contract, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-type value W implements geo::HidC { int32 a; public ctor make() { this.a = 1; } public fn int32 cm() { return this.a; } }
-fn int32 main() { W w = W.make(); return w.cm() - 1; }

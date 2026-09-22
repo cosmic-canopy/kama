@@ -1201,7 +1201,6 @@ private:
     // `Enum::` / `Variant::` cases and type-associated `comptime` constants (M4.2).
     void addScopeMembers(const std::string& key, const QueryCtx& qc, std::vector<CompletionItem>& out);
     // Everything declared in the namespace `path` names, one level deep (M4.2).
-    void addNamespaceSymbols(const std::string& path, const QueryCtx& qc, std::vector<CompletionItem>& out);
     // A `::`-qualified path -> the table key it names, "" if it names a namespace or nothing (M4.2).
     std::string resolvePathAsType(const std::string& path);
     // Everything spellable as a BARE name at the cursor (M4.3): bindings, the enclosing type's members,
@@ -1940,7 +1939,6 @@ private:
     // call sites that have no identifier in hand (or don't want the use recorded) are unaffected.
     std::string resolveUserName(const std::string& value, SharedStringList qualifier,
                                 const IdentifierNode* site = nullptr);                  // class/enum/iface ref
-    bool rejectRootedPath(SharedStringList qualifier, const IdentifierNode* site);
     std::string resolveFunc(const std::string& name, SharedStringList qualifier,
                             const IdentifierNode* site = nullptr);                      // function ref
     std::string resolveUserNameImpl(const std::string& value, SharedStringList qualifier);  // the search itself
@@ -2948,6 +2946,7 @@ private:
     static void forEachTypeArg(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     static void forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     bool constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile);
+    void checkModulePaths(const std::vector<SharedCompilationUnit>& units);    // `a::b::X` outside an import (KR-87)
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
     // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
     //

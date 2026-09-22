@@ -1,7 +1,7 @@
 // `as` renames an imported SYMBOL. It is the only alias kama has: the whole-module alias went with the
 // whole-module import, because `u::anything` is a qualified glob and GOALS.md already rejects globs for
-// the unqualified case. The qualified access this fixture used to get from a bare `import modalias::geo;`
-// survives with a name attached — importing any symbol of a module loads it.
+// the unqualified case — and so did the qualified side door that importing one symbol used to open (KR-87):
+// every name a file uses is in its import list, under its own name or an `as` one.
 import { modalias::geo::area, modalias::util::three as t };
 
-fn int32 main() { return modalias::geo::area() + t(); }   // 7 + 3 = 10
+fn int32 main() { return area() + t(); }   // 7 + 3 = 10

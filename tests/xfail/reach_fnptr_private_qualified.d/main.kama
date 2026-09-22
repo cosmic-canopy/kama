@@ -1,3 +1,0 @@
-// KR-46: an `fnptr` parameter type, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-fnptr int32 Cb(geo::HidVal x);
-fn int32 main() { return 0; }

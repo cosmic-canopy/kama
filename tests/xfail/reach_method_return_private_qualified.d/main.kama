@@ -1,3 +1,0 @@
-// KR-46: a method return type's type argument, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-type value W { public int32 a; public ctor make() { this.a = 1; } public fn Optional<geo::HidErr> m() { return Optional::None; } }
-fn int32 main() { W w = W.make(); return w.a - 1; }

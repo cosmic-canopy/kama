@@ -1,3 +1,0 @@
-// KR-46: a serde turbofish type argument, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-import { std::serialization::text::json::deserializeJsonBuffer };
-fn int32 main() { string s = "{\"v\":1}"; deserializeJsonBuffer::<geo::HidVal>(src: give s); return 0; }

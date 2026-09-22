@@ -51,6 +51,17 @@ public:
     // it), so the pointer removes any dependence on reduction order.
     std::map<const StringList*, std::vector<SrcRange>> listSegPos;
 
+    // Every `a::b::X` the source spells OUTSIDE an import (KR-87): a module path belongs in the import list
+    // only, and judging each occurrence where it was written is what makes that rule total. Resolution asks
+    // about qualified names from ~80 places, many with no node to report at, so it cannot be the judge.
+    // Moved onto the CompilationUnit when the unit reduces.
+    std::vector<SharedIdentifier> qualifiedIds;
+    void unjudgeQualified(const IdentifierNode* id)       // a `friend` grant's path — see friend_declaration
+    {
+        for (auto it = qualifiedIds.rbegin(); it != qualifiedIds.rend(); ++it)
+            if (it->get() == id) { qualifiedIds.erase(std::next(it).base()); return; }
+    }
+
     // An integer literal whose magnitude is EXACTLY one past its type's maximum — the only out-of-range
     // magnitude a unary minus can rescue, because the negation fits exactly. `2147483648` unsuffixed IS
     // INT32_MIN written down; so is `128i8` for `int8`. The check therefore cannot fire at the literal:

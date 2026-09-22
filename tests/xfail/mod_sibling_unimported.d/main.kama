@@ -1,1 +1,2 @@
-fn int32 main() { return geo::viaSibling(); }
+import { geo::viaSibling };
+fn int32 main() { return viaSibling(); }

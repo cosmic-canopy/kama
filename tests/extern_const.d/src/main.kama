@@ -4,8 +4,8 @@
 // Exercised:
 //   - two `static const` flags OR'd in a module that exports them, reaching C (`take_usage` sees 72);
 //   - a `#define` of each literal kind (`int` as `int32`, `double` as `float64`, the latter bound by `@linkName`);
-//   - an imported constant, a qualified one, one borrowed by `const ref`, and one interpolated.
-import { externconst::gpu::USAGE_UNIFORM, externconst::gpu::uniformCopy };
+//   - imported constants, one borrowed by `const ref`, and one interpolated.
+import { externconst::gpu::USAGE_UNIFORM, externconst::gpu::USAGE_COPY_DST, externconst::gpu::uniformCopy };
 extern "flags.h";
 
 extern const int32 KEY_ESCAPE;
@@ -20,7 +20,7 @@ unsafe fn int32 run() {
     return take_usage(u: uniformCopy())                                   // 72: 0x40 | 0x08, the header's values
          + (byRef(k: KEY_ESCAPE) - 250)                                   //  6
          + cast<int32>(gain * 2.0)                                        //  3
-         + (externconst::gpu::USAGE_COPY_DST == 8 ? 10 : 900)             // 10
+         + (USAGE_COPY_DST == 8 ? 10 : 900)                               // 10
          + (USAGE_UNIFORM == 64 ? 1 : 900);                               //  1
 }
 

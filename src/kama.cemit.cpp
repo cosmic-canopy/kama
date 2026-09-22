@@ -760,7 +760,6 @@ bool CEmitter::isNamespace(const std::string& name) const
 std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier,
                                       const IdentifierNode* site)
 {
-    if (rejectRootedPath(qualifier, site)) return value;
     std::string key = resolveUserNameImpl(value, qualifier);
     // THE CHOKEPOINT. Every qualified/unqualified type spelling in expression position resolves through
     // here — a static call's receiver, a variant construction's union, a dot-on-type ctor — so the file
@@ -790,24 +789,13 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
         if (sa != _nsCtx.symbolAliases.end() && known(sa->second)) return sa->second;
         if (sa != _nsCtx.symbolAliases.end()) { std::string ext = importedExtern(sa->second); if (!ext.empty()) return ext; }
     }
-    // `global::X` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases:
-    // the same symbol as bare `X`, nameable even where a local declaration shadows the spelling. `global`
-    // is therefore a reserved PROJECT name (§2f.29). A longer path under it is refused by
-    // rejectRootedPath before this runs, so `q` is empty here whenever `rooted`. (docs/SPEC.md § Modules —
-    // deferred until an LSP existed to give it a completion payoff; precedent is C#'s `global::`.)
+    // A module path outside an import is refused by checkModulePaths (KR-87); resolving it anyway is the
+    // recovery that keeps that refusal the only line a reader sees.
     SharedStringList q = qualifier;
-    bool rooted = q && !q->empty() && *(*q)[0] == "global";
-    if (rooted) {
-        auto rest = std::make_shared<StringList>();
-        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
-        q = rest;
-        if (q->empty()) return known(preludeName(value)) ? preludeName(value) : value;   // `global::X` == the floor spelling
-    }
     if (q && !q->empty()) {
-        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head, but never under
-        // `global::`, whose whole meaning is "not through this file's aliases").
+        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
         std::string nsMangled;
-        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
             nsMangled = _nsCtx.aliases[*(*q)[0]];
         else {
             std::string path;
@@ -2837,18 +2825,14 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
 }
 
 // Is this call one of the floor builtins the compiler lowers ITSELF — `panic`, `assert`, `debugAssert`,
-// `addr`, `drop`? `global::X` always is; a bare `X` is unless a declaration in reach takes the name — the
-// floor's shadowing rule, the same one `envOr` follows (FLOOR.md). (`sizeof`/`alignof`/`bitcast` are
-// reserved words, so nothing can take theirs.)
+// `addr`, `drop`? A bare one always is: they are keywords (0.9.425), so no declaration can take the name.
+// (`sizeof`/`alignof`/`bitcast` are reserved words too.)
 bool CEmitter::isFloorBuiltinCall(const IdentifierNode* id) const
 {
     if (!id || !id->value) return false;
     const std::string& nm = *id->value;
     if (nm != "panic" && nm != "assert" && nm != "debugAssert" && nm != "addr" && nm != "drop") return false;
-    const SharedStringList& q = id->qualifier;
-    if (q && q->size() == 1 && *(*q)[0] == "global") return true;
-    if (q && !q->empty()) return false;
-    return !_funcs.count(const_cast<CEmitter*>(this)->resolveFuncImpl(nm, nullptr));
+    return !id->qualifier || id->qualifier->empty();
 }
 
 // `panic(...)` — the one call the language knows never returns.
@@ -2858,7 +2842,7 @@ bool CEmitter::exprDiverges(const ASTNode* n) const
     // A BARE call keeps its name in `identifier`; `expression` is the RECEIVER and is null for one.
     if (!inv || inv->expression || !inv->identifier || !inv->identifier->value) return false;
     if (*inv->identifier->value != "panic") return false;
-    return isFloorBuiltinCall(inv->identifier.get());   // `panic` or `global::panic`, and not a user's own
+    return isFloorBuiltinCall(inv->identifier.get());
 }
 
 // Is there a `break` that would escape THIS loop? Nested loops swallow their own, and a `break` inside a
@@ -3214,6 +3198,68 @@ void CEmitter::rejectPlainCrossingC(const std::string& cty, const char* where, c
                 line);
 }
 
+// KR-87: a module path is written only in an `import`. Importing ONE symbol used to open every export of its
+// module to a qualified spelling (`import { geo::Point }` and then `geo::area()`) — a qualified glob, and a
+// second way to name each thing. Now every name reaches a file one way: imported by name, `as` for a clash.
+// `::` stays for TYPE-scoped names (`Color::Blue`, `Ordering::Less`), which name no module.
+//
+// Judged per OCCURRENCE, from the list the parser kept (CodeGenContext::qualifiedIds), rather than inside
+// resolution: resolution asks about a qualified name from dozens of places, most with no node to report
+// at, so a rule enforced there has holes wherever the node is missing. Resolution still resolves the path
+// — that is recovery, so the refusal below is the one line the reader sees.
+void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->name || u->name->empty() || (*u->name)[0] == '<') continue;   // compiler-owned sources
+        ScopedStr _cu(_collectingUnitPath, *u->name);
+        for (auto& id : u->qualifiedIds) {
+            if (!id || !id->qualifier || id->qualifier->empty() || !id->value) continue;
+            const StringList& q = *id->qualifier;
+            const std::string& name = *id->value;
+            if (*q[0] == "global") {
+                // The retired floor qualifier. Its intrinsics are keywords, its capabilities are `core`'s.
+                const bool intrinsic = q.size() == 1 && (name == "panic" || name == "assert" || name == "debugAssert"
+                                                         || name == "addr" || name == "drop");
+                if (intrinsic)
+                    unsupported(("`global::" + name + "` — `" + name + "` is a keyword, so it needs no qualifier: "
+                                 "write `" + name + "(…)`").c_str(), id->line, name);
+                else
+                    unsupported(("`global::` was retired: a file names what it uses in its import list (KR-87) — "
+                                 "for a capability add `import { core::" + name + " };` and write `" + name
+                                 + "`; a language type (`Optional`, `Result`, …) needs neither").c_str(), id->line, name);
+                continue;
+            }
+            // The longest leading run of segments that names a module; what follows it is the symbol.
+            size_t modLen = 0;
+            std::string path;
+            for (size_t i = 0; i < q.size(); ++i) {
+                path += (i ? "." : "") + *q[i];
+                if (_namespaces.count(mangleNs(path))) modLen = i + 1;
+            }
+            if (modLen == 0) continue;                          // `Color::Blue` — a type's scope, not a module
+            std::string mod, rest;
+            for (size_t i = 0; i < modLen; ++i) mod += (i ? "::" : "") + *q[i];
+            for (size_t i = modLen; i < q.size(); ++i) rest += *q[i] + "::";
+            rest += name;
+            const std::string symbol = modLen < q.size() ? *q[modLen] : name;
+            // Already imported (maybe under an `as` name): the fix is the spelling, not another import.
+            std::string local;
+            const std::string key = mangleNs(dottedModule(mod)) + "__" + symbol;
+            auto uc = _unitCtx.find(u.get());
+            if (uc != _unitCtx.end())
+                for (auto& sa : uc->second.symbolAliases) if (sa.second == key) { local = sa.first; break; }
+            const std::string spelled = local.empty() ? rest : local + rest.substr(symbol.size());
+            if (!local.empty())
+                unsupported(("`" + mod + "::" + rest + "` — a module path is written only in an `import`, and this "
+                             "file already imports `" + symbol + "`" + (local != symbol ? " as `" + local + "`" : std::string())
+                             + ": write `" + spelled + "`").c_str(), id->line, symbol);
+            else
+                unsupported(("`" + mod + "::" + rest + "` — a module path is written only in an `import`: add `import { "
+                             + mod + "::" + symbol + " };` and write `" + rest + "`").c_str(), id->line, symbol);
+        }
+    }
+}
+
 void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units)
 {
     // The prelude and the built-in modules are compiler-owned sources: they are collect-only, they are not
@@ -3545,45 +3591,10 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     _nsCtx = saved;
 }
 
-// `global::` has ONE job now: reach the floor past a local declaration that shadows the spelling
-// (`global::envOr`). It used to have a second — `global::a::b::X`, naming a namespace absolutely, through
-// neither the file's `using`s nor its aliases — and the module model (SPEC.md § Modules) removed it,
-// because `global` is an ordinary reserved PROJECT name now and `global::a::b::X` would have to mean
-// module `a/b` OF a project called `global`. Two spellings for one path is exactly what this campaign
-// exists to remove.
-//
-// The job it did is real, and it is fixed at the source instead: the only way a module path needed an
-// absolute escape was an `import … as N` alias shadowing a project name, and that alias is now refused
-// where it is written (`kama.driver.cpp`, the import-alias check).
-bool CEmitter::rejectRootedPath(SharedStringList qualifier, const IdentifierNode* site)
-{
-    if (!qualifier || qualifier->size() < 2 || *(*qualifier)[0] != "global") return false;
-    std::string rest;
-    for (size_t i = 1; i < qualifier->size(); ++i) rest += (rest.empty() ? "" : "::") + *(*qualifier)[i];
-    // Name resolution runs from passes with no current module, so this named no file. `_nsCtx` is the
-    // context of the file doing the naming, which is the file that wrote the `global::` path. See diagFile().
-    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
-    // REJECT ALWAYS, REPORT ONLY FROM THE SITE. `site` is defaulted to null at ~75 of this predicate's call
-    // sites — name resolution asks the same question from positions that carry no identifier node — and
-    // those calls reported the violation wherever the emitter happened to be: at line 0 before the walk,
-    // and at the enclosing function's line inside it. Because `unsupported` dedupes on (file, line,
-    // message), neither merged with the correctly-positioned firing, so ONE mistake was reported TWICE —
-    // `global_absolute_path.kama` said line 10, which is right, and then line 9, which is the `fn` above it.
-    // A second copy at an approximate line teaches a reader that the compiler is guessing. The sited call
-    // is the one that knows, so it is the only one that speaks; `return true` is unchanged, so the path is
-    // still refused. That the build still FAILS is not an assumption — it is the xfail leg's first assertion.
-    if (site)
-        unsupported(("`global::" + rest + "::…` names a module absolutely, which `global::` no longer does — "
-                     "it reaches the always-in-scope floor and nothing else. Write `" + rest + "::…`, and if "
-                     "an `import … as` alias is shadowing that name, rename the alias").c_str(), site->line);
-    return true;
-}
-
 // Resolve a function reference to its mangled cName (same search as types).
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier,
                                   const IdentifierNode* site)
 {
-    if (rejectRootedPath(qualifier, site)) return name;
     std::string key = resolveFuncImpl(name, qualifier);
     // §2f.31: `main` is the ENTRY POINT, not a symbol. C++ forbids calling it; Rust and Go make it
     // uncallable. Here it is reached BELOW the visibility system — `qualify` maps it to `kama_main` before
@@ -3607,17 +3618,10 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
         if (sa != _nsCtx.symbolAliases.end() && _funcs.count(sa->second)) return sa->second;
         if (sa != _nsCtx.symbolAliases.end()) { std::string ext = importedExtern(sa->second); if (!ext.empty()) return ext; }
     }
-    SharedStringList q = qualifier;                      // `global::…` — see resolveUserNameImpl
-    bool rooted = q && !q->empty() && *(*q)[0] == "global";
-    if (rooted) {
-        auto rest = std::make_shared<StringList>();
-        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
-        q = rest;
-        if (q->empty()) return _funcs.count(preludeName(name)) ? preludeName(name) : name;   // `global::f` == the floor
-    }
+    SharedStringList q = qualifier;                      // a module path — see resolveUserNameImpl
     if (q && !q->empty()) {
         std::string nsMangled;
-        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
             nsMangled = _nsCtx.aliases[*(*q)[0]];
         else {
             std::string path;
@@ -3672,16 +3676,10 @@ std::string CEmitter::resolveModuleVar(const std::string& name, SharedStringList
         auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{CAP}` (or `as`)
         if (sa != _nsCtx.symbolAliases.end() && _moduleStatics.count(sa->second)) return sa->second;
     }
-    SharedStringList q = qualifier;                  // `global::…` — see resolveUserNameImpl
-    bool rooted = q && !q->empty() && *(*q)[0] == "global";
-    if (rooted) {
-        auto rest = std::make_shared<StringList>();
-        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
-        q = rest;                                    // empty => `global::CAP`, the bare spelling below
-    }
+    SharedStringList q = qualifier;                  // a module path — see resolveUserNameImpl
     if (q && !q->empty()) {
         std::string nsMangled;
-        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
             nsMangled = _nsCtx.aliases[*(*q)[0]];
         else {
             std::string path;
@@ -34352,6 +34350,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // lists, so `@compileFor`-dropped declarations are simply absent here rather than needing a guard.
     // Running inside `collectProgram` (rather than at emit) is also what makes `kama build`, `kama check`
     // and the language server agree — all three take this path, which is the whole point of the check.
+    checkModulePaths(units);
     checkDeclaredTypes(units);
 }
 

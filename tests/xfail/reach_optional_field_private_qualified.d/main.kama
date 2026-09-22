@@ -1,3 +1,0 @@
-// KR-46: a field's type argument, never constructed, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-type value W { public Optional<geo::HidErr> e; public ctor make() { this.e = Optional::None; } }
-fn int32 main() { return 0; }

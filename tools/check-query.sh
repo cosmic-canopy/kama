@@ -772,14 +772,6 @@ expect --complete 102:37 -- "variant	None"
 expect --complete 149:28 -- "method	zero	fn int32 zero()"   # Stat::| — a static method
 expect --complete 149:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (the `::` bridge reaches them)
 expect --complete 149:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
-# A MODULE head lists what that module declares, one level deep. The head is an IMPORTED module, and that
-# is not a weakening of the assertion — it is the only spelling that exists. A file's identity is its
-# FOLDER (SPEC.md §Modules), so a loose single-file fixture like this one has no module of its
-# own to qualify with; `completeprobe::blend` used to work here only because the file DECLARED a namespace.
-expect --complete 177:23 -- "type	DynamicArray"
-expect --complete 177:23 -- "type	View"
-reject --complete 177:23 -- "	Cell	"          # ... never the naming FILE's own symbols
-reject --complete 177:23 -- "	blend	"
 
 # ---------------------------------------------------------------------------------------------------
 # M4.3 — bare names. The flooding guard is the whole milestone: `_classes` and `_funcs` span the entire
@@ -829,17 +821,6 @@ expect --complete 15:47 -- "type	println	core"      # `import { …, core::|` ->
 expect --complete 15:47 -- "type	Args	core"
 
 # ---------------------------------------------------------------------------------------------------
-# M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the
-# always-in-scope floor is otherwise undiscoverable, since there is no module to import that would list it.
-echo "check-query: M4.8 global:: completion"
-reject --complete 168:12 -- "	println	"        # the capabilities are module `core` now, imported by name (KR-87)
-reject --complete 168:12 -- "	args	"
-expect --complete 168:12 -- "type	Optional"
-reject --complete 168:12 -- "	Cell	"          # ... never a namespaced symbol, even this file's own
-reject --complete 168:12 -- "	blend	"
-reject --complete 168:12 -- "keyword"           # ... and `global::while` is not a thing
-reject --complete 168:12 -- "kama_args_at"      # ... nor the C-ABI plumbing behind the floor
-
 # ---------------------------------------------------------------------------------------------------
 # M4.4 — signature help + argument labels. kama has NO positional arguments (kama.y's `argument`
 # productions are all `IDENTIFIER COLON …`), so "which parameter am I on" and "what labels may I type"

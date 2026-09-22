@@ -1,2 +1,0 @@
-// KR-46: a `sizeof` operand, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-fn int32 main() { usize n = sizeof(geo::HidVal); return 0; }

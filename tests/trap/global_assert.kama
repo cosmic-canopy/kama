@@ -1,9 +1,0 @@
-// `global::assert` is the floor's trapping `assert`, the same intrinsic as the bare spelling (FLOOR.md). This
-// used to be the half of tests/global_floor_builtins.kama that aborted beside a user's own `fn assert`; the
-// intrinsics are reserved words now (tests/xfail/intrinsic_reserved.kama), so no such declaration exists
-// and what remains is the claim that the qualified spelling still traps.
-fn int32 main() {
-    global::assert(cond: 1 < 2, msg: "holds");
-    global::assert(cond: false, msg: "the floor's");   // traps here
-    return 0;
-}

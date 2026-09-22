@@ -63,9 +63,9 @@ type resource JsonSerializer<W: Writer> implements Serializer {
     // caller builds at a concrete site):
     //   JsonSerializer<StringWriter> w = JsonSerializer::<StringWriter>.make(sink: give mySink);
     //   Result<Unit, Owned<Error>> r = w.encodeValue(v: myValue);
-    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
+    public fn Result<Unit, Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;   // borrow self behind the Serializer interface
-        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
         match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         Result<Unit, IoError> fr = this.sink.flush();
         match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
@@ -204,10 +204,10 @@ type resource JsonSerializer<W: Writer> implements Serializer {
 // (dynamic dispatch), so a concrete value auto-wraps at the call site (`json::serializeJsonBuffer(v: point)`); the
 // value's vtable travels in the fat pointer, sidestepping cross-module static-vtable visibility. A `value`
 // copies cheaply; pass `copy`/`give` for a `resource` you want to keep or move.
-fn Result<string, std::memory::Owned<Error>> serializeJsonBuffer(Serializable v) {
+fn Result<string, Owned<Error>> serializeJsonBuffer(Serializable v) {
     JsonSerializer<StringWriter> w = JsonSerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;              // borrow the writer behind the Serializer interface
-    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
     return Result::Ok(value: w.innerRefMut().finish());   // materialize the concrete StringWriter's bytes
 }
@@ -537,7 +537,7 @@ fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader fr
 // The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
 // When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
 // the sink through `innerRefMut()`.
-fn Result<Unit, std::memory::Owned<Error>> serializeJsonStream<W: Writer>(Serializable v, W to) {
+fn Result<Unit, Owned<Error>> serializeJsonStream<W: Writer>(Serializable v, W to) {
     JsonSerializer<W> w = JsonSerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
 }

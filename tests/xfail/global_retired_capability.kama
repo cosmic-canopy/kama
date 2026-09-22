@@ -1,0 +1,3 @@
+// `global::` is retired (KR-87). A runtime capability is module `core`'s, named in the import list like any
+// module's symbol; the diagnostic hands over that import.
+fn int32 main() { global::println(s: "qualified"); return 0; }

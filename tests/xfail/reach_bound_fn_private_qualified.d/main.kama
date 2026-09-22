@@ -1,3 +1,0 @@
-// KR-46: a generic function's bound, never called, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-fn int32 g<X: geo::HidC>(X x) { return x.cm(); }
-fn int32 main() { return 0; }

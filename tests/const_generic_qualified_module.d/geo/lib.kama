@@ -1,3 +1,0 @@
-export { CAP };
-
-comptime isize CAP = 3;

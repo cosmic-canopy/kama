@@ -1,3 +1,0 @@
-// KR-46: a parameter type, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-fn int32 f(geo::HidErr e) { return 0; }
-fn int32 main() { return 0; }

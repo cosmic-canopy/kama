@@ -1,0 +1,2 @@
+// KR-87: a module path is written only in an `import` — this position spells an EXPORTED name of `geo` qualified, never imported. Refused, naming the import.
+fn int32 main() { Owned<geo::ShownVal> p = new geo::ShownVal.make(); return 0; }

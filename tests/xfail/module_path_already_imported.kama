@@ -1,0 +1,8 @@
+// A module path is written only in an `import` (KR-87) — also for a symbol the file DOES import, where the
+// fix is the spelling rather than another import line. Under an `as` name, that name.
+import { std::collections::DynamicArray as Arr };
+
+fn int32 main() {
+    std::collections::DynamicArray<int32> d = Arr.empty();
+    return 0;
+}

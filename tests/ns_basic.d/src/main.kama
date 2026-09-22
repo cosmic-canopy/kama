@@ -1,12 +1,12 @@
-// Two modules of one project declaring the SAME type name, kept apart. `graphics::Texture` comes in
-// unqualified; `physics::Texture` is reached by its qualified spelling, which stays available because
-// importing any symbol of a module loads that module.
-import { nsbasic::graphics::Texture, nsbasic::physics::Texture as PhysTexture };
+// Two modules of one project declaring the SAME type name, kept apart. `graphics::Texture` comes in under its
+// own name; `physics::Texture` under an `as` one — the clash is settled in the import list, the one place a
+// module path is written (KR-87), and every use after it is bare.
+import { nsbasic::graphics::Texture, nsbasic::physics::Texture as PhysTexture, nsbasic::graphics::scale };
 
 fn int32 main()
 {
-    Texture g = Texture.make(id: 10);                     // graphics::Texture (imported bare)
-    PhysTexture p = nsbasic::physics::Texture.make(m: 7); // alias in type position, qualified to construct
-    int32 s = nsbasic::graphics::scale(x: 3);             // qualified call into an imported module -> 6
+    Texture g = Texture.make(id: 10);                     // graphics::Texture
+    PhysTexture p = PhysTexture.make(m: 7);               // physics::Texture, by its alias
+    int32 s = scale(x: 3);                                // -> 6
     return g.get() + p.get() + s;                         // 10 + 7 + 6 = 23
 }

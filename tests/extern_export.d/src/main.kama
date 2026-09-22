@@ -1,9 +1,9 @@
-// Imported externs are named like any imported name — bare, through an `as` alias, and qualified. Calling one
+// Imported externs are named like any imported name — bare, and through an `as` alias. Calling one
 // still requires an `unsafe fn` here: exporting an extern hands out the C surface, not a safe one.
 import { xe::cdiv::div_t, xe::cdiv::div, xe::cdiv::abs as absval };
 unsafe fn int32 go() {
     div_t d = div(numer: 17, denom: 5);                         // 3 r 2
-    xe::cdiv::div_t e = xe::cdiv::div(numer: 9, denom: 4);      // 2 r 1, qualified
+    div_t e = div(numer: 9, denom: 4);                          // 2 r 1
     return d.back(d: 10) + absval(x: -7) + e.quot * 100;        // 32 + 7 + 200
 }
 fn int32 main() { return go() % 256; }                          // 239

@@ -10,24 +10,17 @@ command line, the environment and the fatal-handler hook. `core` is embedded in 
 `--no-std` too, but it is an ordinary module: a file names each capability it uses in its import list
 (`import { core::println };`), because a file uses only what it declares or imports (KR-87).
 
-**`global::` names the floor explicitly** (shipped with the language server, LSP M4.8). `global::assert` is
-the *same symbol* as bare `assert` — the qualifier resolves from the root, ignoring the file's own scope, its
-imports and its aliases, so it still reaches the floor where a local declaration shadows the spelling.
-Precedent: C#'s `global::`. `global` is therefore a **reserved project name**, and that is the whole of its
-specialness — it is not a third kind of scope, just a name nobody else may claim. It names ONLY the floor: a
-longer `global::a::b::X` used to name a module absolutely and was deleted with the `namespace` declaration
-(SPEC.md §Modules), because `global` being a project name would make it mean module `a/b` OF a
-project called `global`. The job it did — reach a name past an `import … as` alias shadowing it — is done at
-the source now: such an alias is refused where it is written. Typing `global::` in an editor lists this
-whole surface — which is why the qualifier waited for a language server: without completion it would have
-been a spelling with no discovery payoff.
+**There is no `global::`** (retired with KR-87). It named the floor so a local declaration could not hide
+it; nothing may shadow a name in scope now, the intrinsics below are keywords, and the capabilities are
+`core`'s. `global` stays a reserved project name. The floor is discovered here and by completion on a bare
+name; `core`'s surface completes inside the import list (`import { core::| }`).
 
 Everything here is declared in [`prelude/global.kama`](../prelude/global.kama) and
 [`prelude/builtin.kama`](../prelude/builtin.kama) over [`kama_runtime.h`](../include/kama_runtime.h), except the
 handful the compiler lowers itself because they need the call site — `panic`, `assert`, `debugAssert` (the
 source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop`. Those eight are **reserved words**
 (SPEC *kama's keywords*): each is legal only in call position, so no local, parameter, field or function can take
-the name, and `global::assert(…)` is the same intrinsic as `assert(…)`. The rule for which words are reserved is
+the name, and each is written bare. The rule for which words are reserved is
 the greppability one in SPEC. The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
 a semantics index. See also [SPEC.md](SPEC.md) for the language.
 

@@ -5138,10 +5138,14 @@ outright — `namespace` is not a keyword and writing one is a syntax error.
 **One `import { … };` block per file, and every entry names a SYMBOL.** `a::b::X` is symbol `X` of module
 `a::b`, always — there is no whole-module import, so the entry is never ambiguous. `as` renames
 (`a::b::X as Y`), and an entry with **no scope** (`X`) names a symbol of this file's own module, because
-there the scope is the only candidate. Importing any symbol of a module loads that module, so a qualified
-`a::b::Y` stays available afterwards. There is no glob — unqualified-everything is not offered: explicit over implicit, and per-symbol imports are what the LSP's auto-import and closure pruning ride on. Fully-qualified `a::b::X` is always available once
-imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
-a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
+there the scope is the only candidate. There is no glob — unqualified-everything is not offered: explicit over implicit, and per-symbol imports are what the LSP's auto-import and closure pruning ride on.
+**A module path is written only in an `import`** (KR-87) — every name a file uses is in its import list, and
+every use of it is bare. `geo::area()` is refused in every position, naming the import that fixes it or, for <!-- xfail: module_path_fn_call, module_path_local, module_path_ctor_call, module_path_static_call, module_path_variant_expr, module_path_already_imported -->
+a symbol already imported, the spelling to write. Importing one symbol used to open every export of its
+module to a qualified spelling, which was a qualified glob and a second way to name each thing. `::` stays
+for a TYPE's scope (`Color::Blue`, `Ordering::Less`), which names no module; the one other place a module
+path is written is a `friend` grant, a module relation like an import entry rather than a use (§ *Access
+control*). Two imports binding the same bare name is a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 
@@ -5155,23 +5159,21 @@ see each other, so a list never names itself.
 **Visibility is per FILE. A file may name only what it DECLARES or IMPORTS** — `export { … };` is the
 outbound half and `import` the inbound one, and the symmetry is the rule. A top-level `type`/`fn` leaves its
 file only by being named in that file's one `export` block; a listed name must be a top-level declaration of
-that same file, so a directory-module's files each state their own surface. **A qualified spelling reaches no
-further than an `import` would** — `a::b::X` naming a non-exported `X` is the same error, in **every**
-position: a call, a construction, a static call, a field, a parameter, a return type, a local declaration.
+that same file, so a directory-module's files each state their own surface.
 
-**Every name in a type is held to this, at any depth — not only the name that IS the type.** A type argument <!-- xfail: reach_optional_param_private_qualified, reach_nested_local_private -->
-(`Result<Uuid, geo::HidErr>`, `Optional<Result<int32, X>>`), a `#(K)` constant, a bound and an `implements` <!-- xfail: reach_const_generic_arg_private_qualified, reach_bound_fn_private_qualified, reach_implements_private_qualified, reach_implements_arg_private_qualified -->
+**Every name in a type is held to this, at any depth — not only the name that IS the type.** A type argument <!-- xfail: reach_optional_param_unimported, reach_nested_local_private -->
+(`Result<Uuid, HidErr>`, `Optional<Result<int32, X>>`), a `#(K)` constant, a bound and an `implements` <!-- xfail: reach_const_generic_arg_unimported, reach_bound_fn_unimported, reach_implements_unimported, reach_implements_arg_unimported -->
 entry with its own type arguments, a module `static`'s type, and every type a body writes — a `cast<…>`, <!-- xfail: reach_static_decl_private, reach_cast_arg_private, reach_sizeof_private, reach_as_downcast_private -->
-`sizeof(…)`, an `.as<…>()` target, a turbofish argument, a variant expression's enum — is refused the same <!-- xfail: reach_turbofish_private_qualified, reach_variant_expr_private_qualified -->
-way, and inside a generic body whether or not anything instantiates it. A name that is not in reach is <!-- xfail: reach_generic_body_private_qualified -->
+`sizeof(…)`, an `.as<…>()` target, a turbofish argument, a variant expression's enum — is refused the same <!-- xfail: reach_turbofish_unimported, reach_variant_expr_unimported -->
+way, and inside a generic body whether or not anything instantiates it. A name that is not in reach is <!-- xfail: reach_generic_body_unimported -->
 reported by kama, never left for the C compiler, and a name another module EXPORTS is reported with the <!-- xfail: reach_result_local_std_unimported, reach_local_private -->
 import that fixes it (`add import { std::uuid::UuidError };`); a private one says which file keeps it,
 because no import can reach it. A bound or an `implements` entry must name a contract: a type there is <!-- xfail: bound_names_a_type, implements_names_a_type -->
 refused at the declaration, even on a generic nobody calls.
 
 **The FFI seam keeps its C spellings, and only those.** An `extern fn` signature names types its header owns,
-so a BARE name there is the header's literal C spelling and is not resolved; a qualified name is never a C <!-- xfail: reach_extern_sig_private_qualified -->
-spelling and is held to the rule. A body may name the C spellings its own file's `extern fn` signatures
+so a BARE name there is the header's literal C spelling and is not resolved; a module path is never a C
+spelling and is refused there as everywhere. <!-- xfail: module_path_extern_sig --> A body may name the C spellings its own file's `extern fn` signatures
 introduced — `cast<CompareFn>(c)` beside `extern fn void qsort(…, CompareFn compar)` — and no other <!-- xfail: extern_c_spelling_other_file -->
 unresolved name: another file's extern does not introduce it here (`tests/callback_qsort.d`).
 
@@ -5277,11 +5279,10 @@ error**, **`main` may not be exported**, and it must be **unique per PROJECT** r
 two collide where `a::helper` and `b::helper` do not. Its location is unconstrained; location simply does
 not scope it, which is exactly why it is not callable.
 
-**`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
-`X` — the always-in-scope [floor](FLOOR.md). It exists for the case where a local declaration shadows the
-spelling you want. It names **only** the floor: `global` is a
-reserved project name, not a path prefix, so `global::a::b::X` is an error <!-- xfail: global_absolute_path -->
-(`tests/xfail/global_absolute_path.kama`).
+**There is no `global::`** (retired with KR-87). It named the floor, and nothing is left for it to do: the
+intrinsics are keywords (`global::assert` is refused, naming `assert`), the runtime capabilities are module <!-- xfail: global_retired_intrinsic, global_retired_capability -->
+`core`, imported by name, and nothing may shadow a name in scope, so there is no local to reach past.
+`global` stays a reserved project name, like `std` and `core`.
 
 ## Concurrency ✅
 
@@ -5668,8 +5669,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   **Entry points are `serialize…`/`deserialize…`, and name the FORMAT and the SOURCE.** The verb matches the
   contracts and the methods the derive emits (`Serializable.serialize`), and it leaves `encode`/`decode` to
   mean what they mean in `std::encoding::base64` and `::hex` — a bytes-to-bytes transform, not a typed value
-  going to a wire form. The format is in the NAME because kama has no module-qualified call — an `import`
-  brings a symbol in unqualified, so the module path never reaches the call site and the name must carry
+  going to a wire form. The format is in the NAME because kama has no module-qualified call — a module
+  path is written only in an `import`, so it never reaches the call site and the name must carry
   everything. `…Buffer` works on a value already in memory; `…Stream` works on a `Reader`/`Writer` (a file, a
   socket). Every back end offers all four, so the read and write sides are symmetric.
 

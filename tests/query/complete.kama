@@ -162,18 +162,18 @@ fn int32 bareNames(int32 seed) {
     return far;
 }
 
-// M4.8 — `global::` names the ROOT scope explicitly: the same symbol as the bare spelling, reachable
-// even where a local declaration shadows it. Its completion payoff is why the alias waited for an LSP.
+// KR-87 — there is no `global::` any more: the intrinsics are keywords, called bare like this `assert`, and
+// the runtime capabilities are module `core`, imported by name.
 fn int32 rootScope() {
-    global::assert(cond: true, msg: "root scope");     // a FLOOR symbol, named explicitly
+    assert(cond: true, msg: "root scope");               // a keyword, no qualifier
     return blend(lo: 1, hi: 2);                        // ... beside the file's own, which needs no prefix
 }
 
-// M4.2 — a MODULE head lists what that module declares, one level deep. The head has to be a module the
-// file can NAME: a file's identity is its FOLDER (SPEC.md § Modules), so a loose single-file
-// fixture like this one has no module of its own to qualify with. An IMPORTED module is the spelling that
-// exists, and `std::collections` is loaded whole by the import at the top.
+// KR-87 — a module path is written only in an `import`, so a MODULE head in code completes nothing: its
+// symbols complete inside the import list (`import { std::collections::|`, at the top of this file), and
+// every use is the bare name the import binds. `::` in code is a TYPE's scope only (`Stat::zero`, above).
+// (This used to be the module-head completion site, reached through `std::collections::DynamicArray`.)
 fn int32 moduleHead() {
-    std::collections::DynamicArray<Cell> viaMod = DynamicArray.empty();
+    DynamicArray<Cell> viaMod = DynamicArray.empty();
     return cast<int32>(viaMod.length());
 }

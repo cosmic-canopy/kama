@@ -1,0 +1,3 @@
+// `global::` is retired (KR-87). It named the floor, and the floor's intrinsics are keywords now, so a
+// qualifier on one is a second spelling of the same word — refused, with the one spelling to write.
+fn int32 main() { global::assert(cond: true, msg: "qualified"); return 0; }

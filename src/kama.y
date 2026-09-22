@@ -525,7 +525,7 @@ struct kamayystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : file_directive_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3);
+  : file_directive_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3); yyget_extra(scanner)->compilationUnit->qualifiedIds = std::move((SCANNER_CODEGENCONTEXT).qualifiedIds);
       yyget_extra(scanner)->compilationUnit->fileGate = $1;
       /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
          and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
@@ -720,14 +720,14 @@ boolean_literal
 
 qualified_identifier
   : basic_identifier
-  | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); TAKE_SEGS($$->qualifierPos, $1); }
+  | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
   ;
 intrinsic_name
   : ADDR { $$ = $1; } | DROP { $$ = $1; } | PANIC { $$ = $1; } | ASSERT { $$ = $1; } | DEBUG_ASSERT { $$ = $1; }
   ;
 intrinsic_callee
   : intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC($$, @1); }
-  | qualifier intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
+  | qualifier intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
   ;
 qualifier
   : IDENTIFIER COLONCOLON { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
@@ -783,7 +783,7 @@ qualified_identifier_no_generic
   | FILE_KW  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `file` — `File file = …` is the spelling a user reaches for first */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
-  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
+  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
   ;
 
 type_name
@@ -1010,11 +1010,14 @@ modifier
   | IMMUTABLE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
+/* A grant's path is a module RELATION, like an import entry, not a use — so it is the one place besides
+   `import` a module path may be written (KR-87), and it leaves the list checkModulePaths judges. That is
+   what keeps a grant to a module absent from this program inert rather than an unresolvable import. */
 friend_declaration
   : FRIEND qualified_identifier LEFT_BRACKET friend_member_list RIGHT_BRACKET SEMICOLON
-      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, $4); (SCANNER_CODEGENCONTEXT).unjudgeQualified($2.get()); }
   | FRIEND qualified_identifier LEFT_BRACKET ELLIPSIS RIGHT_BRACKET SEMICOLON
-      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, nullptr); }   // [...] => all privates
+      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, nullptr); (SCANNER_CODEGENCONTEXT).unjudgeQualified($2.get()); }   // [...] => all privates
   ;
 friend_member_list
   : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
@@ -1719,7 +1722,7 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
-    /* A call-site intrinsic (`addr(of: x)`, `global::assert(…)`). The node is the one a plain call builds —
+    /* A call-site intrinsic (`addr(of: x)`, `assert(…)`). The node is the one a plain call builds —
        an IdentifierNode carrying the spelling — so every pass that recognises an intrinsic by name is
        untouched; the grammar only stops the word from being anything else. */
   | intrinsic_callee LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }

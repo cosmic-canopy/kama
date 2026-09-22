@@ -79,9 +79,9 @@ type resource KbinPositionalSerializer<W: Writer> implements Serializer {
 
     // Stream a `Serializable` value's POS into this writer's owned sink, then flush — the streaming twin of
     // `serializeKbinPositionalBuffer`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
-    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
+    public fn Result<Unit, Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
-        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
         match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         Result<Unit, IoError> fr = this.sink.flush();
         match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
@@ -297,10 +297,10 @@ type resource KbinPositionalDeserializer implements Deserializer {
 
 // Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a
 // `DynamicArray<uint8>`, not a `string`.
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> serializeKbinPositionalBuffer(Serializable v) {
+fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinPositionalBuffer(Serializable v) {
     KbinPositionalSerializer<StringWriter> w = KbinPositionalSerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
-    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
     return Result::Ok(value: w.innerRefMut().takeBytes());
 }
@@ -328,7 +328,7 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>
 // The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
 // When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
 // the sink through `innerRefMut()`.
-fn Result<Unit, std::memory::Owned<Error>> serializeKbinPositionalStream<W: Writer>(Serializable v, W to) {
+fn Result<Unit, Owned<Error>> serializeKbinPositionalStream<W: Writer>(Serializable v, W to) {
     KbinPositionalSerializer<W> w = KbinPositionalSerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
 }

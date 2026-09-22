@@ -75,9 +75,9 @@ type resource KbinNumberedSerializer<W: Writer> implements Serializer {
     public const fn const ref W innerRef() { return this.sink; }
     public fn ref W innerRefMut() { return this.sink; }
 
-    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
+    public fn Result<Unit, Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
-        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
         match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         Result<Unit, IoError> fr = this.sink.flush();
         match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
@@ -379,10 +379,10 @@ type resource KbinNumberedDeserializer implements Deserializer {
     public const fn DeError errorCode() { return this.code; }
 }
 
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> serializeKbinNumberedBuffer(Serializable v) {
+fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinNumberedBuffer(Serializable v) {
     KbinNumberedSerializer<StringWriter> w = KbinNumberedSerializer::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
-    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
     return Result::Ok(value: w.innerRefMut().takeBytes());
 }
@@ -407,7 +407,7 @@ fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(R
 // The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
 // When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
 // the sink through `innerRefMut()`.
-fn Result<Unit, std::memory::Owned<Error>> serializeKbinNumberedStream<W: Writer>(Serializable v, W to) {
+fn Result<Unit, Owned<Error>> serializeKbinNumberedStream<W: Writer>(Serializable v, W to) {
     KbinNumberedSerializer<W> w = KbinNumberedSerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
 }

@@ -83,6 +83,7 @@ public:
     SharedImportDeclarationList importDeclarationList;
     SharedStringList exportList;              // the module's public surface (`export { … };`)
     std::vector<SrcRange> exportListPos;      // one span per exportList entry (M6 B3f), or empty
+    std::vector<SharedIdentifier> qualifiedIds;   // every `::`-qualified name outside the imports (KR-87)
     SharedStatementList codeDeclarationList;
     // Names `@compileFor` dropped from codeDeclarationList — recorded HERE, on the unit, and not only on
     // the emitter that did the pruning. pruneInactiveDecls rewrites the decl list IN PLACE, so a second

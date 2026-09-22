@@ -1,2 +1,0 @@
-// KR-46: an `.as<X>()` downcast target, naming a name private to `geo/lib.kama`, spelled qualified. Must be rejected, naming it.
-fn int32 main() { Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<geo::HidErr>()) { case Some(value: x): 1; case None: 0; }; }; }
