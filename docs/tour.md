@@ -213,7 +213,7 @@ keep, you own, and a borrow (`ref`, or a `view`) is scope-local by construction.
 
 Fallible operations return a value you have to look at.
 
-```kama
+```kama fragment
 type enum Optional<T> { Some(T value), None }
 type enum Result<T, E: Error> { Ok(T value), Err(E error) }
 ```

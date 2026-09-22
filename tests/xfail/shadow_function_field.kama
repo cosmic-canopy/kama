@@ -1,0 +1,5 @@
+// KR-57: a FIELD is reachable bare inside its type's methods, so it is a binding like any other and may not
+// take the name of a function in scope (maintainer ruling, 2026-09-22).
+fn int32 total() { return 1; }
+type value Tally { int32 total; public ctor make() { this.total = 0; return this; } }
+fn int32 main() { Tally t = Tally.make(); return 0; }

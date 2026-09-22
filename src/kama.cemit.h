@@ -2947,6 +2947,12 @@ private:
     static void forEachConstArgName(const SharedIdentifier& t, const std::function<void(const SharedIdentifier&)>& f);
     bool constArgReaches(const SharedIdentifier& k, const char* what, const std::string& refFile);
     void checkModulePaths(const std::vector<SharedCompilationUnit>& units);    // `a::b::X` outside an import (KR-87)
+    // No name may be taken twice in one scope (KR-57/KR-87): a binding never takes a language name, nor the
+    // name of a function or type in scope; a top-level declaration never takes a language name.
+    bool isLanguageName(const std::string& nm);
+    void checkBindingName(const std::string& nm, const char* kind, int srcLine);
+    void checkDeclaredNames(const std::vector<SharedCompilationUnit>& units);
+    std::set<std::string> _languageNames;   // filled on first use, after collection — see isLanguageName
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
     // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
     //

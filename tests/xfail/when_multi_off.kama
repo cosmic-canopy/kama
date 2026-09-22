@@ -1,7 +1,7 @@
-// A multi-`when` gate is AND: `Box2<int32, Owned>` fails the `B: Copyable` condition (Owned is move-only),
+// A multi-`when` gate is AND: `Box2<int32, MoveOnly>` fails the `B: Copyable` condition (MoveOnly is move-only),
 // so `Box2`'s `copy()` is ABSENT for this instance — `copy p` must be a clean compile error, not a
 // half-copy. Guards the multi-condition gate's AND semantics.
-type resource Owned { int32 x; public ctor make(int32 x) { this.x = x; } }
+type resource MoveOnly { int32 x; public ctor make(int32 x) { this.x = x; } }
 
 type resource Box2<A, B> implements Copyable<This>(bare: give) when [A: Copyable<A>, B: Copyable<B>] {
     A a; B b;
@@ -10,7 +10,7 @@ type resource Box2<A, B> implements Copyable<This>(bare: give) when [A: Copyable
 }
 
 fn int32 main() {
-    Box2<int32, Owned> p = Box2.make(a: 3, b: Owned.make(x: 1));
-    Box2<int32, Owned> q = copy p;   // B=Owned not Copyable -> copy() absent -> REJECTED
+    Box2<int32, MoveOnly> p = Box2.make(a: 3, b: MoveOnly.make(x: 1));
+    Box2<int32, MoveOnly> q = copy p;   // B=MoveOnly not Copyable -> copy() absent -> REJECTED
     return 0;
 }

@@ -1,0 +1,4 @@
+// KR-87: the language's names are in every scope, like `string` — the syntax lowers into them — so no
+// declaration may take one. A user `type value Optional` used to be accepted and hid the real one for its file.
+type value Optional { public int32 v; public ctor make() { this.v = 1; return this; } }
+fn int32 main() { return 0; }

@@ -339,6 +339,7 @@ extern_value_layout	-
 extern_value_nameless	extern_value_nameless.kama:6
 extern_value_plain_enum_field	extern_value_plain_enum_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
+field_method_same_name	field_method_same_name.kama:4
 field_no_default	field_no_default.kama:14
 field_on_bool	field_on_bool.kama:3
 field_on_enum_value	field_on_enum_value.kama:3
@@ -942,6 +943,8 @@ reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3
 reffn_static_local	reffn_static_local.kama:9
 refreturn_local	refreturn_local.kama:5
+reserved_binding_name	reserved_binding_name.kama:2
+reserved_type_name	reserved_type_name.kama:3
 reserved_word_as_name	reserved_word_as_name.kama:14 reserved_word_as_name.kama:15
 scope_borrow_element	scope_borrow_element.kama:20
 scope_borrow_escape	scope_borrow_escape.kama:27
@@ -983,6 +986,9 @@ ser_unmarked_field	ser_unmarked_field.kama:5
 serialize_isize_field	serialize_isize_field.kama:13
 shadow_enclosing	shadow_enclosing.kama:4
 shadow_field	shadow_field.kama:6
+shadow_function_field	shadow_function_field.kama:4
+shadow_function_local	shadow_function_local.kama:4
+shadow_function_param	shadow_function_param.kama:3
 shadow_param	shadow_param.kama:3
 signflip_local	signflip_local.kama:1
 simd_bad_elem	simd_bad_elem.kama:6 simd_bad_elem.kama:7

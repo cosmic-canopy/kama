@@ -6,19 +6,19 @@
 //      workaround was to mention `G::<int32>` somewhere else in the same function, which is a site that
 //      IS walked.
 //   2. RENDERING. With the instance registered, `exprClass`'s dot-on-type branch then bailed on
-//      `if (inst != dotTy) return "";` — a fallible ctor's declared `Result<G<T>, Err>` needs the owning
+//      `if (inst != dotTy) return "";` — a fallible ctor's declared `Result<G<T>, OpenErr>` needs the owning
 //      instance's type args bound to render. `cTypeInInstance` binds exactly those.
 //
 // The infallible ctor on the same instance always worked, which is what made the row read as a
 // fallible-ctor problem rather than a discovery one.
-type enum Err implements Error {
+type enum OpenErr implements Error {
     Bad;
 
     public const fn string message() { return "bad"; }
 }
 type value G<T> {
     public T item;
-    public ctor Result<G<T>, Err> open(T item) {
+    public ctor Result<G<T>, OpenErr> open(T item) {
         this.item = item;
         return Result::Ok(value: this);
     }

@@ -5,10 +5,10 @@
 type value Widget {
     const int32 id;          // set from the ctor arg
     const int32 kind = 7;    // inline initializer
-    int32 count;             // private (kind-decides); read via the accessor
-    public ctor make(int32 id) { this.id = id; this.count = 0; }
-    public fn void tick() { this.count = this.count + 1; }    // mutating non-const field: OK
-    public const fn int32 count() { return this.count; }
+    int32 ticks;             // private (kind-decides); read via the accessor
+    public ctor make(int32 id) { this.id = id; this.ticks = 0; }
+    public fn void tick() { this.ticks = this.ticks + 1; }    // mutating non-const field: OK
+    public const fn int32 count() { return this.ticks; }
     public const fn int32 tag() { return this.id + this.kind; }
 }
 fn int32 main() {

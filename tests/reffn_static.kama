@@ -12,7 +12,7 @@
 // `ref`-parameter root. The sibling that must STILL be refused is tests/xfail/reffn_local.kama (a local
 // root would dangle) and tests/xfail/reffn_static_local.kama (a local that merely shares a static's name).
 type value Counters {
-    public int32 hits;
+    public int32 hitCount;
     public int32 misses;
 }
 
@@ -20,7 +20,7 @@ static int32 g_ticks;
 static Counters g_counters;
 
 fn ref int32 ticks() { return g_ticks; }
-fn ref int32 hits() { return g_counters.hits; }        // a FIELD of a static root, as `this.f` is of `this`
+fn ref int32 hits() { return g_counters.hitCount; }        // a FIELD of a static root, as `this.f` is of `this`
 fn void bump(ref int32 v) { v = v + 100; }
 
 fn int32 main() {

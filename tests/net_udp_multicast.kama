@@ -13,7 +13,7 @@ import { core::print,
     std::net::Poller,
     std::net::Interest,
     std::net::parseIp,
-    std::net::interfaceIndex,
+    std::net::interfaceIndexOf,
     std::io::IoError,
     std::collections::DynamicArray,
     std::collections::FixedArray,
@@ -96,7 +96,7 @@ fn int32 v4() {
 
 fn int32 v6() {
     IpAddr group = ip(text: "ff02::6b61:6d61");
-    uint32 index = match (interfaceIndex(name: loopbackName())) { case Ok(value: i): i; case Err(error: e): 0ui32; };
+    uint32 index = match (interfaceIndexOf(name: loopbackName())) { case Ok(value: i): i; case Err(error: e): 0ui32; };
     if (index == 0ui32) { print(s: "no loopback index\n"); return 0; }
     Result<UdpSocket, IoError> rr = UdpSocket.bind(host: "::", port: 0ui16);
     Result<UdpSocket, IoError> rt = UdpSocket.bind(host: "::1", port: 0ui16);
@@ -126,7 +126,7 @@ fn int32 v6() {
 
 // A name that is no interface is NotFound, not index 0 passed on as "the OS's choice".
 fn int32 unknownInterface() {
-    return match (interfaceIndex(name: "kama-no-such-if")) {
+    return match (interfaceIndexOf(name: "kama-no-such-if")) {
         case Ok(value: i): 0;
         case Err(error: e): match (e) { case NotFound: 4; case _: 0; };
     };

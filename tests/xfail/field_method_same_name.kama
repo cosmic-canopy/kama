@@ -1,0 +1,8 @@
+// A field may not share a name with a method of its own type: inside a method the bare name would mean both.
+// std::process::Command had `args` twice this way until KR-87.
+type value Counter {
+    int32 count;
+    public ctor make() { this.count = 0; return this; }
+    public const fn int32 count() { return this.count; }
+}
+fn int32 main() { Counter c = Counter.make(); return c.count(); }

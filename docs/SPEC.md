@@ -144,7 +144,7 @@ match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; }
 Rendering a value as text goes through **one** contract, `Formattable` (prelude, so it works without an import and
 survives `--no-std`) — the display twin of `Serializable`:
 
-```kama
+```kama fragment
 type contract Formattable for value, resource, enum, intrinsic { const fn void format(ref Formatter f); }
 ```
 
@@ -441,7 +441,7 @@ tombstoned, grows at 0.75 load) and `Set<K, H: Hasher = DefaultHasher, A: Alloca
 thin wrapper over `Map<K, Unit, H, A>`), over a key `K: Hashable + Equatable` (the trailing `A` is the custom
 allocator — see "Custom allocators" below). These two key contracts are in the **prelude**:
 
-```kama
+```kama fragment
 type contract Hashable  for value, resource, enum, intrinsic { const fn uint64 hash(); }
 type contract Equatable<T is This> for value, resource, enum, intrinsic { const fn bool equals(const ref T other); }
 ```
@@ -1077,7 +1077,7 @@ fn int32 main() {
 access to their pointee (`ptr.method()`/`ptr.field` reach the held `T`). Any type can opt into the same
 **auto-deref** by implementing the prelude contracts — the `implements` is the explicit gate:
 
-```kama
+```kama fragment
 type contract Deref<T>    for value, resource { const fn const ref T deref(); }   // the read-only place
 type contract DerefMut<T> for value, resource { fn ref T derefMut(); }           // the writable place
 ```
@@ -1134,9 +1134,12 @@ enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; o
 any live scope — keeps both name resolution and move tracking unambiguous). **Every** binding is covered,
 not just a declaration —
 a `for` counter, a `foreach` variable and a `match` payload binding are each refused the same three ways. <!-- xfail: binder_shadow_for_local, binder_shadow_foreach_local, binder_shadow_foreach_param, binder_shadow_foreach_field, binder_shadow_match_local, binder_shadow_match_field -->
-⚠️ One hole is open: a binding may still take the name of a **function** in scope
-(`fn int32 use(int32 helper) { return helper + helper(); }` builds), and over a bare prelude function the C
-compiler refuses what kama accepted — [KR-57](ROADMAP.md).
+Nor may a binding take the name of a **function or type in scope** — declared in the module or imported, <!-- xfail: shadow_function_local, shadow_function_param, shadow_function_field -->
+and with nothing implicit in scope (KR-87) that needs no exception. A **field** is a binding too: it is
+reachable bare in its type's methods, so it is held to the same rule, and may not share a name with a <!-- xfail: field_method_same_name -->
+method of its own type. The **language's names** — `Optional`, `Result`, `Owned`, `Ordering`, the core
+contracts, every name the prelude declares — are in every scope like `string`, so no binding and no <!-- xfail: reserved_binding_name, reserved_type_name -->
+declaration may take one.
 A pattern's *label* names the variant's field and is unrestricted (`case V4(a: o1)`); it is the binding
 beside it that must be fresh.
 Sibling scopes may reuse a name freely (they never coexist), whatever binds it — two sequential `for` loops <!-- test: local_scope_sibling_match, local_scope_sibling_foreach, local_scope_for_init, local_scope_sibling_const -->
@@ -1815,7 +1818,7 @@ from the socket, not a silent drop.
 **Multicast (`std::net`).** A `UdpSocket` joins a group **per interface**, and the families name an interface
 differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
 the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the
-OS's choice), with `leaveMulticastV4`/`leaveMulticastV6` beside them. `interfaceIndex(name:)` turns `lo0` or `eth0` <!-- test: net_udp_multicast -->
+OS's choice), with `leaveMulticastV4`/`leaveMulticastV6` beside them. `interfaceIndexOf(name:)` turns `lo0` or `eth0` <!-- test: net_udp_multicast -->
 into an index, and a name that is no interface is `Err(NotFound)`. On Windows the name is the NDIS name
 (`loopback_0`, `ethernet_32769`), and the friendly name (`Loopback Pseudo-Interface 1`) is `Err(NotFound)`. `setMulticastInterfaceV4`/`V6` choose the
 interface sends leave by (without it the routing table picks, and a loopback-bound V4 socket's send fails on a
@@ -5994,9 +5997,6 @@ which also holds the reserved table equal to the two C standards' sets.
 ## Known limitations (tracked → [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1)
 
 Everything below **hard-errors** (never miscompiles) and has a clean workaround. Two kinds:
-
-(One open defect is NOT of that kind — kama accepts the program and the C compiler refuses it — and it
-is a roadmap row rather than a rule: a binding named like a function in scope ([KR-57](ROADMAP.md)).)
 
 **By-design rules** — an rvalue can't be borrowed/reseated soundly, so these stay errors, not "unbuilt":
 - **An inline `new` (or owned value) borrowed by a `ref`/`out` or contract parameter** — an inline `new` is

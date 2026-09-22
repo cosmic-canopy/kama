@@ -2,7 +2,7 @@
 import { std::io::IoError, std::io::lastError,
          std::collections::DynamicArray, std::collections::FixedArray };
 
-export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne, interfaceIndex };
+export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne, interfaceIndexOf };
 
 extern "kama_os.h";
 extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIps,
@@ -294,7 +294,7 @@ fn Optional<IpAddr> parseV6(const ref string text) {
 // A network interface's index from its name (`lo0`, `eth0`) — what `UdpSocket.joinMulticastV6` and a link-local
 // `SocketAddr.scopeId` take. `Err(NotFound)` when there is no such interface. ⚠️ On Windows the name is the NDIS
 // name (`loopback_0`, `ethernet_32769`), not the friendly one ("Ethernet"), which is `Err(NotFound)`.
-unsafe fn Result<uint32, IoError> interfaceIndex(const ref string name) {
+unsafe fn Result<uint32, IoError> interfaceIndexOf(const ref string name) {
     uint32 index = kama_interface_index(name: name.cstr());
     if (index == 0ui32) { return Result::Err(error: lastError()); }
     return Result::Ok(value: index);

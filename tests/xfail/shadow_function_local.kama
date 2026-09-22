@@ -1,0 +1,4 @@
+// KR-57: a local may not take the name of a function in scope — kama has no shadowing, so one name means
+// one thing. It used to be accepted, and worked only because a user function is qualified in C.
+fn int32 helper() { return 5; }
+fn int32 main() { int32 helper = 2; return helper - 2; }

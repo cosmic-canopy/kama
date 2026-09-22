@@ -142,11 +142,11 @@ unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
 // string (use the explicit `shell` ctor for `sh -c`).
 type resource Command {
     string program;
-    DynamicArray<string> args;
+    DynamicArray<string> arguments;
     DynamicArray<string> envKeys;
     DynamicArray<string> envVals;
-    bool   envClear;
-    string cwd;              // empty = inherit the parent's cwd
+    bool   clearsEnv;
+    string workingDir;       // empty = inherit the parent's cwd
     Stdio  inCfg;
     Stdio  outCfg;
     Stdio  errCfg;
@@ -155,11 +155,11 @@ type resource Command {
     // the passed string (pass a literal, or `copy someVar`).
     public ctor make(string program) {
         this.program = give program;
-        this.args    = DynamicArray.empty();
+        this.arguments = DynamicArray.empty();
         this.envKeys = DynamicArray.empty();
         this.envVals = DynamicArray.empty();
-        this.envClear = false;
-        this.cwd = "";
+        this.clearsEnv = false;
+        this.workingDir = "";
         this.inCfg = Stdio::Inherit; this.outCfg = Stdio::Inherit; this.errCfg = Stdio::Inherit;
     }
 
@@ -167,22 +167,22 @@ type resource Command {
     // clearly-named escape hatch when you actually want shell parsing.
     public ctor shell(string line) {
         Command c = Command.make(program: "sh");
-        c.args.add(item: "-c");
-        c.args.add(item: give line);
+        c.arguments.add(item: "-c");
+        c.arguments.add(item: give line);
         return give c;
     }
 
-    public fn void arg(string a) { this.args.add(item: give a); }
+    public fn void arg(string a) { this.arguments.add(item: give a); }
     public fn void args(ref DynamicArray<string> list) {
         isize i = 0;
-        while (i < list.length()) { this.args.add(item: copy list[i]); i = i + 1; }
+        while (i < list.length()) { this.arguments.add(item: copy list[i]); i = i + 1; }
     }
     // ⚠️ On Windows a child's cwd (and its executable path) must stay under 260 characters: that is a
     // CreateProcessW limit, not a kama one, and the `\\?\` prefix does NOT lift it. Hand the child
     // absolute paths rather than a deep cwd() plus relative ones.
-    public fn void cwd(string dir) { this.cwd = give dir; }
+    public fn void cwd(string dir) { this.workingDir = give dir; }
     public fn void env(string key, string val) { this.envKeys.add(item: give key); this.envVals.add(item: give val); }
-    public fn void envClear() { this.envClear = true; }
+    public fn void envClear() { this.clearsEnv = true; }
     public fn void stdin(Stdio s)  { this.inCfg = s; }
     public fn void stdout(Stdio s) { this.outCfg = s; }
     public fn void stderr(Stdio s) { this.errCfg = s; }
@@ -245,13 +245,13 @@ type resource Command {
         int32 childOut = match (this.outCfg) { case Inherit: -1; case _: outGive.rawFd(); };
         int32 childErr = match (this.errCfg) { case Inherit: -1; case _: errGive.rawFd(); };
 
-        UnsafePtr argv = match (buildArgv(program: ref this.program, args: ref this.args)) {
+        UnsafePtr argv = match (buildArgv(program: ref this.program, args: ref this.arguments)) {
             case Some(value: v): v;
             case None: { return Result::Err(error: lastError()); }
         };
         UnsafePtr envp = null;
-        if (this.envClear || this.envKeys.length() > 0) {
-            envp = match (buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals)) {
+        if (this.clearsEnv || this.envKeys.length() > 0) {
+            envp = match (buildEnvp(clear: this.clearsEnv, keys: ref this.envKeys, vals: ref this.envVals)) {
                 case Some(value: e): e;
                 case None: { kama_argv_free(v: argv); return Result::Err(error: lastError()); }
             };
@@ -259,7 +259,7 @@ type resource Command {
 
         isize handle = 0;
         int32 pid = 0;
-        int32 rc = kama_proc_spawn(argv: argv, envp: envp, cwd: this.cwd.cstr(),
+        int32 rc = kama_proc_spawn(argv: argv, envp: envp, cwd: this.workingDir.cstr(),
                                    inFd: childIn, outFd: childOut, errFd: childErr,
                                    outHandle: addr(of: handle), outPid: addr(of: pid));
         kama_argv_free(v: argv);

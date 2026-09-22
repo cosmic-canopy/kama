@@ -60,11 +60,11 @@ fn int32 classify(Code c) {
 
 // A `foreach` loop variable is a local too, though it never enters the shadowing table.
 fn int32 total(InlineArray<int32>#(3) xs) {
-    int32 sum = 0;
+    int32 acc = 0;
     foreach (int32 item in xs) {
-        sum = sum + item;
+        acc = acc + item;
     }
-    return sum;
+    return acc;
 }
 
 // Appended (see the header): the `out` callee that fills `plain` above, so its declaration can stay

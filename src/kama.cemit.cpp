@@ -6824,6 +6824,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         unsupported("`self` names the receiver inside a type body — the kama spelling is "
                                     "`this`; rename this local", n->line);
                     checkConstParamBinder(nm, "local", n->line);
+                    checkBindingName(nm, "local", n->line);
                     if (_paramNames.count(nm))
                         unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n->line);
                     else {
@@ -21331,9 +21332,101 @@ void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, in
 // rule reads identically wherever it fires. The `ctor`/static exemptions come along for the same reason
 // they exist there: a bare name in a `ctor` body is always a local or a param (the value under
 // construction is reached only through `this`), and a static method has no `this` to shadow.
+// The LANGUAGE's names: what the prelude and the always-in-scope `std::memory` triad declare, and the
+// variants the syntax produces. They are in every scope with no import — the syntax lowers into them
+// (`try` → `Optional`, `new` → `Owned`, interpolation → `Formattable`) — so, like `string`, nothing may
+// take one: a user `type value Optional` used to be accepted and hide the real one for its whole file.
+// Read off the tables rather than listed, so a name added to the prelude is reserved by that act.
+bool CEmitter::isLanguageName(const std::string& nm)
+{
+    if (_languageNames.empty()) {
+        auto take = [&](const std::string& key) {
+            for (const std::string pfx : { "kama__", "std__memory__" }) {
+                const size_t n = pfx.size();
+                if (key.compare(0, n, pfx) == 0 && key.find("__", n) == std::string::npos) _languageNames.insert(key.substr(n));
+            }
+        };
+        for (auto& kv : _classes) if (!kv.second.isGenericInst) take(kv.first);
+        for (auto& kv : _enums) take(kv.first);
+        for (auto& kv : _interfaces) if (!kv.second.isGenericInst) take(kv.first);
+        for (auto& kv : _genericTypes) take(kv.first);
+        for (auto& kv : _genericContracts) take(kv.first);
+        for (auto& kv : _funcs) take(kv.first);
+        for (const char* v : { "Some", "None", "Ok", "Err" }) _languageNames.insert(v);
+    }
+    return _languageNames.count(nm) != 0;
+}
+
+// KR-57, closed by KR-87: with nothing in scope that a file did not declare or import, "a binding may not
+// take a name in scope" needs no exception. A binding named like a FUNCTION used to be accepted, and it
+// worked only because a user function is qualified in C; a prelude one met the local bare and clang refused
+// what kama had accepted (`fn int32 count(int32 args) { … args() … }`).
+void CEmitter::checkBindingName(const std::string& nm, const char* kind, int srcLine)
+{
+    if (nm.empty() || _probingTemplate) return;
+    if (isLanguageName(nm)) {
+        unsupported((std::string(kind) + " `" + nm + "` takes a language name — `" + nm + "` is in every scope, "
+                     "like `string`, so nothing may be named it; rename it").c_str(), srcLine, nm);
+        return;
+    }
+    if (_funcs.count(resolveFuncImpl(nm, nullptr))) {
+        unsupported((std::string(kind) + " `" + nm + "` has the name of a function in scope — kama has no "
+                     "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
+        return;
+    }
+    if (isTypeKey(resolveUserNameImpl(nm, nullptr)))
+        unsupported((std::string(kind) + " `" + nm + "` has the name of a type in scope — kama has no "
+                     "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
+}
+
+// The declaration-side twin, run once every table is filled: a top-level declaration may not take a
+// language name, and a FIELD — reachable bare inside its type's methods — is a binding like any other, so it
+// may not take a name in scope nor the name of a method of its own type (maintainer ruling, 2026-09-22).
+void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->name || u->name->empty() || (*u->name)[0] == '<' || !u->codeDeclarationList) continue;
+        ScopedStr _cu(_collectingUnitPath, *u->name);
+        auto uc = _unitCtx.find(u.get());
+        if (uc == _unitCtx.end()) continue;
+        _nsCtx = uc->second;
+        auto topLevel = [&](const SharedIdentifier& id, const char* what) {
+            if (id && id->value && isLanguageName(*id->value))
+                unsupported((std::string(what) + " `" + *id->value + "` takes a language name — `" + *id->value
+                             + "` is in every scope, like `string`, so nothing may be named it; rename it").c_str(),
+                            id->line, *id->value);
+        };
+        for (auto& decl : *u->codeDeclarationList) {
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) { if (!isExtern(fn)) topLevel(fn->name, "function"); continue; }
+            if (auto* en = dynamic_cast<EnumDeclarationNode*>(decl.get())) { topLevel(en->identifier, "type"); continue; }
+            auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+            if (!cd) continue;
+            topLevel(cd->name, "type");
+            if (!cd->members) continue;
+            std::set<std::string> methods;
+            for (auto& m : *cd->members)
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) if (md->name && md->name->value) methods.insert(*md->name->value);
+            for (auto& m : *cd->members) {
+                auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+                if (!fd || !fd->declarators) continue;
+                for (auto& d : *fd->declarators) {
+                    if (!d || !d->name || !d->name->value) continue;
+                    const std::string& nm = *d->name->value;
+                    if (methods.count(nm))
+                        unsupported(("field `" + nm + "` has the name of a method of its own type — inside a method "
+                                     "the bare name would mean both; rename one").c_str(), d->name->line, nm);
+                    else
+                        checkBindingName(nm, "field", d->name->line);
+                }
+            }
+        }
+    }
+}
+
 void CEmitter::checkBinderShadow(const std::string& nm, const char* kind, int srcLine)
 {
     if (nm.empty() || _probingTemplate) return;
+    checkBindingName(nm, kind, srcLine);
     const std::string what = std::string(kind) + " `" + nm + "` shadows ";
     if (_paramNames.count(nm)) { unsupported((what + "a parameter — rename it").c_str(), srcLine); return; }
     for (auto& sc : _scopes)
@@ -26676,6 +26769,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         for (auto& p : *fn->parameters) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
+            checkBindingName(pn, "parameter", p->identifier->line);
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
@@ -27678,6 +27772,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         for (auto& p : *params) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
+            checkBindingName(pn, "parameter", p->identifier->line);
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
@@ -34351,6 +34446,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // Running inside `collectProgram` (rather than at emit) is also what makes `kama build`, `kama check`
     // and the language server agree — all three take this path, which is the whole point of the check.
     checkModulePaths(units);
+    checkDeclaredNames(units);
     checkDeclaredTypes(units);
 }
 

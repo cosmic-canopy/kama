@@ -1,0 +1,2 @@
+// KR-87: a binding may not take a language name either: `Ordering` is in every scope, like `string`.
+fn int32 main() { int32 Ordering = 1; return Ordering - 1; }

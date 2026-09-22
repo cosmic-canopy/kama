@@ -1,0 +1,4 @@
+// KR-57: a parameter may not take the name of a function in scope, imported ones included.
+import { std::math::sqrt };
+fn float64 twice(float64 sqrt) { return sqrt * 2.0; }
+fn int32 main() { return cast<int32>(twice(sqrt: 1.0)) - 2; }

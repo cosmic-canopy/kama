@@ -724,18 +724,17 @@ expect --complete 94:47  -- "field	value	int32"    # a local inside the foreach 
 expect --complete 100:32 -- "field	value	int32"    # scope
 expect --complete 103:70 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
 
-# A type may declare a FIELD and a METHOD under one name (std::process::Command has both spellings of
-# `args`). Which one a path segment names depends on whether the source CALLED it — resolving `this.args.`
-# through the void-returning method would silently offer nothing.
-echo "check-query: M4.1 field-vs-method precedence on a real stdlib type"
+# Member completion on a real stdlib type. (This section used to prove field-vs-method precedence on
+# `Command.args`, which had both; a field may not share a name with its type's method since KR-87, so
+# there is no precedence left to test.)
+echo "check-query: M4.1 member completion on a real stdlib type"
 FIXTURE="$ROOT/lib/std/process/process.kama"
 # The two probe positions are DERIVED from the source text, not hardcoded. Pinning a line number into a
 # live stdlib file makes every edit to that file — even adding a comment — fail this guard for a reason
 # that has nothing to do with what it tests. The columns are still literal: they point INSIDE the line
-# (just past `this.args.` / `this.`), which is the thing under test.
+# (just past `this.`), which is the thing under test.
 qline() { grep -n -m1 -F "$1" "$FIXTURE" | cut -d: -f1; }
-expect --complete "$(qline 'this.args.add(item: give a)'):45" -- "method	add	fn void add(item: string)"   # this.args.| is the DynamicArray FIELD
-expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int32"                       # ... and a plain `this.` still works
+expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int32"                       # a plain `this.`
 
 # ---------------------------------------------------------------------------------------------------
 # M4.2 — after `::`. A `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value, and the

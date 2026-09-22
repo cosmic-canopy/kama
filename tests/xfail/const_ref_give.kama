@@ -2,9 +2,9 @@
 // is refused at the hand-off, exactly as `give` out of a `const` binding is. `copy` reads; `give` writes.
 import { std::collections::DynamicArray };
 type resource Token {
-    int32 id;
-    public ctor make(int32 id) { this.id = id; }
-    public const fn int32 id() { return this.id; }
+    int32 serial;
+    public ctor make(int32 id) { this.serial = id; }
+    public const fn int32 id() { return this.serial; }
 }
 type resource Bag {
     DynamicArray<Token> items;
