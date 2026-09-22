@@ -164,9 +164,21 @@ gate() {
     done
 }
 
+# --- the worktree contract, held down for the whole pool ------------------------------------------------
+# Every guard is hermetic by its own account, so a guard that writes into the worktree anyway is invisible
+# to all of them — including check-clean-tree.sh, which only looks inside its own mktemp dir. That is how an
+# empty `a.o` kept appearing in the repo root after `./dev check` for weeks, was committed once, and was
+# blamed on a "parallel interaction" when one guard wrote it every time (KR-86: `zig cc --version`). So the
+# runner lists the untracked files before the pool and after it, and a new one fails the run by name.
+# Heavy guards run after this check: writing to the worktree is what makes a guard heavy.
+untracked() { git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | LC_ALL=C sort; }
+untracked >"$WORK/untracked.before"
+
 wall0=$(date +%s)
 for g in $par; do gate; run_one "$g" & running="$running $!"; done
 for p in $running; do wait "$p" 2>/dev/null; done     # explicit PIDs, never a bare `wait`
+untracked >"$WORK/untracked.after"
+strays=$(LC_ALL=C comm -13 "$WORK/untracked.before" "$WORK/untracked.after")
 for g in $exc; do ( run_one "$g" ); done              # alone, last: it repoints ./kama while it builds
                                                       # (subshell: run_one exports KAMA_STORE)
 wall=$(( $(date +%s) - wall0 ))
@@ -185,6 +197,12 @@ for g in $sel; do
         f=$((f+1)); rc=1
     fi
 done
+if [ -n "$strays" ]; then
+    echo "run-checks.sh: FAILED — the guard pool wrote into the worktree (find the writer; do NOT add a"
+    echo "  .gitignore pattern — AGENTS.md). New untracked file(s):"
+    printf '%s\n' "$strays" | sed 's/^/    /'
+    f=$((f+1)); rc=1
+fi
 
 # --- timing: which guards actually cost, so the block stays honest as guards are added --------------
 # `cpu` is the summed guard wall-clock, so cpu/wall is the parallel speedup actually achieved. The slowest

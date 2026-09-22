@@ -233,7 +233,7 @@ its consumer, exactly like `cflags` — with one difference that is the reason t
 (`-Werror=incompatible-pointer-types` and friends) stay off C++.
 
 **Your compiler's family decides two of those promotions, and kama asks it which family it is** (one
-`--version` per build, because `cc` is gcc on most Linux and clang on macOS, and a cross prefix or a
+`-v` per build, because `cc` is gcc on most Linux and clang on macOS, and a cross prefix or a
 wrapper can be either). `-Werror=return-type` and `-Werror=uninitialized` are promoted everywhere. The
 pointer class is not, and cannot be: handing a kama `fnptr` to a C callback field is the sanctioned FFI
 seam — a kama callback lowers enums to `int` and handles to `void*`, which C sees as an incompatible
@@ -645,7 +645,7 @@ behaviour a C project with a shared header has.
 
 What makes an object stale is decided by the compiler, not guessed: each compile passes `-MMD`, and the
 cache re-checks the content of every file on the dependency list the compiler wrote, plus the exact command
-and the compiler's own `--version`. So an edited `extern "…"` C header, a changed `cflags`, a kama upgrade
+and the compiler's own `-v` output. So an edited `extern "…"` C header, a changed `cflags`, a kama upgrade
 that touches a runtime header and a switch from clang to gcc all rebuild what they must.
 
 Two shapes have no per-unit objects to cache, and get nothing from it: a **`--release`** build (the program

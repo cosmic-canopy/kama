@@ -653,32 +653,45 @@ std::string deriveCxxDriver(const std::string& cc)
 // warning flags that are a HARD ERROR when a compiler is handed the other family's spelling — `--cc gcc`
 // could not build a hello-world for as long as kama has documented gcc as a `cc` (KR-72).
 //
-// One `--version` per distinct `cc` string, cached: a build already spawns the compiler once per TU, and
-// `--version` is the cheapest question that answers for a wrapper. `emcc` prints "Emscripten gcc/clang-like
-// replacement" and names clang after it — clang is tested first for exactly that reason — and `zig cc`
-// prints a plain "clang version N".
+// One `-v` per distinct `cc` string, cached: a build already spawns the compiler once per TU, and `-v` with
+// no input is the cheapest question that answers for a wrapper. Every family prints its own name beside the
+// word "version" there — "clang version N" (Apple's and Ubuntu's are prefixed), "gcc version N", and `emcc`
+// and `zig cc` hand it to their bundled clang — so the match is on that pair, not on a bare substring that
+// gcc's "Configured with:" line could carry.
+//
+// ⚠️ NOT `--version` (KR-86). zig 0.16 treats `zig cc --version` as a compile with no inputs and leaves an
+// EMPTY `a.o` in the current directory, so every `kama build --cc "zig cc"` littered the directory it was run
+// from — the repo root, under the guards, and the stray was committed once. `-v` writes nothing on any of
+// the four (measured: Apple clang 21, Ubuntu clang 18, gcc 13.3, emcc 3.x/clang 23, zig 0.16), and needs no
+// change of directory, which would break a relative `--cc ./mycc`.
 enum class CcFamily { Clang, Gcc, Unknown };
 
 std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr);   // defined below, with the other spawns
 
-CcFamily ccFamily(const std::string& cc)
+// The compiler's answer to `-v`, asked once per distinct `cc` string. Two readers: `ccFamily` below, and the
+// object cache, which keys every stamp on it so a toolchain upgrade misses. Empty when the driver could not
+// be asked — the cache then refuses to run rather than guess which toolchain it is.
+const std::string& ccIdentity(const std::string& cc)
 {
-    static std::map<std::string, CcFamily> cache;
-    std::map<std::string, CcFamily>::iterator it = cache.find(cc);
+    static std::map<std::string, std::string> cache;
+    std::map<std::string, std::string>::iterator it = cache.find(cc);
     if (it != cache.end()) return it->second;
     int rc = 0;
-    std::string out = runCmdCapture(cc + " --version 2>&1", &rc);
+    std::string out = runCmdCapture(cc + " -v 2>&1", &rc);
+    if (rc != 0) out.clear();
+    return cache[cc] = out;
+}
+
+CcFamily ccFamily(const std::string& cc)
+{
+    std::string out = ccIdentity(cc);
     for (size_t i = 0; i < out.size(); ++i) out[i] = (char)tolower((unsigned char)out[i]);
-    // A driver that cannot be asked (a missing compiler, a wrapper with no `--version`) is UNKNOWN, and
-    // unknown takes the conservative flags below rather than clang's — the failure this row is about is a
-    // compiler being handed a spelling it does not have.
-    const CcFamily fam = rc != 0                              ? CcFamily::Unknown
-                       : out.find("clang") != std::string::npos ? CcFamily::Clang
-                       : out.find("gcc")   != std::string::npos ? CcFamily::Gcc
-                       : out.find("g++")   != std::string::npos ? CcFamily::Gcc
-                       :                                          CcFamily::Unknown;
-    cache[cc] = fam;
-    return fam;
+    // A driver that cannot be asked (a missing compiler, a wrapper with no `-v`) is UNKNOWN, and unknown
+    // takes the conservative flags below rather than clang's — the failure this row is about is a
+    // compiler being handed a spelling it does not have. clang is tested first: `emcc -v` names both.
+    return out.find("clang version") != std::string::npos ? CcFamily::Clang
+         : out.find("gcc version")   != std::string::npos ? CcFamily::Gcc
+         :                                                  CcFamily::Unknown;
 }
 
 // The `-W` promotions for kama's own C, in the spelling THIS driver has.
@@ -724,7 +737,7 @@ std::string ccWarnFlags(const std::string& cc)
 // happen: a TU also depends on kama's shipped runtime headers, on the generated shared header, and on any
 // header a user reached through `extern "my.h"`. So the compile asks the compiler itself — `-MMD` writes
 // the real dependency list — and the stamp records a content hash of every file on it, plus the exact
-// command and the compiler's own `--version`. A toolchain upgrade, a flag change, an edited FFI header and
+// command and the compiler's own `-v` (`ccIdentity`). A toolchain upgrade, a flag change, an edited FFI header and
 // an edited kama source all miss, and nothing else does.
 uint64_t fileHash64(const std::string& path)
 {
@@ -12321,8 +12334,7 @@ int main(int argc, char** argv)
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
         // could not identify all opt out; a cache that cannot tell one toolchain from another is the one
         // failure mode worth refusing outright.
-        const std::string ccVersion = noCache ? std::string()
-                                              : runCmdCapture(compiler + " --version 2>&1");
+        const std::string ccVersion = noCache ? std::string() : ccIdentity(compiler);
         const bool useCache = !noCache && !stopsAtObject && !ccVersion.empty();
         const std::string cacheDir = dirName(outPath) + "/.kama-cache/" + baseName(stripExtension(outPath));
         if (useCache && !dirExists(cacheDir)) makeDirs(cacheDir);

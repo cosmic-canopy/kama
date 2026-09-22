@@ -2531,12 +2531,6 @@ rather than here, so there is one number to keep current. Forward work:
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an
   agent or an editor reads it rather than scraping KEYWORDS.md. `kama query --json` is the program half and
   ships. Unscheduled; GOALS.md names this row.
-- **A stray empty `a.o` appears in the repo root during `./dev check` (KR-86)** — found 2026-09-21. It was
-  COMMITTED once by accident (`0.9.402`, removed in the docs audit), and it came back at 17:33:58 during a
-  `./dev check`, 20 s in, with no agent running. Running each guard alone in series flagged three
-  (`check-buildsettings`, `check-debug-info`, `check-target`) and none reproduces alone, so it is either an
-  interaction between parallel guards or a detached child outliving its guard. 0 bytes, so no real C
-  compiler wrote it. `check-clean-tree.sh` cannot see it: it checks its own builds, not the root.
 
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings

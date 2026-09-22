@@ -18,7 +18,7 @@
 # stripping one flag, and why this guard builds `tests/callback_qsort.d` rather than just a `main`.
 #
 # A name test cannot answer the question: `cc` is gcc on most Linux and clang on macOS, and a cross prefix
-# or a wrapper can be either. The driver probes `--version` once per distinct `cc` string, so THIS guard
+# or a wrapper can be either. The driver probes `-v` once per distinct `cc` string, so THIS guard
 # also pins the `cc` spelling — the one a name test gets wrong.
 #
 # SKIPS, visibly, where there is no gcc. A visible SKIP is legible in the run output; a silent pass is not.

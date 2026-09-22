@@ -22,6 +22,11 @@
 #      which is the corpus where every fixture is *meant* to fail.
 #   4. `--keep-c` still keeps the C. The fix must not turn into "always delete".
 #   5. A multi-unit build confines its per-module .c + .gen.h to the output directory.
+#   6. `--no-cache` leaves not even the object cache behind.
+#   7. The directory a build is RUN from gains nothing — including through `zig cc` (KR-86).
+#
+# Hermeticity cuts one way: a guard that writes into the WORKTREE is invisible here. `tools/run-checks.sh`
+# holds that down for the whole pool, by listing the untracked files before and after it.
 #
 # Hermetic on purpose: everything happens in a private mktemp dir, so this says nothing about the
 # developer's own untracked scratch files and cannot fail because of them. It reaches the compiler
@@ -86,6 +91,7 @@ cp "$GOOD" "$tmp/c1/src/app.kama"
 ( cd "$tmp/c1" && "$KAMA" build src/app.kama -o dest/app >/dev/null 2>&1 ) \
     || bad "case 1: a good build failed"
 expect_listing "$tmp/c1/src"  "app.kama " "case 1: the source directory gained a file"
+expect_listing "$tmp/c1"      "dest src " "case 1: the directory the build was RUN from gained a file"
 expect_no_intermediates "$tmp/c1/dest" "case 1: the output directory kept a generated intermediate"
 
 # 2. No -o at all. docs/targets.md is explicit that a loose file with no manifest builds beside its
@@ -165,5 +171,20 @@ else
     bad "case 6: the --no-cache build failed"
 fi
 
+# 7. The DRIVER must not write either (KR-86). zig 0.16 leaves an empty `a.o` in the current directory when
+#    asked `zig cc --version`, and kama asked it that twice per build (the family probe and the object
+#    cache's toolchain key), so every `--cc "zig cc"` build littered the directory it was run from — the
+#    repo root, under this very gate, and the stray was committed once. Case 1's listing of the run
+#    directory holds the default compiler down; this holds zig, the compiler a bundled install ships.
+if command -v zig >/dev/null 2>&1; then
+    mkdir -p "$tmp/c7/src" "$tmp/c7/dest"
+    cp "$GOOD" "$tmp/c7/src/app.kama"
+    ( cd "$tmp/c7" && "$KAMA" build src/app.kama --cc "zig cc" -o dest/app >/dev/null 2>&1 ) \
+        || bad "case 7: a \`--cc \"zig cc\"\` build failed"
+    expect_listing "$tmp/c7" "dest src " "case 7: a \`--cc \"zig cc\"\` build wrote into the directory it was run from"
+else
+    echo "  skip: case 7 (no zig on PATH)"
+fi
+
 if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "check-clean-tree: PASS (a build writes only its output: -o, no--o, FAILED, --keep-c, multi-unit, --no-cache)"
+echo "check-clean-tree: PASS (a build writes only its output: -o, no--o, FAILED, --keep-c, multi-unit, --no-cache, zig cc)"
