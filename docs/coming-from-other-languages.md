@@ -85,7 +85,7 @@ format because someone added a member. Explicit over implicit ([GOALS.md](GOALS.
 ## Named arguments are not friction
 
 ```kama fragment
-println(s: "hello");
+println(s: "hello");                  // with `import { core::println };`, like any imported name
 FixedArray.make(size: 4);
 split(a: 17, b: 5, q: out q, r: out r);
 ```

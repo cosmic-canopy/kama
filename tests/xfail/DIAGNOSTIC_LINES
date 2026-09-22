@@ -589,7 +589,7 @@ local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
-main_void	main_void.kama:3
+main_void	main_void.kama:4
 match_arm_member_type_mismatch	match_arm_member_type_mismatch.kama:17
 match_arm_stale_target	match_arm_stale_target.kama:10 match_arm_stale_target.kama:9
 match_bad_variant	match_bad_variant.kama:7

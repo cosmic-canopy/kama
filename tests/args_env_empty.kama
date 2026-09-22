@@ -10,6 +10,9 @@
 //     has no exe path), and this fixture runs on the wasm leg too; its native Some-resolution is asserted in
 //     tools/check-argv-env.sh.
 // The with-args / set-env paths live in tools/check-argv-env.sh (the harness can't set those).
+
+import { core::env, core::envOr, core::programInvocation, core::programName, core::programPath, core::args };
+
 fn int32 main() {
     if (args().count() != 0) { return 1; }
 

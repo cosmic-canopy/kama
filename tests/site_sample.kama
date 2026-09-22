@@ -2,6 +2,8 @@
 // exit code, so the front page's code is compiled and run by every leg of the test suite and
 // cannot rot. tools/site/build.mjs reads this file verbatim, minus this header.
 
+import { core::println };
+
 // A `value` owns nothing but its bytes, so it copies freely.
 // The other kinds: `resource` owns and moves, `view` borrows, `contract` is a guarantee.
 type value Steel

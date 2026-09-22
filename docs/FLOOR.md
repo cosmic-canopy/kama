@@ -1,10 +1,14 @@
 # Floor reference — the always-in-scope surface
 
 The **floor** is everything usable with **no `import`** and available even under **`--no-std`**: the core
-contracts/types the language itself leans on, the construction helpers, plus the diagnostics, console-I/O and
-args/env capabilities that a program cannot reimplement (they bind runtime globals set before `main`). It has
-no module to browse, so this page *is* where it is written down — grouped by concern, kept current as the
-floor grows. Bare is the everyday style (importing to call `assert`/`println` would be terrible).
+contracts and types the language itself leans on — the ones the syntax produces or lowers into — and the
+construction helpers. It has no module to browse, so this page *is* where it is written down.
+
+Beside it, and documented here because it ships the same way, is module **`core`**: the runtime capabilities
+a program cannot reimplement, because they bind runtime globals set before `main` — console output, the
+command line, the environment and the fatal-handler hook. `core` is embedded in the compiler, so it survives
+`--no-std` too, but it is an ordinary module: a file names each capability it uses in its import list
+(`import { core::println };`), because a file uses only what it declares or imports (KR-87).
 
 **`global::` names the floor explicitly** (shipped with the language server, LSP M4.8). `global::assert` is
 the *same symbol* as bare `assert` — the qualifier resolves from the root, ignoring the file's own scope, its
@@ -59,6 +63,8 @@ Two tiers of "built-in" follow from that:
 - **Prelude** — embedded in the compiler binary, always in scope, present under `--no-std`:
   `prelude/global.kama` (`Optional`/`Result`/`Unit`/`string` and the core contracts) plus the
   `Owned`/`Shared`/`Weak` triad, which needs no import although it lives in module `std::memory`.
+- **`core`** — embedded too, so present under `--no-std`, but imported by name like any module:
+  `lib/core/src/core.kama`, the runtime capabilities.
 - **On-disk `std::*`** — an explicit `import`, absent under `--no-std`: everything else.
 
 `--no-std` is an **install flavour**, not a compiler flag: `install.sh --no-std` (or `KAMA_NO_STD=1`) installs
@@ -82,11 +88,13 @@ For *bugs and broken invariants* — "this can't continue." Recoverable errors s
 | `panic(msg: string)` | Unconditional abort with a message. |
 | `assert(cond: bool, msg: string)` | Abort iff `cond` is false. **`msg:` is mandatory** (empty allowed); the condition's source text is **auto-appended** — `assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (f.kama:12)`, and a non-empty `msg` appends after an em dash. **Always-on** (production invariants). |
 | `debugAssert(cond: bool, msg: string)` | Identical to `assert`, but **stripped under `--release`** (`NDEBUG` / `debug_assert!` — for expensive dev-only checks). |
-| `setPanicHandler(handler: PanicHandler)` | Install a custom fatal handler (`fnptr void PanicHandler()`) for cleanup/exhibition — a shipped game/GUI shows a dialog / flushes a save instead of a bare stderr abort. **Contract:** set **once** at startup before spawning isolates; **re-entrancy-guarded** (a panic while handling one hard-aborts); the runtime **always terminates** after it (not a resume point). Covers every hosted fatal path (panic/assert/bounds). On embedded, provide a strong `kama_panic_handler` symbol instead (this is a no-op there). |
+| `setPanicHandler(handler: PanicHandler)` | *Module `core`.* Install a custom fatal handler (`fnptr void PanicHandler()`) for cleanup/exhibition — a shipped game/GUI shows a dialog / flushes a save instead of a bare stderr abort. **Contract:** set **once** at startup before spawning isolates; **re-entrancy-guarded** (a panic while handling one hard-aborts); the runtime **always terminates** after it (not a resume point). Covers every hosted fatal path (panic/assert/bounds). On embedded, provide a strong `kama_panic_handler` symbol instead (this is a no-op there). |
 
 *(`warn` is **not** here — a warning must never abort. That is a log level; see [`std::log`](SPEC.md#logging-stdlog-).)*
 
-## Console I/O — the print family
+## Console I/O — the print family (module `core`)
+
+`import { core::print, core::println, core::eprint, core::eprintln };` — each one a file uses.
 
 Diagnostics that **keep running**: write text to the standard streams. String-only — formatting rides
 interpolation (`println(s: "x = ${x}")`). Unbuffered line writes. On `--target embedded` there is no fd, so both
@@ -103,13 +111,15 @@ A literal or interpolation temp passes by value directly; a **named** `string` i
 like anywhere else in the value model.
 
 **Not a duplicate of `std::io::stdout()`.** The two coexist on purpose. The print family is always
-available, needs no import, survives `--no-std`, and writes immediately — it is for diagnostics that must
+available, survives `--no-std`, and writes immediately — it is for diagnostics that must
 work when nothing else does. `std::io`'s `stdin()`/`stdout()`/`stderr()` are ordinary `Reader`/`Writer`
 *values*, so they **compose**: `pump(from: file, to: out)`, `BufWriter.make(inner: out)`,
 `serializeJsonStream(v: cfg, to: out)`, a function that takes a `Writer` and does not care whether it is a socket, a
 file or the terminal. Use print to *say* something; use the handles to *plumb* something.
 
-## Command-line arguments + environment
+## Command-line arguments + environment (module `core`)
+
+`import { core::args, core::env, core::envOr, … };` — `Args` is importable too, for a local of that type.
 
 Bound to runtime globals stashed before `main` (so a `--no-std` program cannot reimplement them). Full prose
 in [SPEC.md](SPEC.md) "Command-line arguments + environment". On `--target embedded` these are no-op stubs

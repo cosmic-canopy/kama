@@ -4,7 +4,7 @@
 // init while we're still running, so an un-swept pid pins a process-table slot until `fork` fails with
 // EAGAIN — this loop exceeds macOS's kern.maxprocperuid of 2666). Its File fields must also close the pipe
 // ends (no fd leak -> no EMFILE). Stays ASan-clean under KAMA_SAN.
-import { std::process::Command, std::process::Process, std::process::Stdio, std::io::IoError };
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::io::IoError };
 
 fn int32 main() {
     int32 i = 0;

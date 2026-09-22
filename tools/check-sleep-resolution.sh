@@ -25,7 +25,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 cat > "$tmp/res.kama" <<'KAMA'
-import { std::time::Duration, std::time::Instant, std::time::monotonicNow, std::time::sleep };
+import { core::print, std::time::Duration, std::time::Instant, std::time::monotonicNow, std::time::sleep };
 
 // The MEAN over many runs, in microseconds. One sample is scheduling noise; the tick is a property of
 // the distribution, so it takes a distribution to see it.

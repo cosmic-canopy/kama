@@ -3,7 +3,7 @@
 // basename, once WITH cwd set to the helper's directory (KAMA_PROCUTIL_DIR) — it finds the file, exit 0 —
 // and once WITHOUT the override (inheriting the harness cwd = repo root, where that basename is absent) —
 // exit 1. The two differing outcomes prove cwd() took effect. Env vars are set by run_tests.sh.
-import { std::process::Command, std::process::Output, std::io::IoError };
+import { core::envOr, std::process::Command, std::process::Output, std::io::IoError };
 
 fn int32 main() {
     Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

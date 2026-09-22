@@ -2,7 +2,7 @@
 // process and deadlock-free, like net_loopback: a datagram is kernel-buffered before its recv, and a connect
 // completes into the backlog before the accept. A datagram that never arrives must FAIL, not hang the suite,
 // so every receive waits through a Poller with a timeout. The seven flags sum to 127.
-import {
+import { core::print,
     std::net::UdpSocket,
     std::net::TcpListener,
     std::net::TcpStream,

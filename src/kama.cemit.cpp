@@ -652,7 +652,6 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
     // AFTER an explicit import's symbolAliases and the unit's own scope (see resolveUserName/resolveFunc),
     // so it never shadows a user's own name and a redundant explicit import stays a harmless no-op.
     ctx.usings.push_back("std__memory");
-    ctx.usings.push_back("core");   // KR-87 transition: bare capabilities still resolve; removed with the refusal
     return ctx;
 }
 
@@ -879,7 +878,10 @@ bool CEmitter::reportDeclaredElsewhere(const std::string& noun, const std::strin
     auto userDecl = [&](const std::string& k) {
         if (!known(k)) return false;
         const std::string f = declFileOf(k);
-        return !f.empty() && f[0] != '<';                 // not an FFI spelling, not compiler-owned
+        // Not an FFI spelling, and not the compiler-owned global prelude — but a built-in MODULE
+        // (`<prelude>/core/core.kama`) is imported like any other, so its names get the same "add this
+        // import" answer: a bare `println` is the one every program writes first (KR-87).
+        return !f.empty() && (f[0] != '<' || f.compare(0, 10, "<prelude>/") == 0);
     };
     std::set<std::string> exportedBy, privateIn;
     for (auto& kv : _unitCtx) {
@@ -3053,6 +3055,25 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
                  "add `import { " + spelled + " };`. A module's files share a name space but not a scope: "
                  "`export` offers a name and `import` accepts it, so every name a file uses is written "
                  "down at its top").c_str(), line, spelled);
+}
+
+// Why typing recovers at all: a call's RESULT type is asked for before the call is emitted wherever the
+// call sits inside something typed (a `match` subject, an operand, a receiver, an initializer), so an
+// unresolvable callee used to surface as whatever that enclosing construct says when its type is unknown —
+// never as the missing import. Typing through the one candidate lets the enclosing construct type-check
+// and the call report itself. Nothing is emitted from it: the call's own emission refuses it.
+std::string CEmitter::unimportedFuncKey(const std::string& name) const
+{
+    std::string found;
+    for (auto& kv : _unitCtx) {
+        const NsCtx& c = kv.second;
+        if (!c.isPublic) continue;
+        const std::string k = c.scope + "__" + name;
+        if (!_funcs.count(k) || !_exported.count(k)) continue;
+        if (!found.empty() && found != k) return "";
+        found = k;
+    }
+    return found;
 }
 
 // Does a file whose module scope is `modScope` export the extern `name`? An extern keeps its literal key, so
@@ -25175,6 +25196,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
     // Free-function call — resolve the name through the file's scope + usings.
     auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier, call->identifier.get()));
+    // A bare call to a function this file does not import: refuse it with the import, then carry on through
+    // the one function it would mean, so its ARGUMENTS are judged as arguments (`println(s: give a)` said
+    // nothing else wrong, and a `give` outside an argument position is itself an error) — the same recovery
+    // typing takes in unimportedFuncKey.
+    if (it == _funcs.end() && (!call->identifier->qualifier || call->identifier->qualifier->empty())) {
+        const std::string key = unimportedFuncKey(name);
+        if (!key.empty() && reportDeclaredElsewhere("function", name,
+                                                    [&](const std::string& k) { return _funcs.count(k) > 0; },
+                                                    "this call", call->line))
+            it = _funcs.find(key);
+    }
     if (it == _funcs.end()) {
         // const-eval 6b-3: a `comptime fn` is not a runtime symbol — reject a runtime-position call
         // with a diagnostic that points at the `comptime` constant form.
@@ -30977,6 +31009,8 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     if (isGlobalHeapCall(inv) && !_globalAllocator.empty()) return _globalAllocator;
     if (inv->identifier && inv->identifier->value) {
         auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+        if (f == _funcs.end() && (!inv->identifier->qualifier || inv->identifier->qualifier->empty()))
+            f = _funcs.find(unimportedFuncKey(*inv->identifier->value));   // typing recovery only — see there
         if (f != _funcs.end()) return f->second.retCType;
     }
     return "";

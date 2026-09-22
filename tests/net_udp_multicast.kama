@@ -5,7 +5,7 @@
 // so a send to ff02::… on it is ENETUNREACH on every Linux host, container or not, while the same send succeeds on
 // macOS (there only from a socket bound to ::1: an unbound one is EHOSTUNREACH). Joining, leaving and the options
 // are still checked there.
-import {
+import { core::print,
     std::net::UdpSocket,
     std::net::IpAddr,
     std::net::SocketAddr,

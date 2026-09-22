@@ -133,7 +133,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
 # still has it; lib/core/ is embedded for the same reason. ctxOf indexes `[prelude] + preludeModules +
 # userUnits` positionally, so changing the COUNT shifts every loose file's `_F<n>` symbol.
 PRELUDE_GLOBAL  = prelude/global.kama
-PRELUDE_MODULES = lib/std/memory/owned.kama lib/std/memory/shared.kama lib/std/memory/weak.kama lib/core/core.kama
+PRELUDE_MODULES = lib/std/memory/owned.kama lib/std/memory/shared.kama lib/std/memory/weak.kama lib/core/src/core.kama
 
 $(BUILD):
 	mkdir -p $(BUILD)

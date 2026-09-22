@@ -38,7 +38,7 @@
 //     kama: C:/msys64/tmp/tmp.xxx/w\???-??????\kama.json does not exist
 // (the manifest operand is checked before the output directory, so this is the FIRST ceiling here; the
 // roadmap's `cannot create output directory` was measured with a lone .kama file as the operand).
-import { std::fs::exists, std::fs::createDirAll, std::fs::writeFile,
+import { core::args, core::print, std::fs::exists, std::fs::createDirAll, std::fs::writeFile,
          std::io::IoError, std::collections::DynamicArray, std::path::join,
          std::process::Command, std::process::Process, std::process::ExitStatus };
 

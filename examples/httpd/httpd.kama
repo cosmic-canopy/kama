@@ -12,7 +12,7 @@
 // the request is read in a single recv (fine for GETs), no keep-alive, no directory listings, no
 // query-string handling. Path traversal ("..") is rejected. Numeric host only.
 
-import {
+import { core::envOr,
     std::net::TcpListener,
     std::net::TcpStream,
     std::fs::readFile,

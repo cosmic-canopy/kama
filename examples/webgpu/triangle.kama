@@ -13,7 +13,7 @@
 // rides Kama `fnptr` callbacks. App state lives on the heap (Kama has no mutable
 // globals yet) and is threaded through the WebGPU `userdata` pointer.
 
-import { std::app::run };
+import { core::println, std::app::run };
 
 extern "<webgpu/webgpu.h>";
 extern "<stdlib.h>";

@@ -1,7 +1,7 @@
 // std::net — IPv6 text. `parseIp` reads RFC 4291 text and `IpAddr` writes RFC 5952's canonical form; the
 // round trips below are RFC 5952's own examples. No sockets. Returns the failure count plus 100 if the
 // check count drifted, so a table that silently stopped running cannot pass.
-import { std::net::IpAddr, std::net::SocketAddr, std::net::parseIp };
+import { core::print, std::net::IpAddr, std::net::SocketAddr, std::net::parseIp };
 
 fn int32 canon(const ref string text, const ref string want) {
     match (parseIp(text: text)) {

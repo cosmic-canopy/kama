@@ -4,7 +4,7 @@
 // startup, through the funnel — two slots gone to code the program never wrote, and the same two funnel calls
 // under `--no-heap`. The conversion now runs on first use, so a program that never asks pays nothing, and
 // one that does pays ONE block (the vector and every string together) — which the second half measures.
-import { std::concurrent::Atomic, std::collections::DynamicArray };
+import { core::args, std::concurrent::Atomic, std::collections::DynamicArray };
 
 // The pool from tests/global_allocator_pool: 32 slots of 1024 bytes, a free list through each slot's first
 // word, a spin lock; every field starts at zero.

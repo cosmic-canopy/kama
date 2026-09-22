@@ -10,8 +10,8 @@ export { Args, args, programInvocation, programName, programPath, env, envOr, Pa
 // `Optional`, `Result`, `Iterator`, `Formattable`, … — are not here: the syntax lowers into them, so they
 // stay in every scope as reserved names (prelude/global.kama).
 
-// ── Command-line arguments + environment (prelude floor) ──────────────────────────────────────────────
-// argv/env access lives in the FLOOR (survives --no-std), so it can't hand back a std::collections type
+// ── Command-line arguments + environment ───────────────────────────────────────────────────────────────
+// argv/env access lives in `core` (survives --no-std), so it can't hand back a std::collections type
 // (DynamicArray/View aren't collected this early). `Args` is the single handle: a cursor that `foreach`
 // iterates (Iterator<string>) AND supports random access via count()/get(at:). Each yielded/returned
 // string is a fresh OWNED copy (like Split), so a caller may `give` it onward. The program name (argv[0])
@@ -33,7 +33,7 @@ type value Args implements Iterator<string> {
         this.pos = this.pos + 1;
         return Optional::Some(value: give s);
     }
-    // Random access (an owned collection isn't available in the floor).
+    // Random access (an owned collection isn't available below std).
     public unsafe fn int32 count() { return kama_args_count(); }
     public unsafe fn Optional<string> get(int32 at) {
         if (at < 0 || at >= kama_args_count()) { return Optional::None; }
@@ -96,7 +96,7 @@ unsafe fn string envOr(string name, string dflt) {
     return give dflt;
 }
 
-// ── Fatal-handler hook (diagnostics floor) ──────────────────────────────────────────────────────────────
+// ── Fatal-handler hook ──────────────────────────────────────────────────────────────────────────────────
 // Install a custom handler for a fatal `panic`/`assert`/bounds trap. The default runtime behavior writes the
 // message to stderr and `abort()`s — useless/hostile to an end user with no terminal (a shipped game/GUI), so
 // a handler can exhibit gracefully instead (show a dialog, flush a save, route to a telemetry sink). CONTRACT:
@@ -113,8 +113,8 @@ unsafe fn string envOr(string name, string dflt) {
 extern fn void kama_set_panic_handler(PanicHandler h);
 unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
 
-// ── Console output (diagnostics floor) ──────────────────────────────────────────────────────────────────
-// The floor print family: text to stdout (`print`/`println`, the program's data/results) or stderr
+// ── Console output ──────────────────────────────────────────────────────────────────────────────────────
+// The print family: text to stdout (`print`/`println`, the program's data/results) or stderr
 // (`eprint`/`eprintln`, prompts/progress/diagnostics — `e` for "to stderr", the Rust convention). String-only
 // — formatting rides interpolation (`println("x = ${x}")`). Unbuffered line writes (v1). On `--target
 // embedded` there is no fd, so both streams route to the weak `kama_log_sink` (default no-op; a firmware

@@ -14,6 +14,8 @@ no hidden allocation.
 A program is a `main` that returns an `int32`, and that integer is the process exit status.
 
 ```kama
+import { core::println };
+
 fn int32 main()
 {
     string name = "world";
@@ -31,8 +33,10 @@ never implied. The rest are `bool`, `char` and `string`. Comments are `//` and `
 into direct formatting calls, so nothing parses a format string at runtime. [Collections and
 strings](#collections-and-strings) has the rest of it.
 
-`println` needs no import. It belongs to the [prelude floor](FLOOR.md) — the surface that is
-always in scope, survives `--no-std`, and still works on a microcontroller.
+`println` is imported, like every name a file uses and does not declare: it lives in module `core`,
+with the rest of the runtime capabilities (`args`, `env`, …). `core` ships inside the compiler, so it
+survives `--no-std` and still works on a microcontroller. What needs no import is the language itself —
+`string`, `Optional`, `Result` and the rest of the [floor](FLOOR.md), the types the syntax produces.
 
 ## Named arguments
 
@@ -165,6 +169,8 @@ There is no garbage collector and nothing to call. A resource is destroyed at th
 the scope that owns it, in reverse order of construction:
 
 ```kama
+import { core::println };
+
 type resource Handle
 {
     int32 id;
@@ -469,6 +475,8 @@ fn int32 main()
 `equals`), and interpolation is built into the literal:
 
 ```kama
+import { core::println };
+
 fn int32 main()
 {
     int32 folds = 12;
@@ -494,7 +502,8 @@ attribute, marks every field it wants written, and the compiler generates the co
 ordinary C:
 
 ```kama
-import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
+import { core::println, std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer };
 
 @generate(Serializable, Deserializable)
 type resource Player
@@ -540,12 +549,13 @@ graph rules.
 
 ## The standard library, briefly
 
-The prelude is what you get with no import: `println`, `args()`, `envOr`, `Optional`, `Result`, the smart
-pointers and the core contracts — the [floor](FLOOR.md). Everything else is a `std::` module you import by
-symbol. A short program touching several:
+The language needs no import: `Optional`, `Result`, the smart pointers and the core contracts — the
+[floor](FLOOR.md). Everything else is imported by symbol: the runtime capabilities (`println`, `args`,
+`envOr`) from `core`, and the libraries from `std::`. A short program touching several:
 
 ```kama
-import { std::fs::File, std::fs::OpenMode, std::io::Lines, std::io::IoError,
+import { core::args, core::envOr, core::println,
+         std::fs::File, std::fs::OpenMode, std::io::Lines, std::io::IoError,
          std::time::unixNow, std::time::Date, std::log::logInfo, std::log::logWarn,
          std::process::Command, std::process::Output };
 

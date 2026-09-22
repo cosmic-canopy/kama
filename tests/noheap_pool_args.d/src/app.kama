@@ -4,7 +4,7 @@
 //
 // ⚠️ The `foreach` is by VALUE and must stay so: that is what mints a string per argument and therefore what
 // makes this fixture about allocation at all. A `ref` loop would pass without proving anything.
-import { std::concurrent::Atomic };
+import { core::args, std::concurrent::Atomic };
 
 @globalAllocator type resource Pool implements GlobalHeap {
     InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned

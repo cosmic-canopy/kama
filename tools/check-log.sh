@@ -64,7 +64,7 @@ fi
 
 # --- 4. custom sink reroutes records; the default console sink goes silent -----
 cat > "$tmp/sink.kama" <<'KAMA'
-import { std::log::setLogSink, std::log::logInfo };
+import { core::println, std::log::setLogSink, std::log::logInfo };
 fn void mySink(int32 level, string tag, string msg) { println(s: "SINK:${level}:${msg}"); }
 fn int32 main() {
     setLogSink(s: mySink);
@@ -145,7 +145,7 @@ rm -f "$tmp/proj/kama.local.json"
 # 8a/8b: the message is a function call with an OBSERVABLE side effect (prints a marker to stdout). The v2
 # lowering builds the message INSIDE the runtime guard, so a filtered-out call never runs it.
 cat > "$tmp/v2.kama" <<'KAMA'
-import { std::log::logInfo, std::log::logDebug };
+import { core::println, std::log::logInfo, std::log::logDebug };
 fn string expensive() { println(s: "BUILT"); return "payload"; }
 fn int32 main() {
     logInfo(tag: "x", msg: "info-line");

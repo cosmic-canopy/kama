@@ -790,8 +790,8 @@ expect --complete 162:4 -- "local	near	Cell"                 # locals, with thei
 expect --complete 162:4 -- "param	seed	int32"                # ... and parameters
 expect --complete 162:4 -- "type	Cell"                       # a type declared in this file
 expect --complete 162:4 -- "type	DynamicArray"               # ... one reached through an import
-expect --complete 162:4 -- "function	print	fn void print(s: string)"   # the always-in-scope FLOOR
-expect --complete 162:4 -- "function	args	fn Args args()"
+expect --complete 162:4 -- "function	print	"                         # a capability this file IMPORTS from `core`
+reject --complete 162:4 -- "	args	"                            # ... and not one it does not (KR-87)
 expect --complete 162:4 -- "function	main	fn int32 main()"    # `main` is the one name the resolver rewrites
 expect --complete 162:4 -- "keyword	foreach"                  # the lexer's own keyword table
 # The C-ABI plumbing behind the floor is spellable but is NOT language surface. A user's own extern is.
@@ -824,6 +824,9 @@ expect --complete 15:14 -- "module	collections"   # `import { std::|` -> the std
 expect --complete 15:14 -- "module	process"
 expect --complete 15:31 -- "type	DynamicArray	std::collections"   # `…::collections::|` -> its export manifest
 expect --complete 15:31 -- "type	Deque	std::collections"
+expect --complete 15:7  -- "module	core"          # `import |` -> `core`, the runtime capabilities (KR-87)
+expect --complete 15:47 -- "type	println	core"      # `import { …, core::|` -> its export manifest
+expect --complete 15:47 -- "type	Args	core"
 
 # ---------------------------------------------------------------------------------------------------
 # M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the

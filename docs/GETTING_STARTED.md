@@ -59,6 +59,8 @@ make
 `hello.kama`:
 
 ```kama
+import { core::println };
+
 fn int32 add(int32 a, int32 b) { return a + b; }
 
 fn int32 main()
@@ -71,7 +73,8 @@ fn int32 main()
 ```
 
 `${…}` splices a value into the string as the program runs. The compiler turns the template into direct
-formatting calls, so no format string is parsed at runtime. `println` needs no import. The
+formatting calls, so no format string is parsed at runtime. `println` comes from module `core`, and the
+import line names it — a file uses only what it declares or imports. The
 [tour](tour.md) covers the rest of the language in one read.
 
 ## 3. Build & run

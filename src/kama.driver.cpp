@@ -9448,9 +9448,10 @@ std::vector<std::string> lspImportModules(const std::string& fromPath, const std
     std::vector<std::string> segs = lspSplitModulePath(prefix, rel);
     std::set<std::string> out;                       // sorted + deduped across roots
 
-    // The top level names PROJECTS: the stdlib, the file's own project, and every dependency it declares.
+    // The top level names PROJECTS: the stdlib, `core`, the file's own project, and every dependency it declares.
     if (segs.empty()) {
         out.insert("std");
+        out.insert("core");
         const std::string proj = projectManifestDir({ fromPath });
         if (!proj.empty()) {
             const ManifestModules& mm = manifestModulesCached(proj + "/kama.json");

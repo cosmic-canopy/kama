@@ -1,6 +1,6 @@
 // std::process — tryWait() is the non-blocking reap: None while the child runs, then wait() collects the
 // exit. The helper's `sleep 1000` (ms) is alive at the immediate tryWait, exits 0 after wait().
-import { std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
+import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

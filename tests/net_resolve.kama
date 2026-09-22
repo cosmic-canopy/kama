@@ -2,7 +2,7 @@
 // machine resolves without a network (it is in /etc/hosts on POSIX and its Windows equivalent), so this
 // fixture needs no DNS server and no internet. The ten flags sum to 1023; the exit code is one byte, so the
 // fixture prints the flags and exits 0 only when every one is set.
-import { std::net::SocketAddr, std::net::parseIp, std::net::resolve,
+import { core::print, std::net::SocketAddr, std::net::parseIp, std::net::resolve,
          std::net::resolveOne, std::net::TcpListener, std::net::TcpStream,
          std::io::IoError };
 

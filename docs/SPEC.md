@@ -1840,7 +1840,7 @@ an `Optional`-yielding iterator cannot tell a read failure from a clean end, it 
 `error()` after the loop; `readLine`'s `Result` is the spelling that cannot be ignored. `stdin()`,
 `stdout()` and `stderr()` are three non-owning `Reader`/`Writer` values (no-op destructors — the
 descriptors belong to the process) that compose with `pump`, `BufWriter` and serde; they do not replace
-the floor's `print` family, which [FLOOR.md](FLOOR.md) explains.
+`core`'s `print` family (`import { core::println };`), which [FLOOR.md](FLOOR.md) explains.
 
 **Subprocesses (`std::process`).** A `Command` builder — argv **vector** (never a shell string, so
 injection-safe by construction; `Command.shell(line:)` is the explicit `sh -c` opt-in) with `cwd`/`env`/
@@ -2344,14 +2344,17 @@ bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b 
 
 ### Command-line arguments + environment ✅
 
-A program reads its own command-line arguments and environment through a small, always-in-scope **prelude
-floor** surface — no import, and it **survives `--no-std`** (the tier of `Optional`/`Result`/the smart
-pointers). It is *not* an importable `std::env`: arguments enter through the compiler-synthesized `main`
-wrapper (which stashes `argc/argv` into a runtime global before `kama_main` runs), so a `--no-std` user
-cannot reimplement them — a core, non-reimplementable capability belongs in the floor. The user's
-`fn int32 main()` signature is unchanged.
+A program reads its own command-line arguments and environment through module **`core`**, imported by
+name like any other module's symbols (`import { core::args, core::envOr };`). `core` is embedded in the
+compiler, so it **survives `--no-std`**. It is not a `std::` module because it cannot be one: arguments
+enter through the compiler-synthesized `main` wrapper (which stashes `argc/argv` into a runtime global
+before `kama_main` runs), so a `--no-std` user could not reimplement them. The user's `fn int32 main()`
+signature is unchanged.
 
 ```
+import { core::args, core::Args, core::programInvocation, core::programName, core::programPath,
+         core::env, core::envOr };
+
 // arguments (argv[0] is excluded — see programPath())
 foreach (string a in args()) { /* each user arg, in order */ }
 int32 n     = args().count();              // number of user args
@@ -2394,7 +2397,7 @@ string term = envOr(name: "TERM", dflt: "dumb");           // value, or the fall
 ### Logging (`std::log`) ✅
 
 Leveled, tagged diagnostics — the configurable logger, **a library over a small runtime seam, no new language
-surface**. The floor gives `print`/`eprint` (raw console output) and `assert`/`panic` (fatal checks);
+surface**. Module `core` gives `print`/`eprint` (raw console output) and the language gives `assert`/`panic` (fatal checks);
 `std::log` is the tier above: filterable, taggable, redirectable output that **keeps running** (a `warn` is a
 log level, never an abort). Import it — the module is the discovery unit; it is not scattered as floor globals.
 
@@ -2943,7 +2946,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   For a premise that can be settled before the program runs, use
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For
   a *bug that can't continue*; recoverable errors use `Result<T, E>`. A custom fatal handler (for a shipped
-  game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** — it runs for cleanup/exhibition,
+  game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** (module `core`) — it runs for cleanup/exhibition,
   then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.
   The one exception is a declared **`@onPanic` region**, which recovers *before* the hook and never reaches
   it — see *Recoverable regions*.) The
@@ -5276,8 +5279,7 @@ not scope it, which is exactly why it is not callable.
 
 **`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
 `X` — the always-in-scope [floor](FLOOR.md). It exists for the case where a local declaration shadows the
-spelling you want: a file that defines its own `envOr` still reaches the floor's with
-`global::envOr(name: …, dflt: …)` (`tests/global_alias.kama`). It names **only** the floor: `global` is a
+spelling you want. It names **only** the floor: `global` is a
 reserved project name, not a path prefix, so `global::a::b::X` is an error <!-- xfail: global_absolute_path -->
 (`tests/xfail/global_absolute_path.kama`).
 

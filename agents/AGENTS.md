@@ -178,7 +178,7 @@ feature.
   `match (r) { case Ok(value: x): x; … }`; a *resource* payload leaves a consuming
   `match (give r) { case Ok(value: x): give x; … }`. The subject must be a local — bind a call's result
   first — and a block arm that does not produce a value must `return`.
-- **`print(s: …)` / `println(s: …)`** — named like every other call.
+- **`println(s: …)`** is named and imported like any call: `import { core::println };` (also `args`, `envOr`).
 - **One way to do a thing.** Before adding a helper, `--search` for an existing one.
 
 ## Conventions

@@ -3,6 +3,9 @@
 // and KAMA_PROBE_MISSING unset. Returns 0 iff every check passes; a distinct nonzero code pinpoints the
 // first failing check (so a break is diagnosable). Exercises random access, the None tail, foreach order,
 // env hit/miss, envOr both branches, programInvocation()/programName() (basename suffix of it), programPath().
+
+import { core::env, core::envOr, core::programInvocation, core::programName, core::programPath, core::args };
+
 fn int32 main() {
     // Random access over the user args (argv[0] excluded).
     if (args().count() != 3) { return 1; }

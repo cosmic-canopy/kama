@@ -47,8 +47,10 @@ global=$1; shift
     # The MODULE these declarations belong to, stated rather than derived — a synthetic unit has no path
     # for the file→module rule to work from, and without this the triad would land in a file-private
     # scope and `std__memory__Owned` would silently become `_F<file>__Owned`. Derived from the file's
-    # directory under lib/, which is exactly how the same module is named for the copy on disk.
-    printf '    "%s" },\n' "$(dirname "$rel" | tr '/' '@' | sed 's/@/::/g')"
+    # directory under lib/, which is exactly how the same module is named for the copy on disk. `core`
+    # keeps its sources in `core/src/` (its manifest's `source`, the layout `kama seed` teaches; the
+    # stdlib's `source` is `std` itself), so that `src` segment is layout, not module, and is dropped.
+    printf '    "%s" },\n' "$(dirname "$rel" | sed 's#^\([^/]*\)/src$#\1#; s#^\([^/]*\)/src/#\1/#' | tr '/' '@' | sed 's/@/::/g')"
     n=$((n + 1))
   done
   printf '};\n'

@@ -1,6 +1,9 @@
 // The process-level panic hook is NOT run for a recovered panic: the region's declared recovery IS the
 // handling, and the hook keeps its contract — it runs only when the process is about to terminate. The
 // hook here would poison the trace; the trace stays at its initial value.
+
+import { core::setPanicHandler };
+
 extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();
 unsafe fn int32 traceGet() { return kama_trace_get(); }

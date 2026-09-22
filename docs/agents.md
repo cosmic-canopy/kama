@@ -93,9 +93,8 @@ the cursor's lexical context, then one tab-separated `kind⇥label⇥detail` row
 ```console
 $ kama query tests/query/shapes.kama --complete 24:5
 trigger=bare recv= callee= prefix=in active=-1 filled=
-function	args	fn Args args()
-function	env	fn Optional<string> env(name: string)
-function	envOr	fn string envOr(name: string, dflt: string)
+function	main	fn int32 main()
+function	midpoint	fn Point midpoint(a: Point, b: Point)
 ```
 
 ### `--type` / `--def` / `--refs` / `--sighelp`

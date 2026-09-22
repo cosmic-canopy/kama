@@ -19,7 +19,7 @@
 // functions (`_mkdir`, `_open`, `GetFileAttributesA`, `FindFirstFileA`), which decode a path in the
 // process ANSI code page. A kama string is UTF-8 by definition (lib/std/path/path.kama), so these
 // names were mojibake before they reached the filesystem — at ANY length, with no MAX_PATH involved.
-import { std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
+import { core::args, std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::readDir, std::fs::writeFile, std::fs::readFile,
          std::io::IoError, std::collections::DynamicArray,
          std::path::join };

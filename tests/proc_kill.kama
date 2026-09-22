@@ -2,7 +2,7 @@
 // the helper `sleep 10000` (ms) directly so the child IS the target. The abnormal-exit SHAPE differs by
 // platform (POSIX: terminated by SIGKILL -> code -1, signal 9; Windows: TerminateProcess -> code 1, signal
 // 0), so the portable assertion is `!success()`; both platforms agree the child did not exit cleanly.
-import { std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
+import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

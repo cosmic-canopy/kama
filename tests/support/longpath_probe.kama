@@ -15,7 +15,7 @@
 // `kama_diropen` is the one site with an explicit `char[MAX_PATH]` and an ENOMEM bail. That is the most
 // VISIBLE ceiling, not the first one reached — the probe never gets that far. Both are fixed by the same
 // wide seam; the ordering claim was simply wrong, and is recorded here so it is not re-derived.
-import { std::fs::File, std::fs::OpenMode,
+import { core::args, core::print, std::fs::File, std::fs::OpenMode,
          std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove, std::fs::readDir,
          std::fs::writeFile, std::fs::readFile,

@@ -2927,6 +2927,9 @@ private:
     // "not imported — add this import" / "not exported by that file" for a name another file declares; false if none does
     bool reportDeclaredElsewhere(const std::string& noun, const std::string& name,
                                  const std::function<bool(const std::string&)>& known, const char* what, int line);
+    // Error recovery for TYPING only: the one function an unimported bare call would mean if it were imported
+    // ("" when no module, or more than one, exports that name). Emission still refuses the call itself.
+    std::string unimportedFuncKey(const std::string& name) const;
     bool isTypeParamName(const std::string& n) const;              // `n` is a generic type-param (any template's, or an active binding)
     // The VALUE-position twin of checkTypeResolves: a bare or `::`-qualified name that no binding table,
     // function, module static, enum, type constant or type resolved. Says what the name IS when it is a

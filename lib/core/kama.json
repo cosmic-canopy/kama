@@ -1,0 +1,10 @@
+{
+  "name": "core",
+  "kind": "library",
+  "source": "src",
+  "modules": {
+    ".": {
+      "visibility": "public"
+    }
+  }
+}

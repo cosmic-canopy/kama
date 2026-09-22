@@ -2,6 +2,9 @@
 // then the handler itself panics — the re-entrancy guard must SKIP the handler the second time and hard-abort
 // (no infinite recursion), so the process still terminates with a signal exit. Proves: handler runs +
 // re-entrancy-safe + always-terminates.
+
+import { core::setPanicHandler };
+
 extern "<unistd.h>";
 extern fn int64 write(int32 fd, UnsafeConstPtr buf, usize n);
 

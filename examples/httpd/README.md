@@ -70,7 +70,7 @@ keep-alive, directory listings, query-string decoding, or URL-percent-decoding. 
 - **`std::fs`** — `readFile(path:)` returns `Result<List<uint8>, IoError>`; a `NotFound` becomes a 404.
 - **strings** — `split` / `startsWith` / `endsWith` / `contains` to parse the request line and pick a
   MIME type; the response is assembled as a `List<uint8>` (headers as bytes + the file bytes).
-- **env** — `envOr(name:, dflt:)` (prelude floor) reads `PORT`/`ROOT` config with a fallback.
+- **env** — `envOr(name:, dflt:)` (module `core`) reads `PORT`/`ROOT` config with a fallback.
 - **FFI** — `puts` for the startup banner, declared inline with `extern`.
 
 ## Seeding a standalone repo

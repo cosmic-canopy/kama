@@ -1,6 +1,6 @@
 // std::process — the helper's `echo2 out err` writes "out\n" (4) to stdout AND "err\n" (4) to stderr,
 // proving run()'s concurrent drain of both pipes.
-import { std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
+import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
