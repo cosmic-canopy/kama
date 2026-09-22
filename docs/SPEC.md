@@ -5960,7 +5960,22 @@ FFI binding emit a C field literally called `type` without inventing a name
 the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The kind words `value` / `resource` / `view` / `contract` / `intrinsic` are not
 keywords at all — they lex as identifiers.
 
-`this` and the primitive type names are keywords like any other: they cannot be redeclared.
+**Which words are reserved — the greppability rule** (maintainer, 2026-09-22). A word is reserved everywhere
+unless every KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword
+use can always be found without also finding the word used as a name. How common the word is as a name is
+not a reason by itself. The six contextual words pass:
+
+| word | keyword use | grep anchor |
+|---|---|---|
+| `type` | `type resource Foo {` | `type` + a kind word |
+| `file` | `file @compileFor(X);` (line 1) | `file @` |
+| `truncate` | `truncate<int8>(x)` | `truncate<` (a method is `.truncate(`) |
+| `give` / `copy` / `slot` | `give x`, `copy x`, `slot T x;` | the word + a name other than `in` — a binding so named is followed by an operator or punctuation, never a name, except `in` in a `foreach` header |
+
+By the same rule `out` stays reserved (no anchor: `out T x` and `q: out quotient`), and so do the call-site
+intrinsics. `this` and the primitive type names are keywords like any other: they cannot be redeclared. The
+language's type and contract names (`Optional`, `Result`, `Owned`, `Formattable`, …) are not keywords — they
+lex as identifiers — but they are reserved NAMES in every scope (§ *Shadowing*).
 
 ## C's reserved words are reserved in kama
 
