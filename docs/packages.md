@@ -149,7 +149,10 @@ A **project's name has to be a legal kama identifier**, of either kind, because 
 project's root module. `kama seed --kind library --name my-lib` is refused and says to use
 `my_lib`: `import my-lib::{ … }` does not parse, so that package could never be imported by anyone —
 and an executable is not the softer case it looks like, since its own symbols are qualified by the
-same name. A monorepo directory may be called anything: it has no name in any file.
+same name. Some names are **reserved**: `std` and `core` (the bundled libraries), `global` (the floor's
+retired qualifier), and — because a project's name heads every C name its modules emit (`<project>__…`,
+[SPEC.md](SPEC.md) *C names*) — `k`, `kama`, and any name starting `k_` or `kama_`, whose prefix would open
+one of kama's own C registers. A monorepo directory may be called anything: it has no name in any file.
 
 ## Build output — `out`
 

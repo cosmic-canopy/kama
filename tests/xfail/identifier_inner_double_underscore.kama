@@ -1,0 +1,4 @@
+// KR-88: `__` may lead a name but not appear inside one. kama joins scopes with `__` in the C it emits, so
+// this local spelled the file-private `helper`'s C name (`k_F<file>__helper`) and clang refused the call.
+fn int32 helper() { return 40; }
+fn int32 main() { int32 Fidentifier_inner_double_underscore__helper = 2; return helper() + 2; }

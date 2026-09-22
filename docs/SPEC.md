@@ -3349,11 +3349,18 @@ macros over the shipped header set on macOS, 21,748 over one Windows TU.
 |---|---|
 | `KAMA_…` | kama's macros |
 | `kama_…` | what the **compiler** owns — runtime types and their members, emitted members and temps, the prelude's own scope |
-| `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots, and scope-prefixed declarations |
+| `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots, and file-private declarations (`k_F<file>__…`) |
+| `<project>__…` | a **module's** declarations — `geo__area`, `std__collections__DynamicArray…`, `core__println` |
 
-The two are disjoint by construction, not by convention: `k_` has `_` at index 1 and `kama_` has `a`, so no
+They are disjoint by construction, not by convention: `k_` has `_` at index 1 and `kama_` has `a`, so no
 user name can ever produce a compiler-owned spelling. A user name that already starts with `k_` becomes
-`k_k_…`, and the mangling stays reversible — strip exactly one `k_`.
+`k_k_…`, and the mangling stays reversible — strip exactly one `k_`. Two rules close the rest. A project's name
+keeps out of `k`, `kama` and anything starting `k_` or `kama_` ([packages.md](packages.md)), since its
+`<project>__` prefix would open one of the other registers (a project `k`'s `x` was `k__x`, which a local
+`_x` also emits). And **a name may
+start with `__` but not contain one** — `__` is how scopes join in C, so a local `Fmain__helper` spelled <!-- xfail: identifier_inner_double_underscore -->
+the file-private `helper`'s C name (`k_Fmain__helper`). The one place that rule meets C is the declared
+surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
 
 **The declared C surface keeps its spelling**, because code on the other side depends on it: `extern fn`
 names, `type extern value` fields, `type expose value` / `expose enum` fields and values, and the parameter

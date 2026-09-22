@@ -456,6 +456,7 @@ heap_attr_on_body	heap_attr_on_body.kama:4
 heap_attr_on_fnptr	heap_attr_on_fnptr.kama:4
 heap_attr_on_runtime_symbol	heap_attr_on_runtime_symbol.kama:11
 heap_handle_bare_value	heap_handle_bare_value.kama:7
+identifier_inner_double_underscore	identifier_inner_double_underscore.kama:4
 identity_char_constref_argument	identity_char_constref_argument.kama:10
 identity_char_literal	identity_char_literal.kama:12 identity_char_literal.kama:13
 identity_char_to_int	identity_char_to_int.kama:14 identity_char_to_int.kama:15 identity_char_to_int.kama:16

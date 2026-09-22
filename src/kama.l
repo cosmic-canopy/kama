@@ -80,16 +80,28 @@
  * The rules fire on every OCCURRENCE, not just the declaration, so `reservedReported` keeps it to one
  * error per spelling per file. Lexing continues (handleError accumulates) so a file naming two reserved
  * words reports both rather than one at a time. */
+/* ...and `__` INSIDE a name (KR-88). kama joins scopes with `__` in the C it emits (`k_Fmain__helper`,
+   `geo__area`), so a local `Fmain__helper` spelled a file-private function's C name — kama accepted it
+   and clang refused the call. A LEADING `__` stays legal (`__ok` emits `k___ok`, which no scope forms). */
 #define RESERVED_CHECK(src)                                                       \
     do {                                                                          \
         if (cIsReservedWord(src) && yyextra->reservedReported.insert(src).second)  \
             error(cReservedWhy(src).c_str(), yyscanner);                          \
+        else if (hasInnerDoubleUnderscore(src) && yyextra->reservedReported.insert(src).second) \
+            error(("`" + std::string(src) + "` has `__` inside it — kama joins scopes with `__` in the C it "  \
+                   "emits, so such a name could spell another declaration's C name. A name may START with "  \
+                   "`__`, not contain one; pick another name").c_str(), yyscanner);          \
     } while (0)
 
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 
 static int getToken(const char *);
 bool cIsReservedWord(const char *);
+static bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading underscores */
+{
+  while (*s == '_') ++s;
+  return strstr(s, "__") != nullptr;
+}
 static std::string cReservedWhy(const std::string&);
 char getSimpleEscape(const char* input, int index);
 std::string hexToUTF8(int cp);

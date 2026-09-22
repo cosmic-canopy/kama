@@ -607,7 +607,20 @@ accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
 proj globalname <<'JSON'
 { "name": "global", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
-reject globalname 'which is reserved: `global` names the' "a project claiming the floor's name"
+reject globalname 'which is reserved: `global` named the floor' "a project claiming the retired floor's name"
+
+# KR-88: a project's name heads every C name its modules emit (`<project>__…`), so a name whose prefix would
+# open one of kama's own registers is reserved — a project `k`'s `x` was `k__x`, which is also what a local
+# `_x` emits (the `k_` register), and kama accepted what clang then refused.
+for rn in k k_tools kama kama_ext; do
+proj "cregname_$rn" <<JSON
+{ "name": "$rn", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+done
+reject cregname_k        'would begin with `k_`'    "a project named k (the user register)"
+reject cregname_k_tools  'would begin with `k_`'    "a project name starting k_"
+reject cregname_kama     'would begin with `kama_`' "a project named kama (the compiler register)"
+reject cregname_kama_ext 'would begin with `kama_`' "a project name starting kama_"
 
 # ⚠️ Its two companions in the reserved set, `std` and `core`, are deliberately NOT refused on this rung,
 # and the twin below is what stops someone "fixing" that: `lib/kama.json`'s own `name` IS "std", so a

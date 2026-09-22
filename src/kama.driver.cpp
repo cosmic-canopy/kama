@@ -3081,6 +3081,20 @@ struct EmSetting {
 };
 static std::vector<EmSetting> g_emSettings;
 
+// A project's name is the head of every C name its modules emit (`<project>__<module>__name`, SPEC § C names).
+// kama's own registers are `k_` (the user's names) and `kama_` (the compiler's), so a project whose `__`-joined
+// prefix could START one of them would share its spellings: a project `k`'s `x` is `k__x`, which is also what a
+// local `_x` emits, and kama accepted what clang then refused (KR-88). Refusing those names is what makes the
+// registers disjoint by construction. Returns the reason, or "" for an ordinary name.
+static std::string reservedByCRegister(const std::string& ident)
+{
+    if (ident == "k" || ident.compare(0, 2, "k_") == 0)
+        return "its C prefix `" + ident + "__` would begin with `k_`, the register of the names kama code declares";
+    if (ident == "kama" || ident.compare(0, 5, "kama_") == 0)
+        return "its C prefix `" + ident + "__` would begin with `kama_`, the register of the compiler's own names";
+    return "";
+}
+
 // ...and everything else the ROOT manifest contributes to the C command line, as written. `link` is
 // seeded into g_target after target resolution unless the target overrode it; `cflags`/`ldflags` PREPEND
 // onto whatever the target carries, because the target tier appends (project-then-target, so the more
@@ -4015,9 +4029,8 @@ struct ManifestReader {
                                 + ident + "::{ … }`"
                                 + (kamaIsIdentifier(hint) ? ". Try \"" + hint + "\"" : ""));
                 }
-                // `global` is the always-in-scope floor (§2f.29), reserved by exactly this rule rather
-                // than by separate machinery — which is the point: there is no third kind of scope, only
-                // a project name nobody else may claim. Refused HERE, not only at `kama seed`, because a
+                // `global` (§2f.29, retired as a qualifier by KR-87) and the names that would share a C
+                // register (reservedByCRegister). Refused HERE, not only at `kama seed`, because a
                 // project that was not seeded is read here and nowhere else.
                 //
                 // ⚠️ `std` and `core` are reserved too, and they are NOT refused here — measured, not
@@ -4027,9 +4040,12 @@ struct ManifestReader {
                 // what makes it the one of the three this rung can hold down. seedValidName refuses all
                 // three, where "am I creating a new project?" is the question being asked.
                 if (ident == "global")
-                    return fail("`name` is \"" + nm + "\", which is reserved: `global` names the "
-                                "always-in-scope floor, whose symbols are visible unqualified in every "
-                                "file, so a project claiming it would collide with all of them");
+                    return fail("`name` is \"" + nm + "\", which is reserved: `global` named the floor "
+                                "until KR-87 retired it, and a project claiming it would read as that "
+                                "retired spelling");
+                const std::string creg = reservedByCRegister(ident);
+                if (!creg.empty())
+                    return fail("`name` is \"" + nm + "\", which is reserved: " + creg);
                 if (nameOut) *nameOut = nm;
             }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
@@ -8120,14 +8136,14 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
               "nothing could ever import this package";
         return false;
     }
-    // The floor (§2f.29). Reserved by the ordinary project-name uniqueness rule rather than by separate
-    // machinery, which is what keeps `global` from being a third kind of scope: it is a name, taken.
+    // `global` (§2f.29) — retired as a qualifier by KR-87, kept reserved as a name.
     if (ident == "global") {
-        err = "'global' is reserved — it names the always-in-scope floor, whose symbols are visible "
-              "unqualified in every file, so a project claiming it could not be imported without "
-              "colliding with all of them";
+        err = "'global' is reserved — it named the floor until KR-87 retired it, and a project claiming it "
+              "would read as that retired spelling";
         return false;
     }
+    const std::string creg = reservedByCRegister(ident);
+    if (!creg.empty()) { err = "'" + ident + "' is reserved — " + creg; return false; }
     return true;
 }
 
