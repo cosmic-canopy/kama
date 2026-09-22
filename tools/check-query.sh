@@ -829,8 +829,8 @@ expect --complete 15:31 -- "type	Deque	std::collections"
 # M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the
 # always-in-scope floor is otherwise undiscoverable, since there is no module to import that would list it.
 echo "check-query: M4.8 global:: completion"
-expect --complete 168:12 -- "function	println	fn void println(s: string)"   # the floor
-expect --complete 168:12 -- "function	args	fn Args args()"
+reject --complete 168:12 -- "	println	"        # the capabilities are module `core` now, imported by name (KR-87)
+reject --complete 168:12 -- "	args	"
 expect --complete 168:12 -- "type	Optional"
 reject --complete 168:12 -- "	Cell	"          # ... never a namespaced symbol, even this file's own
 reject --complete 168:12 -- "	blend	"

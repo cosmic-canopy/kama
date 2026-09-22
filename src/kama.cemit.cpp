@@ -652,6 +652,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
     // AFTER an explicit import's symbolAliases and the unit's own scope (see resolveUserName/resolveFunc),
     // so it never shadows a user's own name and a redundant explicit import stays a harmless no-op.
     ctx.usings.push_back("std__memory");
+    ctx.usings.push_back("core");   // KR-87 transition: bare capabilities still resolve; removed with the refusal
     return ctx;
 }
 
@@ -9758,8 +9759,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (ci.isBorrow && cd->name && cd->name->value)
             _viewTypeNames.insert(*cd->name->value);   // bare name — recognizes `View(...)` in the return check
         // A non-generic prelude type (e.g. `Chars`, the codepoint iterator) has method bodies but no
-        // owning module to emit them — flag it so the header emits them static-inline.
-        if (unit == _preludeUnit && (!cd->typeParams || cd->typeParams->empty())) ci.preludeStatic = true;
+        // owning module to emit them — flag it so the header emits them static-inline. A built-in module's
+        // (`core`'s `Args`) is collect-only the same way.
+        bool builtinUnit = unit == _preludeUnit
+            || std::find(_preludeModuleUnits.begin(), _preludeModuleUnits.end(), unit) != _preludeModuleUnits.end();
+        if (builtinUnit && (!cd->typeParams || cd->typeParams->empty())) ci.preludeStatic = true;
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
         ci.symbolAliases = _nsCtx.symbolAliases;
@@ -34597,23 +34601,28 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // in the header HERE (before the generic-fn/collection instances that call them), so a helper the
     // collections rely on (unwrap a fallible `Optional<UnsafePtr>` → panic-on-OOM) resolves everywhere. Generic
     // prelude free fns ride `emitGenericInst`; extern/signature-only ones carry no body.
-    if (_preludeUnit && _preludeUnit->codeDeclarationList) {
-        _nsCtx = _unitCtx[_preludeUnit.get()];
+    // The built-in MODULES' free functions (module `core`: `println`, `args`, …) are compile-owned and
+    // collect-only in exactly the same way, so they take the same pass under their own module context.
+    std::vector<SharedCompilationUnit> inlineFnUnits;
+    if (_preludeUnit) inlineFnUnits.push_back(_preludeUnit);
+    for (auto& m : _preludeModuleUnits) if (m) inlineFnUnits.push_back(m);
+    for (auto& pu : inlineFnUnits) if (pu->codeDeclarationList) {
+        _nsCtx = _unitCtx[pu.get()];
         // Say WHOSE code this is. Header content belongs to no module, so a diagnostic raised in one of
         // these bodies fell through diagFile()'s last rung to `_sourcePath` — the file being compiled —
         // and was stamped with the USER's path at the PRELUDE's line. Measured on 0.9.177: a 4-line
         // program, built with `--strict-numeric`, produced 26 rows naming that program and not one of
         // them at a line it has; the highest claimed line 531. `emitStruct` already installs this for the
         // same reason one layer up. See diagFile().
-        ScopedStr _cu(_collectingUnitPath, _preludeUnit->name ? *_preludeUnit->name : std::string());
+        ScopedStr _cu(_collectingUnitPath, pu->name ? *pu->name : std::string());
         _emitStaticInlineFn = true;
-        for (auto& decl : *_preludeUnit->codeDeclarationList)
+        for (auto& decl : *pu->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;
                 if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiated below
                 emitFunctionPrototype(fn);
             }
-        for (auto& decl : *_preludeUnit->codeDeclarationList)
+        for (auto& decl : *pu->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;
                 if (fn->typeParams && !fn->typeParams->empty()) continue;

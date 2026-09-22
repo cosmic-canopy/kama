@@ -85,6 +85,9 @@ jobs:
           # `builtinSourcePath` looks for beside the stdlib. The `std::memory` triad needs no line here:
           # it already ships under lib/std.
           cp -R prelude payload/lib/kama/prelude
+          # Module `core` (the runtime capabilities) is embedded too, for the same reason; its source is
+          # what `builtinSourcePath` opens for `<prelude>/core/core.kama`.
+          cp -R lib/core payload/lib/kama/core
           cp LICENSE payload/ 2>/dev/null || true
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
 
@@ -170,6 +173,9 @@ jobs:
           # `builtinSourcePath` looks for beside the stdlib. The `std::memory` triad needs no line here:
           # it already ships under lib/std.
           cp -R prelude payload/lib/kama/prelude
+          # Module `core` (the runtime capabilities) is embedded too, for the same reason; its source is
+          # what `builtinSourcePath` opens for `<prelude>/core/core.kama`.
+          cp -R lib/core payload/lib/kama/core
           cp LICENSE payload/ 2>/dev/null || true
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
       - name: Package (slim)

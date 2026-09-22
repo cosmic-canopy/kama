@@ -1,0 +1,17 @@
+// The runtime capabilities are module `core` (KR-87): a program names each one it uses in its import list,
+// like any other module's symbol. The module is embedded in the compiler, so this resolves in a `--no-std`
+// install too. `Args` travels with `args()`, the function that returns it.
+
+import { core::println, core::eprint, core::args, core::Args, core::env, core::envOr };
+
+fn int32 main() {
+    println(s: "core");                                  // stdout
+    eprint(s: "");                                       // stderr, empty: a harmless no-op write
+    Args a = args();
+    int32 r = 40 + a.count();                            // the harness passes no arguments -> 40
+    string fallback = envOr(name: "KAMA_CORE_IMPORT_UNSET", dflt: "1");
+    if (fallback == "1") { r = r + 1; }                  // 41
+    bool unset = match (env(name: "KAMA_CORE_IMPORT_UNSET")) { case Some(value: v): false; case None: true; };
+    if (unset) { r = r + 1; }                            // 42
+    return r;
+}

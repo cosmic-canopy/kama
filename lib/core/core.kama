@@ -1,0 +1,131 @@
+export { Args, args, programInvocation, programName, programPath, env, envOr, PanicHandler, setPanicHandler, print, eprint, println, eprintln };
+
+// Module `core` — the runtime capabilities: console output, the command line, the environment, and the
+// fatal-handler hook. A program names each one it uses in its import list (`import { core::println };`),
+// like any other module's symbol; nothing here is in scope without that import (KR-87, SPEC § Modules).
+//
+// What sets it apart from `std` is only where it ships: it binds runtime globals the C runtime sets up
+// before `main` (argc/argv, the panic slot, the output fds), so it is EMBEDDED in the compiler like the
+// prelude and survives `--no-std` (Makefile PRELUDE_MODULES). The language's own types and contracts —
+// `Optional`, `Result`, `Iterator`, `Formattable`, … — are not here: the syntax lowers into them, so they
+// stay in every scope as reserved names (prelude/global.kama).
+
+// ── Command-line arguments + environment (prelude floor) ──────────────────────────────────────────────
+// argv/env access lives in the FLOOR (survives --no-std), so it can't hand back a std::collections type
+// (DynamicArray/View aren't collected this early). `Args` is the single handle: a cursor that `foreach`
+// iterates (Iterator<string>) AND supports random access via count()/get(at:). Each yielded/returned
+// string is a fresh OWNED copy (like Split), so a caller may `give` it onward. The program name (argv[0])
+// is NOT part of args() — it's programInvocation()/programName()/programPath(); indices are 0-based over user args only. The extern fns bind
+// the kama_runtime.h helpers, exactly like kama_string_from_raw above.
+extern fn int32  kama_args_count();
+extern fn string kama_args_at(int32 i);
+extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
+extern fn bool   kama_program_name(UnsafePtr<string> dst);
+extern fn bool   kama_program_path(UnsafePtr<string> dst);
+extern fn bool   kama_env_lookup(UnsafeConstPtr<cchar> name, UnsafePtr<string> dst);
+type value Args implements Iterator<string> {
+    int32 pos;
+    public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
+    // foreach protocol: yield each user arg once (a fresh owned string), then None.
+    public unsafe fn Optional<string> next() {
+        if (this.pos >= kama_args_count()) { return Optional::None; }
+        string s = kama_args_at(i: this.pos);
+        this.pos = this.pos + 1;
+        return Optional::Some(value: give s);
+    }
+    // Random access (an owned collection isn't available in the floor).
+    public unsafe fn int32 count() { return kama_args_count(); }
+    public unsafe fn Optional<string> get(int32 at) {
+        if (at < 0 || at >= kama_args_count()) { return Optional::None; }
+        return Optional::Some(value: kama_args_at(i: at));
+    }
+}
+// The program's command-line arguments, excluding the program name.
+// `foreach (string a in args())` or `args().get(at: 0)`.
+fn Args args() { return Args.make(); }
+// The raw invocation — argv[0] VERBATIM, exactly how the program was launched (`./app`, `/usr/bin/app`, or a
+// bare `app` when found via PATH), or None if unavailable (bare-metal firmware). The unmodified string, for
+// fidelity/logging or code ported from Go/Rust; use programName() for a display name, programPath() for the
+// real binary location.
+unsafe fn Optional<string> programInvocation() {
+    string val = "";
+    bool found = false;
+    found = kama_program_invocation(dst: addr(of: val));
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The program name — the basename of argv[0] (the name the program was invoked as: `/usr/bin/app` -> `app`,
+// `.\app.exe` -> `app.exe`). This is what usage/error messages print and what a busybox-style multi-call
+// binary dispatches on. `None` only where there is no argv[0] (bare-metal firmware). Spoofable (it is
+// whatever the caller put in argv[0]) — for the reliable binary location use programPath().
+unsafe fn Optional<string> programName() {
+    string val = "";
+    bool found = false;
+    found = kama_program_name(dst: addr(of: val));
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The OS-resolved absolute path to the running executable — reliable for locating sibling files or
+// re-exec'ing (unlike argv[0], it is queried from the OS, not the caller). `None` where there is no such
+// notion or no portable query: wasm (a JS/browser host), bare-metal firmware, or an unsupported platform.
+unsafe fn Optional<string> programPath() {
+    string val = "";
+    bool found = false;
+    found = kama_program_path(dst: addr(of: val));
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The value of environment variable `name`, or None if unset. `envOr` is sugar for the fallback case.
+unsafe fn Optional<string> env(string name) {
+    if (name.length() == 0) { return Optional::None; }   // guard: cstr() of an empty/borrowed string may be NULL
+    string val = "";
+    bool found = false;
+    found = kama_env_lookup(name: name.cstr(), dst: addr(of: val));
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// Calls the runtime seam directly (rather than moving a string out of env()'s Optional, which the
+// ownership model disallows — a payload can be read/`copy`d but not `give`n out of an enum); `give val`
+// moves the fresh LOCAL out, no copy on the hit path.
+unsafe fn string envOr(string name, string dflt) {
+    if (name.length() == 0) { return give dflt; }
+    string val = "";
+    bool found = false;
+    found = kama_env_lookup(name: name.cstr(), dst: addr(of: val));
+    if (found) { return give val; }
+    return give dflt;
+}
+
+// ── Fatal-handler hook (diagnostics floor) ──────────────────────────────────────────────────────────────
+// Install a custom handler for a fatal `panic`/`assert`/bounds trap. The default runtime behavior writes the
+// message to stderr and `abort()`s — useless/hostile to an end user with no terminal (a shipped game/GUI), so
+// a handler can exhibit gracefully instead (show a dialog, flush a save, route to a telemetry sink). CONTRACT:
+// register ONCE at startup before spawning isolates (the slot is then read-only = race-free); the handler runs
+// for CLEANUP/REPORTING only — the runtime ALWAYS terminates after it (it is NOT a resume point; recovery is
+// `Result`, or a declared `@onPanic` region, which recovers BEFORE the hook and never reaches it), and a
+// re-entrant panic while handling one hard-aborts (no infinite recursion). On
+// `--target embedded` there is no runtime setter — provide a strong `kama_panic_handler` symbol at link time
+// instead (this call is a no-op there).
+// `@foreignEntry`: the handler runs on whichever thread panicked, which is not necessarily the isolate
+// that registered it — a bounds miss in library code on any isolate, or on a thread a C library created,
+// reaches this slot. So a module `static` the handler reads is a different object there.
+@foreignEntry fnptr void PanicHandler();
+extern fn void kama_set_panic_handler(PanicHandler h);
+unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
+
+// ── Console output (diagnostics floor) ──────────────────────────────────────────────────────────────────
+// The floor print family: text to stdout (`print`/`println`, the program's data/results) or stderr
+// (`eprint`/`eprintln`, prompts/progress/diagnostics — `e` for "to stderr", the Rust convention). String-only
+// — formatting rides interpolation (`println("x = ${x}")`). Unbuffered line writes (v1). On `--target
+// embedded` there is no fd, so both streams route to the weak `kama_log_sink` (default no-op; a firmware
+// author overrides it to pipe out a UART/RTT). Survive `--no-std`. `cstr()` of an empty string may be NULL,
+// but the length is 0 then, so the write is a harmless no-op.
+// Each reads its own `s` by borrow (`cstr()`/`length()`) — it never re-passes the string by value, so there
+// is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
+// string is passed with `copy`/`give` like anywhere else in the value model.
+extern fn void kama_print_write(int32 fd, UnsafeConstPtr<cchar> bytes, usize len);
+extern fn void kama_print_nl(int32 fd);
+unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
+unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
+unsafe fn void println(string s)  { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); }
+unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); }

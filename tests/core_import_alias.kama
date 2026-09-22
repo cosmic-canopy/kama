@@ -1,0 +1,19 @@
+// A file may declare a name module `core` also declares: nothing from `core` is in scope until it is
+// imported (KR-87), so the file's own `envOr` is the only one its bare spelling can mean. To use both, the
+// import renames `core`'s — `as` is how kama resolves every clash between two names, with no qualifier
+// and no precedence rule to learn.
+
+import { core::envOr as coreEnvOr };
+
+fn string envOr(string name, string dflt) { return "mine"; }
+
+fn int32 pick(int32 a, int32 b) { return a + b; }
+
+fn int32 main() {
+    string mine = envOr(name: "KAMA_NOT_SET", dflt: "1");            // this file's own
+    string fromCore = coreEnvOr(name: "KAMA_NOT_SET", dflt: "7");    // core's, under its import name
+    int32 r = pick(a: 20, b: 15);                                    // 35
+    if (mine == "mine") { r = r + 4; }                               // 39
+    if (fromCore == "7") { r = r + 3; }                              // 42
+    return r;
+}
