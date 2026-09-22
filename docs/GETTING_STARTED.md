@@ -70,7 +70,8 @@ fn int32 main()
 }
 ```
 
-`${…}` splices a value into a string at compile time; `println` needs no import. The
+`${…}` splices a value into the string as the program runs. The compiler turns the template into direct
+formatting calls, so no format string is parsed at runtime. `println` needs no import. The
 [tour](tour.md) covers the rest of the language in one read.
 
 ## 3. Build & run

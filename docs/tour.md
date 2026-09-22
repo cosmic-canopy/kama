@@ -27,7 +27,8 @@ Declarations read *type first, then name* — `fn int32 main()` is a function re
 `uint64`, `float32`, `float64`, and `isize` for sizes and indices — and `int` on its own is a reserved word, not an alias, so a width is
 never implied. The rest are `bool`, `char` and `string`. Comments are `//` and `/* */`.
 
-`${name}` splices a value into the text; it is lowered at compile time, and [Collections and
+`${name}` splices the value of `name` into the text when the line runs. The compiler turns the template
+into direct formatting calls, so nothing parses a format string at runtime. [Collections and
 strings](#collections-and-strings) has the rest of it.
 
 `println` needs no import. It belongs to the [prelude floor](FLOOR.md) — the surface that is
