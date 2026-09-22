@@ -2,8 +2,7 @@
 // hand-rolled splitter gets wrong: CRLF, an empty line, a final line with no terminator, and a lone `\r`
 // that is NOT a terminator, plus the `foreach` form and the standard-stream handles. Eight flags, 255.
 import { std::io::BufReader, std::io::SliceReader, std::io::Lines, std::io::IoError, std::io::writeAll,
-         std::io::stdout, std::io::stderr, std::io::StdOut, std::io::StdErr,
-         std::collections::DynamicArray, std::collections::View };
+         std::io::stdout, std::io::stderr, std::io::StdOut, std::io::StdErr };
 
 // Read every line from `text` and report them joined by '|', or "ERR".
 fn string linesOf(string text) {
@@ -28,13 +27,6 @@ fn string linesOf(string text) {
         };
     }
     return give acc;
-}
-
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> d = DynamicArray.empty();
-    isize i = 0;
-    while (i < s.length()) { d.add(item: s[i]); i = i + 1; }
-    return give d;
 }
 
 fn int32 main() {
@@ -62,16 +54,16 @@ fn int32 main() {
     // The handles: `stdout()` is a `Writer` that composes with the free helpers, and `stderr()` is a
     // separate one. Both write for real, which the harness ignores (it compares the exit code).
     StdOut sink = stdout();
-    DynamicArray<uint8> msg = bytesOf(s: "io_lines ok\n");
-    bool wroteOut = match (writeAll(w: sink, bytes: msg.view())) {
+    string msg = "io_lines ok\n";
+    bool wroteOut = match (writeAll(w: sink, bytes: msg.bytes())) {
         case Ok(value: u): true;
         case Err(error: e): false;
     };
     // (Bound to a local, not passed inline: a call result has no address for a by-value contract
     // parameter to borrow — SPEC's *Known limitations*.)
     StdErr diag = stderr();
-    DynamicArray<uint8> note = bytesOf(s: "");
-    bool wroteErr = match (writeAll(w: diag, bytes: note.view())) {
+    string note = "";
+    bool wroteErr = match (writeAll(w: diag, bytes: note.bytes())) {
         case Ok(value: u): true;
         case Err(error: e): false;
     };

@@ -2,17 +2,10 @@
 // and the RFC 6455 handshake example — the reason SHA-1 is in the stdlib at all. Bits sum to 63.
 import { std::digest::sha1::Sha1, std::digest::sha1::sha1, std::digest::sha1::DIGESTBYTES,
          std::encoding::hex::encode as hexEncode, std::encoding::base64::encode as b64Encode,
-         std::collections::DynamicArray, std::collections::View };
-
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> b = DynamicArray::<uint8>.withCapacity(capacity: s.length());
-    foreach (uint8 c in s) { b.add(item: c); }
-    return b;
-}
+         std::collections::DynamicArray };
 
 fn bool hashIs(const ref string text, const ref string want) {
-    DynamicArray<uint8> b = bytesOf(s: text);
-    InlineArray<uint8>#(20) d = sha1(bytes: b.view());
+    InlineArray<uint8>#(20) d = sha1(bytes: text.bytes());
     string got = hexEncode(bytes: d.view());
     return got.equals(other: want);
 }
@@ -35,10 +28,12 @@ fn int32 main() {
     string bigHex = hexEncode(bytes: big.view());
     if (bigHex.equals(other: "34aa973cd4c4daa4f61eeb2bdbad27316534016f"))                            { r = r + 16; }
     // Streaming in two parts equals one-shot, split at 3 bytes into a 56-byte message.
-    DynamicArray<uint8> whole = bytesOf(s: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+    string whole = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
     Sha1 s = Sha1.make();
-    s.update(bytes: whole.slice(from: 0, count: 3));
-    s.update(bytes: whole.slice(from: 3, count: 53));
+    borrow whole.bytes() as wv {   // two updates off ONE window — a sub-view of the string's own bytes
+        s.update(bytes: wv.slice(from: 0, count: 3));
+        s.update(bytes: wv.slice(from: 3, count: 53));
+    }
     InlineArray<uint8>#(20) two = s.finish();
     string twoHex = hexEncode(bytes: two.view());
     if (twoHex.equals(other: "84983e441c3bd26ebaae4aa1f95129e5e54670f1"))                            { r = r + 32; }

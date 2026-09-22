@@ -74,7 +74,13 @@ encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by typ
 never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
-  iterates bytes. `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced. <!-- xfail: foreach_char_over_string -->
+  iterates bytes; `s.bytes()` hands out a **`ConstView<uint8>`** over the string's own storage — borrowed,
+  **no copy** — which is what the byte-taking stdlib takes (`sha256(bytes:)`, `base64::encode(bytes:)`,
+  `File.write(bytes:)`). It is a second-class borrow like any other view: fine as an argument, and a
+  *local* needs the window `borrow s.bytes() as v { … }`, which `BytesViewable<ConstView<uint8>>` grants.
+  There is no writable twin — `string` is immutable. Needs `std::collections` in the program (the view is
+  a stdlib type); without it `.bytes()` is an ordinary "no such method". <!-- test: string_bytes -->
+  `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced. <!-- xfail: foreach_char_over_string -->
   That is one case of a general rule: a `foreach` binding must have the type the collection actually
   yields, and a mismatch is rejected rather than left to C's implicit conversions <!-- xfail: foreach_elem_type_mismatch -->
   (`tests/xfail/foreach_char_over_string`, `tests/xfail/foreach_elem_type_mismatch`).

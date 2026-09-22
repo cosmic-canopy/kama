@@ -86,6 +86,7 @@ type value string {
     public fn UnsafeConstPtr<cchar> cstr();                     // FFI: the NUL-terminated C pointer (`const char*`), read-only
     public fn uint8 get(isize index);                           // `s[i]` — the i-th BYTE
     public fn Chars chars();                                    // codepoint iterator (see the prelude)
+    public fn ConstView<uint8> bytes();                         // the UTF-8 bytes, BORROWED — needs std::collections
 
     public fn string substring(isize start, isize end);         // traps on a non-boundary offset
     public fn isize floorCharBoundary(isize at);                // snap DOWN to a safe offset, total, O(1)

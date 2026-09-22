@@ -93,7 +93,18 @@ say_ok "...and the identifier-spelled built-ins are still special-cased in kama.
 # by registerFixed and registerBindable, whose `get`/`set` belong to InlineArray and a bound fn pointer,
 # not to `string`. An unscoped grep would demand `set` be documented as a string method.
 awk "/string\`'s intrinsic method set/,/_classes\[cName\] = ci;/" "$ROOT/src/kama.cemit.cpp" \
-    | grep -oE 'addMethod\("[a-zA-Z]+"' | sed 's/addMethod("//; s/"//' | sort -u > "$tmp/reg_methods"
+    | grep -oE 'addMethod\("[a-zA-Z]+"' | sed 's/addMethod("//; s/"//' > "$tmp/reg_methods"
+
+# ...plus the ones registered in the LATE pass. A string intrinsic whose return type is a stdlib type
+# cannot be registered in registerCollection at all: whether `std::collections::ConstView` exists depends
+# on the user's imports, and collection runs while units are still being read. So `bytes()` is minted in
+# registerIntrinsicViews, which runs once everything is collected, and writes `sci.methods["…"]` directly
+# rather than through the local `addMethod` lambda. Scanning only the first site made this check report
+# "documented but NOT registered: bytes" — the guard's own blind spot, not a missing registration.
+awk '/^void CEmitter::registerIntrinsicViews/,/^}/' "$ROOT/src/kama.cemit.cpp" \
+    | grep -oE 'sci\.methods\["[a-zA-Z]+"\]' | sed 's/sci\.methods\["//; s/"\]//' >> "$tmp/reg_methods"
+
+sort -u -o "$tmp/reg_methods" "$tmp/reg_methods"
 
 sed -n '/^type value string {/,/^}/p' "$DOC" \
     | grep -oE 'fn +[A-Za-z0-9_<>]+ +[a-zA-Z]+\(' | sed 's/.* //; s/(//' | sort -u > "$tmp/doc_methods"

@@ -11344,7 +11344,7 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
 
 // Split a mangled template key (`std__collections__View`) back into a qualified type node — value `View`,
 // qualifier ["std", "collections"]. Named separately because the split is the non-obvious half: the key is
-// the only handle registerFixedViews has on the stdlib's View, and the two consumers want opposite halves
+// the only handle registerIntrinsicViews has on the stdlib's View, and the two consumers want opposite halves
 // of it (cType wants the mangle, inference wants the bare name).
 SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
 {
@@ -11362,8 +11362,10 @@ SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
     return n;
 }
 
-// Give every registered `InlineArray<T,N>` its `view()` and the `Viewable<View<T>>` grant that makes the
-// mint legitimate. A PASS rather than a line in registerFixed, and the reason is ordering: registerFixed
+// Give the INTRINSIC types their stdlib-view accessors: every registered `InlineArray<T,N>` its `view()`
+// and the `Viewable<View<T>>` grant that makes the mint legitimate, and `string` its `bytes()`.
+//
+// A PASS rather than a line in registerFixed/registerCollection, and the reason is ordering: registerFixed
 // runs while units are still being collected, so whether `std::collections::View` existed yet depended on
 // the user's unrelated imports — `FixedArray` drags View in through its own module, a prelude builtin
 // drags in nothing. `a.view()` therefore resolved or not according to which other containers the file
@@ -11373,11 +11375,57 @@ SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
 // If the program has no `View` at all, `view()` is simply not registered and `a.view()` is an ordinary
 // "no such method" — deterministic, and the honest answer: `View<T>` is a stdlib type, so a program that
 // never imports it does not have one. `dataPtr()` is unaffected and always present.
-void CEmitter::registerFixedViews()
+void CEmitter::registerIntrinsicViews()
 {
     const std::string viewTmpl  = viewTemplateKey();
     const std::string constTmpl = constViewTemplateKey();
     if (viewTmpl.empty() || constTmpl.empty()) return;   // one module declares both; neither, or both
+
+    // `string.bytes()` -> `ConstView<uint8>`: the string's own UTF-8 bytes, borrowed, no copy (KR-82).
+    //
+    // It is the piece that makes the byte-taking half of the stdlib reachable from text at all.
+    // `base64::encode`, `hex::encode`, `sha256` and `File.write` all take a `ConstView<uint8>`, and a
+    // `string` could not produce one — so six fixtures each open-coded the same loop, allocating a
+    // DynamicArray and pushing one byte at a time just to hash a literal.
+    //
+    // The grant is `BytesViewable<ConstView<uint8>>`, NOT `Viewable<…>`, and the difference is the member
+    // NAME: `grantedMint` reads a grant by member name, so a `Viewable<V>` grant would name `view()` and
+    // leave `borrow s.bytes() as v` refused ("has a `.bytes()` but never granted it as a mint") — a dead
+    // end, since a user cannot implement a contract on a builtin. Naming the method `view()` instead was
+    // the other way out and is the worse one: "a view of a string" says neither bytes nor codepoints where
+    // `.bytes()` and `.chars()` both exist.
+    //
+    // The mint itself is legitimate for the reason emitFixedView gives: `ConstView.over` is private by a
+    // SOURCE-level rule, and an intrinsic has no source (see emitStringBytes, where the literal IS the
+    // mint). There is no writable twin: `string` is immutable, so a `View<uint8>` over its bytes would be
+    // a hole in that.
+    auto sc = _classes.find("kama_string");
+    if (sc != _classes.end() && sc->second.collKind == CollKind::String && !sc->second.methods.count("bytes")) {
+        auto u8 = synthId("uint8", IDENTIFIER_UINT8_VAL);
+        auto cvArgs = std::make_shared<IdentifierList>();
+        cvArgs->push_back(u8);
+        registerGenericTypeInst(constTmpl, cvArgs);
+        auto ret = viewQualifiedNode(constTmpl);   // QUALIFIED, so inference can match a `ConstView<T>` param
+        ret->genericArg  = u8;
+        ret->genericArgs = std::make_shared<IdentifierList>();
+        ret->genericArgs->push_back(u8);
+        ClassInfo& sci = _classes["kama_string"];   // re-look-up: the instantiation above may have grown _classes
+        MethodInfo mi; mi.cName = "kama_string__bytes";
+        mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = true;
+        mi.visibility = Visibility::Public;         // an intrinsic IS that type's public API
+        sci.methods["bytes"] = mi;
+
+        // The grant, the same two-step the InlineArray mints use below: a generic contract's instance must
+        // be registered before it can be named, and the RECORDED conformance must use the prelude's own
+        // key spelling (KR-67 stage 4a) or `grantedMint` will not find it.
+        const std::string bk = preludeKey("BytesViewable");
+        if (_genericContractParams.count(bk)) {
+            auto bvArgs = std::make_shared<IdentifierList>();
+            bvArgs->push_back(ret);
+            registerGenericContractInst(bk, bvArgs);
+            sci.interfaces.push_back(bk + "_" + mangleElem(ret));
+        }
+    }
     // Collect first: registerGenericTypeInst can register further collections, and mutating
     // `_collections` while iterating it would invalidate the iterator.
     std::vector<std::string> fixed;
@@ -11814,13 +11862,13 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // a `@noheap` region is allowed to use. `Viewable<View<T>>` goes on `interfaces` below because
     // `borrow`/`parallel_for` read that grant to prove the host is the thing being viewed, and here it
     // states a fact: an InlineArray is `struct { T v[N]; }`, so it genuinely owns the bytes handed out.
-    // `view()` is NOT registered here — see registerFixedViews, which runs once every unit is collected.
+    // `view()` is NOT registered here — see registerIntrinsicViews, which runs once every unit is collected.
     // Doing it from this function made the method's existence depend on whether `std::collections::View`
     // happened to be collected before the first `InlineArray<T,N>` in the program, which is an ordering
     // race: `FixedArray` pulls View in transitively through its own module, a prelude builtin pulls in
     // nothing, so `a.view()` resolved or not according to the user's unrelated imports.
     _classes[cName] = ci;
-    // For registerFixedViews, below — resolved HERE, under the declaring file's context. That pass runs once
+    // For registerIntrinsicViews, below — resolved HERE, under the declaring file's context. That pass runs once
     // every unit is collected, under whatever context the LAST unit left (a stdlib module), where a user
     // file's private `Point` resolves to nothing: the view it minted was over a bare, unregistered `Point`,
     // so `a.viewMut()` did not return a view at all, and an element that is itself a generic instance
@@ -13524,7 +13572,7 @@ SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
     // the node goes back to a CALLER that may never have imported that name: `id(x: xs.view().length())`
     // in a file importing only `View` resolved `ConstView` to nothing and could not infer `T`. Re-spell
     // it absolutely under the host's own context (the same independence from the calling file's imports
-    // registerFixedViews buys with viewQualifiedNode), so the next lookup needs no import.
+    // registerIntrinsicViews buys with viewQualifiedNode), so the next lookup needs no import.
     if (out && out->value) {
         NsCtx savedCtx = _nsCtx;
         auto cx = _genericTypeCtx.find(base);
@@ -15055,6 +15103,30 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
           << "}\n";
 }
 
+// `string.bytes()` -> `ConstView<uint8>`: a borrowed window over the string's own UTF-8 bytes, no copy.
+// Sibling of emitStringFind and emitFixedView, and the same shape — a static inline building the generic
+// instance's struct literal directly, in the collection FUNCS phase where that struct is complete.
+//
+// It mints the view WITHOUT `ConstView.over`, for the reason emitFixedView gives: that ctor is private by
+// a SOURCE-level rule about which kama type may call it, and an intrinsic has no source. The two-field
+// literal here IS the mint.
+//
+// `kama_data` is `char*` and the view's element is `uint8_t`, so the cast is explicit — it is a
+// reinterpretation of the same bytes (C guarantees `char` and `uint8_t` alias), not a conversion. The
+// view is read-only, which is the honest half: `string` is immutable, so a WRITABLE window over its
+// bytes would be a hole in that, and `View<uint8>` is deliberately not offered.
+void CEmitter::emitStringBytes(const CollectionInfo& info)
+{
+    auto mi = _classes[info.cName].methods.find("bytes");
+    if (mi == _classes[info.cName].methods.end()) return;   // no stdlib ConstView -> unregistered
+    const std::string vt = cType(mi->second.returnType);
+    if (!isViewCType(vt)) return;                           // registration failed; nothing to emit
+    *_out << "static inline " << vt << " " << info.cName << "__bytes(" << info.cName << "* self) {\n"
+          << "    return (" << vt << "){ .k_data = (const uint8_t*)self->kama_data,"
+          << " .k_len = (ptrdiff_t)self->kama_len };\n"
+          << "}\n";
+}
+
 // `InlineArray<T,N>.view()` -> `View<T>`, the wrapper KAMA_FIXED_FUNCS cannot supply: a runtime macro has
 // no way to name the program-specific `View_<T>` struct. Sibling of emitStringFind, and the same shape —
 // a static inline that builds the generic instance's struct literal directly.
@@ -15065,7 +15137,7 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
 // — so the two-field literal here IS the grant, discharged in C.
 void CEmitter::emitFixedView(const CollectionInfo& info)
 {
-    // Both halves (registerFixedViews): `__view` builds the `ConstView<T>` literal — `self->v` decays to
+    // Both halves (registerIntrinsicViews): `__view` builds the `ConstView<T>` literal — `self->v` decays to
     // `T*` and C narrows it to the struct's `T const*` field — and `__viewMut` the `View<T>` one.
     for (const char* member : { "view", "viewMut" }) {
         auto mi = _classes[info.cName].methods.find(member);
@@ -15319,9 +15391,10 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                      << ", " << info.cName << ")\n";
         }
         else if (info.kind == CollKind::String) {
-            // kama_string itself is predefined in the runtime header; only the `.find()` Optional wrapper
-            // (which needs the program-specific Optional_usize struct) is emitted here, in the FUNCS phase.
-            if (!typesOnly) emitStringFind(info);
+            // kama_string itself is predefined in the runtime header; only the wrappers that need a
+            // program-specific struct are emitted here, in the FUNCS phase: `.find()`'s Optional_usize
+            // and `.bytes()`'s ConstView_uint8.
+            if (!typesOnly) { emitStringFind(info); emitStringBytes(info); }
         }
     }
     if (!_collections.empty()) *_out << "\n";
@@ -34179,7 +34252,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // `View<T>.swap` calls the generic `relocate`, and a View instance minted after registerInstGenerics
     // never gets the per-instantiation walk that resolves it (the symptom is an unresolved `relocate`
     // reported inside the stdlib's own view.kama).
-    registerFixedViews();
+    registerIntrinsicViews();
 
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
@@ -34189,7 +34262,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
-    registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
+    registerIntrinsicViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
     refreshStaleParamTypes();  // a const-generic param mangled before its comptime constant was known

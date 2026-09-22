@@ -1411,6 +1411,51 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
     buf[self->kama_len] = '\0';
     kama_string r; r.kama_data = buf; r.kama_len = self->kama_len; r.kama_cap = self->kama_len + 1; return r;
 }
+// Is `base[start .. start+len)` well-formed UTF-8? Answers -1 for yes, or the byte OFFSET (relative to
+// `start`) where the first ill-formed sequence BEGINS — the shape of Rust's `Utf8Error::valid_up_to`,
+// which is what a caller needs to report where a file went wrong rather than just that it did.
+//
+// Why this exists. `kama_string_from_raw` below copies bytes and asks nothing, and until now nothing in
+// the language asked either: `kama_utf8_is_boundary` only tests whether ONE offset names a continuation
+// byte, and `.chars()` states outright that it ASSUMES well-formed input. The substring comment above
+// argues the invariant is total because "every other string operation preserves it by construction" —
+// true of the operations, but `std::io::readAll` hands back a `string` built from arbitrary reader bytes,
+// so a file of `\xff\xfe\x80hello` became an 8-byte `string` whose `.chars()` yielded 5 bogus codepoints
+// (measured). That is the hole this closes; the safe surface now has no way in.
+//
+// Full validation, not a byte scan: a continuation byte in the lead position, a truncated tail, an
+// OVERLONG encoding (the classic `\xC0\x80` NUL smuggle), a UTF-16 surrogate (U+D800..DFFF, which is not
+// a scalar value), and anything above U+10FFFF are each rejected. Those are exactly the five ways RFC 3629
+// narrowed UTF-8, and skipping any of them is how a "validator" becomes a security bug.
+//
+// `ptrdiff_t` in and out, like every other offset into a string — kama's size type is `isize`, so taking
+// them narrower would put a cast on every caller.
+static inline ptrdiff_t kama_utf8_bad_offset(const uint8_t* base, ptrdiff_t start, ptrdiff_t len) {
+    if (start < 0 || len < 0) return 0;                 // defensive: a bad range is not valid text
+    const uint8_t* p = base + start;
+    size_t n = (size_t)len, i = 0;
+    while (i < n) {
+        uint8_t c = p[i];
+        size_t need; uint32_t cp, lo;
+        if (c < 0x80u)               { ++i; continue; }                             // ASCII, the fast path
+        else if ((c & 0xE0u) == 0xC0u) { need = 1; cp = c & 0x1Fu; lo = 0x80u;    }
+        else if ((c & 0xF0u) == 0xE0u) { need = 2; cp = c & 0x0Fu; lo = 0x800u;   }
+        else if ((c & 0xF8u) == 0xF0u) { need = 3; cp = c & 0x07u; lo = 0x10000u; }
+        else return (ptrdiff_t)i;                        // a continuation byte, or 0xF8..0xFF: never a lead
+        if (need >= n - i) return (ptrdiff_t)i;          // truncated: the tail runs past the end
+        for (size_t k = 1; k <= need; ++k) {
+            uint8_t cc = p[i + k];
+            if ((cc & 0xC0u) != 0x80u) return (ptrdiff_t)i;                         // not a continuation
+            cp = (cp << 6) | (uint32_t)(cc & 0x3Fu);
+        }
+        if (cp < lo) return (ptrdiff_t)i;                                           // overlong
+        if (cp > 0x10FFFFu) return (ptrdiff_t)i;                                    // above the last scalar
+        if (cp >= 0xD800u && cp <= 0xDFFFu) return (ptrdiff_t)i;                    // a surrogate half
+        i += need + 1;
+    }
+    return -1;
+}
+
 // Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
 // iterator hold a borrowed `UnsafePtr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
 // pieces, without exposing raw allocation to kama source. Declared in the prelude as

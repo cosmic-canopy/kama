@@ -4,12 +4,6 @@ import { std::encoding::base64::encode, std::encoding::base64::decode,
          std::encoding::base64::encodeUrl, std::encoding::base64::decodeUrl,
          std::encoding::base64::DecodeError, std::collections::DynamicArray };
 
-fn DynamicArray<uint8> bytesOf(const ref string s) {
-    DynamicArray<uint8> b = DynamicArray::<uint8>.empty();
-    foreach (uint8 c in s) { b.add(item: c); }
-    return b;
-}
-
 fn bool sameBytes(ref DynamicArray<uint8> a, const ref string s) {
     if (a.length() != s.length()) { return false; }
     isize i = 0;
@@ -17,19 +11,8 @@ fn bool sameBytes(ref DynamicArray<uint8> a, const ref string s) {
     return true;
 }
 
-fn string enc(const ref string s) {
-    DynamicArray<uint8> b = bytesOf(s: s);
-    string t = "";
-    borrow b.view() as v { t = encode(bytes: v); }
-    return t;
-}
-
-fn string encUrl(const ref string s) {
-    DynamicArray<uint8> b = bytesOf(s: s);
-    string t = "";
-    borrow b.view() as v { t = encodeUrl(bytes: v); }
-    return t;
-}
+fn string enc(const ref string s)    { return encode(bytes: s.bytes()); }
+fn string encUrl(const ref string s) { return encodeUrl(bytes: s.bytes()); }
 
 // `decode(text)` equals the bytes of `want`?
 fn bool decodesTo(const ref string text, const ref string want) {

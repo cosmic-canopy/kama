@@ -561,7 +561,7 @@ struct CollectionInfo {
     bool         elemCopyable = false;   // element is a `Copyable` resource -> deep-copy each
     bool         elemIsInterface = false;   // owned-contract smart ptr (fat {obj, vtbl} element)
     int64_t      constValue = 0;         // Fixed<T,N> only: the compile-time size N (the array length)
-    // Fixed<T,N> only: the element TYPE NODE, kept because registerFixedViews needs to build `View<T>`
+    // Fixed<T,N> only: the element TYPE NODE, kept because registerIntrinsicViews needs to build `View<T>`
     // later — after every unit is collected — and the C spellings above cannot be turned back into one.
     SharedIdentifier elem;
     // The paired smart-ptr INSTANCE name across the Shared<->Weak pair: for a Weak, the Shared it upgrades
@@ -2247,6 +2247,7 @@ private:
     void registerOptionalOfName(const std::string& sharedName);    // Optional<sharedName> — a library `Rc_<elem>` partner
     void emitWeakTryUpgrade(const CollectionInfo& info);           // the tryUpgrade wrapper (builds the Optional)
     void emitStringFind(const CollectionInfo& info);
+    void emitStringBytes(const CollectionInfo& info);              // string.bytes() -> ConstView<uint8>
     void emitFixedView(const CollectionInfo& info);                // InlineArray<T,N>.view() -> View<T>               // `.find()` wrapper: kama_string__find_raw -> Optional<usize>
     void emitSharedToWeakDowngrade(const CollectionInfo& info);    // a library `Rc<Shape>`'s downgrade() (Shared IFACE -> Weak partner)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig>
@@ -2305,7 +2306,7 @@ private:
     // (zero type args), like an all-defaulted `BitSet<A = GlobalAllocator>` written just `BitSet`.
     // Its defaults then fill in at genericTypeMangle / registerGenericTypeInst (empty args).
     bool allTypeParamsDefaulted(const std::string& tmpl) const;
-    void registerFixedViews();                  // late pass: InlineArray<T,N> gains view() + the Viewable grant
+    void registerIntrinsicViews();                  // late pass: InlineArray<T,N> gains view() + the Viewable grant; string gains bytes()
     SharedIdentifier viewQualifiedNode(const std::string& tmplKey);   // "a__b__View" -> `a::b::View` node
     SharedIdentifier findMethodReturn(ClassInfo& ci, const std::string& member);   // one method's return type
     const std::string& viewTemplateKey();       // the stdlib `type view View<T>` template key (cached)

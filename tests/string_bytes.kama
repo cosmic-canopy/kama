@@ -1,0 +1,71 @@
+// `s.bytes()` — a `ConstView<uint8>` over the string's own UTF-8 bytes, borrowed, no copy (KR-82).
+//
+// Before it, a `string` could not produce a `ConstView<uint8>` at all, and that is what the byte-taking
+// half of the stdlib takes: `base64::encode`, `hex::encode`, `sha1`/`sha256`, `File.write`. So six
+// fixtures in this directory each open-coded the same `bytesOf` loop — allocate a `DynamicArray`, push one
+// byte at a time, hash a literal — and this commit deletes every one of them. The loop was not just
+// verbose: it allocated, and a view does not.
+//
+// The string keeps owning the bytes. The view is a second-class borrow (`type view`), so the escape rules
+// apply unchanged: it may be an argument, and a LOCAL needs the `borrow … as` window that
+// `BytesViewable<ConstView<uint8>>` grants. There is no writable twin — `string` is immutable.
+//
+// Exit 0, or the number of the first check that failed.
+import { std::collections::ConstView, std::collections::DynamicArray,
+         std::encoding::hex::encode as hexEncode,
+         std::encoding::base64::encode as b64Encode,
+         std::digest::sha256::sha256 };
+
+// A view PARAMETER is already lifetime-bounded, so it needs no window of its own.
+fn int32 sumOf(ConstView<uint8> bytes) {
+    int32 n = 0;
+    foreach (uint8 b in bytes) { n = n + cast<int32>(b); }
+    return n;
+}
+
+// The view BORROWS — it is a window on the string's own buffer, not a copy of it. A copy would compare
+// equal byte for byte, so the only honest check is the ADDRESS, against `cstr()`, which is that buffer
+// by definition. Reaching a raw pointer needs `unsafe`.
+unsafe fn bool sameStorage(const ref string s) {
+    borrow s.bytes() as pv { return cast<usize>(pv.dataPtr()) == cast<usize>(s.cstr()); }
+}
+
+fn int32 main() {
+    string s = "hello";
+
+    // 1-3: length, element, and the whole window in one `borrow`
+    borrow s.bytes() as v {
+        if (v.length() != 5) { return 1; }
+        if (v[0] != 104ui8 || v[4] != 111ui8) { return 2; }   // 'h' … 'o'
+        if (sumOf(bytes: v.slice(from: 1, count: 3)) != 317) { return 3; }   // 'e'+'l'+'l' = 101+108+108
+    }
+
+    // 4: an argument position needs no window
+    if (sumOf(bytes: s.bytes()) != 532) { return 4; }
+
+    // 5-7: the byte-taking stdlib, reachable from text at last
+    if (!hexEncode(bytes: s.bytes()).equals(other: "68656c6c6f")) { return 5; }
+    if (!b64Encode(bytes: s.bytes()).equals(other: "aGVsbG8=")) { return 6; }
+    InlineArray<uint8>#(32) d = sha256(bytes: s.bytes());
+    if (!hexEncode(bytes: d.view()).equals(
+            other: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")) { return 7; }
+
+    // 8: bytes are BYTES, not codepoints — "é" is one char and two bytes, the model `s[i]` already has
+    string acc = "é";
+    if (acc.bytes().length() != 2 || acc.length() != 2) { return 8; }
+    borrow acc.bytes() as av { if (av[0] != 195ui8 || av[1] != 169ui8) { return 9; } }
+
+    // 10: the empty string yields an empty view, not a dangling one
+    string e = "";
+    if (!e.bytes().isEmpty() || e.bytes().length() != 0) { return 10; }
+
+    // 11: the view reads the SAME storage — a copy would still compare equal, so compare the POINTER
+    if (!sameStorage(s: s)) { return 11; }
+
+    // 12: it composes with the owning half — the same bytes through a DynamicArray agree
+    DynamicArray<uint8> owned = DynamicArray::<uint8>.withCapacity(capacity: s.length());
+    foreach (uint8 b in s) { owned.add(item: b); }
+    if (!hexEncode(bytes: owned.view()).equals(other: hexEncode(bytes: s.bytes()))) { return 12; }
+
+    return 0;
+}
