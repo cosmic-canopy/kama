@@ -15,7 +15,7 @@ export { TcpListener, TcpStream };
 
 // POSIX/Winsock TCP bindings — see kama_os.h. Socket handles are `isize`: a Windows SOCKET is wider than
 // int, and INVALID_SOCKET reinterpreted as isize is -1, so a uniform `< 0 == error` convention holds on
-// both platforms. The sockaddr fill happens in C; kama passes the handle and an address as `addr.kama`'s
+// both platforms. The sockaddr fill happens in C; kama passes the handle and an address as `address.kama`'s
 // seam form (family 4 or 6, sixteen network-order bytes, port, scope id).
 extern "kama_os.h";
 extern fn int32 kama_net_init();
@@ -54,7 +54,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     public unsafe ctor Result<TcpStream, IoError> connect(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: false)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: a): TcpStream.connectTo(addr: a);
+            case Ok(value: a): TcpStream.connectTo(address: a);
         };
     }
 
@@ -62,14 +62,14 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     // sender a datagram came from. The pair is deliberate: `connect` takes numeric text and performs no
     // lookup, so a call that reads like a syscall cannot silently make a DNS round trip, and a name is
     // resolved by a function that says so and hands back every address it found.
-    public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr addr) {
+    public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr address) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        int32 family = addr.ip.family();
-        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        int32 family = address.ip.family();
+        InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
+        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
@@ -95,7 +95,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
         IoError last = IoError::HostUnreachable;   // `resolve` never succeeds empty, so an attempt replaces it
         isize i = 0;
         while (i < addrs.length()) {
-            Result<TcpStream, IoError> attempt = TcpStream.connectTo(addr: addrs[i]);
+            Result<TcpStream, IoError> attempt = TcpStream.connectTo(address: addrs[i]);
             match (give attempt) {
                 case Ok(value: s): { return Result::Ok(value: give s); }
                 case Err(error: e): { last = e; }
@@ -149,16 +149,16 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     public unsafe ctor Result<TcpStream, IoError> connectNonBlocking(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: false)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: a): TcpStream.connectToNonBlocking(addr: a);
+            case Ok(value: a): TcpStream.connectToNonBlocking(address: a);
         };
     }
 
     // `connectNonBlocking` to an address a lookup or a datagram already produced (a scoped one included).
-    public unsafe ctor Result<TcpStream, IoError> connectToNonBlocking(const ref SocketAddr addr) {
+    public unsafe ctor Result<TcpStream, IoError> connectToNonBlocking(const ref SocketAddr address) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        int32 family = addr.ip.family();
-        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        int32 family = address.ip.family();
+        InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         if (kama_set_nonblocking(fd: fd, on: 1) != 0) {
@@ -166,7 +166,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
+        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             int32 e = kama_last_error();
             // EINPROGRESS (POSIX) / EAGAIN (Winsock WSAEWOULDBLOCK) = handshake in flight — NOT an error.
             if (e != kama_EINPROGRESS() && e != kama_EAGAIN()) {
@@ -209,21 +209,21 @@ type resource TcpListener {
     public unsafe ctor Result<TcpListener, IoError> bind(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: a): TcpListener.bindTo(addr: a);
+            case Ok(value: a): TcpListener.bindTo(address: a);
         };
     }
 
     // `bind` to an address value — the one spelling that reaches a link-local V6 address, whose interface is
     // its `scopeId` and has no place in host text.
-    public unsafe ctor Result<TcpListener, IoError> bindTo(const ref SocketAddr addr) {
+    public unsafe ctor Result<TcpListener, IoError> bindTo(const ref SocketAddr address) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        int32 family = addr.ip.family();
-        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        int32 family = address.ip.family();
+        InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
-        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
+        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);

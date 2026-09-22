@@ -370,6 +370,14 @@ struct kamayystype {
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
+/* The intrinsics the compiler lowers at the CALL SITE — `addr(of:)`, `drop(ptr:)`, `panic(msg:)`,
+   `assert(cond:, msg:)`, `debugAssert(cond:, msg:)`. Reserved words, like `sizeof`/`bitcast`: they were
+   floor NAMES, so a local or a parameter could take one and a `fn assert` could be declared beside the
+   intrinsic and silently never called. Each is legal only in call position (`intrinsic_callee`).
+   `debugAssert` carries its spelling as an alias for the same reason FILE_KW does: reservedWordNote
+   matches the token's name against the lexer table, and DEBUG_ASSERT folds to `debug_assert`. */
+%token <string> ADDR DROP PANIC ASSERT
+%token <string> DEBUG_ASSERT "debugAssert"
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN SLOT STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -429,6 +437,8 @@ struct kamayystype {
 /* non-terminals */
 %type <token> assignment_operator overloadable_operator handoff_default
 %type <strings> qualifier
+%type <string> intrinsic_name
+%type <identifier> intrinsic_callee
 %type <expression> expression expression_opt literal boolean_literal variable_initializer parallel_workers_opt
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
@@ -711,6 +721,13 @@ boolean_literal
 qualified_identifier
   : basic_identifier
   | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); TAKE_SEGS($$->qualifierPos, $1); }
+  ;
+intrinsic_name
+  : ADDR { $$ = $1; } | DROP { $$ = $1; } | PANIC { $$ = $1; } | ASSERT { $$ = $1; } | DEBUG_ASSERT { $$ = $1; }
+  ;
+intrinsic_callee
+  : intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC($$, @1); }
+  | qualifier intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
   ;
 qualifier
   : IDENTIFIER COLONCOLON { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
@@ -1360,6 +1377,7 @@ embedded_statement
      tmLanguage keyword list, and check-syntax-drift); the emitter checks the name. */
 comptime_assert_statement
   : COMPTIME qualified_identifier_no_generic LPAREN argument_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<ComptimeAssertNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+  | COMPTIME intrinsic_callee LPAREN argument_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<ComptimeAssertNode>(SCANNER_CODEGENCONTEXT, $2, $4); }   /* `assert` is a reserved word */
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -1701,6 +1719,10 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+    /* A call-site intrinsic (`addr(of: x)`, `global::assert(…)`). The node is the one a plain call builds —
+       an IdentifierNode carrying the spelling — so every pass that recognises an intrinsic by name is
+       untouched; the grammar only stops the word from being anything else. */
+  | intrinsic_callee LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
     /* `shifted(x: 2)#(3)` — a generic fn called WITHOUT a turbofish still takes its compile-time
        values, and they are the last list. `attachComptimeArgs` puts them on the callee name, where a
        turbofish's type args would be, so both spellings hand the emitter the same merged vector. */

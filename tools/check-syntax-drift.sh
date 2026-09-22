@@ -14,19 +14,21 @@ LEXER="$ROOT/src/kama.l"
 GRAMMAR="$ROOT/editor/vscode/syntaxes/kama.tmLanguage.json"
 
 # Keywords the compiler reserves — the `{"word", TOKEN}` rows of the sorted keyword table in kama.l.
+# ⚠️ ...and UPPER case: `debugAssert` is the first camelCase keyword (0.9.425); a lowercase-only class
+# dropped it from the table silently, exactly as it once dropped the digits.
 # ⚠️ The character class MUST include digits. It was `[a-z_]+`, which silently excluded every
 # digit-bearing keyword — `int8`…`uint64`, `float32`, `float64` — so this guard could not have noticed
 # any of them going missing from the grammar. Nothing was missing when that was found (M6 Stage B); the
 # guard simply had no way to tell, which is the same blind spot in a different place.
 lexer_keywords() {
     sed -n '/static struct name_value keywords/,/};/p' "$LEXER" \
-        | grep -oE '\{"[a-z0-9_]+"' | tr -d '{"'
+        | grep -oE '\{"[A-Za-z0-9_]+"' | tr -d '{"'
 }
 
 # Every bare word the TextMate grammar highlights: the alternations inside `\b(...)\b`, plus the kind words
 # in the `type <kind>` declaration rule. One word per line.
 grammar_tokens() {
-    grep -oE '\\\\b\(([a-z0-9_|]+)\)' "$GRAMMAR" | sed -E 's/\\\\b\(//; s/\)//' | tr '|' '\n'
+    grep -oE '\\\\b\(([A-Za-z0-9_|]+)\)' "$GRAMMAR" | sed -E 's/\\\\b\(//; s/\)//' | tr '|' '\n'
     # the `type (value|resource|view|contract)` declaration capture
     grep -oE '\(value\|resource\|view\|contract\)' "$GRAMMAR" | tr -d '()' | tr '|' '\n'
 }

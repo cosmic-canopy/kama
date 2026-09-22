@@ -57,6 +57,7 @@
 ["spawn" "scope" "borrow"] @keyword.control
 ["new" "try"] @keyword.operator
 ["cast" "bitcast" "truncate" "sizeof" "alignof"] @keyword.operator
+(intrinsic_name) @function.builtin   ; addr drop panic assert debugAssert — reserved call-site intrinsics
 
 (modifier) @keyword.storage.modifier
 (function_modifier) @keyword.storage.modifier

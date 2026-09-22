@@ -1999,6 +1999,10 @@
             "named": true
           },
           {
+            "type": "intrinsic_callee",
+            "named": true
+          },
+          {
             "type": "primitive_type",
             "named": true
           },
@@ -2392,6 +2396,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "intrinsic_callee",
             "named": true
           }
         ]
@@ -4815,6 +4823,46 @@
     }
   },
   {
+    "type": "intrinsic_callee",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "intrinsic_name",
+            "named": true
+          }
+        ]
+      },
+      "scope": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "scoped_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "intrinsic_name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "intrinsic_declaration",
     "named": true,
     "fields": {
@@ -4867,6 +4915,11 @@
         }
       ]
     }
+  },
+  {
+    "type": "intrinsic_name",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "intrinsic_section",
@@ -8971,6 +9024,10 @@
     "named": false
   },
   {
+    "type": "addr",
+    "named": false
+  },
+  {
     "type": "alignof",
     "named": false
   },
@@ -8980,6 +9037,10 @@
   },
   {
     "type": "asm",
+    "named": false
+  },
+  {
+    "type": "assert",
     "named": false
   },
   {
@@ -9056,6 +9117,10 @@
     "named": false
   },
   {
+    "type": "debugAssert",
+    "named": false
+  },
+  {
     "type": "default",
     "named": false
   },
@@ -9065,6 +9130,10 @@
   },
   {
     "type": "double",
+    "named": false
+  },
+  {
+    "type": "drop",
     "named": false
   },
   {
@@ -9234,6 +9303,10 @@
   },
   {
     "type": "override",
+    "named": false
+  },
+  {
+    "type": "panic",
     "named": false
   },
   {

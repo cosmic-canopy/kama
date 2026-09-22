@@ -1,0 +1,9 @@
+// The call-site intrinsics are reserved words: `addr`, `drop`, `panic`, `assert`, `debugAssert` cannot name
+// a function, a local, a parameter or a field. Before, `fn void assert(bool cond, string msg)` was accepted
+// and silently never called (every bare `assert` lowered to the trap); a reserved word makes that
+// unwritable, and the diagnostic says the word is reserved rather than naming a bare token.
+fn void assert(bool cond, string msg) { }
+
+fn int32 main() {
+    return 0;
+}

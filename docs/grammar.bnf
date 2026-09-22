@@ -195,6 +195,13 @@ qualified_identifier
   : basic_identifier
   | qualifier basic_identifier
   ;
+intrinsic_name
+  : ADDR  | DROP  | PANIC  | ASSERT  | DEBUG_ASSERT
+  ;
+intrinsic_callee
+  : intrinsic_name
+  | qualifier intrinsic_name
+  ;
 qualifier
   : IDENTIFIER COLONCOLON
   | qualifier IDENTIFIER COLONCOLON
@@ -725,6 +732,7 @@ embedded_statement
      tmLanguage keyword list, and check-syntax-drift); the emitter checks the name. */
 comptime_assert_statement
   : COMPTIME qualified_identifier_no_generic LPAREN argument_list_opt RPAREN SEMICOLON
+  | COMPTIME intrinsic_callee LPAREN argument_list_opt RPAREN SEMICOLON      /* `assert` is a reserved word */
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -1040,6 +1048,10 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
+    /* A call-site intrinsic (`addr(of: x)`, `global::assert(…)`). The node is the one a plain call builds —
+       an IdentifierNode carrying the spelling — so every pass that recognises an intrinsic by name is
+       untouched; the grammar only stops the word from being anything else. */
+  | intrinsic_callee LPAREN argument_list_opt RPAREN
     /* `shifted(x: 2)#(3)` — a generic fn called WITHOUT a turbofish still takes its compile-time
        values, and they are the last list. `attachComptimeArgs` puts them on the callee name, where a
        turbofish's type args would be, so both spellings hand the emitter the same merged vector. */

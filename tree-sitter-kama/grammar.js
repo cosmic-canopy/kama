@@ -873,13 +873,13 @@ module.exports = grammar({
     asm_statement: ($) => seq('asm', '(', field('code', $.string_literal), ')', ';'),
 
     // kama.y `comptime_assert_statement`. `comptime assert(cond: …, msg: "…");` — a compile-time
-    // assertion (M7), legal at module, type-member and statement scope. `assert` is an ordinary
-    // IDENTIFIER, not a keyword (the runtime `assert` builtin is spelled the same way), so the callee is
-    // matched as one rather than as a literal token.
+    // assertion (M7), legal at module, type-member and statement scope. `assert` is a reserved word (a
+    // call-site intrinsic), so the callee is an `intrinsic_callee`; kama.y also admits any other name here
+    // so the emitter can refuse it with a sentence, and so does this.
     comptime_assert_statement: ($) =>
       seq(
         'comptime',
-        field('callee', $.identifier),
+        field('callee', choice($.identifier, $.intrinsic_callee)),
         $.argument_list,
         ';',
       ),
@@ -961,6 +961,15 @@ module.exports = grammar({
 
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
 
+    // kama.y `intrinsic_name`/`intrinsic_callee`: the call-site intrinsics are reserved words, legal only
+    // as a callee — bare (`addr(of: x)`) or floor-qualified (`global::assert(…)`).
+    intrinsic_name: (_) => choice('addr', 'drop', 'panic', 'assert', 'debugAssert'),
+    intrinsic_callee: ($) =>
+      choice(
+        $.intrinsic_name,
+        seq(field('scope', choice($.identifier, $.scoped_identifier)), '::', field('name', $.intrinsic_name)),
+      ),
+
     scoped_identifier: ($) =>
       prec.left(
         seq(
@@ -986,6 +995,7 @@ module.exports = grammar({
     _callable: ($) =>
       choice(
         $.identifier,
+        $.intrinsic_callee,
         $.scoped_identifier,
         $.field_expression,
         $.subscript_expression,

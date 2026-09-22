@@ -35,7 +35,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 # The compiler's truth: the `{"word", TOKEN}` rows of the keyword table.
 sed -n '/static struct name_value keywords/,/};/p' "$LEXER" \
-    | grep -oE '"[a-z0-9_]+"' | tr -d '"' | LC_ALL=C sort -u > "$tmp/lex"
+    | grep -oE '"[A-Za-z0-9_]+"' | tr -d '"' | LC_ALL=C sort -u > "$tmp/lex"
 
 # The doc's claim: the first fenced block after the "## kama's keywords" heading.
 awk '

@@ -47,7 +47,7 @@ if [ ! -x "$KAMA" ]; then echo "FAIL treesitter: $KAMA not built" >&2; exit 1; f
 # `[a-z_]+` class silently excluded every one of int8…uint64 and float32.
 lexer_keywords() {
     sed -n '/static struct name_value keywords/,/};/p' "$ROOT/src/kama.l" |
-        grep -oE '\{"[a-z0-9_]+"' | tr -d '{"' | sort -u
+        grep -oE '\{"[A-Za-z0-9_]+"' | tr -d '{"' | sort -u
 }
 grammar_terminals() {
     grep -oE '"value": *"[^"]+"' "$G/src/grammar.json" |

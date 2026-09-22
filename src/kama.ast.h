@@ -1049,7 +1049,8 @@ public:
 //
 // The parser accepts ANY bare/qualified callee here: the trailing `(` is what keeps the production
 // LALR(1)-clean against `comptime <type> <name>`, so the name check belongs in the emitter, where a
-// real diagnostic can be written. `assert` stays an ordinary identifier, never a keyword.
+// real diagnostic can be written. `assert` itself is a reserved word (a call-site intrinsic), which the
+// grammar admits here through `intrinsic_callee`.
 class ComptimeAssertNode : public ClassMemberDeclarationNode {
 public:
     SharedIdentifier   callee;      // must be the bare name `assert` — checked in the emitter

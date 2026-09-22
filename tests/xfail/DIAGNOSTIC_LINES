@@ -534,6 +534,7 @@ intrinsic_field	intrinsic_field.kama:4
 intrinsic_incomplete	intrinsic_incomplete.kama:3
 intrinsic_multi_contract	intrinsic_multi_contract.kama:4
 intrinsic_no_contract	intrinsic_no_contract.kama:2
+intrinsic_reserved	intrinsic_reserved.kama:5
 intrinsic_uncovered_member	intrinsic_uncovered_member.kama:4
 intrinsic_widen_escape	intrinsic_widen_escape.kama:5
 isolate_use_after_move	isolate_use_after_move.kama:25

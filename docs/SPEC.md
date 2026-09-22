@@ -5928,19 +5928,19 @@ however, **reserved** — see below.
 
 ## kama's keywords
 
-**The complete list — 84 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
+**The complete list — 89 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
 walking into it. The first external project found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
 drift.
 
 ```
-abstract alignof as asm base bitcast bool borrow break case cast cchar char clong comptime const
-continue copy ctor culong default do else enum export expose extends extern false file final
-float32 float64 fn fnptr for foreach friend give hardware if immutable implements import in int16
-int32 int64 int8 isize match new null operator out override parallel_for parallel_spawn private
-protected public ref return scope sizeof slot spawn static string this true truncate try type
-uint16 uint32 uint64 uint8 unsafe usize virtual void when while
+abstract addr alignof as asm assert base bitcast bool borrow break case cast cchar char clong
+comptime const continue copy ctor culong debugAssert default do drop else enum export expose extends
+extern false file final float32 float64 fn fnptr for foreach friend give hardware if immutable
+implements import in int16 int32 int64 int8 isize match new null operator out override panic
+parallel_for parallel_spawn private protected public ref return scope sizeof slot spawn static
+string this true truncate try type uint16 uint32 uint64 uint8 unsafe usize virtual void when while
 ```
 
 **Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any

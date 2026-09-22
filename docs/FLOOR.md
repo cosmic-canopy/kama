@@ -21,8 +21,10 @@ been a spelling with no discovery payoff.
 Everything here is declared in [`prelude/global.kama`](../prelude/global.kama) and
 [`prelude/builtin.kama`](../prelude/builtin.kama) over [`kama_runtime.h`](../include/kama_runtime.h), except the
 handful the compiler lowers itself because they need the call site — `panic`, `assert`, `debugAssert` (the
-source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop` — which behave as floor names all
-the same. The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
+source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop`. Those eight are **reserved words**
+(SPEC *kama's keywords*): each is legal only in call position, so no local, parameter, field or function can take
+the name, and `global::assert(…)` is the same intrinsic as `assert(…)`. The rule for which words are reserved is
+the greppability one in SPEC. The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
 a semantics index. See also [SPEC.md](SPEC.md) for the language.
 
 ## What is floor, and what is an `import`

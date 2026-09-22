@@ -64,20 +64,20 @@ type resource UdpSocket implements DatagramSocket {
     public unsafe ctor Result<UdpSocket, IoError> bind(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: a): UdpSocket.bindTo(addr: a);
+            case Ok(value: a): UdpSocket.bindTo(address: a);
         };
     }
 
     // `bind` to an address value — the one spelling that reaches a link-local V6 address (its `scopeId`).
-    public unsafe ctor Result<UdpSocket, IoError> bindTo(const ref SocketAddr addr) {
+    public unsafe ctor Result<UdpSocket, IoError> bindTo(const ref SocketAddr address) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
-        int32 family = addr.ip.family();
-        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
+        int32 family = address.ip.family();
+        InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_udp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
-        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: addr.port, scopeId: addr.scopeId) != 0) {
+        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
@@ -91,15 +91,15 @@ type resource UdpSocket implements DatagramSocket {
     public unsafe fn Result<Unit, IoError> connect(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: false)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: a): this.connectTo(addr: a);
+            case Ok(value: a): this.connectTo(address: a);
         };
     }
 
     // `connect` to an address value (a sender a datagram came from, a scoped one).
-    public unsafe fn Result<Unit, IoError> connectTo(const ref SocketAddr addr) {
-        InlineArray<uint8>#(16) bytes = addr.ip.bytes();
-        if (kama_connect_addr(fd: this.fd, family: addr.ip.family(), ip: addr(of: bytes[0]), port: addr.port,
-                              scopeId: addr.scopeId) != 0) { return Result::Err(error: lastError()); }
+    public unsafe fn Result<Unit, IoError> connectTo(const ref SocketAddr address) {
+        InlineArray<uint8>#(16) bytes = address.ip.bytes();
+        if (kama_connect_addr(fd: this.fd, family: address.ip.family(), ip: addr(of: bytes[0]), port: address.port,
+                              scopeId: address.scopeId) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 

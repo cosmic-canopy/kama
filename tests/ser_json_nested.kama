@@ -11,14 +11,14 @@ type resource Address {
 type resource Person {
     @field string name;
     @field int32 age;
-    @field Address addr;
-    public ctor make(string name, int32 age, Address addr) {
-        this.name = give name; this.age = age; this.addr = give addr;
+    @field(name: "addr") Address address;
+    public ctor make(string name, int32 age, Address address) {
+        this.name = give name; this.age = age; this.address = give address;
     }
 }
 fn int32 main() {
     Address a = Address.make(city: "New \"York\"", zip: 10001);
-    Person p = Person.make(name: "Sam", age: 30, addr: give a);
+    Person p = Person.make(name: "Sam", age: 30, address: give a);
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: p);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"name\":\"Sam\",\"age\":30,\"addr\":{\"city\":\"New \\\"York\\\"\",\"zip\":10001}}") { return 0; }
