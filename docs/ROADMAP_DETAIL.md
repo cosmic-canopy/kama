@@ -285,15 +285,6 @@ of a hole's path; nothing else about the hole rule changes.
 passes; the initializer does not. The destination range check folds the shift as an unbounded integer
 instead of at the left operand's width. Present at `0.9.419`, before the literal-shift change.
 
-### A generic instance named only in `sizeof`/`alignof` is never instantiated (KR-62) — found 2026-09-16, `0.9.366`
-
-`fn int32 main() { usize s = sizeof(DynamicArray<int64>); return cast<int32>(s); }` passes kama and fails in
-clang: `use of undeclared identifier 'std__collections__DynamicArray_int64_GlobalAllocator'`. The same with
-`Simd<float32>#(4)`; adding a local of the type anywhere makes it build. The `SizeofNode` arm emits
-`sizeof(<cType>)` without registering the instance the way a declaration does. A layout `comptime assert` over
-a generic type would hit it too.
-
-
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and

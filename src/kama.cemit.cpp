@@ -12593,6 +12593,35 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
     // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
+    // ...and every member BODY, under this instance's substitution (KR-62). collectCollections walks the
+    // bodies of a non-generic type and skips a template's, on the premise that this function re-scans the
+    // specialized members — but it scanned only their SIGNATURES, so an instance named nowhere but inside a
+    // generic type's method (`sizeof(Box<T>)`, a local `Box<int32> b = Box::<int32>.make(…)`) never had its
+    // struct emitted: clang's undeclared identifier, or a false "cannot tell which `Box` to construct".
+    // The discovery-time local table is saved around the walk: this runs from inside another body's scan
+    // whenever that body is what first names the instance.
+    {
+        ScopedStr _ts(_thisType, mangled);
+        std::map<std::string, SharedIdentifier> savedLocals = _scanLocalTys;
+        std::map<std::string, int64_t> savedConsts = _constLocalVals;
+        auto scanBody = [&](SharedParameterList params, SharedStatement body) {
+            _scanLocalTys.clear();
+            _constLocalVals.clear();
+            if (params) for (auto& p : *params)
+                if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
+            scanStmtForCollections(body);
+        };
+        for (auto& kv : ci.methods) if (kv.second.node) scanBody(kv.second.node->params, kv.second.node->body);
+        for (auto& kv : ci.ctors) if (kv.second.node)
+            scanBody(kv.second.node->declarator ? kv.second.node->declarator->params : SharedParameterList(),
+                     kv.second.node->body);
+        if (ci.dtorNode) scanBody(SharedParameterList(), ci.dtorNode->body);
+        if (ci.node && ci.node->members) for (auto& m : *ci.node->members)   // `comptime` members, per instance
+            if (dynamic_cast<ClassConstDeclarationNode*>(m.get()) || dynamic_cast<ComptimeAssertNode*>(m.get()))
+                scanBody(SharedParameterList(), m);
+        _scanLocalTys = savedLocals;
+        _constLocalVals = savedConsts;
+    }
     // A view in a tagged-union PAYLOAD (`Optional<View>`) would let the borrow be stored or returned via
     // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
     // where the payload type is substituted concrete (`View_int32`, now registered by the scan above). A
@@ -13037,6 +13066,11 @@ void CEmitter::scanExprForCollections(SharedExpression e)
     } else if (auto* c = dynamic_cast<CastNode*>(n)) {
         scanTypeForCollections(c->type);
         scanExprForCollections(c->unaryExpression);
+    } else if (auto* sz = dynamic_cast<SizeofNode*>(n)) {
+        // The operand is a TYPE, and the C is `sizeof(<its struct>)` — so an instance named nowhere else
+        // (`sizeof(DynamicArray<int64>)`, `alignof(Simd<float32>#(4))`) must be registered here, or its
+        // struct is never emitted and only clang notices (KR-62).
+        scanTypeForCollections(sz->type);
     } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {
         // Model C `.as<T>()` yields `Optional<T>` — register that instance so its struct + Some/None exist
         // for the result / enclosing match (mirrors string.find's Optional<usize> registration).
@@ -13116,7 +13150,17 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         if (cd->variables) for (auto& v : *cd->variables)
             if (v && v->name && v->name->value && v->initializer) {
                 int64_t cv; if (constValue(v->initializer, cv)) _constLocalVals[*v->name->value] = cv;
+                scanExprForCollections(v->initializer);   // `comptime usize L = sizeof(Box<int32>)` (KR-62)
             }
+    } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(n)) {
+        // A type-associated `comptime` — reached from a type's member sweep, not a body. Its initializer is
+        // emitted as C when it does not fold, so an instance it names must exist (KR-62).
+        scanTypeForCollections(kd->type);
+        if (kd->declarators) for (auto& v : *kd->declarators) if (v) scanExprForCollections(v->initializer);
+    } else if (auto* ca = dynamic_cast<ComptimeAssertNode*>(n)) {
+        // An aggregate `sizeof` predicate lowers to `_Static_assert(sizeof(<struct>) …)` (KR-62). Valid at
+        // module, member and statement scope; all three sweeps route here.
+        if (ca->args) for (auto& a : *ca->args) if (a) scanExprForCollections(a->expression);
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         scanExprForCollections(r->expression);
     } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {
@@ -13176,6 +13220,9 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             scanTypeForCollections(mv->type);   // register e.g. `InlineArray<uint8,256>` used only by a static
+        } else if (dynamic_cast<ComptimeAssertNode*>(decl.get()) || dynamic_cast<ConstLocalVariableDeclaration*>(decl.get())) {
+            seedParams(SharedParameterList());  // module scope: no locals, and nothing may leak into the next body
+            scanStmtForCollections(std::dynamic_pointer_cast<StatementNode>(decl));
         } else if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             scanTypeForCollections(fn->returnType);
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
@@ -13204,8 +13251,8 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
                     scanTypeForCollections(fd->type);
-                } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
-                    scanTypeForCollections(kd->type);   // const field of a collection type
+                } else if (dynamic_cast<ClassConstDeclarationNode*>(mn) || dynamic_cast<ComptimeAssertNode*>(mn)) {
+                    scanStmtForCollections(m);          // the type and the initializer / the predicate
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
                     scanTypeForCollections(md->returnType);
                     if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
@@ -14120,6 +14167,10 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
             scanExprForGenerics(v->initializer, localTys);
             if (v->name && v->name->value && cd->type) localTys[*v->name->value] = cd->type;
         }
+    } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(n)) {
+        if (kd->declarators) for (auto& v : *kd->declarators) if (v) scanExprForGenerics(v->initializer, localTys);
+    } else if (auto* ca = dynamic_cast<ComptimeAssertNode*>(n)) {
+        if (ca->args) for (auto& a : *ca->args) if (a) scanExprForGenerics(a->expression, localTys);
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         scanExprForGenerics(r->expression, localTys);
     } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {

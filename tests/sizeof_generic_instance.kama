@@ -1,0 +1,62 @@
+// KR-62: a generic instance named ONLY as a `sizeof`/`alignof` operand — or only inside a generic type's
+// member — was never registered, so its struct was never emitted. `kama check` passed and clang refused
+// the C with "use of undeclared identifier 'std__collections__DynamicArray_int64_…'"; inside a generic
+// type's method the construction spelling was refused instead, as "cannot tell which `Box` to construct".
+// Every position below failed on 0.9.420, and each names its instance nowhere else in the program.
+//
+// Three holes, one rule (an instance a program names must be registered, wherever it names it):
+//   1. the discovery walk did not enter a `sizeof` operand, because the operand is a TYPE;
+//   2. it did not enter a `comptime` initializer or a `comptime assert` predicate, at any scope;
+//   3. a generic type's instance had its member SIGNATURES scanned and never its member BODIES.
+//
+// Layout is the target's (kama emits C and clang lays out the structs), so the assertions are relative
+// wherever the answer differs between x86_64/arm64 and wasm32.
+import { std::collections::DynamicArray };
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { this.v = v; }
+}
+
+// (2) module scope: an aggregate `sizeof` predicate lowers to C11 `_Static_assert`.
+comptime assert(cond: sizeof(Box<int8>) == 1, msg: "a one-byte Box");
+
+// (2) type-associated `comptime`, and a member `comptime assert`.
+type value Cfg {
+    public int32 x;
+    public ctor make() { this.x = 0; }
+    public comptime usize UNIT = sizeof(Box<uint16>);
+    comptime assert(cond: sizeof(Box<int64>) == 8, msg: "an eight-byte Box");
+}
+
+// (3) a generic type's members, per instance: a body's `sizeof`/`alignof`, a local constructed over a
+// concrete instance, and a member `comptime assert` over the type's own parameter.
+type value W<T> {
+    public T w;
+    public ctor make(T w) { this.w = w; }
+    public fn usize boxed() { return sizeof(Box<T>) + alignof(Box<T>); }
+    public fn int32 local() { Box<float32> b = Box::<float32>.make(v: 2.0f32); return cast<int32>(b.v); }
+    comptime assert(cond: sizeof(Box<T>) == sizeof(T), msg: "a Box adds no padding");
+}
+
+// (1) inside a generic FUNCTION's body — the instance exists only under the substitution.
+fn usize sizeOfBoxOf<T>(T x) { return sizeof(Box<T>); }
+
+fn int32 main() {
+    int32 bad = 0;
+    // (1) a stdlib generic, and one nested in another.
+    if (sizeof(DynamicArray<int64>) < sizeof(usize)) { bad = bad + 1; }
+    if (alignof(DynamicArray<int32>) == 0) { bad = bad + 2; }
+    if (sizeof(Box<Box<int32>>) != 4) { bad = bad + 4; }
+    if (sizeof(Simd<float32>#(4)) != 16) { bad = bad + 8; }
+    // (2) statement scope.
+    comptime usize L = sizeof(Box<uint32>);
+    comptime assert(cond: sizeof(Box<int16>) == 2, msg: "a two-byte Box");
+    if (L != 4 || Cfg::UNIT != 2) { bad = bad + 16; }
+    // (1) + (3)
+    if (sizeOfBoxOf(x: 5i64) != 8) { bad = bad + 32; }
+    W<int16> w = W::<int16>.make(w: 1i16);
+    if (w.boxed() != 4) { bad = bad + 64; }
+    if (w.local() != 2) { bad = bad + 128; }
+    return bad;   // 0: every instance registered and sized
+}

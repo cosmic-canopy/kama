@@ -34,7 +34,11 @@ SRC="$ROOT/src/kama.cemit.cpp"
 # - IdentifierNode: a LEAF — it contains no shape, so neither walk enters one. The generics walk casts to it
 #   only to read a method call's receiver. The collections walk used to name it for the same kind of peek
 #   (the primitive-widening recorder, deleted with KR-37), which is all that kept the two sets equal.
-EXEMPT="scanExprForCollections:IdentifierNode"
+# - SizeofNode: its operand is a TYPE, never an expression, so it can hold no call for the generics walk to
+#   find. The collections walk enters it because the C is `sizeof(<the instance's struct>)`, and an instance
+#   named nowhere else must still be registered (KR-62).
+EXEMPT="scanExprForCollections:IdentifierNode
+scanExprForGenerics:SizeofNode"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
