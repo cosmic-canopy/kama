@@ -278,7 +278,56 @@ identifier with member/index accessors and `this` is a keyword. Every other fiel
 (`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
 of a hole's path; nothing else about the hole rule changes.
 
-### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
+### The floor becomes an importable module (KR-87) — decided 2026-09-22 with the maintainer, `0.9.425`
+
+**The rule it serves.** Two universally easy rules, with no punch-through exceptions: *a name is in scope only if
+it is declared in your module or imported*, and *no binding may shadow a name in scope*. Today the floor (FLOOR.md)
+breaks the first: its functions are in every file, unqualified, with no import and no opt-out, which is why KR-57
+had no clean answer — refusing a binding named `args` would make every function later added to the floor a
+source break, while exempting the floor leaves one name with two meanings in one scope.
+
+**What the floor holds, measured over tests/ lib/ examples/ bench/ (2370 files):**
+
+| group | names | use | disposition |
+|---|---|---|---|
+| call-site intrinsics | `addr` `drop` `panic` `assert` `debugAssert` (+ `sizeof` `alignof` `bitcast`) | ~690 calls | **SHIPPED `0.9.425`** — reserved words, legal only in call position |
+| language types | `Optional`/`Some`/`None`, `Result`/`Ok`/`Err`, `Owned`/`Shared`/`Weak`, `Unit` | 140–300 files each | stay in scope, as RESERVED names (the category of `string`) — the syntax produces them (`new` → `Owned`, `try` → `Optional`), so importing them would be ceremony |
+| runtime capabilities | `print` `println` `eprint` `eprintln` `args` `env` `envOr` `programName` `programPath` `programInvocation` `setPanicHandler` | 33 files (1.4%) | **import or qualify**: `import { global::println };` or `global::println(…)` |
+
+**Design questions for the pass (answer before code):**
+- `global` becomes an importable module name; today `import { global::println }` fails ("cannot resolve module
+  'global'"). It must survive `--no-std`, as the floor does now. Is the name `global` right for a module users
+  import from, or does it want a better one (the `global::` qualifier shipped with the LSP, M4.8)?
+- The diagnostic for a bare `println(…)` must name the fix (`import { global::println }`) — this is the line an
+  agent reads, so it is the one that makes the break cheap.
+- Which prelude TYPES and contracts count as "language" (always in scope, reserved) versus library. The line is
+  "the syntax lowers into it"; the contracts interpolation and `@generate` lower into (`Formattable`,
+  `Serializable`, `Equatable`, …) need a per-name verdict.
+- FLOOR.md's "importing to call `assert`/`println` would be terrible" is reversed for the capabilities; the
+  intrinsics half of it is already moot (they are keywords). GOALS/FLOOR/SPEC wording, the site's hello-world, and
+  `agents/AGENTS.md` + `seed/` examples all change — those last two are EMBEDDED, so a VERSION bump.
+- KR-57 lands in the same arc: with nothing implicit, "a binding may not take the name of a function in scope"
+  needs no exception. Renames it forces: `std::net::udp`'s public `interfaceIndex:` label, `std::process`'s
+  `args` parameter (and `Command`'s `args` field if fields count — they are reachable bare in a method), two
+  fixtures (`tests/query/scopes.kama`'s `sum`, `tests/ser_roundtrip_nested.kama`'s `main` parameter).
+
+**The reserved-word rule — greppability (maintainer, 2026-09-22).** A word is reserved everywhere unless every
+KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword use can always be
+found without also finding names. Commonness of the word as a name is NOT a reason by itself. Applied to the six
+contextual words:
+
+| word | keyword use | grep anchor | verdict |
+|---|---|---|---|
+| `type` | `type resource Foo {` | `type` + a kind word | passes |
+| `file` | `file @compileFor(X);` (line 1) | `file @` | passes |
+| `truncate` | `truncate<int8>(x)` | `truncate<` (a method is `.truncate(`) | passes |
+| `give` / `copy` | `give x`, `copy x` | marker + space + a name; a binding named `give` is never followed by a bare name | passes |
+| `slot` | `slot T x;` | only the multi-token shape `slot <type> <name>;` | **weak — decide in the pass** (reserving it costs `tests/contextual_slot.kama`) |
+
+By the same rule `out` stays reserved (no anchor: `out T x` and `q: out quotient`), and so do the intrinsics.
+Write the rule into SPEC *kama's keywords* when this lands.
+
+### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`; **decided 2026-09-22: resolved by KR-87** (above)
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
 says kama has no shadowing. It does: a binding may take the name of a FUNCTION, and the function stays callable
