@@ -1,0 +1,29 @@
+// KR-85: a shift is computed at its LEFT operand's width, in the unsigned type of that width, and read back
+// (SPEC § *arithmetic*: "a signed left shift into the sign bit is defined"). The emitter always did that; the
+// compile-time FOLD did not — it shifted an unbounded int64 — so an initializer whose value only the wrap
+// makes fit was refused: `int32 d = 1i32 << 31;` as "cannot be initialized with 2147483648", while the
+// comparison `(1i32 << 31) == int32Min()` in tests/num_cast.kama passed. Every line below was refused on
+// 0.9.420 or folded to a different number than the program computes at runtime.
+//
+// Not changed, on purpose: a count at or past the width still folds unbounded, so `uint8 b = 1ui8 << 8;`
+// keeps its out-of-range refusal (at runtime that shift traps); and an UNSUFFIXED left operand states no
+// width, so `uint32 m = 0xFF << 24;` keeps the conversion refusal that says to write `0xFFui32`.
+fn int32 main() {
+    int32 d = 1i32 << 31;
+    int8 e = 3i8 << 7i8;
+    int64 f = 1i64 << 63;
+    uint32 g = 1ui32 << 31;
+    uint8 h = 0xFFui8 << 4;
+    int16 i = -32768i16 >> 15;
+    uint64 j = 0xFFFFFFFFFFFFFFFFui64 >> 60;
+    comptime int32 K = 1i32 << 31;
+    int32 r = 0;
+    if (d != K || d >= 0) { r = r + 1; }
+    if (e != -128i8) { r = r + 2; }
+    if (f >= 0i64) { r = r + 4; }
+    if (g != 2147483648ui32) { r = r + 8; }
+    if (h != 240ui8) { r = r + 16; }
+    if (i != -1i16) { r = r + 32; }
+    if (j != 15ui64) { r = r + 64; }
+    return r;
+}

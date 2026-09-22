@@ -93,7 +93,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-81 | **`"${this.f}"` is a parse error** — the hole grammar wants an identifier head and `this` is a keyword, so the natural spelling inside a method is refused while `${p.x}` works | S | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-82 | **Text files are bytes-only** — no `string`↔bytes conversion outside `std::io` internals and no `readText`/`writeText`, so writing a string to a file is a hand loop | S | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-83 | **Extended `asm` (operand constraints) and `@naked` functions** — SPEC called them "tracked follow-ons" with no row; they are the MCU seam's remaining half | — | [§5](ROADMAP_DETAIL.md#s5) |
-| KR-85 | **`int32 d = 1i32 << 31;` is refused** although `1i32 << 31` is INT32_MIN by SPEC — the initializer's range check folds a suffixed shift unbounded | S? | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — tooling & ecosystem
 

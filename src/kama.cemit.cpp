@@ -10752,8 +10752,31 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
             case STAR:    out = l * r; return true;
             case SLASH:   if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l / r; return true;
             case PERCENT: if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l % r; return true;
-            case LTLT:    if (r < 0 || r >= 64) return false; out = (int64_t)((uint64_t)l << r); return true;
-            case GTGT:    if (r < 0 || r >= 64) return false; out = l >> r; return true;
+            case LTLT: case GTGT: {
+                if (r < 0 || r >= 64) return false;
+                // A shift is computed at its LEFT operand's width, in the unsigned type of that width, and
+                // read back (SPEC § *arithmetic*): `1i32 << 31` IS INT32_MIN and `3i8 << 7i8` is -128, so the
+                // fold must agree with the emitter or `int32 d = 1i32 << 31;` is refused as 2147483648
+                // (KR-85). Two cases keep the unbounded fold: a count at or past the width, whose
+                // out-of-range diagnostic is the clearer refusal of a shift that would trap; and an
+                // UNSUFFIXED literal on the left, which states no width (`isSmallLiteralShift`), so a
+                // `uint32 m = 0xFF << 24;` keeps the conversion refusal that says to write `0xFFu32`.
+                const auto* lit = dynamic_cast<const Int32Node*>(b->LHS.get());
+                const std::string lt = (lit && lit->unsuffixed) ? std::string() : typeOfExpr(b->LHS);
+                const int w = cNumFloat(lt) || lt == "kama_char" ? 0 : cNumBits(lt);
+                if (w == 0 || r >= w) {
+                    out = b->token == LTLT ? (int64_t)((uint64_t)l << r) : l >> r;
+                    return true;
+                }
+                const uint64_t mask = w == 64 ? ~0ULL : ((1ULL << w) - 1);
+                const bool sgn = cNumSigned(lt);
+                uint64_t u = b->token == LTLT ? (((uint64_t)l << r) & mask)
+                           : sgn            ? ((uint64_t)(l >> r) & mask)          // arithmetic
+                                            : (((uint64_t)l & mask) >> r);         // logical
+                if (sgn && w < 64 && ((u >> (w - 1)) & 1)) u |= ~mask;              // sign-extend
+                out = (int64_t)u;
+                return true;
+            }
             case AMP:     out = l & r; return true;
             case BAR:     out = l | r; return true;
             case CARET:   out = l ^ r; return true;

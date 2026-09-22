@@ -278,13 +278,6 @@ identifier with member/index accessors and `this` is a keyword. Every other fiel
 (`int32 n = this.id; "${n}"`), which the tour's own `Handle` example had to use. Admit `this` as the head
 of a hole's path; nothing else about the hole rule changes.
 
-### A suffixed shift cannot initialize its own width (KR-85) — found 2026-09-21, `0.9.420`
-
-`int32 d = 1i32 << 31;` is refused ("cannot be initialized with 2147483648") although SPEC and
-`tests/num_cast.kama` say `1i32 << 31` IS the `int32` INT32_MIN — the comparison form the fixture uses
-passes; the initializer does not. The destination range check folds the shift as an unbounded integer
-instead of at the left operand's width. Present at `0.9.419`, before the literal-shift change.
-
 ### A binding may take the name of a function in scope (KR-57) — found 2026-09-15 building the reach-based `--no-heap`, `0.9.345`
 
 SPEC *Shadowing is a compile error* refuses a binding named like a parameter, an enclosing local or a field, and
