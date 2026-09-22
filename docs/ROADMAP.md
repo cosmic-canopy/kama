@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-78 | **Analysis is EXPONENTIAL in the length of an operator chain** — `f(x) + f(x) + …` doubles `kama check` for roughly every 5 terms added: 0.06 s at 20 calls, 0.21 s at 30, 0.37 s at 35 (single file, `0.9.400`), and inside a 40-file project a 40-term chain is 2.4 s while the SAME 40 calls written as 40 statements are 0.05 s. `typeOfExpr` recurses into its operand's subtree and is asked again at every level, so a node's cost multiplies down the chain; `0.9.401` cut the per-node asks from three to one, which moves the constant and not the shape. Memoize the classification per (node, substitution context) — the context is why a bare node→type map is wrong. Found scoping the incremental-build row (shipped `0.9.410`; docs/targets.md *`.kama-cache/`*) | S? | [§9](ROADMAP_DETAIL.md#s9) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-7 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |

@@ -1422,6 +1422,17 @@ std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassI
 std::string CEmitter::typeOfExpr(SharedExpression e)
 {
     if (!e) return "";
+    ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
+    auto it = _clsMemo.type.find(e.get());
+    if (it != _clsMemo.type.end()) return it->second;
+    std::string r = typeOfExprImpl(e);
+    _clsMemo.type[e.get()] = r;
+    return r;
+}
+
+std::string CEmitter::typeOfExprImpl(SharedExpression e)
+{
+    if (!e) return "";
     ASTNode* n = e.get();
 
     // --- literals: the one place a type is known outright -------------------------------------------
@@ -30666,6 +30677,17 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
 bool CEmitter::exprIsString(SharedExpression e)
 {
     if (!e) return false;
+    ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
+    auto it = _clsMemo.str.find(e.get());
+    if (it != _clsMemo.str.end()) return it->second;
+    const bool r = exprIsStringImpl(e);
+    _clsMemo.str[e.get()] = r;
+    return r;
+}
+
+bool CEmitter::exprIsStringImpl(SharedExpression e)
+{
+    if (!e) return false;
     if (dynamic_cast<StringNode*>(e.get())) return true;
     if (auto* be = dynamic_cast<BinaryExpressionNode*>(e.get()))
         if (be->token == PLUS && (exprIsString(be->LHS) || exprIsString(be->RHS))) return true;
@@ -31002,6 +31024,17 @@ std::string CEmitter::indexElemTypeRaw(SharedExpression e)
 }
 
 std::string CEmitter::exprClass(SharedExpression e)
+{
+    if (!e) return "";
+    ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
+    auto it = _clsMemo.cls.find(e.get());
+    if (it != _clsMemo.cls.end()) return it->second;
+    std::string r = exprClassImpl(e);
+    _clsMemo.cls[e.get()] = r;
+    return r;
+}
+
+std::string CEmitter::exprClassImpl(SharedExpression e)
 {
     if (!e) return "";
     ASTNode* n = e.get();

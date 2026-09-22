@@ -5992,9 +5992,8 @@ which also holds the reserved table equal to the two C standards' sets.
 
 Everything below **hard-errors** (never miscompiles) and has a clean workaround. Two kinds:
 
-(Two open defects are NOT of that kind — kama accepts the program and the C compiler or the clock
-refuses it — and each is a roadmap row rather than a rule: a binding named like a function in scope
-([KR-57](ROADMAP.md)); and analysis time exponential in the length of an operator chain ([KR-78](ROADMAP.md)).)
+(One open defect is NOT of that kind — kama accepts the program and the C compiler refuses it — and it
+is a roadmap row rather than a rule: a binding named like a function in scope ([KR-57](ROADMAP.md)).)
 
 **By-design rules** — an rvalue can't be borrowed/reseated soundly, so these stay errors, not "unbuilt":
 - **An inline `new` (or owned value) borrowed by a `ref`/`out` or contract parameter** — an inline `new` is

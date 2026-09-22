@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>   // ClassifierMemo (KR-78)
 #include <set>
 #include <algorithm>   // std::find (contract-implementor lookups in the graph-node closure)
 #include <functional>  // the package resolver the driver installs (setPackageResolver)
@@ -2998,6 +2999,26 @@ private:
     // `TKind::Unknown` one level down. This is the resolver every finer rule composes from: the kind
     // rule above reads it through `kindOfCType`, and width/conversion checking will read it directly.
     std::string typeOfExpr(SharedExpression e);
+    std::string typeOfExprImpl(SharedExpression e);      // the uncached body; call typeOfExpr
+    // KR-78: the three expression classifiers (`typeOfExpr`, `exprClass`, `exprIsString`) each ask about an
+    // operator's operands, and each operand asks about ITS operands, so in `f(x) + f(x) + …` every level
+    // re-walked the whole subtree below it — analysis grew as n^3.5 in the chain length (3.2 s at 70 terms).
+    // One memo per OUTERMOST query: a query reads the emitter's state and never changes it, so within one
+    // the answer for a node is fixed; across queries it is not (a local is declared, a `match` arm binds, a
+    // generic body is re-walked under another substitution), so the memo is dropped when the outermost
+    // query returns. Keyed by node address, which is stable for that long.
+    struct ClassifierMemo {
+        int depth = 0;
+        std::unordered_map<const ASTNode*, std::string> type, cls;
+        std::unordered_map<const ASTNode*, bool> str;
+    };
+    ClassifierMemo _clsMemo;
+    struct ClassifierQuery {   // RAII: the outermost one clears the memo on the way in and out
+        ClassifierMemo& m;
+        explicit ClassifierQuery(ClassifierMemo& memo) : m(memo) { if (m.depth++ == 0) clear(); }
+        ~ClassifierQuery() { if (--m.depth == 0) clear(); }
+        void clear() { m.type.clear(); m.cls.clear(); m.str.clear(); }
+    };
     std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
     // The `match` subject's variant class, QUIETLY — the same four-step recovery `emitMatchSwitch` does
     // (`exprClass`, through a `give` hand-off, the discovery-stashed inline instance, the qualified
@@ -3064,6 +3085,7 @@ private:
     std::string rawPointeeCType(SharedExpression e);  // pointee class of an `UnsafePtr<T>` expression (drop(ptr:)'s gate), "" otherwise
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    std::string exprClassImpl(SharedExpression e);      // the uncached body (see ClassifierMemo)
     std::string handoffSourceClass(SharedExpression e, int handoff);  // exprClass, widened for a MARKED bare-local `buf[i]`
     // a MARKED hand-off whose SOURCE class did not resolve, into a destination that owns — a compiler bug, refused loudly
     void rejectUnresolvedHandoff(const std::string& srcCls, const std::string& dstCType,
@@ -3078,6 +3100,7 @@ private:
     void emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec);        // render one hole into Formatter `fv` (spec / char / Formattable dispatch); shared by plain + tagged interpolation
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
+    bool exprIsStringImpl(SharedExpression e);          // the uncached body (see ClassifierMemo)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
     void emitStruct(ClassInfo& ci);
     void emitVariantStruct(ClassInfo& ci);   // tag + union layout of a discriminated-union enum
