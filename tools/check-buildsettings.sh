@@ -428,10 +428,16 @@ JSON
 done
 rc=0
 "$KAMA" pkg install "$tmp/twoshims/kama.json" >/dev/null 2>&1 || rc=1
+# ⚠️ A DIFFERENT `-o` PER PASS, because this loop builds and then RUNS the program twice. On Windows the
+# image of a process that has just exited stays open for a while, so a second link over the SAME path
+# dies with `ld: cannot open output file …/app.exe: Permission denied` — nothing to do with csources or
+# with kama: `clang h.c -o h.exe`, run it, recompile, reproduces it 5 times in 6 on the same box.
+# docs/platforms/windows.md states the remedy this now follows: give each build its own output path
+# rather than retrying. The two passes are about `-j 2` vs `-j 1`, and they do not need to share a name.
 for j in 2 1; do
-    [ "$rc" = 0 ] && { "$KAMA" build "$tmp/twoshims/kama.json" -j $j -o "$tmp/twoshims/app" >"$tmp/o" 2>"$tmp/e" || rc=1; }
+    [ "$rc" = 0 ] && { "$KAMA" build "$tmp/twoshims/kama.json" -j $j -o "$tmp/twoshims/app-j$j" >"$tmp/o" 2>"$tmp/e" || rc=1; }
     # The program's own exit code is 7 by construction (see `app`), so only the BUILD is being judged here.
-    [ "$rc" = 0 ] && { arc=0; "$tmp/twoshims/app" >/dev/null 2>&1 || arc=$?; [ "$arc" = 7 ] || rc=1; }
+    [ "$rc" = 0 ] && { arc=0; "$tmp/twoshims/app-j$j" >/dev/null 2>&1 || arc=$?; [ "$arc" = 7 ] || rc=1; }
 done
 if [ "$rc" = 0 ]; then
     ok "two packages both shipping csrc/shim.c compile to different objects"
