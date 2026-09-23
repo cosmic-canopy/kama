@@ -43,7 +43,7 @@ struct Diagnostic {
     int          endLine   = 0;   // T3: end line   (0 = unknown -> == start)
     int          endColumn = 0;   // T3: end column (0 = unknown -> == start)
     DiagSeverity severity  = DiagSeverity::Error;
-    std::string  code;            // short stable id, e.g. "unsupported", "parse"
+    std::string  code;            // short stable id, by PHASE: "Parse", "semantic", "comptime"
     std::string  message;         // human-readable text
     std::string  file;            // source path / module name the position is relative to
     // The single NAME this diagnostic is about, when it has one ("" otherwise) — an unimported symbol,

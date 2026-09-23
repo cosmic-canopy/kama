@@ -490,7 +490,13 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     Diagnostic d;
     d.line = srcLine;
     d.severity = DiagSeverity::Error;
-    d.code = "unsupported";
+    // "semantic", not "unsupported": this is the emitter's general rejection path and it is named for
+    // the C++ helper that reaches it, but almost none of its 800-odd call sites are about a feature
+    // kama lacks — they are ordinary user errors ("`main` is the program's entry point, not a callable
+    // function"). The code is what an editor prints beside the message (`kama(semantic)`), so the
+    // helper's internal name was telling every user their mistake was an unimplemented feature.
+    // It pairs with "Parse" the way the phases do.
+    d.code = "semantic";
     d.message = what;
     // reportPath, not diagFile: a diagnostic owned by the prelude names the prelude's FILE when the
     // install has it (and the driver has verified it is still what this binary compiled), and its
