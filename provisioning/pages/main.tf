@@ -7,6 +7,9 @@
 #
 # NOTE: the Cloudflare provider renamed many resources v4->v5; this targets v5. Pin and
 # verify attribute names against the provider docs for the version you install.
+#
+# Repair resources here by editing this file and applying — a change made in the dashboard or through
+# the API is invisible until the next plan, where it turns into a collision.
 
 terraform {
   required_providers {
@@ -42,11 +45,15 @@ resource "cloudflare_pages_domain" "www" {
 }
 
 # Cloudflare flattens the apex CNAME to A records automatically.
+#
+# ⚠️ Use the project's computed `subdomain`, never "<name>.pages.dev" — pages.dev names are globally
+# unique, so this project got `kama-adu.pages.dev`. Hardcoding the name aimed the domain at a stranger's
+# project, which Cloudflare serves as `error code: 1014`.
 resource "cloudflare_dns_record" "apex" {
   zone_id = var.zone_id
   name    = "kama-lang.org"
   type    = "CNAME"
-  content = "kama.pages.dev"
+  content = cloudflare_pages_project.kama.subdomain
   proxied = true
   ttl     = 1
 }
@@ -55,7 +62,7 @@ resource "cloudflare_dns_record" "www" {
   zone_id = var.zone_id
   name    = "www"
   type    = "CNAME"
-  content = "kama.pages.dev"
+  content = cloudflare_pages_project.kama.subdomain
   proxied = true
   ttl     = 1
 }
