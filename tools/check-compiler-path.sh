@@ -134,3 +134,29 @@ fi
 
 echo "  ok: kama build handles a non-ASCII and a $len-char project directory (manifest, modules, -j 2, run)"
 echo "  ok: kama pkg install links a path dependency at a $deplen-char project, and the build resolves through it"
+
+# WHICH ROUTE DID THE NON-ASCII CASE ACTUALLY TAKE? Not a pass/fail — a note, because a green run means
+# two different things on two volumes and the difference is invisible otherwise.
+#
+# kama spells a non-ASCII path for ld either by borrowing the directory's 8.3 alias or, when there is
+# none, by standing the directory in with a junction (kama_win_shortpath). 8dot3 creation is a PER-VOLUME
+# setting, ON by default on the system volume and OFF by default on every other volume of a Windows
+# Server — so a dev box on `C:` exercises the alias route and the GitHub runner, whose temp is on `D:`,
+# exercises the junction one. Before 0.9.439 only the first worked, the helper handed ld the unchanged
+# non-ASCII path when no alias existed, and this guard went green on every dev box while CI read
+# `cannot open output file …/???-??????/out/app.exe: Invalid argument`. Saying which route ran is what
+# makes a local PASS legible.
+#
+# ⚠️ `fsutil`, NOT `cmd //c dir //x`. The obvious way to read this is the 8.3 column of a `dir /x`, and
+# from msys2 bash that command exits 0 and prints NOTHING (measured) — so the note would have reported
+# "no alias, junction route" on every host, which is a worse thing to ship than no note at all.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
+    vol=$(printf '%s' "$(kama_native_path "$work")" | cut -c1-2)
+    case "$(fsutil 8dot3name query "$vol" 2>/dev/null | tr -d '\r')" in
+        *"is ENABLED on"*)
+            echo "  note: $vol keeps 8.3 names, so the non-ASCII case took the ALIAS route. The JUNCTION"
+            echo "        route is the one exercised where 8dot3 is off — the CI runner's D:, by default." ;;
+        *"is DISABLED on"*)
+            echo "  note: $vol keeps NO 8.3 names, so the non-ASCII case took the JUNCTION route." ;;
+    esac
+;; esac

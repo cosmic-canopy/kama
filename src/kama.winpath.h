@@ -45,10 +45,16 @@ bool kama_win_listdir(const std::string& dir, std::vector<std::string>& names);
 // the shell are the narrow programs). A path that is ASCII and under 248 characters comes back
 // byte-for-byte. Otherwise the longest EXISTING prefix is shortened (an alias exists only for a name
 // that does; a `-o` target's directory exists, its file does not yet) and the rest is appended
-// unchanged, with `/` separators like the rest of the driver. `p` itself comes back when the volume
-// keeps no short names (8dot3name is on by default on the system volume, where a user's profile and
-// therefore the common non-ASCII case lives), so that rare case fails exactly as it did before rather
-// than differently.
+// unchanged, with `/` separators like the rest of the driver.
+//
+// ⚠️ THE ALIAS IS CHECKED, NOT ASSUMED, AND THERE IS A SECOND ROUTE BEHIND IT. 8dot3 creation is a
+// per-volume setting that is OFF by default on every non-system volume of a Windows Server — the GitHub
+// runner's `D:`, where CI's temp lives. GetShortPathNameW does not fail there: it returns the long name
+// for any component that has no alias, so the answer came back still non-ASCII and ld was handed `???`.
+// A result that is not ASCII-and-short is therefore rejected, and the longest existing DIRECTORY is
+// stood in with a JUNCTION under TEMP instead (removed at exit; a junction, not a symlink, needs no
+// privilege). `p` itself comes back only when even that cannot be done — a non-ASCII TEMP, or a
+// non-ASCII FILENAME, which is the driver's `linkOut` stand-in to fix and not this function's.
 std::string kama_win_shortpath(const std::string& p);
 
 // Create (replacing any existing link) a directory JUNCTION at `linkPath` pointing at `target`, both

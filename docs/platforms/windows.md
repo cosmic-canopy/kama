@@ -357,9 +357,20 @@ Worth knowing before debugging, because each of these produced a confident wrong
   directory: `clang -c` into it, out of it and with `-I` on it all work — clang is LLVM and reads its
   UTF-16 command line — while `ld` cannot find an object in it, cannot open an output in it, and `ar`
   fails both ways. The same tree through its **8.3 alias** (`6A7A~1`) links fine, which is what the
-  compiler now hands them (`toolPath`). 8dot3 name creation is on by default on the system volume
-  (`fsutil 8dot3name query C:`), where a user profile — the common non-ASCII directory — lives; a data
-  volume may have it off, and there the linker fails as it always did.
+  compiler hands them (`toolPath`).
+- ⚠️ **…and 8dot3 name creation is OFF by default on every volume but the system one, so the alias is
+  not always there to borrow.** `fsutil 8dot3name query C:` reports it enabled; the registry state is
+  `2` ("per volume"), which means enabled on the system volume — where a user profile, and therefore
+  the common non-ASCII directory, lives — and **disabled elsewhere**. That is not a corner: it is the
+  GitHub Windows runner, whose temp is `D:\a\_temp`, and it is any data volume.
+  **`GetShortPathNameW` does not fail there.** It substitutes an alias for each component that has one
+  and returns the LONG name for each that does not, reporting nothing about which happened — so kama
+  read success, handed `ld` a path still carrying `日本語`, and the build died on
+  `cannot open output file …/???-??????/out/app.exe: Invalid argument` while every dev box on `C:` went
+  green. Since 0.9.439 `kama_win_shortpath` judges the RESULT, and where no usable alias exists it
+  stands the directory in with a **junction** under `%TEMP%` (removed at exit; a junction needs no
+  privilege, a symlink would). To reproduce the no-alias volume without one:
+  `fsutil 8dot3name strip /s /f <dir>` removes the aliases from an existing tree.
 - ⚠️ **cmd.exe's redirections stop at MAX_PATH.** `>"<300-char path>"` on a `cmd /c` line says "The system
   cannot find the path specified" even though the directory exists and the CRT with a `\\?\` prefix can
   write there. The 8.3 alias answers this one too: every component shrinks to eight characters.
@@ -497,8 +508,7 @@ entries here. One has shipped:
 
   What is deliberately NOT covered, each a settled verdict rather than pending work: starting an
   executable past MAX_PATH (`CreateProcessW`, below — the guard runs its deep cases from a second build
-  into a short directory); a volume with 8dot3 names disabled, where the linker fails exactly as it did
-  before; and a non-ASCII `%TEMP%`, which breaks clang's own single-invocation link with no kama path
+  into a short directory); and a non-ASCII `%TEMP%`, which breaks clang's own single-invocation link with no kama path
   involved at all (below). Two more are **genuinely optional** rather than non-goals, and each is a small
   known edit if it is ever reported: `selfExePath` and `relativizeToCwd` keep 260-byte buffers
   (`_get_pgmptr` / `getcwd` into `PATH_MAX`) — a process cannot *have* a cwd past 260 without the registry

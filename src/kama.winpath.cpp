@@ -2,6 +2,9 @@
 #ifdef _WIN32
 #include "kama.winpath.h"
 #include <windows.h>
+#include <map>
+#include <cstdio>
+#include <cstdlib>
 
 // UTF-8 <-> UTF-16, the same two conversions include/kama_os.h makes (kama__wide / kama__utf8). Invalid
 // UTF-8 yields an empty wide string and the caller falls back to handing the OS the bytes it was given —
@@ -93,11 +96,70 @@ bool kama_win_listdir(const std::string& dir, std::vector<std::string>& names)
     return true;
 }
 
+// Can a narrow tool actually open `p`? Both ceilings at once: ASCII, because ld and ar ANSI-decode their
+// argv, and under 248 characters, because cmd carries the `-j` pool's redirections. This is the question
+// the shortening below has to answer — NOT "did GetShortPathNameW succeed", which is a different question,
+// and asking that one is what put `???` on a linker command line (see kama_win_shortpath).
+static bool toolSafe(const std::string& p)
+{
+    if (p.size() >= 248) return false;
+    for (unsigned char c : p) if (c >= 0x80) return false;
+    return true;
+}
+
+// The junctions toolShim has made, removed at exit. RemoveDirectoryW on a reparse point unlinks the
+// junction and never touches what it points at, so this cannot reach a user's build output.
+static std::vector<std::wstring>& shimLinks() { static std::vector<std::wstring> v; return v; }
+static void removeShims()
+{
+    std::vector<std::wstring>& v = shimLinks();
+    for (size_t i = 0; i < v.size(); ++i) RemoveDirectoryW(v[i].c_str());
+    v.clear();
+}
+
+// An ASCII, short stand-in for directory `dir`, as a junction under TEMP — the answer when `dir` has no
+// 8.3 alias to borrow. One per directory (cached, including the failure, so a hopeless TEMP is probed
+// once), which is what makes the object list, the `-o` and the `-MF` of one build agree on a spelling.
+//
+// A junction, not a symlink: a symlink needs SeCreateSymbolicLinkPrivilege (Developer Mode or elevation)
+// and an ordinary `kama build` cannot require one — the same reasoning kama_win_make_junction already
+// records for the dependency link.
+static std::string toolShim(const std::string& dir)
+{
+    static std::map<std::string, std::string> cache;
+    std::map<std::string, std::string>::iterator it = cache.find(dir);
+    if (it != cache.end()) return it->second;
+
+    std::string shim;                                   // empty: no stand-in could be made
+    wchar_t tmp[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
+    if (n && n <= MAX_PATH) {
+        std::string base = narrow(std::wstring(tmp, (size_t)n));
+        for (char& c : base) if (c == '\\') c = '/';
+        while (!base.empty() && base[base.size() - 1] == '/') base.erase(base.size() - 1);
+        // A stand-in is only a stand-in if it is itself safe; a non-ASCII or deep TEMP cannot help, and
+        // the length is judged with the longest name this will mint rather than with `base` alone.
+        char probe[64];
+        snprintf(probe, sizeof probe, "/kama-tool-%lu-63", (unsigned long)GetCurrentProcessId());
+        if (!base.empty() && toolSafe(base + probe)) {
+            for (int i = 0; i < 64 && shim.empty(); ++i) {
+                char name[64];
+                snprintf(name, sizeof name, "/kama-tool-%lu-%d", (unsigned long)GetCurrentProcessId(), i);
+                const std::string cand = base + name;
+                if (GetFileAttributesW(wide(cand).c_str()) != INVALID_FILE_ATTRIBUTES) continue;
+                if (!kama_win_make_junction(dir, cand)) continue;
+                if (shimLinks().empty()) atexit(removeShims);
+                shimLinks().push_back(wide(cand));
+                shim = cand;
+            }
+        }
+    }
+    return cache[dir] = shim;
+}
+
 std::string kama_win_shortpath(const std::string& p)
 {
-    bool ascii = true;
-    for (unsigned char c : p) if (c >= 0x80) { ascii = false; break; }
-    if (ascii && p.size() < 248) return p;
+    if (toolSafe(p)) return p;
     // Shorten the longest existing prefix; carry the remainder (a not-yet-created file, or nested dirs
     // a later step makes) verbatim behind it.
     std::string head = p, tail;
@@ -116,15 +178,54 @@ std::string kama_win_shortpath(const std::string& p)
                     if      (out.rfind("\\\\?\\UNC\\", 0) == 0) out = "\\\\" + out.substr(8);
                     else if (out.rfind("\\\\?\\",      0) == 0) out = out.substr(4);
                     for (char& c : out) if (c == '\\') c = '/';
-                    return tail.empty() ? out : out + "/" + tail;
+                    const std::string cand = tail.empty() ? out : out + "/" + tail;
+                    // ⚠️ THE CALL SUCCEEDING DOES NOT MEAN THE PATH IS ANSWERED. GetShortPathNameW
+                    // substitutes an alias for each component that HAS one and returns the LONG name for
+                    // each that does not — it does not fail, and it reports nothing about which happened.
+                    // 8dot3 creation is off by default on every NON-SYSTEM volume of a Windows Server,
+                    // which is where the GitHub runner keeps its temp (`D:\a\_temp`), so a non-ASCII
+                    // directory there came back unchanged and ld was handed `???-??????/out/app.exe`:
+                    // "cannot open output file … Invalid argument". This file's own junction comment had
+                    // already written the hazard down — "8dot3 creation can be disabled per volume, where
+                    // the helper returns its input unchanged and the fix would silently not apply" — and
+                    // the header called that case rare and accepted it. It is the default half the time.
+                    // So: judge the RESULT, and fall through to a junction when it is still unopenable.
+                    if (toolSafe(cand)) return cand;
+                    break;                  // a shorter prefix cannot alias what this one would not
                 }
             }
         }
         size_t cut = head.find_last_of("/\\");
-        if (cut == std::string::npos || cut == 0) return p;      // nothing shorter exists: give back p
+        if (cut == std::string::npos || cut == 0) break;         // nothing shorter exists
         tail = tail.empty() ? head.substr(cut + 1) : head.substr(cut + 1) + "/" + tail;
         head = head.substr(0, cut);
-        if (head.size() == 2 && head[1] == ':') return p;        // down to the drive with no alias found
+        if (head.size() == 2 && head[1] == ':') break;           // down to the drive with no alias found
+    }
+
+    // No alias worth having. Stand in the longest existing DIRECTORY with a junction and spell the rest
+    // behind it. `p` still comes back if even that cannot be done, which is exactly the old behaviour.
+    {
+        DWORD a = GetFileAttributesW(wide(kama_win_ospath(p)).c_str());
+        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) {
+            const std::string shim = toolShim(p);
+            return shim.empty() ? p : shim;
+        }
+    }
+    std::string dir = p, rest;
+    for (;;) {
+        size_t cut = dir.find_last_of("/\\");
+        if (cut == std::string::npos || cut == 0) return p;
+        rest = rest.empty() ? dir.substr(cut + 1) : dir.substr(cut + 1) + "/" + rest;
+        dir = dir.substr(0, cut);
+        if (dir.size() == 2 && dir[1] == ':') return p;
+        DWORD a = GetFileAttributesW(wide(kama_win_ospath(dir)).c_str());
+        if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        const std::string shim = toolShim(dir);
+        if (shim.empty()) return p;
+        const std::string cand = shim + "/" + rest;
+        // A non-ASCII FILENAME is not this function's to fix — the driver links under an ASCII stand-in
+        // and renames (see `linkOut`) — so say so by handing `p` back rather than a path that still bites.
+        return toolSafe(cand) ? cand : p;
     }
 }
 
