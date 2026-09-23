@@ -1,0 +1,18 @@
+// KR-89 — a CALL through a moved-from `BindableFunctionPtr`. The argument `give` DOES mark the source
+// (a second `give` was always refused); what was missing is that an invoke builds its receiver's C
+// spelling itself, walking past the one `checkNotMoved`. So this shape built clean and exited 139 —
+// the only use-after-move in kama that was a SIGSEGV rather than a diagnostic.
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type value Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn int32 sink(BindableFunctionPtr<Get> f) { return f(d: 1); }
+fn int32 main() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
+    int32 r = sink(f: give a);
+    return a(d: 1);    // ERROR: use of `a` after it was moved
+}

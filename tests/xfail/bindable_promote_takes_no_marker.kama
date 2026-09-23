@@ -1,0 +1,9 @@
+// KR-89 — the other side of the same rule: promoting a FREE FUNCTION transfers nothing (the bindable
+// records a code address and owns no receiver), so a `give`/`copy` there names a hand-off that does not
+// happen. The marker was silently ignored.
+fnptr int32 Get(int32 d);
+fn int32 plain(int32 d) { return d + 1; }
+fn int32 main() {
+    BindableFunctionPtr<Get> f = give plain;    // ERROR: a free function is promoted, not handed over
+    return f(d: 1);
+}

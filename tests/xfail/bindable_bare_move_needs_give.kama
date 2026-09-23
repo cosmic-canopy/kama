@@ -1,0 +1,18 @@
+// KR-89 — a bound `BindableFunctionPtr` OWNS its receiver (`bind` consumes a unique owner, and the
+// handle releases it through a generated thunk), so handing one to another is an ownership transfer and
+// says `give`, like every other owning type. The ASSIGNMENT form has always demanded that; this decl
+// form silently moved, because it shares a branch with the free-function promote (which owns nothing
+// and correctly takes no marker — see tests/bindfn_basic.kama, where `f = sub` stays bare).
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type value Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn int32 main() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> b = a;    // ERROR: a bindable hand-off must say `give`
+    return b(d: 1);
+}

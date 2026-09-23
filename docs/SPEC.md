@@ -3251,6 +3251,15 @@ bound callables, while `fnptr` stays the zero-cost free-only form. It is **move-
 its object): returning one from a factory transfers ownership; the captured object's destructor runs
 **exactly once** when the bindable finally drops.
 
+Because a bound one **owns** its receiver, handing one bindable to another is an ownership transfer and
+takes the same marker every other owning type takes: **`give`, and only `give`**. A bare `b = a` is <!-- xfail: bindable_bare_move_needs_give -->
+refused — it would leave two handles releasing one object — and **`copy` is refused outright**: the <!-- xfail: bindable_copy_refused -->
+handle is type-erased, so whether its receiver is unique or refcounted is only known at run time, and the
+compiler cannot decide which of the two a duplicate would need (`Owned` refuses `copy` for the same
+reason). Promoting a **free function** is not a hand-off — it transfers nothing — so it takes **no**
+marker, and a `give`/`copy` there is refused rather than ignored. Reading a bindable after it was <!-- xfail: bindable_promote_takes_no_marker -->
+`give`n is a use-after-move like any other, **including calling it**. <!-- xfail: use_after_move_bindable_call -->
+
 **FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. C requires an
 *exact* function-pointer-type match (incompatible fn-pointer types are a hard error), so when the C callback
 signature is one kama's `fnptr` doesn't spell identically — most commonly `const`-qualified parameters —

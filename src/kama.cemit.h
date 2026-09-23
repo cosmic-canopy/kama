@@ -3512,7 +3512,7 @@ private:
                                  const SharedArgumentList& args, int ln, int depth);
     InvocationNode* bindableBindCall(const SharedExpression& e);
     void        emitBindablePromote(const std::string& nm, const std::string& ty,
-                                    SharedExpression init, int depth);
+                                    SharedExpression init, int depth, int handoff);
     std::string emitBindableInvoke(const std::string& recv, const std::string& cls,
                                    SharedArgumentList args, int line);
     // Emit `cName(leadArg, <args reordered to params>)`. leadArg "" omits self.

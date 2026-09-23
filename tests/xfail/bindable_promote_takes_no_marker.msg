@@ -1,0 +1,1 @@
+PROMOTED into a `BindableFunctionPtr`

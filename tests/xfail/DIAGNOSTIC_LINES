@@ -51,8 +51,11 @@ bind_foreach_narrow	bind_foreach_narrow.kama:3
 bind_foreach_operand	bind_foreach_operand.kama:3
 bind_match_narrow	bind_match_narrow.kama:4
 bind_match_operand	bind_match_operand.kama:3
+bindable_bare_move_needs_give	bindable_bare_move_needs_give.kama:16
 bindable_bind_not_local	bindable_bind_not_local.kama:8
+bindable_copy_refused	bindable_copy_refused.kama:16
 bindable_new	bindable_new.kama:8
+bindable_promote_takes_no_marker	bindable_promote_takes_no_marker.kama:7
 bindable_stateful_allocator	bindable_stateful_allocator.kama:10
 binder_shadow_for_local	binder_shadow_for_local.kama:10
 binder_shadow_foreach_field	binder_shadow_foreach_field.kama:14
@@ -1073,6 +1076,8 @@ unsafe_ptr_signature_return	unsafe_ptr_signature_return.kama:6
 upcast_bad	upcast_bad.kama:8
 use_after_give_shared	use_after_give_shared.kama:8
 use_after_move	use_after_move.kama:8
+use_after_move_bindable_call	use_after_move_bindable_call.kama:17
+use_after_move_bindable_init	use_after_move_bindable_init.kama:14
 usize_from_int32	usize_from_int32.kama:1
 value_holds_move_only	value_holds_move_only.kama:5
 value_holds_move_only_enum	value_holds_move_only_enum.kama:4

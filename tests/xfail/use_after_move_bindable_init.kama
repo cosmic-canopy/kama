@@ -1,0 +1,15 @@
+// KR-89 — the same crash reached through the DECLARATION-INITIALIZER give, which is the position that
+// did not even mark: `emitBindablePromote` nulled the source's four fields and recorded nothing.
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type value Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn int32 main() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> b = give a;
+    return a(d: 1);    // ERROR: use of `a` after it was moved
+}

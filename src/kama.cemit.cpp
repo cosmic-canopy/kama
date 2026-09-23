@@ -7309,9 +7309,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     flushHoisted(depth);
                     indent(depth); *_out << kName(nm) << " = " << t << ";\n";
                 } else if (isBindableClass(ty)) {
-                    // BindableFunctionPtr <- free function (promote) or another bindable (move).
+                    // BindableFunctionPtr <- free function (promote) or another bindable (move). The
+                    // marker rule differs between those two, so the handoff travels in and is judged there.
                     line(n->line);
-                    emitBindablePromote(kName(nm), ty, init, depth);
+                    emitBindablePromote(kName(nm), ty, init, depth, handoff);
                 } else {
                     // Copy-initialize from another named value. The give/copy marker
                     // (or the type's default) decides move vs duplicate.
@@ -8123,7 +8124,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
 
                 if (isNamedValue(rhs.get())) {
-                    if (handoff == 0)
+                    // A bindable reaches this branch too (it is an intrinsic that owns), but only `give`
+                    // means anything for one — see emitBindablePromote for why `copy` cannot. Saying so
+                    // here keeps the two hand-off forms telling the same story, and stops a `copy` from
+                    // reaching `copyCall` and emitting a call to a `__copy` that is never generated: that
+                    // surfaced as a raw C "call to undeclared function", on the right line and in the
+                    // wrong language.
+                    if (isBindableClass(lty)) {
+                        if (handoff == 2)
+                            unsupported("a `BindableFunctionPtr` can't be `copy`d — whether its bound receiver "
+                                        "is unique or shared is only known at run time; use `give` to move it", n->line);
+                        else if (handoff == 0)
+                            unsupported("a `BindableFunctionPtr` hand-off must say `give` — it owns its bound "
+                                        "receiver, and a bare `=` would leave two handles releasing it", n->line);
+                    }
+                    else if (handoff == 0)
                         unsupported("a collection/`string` hand-off must say `give` (move) or `copy` (deep) "
                                     "— write `… = give …` or `… = copy …`, or pass by `ref` to borrow", n->line);
                     std::string rname;
@@ -23678,7 +23693,7 @@ InvocationNode* CEmitter::bindableBindCall(const SharedExpression& e)
 // `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
 // function (no object) or MOVE another bindable.
 void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
-                                   SharedExpression init, int depth)
+                                   SharedExpression init, int depth, int handoff)
 {
     const std::string& sigCName = _classes[ty].collElemClass;
 
@@ -23689,18 +23704,41 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
     }
     if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
         if (id->value) {
-            // Another BindableFunctionPtr lvalue -> move (copy + invalidate the source).
+            // Another BindableFunctionPtr lvalue -> move (relocate + invalidate the source).
+            //
+            // A BOUND bindable OWNS its receiver: `bind` consumes a unique owner (markMoved on the `obj:`
+            // argument) or retains a shared one, and the handle releases it through the generated thunk. So
+            // handing one bindable to another is an ownership transfer, and it says `give` like every other
+            // owning type — the ASSIGNMENT form has demanded that all along; only this decl form did not,
+            // because it shares a branch with the free-function PROMOTE below, which owns nothing and
+            // correctly takes no marker. The move inherited the promotion's silence.
+            //
+            // `copy` has no sound meaning here. The handle is type-erased, so whether its receiver is
+            // unique or refcounted is a RUNTIME fact (`kama_ctrl != NULL`) — the compiler cannot decide
+            // which of the two a duplicate would need. Refused, the way `Owned` refuses `copy`.
             if (isBindableClass(exprClass(init))) {
+                if (handoff == 2)
+                    unsupported("a `BindableFunctionPtr` can't be `copy`d — whether its bound receiver is "
+                                "unique or shared is only known at run time; use `give` to move it", init->line);
+                else if (handoff == 0)
+                    unsupported("a `BindableFunctionPtr` hand-off must say `give` — it owns its bound "
+                                "receiver, and a bare `=` would leave two handles releasing it", init->line);
                 std::string src = emitExpression(init);
                 indent(depth); *_out << nm << " = " << src << ";\n";
-                indent(depth);
-                *_out << "(" << src << ").kama_obj = NULL; (" << src << ").kama_ctrl = NULL; ("
-                      << src << ").kama_fn = NULL; (" << src << ").kama_release = NULL;\n";
+                indent(depth); *_out << moveNullStmt(ty, src) << "\n";
+                // …and RECORD the move. Nulling alone left the source readable: calling a moved-from
+                // bindable dereferences a NULL `kama_fn` (measured — SIGSEGV), where a moved-from `string`
+                // is merely empty. Both neighbouring hand-off sites emit their null and this mark together.
+                std::string mv = moveOnlySource(init, init->line); if (!mv.empty()) markMoved(mv);
                 return;
             }
-            // A free function -> promote (obj = NULL; no RAII).
+            // A free function -> promote (obj = NULL; no RAII). Nothing is transferred — the bindable
+            // records the code address — so a marker here would name a hand-off that does not happen.
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end()) {
+                if (handoff)
+                    unsupported("a free function is PROMOTED into a `BindableFunctionPtr`, not handed over "
+                                "— it owns nothing; drop the `give`/`copy`", init->line);
                 if (!sigMatches(_sigs.at(sigCName), fit->second))
                     unsupported("function does not match the BindableFunctionPtr signature", init->line);
                 else if (_sigs.at(sigCName).noHeap && !fnHasNoHeap(fit->second.node))
@@ -25196,6 +25234,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // bound object (call the method with it, or the free fn directly).
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isBindableClass(_localTypes[name])) {
+        // A CALL is a read, and this is the one read route that does not go through the identifier
+        // emitter — it builds the receiver's C spelling itself, so it walked straight past the single
+        // `checkNotMoved` choke point there. A moved-from bindable is all-NULL, so the call that follows
+        // dereferences a NULL function pointer: measured, it built clean and exited 139. Every other read
+        // of a moved-from value is a diagnostic; this one was a SIGSEGV.
+        checkNotMoved(name, call->line);
         return emitBindableInvoke(kName(name), _localTypes[name], call->args, call->line);
     }
 

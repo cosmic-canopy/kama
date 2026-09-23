@@ -1,0 +1,18 @@
+// KR-89 — `copy` has no sound meaning for a bindable: the handle is type-erased, so whether its
+// receiver is unique or refcounted is a RUNTIME fact (`kama_ctrl`), and the compiler cannot decide which
+// of the two a duplicate would need. Refused, the way `Owned` refuses `copy`. Before this it was
+// ACCEPTED in an initializer, and in an assignment it reached a `__copy` that is never generated —
+// surfacing as a raw C "call to undeclared function", on the right line and in the wrong language.
+import { std::memory::Owned };
+fnptr int32 Get(int32 d);
+type value Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn int32 main() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
+    BindableFunctionPtr<Get> b = copy a;    // ERROR: a bindable can't be `copy`d
+    return b(d: 1);
+}
