@@ -286,9 +286,20 @@ case "$(uname -s)" in
     #     handed a stdout, and the parent of a redirect usually has a console too, so the attach succeeded
     #     and the file got NOTHING. `app > log.txt` wrote 0 bytes where a console build wrote 13 (KB-30).
     #     The console build is the control: the two must agree, whatever the number is.
-    printf 'fn int32 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
-    "$KAMA" build --subsystem windows "$tmp/gui_out.kama" -o "$tmp/gui_out.exe" >/dev/null 2>&1
-    "$KAMA" build                    "$tmp/gui_out.kama" -o "$tmp/con_out.exe" >/dev/null 2>&1
+    printf 'import { core::print };\nfn int32 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
+    # ⚠️ Checked, and loudly. These two were unchecked, so when `print` became an import-or-error `core`
+    # capability (KR-87) both builds failed, neither exe existed, and the assertion below read the two
+    # missing outputs as "0 bytes == 0 bytes" — `set -e` then killed the guard with NO message at all.
+    # A build this guard depends on says so when it fails.
+    for sub in gui con; do
+        case "$sub" in gui) flags="--subsystem windows" ;; *) flags="" ;; esac
+        # shellcheck disable=SC2086
+        "$KAMA" build $flags "$tmp/gui_out.kama" -o "$tmp/${sub}_out.exe" >"$tmp/${sub}_out.err" 2>&1 || {
+            echo "check-target: FAIL — the ${sub} build of the redirect probe did not compile" >&2
+            sed -n '1,10p' "$tmp/${sub}_out.err" | sed 's/^/    /' >&2
+            exit 1
+        }
+    done
     "$tmp/gui_out.exe" > "$tmp/gui_out.txt" 2>/dev/null || true
     "$tmp/con_out.exe" > "$tmp/con_out.txt" 2>/dev/null || true
     guibytes=$(wc -c < "$tmp/gui_out.txt" | tr -d ' ')

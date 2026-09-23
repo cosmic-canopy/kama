@@ -47,9 +47,10 @@ mkstub() {
     d="$HOME/.kama/versions/$1/bin"; mkdir -p "$d"
     case "$EXE" in
         .exe)
-            printf 'fn int32 main() {\n    println(s: "TOOLCHAIN %s");\n    return 0;\n}\n' "$1" > "$tmp/stub-$1.kama"
-            "$KAMA" build "$tmp/stub-$1.kama" -o "$d/kama.exe" >/dev/null 2>&1 \
-                || { echo "check-toolchain: could not build the $1 stub" >&2; exit 1; }
+            printf 'import { core::println };\nfn int32 main() {\n    println(s: "TOOLCHAIN %s");\n    return 0;\n}\n' "$1" > "$tmp/stub-$1.kama"
+            "$KAMA" build "$tmp/stub-$1.kama" -o "$d/kama.exe" >"$tmp/stub-$1.log" 2>&1 \
+                || { echo "check-toolchain: could not build the $1 stub" >&2
+                     sed -n '1,10p' "$tmp/stub-$1.log" | sed 's/^/    /' >&2; exit 1; }
             ;;
         *)
             printf '#!/bin/sh\necho "TOOLCHAIN %s"\n' "$1" > "$d/kama"
