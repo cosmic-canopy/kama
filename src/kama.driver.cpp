@@ -5963,8 +5963,8 @@ static bool makeDirs(const std::string& path)
 // resulting error ("declares no dependency named `engine`") blames the manifest, which is correct.
 // A relative `../../../engine` is right under every mount point simultaneously, so one resolved tree
 // serves host and container at once. Re-running `pkg install` per environment is not an alternative:
-// each run overwrites the other's links, so the two fight. (Reported from a real port —
-// friendly-fire-department KAMA_GAPS KB-6, which had to post-process the links to work around it.)
+// each run overwrites the other's links, so the two fight. (Reported from a real external port, which
+// had to post-process the links to work around it.)
 //
 // The store is deliberately exempt. `~/.kama/store/<pkg>-<hash>` is content-addressed and machine-global,
 // not part of any repo, so a relative path to it would be both longer and more fragile — and it does not

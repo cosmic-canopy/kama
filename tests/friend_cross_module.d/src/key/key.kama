@@ -1,8 +1,8 @@
 // `friend` reaches across FILES and MODULES, by qualified path, for every accessor kind — a free function,
 // a type, and a `Type::method` (a named `ctor` included). Until 0.9.223 only the free-function form resolved
 // from a qualified path; a type had to be imported and named bare, so an owner had to `import` a module
-// purely to name it (the first external package's KAMA_GAPS #1). And a grant naming a module that is not
-// part of THIS program is INERT rather than an error (#2): the code it names is not being compiled, so
+// purely to name it (reported by the first external package). And a grant naming a module that is not
+// part of THIS program is INERT rather than an error: the code it names is not being compiled, so
 // it can grant nothing — while a typo inside a module that IS present stays a hard error
 // (tests/xfail/friend_present_module_typo.d).
 export { Key, fillSame };

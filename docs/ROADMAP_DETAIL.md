@@ -914,8 +914,8 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 - **The first consumer's second audit (2026-09-01), triaged against this tree.** Everything below was
   REPRODUCED here before being scheduled — their report names the symptom, and three times running the
-  shape underneath it has been different. Their doc is `../friendly-fire-department/docs/KAMA_GAPS.md`;
-  they renumber it between audits, so find an entry by its text, never by a remembered KG number. They
+  shape underneath it has been different. They keep their own gap list and renumber it between audits,
+  so find an entry by its text, never by a remembered KG number. They
   pin `0.9.132` and have verified `@noheap` transitivity by behaviour in their own tree.
 
   - **A contract member returning a type declared BESIDE the contract — FIXED `0.9.134`.** ⚠️ **It was

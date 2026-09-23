@@ -1023,7 +1023,7 @@ grep -q "app/out/" "$tmp/out.out" \
 #
 # ⚠️ Nothing could have caught it: `tests/mod_dir_module.d` has the multi-module shape but is an
 # EXECUTABLE, so nothing ever consumes it. It takes two packages, which is why this lives here rather
-# than in a `.d` fixture. Reported from a real project port (friendly-fire-department, KAMA_GAPS KB-4).
+# than in a `.d` fixture. Reported from a real external project port.
 mm="$tmp/mm"
 mkdir -p "$mm/lib/src/a" "$mm/lib/src/b" "$mm/app/src"
 cat > "$mm/lib/kama.json" <<'JSON'

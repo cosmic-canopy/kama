@@ -23052,7 +23052,7 @@ void CEmitter::resolveFriends()
                 // (a free function). The first two used to be spelled only bare: `resolveUserName` was
                 // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
-                // friend (the first external package's KAMA_GAPS #1). Fixed in 0.9.230.
+                // friend (reported by the first external package). Fixed in 0.9.230.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
                 if (asType(clsName, g)) resolved = true;
                 if (!resolved) {                                           // `mod::Type::method`
@@ -23069,7 +23069,7 @@ void CEmitter::resolveFriends()
                 // A grant into a module that is not part of THIS program is INERT, not an error: the code
                 // it names is not being compiled, so it can grant nothing — and an owner must be able to
                 // say who its friends are without dragging every one of their modules into every
-                // consumer's build (KAMA_GAPS #2: `Nonce.raw()` was `public` "under protest" for exactly
+                // consumer's build (reported: an accessor was `public` "under protest" for exactly
                 // this). A typo inside a module that IS present stays a hard error below. "Present" is
                 // judged on the longest namespace prefix of the path that names a loaded module, which is
                 // what an absent `sodium::box` fails and a present `sodium::aead` passes.
@@ -25303,7 +25303,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
         // dangle — and until 0.9.231 it escaped the front end and died in clang ("cannot take the address
         // of an rvalue"), which a package author who does not read C could not act on (the first external
-        // package's KAMA_GAPS #3). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
+        // package reported it). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
         // still owns and stays fine, as it does for `isNamedValue`.
         else if (rootIsTemporary(a))
             unsupported(("`addr(of: …)` on an element of a temporary — `" + unparseExpr(a) + "` is rooted in "
