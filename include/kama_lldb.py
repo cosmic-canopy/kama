@@ -25,6 +25,9 @@ import lldb
 
 CATEGORY = 'kama'
 PRELUDE_SCOPE = 'kama__'   # what qualify() puts in front of every prelude declaration
+# The one frame-format token this file replaces. Every other token in lldb's default is left alone —
+# see the frame-format block in __lldb_init_module for why it is read live rather than copied.
+NAME_WITH_ARGS = '${function.name-with-args}'
 
 # Read at most this many bytes for a string summary. A corrupt or uninitialized `kama_len` is a number
 # like 14472985476293984456 (measured, stopping at a function's entry before its locals are live), and
@@ -573,18 +576,38 @@ def __lldb_init_module(debugger, internal_dict):
 
     debugger.HandleCommand('type category enable ' + CATEGORY)
 
-    # FRAME NAMES. This is LLDB's own default frame-format with `${function.name-with-args}` — and only
-    # that — swapped for the hook above, so every other part of a backtrace line (the index, the pc, the
+    # FRAME NAMES. Take THIS lldb's own default frame-format and swap `${function.name-with-args}` — and
+    # only that — for the hook above, so every other part of a backtrace line (the index, the pc, the
     # module, the file:line, the [opt]/[inlined]/[artificial] markers) renders exactly as it always did.
-    # Copied from `settings show frame-format` rather than hand-written, because anything hand-written
-    # here silently degrades a backtrace for every language in the process, not just kama's.
-    debugger.HandleCommand(
-        'settings set frame-format "frame #${frame.index}: '
-        '{${ansi.fg.cyan}${frame.pc}${ansi.normal} }{${module.file.basename}{`}}'
-        '{${script.frame:' + __name__ + '.frame_name}{${frame.no-debug}${function.pc-offset}}}'
-        '{ at ${ansi.fg.cyan}${line.file.basename}${ansi.normal}:${ansi.fg.yellow}${line.number}'
-        '${ansi.normal}{:${ansi.fg.yellow}${line.column}${ansi.normal}}}${frame.kind}'
-        '{${function.is-optimized} [opt]}{${function.is-inlined} [inlined]}'
-        '{${frame.is-artificial} [artificial]}\n"')
+    # Anything hand-written here silently degrades a backtrace for every language in the process, not
+    # just kama's.
+    #
+    # ⚠️ READ THE DEFAULT AT RUNTIME, never a copy of it. This was a copy — taken from `settings show
+    # frame-format` on one machine — and it carried `${frame.kind}`, a token that lldb only learned
+    # recently. On an older lldb that member does not exist, and lldb rejects the WHOLE `settings set`
+    # rather than the one token: the format never applied, every frame fell back to its C symbol, and
+    # `check-lldb-formatters` failed on CI's macos-14 while passing on a dev box with a newer Xcode.
+    # A pinned copy is a bet that every lldb has exactly the tokens one machine had. Reading the live
+    # default wins that bet on every version, forwards and backwards, because whatever tokens this lldb
+    # puts in its own default are by construction ones it can parse.
+    fmt = None
+    try:                                                   # SBDebugger.GetSetting: lldb 13+ (2021)
+        live = debugger.GetSetting('frame-format').GetStringValue(4096)
+        if live and NAME_WITH_ARGS in live:
+            fmt = live.replace(NAME_WITH_ARGS, '${script.frame:' + __name__ + '.frame_name}')
+    except Exception:
+        fmt = None
+    if fmt is None:
+        # No readable default (a very old lldb, or a shape we do not recognise). Fall back to the
+        # long-standing default, minus `${frame.kind}` — the token renders EMPTY for an ordinary frame
+        # (measured), so omitting it costs nothing and keeps this parseable on old and new alike.
+        fmt = ('frame #${frame.index}: '
+               '{${ansi.fg.cyan}${frame.pc}${ansi.normal} }{${module.file.basename}{`}}'
+               '{${script.frame:' + __name__ + '.frame_name}{${frame.no-debug}${function.pc-offset}}}'
+               '{ at ${ansi.fg.cyan}${line.file.basename}${ansi.normal}:${ansi.fg.yellow}${line.number}'
+               '${ansi.normal}{:${ansi.fg.yellow}${line.column}${ansi.normal}}}'
+               '{${function.is-optimized} [opt]}{${function.is-inlined} [inlined]}'
+               '{${frame.is-artificial} [artificial]}\\n')
+    debugger.HandleCommand('settings set frame-format "%s"' % fmt)
 
     print('kama: value formatters loaded')
