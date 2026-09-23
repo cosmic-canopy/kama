@@ -247,6 +247,61 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### Use-after-move is not diagnosed for a `string` into an initializer (KR-89) — filed by the consumer repo as KB-32, 2026-09-22; re-probed on `0.9.434`
+
+```kama
+string a = "hello.ppm";
+string b = give a;
+isize n = a.length();      // builds clean, n == 0 — no diagnostic at any level
+```
+
+**kama states the opposite as a headline guarantee.** `README.md` says "Use-after-move is a compile
+error" and lists "no use-after-move" among the language's properties; `docs/SPEC.md` repeats it and
+carries an `xfail: use_after_move` marker, so the property *is* tested — on a `resource`, through an
+argument. It cost the consumer a real bug: a path string moved into one local and read two lines later
+through a `const ref` parameter wrote **every frame of a video to `-00000`**, with no stem and no
+extension. A silent `""` reads as "the flag was not passed", three files from the move.
+
+**Not a memory-safety bug.** The emitted C nulls the source, so a read is a well-defined empty value and
+the moved-from local's destructor frees `NULL`. It is a missing *diagnostic*.
+
+**Probed to ONE CELL.** The row as filed says "not diagnosed for `string`"; measured, it is narrower and
+therefore much more actionable — the variable is the GIVE SITE, not only the type:
+
+| | give in an initializer (`T b = give a;`) | give as an argument (`f(v: give a)`) |
+|---|---|---|
+| `string` | ⛔ **silent** | ✅ diagnosed |
+| `DynamicArray<T>` | ✅ diagnosed | ✅ diagnosed |
+| `Owned<T>` | ✅ diagnosed | ✅ diagnosed |
+
+**The read side is complete** — it is only the mark that is missing. After an *argument* give (which does
+mark the local), every reader catches it: a direct method call, a `const ref` parameter, a second `give`,
+`copy a`, a `${a}` hole, and `foreach` over it. So no reader needs work; one mark does.
+
+**The emitter already nulls the source and simply does not record it.** For `string b = give a;`:
+
+```c
+k_b = k_a;
+(k_a).kama_data = NULL; (k_a).kama_len = 0; (k_a).kama_cap = 0;   // the move happened…
+ptrdiff_t k_n = kama_string__length((kama_string*)&(k_a));        // …and nothing marked `k_a` moved
+```
+
+The site is the `give` arm of the intrinsic-collection local-declaration branch in `kama.cemit.cpp`
+(guarded by `_classes[ty].isIntrinsicColl && !isFixedColl(ty) && !isValueVectorKind(…)`), which emits
+`moveNullStmt` alone. Both neighbouring arms — the contract-boxing one just above and the
+`isMoveOnlyValue` resource one just below — emit their move *and* call `markMoved`. That gate is also why
+the hole is string-shaped: of the intrinsic collections, `InlineArray` is excluded as a `Fixed`, `Simd` as
+a value-vector kind, so `string` is effectively the only type whose give reaches that arm.
+
+**Why no fixture caught it.** There are 14 move-related `tests/xfail/` fixtures. Four use an initializer
+give — and **not one of them mentions `string`**. The corpus tests initializer-give (for boxes and
+generics) and tests string hand-offs (elsewhere), and never the intersection. The same lesson as the
+`foreach (char c in s)` claim: a positive fixture on one type does not guard a claim made about all of
+them, and a guarantee this broad wants a fixture per *shape*, not per type.
+
+Wants: the mark at that arm, plus `tests/xfail/` fixtures for `string` × initializer-give across the read
+routes, and a sweep of the other `moveNullStmt` call sites for the same null-without-mark pairing.
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
