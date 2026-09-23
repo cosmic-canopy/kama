@@ -4,6 +4,12 @@ Syntax highlighting, the kama language server (live diagnostics, go-to-definitio
 completion, an auto-import fix) and zero-config breakpoint debugging for the
 [kama](https://kama-lang.org) language (`.kama`).
 
+![Completion, then a use-after-move caught as you type](https://kama-lang.org/assets/demo.gif)
+
+The diagnostics are the **compiler's own** — the same analysis `kama build` runs, so the editor cannot
+disagree with the build. Above: completion resolving a type's members, then `give` moving a `string` and
+the use-after-move reported on the next line, with no build step.
+
 ## Requirements
 
 This extension drives the **kama compiler** — install it first:
@@ -49,6 +55,12 @@ breakpoint-debuggable like any native program — and what you inspect reads as 
    with no project around it is built alone.
 3. Execution stops **in the `.kama` source**; Variables shows locals and params, and the Call Stack
    shows kama frames.
+
+![Paused at a breakpoint: kama values in the Variables pane](https://kama-lang.org/assets/debug.png)
+
+Values read as **kama**, not as the C they compile to: a `string` shows its text, a `value` type shows
+its fields without the `k_` register, and the call stack names `main  demo.kama  18:33`. Note `path = ""`
+— a moved-from `string`, the run-time face of the same guarantee the editor catches above.
 
 Values are rendered by the formatters that ship with the compiler, so a `string` shows its text, an
 `Optional` shows `Some(…)` or `None`, a `DynamicArray` or `Map` shows its elements, and a `Shared`
