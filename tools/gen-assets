@@ -7,7 +7,9 @@ SRC=assets/logo.png
 [ -f "$SRC" ] || { echo "gen-assets: missing $SRC" >&2; exit 1; }
 gen() { mkdir -p "$(dirname "$1")"; sips -s format png -z "$2" "$2" "$SRC" --out "$1" >/dev/null; echo "  $1 (${2}px)"; }
 echo "regenerating brand assets from $SRC"
-gen editor/vscode/icon.png           128     # VS Code / Open VSX listing icon
+gen editor/vscode/icon.png           256     # VS Code / Open VSX listing icon. 128 is the Marketplace
+                                             # MINIMUM, not the target: the extension detail page renders
+                                             # it near 192px, so a 128 source is upscaled and looks soft.
 gen site/assets/logo.png             256     # landing-page hero
 gen site/assets/apple-touch-icon.png 180
 gen site/assets/favicon-32.png       32
