@@ -1,0 +1,11 @@
+// KR-89 — the same hole at the ELEMENT-SLOT store. `v[0] = give a` nulled the source's buffer and left
+// the mark in the branch for resources only, so a `string` source stayed readable. The resource arm
+// beside it (tests/xfail/give_ptr_local_reuse) has always been caught.
+import { std::collections::DynamicArray };
+fn int32 main() {
+    DynamicArray<string> v = DynamicArray::<string>.empty();
+    v.add(item: give "z");
+    string a = "hello.ppm";
+    v[0] = give a;
+    return cast<int32>(a.length());   // ERROR: use of `a` after it was moved
+}

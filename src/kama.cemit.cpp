@@ -7376,8 +7376,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                              "or use `give` to move)").c_str(), n->line);
                             else { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         }
-                        // give: the plain `=` already transferred the struct; null the source's buffer.
-                        else { indent(depth); *_out << moveNullStmt(ty, emitExpression(init)) << "\n"; }
+                        // give: the plain `=` already transferred the struct; null the source's buffer —
+                        // and RECORD the move, which this arm alone forgot to do. Both neighbours (the
+                        // contract-boxing one above, the `isMoveOnlyValue` resource one below) emit their
+                        // move and this mark together. Without it `string b = give a;` then reading `a`
+                        // built clean and answered "", silently, while the same shape on every other
+                        // owning type was refused — the gate above is why the hole looked string-shaped.
+                        else {
+                            indent(depth); *_out << moveNullStmt(ty, emitExpression(init)) << "\n";
+                            std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv);
+                        }
                     } else if (isMoveOnlyValue(ty) && isNamedValue(init.get())) {
                         // A destructible `resource` value. Movable is universal: `give` MOVES (relocate —
                         // the `=` blit already transferred the bytes; move-tracking suppresses the source
@@ -7917,8 +7925,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     indent(depth); *_out << et << "__dtor(" << sp << ");\n";           // release the old element
                     indent(depth); *_out << "*" << sp << " = " << tv << ";\n";         // move/copy the new one in
                     if (!doCopy && named) {   // consume the moved source (a copy leaves it valid; a fresh rvalue has none)
+                        // An intrinsic (`string`) needs its buffer nulled as well as the move recorded; a
+                        // resource needs only the record (its scope-drop is what the mark suppresses). The
+                        // mark is common to both, and used to sit in the `else` alone — so `v[0] = give s`
+                        // nulled `s` and left it readable, the same hole as the declaration arm above.
                         if (isColl) { indent(depth); *_out << moveNullStmt(et, src) << "\n"; }
-                        else { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
+                        std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv);
                     }
                     return;
                 }
@@ -23866,13 +23878,16 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             else { indent(depth); *_out << dst << " = " << copyCall(dstCType, emitExpression(v)) << ";\n"; }
         } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
-    // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops.
+    // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops —
+    // and record the move, for the same reason the promote arm now does. (No source spelling reaches
+    // here today: a value-producing `match` into a bindable is refused earlier, for wanting a statement
+    // slot. Paired anyway, because a null without a mark is the exact defect this row is about, and the
+    // next spelling that reaches this arm should not have to rediscover it.)
     else if (auto* rid = dynamic_cast<IdentifierNode*>(v.get())) {
         if (rid->value && isBindableClass(exprClass(v))) {
             std::string e = emitExpression(v);
-            indent(depth);
-            *_out << "(" << e << ").kama_obj = NULL; (" << e << ").kama_ctrl = NULL; ("
-                  << e << ").kama_fn = NULL; (" << e << ").kama_release = NULL;\n";
+            indent(depth); *_out << moveNullStmt(exprClass(v), e) << "\n";
+            std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv);
         }
     }
 }
@@ -24913,6 +24928,10 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 else {
                     std::string t = "kama_varg" + std::to_string(_tempCounter++);
                     _hoisted.push_back(fcls + " " + t + " = (" + val + "); " + moveNullStmt(fcls, val));
+                    // …and record it. The null alone left `E::V(f: give s)` readable afterwards — the
+                    // third face of the same hole. `giveOfBorrowedBinding` above already refused the
+                    // aliasing case and returns early, so reaching `moveOnlySource` here cannot double it.
+                    std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
                     field = t;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl

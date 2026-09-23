@@ -1078,6 +1078,9 @@ use_after_give_shared	use_after_give_shared.kama:8
 use_after_move	use_after_move.kama:8
 use_after_move_bindable_call	use_after_move_bindable_call.kama:17
 use_after_move_bindable_init	use_after_move_bindable_init.kama:14
+use_after_move_string_elem_slot	use_after_move_string_elem_slot.kama:10
+use_after_move_string_init	use_after_move_string_init.kama:12
+use_after_move_string_variant	use_after_move_string_variant.kama:9
 usize_from_int32	usize_from_int32.kama:1
 value_holds_move_only	value_holds_move_only.kama:5
 value_holds_move_only_enum	value_holds_move_only_enum.kama:4

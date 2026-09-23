@@ -1,0 +1,10 @@
+// KR-89 — and at the VARIANT PAYLOAD. `Msg::Text(body: give a)` nulled the source and recorded nothing,
+// so `a` stayed readable; the identical shape with a `DynamicArray<int32>` payload takes the resource arm
+// and was always refused. Three sites, one missing mark each — the gate that selects them
+// (`isIntrinsicColl && !isFixedColl && !isValueVectorKind`) is why the class looked string-shaped.
+type enum Msg { Text(string body), None }
+fn int32 main() {
+    string a = "hello.ppm";
+    Msg m = Msg::Text(body: give a);
+    return cast<int32>(a.length());   // ERROR: use of `a` after it was moved
+}

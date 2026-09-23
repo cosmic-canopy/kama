@@ -1,0 +1,14 @@
+// KR-89 (consumer KB-32) — the give site is the VARIABLE, not the type. `string b = give a;` then reading
+// `a` built clean and answered "" — silently — though the same shape on a `DynamicArray`, an `Owned`, a
+// `Shared` or a `Weak` was refused, and though `string` is refused in every OTHER position. The emitter
+// nulled the source's buffer and never recorded the move.
+//
+// It cost the consumer a real bug: a path string moved into one local and read two lines later through a
+// `const ref` parameter wrote every frame of a video to `-00000`. A silent "" reads as "the flag was not
+// passed", three files away from the move.
+fn int32 main() {
+    string a = "hello.ppm";
+    string b = give a;
+    isize n = a.length();   // ERROR: use of `a` after it was moved
+    return cast<int32>(n) + cast<int32>(b.length());
+}
