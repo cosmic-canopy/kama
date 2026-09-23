@@ -1044,6 +1044,13 @@ Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` moves t
 memberwise, a `Copyable`-resource element is deep-copied via its own `copy` ctor. A resource element that is not
 `Copyable` is rejected. `give` of a collection **moves** the buffer.)* <!-- xfail: copy_resource_coll -->
 
+Reading a value after `give` moved it is **a compile error** — including out of a declaration's initializer, <!-- xfail: use_after_move_string_init -->
+and including an element-slot store `v[i] = give s`, <!-- xfail: use_after_move_string_elem_slot -->
+and a variant payload `E::V(f: give s)`. <!-- xfail: use_after_move_string_variant -->
+Those three are spelled out because "uniformly" above is a claim about the hand-off SHAPE as much as about
+the type, and it was true of `string` in only some of the shapes until `0.9.436` — with nothing here able
+to tell, since the fixtures tested the site and tested the type but never the intersection.
+
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
