@@ -1,0 +1,16 @@
+// Type arguments on the accessor name ONE instance. `friend Lens<int32>[c]` admits `Lens<int32>`, and a
+// sibling instance is refused — which is the whole reason to write the arguments instead of the bare name.
+type value Cell {
+    int32 c;
+    public ctor make(int32 c) { this.c = c; return this; }
+    friend Lens<int32>[c];
+}
+type value Lens<T> {
+    public ctor make() { return this; }
+    public const fn int32 read(const ref Cell x) { return x.c; }
+}
+fn int32 main() {
+    Cell c = Cell.make(c: 1);
+    Lens<int64> l = Lens::<int64>.make();
+    return l.read(x: c);
+}

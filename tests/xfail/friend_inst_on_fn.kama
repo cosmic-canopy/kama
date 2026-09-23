@@ -1,0 +1,13 @@
+// Type arguments on a FUNCTION accessor are refused where the grant is written. A function's type
+// arguments are inferred at its call, so there is no instance for a grant to name — and a grant that
+// reads precise while naming nothing is exactly what this row closed everywhere else.
+type value Box<T> {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; return this; }
+    friend reader<int32>[v];
+}
+fn int32 reader<T>(const ref Box<T> b) { return b.v; }
+fn int32 main() {
+    Box<int32> b = Box::<int32>.make(v: 1);
+    return reader::<int32>(b: b);
+}

@@ -2093,6 +2093,13 @@ bool CEmitter::visibleFrom(const ClassInfo* owner, Visibility vis, const std::st
         // KAMA name here answered no for every one of them: measured on tests/friend_grant, where the
         // class-form grant offered `balance` in completion and both the free-function and `Type::method`
         // forms offered nothing at all, while the compiler accepts all three.
+        //
+        // A GENERIC free function (`g.accessorIsFnTemplate`) needs nothing extra here, and that is not an
+        // omission. The emitter has to compute correspondence because `_currentFunc` is an INSTANCE
+        // (`reader__int32`); a cursor is always inside the TEMPLATE's body, where `qc.funcKey` is the
+        // template's own cName — exactly what the grant recorded — so this comparison already answers yes.
+        // It is permissive in the same direction, and for the same reason, as the template-accessor arm
+        // above: no instance is in play at a declaration, and completion advises rather than decides.
         else if (!qc.funcKey.empty() && qc.funcKey == g.accessor) return true;
     }
     return false;

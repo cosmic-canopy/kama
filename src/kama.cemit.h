@@ -336,6 +336,26 @@ struct FriendGrant {
     // template's `cName` is not the instance's. See canAccess.
     bool                   accessorIsTemplate = false;
     std::string            accessorMethod;
+    // The accessor named a generic FREE FUNCTION, so `accessor` is its template cName and every instance
+    // is mangled `tmpl__arg[__arg…]` — a different separator from a type instance's `Tmpl_arg`, and built
+    // from the FUNCTION's own inferred type arguments rather than the owner's. That is why this is its own
+    // flag and not `accessorIsTemplate`: the correspondence is computed from `_genericInsts[...].typeArgs`
+    // (see canAccess), not by appending the owner's mangled suffix. Without it the grant resolved — a
+    // generic template IS in `_funcs`, so nothing reported it unknown — and then matched nothing, which is
+    // the worst of the three states a grant can be in (KR-80).
+    bool                   accessorIsFnTemplate = false;
+    // Explicit type arguments written ON the accessor — `friend Peek<int64>[v];` (KR-80). They used to be
+    // PARSED and then dropped, so `friend Peek<int64>` also admitted `Peek<int32>`: ignored is neither of
+    // the two honest answers, and the 0.9.300 ruling already said which one to pick — "kama reads the bare
+    // spelling as the stricter of the two meanings, which keeps an explicit `friend Tree<K,A>` ADDITIVE
+    // later rather than a source break". This is that later.
+    //
+    // One entry per argument, in order: `first >= 0` names the OWNER's type parameter at that index (so
+    // `friend Tree<K,V>` inside `Node<K,V>` is the corresponding instance — the same grant the bare name
+    // makes, written out), and `first < 0` means `second` holds the argument's already-mangled concrete
+    // name. Mixing them is meaningful and supported: `friend Tree<K, int64>` inside `Node<K,V>` reaches
+    // `Tree<int32,int64>` from `Node<int32,float32>`. Empty => no arguments were written.
+    std::vector<std::pair<int, std::string>> accessorArgs;
 };
 // Pre-resolution form captured at collection (accessor spelling + member names).
 struct RawFriendGrant {
@@ -3440,7 +3460,11 @@ private:
     Visibility  visibilityOf(SharedModifierList mods, Visibility dflt, int line);
     Visibility  fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line);   // per-field
     bool        modHas(SharedModifierList mods, const char* name);
-    bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line);
+    bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& memberIn, int line);
+    // Is the current function an instance of generic free function `tmplKey`, corresponding to `ownerArgs`?
+    bool        fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs);
+    // The comptime interpreter's slice of canAccess: does `ownerKey` grant `member` to the type `fromType`?
+    bool        comptimeFriendGrants(const std::string& ownerKey, const std::string& member, const std::string& fromType);
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     bool        friendModulePresent(SharedStringList qual);   // does a `friend` path name a module this program loaded?
@@ -3523,6 +3547,7 @@ private:
     // to a stable C-safe method name (`op_add`, `op_neg`, …), "" if the op has no such form.
     // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so
     // all normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody) is reused verbatim.
+    int         operatorTokenOf(const std::string& spelling);   // source spelling -> token (friend grants)
     std::string operatorMangle(int opToken, int arity);
     // Type-based dispatch: the full operator name adds an operand-type suffix so one type can carry
     // several `operator*` (mat*vec vs mat*mat). `findBinaryOperator` resolves `a OP b` by operand types.

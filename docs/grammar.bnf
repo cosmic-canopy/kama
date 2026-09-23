@@ -454,8 +454,29 @@ friend_declaration
          // [...] => all privates
   ;
 friend_member_list
+  : friend_member_name
+  | friend_member_list COMMA friend_member_name
+  ;
+/* A granted member is named the way it is DECLARED, so the list takes everything a member name can be —
+   not the bare IDENTIFIER it used to, which made the `copy` ctor and every operator ungrantable and said
+   so with a parse error that even told the reader `copy` CAN name a binding (KR-80).
+
+   The contextual keywords are `method_name`'s, for `method_name`'s reason. The operator forms keep their
+   SOURCE spelling here (`operator+`, `operator[]`) and are mangled in resolveFriends, because the mangle
+   depends on ARITY — `operator-` is `op_neg` or `op_sub` — which only the owner's method table knows, and
+   because the C-name mangle has exactly one authority (the emitter) and the parser must not become a
+   second. A grant on `operator*` covers every overload of `*` on that type: the operand-type suffix
+   (`op_mul__Vec4`) is something the grant's spelling cannot say. */
+friend_member_name
   : IDENTIFIER
-  | friend_member_list COMMA IDENTIFIER
+  | COPY            /* the `copy` ctor — a `Copyable` implementer's, grantable like any member */
+  | GIVE
+  | TRUNCATE
+  | TYPE
+  | SLOT
+  | FILE_KW
+  | OPERATOR overloadable_operator
+  | OPERATOR LEFT_BRACKET RIGHT_BRACKET
   ;
 
 function_modifier_opt

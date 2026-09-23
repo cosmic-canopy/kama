@@ -1,9 +1,13 @@
 // Both sides generic, so the grant is between corresponding instances — and `Tree` takes one type
 // parameter where `Node` takes two, so no instance of `Tree` could ever correspond to one of `Node`.
 // Refused where the grant is WRITTEN, not at some call site it silently fails to permit: a grant that
-// reads correct and grants nothing is the defect this rule exists to end. The spelling that would say
-// which arguments to use (`friend Tree<K>[peek];`) does not parse — the accessor is a plain name — so
-// the mismatch has nowhere to be resolved and is a mistake rather than a shape.
+// reads correct and grants nothing is the defect this rule exists to end.
+//
+// ⚠️ The spelling that says which arguments to use, `friend Tree<K>[peek];`, DOES exist as of KR-80 — and
+// this comment used to claim it "does not parse", which was wrong even when it was written: the accessor
+// has always been a `qualified_identifier`, which fills `genericArgs`; nothing downstream read them. What
+// is refused below is the BARE name, which means the corresponding instance, and no instance of a 1-arg
+// `Tree` can correspond to a 2-arg `Node`. Writing the arguments is the way to say something else.
 type value Node<K, V> {
     K k; V v; int32 secret;
     friend Tree[peek];               // ERROR: `Tree` takes 1 where `Node` takes 2

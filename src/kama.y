@@ -40,6 +40,11 @@ static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, Y
 /* Digit separators (0.9.227): the lexer admits `_` between two digits of a run; every numeric parse below
    strips them first, so strtoull/strtod see the plain digits. The token keeps the source spelling. */
 static std::string stripDigitSeps(const std::string& s);
+/* The SOURCE spelling of an overloadable operator token, for a `friend F[operator+]` grant (KR-80). The
+   parser needs the text and not the mangle: `op_neg` vs `op_sub` depends on arity, which only the owner's
+   method table knows, so resolveFriends does the mangling and this stays a pure token->text map with no
+   second copy of the C-name rules. */
+static const char* friendOperatorSpelling(int tok);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
                                           const std::string& spelling, YYLTYPE* loc, yyscan_t scanner);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
@@ -508,7 +513,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt hardware_opt unsafe_opt method_name kind_name
+%type <string> const_opt hardware_opt unsafe_opt method_name kind_name friend_member_name
 
 %start compilation_unit
 
@@ -1023,8 +1028,29 @@ friend_declaration
       { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, nullptr); (SCANNER_CODEGENCONTEXT).unjudgeQualified($2.get()); }   // [...] => all privates
   ;
 friend_member_list
-  : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | friend_member_list COMMA IDENTIFIER   { $1->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); STAMP_LOC($1->back(), @3); $$ = $1; }
+  : friend_member_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
+  | friend_member_list COMMA friend_member_name   { $1->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); STAMP_LOC($1->back(), @3); $$ = $1; }
+  ;
+/* A granted member is named the way it is DECLARED, so the list takes everything a member name can be —
+   not the bare IDENTIFIER it used to, which made the `copy` ctor and every operator ungrantable and said
+   so with a parse error that even told the reader `copy` CAN name a binding (KR-80).
+
+   The contextual keywords are `method_name`'s, for `method_name`'s reason. The operator forms keep their
+   SOURCE spelling here (`operator+`, `operator[]`) and are mangled in resolveFriends, because the mangle
+   depends on ARITY — `operator-` is `op_neg` or `op_sub` — which only the owner's method table knows, and
+   because the C-name mangle has exactly one authority (the emitter) and the parser must not become a
+   second. A grant on `operator*` covers every overload of `*` on that type: the operand-type suffix
+   (`op_mul__Vec4`) is something the grant's spelling cannot say. */
+friend_member_name
+  : IDENTIFIER   { $$ = $1; }
+  | COPY         { $$ = $1; }   /* the `copy` ctor — a `Copyable` implementer's, grantable like any member */
+  | GIVE         { $$ = $1; }
+  | TRUNCATE     { $$ = $1; }
+  | TYPE         { $$ = $1; }
+  | SLOT         { $$ = $1; }
+  | FILE_KW      { $$ = $1; }
+  | OPERATOR overloadable_operator                  { $$ = std::make_shared<std::string>(std::string("operator") + friendOperatorSpelling($2)); }
+  | OPERATOR LEFT_BRACKET RIGHT_BRACKET             { $$ = std::make_shared<std::string>("operator[]"); }
   ;
 
 function_modifier_opt
@@ -2480,6 +2506,35 @@ static std::string stripDigitSeps(const std::string& s)
     std::string r; r.reserve(s.size());
     for (char c : s) if (c != '_') r += c;
     return r;
+}
+
+/* Token -> source spelling, for `friend F[operator*]`. Covers exactly `overloadable_operator`; anything
+   else cannot reach here, and answers "" so an unknown member is reported by name rather than crashing. */
+static const char* friendOperatorSpelling(int tok)
+{
+    switch (tok) {
+        case PLUS:        return "+";
+        case MINUS:       return "-";
+        case STAR:        return "*";
+        case SLASH:       return "/";
+        case PERCENT:     return "%";
+        case AMP:         return "&";
+        case BAR:         return "|";
+        case CARET:       return "^";
+        case LTLT:        return "<<";
+        case GTGT:        return ">>";
+        case EXCLAMATION: return "!";
+        case TILDE:       return "~";
+        case PLUSPLUS:    return "++";
+        case MINUSMINUS:  return "--";
+        case EQEQ:        return "==";
+        case NOTEQ:       return "!=";
+        case LT:          return "<";
+        case GT:          return ">";
+        case LEQ:         return "<=";
+        case GEQ:         return ">=";
+        default:          return "";
+    }
 }
 
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& rawDigits, int base,

@@ -4251,6 +4251,10 @@
         {
           "type": "identifier",
           "named": true
+        },
+        {
+          "type": "overloadable_operator",
+          "named": true
         }
       ]
     }

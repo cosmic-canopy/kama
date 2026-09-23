@@ -4948,9 +4948,20 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   that IS in the program stays a compile error. <!-- xfail: friend_present_module_typo -->
   A grant names **members** — fields, methods, named `ctor`s and `static fn`s — and a type of any kind may
   write one, an `enum` included; a `contract` may not, since every member is already public. <!-- xfail: friend_on_contract -->
-  ⚠️ Three holes are open ([KR-80](ROADMAP.md)): a grant to a **generic free function** is accepted and
-  never takes effect; **type arguments on the accessor** are ignored (`friend Box<int64>[v]` also admits
-  `Box<int32>`); and the member list cannot name the `copy` ctor, an operator, or a `comptime` member.
+  A **generic free function** accessor reaches the corresponding instance, by the same rule a generic type
+  accessor does: `friend reader[v]` on `Box<T>` admits `reader<int32>` into `Box<int32>` and no sibling
+  instance. <!-- test: friend_holes --> <!-- xfail: friend_fn_generic_sibling -->
+  **Type arguments on the accessor** name one instance and are honored: `friend Lens<int32>[c]` admits
+  exactly `Lens<int32>`. <!-- xfail: friend_inst_sibling -->
+  An argument may be one of the owner's own type parameters — `friend Tree<K,V>` is the corresponding
+  instance, the same grant the bare name makes — and the two may be mixed, which nothing else can say:
+  `friend Tree<K, int64>` inside `Node<K,V>` reaches `Tree<int32,int64>` from `Node<int32,float32>`.
+  They are refused on a **function** accessor, whose type arguments are inferred at its call, so there is
+  no instance for a grant to name. <!-- xfail: friend_inst_on_fn -->
+  The member list names a member the way it is **declared**, so it takes the `copy` ctor, an operator
+  (`operator+`, `operator[]` — which grants every overload of that operator, since the operand-type suffix
+  is not something the grant can spell), and both `comptime` member kinds: a type-associated constant and
+  a `comptime fn`. <!-- xfail: friend_comptime_fn_nongranted -->
 
 See [TYPE_MODEL.md](TYPE_MODEL.md) § *Access control* for the full kind × visibility table.
 

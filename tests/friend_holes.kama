@@ -1,0 +1,124 @@
+// The four `friend` holes KR-80 named, each closed and each with its negative beside it.
+//
+// The corresponding-instance work (0.9.300) covered a grant to a generic TYPE. These are what it did not
+// reach, and all four were the same shape of wrong: the grant compiled, reported nothing, and granted
+// nothing — which is the state that rule exists to end, because a grant that reads correct and never
+// fires is worse than one that is refused.
+//
+// The negatives live in tests/xfail/: friend_fn_generic_sibling (a non-corresponding function instance),
+// friend_inst_sibling (a grant to one instance does not admit another), friend_inst_on_fn (type arguments
+// on a function accessor), and friend_comptime_fn_nongranted.
+//
+// Exit 0, or the number of the first check that failed.
+
+// ---- 1. a GENERIC FREE FUNCTION accessor -------------------------------------------------------------
+// `friend reader[v]` naming `fn reader<T>(…)` resolved — a generic template IS in `_funcs`, so nothing
+// reported it unknown — and then matched nothing, because the grant held the template's C name while the
+// body being emitted is an INSTANCE (`reader__int32`). It reaches the CORRESPONDING instance now, and
+// only that one: the rule a generic type accessor already followed.
+type value Box<T> {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; return this; }
+    friend reader[v];
+}
+fn int32 reader<T>(const ref Box<T> b) { return b.v; }
+
+// A non-generic free function already worked and must keep working — the hole was only the generic one.
+type value Plain {
+    int32 w;
+    public ctor make(int32 w) { this.w = w; return this; }
+    friend plainReader[w];
+}
+fn int32 plainReader(const ref Plain p) { return p.w; }
+
+// ---- 2. TYPE ARGUMENTS on the accessor ---------------------------------------------------------------
+// `friend Peek<int64>[v]` parsed and the arguments were dropped, so it also admitted `Peek<int32>`:
+// ignored is neither of the two honest answers. The 0.9.300 ruling already said which to pick — it kept
+// an explicit `friend Tree<K,A>` "additive later rather than a source break" — so they are honored.
+type value Cell {
+    int32 c;
+    public ctor make(int32 c) { this.c = c; return this; }
+    friend Lens<int32>[c];          // ONLY Lens<int32>; Lens<int64> is refused (xfail: friend_inst_sibling)
+}
+type value Lens<T> {
+    public ctor make() { return this; }
+    public const fn int32 read(const ref Cell x) { return x.c; }
+}
+
+// MIXED arguments — one of the owner's own type parameters, one concrete. Neither the bare spelling nor
+// an all-concrete one can say this: from `Node<int32, float32>` the friend is exactly `Tree<int32, int64>`.
+type value Node<K, V> {
+    K k; V v; int32 secret;
+    friend Tree<K, int64>[secret];
+    public ctor make(K k, V v) { this.k = k; this.v = v; this.secret = 5; return this; }
+}
+type value Tree<A, B> {
+    public ctor make() { return this; }
+    public const fn int32 reach(const ref Node<int32, float32> o) { return o.secret; }
+}
+
+// Writing the owner's own parameters, in order, is the corresponding instance — the same grant the bare
+// name makes, spelled out. It must agree with the bare form, not become a second meaning.
+type value Leaf<T> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; return this; }
+    friend Grip<T>[n];
+}
+type value Grip<T> {
+    public ctor make() { return this; }
+    public const fn int32 peek(const ref Leaf<T> l) { return l.n; }
+}
+
+// ---- 3. THE MEMBER LIST: an operator, and both `comptime` member kinds --------------------------------
+// The list took a bare IDENTIFIER, so an operator could not be named at all (a parse error that even told
+// the reader `copy` CAN name a binding), and a `comptime` member was reported as UNKNOWN because
+// resolveFriends looked only in `fields` and `methods` — a type constant lives in `_typeConsts` and a
+// `comptime fn` in `_comptimeMethods`. SPEC says a type's `comptime` members are visibility-controlled.
+type value Vec {
+    public int32 x;
+    private Vec operator+(Vec rhs) { return Vec.make(x: this.x + rhs.x); }
+    public ctor make(int32 x) { this.x = x; return this; }
+    friend Probe[operator+];
+}
+type value Limits {
+    private comptime int32 CAP = 7;
+    private comptime fn int32 slack() { return 2; }
+    public ctor make() { return this; }
+    friend Probe[CAP, slack];
+}
+type value Probe {
+    public ctor make() { return this; }
+    public const fn int32 useOp() { Vec a = Vec.make(x: 2); Vec b = Vec.make(x: 3); Vec c = a + b; return c.x; }
+    public const fn int32 useCap() { return Limits::CAP; }
+    // The `comptime fn` grant is checked by a THIRD access path — the comptime interpreter, which has no
+    // function context at all, only the type whose body is running.
+    public comptime fn int32 useSlack() { return Limits::slack(); }
+}
+comptime int32 SLACK = Probe::useSlack();
+
+fn int32 main() {
+    Box<int32> b = Box::<int32>.make(v: 11);
+    if (reader::<int32>(b: b) != 11) { return 1; }
+
+    Plain pl = Plain.make(w: 13);
+    if (plainReader(p: pl) != 13) { return 2; }
+
+    Cell c = Cell.make(c: 17);
+    Lens<int32> ln = Lens::<int32>.make();
+    if (ln.read(x: c) != 17) { return 3; }
+
+    Node<int32, float32> nd = Node::<int32,float32>.make(k: 1, v: 2.0f32);
+    Tree<int32, int64> tr = Tree::<int32,int64>.make();
+    if (tr.reach(o: nd) != 5) { return 4; }
+
+    Leaf<int64> lf = Leaf::<int64>.make(n: 19);
+    Grip<int64> gr = Grip::<int64>.make();
+    if (gr.peek(l: lf) != 19) { return 5; }
+
+    Probe p = Probe.make();
+    if (p.useOp() != 5) { return 6; }
+    if (p.useCap() != 7) { return 7; }
+    if (SLACK != 2) { return 8; }
+
+    return 0;
+}

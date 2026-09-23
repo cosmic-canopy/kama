@@ -35,6 +35,57 @@ bool CEmitter::isComptimeFnName(const std::string& name, SharedStringList /*qual
     return hit(name);                                                     // prelude / global namespace
 }
 
+// Does `owner` grant `member` to `fromType` by a `friend`? The comptime interpreter's slice of the same
+// question canAccess answers, kept separate because the interpreter has no `_currentClass`/`_currentFunc`:
+// its whole notion of "where am I" is `_ctCurrentOwner`, a type name. So this matches CLASS accessors only
+// — including the corresponding instance of a generic one, by the same rule canAccess uses — and answers
+// no for a function accessor, which cannot be the context here.
+//
+// The owner may be a template (`_genericTypes`) or a concrete class; a grant lives on whichever holds it.
+bool CEmitter::comptimeFriendGrants(const std::string& ownerKey, const std::string& member,
+                                    const std::string& fromType)
+{
+    if (fromType.empty()) return false;
+    const ClassInfo* oc = nullptr;
+    { auto c = _classes.find(ownerKey); if (c != _classes.end()) oc = &c->second;
+      else { auto g = _genericTypes.find(ownerKey); if (g != _genericTypes.end()) oc = &g->second; } }
+    if (!oc) return false;
+    std::string ownerArgs;
+    { auto of = _genericTypeInstOf.find(ownerKey);
+      if (of != _genericTypeInstOf.end() && ownerKey.size() > of->second.size())
+          ownerArgs = ownerKey.substr(of->second.size()); }
+    for (auto& g : oc->friendGrants) {
+        if (!g.members.empty() && !g.members.count(member)) continue;
+        if (!g.accessorIsClass) continue;
+        if (!g.accessorArgs.empty()) {
+            const std::vector<SharedIdentifier>* oa = nullptr;
+            auto oi = _genericTypeInsts.find(ownerKey);
+            if (oi != _genericTypeInsts.end()) oa = &oi->second.typeArgs;
+            std::string key = g.accessor; bool ok = true;
+            for (auto& e : g.accessorArgs) {
+                if (e.first < 0) { key += "_" + e.second; continue; }
+                if (!oa || (size_t)e.first >= oa->size()) { ok = false; break; }
+                key += "_" + mangleElem((*oa)[e.first]);
+            }
+            if (ok && fromType == key) return true;
+            continue;
+        }
+        std::string acc = g.accessor;
+        if (g.accessorIsTemplate) {
+            if (ownerArgs.empty()) {
+                auto cf = _genericTypeInstOf.find(fromType);
+                std::string fromTmpl = (cf != _genericTypeInstOf.end()) ? cf->second : fromType;
+                if (fromTmpl != g.accessor) continue;
+                return true;
+            }
+            acc += ownerArgs;
+            if (!g.accessorMethod.empty()) continue;   // `Type::method` names a method, not this context
+        }
+        if (fromType == acc) return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Value helpers
 // ---------------------------------------------------------------------------
@@ -431,9 +482,25 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             auto mit = _comptimeMethods.find(owner + "::" + *inv->identifier->value);
             if (mit == _comptimeMethods.end())
                 return ctFail(("a comptime fn may call only another `comptime fn` — `" + disp + "` is not one").c_str(), e->line);
-            if (mit->second.vis == Visibility::Private && _ctCurrentOwner != owner)
+            // ...or a `friend` grant names it. This is the THIRD access-check path — canAccess (emitter)
+            // and visibleFrom (query) are the other two — and it was the one that knew nothing about
+            // grants, so `friend P[secret]` on a `comptime fn` resolved and was then refused here anyway
+            // (KR-80). SPEC says a type's `comptime` members are visibility-controlled like any other, so
+            // "controlled" has to include who the owner lets in.
+            //
+            // The accessing context is a TYPE (`_ctCurrentOwner`, the type whose comptime fn is running),
+            // never a function, so only a class-accessor grant can match — a `friend someFn[…]` cannot
+            // reach here, because there is no function context at compile-time evaluation to be.
+            if (mit->second.vis == Visibility::Private && _ctCurrentOwner != owner
+                && !comptimeFriendGrants(owner, *inv->identifier->value, _ctCurrentOwner))
+                // The hint names the owner the way the SOURCE does (the qualifier as written), never the
+                // mangled key `_ctCurrentOwner` holds — a diagnostic that prints `k_Fprobe__Holder` at a
+                // reader is the C-name family leaking into the language (KR-67).
                 return ctFail(("`" + disp + "` is a private `comptime fn` — not accessible here; "
-                               "mark it `public` to call it from another scope").c_str(), e->line);
+                               "mark it `public` to call it from another scope, or have `"
+                               + *inv->identifier->qualifier->back()
+                               + "` grant it to the calling type: `friend <ThatType>["
+                               + *inv->identifier->value + "];`").c_str(), e->line);
             std::vector<CTValue> args; if (!evalArgs(args)) return false;
             std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
             bool ok = ctEvalBody(mit->second.node->params, mit->second.node->body, mit->second.node->returnType, args, e->line, out);

@@ -1,0 +1,13 @@
+// A private `comptime fn` is reachable only from its own type's comptime bodies, or from a type the owner
+// granted. Without the grant it stays refused — by the comptime interpreter, which is a THIRD access-check
+// path beside the emitter's `canAccess` and the query's `visibleFrom`.
+type value Limits {
+    private comptime fn int32 slack() { return 2; }
+    public ctor make() { return this; }
+}
+type value Probe {
+    public ctor make() { return this; }
+    public comptime fn int32 useSlack() { return Limits::slack(); }
+}
+comptime int32 SLACK = Probe::useSlack();
+fn int32 main() { return SLACK; }

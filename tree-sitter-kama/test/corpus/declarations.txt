@@ -863,3 +863,27 @@ extern const uint64 WGPUBufferUsage_Uniform;
   (extern_const_declaration
     (primitive_type)
     (identifier)))
+
+================================================================================
+A friend member list names operators and the copy ctor
+================================================================================
+
+type value Vec
+{
+    friend Probe[copy, operator+, operator[], slack];
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (friend_declaration
+        (type_name
+          (identifier))
+        (overloadable_operator)
+        (identifier)))))

@@ -586,9 +586,30 @@ module.exports = grammar({
         'friend',
         field('type', $.type_name),
         '[',
-        choice(commaSep1($.identifier), '...'),
+        choice(commaSep1($._friend_member_name), '...'),
         ']',
         ';',
+      ),
+
+    // A granted member is named the way it is DECLARED, so this is `method_name`'s set plus the operator
+    // forms (KR-80). It took a bare identifier, which made the `copy` ctor and every operator ungrantable
+    // — a parse error that even told the reader `copy` CAN name a binding.
+    //
+    // HIDDEN (`_`-prefixed), so a plain name still appears as `(identifier)` directly under
+    // `friend_declaration` rather than gaining a wrapper node: the list is a list of names, and the tree
+    // should say so. The contextual keywords are plain literals for the same reason they are in
+    // `method_name`.
+    _friend_member_name: ($) =>
+      choice(
+        $.identifier,
+        $._slot_name,
+        $._file_name,
+        'copy',
+        'give',
+        'truncate',
+        'type',
+        seq('operator', $.overloadable_operator),
+        seq('operator', '[', ']'),
       ),
 
     // `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — the extension budget, kama.y `modifier`. It

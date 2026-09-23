@@ -247,20 +247,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### `friend` accessor holes (KR-80) — found 2026-09-21 in the docs audit, `0.9.417`
-
-Three shapes the corresponding-instance work (`0.9.300`, item 2 below) did not cover, all probed:
-- **A generic FREE FUNCTION as the accessor is accepted and inert.** `friend reader[v];` naming
-  `fn int32 reader<T>(ref Box<T> b)` compiles, and the call inside `reader` is still "'v' is private". It is
-  not refused as unknown either, so the grant is silently nothing.
-- **Type arguments on the accessor are ignored.** `friend Box<int64>[v]` lets `Box<int32>` in. Either the
-  arguments mean something (the grant is to that instance) or they are refused; ignored is neither.
-- **The member list takes plain identifiers only**, so the `copy` ctor, an operator and a `comptime`
-  member cannot be granted (the parse error even says `copy` CAN name a binding). SPEC says a type's
-  `comptime` members are visibility-controlled, so a grant should reach them.
-Protected members, destructors and statics were checked and behave. SPEC § *Access control* names the
-three holes and links here.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

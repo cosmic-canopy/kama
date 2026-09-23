@@ -1,0 +1,13 @@
+// A grant to a generic free function reaches the CORRESPONDING instance and only that one — the rule a
+// generic TYPE accessor already followed, and the rule plain `private` follows between sibling instances.
+// `reader<int64>` is not `Box<int32>`'s friend, however much `reader<int32>` is.
+type value Box<T> {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; return this; }
+    friend reader[v];
+}
+fn int32 reader<T>(const ref Box<int32> b) { return b.v; }
+fn int32 main() {
+    Box<int32> b = Box::<int32>.make(v: 1);
+    return reader::<int64>(b: b);
+}

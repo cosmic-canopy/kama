@@ -4117,6 +4117,26 @@ std::string CEmitter::assignmentOperator(int token)
 // map an overloadable operator token + arity-class to a stable C-safe method name.
 // arity 0 => a UNARY operator on `this`; arity >= 1 => a BINARY operator (method or free form,
 // same name). Returns "" when the operator has no form for that arity (e.g. unary `*`, binary `!`).
+// The token an operator's SOURCE spelling names — the inverse of the parser's `friendOperatorSpelling`,
+// and the only caller is a `friend F[operator*]` grant, which is the one place a member is written the way
+// it is DECLARED rather than the way it is mangled. Kept beside operatorMangle so the pair stays visible
+// as a pair. `[]` is the index operator, whose declarator spells it `operator[]`.
+int CEmitter::operatorTokenOf(const std::string& spelling)
+{
+    if (spelling == "+")  return PLUS;        if (spelling == "-")  return MINUS;
+    if (spelling == "*")  return STAR;        if (spelling == "/")  return SLASH;
+    if (spelling == "%")  return PERCENT;     if (spelling == "&")  return AMP;
+    if (spelling == "|")  return BAR;         if (spelling == "^")  return CARET;
+    if (spelling == "<<") return LTLT;        if (spelling == ">>") return GTGT;
+    if (spelling == "!")  return EXCLAMATION; if (spelling == "~")  return TILDE;
+    if (spelling == "++") return PLUSPLUS;    if (spelling == "--") return MINUSMINUS;
+    if (spelling == "==") return EQEQ;        if (spelling == "!=") return NOTEQ;
+    if (spelling == "<")  return LT;          if (spelling == ">")  return GT;
+    if (spelling == "<=") return LEQ;         if (spelling == ">=") return GEQ;
+    if (spelling == "[]") return LEFT_BRACKET;
+    return 0;
+}
+
 std::string CEmitter::operatorMangle(int opToken, int arity)
 {
     bool unary = (arity == 0);
@@ -22790,11 +22810,42 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
     return Visibility::Private;
 }
 
+// Is the function being emitted right now an instance of the generic free function `tmplKey`, and — when
+// the owner is itself a generic instance — the CORRESPONDING one?
+//
+// The same rule a generic TYPE accessor follows, computed differently because the manglings differ: a type
+// instance is `Box_int32` (one `_` per argument) and a function instance is `reader__int32` (two). Rather
+// than convert one spelling into the other — `mangleElem` can itself produce underscores, so splitting a
+// suffix back apart is guesswork — this compares the ARGUMENT LISTS, taking the function's from the
+// instantiation record and rebuilding the owner's suffix from them with the type spelling.
+//
+// An owner that is not a generic instance has nothing to correspond to, so every instance of the accessor
+// is a friend — which is what a plain owner with a generic CLASS accessor already does.
+bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs)
+{
+    if (_currentFunc.empty()) return false;
+    auto fi = _genericInsts.find(_currentFunc);
+    if (fi == _genericInsts.end() || fi->second.templateKey != tmplKey) return false;
+    if (ownerArgs.empty()) return true;
+    std::string fnArgs;
+    for (auto& a : fi->second.typeArgs) fnArgs += "_" + mangleElem(a);
+    return fnArgs == ownerArgs;
+}
+
 // Is a member (declared on `owner`, visibility `vis`) accessible from the current
 // emission context (`_currentClass`; null = external/free function)? Compile error if not.
-bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line)
+bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& memberIn, int line)
 {
     if (vis == Visibility::Public || !owner) return true;
+    // Callers disagree about what `member` is, and a grant is matched BY MEMBER NAME, so normalize once
+    // here rather than at each site. The operator paths pass a C name (`Vec2__op_add`) where the unary one
+    // passes the key (`op_neg`), and the key is what `ci.methods` — and therefore a grant — uses. Stripping
+    // an `Owner__` prefix is unambiguous: `__` may LEAD a kama name but never sit inside one (KR-88), so no
+    // real member can collide with the mangled spelling.
+    std::string member = memberIn;
+    const std::string pfx = owner->name + "__";
+    if (member.size() > pfx.size() && member.compare(0, pfx.size(), pfx) == 0)
+        member = member.substr(pfx.size());
     if (vis == Visibility::Protected) {                 // owner or any subclass of owner
         for (ClassInfo* c = _currentClass; c; c = c->base) if (c == owner) return true;
     } else {                                            // Private — owner itself, or a friend grant
@@ -22823,6 +22874,25 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
             // to correspond to, so every instance of the accessor is a friend — ownerArgs is empty, and
             // the current context's own template key is what answers.
             std::string acc = g.accessor;
+            // An accessor written WITH type arguments names one instance, so assemble that instance's key
+            // and compare it directly — no correspondence to compute, because the grant already said which
+            // one. An argument that referred to the owner's own type parameter is filled in from the
+            // owner instance's concrete arguments, which is what makes `friend Tree<K,V>` agree with the
+            // bare spelling and `friend Tree<K,int64>` mean something neither of the others can say.
+            if (!g.accessorArgs.empty()) {
+                const std::vector<SharedIdentifier>* ownerConcrete = nullptr;
+                auto oi = _genericTypeInsts.find(owner->name);
+                if (oi != _genericTypeInsts.end()) ownerConcrete = &oi->second.typeArgs;
+                std::string key = g.accessor;
+                bool ok = true;
+                for (auto& e : g.accessorArgs) {
+                    if (e.first < 0) { key += "_" + e.second; continue; }
+                    if (!ownerConcrete || (size_t)e.first >= ownerConcrete->size()) { ok = false; break; }
+                    key += "_" + mangleElem((*ownerConcrete)[e.first]);
+                }
+                if (ok && _currentClass && _currentClass->name == key) return true;
+                continue;
+            }
             if (g.accessorIsTemplate) {
                 if (ownerArgs.empty()) {
                     if (!_currentClass) continue;
@@ -22834,8 +22904,9 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
                 }
                 if (!g.accessorMethod.empty()) acc += "__" + g.accessorMethod;   // `Type::method` form
             }
-            if (g.accessorIsClass) { if (_currentClass && _currentClass->name == acc) return true; }
-            else                   { if (!_currentFunc.empty() && _currentFunc == acc) return true; }
+            if (g.accessorIsClass)          { if (_currentClass && _currentClass->name == acc) return true; }
+            else if (g.accessorIsFnTemplate) { if (fnTemplateCorresponds(g.accessor, ownerArgs)) return true; }
+            else                            { if (!_currentFunc.empty() && _currentFunc == acc) return true; }
         }
     }
     const char* vs = (vis == Visibility::Private) ? "private" : "protected";
@@ -22981,10 +23052,62 @@ void CEmitter::resolveFriends()
                 if (asType(clsName, g)) resolved = true;
                 if (!resolved) {                                       // a free function
                     std::string fk = resolveFunc(val, nullptr);
-                    if (_funcs.count(fk)) { g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true; }
+                    if (_funcs.count(fk)) {
+                        g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true;
+                        // ...and say so when it is a TEMPLATE. A generic function's template is registered
+                        // in `_funcs` too (so call sites can reorder named args off it), so this arm always
+                        // resolved it — and then recorded the template's cName, which no instance's
+                        // `_currentFunc` can ever equal, because emitGenericInst emits each instance under
+                        // its mangled name. The grant was accepted, reported no error, and granted nothing.
+                        if (_generics.count(g.accessor)) g.accessorIsFnTemplate = true;
+                    }
                 }
             }
             if (!resolved) { unsupported(("unknown `friend` accessor '" + val + "' in '" + ci.name + "'").c_str(), rg.line); continue; }
+
+            // Explicit type arguments on the accessor (KR-80). `qualified_identifier` has always filled
+            // `genericArgs`, and nothing read them, so `friend Peek<int64>[v]` compiled and admitted
+            // `Peek<int32>` — a grant that reads precise and is not. Each argument is recorded either as a
+            // reference to one of the OWNER's type parameters (positionally, so `friend Tree<K,V>` means
+            // the corresponding instance, exactly as the bare name does) or as its own mangled concrete
+            // name; canAccess assembles the instance key from the two.
+            if (acc && acc->genericArgs && !acc->genericArgs->empty()) {
+                if (!g.accessorIsClass) {
+                    unsupported(("`friend` grant in '" + ci.name + "' writes type arguments on '" + val
+                                 + "', which is a FUNCTION — a function's type arguments are inferred at its "
+                                   "call, so there is no instance for a grant to name; write `friend "
+                                 + val + "[…]`, which reaches the corresponding instance").c_str(), rg.line);
+                    continue;
+                }
+                const size_t na = _genericTypeParams.count(g.accessor) ? _genericTypeParams[g.accessor].size() : 0;
+                if (na != acc->genericArgs->size()) {
+                    unsupported(("`friend` grant in '" + ci.name + "' writes " + std::to_string(acc->genericArgs->size())
+                                 + " type argument(s) on '" + val + "', which takes " + std::to_string(na)).c_str(), rg.line);
+                    continue;
+                }
+                auto pit = _genericTypeParams.find(ci.name);
+                bool argsOk = true;
+                for (auto& a : *acc->genericArgs) {
+                    const std::string an = (a && a->value) ? *a->value : "";
+                    int idx = -1;
+                    if (pit != _genericTypeParams.end())
+                        for (size_t i = 0; i < pit->second.size(); ++i)
+                            if (pit->second[i] == an) { idx = (int)i; break; }
+                    if (idx >= 0) { g.accessorArgs.push_back({ idx, "" }); continue; }
+                    SharedIdentifier abs = absolutizeType(a);
+                    std::string mg = abs ? mangleElem(abs) : "";
+                    if (mg.empty()) { argsOk = false; break; }
+                    g.accessorArgs.push_back({ -1, mg });
+                }
+                if (!argsOk) {
+                    unsupported(("`friend` grant in '" + ci.name + "' names '" + val
+                                 + "' with a type argument that does not resolve").c_str(), rg.line);
+                    continue;
+                }
+                // The key is now a specific INSTANCE, not a template, so the corresponding-instance
+                // machinery (and the arity check just below) must not also run on it.
+                g.accessorIsTemplate = false;
+            }
 
             // Both sides generic: the grant is between CORRESPONDING instances, so the two argument lists
             // have to be able to correspond at all. Differing arity never can, and the grant would then be
@@ -23003,12 +23126,42 @@ void CEmitter::resolveFriends()
                 }
             }
 
+            // `operator+` in the list is the SOURCE spelling the parser kept; turn it into the member
+            // key(s) it names. Arity is why this happens here and not in the parser: `operator-` is
+            // `op_neg` or `op_sub` depending on how it was declared, and only the owner's method table
+            // knows which — so both are tried and whichever exists is granted. The operand-type suffix
+            // (`op_mul__Vec4`, the mixed-type overload) is picked up the same way, because a grant on
+            // `operator*` means that operator, not one of its overloads.
+            std::set<std::string> expanded;
+            for (auto& m : g.members) {
+                if (m.compare(0, 8, "operator") != 0) { expanded.insert(m); continue; }
+                const std::string sp = m.substr(8);
+                std::set<std::string> bases;
+                for (int arity : { 0, 1 }) {
+                    const std::string b = operatorMangle(operatorTokenOf(sp), arity);
+                    if (!b.empty()) bases.insert(b);
+                }
+                bool any = false;
+                for (auto& b : bases)
+                    for (auto& kv : ci.methods)
+                        if (kv.first == b || (kv.first.compare(0, b.size(), b) == 0 && kv.first.compare(b.size(), 2, "__") == 0))
+                            { expanded.insert(kv.first); any = true; }
+                if (!any) expanded.insert(m);   // keep the source spelling so the error below names it
+            }
+            g.members.swap(expanded);
+
             // Granted members must exist and be private (a grant on a public member, or a
             // typo'd name, is a mistake — keep grants honest and greppable).
             for (auto& m : g.members) {
                 Visibility v = Visibility::Public; bool found = false;
                 for (auto& f : ci.fields) if (f.name == m) { v = f.visibility; found = true; break; }
                 if (!found) { auto mit = ci.methods.find(m); if (mit != ci.methods.end()) { v = mit->second.visibility; found = true; } }
+                // ...and a `comptime` member, which lives in neither table. A type-associated constant is
+                // in `_typeConsts` and a `comptime fn` in `_comptimeMethods`, so a grant naming either was
+                // reported as an UNKNOWN member although SPEC says a type's `comptime` members are
+                // visibility-controlled like every other (KR-80).
+                if (!found) { auto tc = _typeConsts.find(ci.name + "::" + m); if (tc != _typeConsts.end()) { v = tc->second.visibility; found = true; } }
+                if (!found) { auto cm = _comptimeMethods.find(ci.name + "::" + m); if (cm != _comptimeMethods.end()) { v = cm->second.vis; found = true; } }
                 if (!found)
                     unsupported(("`friend` grant names unknown member '" + m + "' in '" + ci.name + "'").c_str(), rg.line);
                 else if (v == Visibility::Public)
