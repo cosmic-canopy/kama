@@ -262,17 +262,27 @@ argument. It cost the consumer a real bug: a path string moved into one local an
 through a `const ref` parameter wrote **every frame of a video to `-00000`**, with no stem and no
 extension. A silent `""` reads as "the flag was not passed", three files from the move.
 
-**Not a memory-safety bug.** The emitted C nulls the source, so a read is a well-defined empty value and
-the moved-from local's destructor frees `NULL`. It is a missing *diagnostic*.
+**For `string`, not a memory-safety bug.** The emitted C nulls the source, so a read is a well-defined
+empty value and the moved-from local's destructor frees `NULL`. It is a missing *diagnostic*. ⚠️ That is
+NOT true of every type sharing the defect — see the table below.
 
-**Probed to ONE CELL.** The row as filed says "not diagnosed for `string`"; measured, it is narrower and
-therefore much more actionable — the variable is the GIVE SITE, not only the type:
+**Probed: the variable is the GIVE SITE, not the type** — which makes it both narrower and, in one place,
+worse than filed:
 
 | | give in an initializer (`T b = give a;`) | give as an argument (`f(v: give a)`) |
 |---|---|---|
 | `string` | ⛔ **silent** | ✅ diagnosed |
+| `BindableFunctionPtr<F>` | ⛔ **silent — and the call SEGFAULTS** | ✅ diagnosed |
 | `DynamicArray<T>` | ✅ diagnosed | ✅ diagnosed |
-| `Owned<T>` | ✅ diagnosed | ✅ diagnosed |
+| `Owned<T>` / `Shared<T>` / `Weak<T>` | ✅ diagnosed | ✅ diagnosed |
+| `InlineArray<T,N>` / `Simd<T,N>` | n/a — values; the source stays valid, nothing to diagnose | n/a |
+
+⚠️ **`BindableFunctionPtr` is the serious half, and it is not in KB-32 at all.** It is diverted before the
+string arm, to `emitBindablePromote`, which nulls `kama_obj`/`kama_ctrl`/`kama_fn`/`kama_release` and also
+never marks. Unlike a moved-from `string` — a defined empty value — calling a moved-from bindable
+dereferences a NULL function pointer: **measured, it builds clean and exits 139 (SIGSEGV)**. So for that
+type the missing diagnostic is the only thing standing between a caller and a crash, and this row is a
+memory-safety fix there even though it is only an ergonomics fix for `string`.
 
 **The read side is complete** — it is only the mark that is missing. After an *argument* give (which does
 mark the local), every reader catches it: a direct method call, a `const ref` parameter, a second `give`,
@@ -299,8 +309,15 @@ generics) and tests string hand-offs (elsewhere), and never the intersection. Th
 `foreach (char c in s)` claim: a positive fixture on one type does not guard a claim made about all of
 them, and a guarantee this broad wants a fixture per *shape*, not per type.
 
-Wants: the mark at that arm, plus `tests/xfail/` fixtures for `string` × initializer-give across the read
-routes, and a sweep of the other `moveNullStmt` call sites for the same null-without-mark pairing.
+Wants: the mark at that arm **and in `emitBindablePromote`**, plus `tests/xfail/` fixtures for `string`
+and `BindableFunctionPtr` × initializer-give across the read routes, and a sweep of the remaining
+`moveNullStmt` / invalidate sites for the same null-without-mark pairing. The bindable half should land
+first: it is the one that crashes.
+
+⚠️ **One claim to re-probe rather than inherit.** An exploration of this pass reported that
+`Owned`/`Shared`/`Weak` are unchecked everywhere, reasoning from `ownsByValue` bailing on
+`isSmartPtrClass`. **That is wrong** — all three are diagnosed in both positions (measured). Some other
+path registers them; find it before assuming the `_moveState` gate is the whole story.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
