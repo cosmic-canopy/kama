@@ -41,3 +41,4 @@ tests/xfail/module_static_volatile.kama
 tests/xfail/pin_keyword_typo.kama
 tests/xfail/recover_multi_error.kama
 tests/xfail/reserved_word_as_name.kama
+tests/xfail/source_bom_column.kama
