@@ -17,7 +17,26 @@ task="${1:-help}"; [ $# -gt 0 ] && shift || true
 case "$task" in
   provision)      cd provisioning/pages && tofu init -input=false && tofu apply ;;
   deploy-site)    sh tools/build-site; npx --yes wrangler@3 pages deploy _site --project-name=kama --branch=main ;;
-  ext-publish)    ( cd editor/vscode && npx --yes @vscode/vsce publish ) && ( cd editor/vscode && npx --yes ovsx publish ) ;;
+  ext-publish)
+    # Package ONCE and publish that one file to both marketplaces. `vsce publish` and `ovsx publish`
+    # each package the directory themselves, so calling them in sequence built the extension TWICE and
+    # shipped two independently-produced artifacts under one version number. release.yml has always
+    # done it this way; this is `./ops` catching up.
+    ver=$(sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' editor/vscode/package.json | head -1)
+    [ -n "${VSCE_PAT:-}" ] || { echo "ops: VSCE_PAT is not set (see .env)" >&2; exit 1; }
+    [ -n "${OVSX_PAT:-}" ] || { echo "ops: OVSX_PAT is not set (see .env)" >&2; exit 1; }
+    tmp=$(mktemp -d); vsix="$tmp/kama-vscode-$ver.vsix"
+    ( cd editor/vscode && npx --yes @vscode/vsce package --allow-missing-repository -o "$vsix" )
+    echo "ops: publishing $ver from $vsix"
+    # Neither is allowed to skip the other: a Marketplace failure must not leave Open VSX unpublished
+    # and silently out of step, so both run and the exit status reports the pair.
+    rc=0
+    npx --yes @vscode/vsce publish --packagePath "$vsix" -p "$VSCE_PAT" || rc=1
+    npx --yes ovsx publish "$vsix" -p "$OVSX_PAT" || rc=1
+    rm -rf "$tmp"
+    [ $rc -eq 0 ] || echo "ops: at least one marketplace publish FAILED — check above before re-running" >&2
+    exit $rc
+    ;;
   release)        echo "cut a release:  git tag vX.Y.Z && git push --tags   (CI builds binaries + publishes the extension)" ;;
   exec)           exec "$@" ;;
   -h|--help|help) usage ;;
