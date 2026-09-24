@@ -2,7 +2,7 @@
   "name": "kama",
   "displayName": "kama",
   "description": "The kama language (.kama): the kama language server (diagnostics, completion, go-to-definition, rename), syntax highlighting, and F5 debugging via CodeLLDB with kama names and values.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "cosmic-canopy",
   "license": "MIT",
   "icon": "icon.png",
@@ -66,7 +66,7 @@
         "kama.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the kama compiler. Empty searches the workspace (out/<os>-<arch>/kama, then ./kama) and falls back to PATH. The binary must be native to this OS — a container-built one will not launch."
+          "description": "Path to the kama compiler. Empty searches the workspace (out/<os>-<arch>/kama, then ./kama), then PATH, then ~/.kama/bin (where the installer puts it). Changing it restarts the language server. The binary must be native to this OS — a container-built one will not launch."
         },
         "kama.trace.server": {
           "type": "string",

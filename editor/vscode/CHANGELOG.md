@@ -13,6 +13,21 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.1] — 2026-09-24
+
+### Fixed
+
+- **A missing compiler now says so, in words.** With no kama compiler available, the extension used to
+  surface VS Code's generic *"couldn't create connection to server … spawn kama ENOENT"* — accurate, but
+  meaningless if you installed the extension first and did not know the compiler is a separate install.
+  It now explains that, and offers **Install kama** (the getting-started page), **Set kama.path…**, and
+  **Retry**.
+- **The compiler is found where the installer puts it.** `~/.kama/bin/kama` (or `$KAMA_HOME/bin/kama`) is
+  now searched after `PATH`, so an install whose `PATH` line was skipped still works — and **Retry** after
+  installing starts the language server without restarting VS Code.
+- **`kama.path` takes effect immediately.** Changing it restarts the language server on the new binary; a
+  `kama.path` that points at nothing is reported as that, rather than as "not installed".
+
 ## [0.9.0] — 2026-09-23
 
 **First public release.** Versions before this one were development-only and were never published to
@@ -58,4 +73,5 @@ The kama compiler, installed separately — see
 `kama lsp` as an ordinary host process, so a container-built Linux `./kama` in a macOS checkout will
 not launch.
 
+[0.9.1]: https://github.com/cosmic-canopy/kama/releases
 [0.9.0]: https://github.com/cosmic-canopy/kama/releases

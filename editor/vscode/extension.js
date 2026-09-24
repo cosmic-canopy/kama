@@ -13,6 +13,7 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
+const os = require('os');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 const names = require('./names');
 const { kamaOperand, findManifest } = names;
@@ -51,21 +52,60 @@ function outDirsWindows(root) {
 // Makefile builds per platform into out/<os>-<arch>/kama and leaves the root ./kama a symlink to
 // whichever platform built last — so check the NATIVE path first, or a `tools/cdev make` would hand
 // this extension a Linux binary it can't launch.
-function findKama() {
+function isExecutable(p) {
+  try { return fs.statSync(p).isFile() && (fs.accessSync(p, fs.constants.X_OK), true); } catch (_) { return false; }
+}
+
+// Where the compiler is: `{ path }`, or `{ path: null }` when there is none — and `configured` when the
+// user's own `kama.path` is what failed, so the message can say THAT rather than "not installed".
+//
+// PATH is SEARCHED here rather than left to spawn. A spawn that cannot find its command surfaces as the
+// language client's own "couldn't create connection to server … spawn kama ENOENT" — accurate, and
+// meaningless to someone who installed this extension from the Marketplace and has never heard that the
+// compiler is a separate install. That is most first-time users, so the failure has to be ours to word.
+function locateKama() {
   // An explicit setting wins outright — the search below cannot know about an install this extension
   // has no reason to expect (a versioned store, a sandbox, a second checkout).
   const configured = vscode.workspace.getConfiguration('kama').get('path');
-  if (configured) return configured;
+  if (configured) return isExecutable(configured) ? { path: configured } : { path: null, configured };
   const plat = platformDir();
   for (const f of vscode.workspace.workspaceFolders || []) {
     const roots = plat ? [path.join(f.uri.fsPath, 'out', plat), f.uri.fsPath]
                        : [...outDirsWindows(f.uri.fsPath), f.uri.fsPath];
     for (const r of roots) {
       const p = path.join(r, 'kama' + EXE);
-      try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) { /* not here */ }
+      if (isExecutable(p)) return { path: p };
     }
   }
-  return 'kama' + EXE;
+  for (const d of (process.env.PATH || '').split(path.delimiter)) {
+    const p = d && path.join(d, 'kama' + EXE);
+    if (p && isExecutable(p)) return { path: p };
+  }
+  // LAST, the installer's own location. install.sh only PRINTS the PATH line it wants added to a shell
+  // profile, so anyone who skips it has a working compiler that PATH cannot see. Checked after PATH so a
+  // kama the user put on PATH on purpose still wins. `~/.kama/bin/kama` is the toolchain selector, so
+  // launching it directly honours a project's pinned version exactly as a PATH lookup would.
+  for (const h of [process.env.KAMA_HOME, path.join(os.homedir(), '.kama')]) {
+    const p = h && path.join(h, 'bin', 'kama' + EXE);
+    if (p && isExecutable(p)) return { path: p };
+  }
+  return { path: null };
+}
+
+const INSTALL_URL = 'https://kama-lang.org/docs/getting-started/';
+
+// Said once per failed attempt, with the three things a user can actually do next. Retry works without
+// restarting VS Code: after `curl … | sh` the compiler is at ~/.kama/bin, which the search above checks
+// whether or not the shell's PATH was updated.
+async function reportMissingKama(found) {
+  const msg = found.configured
+    ? `kama: \`kama.path\` is set to "${found.configured}", which is not an executable file.`
+    : 'kama: the kama compiler was not found. This extension drives the compiler but does not include ' +
+      'it — install it, then Retry. (Searched: kama.path, this workspace\'s out/, PATH, ~/.kama/bin.)';
+  const pick = await vscode.window.showErrorMessage(msg, 'Install kama', 'Set kama.path…', 'Retry');
+  if (pick === 'Install kama') vscode.env.openExternal(vscode.Uri.parse(INSTALL_URL));
+  else if (pick === 'Set kama.path…') vscode.commands.executeCommand('workbench.action.openSettings', 'kama.path');
+  else if (pick === 'Retry') startLanguageServer();
 }
 
 function build(kama, operand, out) {
@@ -156,7 +196,9 @@ async function debugCurrentFile() {
   await ed.document.save();
   const file = ed.document.fileName;
   const folder = vscode.workspace.getWorkspaceFolder(ed.document.uri);
-  const kama = findKama();
+  const found = locateKama();
+  if (!found.path) { reportMissingKama(found); return; }
+  const kama = found.path;
 
   // A file inside an executable project is built AS the project: `kama build <file>` is a loose build,
   // which reads no manifest, so any `import` of the project's own modules fails to resolve. The program
@@ -297,7 +339,10 @@ async function selectBuildConfig() {
 
 
 function startLanguageServer() {
-  const kama = findKama();
+  if (client) return;   // one server per window; Retry and the kama.path watcher both land here
+  const found = locateKama();
+  if (!found.path) { reportMissingKama(found); return; }
+  const kama = found.path;
   // One server binary, one transport: `kama lsp` speaks JSON-RPC over stdio.
   const serverOptions = { command: kama, args: ['lsp'], transport: TransportKind.stdio };
   const clientOptions = {
@@ -344,7 +389,14 @@ function activate(context) {
     vscode.commands.registerCommand('kama.selectBuildConfig', selectBuildConfig),
     // The one honest answer to the one-configuration-per-process limit: re-pinning on tab switch would
     // evict the parse cache and re-analyze every open closure on every switch, so the user gets a button.
-    vscode.commands.registerCommand('kama.restartServer', () => client && client.restart()),
+    vscode.commands.registerCommand('kama.restartServer', () => (client ? client.restart() : startLanguageServer())),
+    // The "Set kama.path…" button's other half. A running client was built with the old command, so a
+    // new path means a new client, not a restart of the old one.
+    vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (!e.affectsConfiguration('kama.path')) return;
+      if (client) { const old = client; client = undefined; await old.stop().catch(() => {}); }
+      startLanguageServer();
+    }),
     vscode.window.onDidChangeActiveTextEditor(refreshStatus),
     // The name layer for LOCALS, the CALL STACK and watch expressions. A data formatter cannot reach
     // these — they come from the debug info — so this edits the DAP traffic in both directions.
@@ -389,7 +441,9 @@ function activate(context) {
         const open = ed && ed.document.languageId === 'kama' ? ed.document.fileName : '';
         const source = kamaOperand(config, folder, open);
         if (!explicit && !source) return config;   // no manifest anywhere: not a kama project
-        const kama = findKama();
+        const found = locateKama();
+        if (!found.path) return config;   // no compiler: leave their lldb session exactly as written
+        const kama = found.path;
         // Appended, not assigned: a user's own initCommands are theirs to keep.
         const init = await lldbInitCommands(kama);
         if (init.length) config.initCommands = (config.initCommands || []).concat(init);

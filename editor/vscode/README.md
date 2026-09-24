@@ -20,7 +20,10 @@ irm https://kama-lang.org/install.ps1 | iex                # Windows (PowerShell
 ```
 
 The extension finds it via **`kama.path`** if you set it, else a workspace-local
-`out/<os>-<arch>/kama` or `./kama`, else your `PATH`.
+`out/<os>-<arch>/kama` or `./kama`, else your `PATH`, else `~/.kama/bin/kama` — where the installer puts
+it — so skipping the `PATH` line the installer prints still works. If none of those has a compiler, the
+extension says so and offers to open the install page; **Retry** picks up a fresh install without
+restarting VS Code.
 
 > **The binary must be native to your OS.** The extension runs `kama lsp` as a normal host
 > process, so a container-built Linux `./kama` sitting in a macOS checkout will not launch.
@@ -110,7 +113,7 @@ Saving it re-analyzes every open buffer — no restart.
 
 | setting | what it does |
 |---|---|
-| `kama.path` | Path to the kama compiler. Empty = search the workspace, then `PATH`. |
+| `kama.path` | Path to the kama compiler. Empty = search the workspace, then `PATH`, then `~/.kama/bin`. Takes effect immediately. |
 | `kama.trace.server` | `off` \| `messages` \| `verbose` — log JSON-RPC traffic to the output channel. |
 
 There is deliberately **no** setting mirroring the build configuration — see above.
