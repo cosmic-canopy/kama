@@ -67,7 +67,13 @@ say "installed kama $VERSION to $VDIR"
 BIN="$PREFIX/bin"
 if [ "${KAMA_SET_DEFAULT:-}" = 1 ] || [ ! -f "$PREFIX/default" ]; then
   mkdir -p "$BIN"
-  cp -f "$VDIR/bin/kama" "$BIN/kama"           # the selector = a copy of the default version's binary
+  # A SYMLINK, never a copy. The compiler resolves its runtime headers and its stdlib RELATIVE TO ITS
+  # OWN EXECUTABLE (`<exeDir>/../include`, `<exeDir>/../lib/kama`) and does so through realpath — so a
+  # symlink resolves into the versioned toolchain and finds that version's own include/ and lib/.
+  # A COPY at $PREFIX/bin/kama instead looks for $PREFIX/include, which does not exist: `kama check`
+  # worked and `kama build` died in the C compiler with "'kama_runtime.h' file not found", for every
+  # user who followed the PATH line printed below. Measured against a real install of v0.9.440.
+  ln -sfn "$VDIR/bin/kama" "$BIN/kama"
   printf '%s\n' "$VERSION" > "$PREFIX/default"
   say "default is now kama $VERSION"
 fi
