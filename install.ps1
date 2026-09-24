@@ -45,15 +45,7 @@ if ($env:KAMA_SET_DEFAULT -eq '1' -or -not (Test-Path "$Prefix\default")) {
   New-Item -ItemType Directory -Force -Path $bin | Out-Null
   # Windows can't overwrite a running .exe — move the old selector aside, then copy the new one in.
   if (Test-Path "$bin\kama.exe") { Move-Item "$bin\kama.exe" "$bin\kama.exe.old" -Force -EA SilentlyContinue }
-  Copy-Item "$vdir\bin\kama.exe" "$bin\kama.exe" -Force
-  # ...and the runtime headers + stdlib BESIDE it. The compiler resolves both relative to its own
-  # executable (`<exeDir>\..\include`, `<exeDir>\..\lib\kama`), so a COPY at $Prefix\bin looks for
-  # $Prefix\include and $Prefix\lib — which did not exist. `kama check` worked and `kama build` died in
-  # the C compiler with "'kama_runtime.h' file not found". POSIX fixes this with a symlink into the
-  # versioned toolchain; Windows cannot, because a file symlink needs Developer Mode or admin, so the
-  # default toolchain is laid out flat next to bin\ instead.
-  Copy-Item "$vdir\include" "$Prefix\include" -Recurse -Force
-  if (Test-Path "$vdir\lib") { Copy-Item "$vdir\lib" "$Prefix\lib" -Recurse -Force }
+  Copy-Item "$vdir\bin\kama.exe" "$bin\kama.exe" -Force       # the selector = a copy of the default's binary
   Remove-Item "$bin\kama.exe.old" -Force -EA SilentlyContinue
   Set-Content -Path "$Prefix\default" -Value $Ver -NoNewline
   Write-Host "kama-install: default is now kama $Ver"

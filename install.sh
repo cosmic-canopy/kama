@@ -67,12 +67,13 @@ say "installed kama $VERSION to $VDIR"
 BIN="$PREFIX/bin"
 if [ "${KAMA_SET_DEFAULT:-}" = 1 ] || [ ! -f "$PREFIX/default" ]; then
   mkdir -p "$BIN"
-  # A SYMLINK, never a copy. The compiler resolves its runtime headers and its stdlib RELATIVE TO ITS
-  # OWN EXECUTABLE (`<exeDir>/../include`, `<exeDir>/../lib/kama`) and does so through realpath — so a
-  # symlink resolves into the versioned toolchain and finds that version's own include/ and lib/.
-  # A COPY at $PREFIX/bin/kama instead looks for $PREFIX/include, which does not exist: `kama check`
-  # worked and `kama build` died in the C compiler with "'kama_runtime.h' file not found", for every
-  # user who followed the PATH line printed below. Measured against a real install of v0.9.440.
+  # A symlink rather than a copy. At the default prefix both work: `bin/kama` recognises itself as the
+  # selector (its path equals ~/.kama/bin/kama) and re-execs the versioned binary, which finds its own
+  # include/ and lib/ — measured on macOS and Linux, pins honoured either way. The difference is a CUSTOM
+  # prefix: the driver's kamaHome() is $HOME/.kama and ignores KAMA_HOME, so a copy under another prefix
+  # never recognises itself, runs in place, and has no headers beside it ("kama_runtime.h not found").
+  # A symlink resolves (realpath) into the versioned toolchain, so builds work under any prefix.
+  # ⚠️ Pins under a custom KAMA_HOME are still not honoured — that is kamaHome(), not this line.
   ln -sfn "$VDIR/bin/kama" "$BIN/kama"
   printf '%s\n' "$VERSION" > "$PREFIX/default"
   say "default is now kama $VERSION"
