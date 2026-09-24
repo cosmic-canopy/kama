@@ -32,6 +32,7 @@ tests/xfail/file_gate_still_parsed.kama
 tests/xfail/float_bare_dot.kama
 tests/xfail/import_empty_braces.kama
 tests/xfail/interp_hole_operator.kama
+tests/xfail/leading_zero.kama
 tests/xfail/lex_char_bad_utf8.kama
 tests/xfail/lex_comment_unterminated.kama
 tests/xfail/lex_string_badchar.kama

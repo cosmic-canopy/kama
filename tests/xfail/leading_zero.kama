@@ -1,0 +1,2 @@
+// A leading 0 is refused rather than read as decimal: C, Go and Node read `0644` as octal 420.
+fn int32 main() { int32 mode = 0644; return mode; }

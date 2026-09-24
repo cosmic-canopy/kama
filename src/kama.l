@@ -141,6 +141,10 @@ int_suffix                  u?i(8|16|32|64)
      strtoull/strtod (stripDigitSeps in kama.y); the token keeps the source spelling for diagnostics. */
 dec_run                     {dec_digit}+(_{dec_digit}+)*
 dec_literal_no_suffix       {dec_run}
+  /* A leading `0` on a multi-digit integer is REFUSED, not read as decimal: C, Go and Node read `0644` as
+     octal 420, so a mode or an address pasted from them would silently mean something else. Octal is
+     `0o644`. Listed before the decimal rules so an equal-length match lands here (tests/xfail/leading_zero_*). */
+leading_zero_no_suffix      0_?{dec_run}
 hex_literal_no_suffix       0[xX]{hex_digit}+(_{hex_digit}+)*
 oct_literal_no_suffix       0[oO]{oct_digit}+(_{oct_digit}+)*
 based_literal_no_suffix     0[bB]{based_digit}+(_{based_digit}+)*_([1-2][0-9]|[3][0-2]|[2-9])
@@ -246,6 +250,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                   yyterminate();   /* stop — else flex re-matches <<EOF>> at EOF forever */
                                                }
 
+{leading_zero_no_suffix}{int_suffix}?          { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); error("a leading 0 does not mean octal in kama — write 0o… for octal, or drop the 0", yyscanner); return DEC_LITERAL_NO_SUFFIX; }
 {dec_literal_no_suffix}                        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
 {hex_literal_no_suffix}                        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return HEX_LITERAL_NO_SUFFIX; }
 {oct_literal_no_suffix}                        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return OCT_LITERAL_NO_SUFFIX; }
@@ -341,6 +346,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
 <IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
 <IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
+<IN_INTERP_HOLE>{leading_zero_no_suffix}        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); error("a leading 0 does not mean octal in kama — write 0o… for octal, or drop the 0", yyscanner); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
 <IN_INTERP_HOLE>"["                             { RETURN_TOKEN(LEFT_BRACKET, 1); }

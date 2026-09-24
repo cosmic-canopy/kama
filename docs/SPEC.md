@@ -40,7 +40,7 @@ boundary). Collections are generic library types.
 
 | form | example | notes |
 |---|---|---|
-| decimal / hex / octal integer | `42`, `0xFF`, `0o17`, `1_000_000`, `0xFFFF_0000` | a digit separator is an underscore **between two digits** of a run (`1_000`, `0xFF_FF`, and `1_000.5` in a float); `1__0`, `10_` and `0x_F` are not literals <!-- test: digit_separators --> <!-- xfail: digit_sep_double, digit_sep_trailing, digit_sep_after_prefix --> |
+| decimal / hex / octal integer | `42`, `0xFF`, `0o17`, `1_000_000`, `0xFFFF_0000` | a digit separator is an underscore **between two digits** of a run (`1_000`, `0xFF_FF`, and `1_000.5` in a float); `1__0`, `10_` and `0x_F` are not literals. A leading `0` on a multi-digit integer is an error, not decimal: C, Go and Node read `0644` as octal 420, and kama's octal is `0o644` <!-- test: digit_separators --> <!-- xfail: digit_sep_double, digit_sep_trailing, digit_sep_after_prefix, leading_zero --> |
 | based integer | `0b1010_2` | `0b<digits>_<base>`, base 2–32; the `_<base>` is required |
 | integer suffix | `42i32`, `42ui32` | `u?i(8\|16\|32\|64)` — unsigned is **`ui`**; there is no bare `42u32` |
 | float | `12.5`, `12.5e10`, `1e10`, `1.5e-3` | `digits.digits` with an optional exponent, **or** `digits` with a required one |

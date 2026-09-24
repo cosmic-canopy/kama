@@ -566,6 +566,7 @@ kind_return	kind_return.kama:4
 kind_variant_payload	kind_variant_payload.kama:6
 layout_attr_on_enum	layout_attr_on_enum.kama:8
 layout_attr_on_static	layout_attr_on_static.kama:4
+leading_zero	leading_zero.kama:2
 lex_char_bad_utf8	lex_char_bad_utf8.kama:4
 lex_comment_unterminated	lex_comment_unterminated.kama:2
 lex_string_badchar	lex_string_badchar.kama:4
