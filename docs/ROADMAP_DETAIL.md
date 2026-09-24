@@ -2410,6 +2410,70 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
+- **A byte-order mark makes a file unbuildable (KR-90).** Found 2026-09-23 while testing the website
+  install of v0.9.440 on Windows: the installer and the build are fine, and a hello-world written with
+  PowerShell would not compile. Everything below was measured against the installed v0.9.440 unless it
+  says otherwise.
+
+  **The symptom.** A `.kama` file starting `EF BB BF` fails with `file.kama:1:0: Lexical error: invalid
+  token [?]` — printed **three times**, once per BOM byte, because `kama.l`'s `.` catch-all rejects each
+  byte on its own. A `kama.json` starting with the same bytes fails with `kama: kama.json: manifest must be
+  a JSON object`, which it is. Neither message mentions an encoding, so a reader looks for the fault in
+  code that has none. A UTF-16LE file (`FF FE`) fails with the same lexer error.
+
+  **Who writes one.** Windows PowerShell 5.1's `Out-File -Encoding utf8` writes UTF-8 *with* a BOM, and its
+  `>` redirect writes UTF-16LE unless `$PSDefaultParameterValues['Out-File:Encoding']` overrides it (the
+  agent shell on the Windows box sets it to `utf8`, which is why `>` produced a UTF-8 BOM there). Visual
+  Studio and Notepad's "UTF-8 with BOM" option write one too (not measured here; modern Notepad's plain
+  "UTF-8" is BOM-less). Unix editors and VS Code on every platform default to no BOM.
+
+  **It is not a Windows bug, only a Windows-origin one.** Measured on Windows; the rest is code-read,
+  because the Windows box has no container for a Linux leg: there is no BOM handling anywhere in `src/` or
+  `include/`, and `kama.l` contains no `_WIN32` at all, so the same bytes fail the same way on every host.
+  A BOM committed from a Windows machine therefore breaks Linux CI too. Nothing guards it: no fixture in
+  `tests/`, `lib/` or `examples/` starts with one, and SPEC says nothing about source encoding.
+
+  **The readers (line numbers at 0.9.440, `src/kama.driver.cpp`):**
+  - `parseFile` (~1903) — `kama build`/`check` and the import closure. `fopen(osp(f), "r")` handed to flex
+    as a `FILE*` buffer.
+  - `parseForQuery` (~2008) — the LSP and `kama query`, from a C string (callers ~8933, ~9272). Whether
+    VS Code's buffer text still carries the BOM is **unmeasured**; a file read from disk certainly does.
+  - `parseString` — the embedded prelude only. Not reachable by a user's bytes.
+  - The manifest parser's `parse()` (~3861; its `ws()` at ~3161) reads `kama.json` and `kama.local.json`,
+    both user-edited. The `kama.lock` parser (~5830) and the registry-index parser (~6873) read files kama
+    writes itself. One shared skip across all three is the "one way to do a thing" answer, rather than
+    fixing only the one that hurts today.
+
+  **What to do.** Skip a leading UTF-8 BOM — at the start of the file only — at every reader above. That is
+  what the comparators do: Go's spec lets a compiler ignore a BOM as the first code point, and rustc, clang
+  and C# skip it. Do NOT decode UTF-16; refuse it with a message that says what the file is and what to do
+  ("… is UTF-16; kama source is UTF-8 — re-save it as UTF-8"). Then write the rule into SPEC: source is
+  UTF-8, a leading BOM is ignored, UTF-16 is refused. The refusal is a negative claim, so it needs a
+  `tests/xfail/` fixture and a `<!-- xfail: … -->` marker for `tools/check-doc-claims.sh`.
+
+  **Traps, each checked or flagged:**
+  - ⚠️ **Skip the BOM before the lexer sees it, not in a lexer rule.** The lexer advances its column once
+    per byte, so a rule that swallows `\xEF\xBB\xBF` would move every line-1 diagnostic three columns to the
+    right. A fixture should pin a line-1 error's column in a BOM file to the column without one.
+  - ⚠️ **`parseFile` opens in TEXT mode**, which on Windows means CRLF translation and `^Z` as end-of-file,
+    while every other host reads bytes. Rewinding with `fseek(f, 0, SEEK_SET)` is safe on a text stream;
+    switching to `"rb"` is not this row — it would put `\r` in front of the lexer on Windows for the first
+    time. `kama.l` lists `\r` as whitespace (`white_space_2`), but strings, comments and raw strings have not
+    been checked for it.
+  - ⚠️ **A BOM fixture is swept by every corpus-wide guard**: at least `check-treesitter`, `check-syntax`
+    (only on the CI grammar leg, which has node), `check-stats`, `check-diag-line`, `check-fixture-reach`,
+    and `run_tests.sh`'s analysis-agreement phase. How tree-sitter treats a BOM is **unmeasured**; if it
+    chokes, that is editor work beside KR-29, not a reason to drop the fixture.
+  - ⚠️ **The positive fixture can go vacuous without anyone noticing.** One editor save can strip the BOM,
+    and the fixture then passes while testing nothing. Hold its first three bytes down, in a guard or in the
+    fixture's own check — the vacuity-control pattern `check-compiler-path.sh` uses.
+
+  **Fixtures:** a positive source fixture starting with a BOM; a positive project fixture (`tests/*.d`,
+  e.g. `tests/csources_std_split.d`) whose `kama.json` starts with one; `tests/xfail/` with a `.msg` for a
+  UTF-16 source; and the line-1 column pin. The change is in `src/`, so bump `VERSION`. Any box can do it —
+  none of it is platform code — but the "every host" claim wants the Linux leg (`./dev test linux`), which
+  the Windows box cannot run.
+
 - **`kama describe --json` (KR-84)** — GOALS §7's "other half" of self-description: the language surface
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an
   agent or an editor reads it rather than scraping KEYWORDS.md. `kama query --json` is the program half and
