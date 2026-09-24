@@ -45,6 +45,52 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 **The language surface is feature-complete.** Anything that would *break* source has to land before the
 tag or wait for 2.0.
 
+- **A literal can break `string`'s UTF-8 invariant (KR-91).** Found 2026-09-23, right after 0.9.441 made the
+  source *file* UTF-8 (a leading BOM skipped, UTF-16 refused). The *inside* of a file is still unchecked, so
+  SPEC's "UTF-8 everywhere" — a `string` is valid UTF-8, `.chars()` assumes it, `std::encoding::utf8.decode`
+  refuses anything else at runtime — has a compile-time hole. It is source-breaking (it makes accepted
+  programs errors), so it lands before the tag.
+
+  **Measured on 0.9.441 (Windows; lexer code-read, no `_WIN32` in `kama.l`, so every host):**
+
+  | source | today | should be |
+  |---|---|---|
+  | `"a<FF>b"` — a raw invalid byte in a plain string | builds, `length()` 3; only clang warns (`-Winvalid-source-encoding`) on the emitted C | error |
+  | `"a<C0 AF>b"` — an overlong form | builds, `length()` 4; clang warns | error |
+  | `@"a<FF>b"` — the same in a verbatim string | builds, `length()` 3; clang warns | error |
+  | `"a\u{D800}b"` — a surrogate escape | builds, `length()` **2**: the escape is silently DELETED | error |
+  | `"a\u{110000}b"` — above U+10FFFF | builds, `length()` **2**: silently deleted | error |
+  | `'\u{D800}'` — a surrogate `char` escape | builds | error |
+  | `'<FF>'` — one raw non-ASCII byte as a `char` | builds, value **255**: read as Latin-1, not UTF-8 | error |
+  | `// a<FF>b` and `/* a<FF>b */` | build | decide: error, or pass-through (a comment reaches nothing) |
+
+  (`<FF>` = the raw byte, written with `printf`; an editor will not produce it on purpose. Interpolated
+  strings were not probed. The lexer rule behind each is: `single_string_char` `[^\\\"]` and
+  `single_verbatim_char` `[^\"]` take any byte; `single_char` `[^\\\']` takes any one byte as a `char`;
+  `uni_codepoint_esc_seq` takes 1–6 hex digits with no range check. A written multi-byte `char` literal
+  (`multibyte_char_literal`) already validates — its action rejects overlong/surrogate/out-of-range —
+  so that is the precedent to copy.)
+
+  **What to do.** Reject malformed UTF-8 in every string and `char` literal form at lex time, with a message
+  that names the byte offset rather than "invalid token". Reject a surrogate or > U+10FFFF `\u{…}` escape
+  in both. Make a raw one-byte `char` literal ASCII-only (a non-ASCII `char` is written as its UTF-8
+  bytes, which `multibyte_char_literal` already takes). Comments are the open decision in the table: GOALS'
+  "one way" argues for rejecting (a file is UTF-8 or it is not), but no program observes a comment byte —
+  write the verdict down. Each refusal is a negative claim, so it needs a `tests/xfail/` fixture and a SPEC
+  line with its `<!-- xfail: … -->` marker (SPEC "The `string` type" is the natural home).
+
+  **Traps:**
+  - ⚠️ **The corpus may already contain one.** Sweep `lib/`, `tests/`, `prelude/`, `examples/`, `bench/`
+    for invalid UTF-8 before landing (`iconv -f UTF-8 -t UTF-8` fails on it) — a fixture that relies on
+    a raw byte becomes an xfail, not a deletion.
+  - ⚠️ **Fixtures carry raw bytes an editor may "repair".** Hold them down the way
+    `tools/check-source-encoding.sh` does for the BOM fixtures (or extend that guard).
+  - ⚠️ **Do not write these fixtures with an agent's Write tool.** In the 0.9.441 (BOM) session it decoded a
+    `\u` JSON escape into raw bytes on the way to disk. Use `printf` with octal escapes.
+  - ⚠️ **The column trap is real here, unlike the BOM one in 0.9.441.** A multi-byte codepoint in a string is more than
+    one byte; check what the lexer counts before a new rule changes it, and pin a column after a valid
+    multi-byte literal.
+
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
