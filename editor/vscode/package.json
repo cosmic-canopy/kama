@@ -2,7 +2,7 @@
   "name": "kama",
   "displayName": "kama",
   "description": "The kama language (.kama): the kama language server (diagnostics, completion, go-to-definition, rename), syntax highlighting, and F5 debugging via CodeLLDB with kama names and values.",
-  "version": "0.3.12",
+  "version": "0.9.0",
   "publisher": "cosmic-canopy",
   "license": "MIT",
   "icon": "icon.png",

@@ -13,7 +13,7 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
-## [0.3.12] — 2026-09-23
+## [0.9.0] — 2026-09-23
 
 **First public release.** Versions before this one were development-only and were never published to
 either marketplace, so everything the extension does is listed here rather than split across entries
@@ -58,4 +58,4 @@ The kama compiler, installed separately — see
 `kama lsp` as an ordinary host process, so a container-built Linux `./kama` in a macOS checkout will
 not launch.
 
-[0.3.12]: https://github.com/cosmic-canopy/kama/releases
+[0.9.0]: https://github.com/cosmic-canopy/kama/releases
