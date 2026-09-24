@@ -131,12 +131,24 @@ tag or wait for 2.0.
   - **setuid/setgid/sticky are out:** no Windows meaning, and a bit that does nothing on one platform is the
     thing this row exists to avoid.
 
-  **Still open — ask before building:**
-  - Does Windows grant **SYSTEM** full control by default, as Cygwin does (backup/indexing keep working), or is
-    `0600` strictly owner-only? (Administrators can take ownership either way — say so, as root is on Unix.)
-  - The default for a plain `File.open(Write)` with no permissions: recommended — POSIX `0666 & ~umask`, and on
-    Windows the directory's inherited ACL, exactly as today, so only an explicit `permissions:` promises
-    anything. The alternative (always apply an explicit ACL) stops Windows files inheriting, which surprises.
+  **Decided 2026-09-24 (the two questions that were open), each after comparing what others do:**
+  - **Windows private = owner + SYSTEM; no explicit Administrators entry.** Windows' own "private" is a user
+    profile's ACL (owner, SYSTEM, Administrators), and Win32-OpenSSH — the strictest consumer of a private
+    file there — accepts exactly owner, SYSTEM and Administrators and refuses a key anyone else can read. Owner +
+    SYSTEM is the smallest set both treat as private: a key kama writes passes OpenSSH's check, and services
+    running as SYSTEM (indexing) keep working. Administrators are left out because they can take ownership of
+    any file regardless — root's position on Unix — so an explicit ACE adds nothing and keeps the DACL
+    closest to `0600`. Strictly owner-only was rejected: stricter than Windows or OpenSSH ask, and it makes
+    kama's private files behave unlike every other private file on the machine. Document the Administrators
+    caveat exactly as root's is documented.
+  - **A plain create with no `permissions:` is `0666`, narrowed by the umask — a change from today's `0644`.**
+    That is the default of C `fopen` (POSIX-mandated), Go `os.Create`, Rust `File::create`, Python `open()`,
+    Node, Zig, Java and .NET. kama's hardcoded `0644` equals it under umask `022` and `077`, but under `002`
+    (shared group directories) it strips the group-write bit the user's own umask granted — overriding an
+    explicit user choice. Directories are already `0777 & ~umask` (`include/kama_os.h:860`), so this also makes
+    files and directories agree. **Windows is unchanged:** a plain create inherits the directory's ACL, as in
+    every language. Only an explicit `permissions:` promises anything. The change reaches `kama_open_create`
+    AND `kama_open_append`; say it in SPEC's `std::fs` text and pin it with a fixture that sets `umask(002)`.
 
   **Traps:** the group bits map weakly on Windows (a file's group is usually "None") — document, do not
   pretend. Every refusal (an unsupported bit, say) is a negative claim and wants an xfail. Close KG-37 in the
