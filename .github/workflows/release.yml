@@ -209,6 +209,14 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: '20' }
+      # The extension is NOT bundled — `.vscodeignore` deliberately ships node_modules — so `vsce
+      # package` runs `npm list --production` and fails outright when the dependency tree is absent.
+      # This job never installed it, and could not have been caught: it runs only on a `v*` tag, the
+      # dependency (`vscode-languageclient`) landed 2026-07-27, and the previous tag was 2026-07-06.
+      # ci.yml has always done this (`npm --prefix editor/vscode ci`); release.yml simply never did.
+      - name: install extension dependencies
+        run: npm --prefix editor/vscode ci
+
       - name: vsce package
         shell: bash
         run: |
