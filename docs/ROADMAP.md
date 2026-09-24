@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-92**
+**Next id: KR-94**
 
 ## The shape
 
@@ -73,6 +73,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | id | item | size | detail |
 |---|---|---|---|
 | KR-91 | **A literal can break `string`'s UTF-8 invariant** — invalid UTF-8 in a string or `char` literal builds (only clang warns on the emitted C), and a surrogate or out-of-range `\u{…}` escape is silently deleted from a string; reject each at lex time | S | [§1](ROADMAP_DETAIL.md#s1) |
+| KR-92 | **`std::fs` cannot create a private file** — every file is created `0644`, nothing sets a mode. One portable `Permissions` bit set (octal `fromMode(mode: 0o600)` or named bits joined with `\|`), applied AT CREATION, mapped to a Windows access list the way Cygwin does, chosen per platform with `@compileFor` | L | [§1](ROADMAP_DETAIL.md#s1) |
+| KR-93 | **`static const` inside a type is silently an instance FIELD** — `public static const int32 K = 4;` builds as a per-instance field, `V::K` is refused as "a field", and one of the type's own type reports "contains itself by value". Make type-level constants real, or refuse the spelling | M? | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-7 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |

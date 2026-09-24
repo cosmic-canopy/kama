@@ -91,6 +91,76 @@ tag or wait for 2.0.
     one byte; check what the lexer counts before a new rule changes it, and pin a column after a valid
     multi-byte literal.
 
+- **`std::fs` cannot create a private file (KR-92).** Filed 2026-09-24 from the peer project's `KAMA_GAPS.md`
+  KG-37 (`friendly-fire-department`): a relay signing key is a secret on disk, and kama cannot write one that
+  other local users cannot read. **Verified on 0.9.441, not taken from the report:** `File.open(Write)`,
+  `writeFile` and `Append` all reach `kama_open_create`/`kama_open_append`, which are
+  `open(…, O_CREAT…, 0644)` on POSIX (`include/kama_os.h:815-816`) and `_wopen(…, _S_IREAD | _S_IWRITE)` on
+  Windows; `lib/std/fs/fs.kama` has no `chmod`, no `setPermissions` and no mode parameter. `Metadata.readOnly`
+  reads one bit and nothing writes it. The only escape today is an `extern` `fchmod` on `File.rawFd()`.
+
+  **Every other language** puts the mode on the CREATE call (C `open`'s third argument, Go `os.OpenFile`'s
+  `perm`, Rust's Unix-only `OpenOptionsExt::mode`, Python `os.open`, Node `{ mode }`, Zig `.mode`, Java
+  `PosixFilePermissions.asFileAttribute`, .NET 7 `UnixCreateMode`) and IGNORES it on Windows (only the write
+  bit, or an unrelated ACL API in Java/.NET). None offers one portable API. `chmod` after the fact is a race:
+  the file exists world-readable, possibly with the secret already in it.
+
+  **Maintainer decisions (2026-09-24):**
+  - **One consistent API, the Unix model, a portable implementation underneath** — the platform split is
+    `@compileFor(OS_WINDOWS)` / `@compileFor(!OS_WINDOWS)` pairs, as `lib/std/path/path.kama:39-44` does.
+  - **Octal AND readable, bitwise.** One `type value Permissions` (a nine-bit set): `Permissions.fromMode(mode:
+    0o600)` for a mode from elsewhere, named per-bit constructors joined with `|` for code written by hand,
+    `has(p:)` to test, and a `Formattable` rendering `rw-------` as `ls -l` does. Prototyped on 0.9.442 (a
+    value type with `operator|` and `ctor ownerRead()` etc. builds and runs). ⚠️ **It cannot be an enum:**
+    kama refuses `|` over enum values on purpose (the result is no declared variant) — correct, keep it.
+    ⚠️ The nicer `Permissions::OwnerRead` spelling needs type-level constants, which is KR-93.
+  - **The leading-zero trap is closed first:** `0644` is a lexical error since `0.9.442` (it compiled and meant
+    decimal 644), so a mode pasted from C cannot silently be wrong.
+
+  **What to build:**
+  - **POSIX:** pass the mode to `open`'s `O_CREAT`; when a private open TRUNCATES an existing file, `fchmod`
+    it before the first write (`O_TRUNC` leaves the old mode — Go documents the same gap and does not fix it).
+    `fs::setPermissions(path:, permissions:)` via `chmod`; `Metadata.permissions` from `st_mode` (replaces
+    or joins the lone `readOnly`).
+  - **Windows — Cygwin's mapping, the bulk of the work:** owner bits → an ACE for the owner SID; group bits →
+    the file's group SID; other → `Everyone`; an absent bit is an absent ACE (a DACL denies by default); the
+    DACL is PROTECTED so a parent's inheritable ACEs do not widen `0600`. Created through `CreateFileW` with a
+    `SECURITY_ATTRIBUTES`, never `_wopen` + a later `SetSecurityInfo` (same race as `chmod`). `stat` maps the
+    DACL back. Lives beside `kama__wopen` in `kama_os.h`.
+  - **wasm (node VFS):** the mode is stored and read back, not enforced — say so in the doc.
+  - **setuid/setgid/sticky are out:** no Windows meaning, and a bit that does nothing on one platform is the
+    thing this row exists to avoid.
+
+  **Still open — ask before building:**
+  - Does Windows grant **SYSTEM** full control by default, as Cygwin does (backup/indexing keep working), or is
+    `0600` strictly owner-only? (Administrators can take ownership either way — say so, as root is on Unix.)
+  - The default for a plain `File.open(Write)` with no permissions: recommended — POSIX `0666 & ~umask`, and on
+    Windows the directory's inherited ACL, exactly as today, so only an explicit `permissions:` promises
+    anything. The alternative (always apply an explicit ACL) stops Windows files inheriting, which surprises.
+
+  **Traps:** the group bits map weakly on Windows (a file's group is usually "None") — document, do not
+  pretend. Every refusal (an unsupported bit, say) is a negative claim and wants an xfail. Close KG-37 in the
+  peer's `KAMA_GAPS.md` via its maintainer, not from here.
+
+- **`static const` inside a type is silently an instance FIELD (KR-93).** Found 2026-09-24 prototyping KR-92.
+  Measured on 0.9.442:
+  ```kama
+  type value V { int32 x; public static const int32 K = 4; public ctor make() { this.x = 1; } }
+  fn int32 main() { V v = V.make(); return V::K - 4; }
+  // error: `V::K` — `K` is a field. Read it from a value (`obj.K`)
+  ```
+  `static` and `const` are dropped without a word: `K` becomes a per-instance field (its initializer's fate
+  unprobed). A `public static const Permissions OwnerRead = …;` inside `Permissions` reports "type
+  'Permissions' contains itself by value (infinite size)" — the same drop, seen from the layout.
+
+  **The decision (maintainer's):** make type-level constants REAL (`V::K`, folded like a module constant,
+  and of the type's own type — the `Permissions::OwnerRead` KR-92 wants), or REFUSE the spelling and point
+  at a module constant. Per AGENTS.md "YAGNI stops at the surface", a refusal needs a written reason a
+  consumer never needs it; C++, C#, Java, Swift and Rust (`associated const`) all have it. Either way the
+  silent drop is a defect today and wants an xfail/positive fixture. **Probe first:** module-scope
+  `const`/`static` of a value type with a ctor-call initializer — whether that folds decides how much of the
+  "real" answer already exists.
+
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
