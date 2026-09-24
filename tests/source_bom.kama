@@ -1,0 +1,3 @@
+﻿// Starts with a UTF-8 byte-order mark, which kama skips (SPEC "Model"). The mark is three bytes no editor
+// shows, so tools/check-source-encoding.sh holds them down: one save without it and this tests nothing.
+fn int32 main() { return 41; }

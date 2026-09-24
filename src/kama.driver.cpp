@@ -802,6 +802,19 @@ std::string readFileText(const std::string& path)
     return text;
 }
 
+// kama reads UTF-8 — source, manifests, the lock, a registry index (SPEC "Model"). A leading UTF-8 byte-order
+// mark is skipped, as Go, rustc, clang and C# do, because Windows tools write one unasked; UTF-16 is refused
+// by name, because read as bytes it fails as "invalid token" in code that has no fault. Returns the bytes to
+// skip (0 or 3), or -1 for a UTF-16 byte-order mark. Only the start of a file is looked at.
+static int byteOrderMark(const char* p, size_t n)
+{
+    const unsigned char* b = (const unsigned char*)p;
+    if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) return 3;
+    if (n >= 2 && ((b[0] == 0xFF && b[1] == 0xFE) || (b[0] == 0xFE && b[1] == 0xFF))) return -1;
+    return 0;
+}
+static const char* const kUtf16Refusal = "the file is UTF-16; kama reads UTF-8 — re-save it as UTF-8";
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -1944,6 +1957,17 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
         yylex_destroy(scanner);
         return nullptr;
     }
+    // Past a byte-order mark by READING it, not seeking to 3: this is a text stream (CRLF-translated on
+    // Windows), where only a seek to 0 is guaranteed.
+    char head[3]; size_t got = fread(head, 1, sizeof head, input);
+    int bom = byteOrderMark(head, got);
+    if (bom < 0) {
+        extra.codeGenContext->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
+        yylex_destroy(scanner);
+        fclose(input);
+        return nullptr;
+    }
+    if (bom == 0) fseek(input, 0, SEEK_SET);
     yy_switch_to_buffer(yy_create_buffer(input, YY_BUF_SIZE, scanner), scanner);
 
     int rc = yyparse(scanner);
@@ -2017,12 +2041,18 @@ ParseResult parseForQuery(const char* src, const std::string& name)
         std::make_shared<CodeGenContext>(std::make_shared<std::string>(name)),
         nullptr
     };
-    yylex_init_extra(&extra, &scanner);
-    yy_scan_string(src, scanner);
-    int rc = yyparse(scanner);
-    yylex_destroy(scanner);
     ParseResult r;
     r.ctx = extra.codeGenContext;
+    int bom = byteOrderMark(src, std::min(strlen(src), (size_t)3));
+    if (bom < 0) {
+        r.ctx->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
+        r.partial = true;
+        return r;
+    }
+    yylex_init_extra(&extra, &scanner);
+    yy_scan_string(src + bom, scanner);
+    int rc = yyparse(scanner);
+    yylex_destroy(scanner);
     // Self-gating (M5.4): `compilationUnit` is assigned only by the `compilation_unit` action, which
     // only runs if the start rule reduced — so this is null when the parse truly aborted and non-null
     // (possibly partial) otherwise. No rc/errorCount bookkeeping needed. parseFile and parseString keep
@@ -3858,6 +3888,7 @@ struct ManifestReader {
     }
 
     bool parse() {
+        int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -5896,6 +5927,7 @@ struct LockReader {
         return true;
     }
     bool parse(std::map<std::string, LockEntry>& pkgs) {
+        int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
         ws(); if (i >= s.size() || s[i] != '{') return fail("lock must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -6920,6 +6952,7 @@ struct IndexReader {
         return true;
     }
     bool parse(std::vector<IndexEntry>& out) {
+        int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
         ws(); if (i >= s.size() || s[i] != '{') return fail("index must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {

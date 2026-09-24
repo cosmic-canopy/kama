@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-90 | **A byte-order mark makes a file unbuildable** — a UTF-8 BOM at the start of a `.kama` file fails with `Lexical error: invalid token` (once per byte), and at the start of `kama.json` with `manifest must be a JSON object`; neither names the BOM. Windows tools write one by default, and a committed one breaks every platform — the readers have no platform code. Skip a leading UTF-8 BOM at both; refuse UTF-16 by name. A shipped-release bug, reproduced on v0.9.440 | S | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-7 | **`std::process`** — live/streaming child-stream reads | — | [§1](ROADMAP_DETAIL.md#s1) |

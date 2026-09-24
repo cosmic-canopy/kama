@@ -1,0 +1,3 @@
+// The kama.json beside this starts with a UTF-8 byte-order mark, which kama skips (SPEC "Model");
+// tools/check-source-encoding.sh holds the mark down.
+fn int32 main() { return 42; }

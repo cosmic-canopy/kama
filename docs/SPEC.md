@@ -13,6 +13,11 @@ kama compiles to **portable C** (native + WASM). No garbage collector — object
 copies), `type resource` (owns/has identity, moves, RAII-dropped), `type view` (a non-owning stack-only
 borrow — a slice/span), or `type contract` (an interface).
 
+**Source files are UTF-8**, and so are `kama.json`, `kama.local.json` and `kama_workspace.json`. A leading
+UTF-8 byte-order mark (`EF BB BF`, which Windows PowerShell 5.1 and "UTF-8 with BOM" editors write unasked) is
+ignored, so line and column positions are the same as without one. <!-- test: source_bom -->
+A UTF-16 file is refused with a message that says so, not lexed as bytes: re-save it as UTF-8. <!-- xfail: source_utf16 -->
+
 ## Types ✅
 
 | kama | C |

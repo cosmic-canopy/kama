@@ -1,0 +1,1 @@
+the file is UTF-16; kama reads UTF-8

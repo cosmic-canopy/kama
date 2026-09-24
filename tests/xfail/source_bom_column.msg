@@ -1,0 +1,1 @@
+:1:25: Lexical error: invalid token [$]

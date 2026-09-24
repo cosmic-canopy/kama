@@ -1019,6 +1019,8 @@ slot_never_filled	slot_never_filled.kama:5
 slot_one_arm	slot_one_arm.kama:5
 slot_read_before_assign	slot_read_before_assign.kama:7
 slot_with_initializer	slot_with_initializer.kama:5
+source_bom_column	source_bom_column.kama:1
+source_utf16	source_utf16.kama:1
 spawn_bundle_shared	spawn_bundle_shared.kama:13
 spawn_in_nested_block	spawn_in_nested_block.kama:24
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15
