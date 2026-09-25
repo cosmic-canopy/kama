@@ -1,0 +1,8 @@
+// KR-93. A `comptime`'s initializer is never emitted, so no run-time type check sees it — the interpreter checks
+// that a value-type constant is given a value of ITS type.
+@generate(of) type value P { public int32 x; }
+@generate(of) type value Q { public int32 x; }
+
+comptime P K = Q.of(x: 1);
+
+fn int32 main() { return 0; }

@@ -1,0 +1,8 @@
+// KR-93. A fallible ctor returns a `Result`, and a `comptime` of a value type holds the value itself — there is
+// no `Err` a constant could hold. The ctor that cannot fail is the one a constant calls.
+type enum E implements Error { Bad; public const fn string message() { return "bad"; } }
+type value P { int32 x; public ctor Result<P, E> checked(int32 x) { this.x = x; return Result::Ok(value: this); } }
+
+comptime P K = P.checked(x: 1);
+
+fn int32 main() { return 0; }

@@ -1,0 +1,7 @@
+// KR-93. A `comptime` holds a `type value`, never a `resource`: a resource owns something, and a value the
+// compiler bakes into read-only storage owns nothing and is never dropped.
+type resource R { int32 h = 0; public ctor make() { this.h = 1; } }
+
+comptime R K = R.make();
+
+fn int32 main() { return 0; }

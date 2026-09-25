@@ -4509,6 +4509,17 @@ fn void demo() {
   foldable elements (`[1, 2, 3]` or the `[v; N]` fill form), which bakes as a `static const` table. A
   `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message <!-- xfail: sizeof_usize_not_foldable, alignof_not_foldable -->
   points you back to `const` for a runtime-initialized immutable).
+- **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, fixed
+  arrays or value types of those, built by one of its ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
+  operator the initializer calls, and bakes the result as a `static const` object:
+  `public comptime Perm R = Perm.fromBits(bits: 4);`, then `Perm::R | Perm::W`. A constant may be of its
+  own type, a private ctor builds the type's own constants, and `@generate(of)`/`zero` build one too. There is
+  no marker on the ctor: the `comptime` at the use site is the explicit part, and a body that leaves the
+  subset (a print, an allocation, a call into C) is an error at the constant naming the member and the <!-- xfail: comptime_value_impure_ctor -->
+  construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_value_pointer_field -->
+  cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
+  At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
+  not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->
 - **One rule at every scope.** A module, a type and a local `comptime` are folded by the same interpreter, so
   they take the same initializers and refuse the same ones — a float, a table, a `comptime fn` call and a <!-- test: comptime_type_parity, comptime_named_args -->
   later-declared constant work at all three, and a struct's `sizeof` or any `alignof`, whose value the
@@ -4559,20 +4570,22 @@ type value Palette {
 - **Comptime-only.** A `comptime fn` is a compile-time symbol; it is **never emitted as C**. It may be
   *called* only from a comptime context — a `comptime` constant initializer, a comptime argument, or
   another `comptime fn`. A runtime-position call is a clean error pointing at the `comptime` constant form.
-  (This is a strict subset of a future dual-use / `constexpr`-style relaxation, so it can widen later without
-  breaking anything.)
+  (The dual-use half is the one below: a value type's ctor, methods and operators are ordinary run-time
+  code that ALSO runs at compile time when a compile-time expression calls them.)
 - **Both scopes, member visibility.** A top-level `comptime fn` is a module-level compile-time function; a
   **type-associated** one is read `Type::name()` and obeys member visibility — **default private** (scoped
   and access-restricted, like any member), callable from outside only when marked `public`. A private
   type-associated comptime fn is callable from within its own type's comptime fns.
 - **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
-  entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, and fixed
-  `InlineArray<T>#(N)`. Statements: local + `const` decls, `=` assignment, fixed-array element writes
-  (`t[i] = …`), `if`/`else`, `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions:
-  arithmetic / bitwise / comparison / logical (short-circuit) / ternary / cast, array index reads, and
-  calls to other comptime fns.
+  entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, fixed
+  `InlineArray<T>#(N)`, and a `type value` whose fields are those. Statements: local + `const` decls, `=`
+  assignment, fixed-array element writes (`t[i] = …`) and field writes (`this.f = …`), `if`/`else`,
+  `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions: arithmetic / bitwise / comparison /
+  logical (short-circuit) / ternary / cast, array index and field reads, and calls to other comptime fns and
+  to a value type's ctors, methods, operators and `static fn`s.
 - **Purity → reproducible builds.** A comptime fn is deterministic and effect-free: no I/O, no `new`/`spawn`,
-  no FFI, no reads of mutable `static`s, no pointers/strings, and it may call **only** another `comptime fn`.
+  no FFI, no reads of mutable `static`s, no pointers/strings, and it may call **only** another `comptime fn`
+  or a value type's member whose body keeps the same rules.
   These are enforced structurally — anything outside the subset is a clean "unsupported in comptime fn"
   diagnostic — so the same inputs always bake the same output.
 - **Bounded.** A step budget (and call-depth cap) guarantees a runaway comptime fn can't hang the compiler

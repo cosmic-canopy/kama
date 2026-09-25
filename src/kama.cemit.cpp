@@ -4287,11 +4287,28 @@ std::string CEmitter::constantTempCType(SharedExpression e)
 {
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
     if (!id || !id->value) return "";
+    // A `comptime` constant of a `type value` (KR-93) is a `static const` object, so an operator or a call that
+    // takes its operand's address gets a copy — `&` of it is a `const T*`, which no `T*` parameter takes. A
+    // table (`InlineArray`) keeps its place: its `const` accessors read it where it lies.
+    auto valueTemp = [&](const std::string& ct) -> std::string {
+        auto c = _classes.find(ct);
+        return (c != _classes.end() && c->second.kind == TypeKind::Value && !c->second.isIntrinsicColl) ? ct : "";
+    };
     if (id->qualifier && !id->qualifier->empty()) {
         const std::string en = exprEnumType(e);
         if (!en.empty()) return en;
+        auto tq = std::make_shared<StringList>(id->qualifier->begin(), id->qualifier->end() - 1);
+        auto tc = _typeConsts.find(resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value);
+        if (tc != _typeConsts.end()) return valueTemp(typeConstCType(tc->second));
     }
     if (_localTypes.count(*id->value) || _paramNames.count(*id->value)) return "";
+    {
+        const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+        if (!mk.empty() && _constStatics.count(mk)) {
+            auto ms = _moduleStatics.find(mk);
+            if (ms != _moduleStatics.end()) return valueTemp(cType(ms->second));
+        }
+    }
     const std::string xk = resolveExternConst(*id->value, id->qualifier);
     return xk.empty() ? "" : cType(_externConsts[xk].type);
 }
@@ -21813,15 +21830,44 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
         unsupported("cannot write through a `const ref` place — it is read-only. Take the mutable form "
                     "where the place was made (the `…Mut` twin, e.g. `getRefMut`), or return `ref T` from "
                     "a non-const method", srcLine);
+    else if (rootsInComptimeConst(target))
+        unsupported("cannot write to a `comptime` constant — it is a value the compiler computed, and it is "
+                    "stored read-only; copy it into a local to change the copy", srcLine);
+}
+
+// KR-93: does `e` name a `comptime` constant — a type's (`Permissions::OwnerRead`) or a module's — or a place
+// inside one (`K.field`, `T[i]`)? The constant is a `static const` object: it reads like a value and nothing
+// may write it, directly, through a `ref` argument, or by a method that is not `const fn`.
+bool CEmitter::rootsInComptimeConst(SharedExpression e)
+{
+    ASTNode* n = e.get();
+    for (;;) {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { n = ma->expression.get(); continue; }
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            if (ea->expression) { n = ea->expression.get(); continue; }
+            n = ea->identifier.get();
+            continue;
+        }
+        break;
+    }
+    auto* id = dynamic_cast<IdentifierNode*>(n);
+    if (!id || !id->value) return false;
+    if (id->qualifier && !id->qualifier->empty()) {
+        auto tq = std::make_shared<StringList>(id->qualifier->begin(), id->qualifier->end() - 1);
+        return _typeConsts.count(resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value) > 0;
+    }
+    if (_localTypes.count(*id->value) || _paramNames.count(*id->value)) return false;
+    const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+    return !mk.empty() && _constStatics.count(mk) > 0;
 }
 
 // a non-const method may not be invoked on a const receiver (it could mutate). A receiver reached
 // THROUGH a const raw pointer (`p[i].bump()`) is one too: the method would take `&p[i]` as a writable
-// `self` out of memory the pointer only reads.
+// `self` out of memory the pointer only reads. So is a `comptime` constant (KR-93).
 bool CEmitter::isConstReceiver(SharedExpression receiver)
 {
     return receiver && (rootIsConst(rootBinding(receiver)) || chainThroughConstRawPtr(receiver)
-                        || chainThroughConstPlace(receiver));
+                        || chainThroughConstPlace(receiver) || rootsInComptimeConst(receiver));
 }
 
 // ---- `UnsafeConstPtr<T>` — the read-only raw pointer ----------------------------------------------

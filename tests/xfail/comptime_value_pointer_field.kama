@@ -1,0 +1,7 @@
+// KR-93. A compile-time value holds numbers, `bool`s, `char`s, fixed arrays and value types of those. A value
+// type with a pointer field is a legal `type value` at run time, but not a thing the compiler can hold.
+@generate(of) type value P { public int32 x; public UnsafePtr<int32> p; }
+
+comptime P K = P.of(x: 1, p: null);
+
+fn int32 main() { return 0; }

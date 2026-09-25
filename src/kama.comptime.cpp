@@ -149,6 +149,7 @@ bool CEmitter::ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n
 // param bind, a return). Integer stores truncate to the target width; a float32 store rounds through float.
 void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 {
+    if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // an aggregate keeps its shape (KR-93)
     if (proto.kind == CTValue::Float) {
         double d = ctAsF(v);
         v.kind = CTValue::Float; v.isF32 = proto.isF32;
@@ -180,7 +181,12 @@ bool CEmitter::ctFail(const char* what, int line)
         d.line = line;
         d.severity = DiagSeverity::Error;
         d.code = "comptime";
-        d.message = std::string("comptime evaluation: ") + what;
+        // Inside a value type's member, say WHICH member cannot run at compile time — the construct that
+        // failed is in its body, not at the constant the author is looking at (KR-93). Demangled as
+        // `unsupported` demangles: a C name in a diagnostic is the C-name family leaking into the language.
+        const std::string body = _ctRunning.empty() ? std::string(what)
+                               : "`" + _ctRunning + "` cannot run at compile time — " + what;
+        d.message = std::string("comptime evaluation: ") + demangleForDisplay(body);
         d.file = reportPath(diagFile());   // the prelude names its own file when the install has it — see reportPath
         attributeToInstSite(d.file, d.line, d.message);   // a stdlib type's assert names the author's instantiation (KR-38)
         _diagnostics.push_back(d);
@@ -193,6 +199,17 @@ bool CEmitter::ctFail(const char* what, int line)
 // suffix avoided — the declared type on the LHS carries it); float as a literal; bool as true/false.
 std::string CEmitter::ctRender(const CTValue& v) const
 {
+    // A `type value` → a designated initializer over the emitter's own C field names (KR-93).
+    if (v.isStruct) {
+        if (v.elems.empty()) return "{0}";
+        auto it = _classes.find(v.structClass);
+        std::string s = "{ ";
+        for (size_t k = 0; k < v.elems.size(); ++k) {
+            const std::string fn = k < v.fieldNames.size() ? v.fieldNames[k] : std::string();
+            s += (k ? ", ." : ".") + (it != _classes.end() ? kMember(it->second, fn) : kName(fn)) + " = " + ctRender(v.elems[k]);
+        }
+        return s + " }";
+    }
     // Fixed array → a C initializer for the `struct { T kama_v[N]; }` (KAMA_FIXED_TYPE) carrier: `{ .kama_v = {…} }`.
     if (v.isArray) {
         std::string s = "{ .kama_v = { ";
@@ -362,12 +379,44 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             auto it = env.vars.find(*id->value);
             if (it != env.vars.end()) { out = it->second; return true; }
             if (ctResolveConst(std::static_pointer_cast<IdentifierNode>(e), out)) return true;
+            if (_ctFailed) return false;
+            // A bare field name inside a value type's member reads `this`'s field (KR-93).
+            auto self = env.vars.find("this");
+            if (self != env.vars.end() && self->second.isStruct && (!id->qualifier || id->qualifier->empty()))
+                for (size_t k = 0; k < self->second.fieldNames.size(); ++k)
+                    if (self->second.fieldNames[k] == *id->value) { out = self->second.elems[k]; return true; }
         }
         // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
         // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
         return ctFail(("unknown identifier `" + (id->value ? *id->value : std::string("?"))
                        + "` — a compile-time expression reads only `comptime` constants, comptime "
                          "parameters, and (inside a `comptime fn`) that function's params and locals").c_str(), e->line);
+    }
+
+    // --- `this` and a field read `x.f` — a value type's member, running (KR-93) ---
+    if (dynamic_cast<ThisAccessNode*>(n)) {
+        auto it = env.vars.find("this");
+        if (it == env.vars.end()) return ctFail("`this` is read only inside a value type's member", e->line);
+        out = it->second;
+        return true;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!ma->identifier || !ma->identifier->value || !ma->expression)
+            return ctFail("unsupported member access at compile time", e->line);
+        CTValue base; if (!ctEvalExpr(ma->expression, env, base)) return false;
+        const std::string& fname = *ma->identifier->value;
+        if (!base.isStruct)
+            return ctFail(("`." + fname + "` — only a `type value`'s fields are read at compile time").c_str(), e->line);
+        ClassInfo& ci = _classes[base.structClass];
+        for (size_t k = 0; k < base.fieldNames.size(); ++k)
+            if (base.fieldNames[k] == fname) {
+                Visibility fv = k < ci.fields.size() ? ci.fields[k].visibility : Visibility::Public;
+                if (!ctMemberVisible(ci, fv, fname))
+                    return ctFail(("'" + fname + "' is private in '" + ci.name + "'").c_str(), e->line);
+                out = base.elems[k];
+                return true;
+            }
+        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no field `" + fname + "`").c_str(), e->line);
     }
 
     // --- cast ---
@@ -382,6 +431,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     // --- unary ---
     if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         CTValue v; if (!ctEvalExpr(u->expression, env, v)) return false;
+        if (v.isStruct) return ctStructOperator(u->token, v, nullptr, e->line, out);   // the type's operator (KR-93)
         switch (u->token) {
             case PLUS:  out = v; return true;
             case MINUS:
@@ -412,6 +462,17 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
         CTValue lv, rv;
         if (!ctEvalExpr(b->LHS, env, lv) || !ctEvalExpr(b->RHS, env, rv)) return false;
+        // A value type's operand: `==`/`!=` is its equality, anything else its declared operator (KR-93).
+        if (lv.isStruct || rv.isStruct) {
+            if (b->token == EQEQ || b->token == NOTEQ) {
+                bool eq = false;
+                if (!ctStructEquals(lv, rv, e->line, eq)) return false;
+                out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false;
+                out.i = (eq == (b->token == EQEQ)) ? 1 : 0;
+                return true;
+            }
+            return ctStructOperator(b->token, lv, &rv, e->line, out);
+        }
         bool flt = (lv.kind == CTValue::Float || rv.kind == CTValue::Float);
         auto mkInt = [&](int64_t r) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = r; };
         auto mkBool = [&](bool r) { out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false; out.i = r ? 1 : 0; };
@@ -477,7 +538,8 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
 
     // --- call to another comptime fn (free `f()` or type-associated `Type::name()`) ---
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
-        if (!inv->identifier || !inv->identifier->value)
+        if (!inv->identifier) return ctEvalCallExpr(inv, env, out);   // `Type.ctor(…)` / `value.method(…)` (KR-93)
+        if (!inv->identifier->value)
             return ctFail("a comptime fn may call only another `comptime fn` by name", e->line);
         std::vector<std::string> argNames;
         auto evalArgs = [&](std::vector<CTValue>& args) -> bool {
@@ -496,8 +558,13 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             std::string owner = resolveUserName(*inv->identifier->qualifier->back(), tq);
             std::string disp = *inv->identifier->qualifier->back() + "::" + *inv->identifier->value;   // source-written name
             auto mit = _comptimeMethods.find(owner + "::" + *inv->identifier->value);
-            if (mit == _comptimeMethods.end())
-                return ctFail(("a comptime fn may call only another `comptime fn` — `" + disp + "` is not one").c_str(), e->line);
+            if (mit == _comptimeMethods.end()) {
+                bool handled = false;   // a value type's `static fn` runs too (KR-93)
+                bool ok = ctStaticMember(owner, *inv->identifier->value, disp, inv, env, e->line, out, handled);
+                if (handled) return ok;
+                return ctFail(("a compile-time call names a `comptime fn`, a value type's ctor, method or `static fn` — `"
+                               + disp + "` is none of those").c_str(), e->line);
+            }
             // ...or a `friend` grant names it. This is the THIRD access-check path — canAccess (emitter)
             // and visibleFrom (query) are the other two — and it was the one that knew nothing about
             // grants, so `friend P[secret]` on a `comptime fn` resolved and was then refused here anyway
@@ -527,8 +594,9 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         // Free `comptime fn`.
         std::string key;
         if (!isComptimeFnName(*inv->identifier->value, inv->identifier->qualifier, key))
-            return ctFail(("a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value
-                           + "` is not one").c_str(), e->line);
+            return ctFail((_ctRunning.empty()
+                           ? "a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value + "` is not one"
+                           : "it calls `" + *inv->identifier->value + "`, which is not a `comptime fn`").c_str(), e->line);
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
         if (!ctBindByName(_comptimeFns[key]->parameters, argNames, args, *inv->identifier->value, e->line)) return false;
         std::string saved = _ctCurrentOwner; _ctCurrentOwner.clear();   // a free fn has no owning type
@@ -603,13 +671,16 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             return CTFlow::Normal;
         }
         CTValue proto;
-        if (!ctTypeInfo(d->type, proto)) { ctFail("a comptime fn local must be a scalar or fixed-array type", s->line); return CTFlow::Fail; }
+        if (!ctValueProto(d->type, proto)) {
+            ctFail("a compile-time local holds a number, `bool`, `char`, fixed array, or a `type value` of those", s->line);
+            return CTFlow::Fail;
+        }
         if (d->variables) for (auto& v : *d->variables) {
             if (!v || !v->name || !v->name->value) continue;
             CTValue val;
             if (v->initializer) { if (!ctEvalExpr(v->initializer, env, val)) return CTFlow::Fail; }
             else                { val = proto; }   // zero-init
-            ctCoerce(proto, val);
+            ctCoerceTo(proto, val);
             env.vars[*v->name->value] = val;
         }
         return CTFlow::Normal;
@@ -617,12 +688,15 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 
     if (auto* d = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         CTValue proto;
-        if (!ctTypeInfo(d->type, proto)) { ctFail("a comptime fn const local must be a scalar type", s->line); return CTFlow::Fail; }
+        if (!ctValueProto(d->type, proto)) {
+            ctFail("a compile-time const local holds a number, `bool`, `char`, or a `type value` of those", s->line);
+            return CTFlow::Fail;
+        }
         if (d->variables) for (auto& v : *d->variables) {
             if (!v || !v->name || !v->name->value) continue;
             CTValue val;
             if (!v->initializer || !ctEvalExpr(v->initializer, env, val)) return CTFlow::Fail;
-            ctCoerce(proto, val);
+            ctCoerceTo(proto, val);
             env.vars[*v->name->value] = val;
         }
         return CTFlow::Normal;
@@ -648,13 +722,53 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             it->second.elems[(size_t)i] = val;
             return CTFlow::Normal;
         }
+        // A field write `this.f = v` / `p.f = v` / `this.a.f = v` — a value type's member, running (KR-93).
+        if (dynamic_cast<MemberAccessNode*>(a->unaryExpression.get())) {
+            std::vector<std::string> path;
+            SharedExpression cur = a->unaryExpression;
+            while (auto* m = dynamic_cast<MemberAccessNode*>(cur.get())) {
+                if (!m->identifier || !m->identifier->value) { ctFail("unsupported field write at compile time", s->line); return CTFlow::Fail; }
+                path.insert(path.begin(), *m->identifier->value);
+                cur = m->expression;
+            }
+            std::string root;
+            if (dynamic_cast<ThisAccessNode*>(cur.get())) root = "this";
+            else if (auto* rid = dynamic_cast<IdentifierNode*>(cur.get()))
+                if (rid->value && (!rid->qualifier || rid->qualifier->empty())) root = *rid->value;
+            auto it = root.empty() ? env.vars.end() : env.vars.find(root);
+            if (it == env.vars.end()) { ctFail("a compile-time field write targets `this` or a local value", s->line); return CTFlow::Fail; }
+            CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+            CTValue* slot = &it->second;
+            for (auto& fname : path) {
+                if (!slot->isStruct) { ctFail(("`." + fname + "` is not a field of a value").c_str(), s->line); return CTFlow::Fail; }
+                size_t k = 0;
+                while (k < slot->fieldNames.size() && slot->fieldNames[k] != fname) ++k;
+                if (k == slot->fieldNames.size()) { ctFail(("no field `" + fname + "`").c_str(), s->line); return CTFlow::Fail; }
+                slot = &slot->elems[k];
+            }
+            ctCoerceTo(*slot, val);   // store into the field's declared width/kind
+            *slot = val;
+            return CTFlow::Normal;
+        }
         auto* tgt = dynamic_cast<IdentifierNode*>(a->unaryExpression.get());
         if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local or an element of a local array (`a[i] = …`)", s->line); return CTFlow::Fail; }
         auto it = env.vars.find(*tgt->value);
+        // A bare field of `this` inside a value type's member (KR-93).
+        if (it == env.vars.end()) {
+            auto self = env.vars.find("this");
+            if (self != env.vars.end() && self->second.isStruct)
+                for (size_t k = 0; k < self->second.fieldNames.size(); ++k)
+                    if (self->second.fieldNames[k] == *tgt->value) {
+                        CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+                        ctCoerceTo(self->second.elems[k], val);
+                        self->second.elems[k] = val;
+                        return CTFlow::Normal;
+                    }
+        }
         if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s->line); return CTFlow::Fail; }
         CTValue val;
         if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
-        ctCoerce(it->second, val);   // store into the target's declared width/kind
+        ctCoerceTo(it->second, val);   // store into the target's declared width/kind
         it->second = val;
         return CTFlow::Normal;
     }
@@ -728,7 +842,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     if (dynamic_cast<ContinueNode*>(n)) return CTFlow::Continue;
 
     if (auto* r = dynamic_cast<ReturnNode*>(n)) {
-        if (!r->expression) { ctFail("a comptime fn must return a value", s->line); return CTFlow::Fail; }
+        if (!r->expression) { ret = CTValue{}; ret.isVoid = true; return CTFlow::Return; }   // a `void` member's `return;`
         if (!ctEvalExpr(r->expression, env, ret)) return CTFlow::Fail;
         return CTFlow::Return;
     }
@@ -803,8 +917,11 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
         auto& p = (*params)[i];
         if (!p || !p->identifier || !p->identifier->value || !p->type) { _ctDepth--; return ctFail("malformed comptime fn parameter", line); }
         CTValue proto;
-        if (!ctTypeInfo(p->type, proto)) { _ctDepth--; return ctFail("a comptime fn parameter must be a scalar type", line); }
-        CTValue v = args[i]; ctCoerce(proto, v);
+        if (!ctValueProto(p->type, proto)) {
+            _ctDepth--;
+            return ctFail("a comptime fn parameter holds a number, `bool`, `char`, fixed array, or a `type value` of those", line);
+        }
+        CTValue v = args[i]; ctCoerceTo(proto, v);
         env.vars[*p->identifier->value] = v;
     }
 
@@ -813,10 +930,423 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
     _ctDepth--;
     if (f == CTFlow::Fail) return false;
     if (f != CTFlow::Return) return ctFail("a comptime fn must return a value on every path", line);
+    if (ret.isVoid) return ctFail("a comptime fn must return a value", line);
 
     CTValue proto;
-    if (ctTypeInfo(retType, proto)) ctCoerce(proto, ret);   // scalar return coercion (arrays pass through)
+    if (ctValueProto(retType, proto)) ctCoerceTo(proto, ret);   // scalar return coercion (aggregates pass through)
     out = ret;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// KR-93: a `type value` at compile time
+//
+// A `comptime` may hold a small value type — `public comptime Permissions OwnerRead = Permissions.fromBits(bits:
+// 0o400);` — so the interpreter runs a value type's ctor, and its methods and operators when a compile-time
+// expression calls them: the dual-use widening SPEC reserved when `comptime fn` was made comptime-only. There
+// is no marker on the ctor — the `comptime` at the use site is the explicit part — and a body that leaves the
+// comptime subset (a print, an allocation, a call into C) is refused at the constant, naming the construct.
+// ---------------------------------------------------------------------------
+
+// A primitive C type's scalar prototype — what a generic instance's field (`T v` in `Box<int32>`) resolves to.
+bool CEmitter::ctProtoOfCType(const std::string& ct, CTValue& proto)
+{
+    auto setInt = [&](int w, bool sgn) { proto = CTValue{}; proto.kind = CTValue::Int; proto.width = w; proto.isSigned = sgn; };
+    if      (ct == "int8_t")    setInt(8, true);
+    else if (ct == "int16_t")   setInt(16, true);
+    else if (ct == "int32_t")   setInt(32, true);
+    else if (ct == "int64_t")   setInt(64, true);
+    else if (ct == "uint8_t")   setInt(8, false);
+    else if (ct == "uint16_t")  setInt(16, false);
+    else if (ct == "uint32_t")  setInt(32, false);
+    else if (ct == "uint64_t")  setInt(64, false);
+    else if (ct == "kama_char") setInt(32, false);
+    else if (ct == "bool")      { proto = CTValue{}; proto.kind = CTValue::Bool; proto.width = 1; proto.isSigned = false; }
+    else if (ct == "float")     { proto = CTValue{}; proto.kind = CTValue::Float; proto.isF32 = true; }
+    else if (ct == "double")    { proto = CTValue{}; proto.kind = CTValue::Float; proto.isF32 = false; }
+    else return false;
+    return true;
+}
+
+// What a compile-time local, parameter or return of `type` holds: a scalar, a fixed array, a payload-less
+// enum (its integer), or a `type value` whose every field is one of those. Silent — a caller says why.
+bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
+{
+    if (!type) return false;
+    if (ctTypeInfo(type, proto)) return true;
+    CTValue ep; int64_t n = 0; std::string ec;
+    if (ctArrayInfo(type, ep, n, ec)) {
+        proto = CTValue{}; proto.isArray = true; proto.elemCType = ec;
+        CTValue z = ep; z.i = 0; z.f = 0.0;
+        proto.elems.assign((size_t)n, z);
+        return true;
+    }
+    const std::string ct = cType(type);
+    if (ctProtoOfCType(ct, proto)) return true;
+    if (isEnum(ct)) { proto = CTValue{}; proto.width = 32; return true; }
+    std::string why;
+    return _classes.count(ct) && ctStructProto(ct, proto, why);
+}
+
+// The zeroed shape of a `type value` a compile-time value can hold. `why` names the first thing it cannot.
+bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string& why)
+{
+    auto it = _classes.find(cls);
+    const std::string shown = demangleForDisplay(cls);
+    if (it == _classes.end()) { why = "`" + shown + "` is not a type a compile-time value can hold"; return false; }
+    ClassInfo& ci = it->second;
+    if (ci.kind != TypeKind::Value) why = "`" + shown + "` is not a `type value`, and a compile-time value owns nothing";
+    else if (ci.isBorrow)           why = "`" + shown + "` is a `view`";
+    else if (ci.isExternStruct)     why = "`" + shown + "` has a layout a C header owns";
+    else if (ci.isIntrinsicColl)    why = "`" + shown + "` is a collection";
+    else if (ci.isVariant)          why = "`" + shown + "` is an enum with payloads";
+    if (!why.empty()) return false;
+    proto = CTValue{}; proto.isStruct = true; proto.structClass = cls;
+    for (auto& f : ci.fields) {
+        CTValue fv;
+        bool ok = ctTypeInfo(f.type, fv);
+        if (!ok) {
+            CTValue ep; int64_t n = 0; std::string ec;
+            if (ctArrayInfo(f.type, ep, n, ec)) {
+                fv = CTValue{}; fv.isArray = true; fv.elemCType = ec;
+                CTValue z = ep; z.i = 0; z.f = 0.0; fv.elems.assign((size_t)n, z);
+                ok = true;
+            }
+        }
+        if (!ok) {
+            const std::string fct = fieldCType(ci.name, f);   // resolved where the TYPE was declared
+            auto fc = _classes.find(fct);
+            if (ctProtoOfCType(fct, fv)) ok = true;
+            else if (isEnum(fct)) { fv = CTValue{}; fv.width = 32; ok = true; }
+            else if (fc != _classes.end() && fc->second.kind == TypeKind::Value && !fc->second.isIntrinsicColl
+                     && !fc->second.isBorrow && !fc->second.isExternStruct && !fc->second.isVariant) {
+                std::string inner;
+                if (!ctStructProto(fct, fv, inner)) { why = "`" + shown + "`'s field `" + f.name + "`: " + inner; return false; }
+                ok = true;
+            }
+        }
+        if (!ok) {
+            why = "`" + shown + "`'s field `" + f.name + "` is a `"
+                + (f.type && f.type->value ? *f.type->value : std::string("?"))
+                + "`, which a compile-time value cannot hold (a number, `bool`, `char`, fixed array, or a `type value` "
+                  "of those)";
+            return false;
+        }
+        proto.fieldNames.push_back(f.name);
+        proto.elems.push_back(fv);
+    }
+    return true;
+}
+
+void CEmitter::ctCoerceTo(const CTValue& proto, CTValue& v)
+{
+    if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // the emitter typed the aggregate
+    ctCoerce(proto, v);
+}
+
+// May the code the interpreter is running reach `ci`'s member? The reader is the type whose body is running,
+// else the type being collected; with neither, a function body is reading and the run-time rule answers.
+bool CEmitter::ctMemberVisible(const ClassInfo& ci, Visibility vis, const std::string& member)
+{
+    if (vis == Visibility::Public) return true;
+    const std::string& reader = !_ctCurrentOwner.empty() ? _ctCurrentOwner : _constReaderType;
+    if (!reader.empty()) {
+        if (reader == ci.name) return true;
+        if (vis == Visibility::Protected) {
+            auto rc = _classes.find(reader);
+            for (ClassInfo* c = rc != _classes.end() ? rc->second.base : nullptr; c; c = c->base)
+                if (c->name == ci.name) return true;
+        }
+        return comptimeFriendGrants(ci.name, member, reader);
+    }
+    return accessAllowed(const_cast<ClassInfo*>(&ci), vis, member);
+}
+
+// A call's arguments, evaluated in the CALLER's frame, with the labels they were written with.
+bool CEmitter::ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names)
+{
+    if (inv->args) for (auto& a : *inv->args) {
+        CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
+        args.push_back(av);
+        names.push_back(a->name && a->name->value ? *a->name->value : std::string());
+    }
+    return true;
+}
+
+// Run a member's body AS its type — its own privates in reach — and in its type's scope, where the names in
+// the body were written. `self` is the receiver (a ctor's value under construction), written back after.
+bool CEmitter::ctRunMember(ClassInfo& ci, std::vector<CTArg> bound, SharedStatement body, SharedIdentifier retType,
+                           CTValue* self, const std::string& what, int line, CTValue& out)
+{
+    if (!body) return ctFail(("`" + what + "` has no body to run at compile time").c_str(), line);
+    if (++_ctDepth > CT_MAX_DEPTH) { _ctDepth--; return ctFail("comptime evaluation recursion too deep", line); }
+    std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
+    std::string savedRunning = _ctRunning; _ctRunning = what;
+    NsCtx savedNs = _nsCtx;
+    _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+    restoreFileRung(_nsCtx, ci.declFile);
+    CTEnv env;
+    for (auto& b : bound) {
+        CTValue proto;
+        if (b.type && ctValueProto(b.type, proto)) ctCoerceTo(proto, b.value);
+        env.vars[b.name] = b.value;
+    }
+    if (self) env.vars["this"] = *self;
+    CTValue ret;
+    CTFlow f = ctEvalStmt(body, env, ret);
+    _ctDepth--;
+    _nsCtx = savedNs;
+    _ctCurrentOwner = savedOwner;
+    _ctRunning = savedRunning;
+    if (f == CTFlow::Fail) return false;
+    if (self) { auto t = env.vars.find("this"); if (t != env.vars.end()) *self = t->second; }
+    out = CTValue{};
+    if (f == CTFlow::Return && !ret.isVoid) {
+        CTValue proto;
+        if (retType && ctValueProto(retType, proto)) ctCoerceTo(proto, ret);
+        out = ret;
+    }
+    return true;
+}
+
+// `Type.ctor(…)` at compile time: the value type's shape, zeroed, its field initializers, then the ctor body
+// with `this` bound. A ctor's value is what it returned (`return this;`, a delegation `return T.other(…)`),
+// else `this`. `@generate(of)` and `@generate(zero)` have no body and are built directly.
+bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& ctorName, InvocationNode* inv, CTEnv& env, int line,
+                           CTValue& out)
+{
+    const std::string shown = demangleForDisplay(ci.name) + "." + ctorName;
+    CTValue self; std::string why;
+    if (!ctStructProto(ci.name, self, why))
+        return ctFail((why + " — so `" + shown + "` cannot build a compile-time value").c_str(), line);
+    std::vector<CTValue> args; std::vector<std::string> names;
+    if (!ctCallArgs(inv, env, args, names)) return false;
+    auto mit = ci.methods.find(ctorName);
+    const bool bodiless = mit == ci.methods.end() || !mit->second.node;
+    if (ctorName == "of" && ci.genOf && bodiless) {
+        std::vector<bool> seen(self.elems.size(), false);
+        for (size_t k = 0; k < args.size(); ++k) {
+            size_t at = self.fieldNames.size();
+            for (size_t i = 0; i < self.fieldNames.size(); ++i) if (self.fieldNames[i] == names[k]) { at = i; break; }
+            if (at == self.fieldNames.size())
+                return ctFail(("`" + shown + "` has no parameter `" + names[k] + "`").c_str(), line);
+            if (seen[at]) return ctFail(("`" + shown + "` is given `" + names[k] + "` twice").c_str(), line);
+            seen[at] = true;
+            ctCoerceTo(self.elems[at], args[k]);
+            self.elems[at] = args[k];
+        }
+        for (size_t i = 0; i < seen.size(); ++i)
+            if (!seen[i]) return ctFail(("`" + shown + "` is missing the argument `" + self.fieldNames[i] + ":`").c_str(), line);
+        out = self;
+        return true;
+    }
+    if (ctorName == "zero" && ci.genZero && bodiless) {
+        if (!args.empty()) return ctFail(("`" + shown + "` takes no arguments").c_str(), line);
+        out = self;
+        return true;
+    }
+    if (mit == ci.methods.end() || !mit->second.isCtor)
+        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no ctor `" + ctorName + "`").c_str(), line);
+    MethodInfo& mi = mit->second;
+    if (!ctMemberVisible(ci, mi.visibility, ctorName))
+        return ctFail(("'" + ctorName + "' is " + (mi.visibility == Visibility::Protected ? "protected" : "private")
+                       + " in '" + ci.name + "'").c_str(), line);
+    auto cit = ci.ctors.find(ctorName);
+    if (cit != ci.ctors.end() && cit->second.isFallible)
+        return ctFail(("`" + shown + "` returns a `Result`, and a compile-time value is built by a ctor that cannot "
+                       "fail").c_str(), line);
+    if (!mi.node || !mi.node->body) return ctFail(("`" + shown + "` has no body to run at compile time").c_str(), line);
+    if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
+    // The field initializers (`int32 fd = -1;`), which hold on entry to every ctor — evaluated as the type, in
+    // the type's scope, where they were written.
+    for (size_t i = 0; i < ci.fields.size() && i < self.elems.size(); ++i)
+        if (ci.fields[i].initializer) {
+            std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
+            NsCtx savedNs = _nsCtx;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            restoreFileRung(_nsCtx, ci.declFile);
+            CTEnv fenv; CTValue fv;
+            bool ok = ctEvalExpr(ci.fields[i].initializer, fenv, fv);
+            _nsCtx = savedNs; _ctCurrentOwner = savedOwner;
+            if (!ok) return false;
+            ctCoerceTo(self.elems[i], fv);
+            self.elems[i] = fv;
+        }
+    std::vector<CTArg> bound;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto& p = (*mi.node->params)[i];
+        bound.push_back({ *p->identifier->value, p->type, args[i] });
+    }
+    CTValue result;
+    if (!ctRunMember(ci, bound, mi.node->body, SharedIdentifier(), &self, shown, line, result)) return false;
+    out = result.isStruct ? result : self;
+    if (!out.isStruct || out.structClass != ci.name)
+        return ctFail(("`" + shown + "` must produce a `" + demangleForDisplay(ci.name) + "`").c_str(), line);
+    return true;
+}
+
+// A call through `.`: `Type.ctor(…)` constructs; `value.method(…)` runs a method of the value's own type, and a
+// method that is not `const fn` writes its receiver back when the receiver is a local or `this`.
+bool CEmitter::ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out)
+{
+    auto* ma = inv ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr;
+    const int line = inv ? inv->line : 0;
+    if (!ma || !ma->identifier || !ma->identifier->value || !ma->expression)
+        return ctFail("a compile-time call names a `comptime fn`, a value type's ctor, or a method of a value", line);
+    const std::string& member = *ma->identifier->value;
+    // `Type.ctor(…)` — the receiver names a TYPE (a binding can never be named like one in reach).
+    if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+        if (rid->value && !env.vars.count(*rid->value)) {
+            std::string cls;
+            if (rid->genericArgs && !rid->genericArgs->empty()) cls = cType(std::static_pointer_cast<IdentifierNode>(ma->expression));
+            else cls = resolveUserName(*rid->value, rid->qualifier);
+            auto cit = _classes.find(cls);
+            if (cit != _classes.end() && !_typeConsts.count(cls + "::" + member))
+                return ctConstruct(cit->second, member, inv, env, line, out);
+        }
+    CTValue recv; if (!ctEvalExpr(ma->expression, env, recv)) return false;
+    if (!recv.isStruct)
+        return ctFail(("`" + member + "` — only a `type value`'s methods run at compile time").c_str(), line);
+    ClassInfo& ci = _classes[recv.structClass];
+    const std::string shown = demangleForDisplay(ci.name) + "." + member;
+    auto mit = ci.methods.find(member);
+    if (mit == ci.methods.end() || mit->second.isCtor || mit->second.isStatic || mit->second.isOperator)
+        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no method `" + member + "`").c_str(), line);
+    MethodInfo& mi = mit->second;
+    if (!ctMemberVisible(ci, mi.visibility, member))
+        return ctFail(("'" + member + "' is " + (mi.visibility == Visibility::Protected ? "protected" : "private")
+                       + " in '" + ci.name + "'").c_str(), line);
+    if (!mi.node || !mi.node->body) return ctFail(("`" + shown + "` has no body to run at compile time").c_str(), line);
+    std::vector<CTValue> args; std::vector<std::string> names;
+    if (!ctCallArgs(inv, env, args, names)) return false;
+    if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
+    std::vector<CTArg> bound;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto& p = (*mi.node->params)[i];
+        bound.push_back({ *p->identifier->value, p->type, args[i] });
+    }
+    CTValue self = recv;
+    if (!ctRunMember(ci, bound, mi.node->body, mi.returnType, &self, shown, line, out)) return false;
+    if (!mi.isConst) {
+        if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
+            if (rid->value && (!rid->qualifier || rid->qualifier->empty())) {
+                auto it = env.vars.find(*rid->value);
+                if (it != env.vars.end()) it->second = self;
+            }
+        } else if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
+            env.vars["this"] = self;
+        }
+    }
+    return true;
+}
+
+// `Type::name(…)` naming a value type's `static fn` — the dual-use widening reaches it too. `handled` is false
+// when `owner` has no such static, so the caller keeps its own diagnostic.
+bool CEmitter::ctStaticMember(const std::string& owner, const std::string& name, const std::string& shown,
+                              InvocationNode* inv, CTEnv& env, int line, CTValue& out, bool& handled)
+{
+    handled = false;
+    auto oc = _classes.find(owner);
+    if (oc == _classes.end()) return false;
+    ClassInfo& ci = oc->second;
+    auto mit = ci.methods.find(name);
+    if (mit == ci.methods.end() || !mit->second.isStatic || mit->second.isCtor || mit->second.isOperator || !mit->second.node)
+        return false;
+    handled = true;
+    MethodInfo& mi = mit->second;
+    if (!ctMemberVisible(ci, mi.visibility, name))
+        return ctFail(("'" + name + "' is private in '" + ci.name + "'").c_str(), line);
+    std::vector<CTValue> args; std::vector<std::string> names;
+    if (!ctCallArgs(inv, env, args, names)) return false;
+    if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
+    std::vector<CTArg> bound;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto& p = (*mi.node->params)[i];
+        bound.push_back({ *p->identifier->value, p->type, args[i] });
+    }
+    return ctRunMember(ci, bound, mi.node->body, mi.returnType, nullptr, shown, line, out);
+}
+
+// An operator on a value at compile time — found as the emitter finds it: the method form (arity 1, or 0 for a
+// unary) on the left operand's type, else the free form (arity 2) on either operand's type — matched by the
+// token and the operand types, then its body run.
+bool CEmitter::ctStructOperator(int token, const CTValue& lv, const CTValue* rv, int line, CTValue& out)
+{
+    const bool unary = rv == nullptr;
+    // Does a declared parameter type accept this operand? A class must be the operand's own; a scalar
+    // parameter takes a scalar.
+    auto accepts = [&](ClassInfo& owner, SharedIdentifier pt, const CTValue& v) -> bool {
+        if (!pt) return false;
+        NsCtx saved = _nsCtx;
+        _nsCtx = NsCtx{}; _nsCtx.scope = owner.scope; _nsCtx.usings = owner.usings; _nsCtx.symbolAliases = owner.symbolAliases;
+        restoreFileRung(_nsCtx, owner.declFile);
+        const std::string pc = (pt->value && *pt->value == "This") ? owner.name : cType(pt);
+        _nsCtx = saved;
+        if (v.isStruct) return pc == v.structClass;
+        return !_classes.count(pc) || _classes[pc].isScalarEnum();   // a scalar operand takes a scalar parameter
+    };
+    std::vector<ClassInfo*> owners;
+    if (lv.isStruct) owners.push_back(&_classes[lv.structClass]);
+    if (rv && rv->isStruct && (!lv.isStruct || rv->structClass != lv.structClass)) owners.push_back(&_classes[rv->structClass]);
+    for (int pass = 0; pass < 2; ++pass)
+        for (ClassInfo* ci : owners)
+            for (auto& kv : ci->methods) {
+                MethodInfo& mi = kv.second;
+                if (!mi.isOperator || !mi.opDecl || !mi.opDecl->operatorDeclarator) continue;
+                auto* d = mi.opDecl->operatorDeclarator.get();
+                if (d->opToken != token) continue;
+                std::vector<CTArg> bound;
+                CTValue self; CTValue* selfp = nullptr;
+                if (pass == 0) {
+                    // the method form, on the left operand's type only
+                    if (ci != (lv.isStruct ? &_classes[lv.structClass] : nullptr)) continue;
+                    if (unary ? mi.arity != 0 : (mi.arity != 1 || !accepts(*ci, d->param1Type, *rv))) continue;
+                    if (!unary) bound.push_back({ d->param1Name && d->param1Name->value ? *d->param1Name->value : std::string(),
+                                                  d->param1Type, *rv });
+                    self = lv; selfp = &self;
+                } else {
+                    if (unary || mi.arity != 2) continue;
+                    if (!accepts(*ci, d->param1Type, lv) || !accepts(*ci, d->param2Type, *rv)) continue;
+                    bound.push_back({ d->param1Name && d->param1Name->value ? *d->param1Name->value : std::string(), d->param1Type, lv });
+                    bound.push_back({ d->param2Name && d->param2Name->value ? *d->param2Name->value : std::string(), d->param2Type, *rv });
+                }
+                const std::string shown = demangleForDisplay(ci->name) + " operator" + binaryOperator(token);
+                if (!ctMemberVisible(*ci, mi.visibility, kv.first))
+                    return ctFail(("`" + shown + "` is private in '" + ci->name + "'").c_str(), line);
+                return ctRunMember(*ci, bound, mi.opDecl->body, d->returnType, selfp, shown, line, out);
+            }
+    return ctFail((std::string("no `operator") + binaryOperator(token) + "` for these operands at compile time").c_str(), line);
+}
+
+// `==` on two values of one type: a hand-written `equals` (Equatable) runs; `@generate(Equatable)` compares
+// memberwise, as the generated C does. A type with neither has no equality, as at run time.
+bool CEmitter::ctStructEquals(const CTValue& a, const CTValue& b, int line, bool& eq)
+{
+    if (!a.isStruct || !b.isStruct || a.structClass != b.structClass)
+        return ctFail("`==` compares two values of one type", line);
+    ClassInfo& ci = _classes[a.structClass];
+    auto mit = ci.methods.find("equals");
+    if (mit != ci.methods.end() && mit->second.node && mit->second.node->body && mit->second.node->params
+        && mit->second.node->params->size() == 1) {
+        auto& p = (*mit->second.node->params)[0];
+        CTValue self = a, r;
+        if (!ctRunMember(ci, { { *p->identifier->value, p->type, b } }, mit->second.node->body,
+                         mit->second.returnType, &self, demangleForDisplay(ci.name) + ".equals", line, r)) return false;
+        eq = ctAsI(r) != 0;
+        return true;
+    }
+    if (!ci.genEquatable)
+        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no equality — implement `Equatable`, or "
+                       "`@generate(Equatable)`").c_str(), line);
+    std::function<bool(const CTValue&, const CTValue&)> same = [&](const CTValue& x, const CTValue& y) -> bool {
+        if (x.isStruct || x.isArray) {
+            if (x.elems.size() != y.elems.size()) return false;
+            for (size_t i = 0; i < x.elems.size(); ++i) if (!same(x.elems[i], y.elems[i])) return false;
+            return true;
+        }
+        return x.kind == CTValue::Float ? ctAsF(x) == ctAsF(y) : ctAsI(x) == ctAsI(y);
+    };
+    eq = same(a, b);
     return true;
 }
 
@@ -892,6 +1422,18 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
             _comptimeConstVals[dc.cName] = v;
             return true;
         }
+        // A constant's initializer is never emitted, so no run-time type check sees it: a value-type constant
+        // must be given a value of its own type, and a scalar one a scalar (KR-93).
+        CTValue shape;
+        const bool shaped = ctValueProto(dc.type, shape);
+        if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass)) {
+            ctFail(("`" + shown + "` is declared a `" + (dc.type && dc.type->value ? *dc.type->value : std::string("?"))
+                    + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
+                                                                     : std::string("a number")).c_str()
+                    ).c_str(), dc.line);
+            _ctErroredConsts.insert(dc.cName);
+            return false;
+        }
         CTValue proto;
         if (ctTypeInfo(dc.type, proto)) ctCoerce(proto, v);
         _comptimeConstVals[dc.cName] = v;
@@ -949,6 +1491,12 @@ bool CEmitter::evalLocalComptime(SharedIdentifier type, SharedExpression init, c
             out = v;
             return true;
         }
+        CTValue shape;
+        const bool shaped = ctValueProto(type, shape);
+        if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass))
+            return ctFail(("`" + name + "` is declared a `" + (type && type->value ? *type->value : std::string("?"))
+                           + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
+                                                                            : std::string("a number"))).c_str(), line);
         CTValue proto;
         if (ctTypeInfo(type, proto)) ctCoerce(proto, v);   // as evalDeferredConst: an unmodelled scalar (an enum,
         out = v;                                           // `isize`) keeps the value it folded to

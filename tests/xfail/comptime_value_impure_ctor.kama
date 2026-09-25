@@ -1,0 +1,8 @@
+// KR-93. A value type's ctor runs at compile time only if its body stays inside the comptime subset. This one
+// prints, so the constant is refused — and the diagnostic names the ctor that cannot run and the call in it.
+import { core::println };
+type value P { int32 x; public ctor loud(int32 x) { println(s: "hi"); this.x = x; } }
+
+comptime P K = P.loud(x: 1);
+
+fn int32 main() { return 0; }

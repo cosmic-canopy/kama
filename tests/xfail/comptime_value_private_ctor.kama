@@ -1,0 +1,7 @@
+// KR-93. The ctor a constant calls obeys member visibility at compile time as it does at run time: a private
+// ctor builds the type's OWN constants, and a module constant outside the type may not call it.
+type value P { int32 x; ctor secret(int32 x) { this.x = x; } public ctor make() { this.x = 0; } }
+
+comptime P K = P.secret(x: 1);
+
+fn int32 main() { return 0; }

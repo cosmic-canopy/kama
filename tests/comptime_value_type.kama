@@ -1,0 +1,45 @@
+// KR-93: a `comptime` may hold a small `type value`. The compiler runs the value type's ctor — and its methods
+// and operators when a compile-time expression calls them — and bakes the result as a `static const` object.
+// No marker on the ctor: the `comptime` at the use site is the explicit part (the maintainer's ruling). This
+// is the widening SPEC reserved when `comptime fn` was made comptime-only.
+@generate(Equatable)
+type value Perm {
+    uint32 bits;
+    ctor fromBits(uint32 bits) { this.bits = bits; }                   // private — the type's own constants use it
+    public comptime Perm R = Perm.fromBits(bits: 4);                   // a constant of the type's OWN type
+    public comptime Perm W = Perm.fromBits(bits: 2);
+    public comptime Perm X = Perm.fromBits(bits: 1);
+    public comptime Perm RW = Perm::R | Perm::W;                       // an operator, run at compile time
+    public Perm operator|(Perm rhs) { return Perm.fromBits(bits: this.bits | rhs.bits); }
+    public const fn bool has(Perm p) { return (this.bits & p.bits) == p.bits; }
+    public const fn uint32 raw() { return this.bits; }
+}
+
+@generate(of)
+type value Point { public int32 x; public int32 y; }
+type value Segment {
+    public Point a; public Point b;
+    public ctor make(Point a, Point b) { this.a = a; this.b = b; }
+    public const fn int32 dx() { return this.b.x - this.a.x; }
+}
+
+comptime Point ORIGIN = Point.of(x: 0, y: 0);                           // `@generate(of)`, which has no body
+comptime Point UNIT_X = Point.of(y: 0, x: 1);                           // named arguments in any order
+comptime Segment SEG = Segment.make(b: Point.of(x: 5, y: 1), a: ORIGIN); // a nested value; a constant as argument
+comptime int32 SEG_DX = SEG.dx();                                       // a method, run at compile time
+comptime bool EQ = Perm::RW == (Perm::R | Perm::W);                     // `@generate(Equatable)` equality
+
+fn int32 main() {
+    Perm p = Perm::R | Perm::W;          // at run time: a constant's address is never taken — it is copied
+    Perm q = Perm::RW;
+    int32 bad = 0;
+    if (!p.has(p: Perm::R)) { bad = bad + 1; }                     // a constant passed by value
+    if (p.has(p: Perm::X)) { bad = bad + 2; }
+    if (q != p) { bad = bad + 4; }
+    if (Perm::RW.raw() != 6ui32) { bad = bad + 8; }                 // a `const fn` on a constant receiver
+    if (SEG_DX != 5 || !EQ) { bad = bad + 16; }
+    if (ORIGIN.x != 0 || UNIT_X.x != 1) { bad = bad + 32; }        // a field of a module constant
+    comptime Perm LOCAL = Perm::R | Perm::X;                       // a local one
+    if (LOCAL.raw() != 5ui32) { bad = bad + 64; }
+    return bad + 42;
+}

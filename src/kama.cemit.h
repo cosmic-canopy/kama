@@ -3394,6 +3394,12 @@ private:
         std::vector<CTValue> elems;   // Stage 3: InlineArray<T,N> element values (kind is unused when set)
         bool isArray = false;         // Stage 3: this value is a fixed array (elems holds the elements)
         std::string elemCType;        // Stage 3: element C type, for baking `static const T name[N] = {…}`
+        // KR-93: a `type value` — its fields in `elems`, in declaration order, named by `fieldNames`, and the
+        // value type's ClassInfo key in `structClass` (which also bakes the C initializer's field names).
+        bool isStruct = false;
+        std::string structClass;
+        std::vector<std::string> fieldNames;
+        bool isVoid = false;          // KR-93: what a bare `return;` returns — fine from a `void` member, not a fn
     };
     struct CTEnv { std::map<std::string, CTValue> vars; };   // one comptime-fn call frame (its locals)
     enum class CTFlow { Normal, Return, Break, Continue, Fail };
@@ -3401,6 +3407,7 @@ private:
     int  _ctDepth = 0;      // comptime-fn call-recursion depth
     bool _ctFailed = false; // a comptime diagnostic was already emitted this evaluation
     bool _ctQuiet = false;  // KR-93: a pre-pass evaluation — fail without reporting; the emission-time run reports
+    std::string _ctRunning; // KR-93: the value type's member running now (`Perm.fromBits`), named by a failure inside it
     static const long CT_STEP_BUDGET = 1000000;   // runaway guard (cf. C++ constexpr-step limit)
     static const int  CT_MAX_DEPTH   = 256;
     // Baked comptime-fn-derived constant values, keyed by qualified cName; consulted at the const emit site.
@@ -3417,6 +3424,23 @@ private:
     bool evalLocalComptime(SharedIdentifier type, SharedExpression init, const std::string& name, int line, CTValue& out);
     bool ctBindByName(SharedParameterList params, const std::vector<std::string>& names, std::vector<CTValue>& args,
                       const std::string& callee, int line);   // named args -> parameter order (KR-93)
+    // KR-93: a `type value` at compile time — its shape, its ctor, its methods and operators run by the
+    // interpreter (the dual-use widening SPEC reserved for comptime fns), and the reader it runs as.
+    struct CTArg { std::string name; SharedIdentifier type; CTValue value; };   // one bound parameter
+    bool ctValueProto(SharedIdentifier type, CTValue& proto);   // scalar / fixed array / enum / value type
+    bool ctProtoOfCType(const std::string& ct, CTValue& proto);   // a primitive C type's scalar prototype
+    bool ctStructProto(const std::string& cls, CTValue& proto, std::string& why);
+    void ctCoerceTo(const CTValue& proto, CTValue& v);            // ctCoerce, which leaves an aggregate alone
+    bool ctConstruct(ClassInfo& ci, const std::string& ctor, InvocationNode* inv, CTEnv& env, int line, CTValue& out);
+    bool ctRunMember(ClassInfo& ci, std::vector<CTArg> bound, SharedStatement body, SharedIdentifier retType,
+                     CTValue* self, const std::string& what, int line, CTValue& out);
+    bool ctMemberVisible(const ClassInfo& ci, Visibility vis, const std::string& member);
+    bool ctStructOperator(int token, const CTValue& lv, const CTValue* rv, int line, CTValue& out);
+    bool ctStructEquals(const CTValue& a, const CTValue& b, int line, bool& eq);
+    bool ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names);
+    bool ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out);   // a member / ctor call through `.`
+    bool ctStaticMember(const std::string& owner, const std::string& name, const std::string& shown,
+                        InvocationNode* inv, CTEnv& env, int line, CTValue& out, bool& handled);
     // ON DEMAND, so a constant may read one declared after it, in any file order; a cycle is refused by name.
     enum class CTConstState { Pending, Evaluating, Done };
     std::map<std::string, CTConstState> _ctDeferredState;   // cName -> state, for every _ctDeferredConsts entry
@@ -3467,6 +3491,7 @@ private:
     // predicate behind the B4 return check and the ctor-argument check, so the two cannot drift.
     bool        isSafeViewRoot(const std::string& root) const;
     bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
+    bool        rootsInComptimeConst(SharedExpression e);      // KR-93: a `comptime` constant, or a place inside one
     bool        isConstFieldWrite(SharedExpression target);   // writing a const data member
     // Access control.
     Visibility  visibilityOf(SharedModifierList mods, Visibility dflt, int line);

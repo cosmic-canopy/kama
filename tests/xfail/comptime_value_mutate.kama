@@ -1,0 +1,6 @@
+// KR-93. A value-type constant is a `static const` object: it reads like a value, and a method that is not
+// `const fn` may not run on it (it would write read-only storage, or a copy nobody sees).
+@generate(of) type value P { public int32 x; public fn void bump() { this.x = this.x + 1; } }
+comptime P K = P.of(x: 1);
+
+fn int32 main() { K.bump(); return 0; }
