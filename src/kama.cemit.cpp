@@ -22246,7 +22246,15 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 
     std::set<std::string> ownerLocals;                       // locals whose declared type is this owner
     std::set<std::string> completeByInit;                    // ownerLocals declared with a constructing initializer
-    std::map<std::string, std::set<std::string>> assigned;   // ownerLocal -> owning fields set (top-level only)
+    // The fields DEFINITELY assigned on the path being walked, per key (`this`, or an owner-local). This is
+    // definite assignment, as Swift and C# have it: a branch walks a COPY of the state it was entered with, so
+    // an assignment inside it counts for a `return` inside it, and where branches rejoin a field counts only
+    // if every branch that can fall through assigned it. Until 0.9.450 only TOP-LEVEL assignments counted and
+    // a `match` was not walked at all, which misread both directions (peer KB-33): a trailing `match` whose
+    // every arm returned was taken for a fall-through, so a fallible ctor that never touched `this` was told
+    // to assign every field; and an `Ok(this)` returned from inside an arm went unchecked.
+    using Assigned = std::map<std::string, std::set<std::string>>;
+    Assigned* assigned = nullptr;                            // the current path's state, read by `missingField`
 
     // `x.f` written as `local.field` — return {local, field} when x is a tracked owner-local; else {"",""}.
     auto localFieldRef = [&](SharedExpression e) -> std::pair<std::string, std::string> {
@@ -22263,7 +22271,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 
     // The first `mustAssign` field this key has not been credited with, in declaration order ("" if none).
     auto missingField = [&](const std::string& key) -> std::string {
-        auto& done = assigned[key];
+        auto& done = (*assigned)[key];
         for (auto& f : owner.fields)
             if (mustAssign.count(f.name) && !done.count(f.name)) return f.name;
         return "";
@@ -22325,8 +22333,21 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         // else — a construction / delegating factory call / param: complete by delegation.
     };
 
-    std::function<void(SharedStatement, bool)> walk = [&](SharedStatement st, bool topLevel) {
-        if (!st) return;
+    // What both of two paths assigned.
+    auto meet = [](const Assigned& x, const Assigned& y) {
+        Assigned out;
+        for (auto& kv : x) {
+            auto it = y.find(kv.first);
+            if (it == y.end()) continue;
+            for (auto& f : kv.second) if (it->second.count(f)) out[kv.first].insert(f);
+        }
+        return out;
+    };
+    // Walk one statement on the path whose state is `state`. True when every path through it leaves the ctor
+    // — `alwaysExits`'s answer, clause for clause — so what continues after it is only the paths that fall
+    // through.
+    std::function<bool(SharedStatement, Assigned&)> walk = [&](SharedStatement st, Assigned& state) -> bool {
+        if (!st) return false;
         ASTNode* n = st.get();
         if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
             // Match BOTH forms: a concrete owner via `resolveUserName` (template name == owner.name), AND a
@@ -22342,36 +22363,74 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
                     ownerLocals.insert(*v->name->value);
                     if (v->initializer) completeByInit.insert(*v->name->value);   // built by delegation at decl
                 }
-        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
-            if (topLevel) {
-                std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
-                if (!lf.first.empty() && mustAssign.count(lf.second)) assigned[lf.first].insert(lf.second);
-            }
-        } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
-            std::string bad; int line = 0;
-            classify(ret->expression, bad, line);
-            if (!bad.empty()) reportMissing(bad, line ? line : st->line);
-        } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
-            walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional assigns
-            walk(iff->elseStatement, false);
-        } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
-            walk(wh->whileStatement, false);
-        } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
-            if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
+            return false;
         }
-        // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
+        if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
+            if (!lf.first.empty() && mustAssign.count(lf.second)) state[lf.first].insert(lf.second);
+            return false;
+        }
+        if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
+            std::string bad; int line = 0;
+            Assigned* outer = assigned;
+            assigned = &state;                               // judged by what THIS path assigned
+            classify(ret->expression, bad, line);
+            assigned = outer;
+            if (!bad.empty()) reportMissing(bad, line ? line : st->line);
+            return true;
+        }
+        if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& s : *blk->statements) if (walk(s, state)) return true;
+            return false;
+        }
+        if (auto* sc = dynamic_cast<ScopeNode*>(n)) return walk(sc->body, state);    // `scope { … }` always runs
+        if (auto* bn = dynamic_cast<BorrowNode*>(n)) return walk(bn->body, state);   // `borrow … { … }` always runs
+        if (auto* iff = dynamic_cast<IfNode*>(n)) {
+            Assigned thenState = state, elseState = state;   // no `else` is an empty one: `state` falls through
+            const bool thenExits = walk(iff->ifStatement, thenState);
+            const bool elseExits = iff->elseStatement && walk(iff->elseStatement, elseState);
+            if (thenExits && elseExits) return true;
+            state = thenExits ? elseState : elseExits ? thenState : meet(thenState, elseState);
+            return false;
+        }
+        if (auto* m = dynamic_cast<MatchNode*>(n)) {             // exhaustive by construction
+            if (!m->arms || m->arms->empty()) return false;
+            bool anyFallsThrough = false;
+            Assigned joined;
+            for (auto& arm : *m->arms) {
+                Assigned armState = state;
+                const bool exits = arm && (arm->block ? walk(arm->block, armState)
+                                                      : (arm->body && exprDiverges(arm->body.get())));
+                if (exits) continue;
+                joined = anyFallsThrough ? meet(joined, armState) : armState;
+                anyFallsThrough = true;
+            }
+            if (!anyFallsThrough) return true;
+            state = joined;
+            return false;
+        }
+        // A loop body may run no times, so what it assigns counts only inside it; a loop with no way out of
+        // the bottom (`while (true)` with no `break`) is the one that leaves.
+        if (auto* wh = dynamic_cast<WhileNode*>(n))   { Assigned inner = state; walk(wh->whileStatement, inner); return alwaysExits(st); }
+        if (auto* fo = dynamic_cast<ForNode*>(n))     { Assigned inner = state; walk(fo->body, inner); return alwaysExits(st); }
+        if (auto* dw = dynamic_cast<DoWhileNode*>(n)) { Assigned inner = state; walk(dw->doWhileStatement, inner); return false; }
+        if (auto* fe = dynamic_cast<ForEachNode*>(n)) { Assigned inner = state; walk(fe->body, inner); return false; }
+        return exprDiverges(n);                                  // a bare `panic(…)`
     };
-    SharedStatement last;
-    for (auto& st : *body->statements) { walk(st, true); last = st; }
+    Assigned atEnd;
+    assigned = &atEnd;
+    walk(body, atEnd);
 
     // Falling off the end of a ctor returns the value it built (the implicit `this`), so that value must be
-    // complete AT THAT POINT — the same proof a written `return give this;` gets, at the return the author
-    // did not write. The condition mirrors the emitter's exactly (kama.cemit.cpp, emitMethodOrCtorBody):
-    // wherever it emits `return __self;`, this has proven `__self` complete. A ctor that ends in a `return`
-    // was already checked by the ReturnNode arm; one that delegates never credits `this` and would be
-    // flagged here, which is correct — a delegating ctor returns, it does not fall off the end.
-    if (!(last && stmtIsJump(last))) {
+    // complete AT THAT POINT — on every path that arrives there — which is the same proof a written
+    // `return give this;` gets, at the return the author did not write. Whether the body CAN arrive there is
+    // the emitter's own test (emitMethodOrCtorBody): where `alwaysExits` says no, it writes no `return` after
+    // the last statement and there is nothing to prove — a ctor ending in a `return`, or in an `if`/`match`
+    // whose every branch returns. One that delegates never credits `this`, and is flagged here only if some
+    // path does fall off the end, which is correct — a delegating ctor returns.
+    if (!alwaysExits(body)) {
         std::string bad = missingField("this");
+        SharedStatement last = body->statements->empty() ? SharedStatement() : body->statements->back();
         if (!bad.empty()) reportMissing(bad, last ? last->line : body->line);
     }
 }
@@ -28517,15 +28576,18 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     std::ostream* savedOut = _out;
     if (ctorBody) _out = &ctorStmts;
 
-    SharedStatement last;
     if (body && body->statements) {
         bool skipFirst = (baseInit != nullptr);   // already emitted, as part of the fill
         for (auto& st : *body->statements) {
-            if (skipFirst) { skipFirst = false; last = st; continue; }
-            emitStatement(st, 1); last = st;
+            if (skipFirst) { skipFirst = false; continue; }
+            emitStatement(st, 1);
         }
     }
-    bool fellOffEnd = !(last && stmtIsJump(last));
+    // A body that can reach its closing brace falls off the end — `alwaysExits`, the test a non-`void`
+    // function's missing return is judged by. One ending in an `if`/`match` whose every branch returns does
+    // not, and gets no `return` after it: the same C a function ending that way is given, and the answer
+    // checkNamedCtorComplete proved `kama_self` complete against (peer KB-33).
+    bool fellOffEnd = !(body && alwaysExits(body));
     if (fellOffEnd) {
         emitScopeCleanup(_scopes.back(), 1);
         // Falling off the end of a ctor RETURNS the value it built. A ctor's whole job is to produce that

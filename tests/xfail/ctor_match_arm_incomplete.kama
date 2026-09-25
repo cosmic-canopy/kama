@@ -1,0 +1,16 @@
+// A `return` inside a `match` arm is judged by what that arm assigned: `y` never is, so the `Ok(this)` it
+// returns is incomplete. Until 0.9.450 the check did not walk a `match`, and this was refused only by
+// accident — as a fall-through, naming `x`, which the arm does assign.
+type enum E implements Error { Bad; public const fn string message() { return "bad"; } }
+type value Plain {
+    public int32 x;
+    public int32 y;
+    public ctor Result<Plain, E> fromCode(int32 code) {
+        Result<int32, E> r = Result::Ok(value: code);
+        match (r) {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: v): { this.x = v; return Result::Ok(value: this); }
+        };
+    }
+}
+fn int32 main() { return match (Plain.fromCode(code: 3)) { case Ok(value: p): p.x; case Err(error: e): 9; }; }

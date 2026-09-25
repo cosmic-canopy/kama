@@ -1,0 +1,89 @@
+// A constructor must assign every field ON EVERY PATH — and only there. Until 0.9.450 the check counted an
+// assignment only at the ctor's top level and did not walk a `match` at all, so it misread both directions:
+//   - a trailing `match` whose every arm RETURNS was taken for a fall-through, and a fallible ctor that never
+//     touches `this` was told to assign every field (the peer project's KB-33, `RelayIdentity.fromSeed`);
+//   - an `if`/`else` or `match` that assigns a field in every branch did not count as assigning it.
+// The rule now is definite assignment, as in Swift and C#: a branch walks a copy of the state it entered
+// with, and where branches rejoin a field counts only if every branch that can fall through assigned it.
+// tests/xfail/ctor_match_arm_incomplete and ctor_match_join_incomplete hold the refusing direction.
+type enum E implements Error { Bad; public const fn string message() { return "bad"; } }
+
+fn Result<int32, E> parse(int32 code) {
+    if (code < 0) { return Result::Err(error: E::Bad); }
+    return Result::Ok(value: code);
+}
+
+type value Plain {
+    public int32 x;
+    public ctor of(int32 x) { this.x = x; }
+    // KB-33 as filed: the `match` is the last statement and both arms return, so nothing falls off the end.
+    public ctor Result<Plain, E> fromCode(int32 code) {
+        Result<int32, E> r = parse(code: code);
+        match (r) {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: v): { return Result::Ok(value: Plain.of(x: v)); }
+        };
+    }
+}
+
+// The resource form the peer hit: the `match` hands a resource out of a `Result` into a delegating ctor.
+type resource Key {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 get() { return this.n; }
+    ~Key() { }
+}
+fn Result<Key, E> loadKey(int32 n) {
+    if (n < 0) { return Result::Err(error: E::Bad); }
+    return Result::Ok(value: Key.make(n: n));
+}
+type resource Identity {
+    Key key;
+    ctor withKey(Key key) { this.key = give key; }
+    public ctor Result<Identity, E> fromSeed(int32 n) {
+        Result<Key, E> r = loadKey(n: n);
+        match (give r) {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: k): { return Result::Ok(value: Identity.withKey(key: give k)); }
+        };
+    }
+    public fn int32 id() { return this.key.get(); }
+    ~Identity() { }
+}
+
+// Every arm ASSIGNS and falls through: the implicit `Ok(this)` at the end is complete on every path.
+type value Pair {
+    public int32 a;
+    public int32 b;
+    public ctor Result<Pair, E> split(int32 code) {
+        Result<int32, E> r = parse(code: code);
+        match (r) {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: v): { this.a = v / 10; this.b = v % 10; }
+        };
+    }
+    // Both arms of an `if`/`else` assign `b`, so it is assigned after it.
+    public ctor ordered(int32 x, int32 y) {
+        this.a = x;
+        if (x < y) { this.b = y; } else { this.b = x; }
+    }
+    // A `return` inside a branch is judged by what THAT branch assigned.
+    public ctor Result<Pair, E> checked(int32 x) {
+        if (x >= 0) { this.a = x; this.b = x; return Result::Ok(value: this); }
+        return Result::Err(error: E::Bad);
+    }
+}
+
+fn int32 main() {
+    int32 total = 0;
+    match (Plain.fromCode(code: 7)) { case Ok(value: p): { total = total + p.x; } case Err(error: e): { return 1; } };
+    match (Plain.fromCode(code: -1)) { case Ok(value: p): { return 2; } case Err(error: e): { } };
+    match (Identity.fromSeed(n: 5)) { case Ok(value: i): { total = total + i.id(); } case Err(error: e): { return 3; } };
+    match (Identity.fromSeed(n: -5)) { case Ok(value: i): { return 4; } case Err(error: e): { } };
+    match (Pair.split(code: 34)) { case Ok(value: p): { total = total + p.a + p.b; } case Err(error: e): { return 5; } };
+    Pair o = Pair.ordered(x: 9, y: 2);
+    total = total + o.b;                                            // 9
+    match (Pair.checked(x: 7)) { case Ok(value: p): { total = total + p.a + p.b; } case Err(error: e): { return 6; } };
+    match (Pair.checked(x: -7)) { case Ok(value: p): { return 7; } case Err(error: e): { } };
+    return total;                                                   // 7 + 5 + 7 + 9 + 14 = 42
+}

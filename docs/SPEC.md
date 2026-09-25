@@ -3771,7 +3771,12 @@ fn int32 main() {
 
 **A constructor must assign every field**, checked at compile time. The returned value is complete by
 delegation when the ctor's terminating move is `return Other.make(…)`, so chaining stays clean. This is
-kama's answer to "a returned object is always fully initialized" — it is proven, not conventional.
+kama's answer to "a returned object is always fully initialized" — it is proven, not conventional. The proof
+is definite assignment, path by path: a field assigned in both arms of an `if`/`else`, or in every arm of a <!-- test: ctor_definite_assignment -->
+`match`, is assigned after it; one assigned in only some arms is not; and a `return` inside a branch is judged <!-- xfail: ctor_match_arm_incomplete, ctor_match_join_incomplete -->
+by what that branch assigned. A ctor whose every path returns — a trailing `if`/`match` whose arms all
+`return` — never falls off its end, so it owes `this` nothing: a fallible ctor that returns only an `Err` or a
+delegated `Ok` is complete as written.
 
 Two escape hatches, both **explicit and at the declaration** rather than hidden in codegen:
 

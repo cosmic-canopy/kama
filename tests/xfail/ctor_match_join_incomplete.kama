@@ -1,0 +1,14 @@
+// Where `match` arms rejoin, a field counts only if EVERY arm that falls through assigned it: the `B` arm
+// assigns `x` alone, so the value the ctor returns by falling off its end may lack `y`.
+type enum Mode { A, B }
+type value Plain {
+    public int32 x;
+    public int32 y;
+    public ctor pick(Mode m) {
+        match (m) {
+            case A: { this.x = 1; this.y = 2; }
+            case B: { this.x = 3; }
+        };
+    }
+}
+fn int32 main() { Plain p = Plain.pick(m: Mode::A); return p.x + p.y; }
