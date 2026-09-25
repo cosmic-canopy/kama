@@ -3,6 +3,9 @@
 // visible — so none is a name b.kama's bindings can shadow.
 export { shared };
 
+static int32 hits = 0;
+comptime int32 LIMIT = 4;
+
 fn int32 label(int32 x) { return x + 1; }
 fn T pick<T>(T x) { return x; }
 fn int32 shared() { return 7; }

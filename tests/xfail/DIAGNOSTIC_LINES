@@ -1023,6 +1023,9 @@ shadow_field	shadow_field.kama:6
 shadow_function_field	shadow_function_field.kama:4
 shadow_function_local	shadow_function_local.kama:4
 shadow_function_param	shadow_function_param.kama:3
+shadow_module_const_imported	main.kama:4
+shadow_module_const_local	shadow_module_const_local.kama:4
+shadow_module_static_field	shadow_module_static_field.kama:5
 shadow_param	shadow_param.kama:3
 shadow_sibling_imported	b.kama:6
 shadow_type_local	shadow_type_local.kama:4

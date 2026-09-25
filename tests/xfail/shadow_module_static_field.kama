@@ -1,0 +1,9 @@
+// A FIELD is reachable bare in its type's methods, so a field named like a module `static` made `hits` mean
+// two things there — and the field silently won every read (measured: `get()` returned 3, the field).
+static int32 hits = 0;
+type value W {
+    public int32 hits;
+    public ctor make() { this.hits = 3; }
+    public fn int32 get() { return hits; }
+}
+fn int32 main() { W w = W.make(); return w.get(); }

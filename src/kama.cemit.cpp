@@ -21649,8 +21649,19 @@ void CEmitter::checkBindingName(const std::string& nm, const char* kind, int src
         return;
     }
     const std::string tk = resolveUserNameImpl(nm, nullptr);
-    if (isTypeKey(tk) && checkReach(tk, nm, "", srcLine, here, false, /*quiet*/ true))
+    if (isTypeKey(tk) && checkReach(tk, nm, "", srcLine, here, false, /*quiet*/ true)) {
         unsupported((std::string(kind) + " `" + nm + "` has the name of a type in scope — kama has no "
+                     "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
+        return;
+    }
+    // A module `static` or constant is a name in scope like a function: its own file's, or one imported.
+    // The rule's first version named functions and types only, so `int32 LIMIT = 5;` beside `comptime int32
+    // LIMIT = 4;` built and quietly read 5, and a FIELD named like a module `static` won every bare read in
+    // its type's methods — one name meaning two things, which is the whole of what the rule forbids.
+    const std::string vk = resolveModuleVar(nm, nullptr);
+    if (!vk.empty() && checkReach(vk, nm, "", srcLine, here, false, /*quiet*/ true))
+        unsupported((std::string(kind) + " `" + nm + "` has the name of a module "
+                     + (_constStatics.count(vk) ? "constant" : "`static`") + " in scope — kama has no "
                      "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
 }
 

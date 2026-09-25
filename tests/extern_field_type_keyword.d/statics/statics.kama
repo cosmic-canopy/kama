@@ -1,0 +1,9 @@
+// Position 5 of main.kama's list: a module `static` named `type`, written and read in the file that
+// declares it. It has a file of its own because a static is in scope throughout its file, and main.kama's
+// parameter and local named `type` may not take a name in scope (a static cannot be exported, so the read
+// reaches main.kama through a function).
+export { typeStatic };
+
+static int32 type = 100;
+
+fn int32 typeStatic() { return type; }

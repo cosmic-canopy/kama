@@ -1,7 +1,9 @@
-// KB-34: every binding below takes a name that src/m/a.kama declares — privately (`label`, `pick`, `Node`)
-// or exported but not imported here (`shared`). Each binder kind is here once: a field, a parameter, a
-// local, a `foreach` variable, a `for` counter and a `match` binding. Until 0.9.449 the shadowing check
-// counted the sibling's names as in scope while the call check, rightly, did not.
+// KB-34: every binding below takes a name that src/m/a.kama declares — privately (`label`, `pick`, `Node`,
+// `hits`, `LIMIT`) or exported but not imported here (`shared`). Each binder kind is here once: a field, a
+// parameter, a local, a `foreach` variable, a `for` counter and a `match` binding. Until 0.9.449 the
+// shadowing check counted the sibling's names as in scope while the call check, rightly, did not. (A module
+// `static` or constant was not checked at all before 0.9.451; `hits` and `LIMIT` hold the new rule to the
+// same line.)
 export { Tally, twice, sumTo };
 
 type value Tally {
@@ -15,10 +17,12 @@ fn int32 sumTo(int32 n) {
     int32 Node = 0;
     int32 pick = 1;
     int32 shared = 0;
+    int32 hits = 0;                  // a sibling's private module `static`
+    int32 LIMIT = 0;                 // ...and its private module constant
     InlineArray<int32>#(3) xs = [1, 2, 3];
     foreach (int32 label in xs) { Node = Node + label; }
     for (int32 label = 0; label < n; label = label + 1) { shared = shared + pick; }
     Optional<int32> o = Optional::Some(value: 5);
     int32 got = match (o) { case Some(value: label): label; case None: 0; };
-    return Node + shared + got;
+    return Node + shared + got + hits + LIMIT;
 }

@@ -1,6 +1,9 @@
 // `type` is a CONTEXTUAL keyword: it may NAME a binding — a field, a local, a module `static`, a
 // parameter or a method — and be read, written and passed like any other name. It leads a declaration
 // only where a declaration can begin. That puts it beside `copy`/`give`/`truncate`/`default`/`base`.
+// (Position 5, the module `static`, lives in statics/statics.kama: a static is in scope throughout its
+// file and no binding may take a name in scope, so the file that declares it cannot also hold the local
+// and the parameter.)
 //
 // This exists for the FFI. `webgpu.h` calls a field `type` in `WGPUBufferBindingLayout`,
 // `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and `WGPUCompilationMessage`, and *an `extern`
@@ -20,6 +23,7 @@
 // from the header, reading `b->type` itself.
 //
 // Exit code is a bitset (127 = all seven).
+import { statics::typeStatic };
 extern "binding.h";
 extern fn int32 bufKind(const UnsafePtr<BufBinding> b);
 
@@ -34,8 +38,6 @@ type value Holder {
     public ctor make(int32 n) { this.n = n; return this; }
     public const fn int32 type() { return this.n; }   // 4. a METHOD named `type`
 }
-
-static int32 type = 100;                              // 5. a module `static`
 
 fn int32 doubled(int32 type) { return type * 2; }     // 6. a PARAMETER, and READ in expression position
 
@@ -55,7 +57,7 @@ fn int32 main() {
     Holder h = Holder.make(n: 5);
     if (h.type() == 5) { r = r + 8; }
 
-    if (type == 100) { r = r + 16; }                  // module static, read
+    if (typeStatic() == 100) { r = r + 16; }          // 5. the module static, read in its own file
 
     int32 type = 5;                                   // 7. a LOCAL, with an initializer
     type = type + 1;                                  //    written and read

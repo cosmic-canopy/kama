@@ -6,5 +6,5 @@ static int32 frames = 0;
 fn void setup() { gain = 7; }
 fn int32 pump() { frames = frames + 1; return gain; }   // the read, two hops from the root
 fn int32 mix() { return pump(); }
-@foreignEntry fn void render(int32 frames) { int32 g = mix(); }   // ERROR: render -> mix -> pump reads `gain`
+@foreignEntry fn void render(int32 count) { int32 g = mix(); }   // ERROR: render -> mix -> pump reads `gain`
 fn int32 main() { setup(); return 0; }

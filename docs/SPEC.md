@@ -1155,8 +1155,8 @@ enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; o
 any live scope — keeps both name resolution and move tracking unambiguous). **Every** binding is covered,
 not just a declaration —
 a `for` counter, a `foreach` variable and a `match` payload binding are each refused the same three ways. <!-- xfail: binder_shadow_for_local, binder_shadow_foreach_local, binder_shadow_foreach_param, binder_shadow_foreach_field, binder_shadow_match_local, binder_shadow_match_field -->
-Nor may a binding take the name of a **function or type in scope** — declared in its file or imported into it, <!-- xfail: shadow_function_local, shadow_function_param, shadow_function_field, shadow_type_local, shadow_extern_own, shadow_sibling_imported -->
-and with nothing implicit in scope (KR-87) that needs no exception. "In scope" is what a use is held to, so a <!-- test: binding_scope_per_file -->
+Nor may a binding take the name of a **function, type, module `static` or module constant in scope** — <!-- xfail: shadow_function_local, shadow_function_param, shadow_function_field, shadow_type_local, shadow_extern_own, shadow_sibling_imported, shadow_module_const_local, shadow_module_static_field, shadow_module_const_imported -->
+declared in its file or imported into it — and with nothing implicit in scope (KR-87) that needs no exception. "In scope" is what a use is held to, so a <!-- test: binding_scope_per_file -->
 sibling file's private name, a sibling's export this file does not import, and a dependency's file-private
 `extern` are free to take: a call to any of them from here is refused as not visible. A **field** is a binding too: it is <!-- xfail: mod_sibling_private, mod_sibling_unimported, extern_undeclared -->
 reachable bare in its type's methods, so it is held to the same rule, and may not share a name with a <!-- xfail: field_method_same_name -->

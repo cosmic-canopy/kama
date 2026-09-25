@@ -1,0 +1,4 @@
+// A module constant is a name in scope, so a binding may not take it. Until 0.9.451 only functions and types
+// counted: this built, and `LIMIT` below read 5 — the local — with the constant one line above it.
+comptime int32 LIMIT = 4;
+fn int32 main() { int32 LIMIT = 5; return LIMIT - 5; }

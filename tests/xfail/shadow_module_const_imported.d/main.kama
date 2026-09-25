@@ -1,0 +1,5 @@
+// An IMPORTED module constant is in scope like an imported function: a parameter may not take its name.
+import { m::LIMIT };
+
+fn int32 scaled(int32 LIMIT) { return LIMIT * 2; }
+fn int32 main() { return scaled(LIMIT: 2) - LIMIT; }
