@@ -1,6 +1,6 @@
 // KR-93's member audit. An operator declared in an enum body was never registered, so it parsed and
 // vanished: `e + 1` then answered "define `operator+` on the type" — which the author had done. Refused at
-// the declaration; whether an enum should take operators at all is an open ROADMAP row.
+// the declaration; whether an enum should take operators at all is KR-96, an open ROADMAP row.
 type enum E { A, B;
     public E operator+(int32 n) { return E::B; }
 }

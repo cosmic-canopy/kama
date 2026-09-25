@@ -91,88 +91,6 @@ tag or wait for 2.0.
     one byte; check what the lexer counts before a new rule changes it, and pin a column after a valid
     multi-byte literal.
 
-- **`std::fs` cannot create a private file (KR-92).** Filed 2026-09-24 from the peer project's `KAMA_GAPS.md`
-  KG-37 (`friendly-fire-department`): a relay signing key is a secret on disk, and kama cannot write one that
-  other local users cannot read. **Verified on 0.9.441, not taken from the report:** `File.open(Write)`,
-  `writeFile` and `Append` all reach `kama_open_create`/`kama_open_append`, which are
-  `open(…, O_CREAT…, 0644)` on POSIX (`include/kama_os.h:815-816`) and `_wopen(…, _S_IREAD | _S_IWRITE)` on
-  Windows; `lib/std/fs/fs.kama` has no `chmod`, no `setPermissions` and no mode parameter. `Metadata.readOnly`
-  reads one bit and nothing writes it. The only escape today is an `extern` `fchmod` on `File.rawFd()`.
-
-  **Every other language** puts the mode on the CREATE call (C `open`'s third argument, Go `os.OpenFile`'s
-  `perm`, Rust's Unix-only `OpenOptionsExt::mode`, Python `os.open`, Node `{ mode }`, Zig `.mode`, Java
-  `PosixFilePermissions.asFileAttribute`, .NET 7 `UnixCreateMode`) and IGNORES it on Windows (only the write
-  bit, or an unrelated ACL API in Java/.NET). None offers one portable API. `chmod` after the fact is a race:
-  the file exists world-readable, possibly with the secret already in it.
-
-  **Maintainer decisions (2026-09-24):**
-  - **One consistent API, the Unix model, a portable implementation underneath** — the platform split is
-    `@compileFor(OS_WINDOWS)` / `@compileFor(!OS_WINDOWS)` pairs, as `lib/std/path/path.kama:39-44` does.
-  - **Octal AND readable, bitwise.** One `type value Permissions` (a nine-bit set): `Permissions.fromMode(mode:
-    0o600)` for a mode from elsewhere, named per-bit constructors joined with `|` for code written by hand,
-    `has(p:)` to test, and a `Formattable` rendering `rw-------` as `ls -l` does. Prototyped on 0.9.442 (a
-    value type with `operator|` and `ctor ownerRead()` etc. builds and runs). ⚠️ **It cannot be an enum:**
-    kama refuses `|` over enum values on purpose (the result is no declared variant) — correct, keep it.
-    ⚠️ The nicer `Permissions::OwnerRead` spelling needs type-level constants, which is KR-93.
-  - **The leading-zero trap is closed first:** `0644` is a lexical error since `0.9.442` (it compiled and meant
-    decimal 644), so a mode pasted from C cannot silently be wrong.
-
-  **What to build:**
-  - **POSIX:** pass the mode to `open`'s `O_CREAT`; when a private open TRUNCATES an existing file, `fchmod`
-    it before the first write (`O_TRUNC` leaves the old mode — Go documents the same gap and does not fix it).
-    `fs::setPermissions(path:, permissions:)` via `chmod`; `Metadata.permissions` from `st_mode` (replaces
-    or joins the lone `readOnly`).
-  - **Windows — Cygwin's mapping, the bulk of the work:** owner bits → an ACE for the owner SID; group bits →
-    the file's group SID; other → `Everyone`; an absent bit is an absent ACE (a DACL denies by default); the
-    DACL is PROTECTED so a parent's inheritable ACEs do not widen `0600`. Created through `CreateFileW` with a
-    `SECURITY_ATTRIBUTES`, never `_wopen` + a later `SetSecurityInfo` (same race as `chmod`). `stat` maps the
-    DACL back. Lives beside `kama__wopen` in `kama_os.h`.
-  - **wasm (node VFS):** the mode is stored and read back, not enforced — say so in the doc.
-  - **setuid/setgid/sticky are out:** no Windows meaning, and a bit that does nothing on one platform is the
-    thing this row exists to avoid.
-
-  **Decided 2026-09-24 (the two questions that were open), each after comparing what others do:**
-  - **Windows private = owner + SYSTEM; no explicit Administrators entry.** Windows' own "private" is a user
-    profile's ACL (owner, SYSTEM, Administrators), and Win32-OpenSSH — the strictest consumer of a private
-    file there — accepts exactly owner, SYSTEM and Administrators and refuses a key anyone else can read. Owner +
-    SYSTEM is the smallest set both treat as private: a key kama writes passes OpenSSH's check, and services
-    running as SYSTEM (indexing) keep working. Administrators are left out because they can take ownership of
-    any file regardless — root's position on Unix — so an explicit ACE adds nothing and keeps the DACL
-    closest to `0600`. Strictly owner-only was rejected: stricter than Windows or OpenSSH ask, and it makes
-    kama's private files behave unlike every other private file on the machine. Document the Administrators
-    caveat exactly as root's is documented.
-  - **A plain create with no `permissions:` is `0666`, narrowed by the umask — a change from today's `0644`.**
-    That is the default of C `fopen` (POSIX-mandated), Go `os.Create`, Rust `File::create`, Python `open()`,
-    Node, Zig, Java and .NET. kama's hardcoded `0644` equals it under umask `022` and `077`, but under `002`
-    (shared group directories) it strips the group-write bit the user's own umask granted — overriding an
-    explicit user choice. Directories are already `0777 & ~umask` (`include/kama_os.h:860`), so this also makes
-    files and directories agree. **Windows is unchanged:** a plain create inherits the directory's ACL, as in
-    every language. Only an explicit `permissions:` promises anything. The change reaches `kama_open_create`
-    AND `kama_open_append`; say it in SPEC's `std::fs` text and pin it with a fixture that sets `umask(002)`.
-
-  **Traps:** the group bits map weakly on Windows (a file's group is usually "None") — document, do not
-  pretend. Every refusal (an unsupported bit, say) is a negative claim and wants an xfail. Close KG-37 in the
-  peer's `KAMA_GAPS.md` via its maintainer, not from here.
-
-- **`static const` inside a type is silently an instance FIELD (KR-93).** Found 2026-09-24 prototyping KR-92.
-  Measured on 0.9.442:
-  ```kama
-  type value V { int32 x; public static const int32 K = 4; public ctor make() { this.x = 1; } }
-  fn int32 main() { V v = V.make(); return V::K - 4; }
-  // error: `V::K` — `K` is a field. Read it from a value (`obj.K`)
-  ```
-  `static` and `const` are dropped without a word: `K` becomes a per-instance field (its initializer's fate
-  unprobed). A `public static const Permissions OwnerRead = …;` inside `Permissions` reports "type
-  'Permissions' contains itself by value (infinite size)" — the same drop, seen from the layout.
-
-  **The decision (maintainer's):** make type-level constants REAL (`V::K`, folded like a module constant,
-  and of the type's own type — the `Permissions::OwnerRead` KR-92 wants), or REFUSE the spelling and point
-  at a module constant. Per AGENTS.md "YAGNI stops at the surface", a refusal needs a written reason a
-  consumer never needs it; C++, C#, Java, Swift and Rust (`associated const`) all have it. Either way the
-  silent drop is a defect today and wants an xfail/positive fixture. **Probe first:** module-scope
-  `const`/`static` of a value type with a ctor-call initializer — whether that folds decides how much of the
-  "real" answer already exists.
-
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
@@ -374,6 +292,23 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
+
+### Operators on an enum (KR-96) — support them, or declare a non-goal
+
+Until `0.9.443` an `operator` declared in an enum body parsed and was never registered, so `e + 1` answered
+"define `operator+` on the type" — which the author had done. It is now refused at the declaration ("`type
+enum E` cannot declare an operator — write a named method instead", `tests/xfail/enum_operator.kama`). What
+is open is whether an enum should take operators at all.
+
+- **For:** a scalar enum as an ordinal (`Weekday + 1`, wrapping); a tagged enum as an algebraic value
+  (`Expr + Expr`). C++, Rust (`impl Add for E`), Swift and C# all allow it.
+- **Against:** `|` over enum values is refused ON PURPOSE — the result is no declared variant — and a
+  user-declared `operator|` would reopen exactly that. Comparison is already a contract
+  (`@generate(Equatable)`, `Comparable`), and a named method is already one way to do each of these.
+
+Wanted: a verdict against GOALS (one way to do a thing), and if operators are supported, WHICH (arithmetic
+on a tagged enum but nothing bitwise on a scalar one, say). Then either build it, or record the non-goal in
+SPEC beside the refusal.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -2040,10 +1975,42 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
   ship, but *host-order* serialization helpers need a compile-time endianness fact pure kama arithmetic can't
   observe — a natural `@compileFor`-style built-in flag (`LITTLE_ENDIAN`/`BIG_ENDIAN`). Every current target is
   little-endian, so this is deferred until a big-endian target appears.
-- **`comptime fn` nice-to-haves (deferred).** Named-arg reorder *inside* a comptime fn body; a **local**
-  `comptime T X = f();` initialized by a comptime-fn call (module + type-associated const forms ship); a
-  per-fn `@steps(…)` budget override; dual-use fallback emission. (`sizeof` inside a comptime fn body ships
-  with M6 — `alignof` does not, and that is now a rule rather than a gap: see §2's layout entry.)
+- **`comptime fn` nice-to-haves (deferred).** A per-fn `@steps(…)` budget override; dual-use fallback
+  emission (a `comptime fn` called at run time is an error today). Named-arg reorder inside a comptime fn body
+  and a local `comptime T X = f();` both work since `0.9.444`. `sizeof` of a fixed-width scalar folds in a
+  comptime fn body; a struct's `sizeof` and any `alignof` are refused at every scope — that is KR-94, below.
+- **A struct's `sizeof` and any `alignof` as a compile-time value (KR-94).** Since `0.9.444` — the
+  maintainer's ruling, 2026-09-24 — no `comptime` at any scope takes a value the target's ABI decides:
+  `sizeof` folds for the fixed-width scalars and is refused for a struct, `usize`, `bool` and the rest, and
+  `alignof` is refused outright ("`sizeof` folds only for fixed-width scalars … user types have target- or
+  layout-dependent size"). Two things already answer part of the need: the value is there at RUN time
+  (`sizeof(Box<uint16>)` in a body is C's own answer), and `comptime assert(cond: sizeof(Vertex) == 20, msg:
+  …)` is checked at build time by C, for the real target. What neither gives is the size as a VALUE a program
+  is built from: `InlineArray<uint8>#(sizeof(Header))`, a record format's fixed stride, an allocator's size
+  classes.
+
+  **The unlock** (asked by the maintainer: can it be done? — yes): the compiler computes layouts itself, from
+  a per-target model — pointer width and data model (LP64; LLP64 on Windows, where `long` is 32-bit; ILP32
+  wasm32; the MCU targets), each primitive's size and alignment, C's struct algorithm (each field at its
+  alignment, the size rounded up to the largest), kama's own lowerings (tag-then-union enums, `Optional`,
+  `string`, a contract's fat pointer, the smart pointers) and `@packed`/`@align`. Every value it bakes is then
+  re-checked by the C compiler that builds the program: the emitted C carries `_Static_assert(sizeof(T) == N,
+  …)` (and `_Alignof`) for each type a baked constant read, so a model that disagrees with the target fails
+  the BUILD, naming the type, and never the program. `tools/check-target.sh`'s cross-builds then prove the
+  model on every triple they build. Still refused after it: a `type extern` (its layout lives in a C header
+  kama does not parse) and anything that contains one.
+
+  **Before code:** where the assertions go (per use, or once per type; header or unit); how a generic
+  instance's layout is keyed; whether the model sits beside `cType` or is derived from it; targets like AVR,
+  where every alignment is 1.
+- **A top-level `comptime fn` cannot be exported (KR-95).** Measured `0.9.448`, two modules: `export {
+  twice };` over `comptime fn int32 twice(int32 n)` fails with "export list names `twice` but there is no such
+  top-level declaration in this module", and the importer's `comptime int32 SIX = twice(n: 3);` with "a
+  comptime fn may call only another `comptime fn` — `twice` is not one". Both are wrong: it is declared, it
+  is one, and the caller is a constant rather than a comptime fn. A module `comptime` constant exports and
+  imports fine, and a type's `public comptime fn` crosses modules as `Palette::twice(n: 3)` — so the language
+  already means a compile-time function to be shareable, and the export list simply does not consult the
+  comptime-fn table. Wants a two-module positive fixture, and the importer's message fixed at its cause.
 - **Platform tag-type compilation.** The `@compileFor`-gated contract-impl seam is the sanctioned platform-variance
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.
@@ -2542,6 +2509,32 @@ rather than here, so there is one number to keep current. Forward work:
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an
   agent or an editor reads it rather than scraping KEYWORDS.md. `kama query --json` is the program half and
   ships. Unscheduled; GOALS.md names this row.
+
+- **`kama query` and the language server know no module `static`, no `comptime` constant and no `comptime
+  fn` (KR-97).** Measured `0.9.448` with `kama query --def`/`--refs`/`--search` over `static int32 counter`,
+  `comptime int32 LIMIT`, `comptime fn twice` and a type's `public comptime int32 K`: go-to-definition says
+  "no definition", references "no references", `--search` "no symbols" — and the `V` in `V::K` does not
+  resolve, though the `V` in `V v` does. `CEmitter::buildDefSites` (`src/kama.query.cpp`) records types,
+  fields, methods, ctors, contracts, enums and their members, free functions and `extern const`, and nothing
+  from the module-constant/static tables, `_typeConsts` or the comptime-fn table. Completion DOES offer
+  `Type::K` (it reads `_typeConsts` directly), so completion and navigation disagree. Wants: a definition
+  site for each at both scopes, a reference recorded at each read (`V::K`, a bare `LIMIT`, `twice(…)` in an
+  initializer), the qualifier resolved, and fixtures in `tools/check-query.sh`. The repo tells an agent to
+  prefer `kama query --search` over grep because it answers from what the compiler resolved; for these names
+  grep is today the only answer.
+
+- **The fixture harness holds less than it says (KR-98).** Two gaps:
+  1. **A `.d` fixture's warnings pass.** `run_tests.sh`'s `test_one` fails a single-file fixture that builds
+     with any warning ("A clean build means NO WARNINGS"); `multi_one` has no such check, so a project
+     fixture's C warnings — the emitter generating something the C compiler does not believe — go unseen.
+     Adding the gate may surface warnings already in the corpus; fix them in the same change.
+  2. **Every fixture runs in the repo root.** The executable is built into a per-fixture `mktemp -d`
+     directory but RUN with the harness's working directory — the worktree — in `run_tests.sh` and in
+     `./dev fixture` alike. A fixture that writes relative paths (`fs_permissions`, `fs_dirs`, …) writes into
+     the repo, and one that fails midway leaves its files there: a deliberately failing `fs_permissions` run
+     left two on 2026-09-24. Run each from its own directory. No fixture spells a repo-relative path
+     (`tests/`, `lib/`, `docs/`, `include/`) today, so nothing should depend on the current behavior —
+     confirm that with the change.
 
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
