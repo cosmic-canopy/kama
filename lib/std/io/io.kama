@@ -6,6 +6,7 @@ extern "kama_os.h";
 extern fn int32 kama_last_error();
 extern fn int32 kama_ENOENT();
 extern fn int32 kama_EACCES();
+extern fn int32 kama_EPERM();
 extern fn int32 kama_EAGAIN();
 extern fn int32 kama_ECONNREFUSED();
 extern fn int32 kama_ECONNRESET();
@@ -67,7 +68,9 @@ type enum IoError implements Error {
 unsafe fn IoError lastError() {
     int32 e = kama_last_error();
     if (e == kama_ENOENT())       { return IoError::NotFound; }
-    if (e == kama_EACCES())       { return IoError::PermissionDenied; }
+    // EPERM too: "not permitted" is what `chmod` of another user's file answers (KR-92), and Rust and Go
+    // both classify it as permission-denied.
+    if (e == kama_EACCES() || e == kama_EPERM()) { return IoError::PermissionDenied; }
     if (e == kama_EAGAIN())       { return IoError::WouldBlock; }
     if (e == kama_ECONNREFUSED()) { return IoError::ConnectionRefused; }
     if (e == kama_ECONNRESET())   { return IoError::ConnectionReset; }

@@ -1,7 +1,7 @@
 // std::fs — the directory and metadata half: createDir / createDirAll / rename / exists / OpenMode::Append,
 // and the two new Metadata fields. Everything happens under one temp directory in the cwd (the harness
 // gives each fixture its own), removed on the way out. The eight flags sum to 255.
-import { std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::stat, std::fs::exists,
+import { std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::Permissions, std::fs::stat, std::fs::exists,
          std::fs::createDir, std::fs::createDirAll, std::fs::removeDir, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove,
          std::fs::readDir, std::fs::writeFile, std::fs::writeText, std::fs::readFile,
@@ -59,7 +59,8 @@ fn int32 main() {
             // file is not read-only. A one-second stat resolution makes an exact compare wrong.
             Duration age = m.modified.durationSince(earlier: now);
             int64 skew = age.asSecs();
-            if (!m.isDir && m.size == cast<usize>(5) && skew < 3600i64 && skew > -3600i64 && !m.readOnly) {
+            if (!m.isDir && m.size == cast<usize>(5) && skew < 3600i64 && skew > -3600i64
+                && m.permissions.has(p: Permissions::OwnerWrite)) {
                 r = r + 16;
             }
         }

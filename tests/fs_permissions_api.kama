@@ -1,0 +1,72 @@
+// KR-92: `std::fs::Permissions`, the nine Unix bits on every platform, and `Metadata.permissions`, which
+// replaces the lone `readOnly` bit (`!m.permissions.has(p: Permissions::OwnerWrite)` asks the same question).
+// Hand-written code names the bits — the constants are `comptime` values of the type's own type (KR-93) —
+// and a mode number from outside the program goes through `fromMode`, which refuses what is not one of the
+// nine rather than dropping it.
+import { std::fs::File, std::fs::OpenMode, std::fs::Permissions, std::fs::stat, std::fs::remove,
+         std::fs::createDir, std::fs::removeDir, std::io::IoError };
+
+fn int32 api() {
+    int32 bad = 0;
+    Permissions rw = Permissions::OwnerRead | Permissions::OwnerWrite;
+    if (rw.mode() != 0o600ui32) { bad = bad + 1; }
+    if (!rw.has(p: Permissions::OwnerRead) || rw.has(p: Permissions::OtherRead)) { bad = bad + 2; }
+    if (!rw.has(p: Permissions::OwnerRead | Permissions::OwnerWrite)) { bad = bad + 4; }
+    if ("${rw}" != "rw-------") { bad = bad + 8; }
+    Permissions all = rw | Permissions::OwnerExecute | Permissions::GroupRead | Permissions::GroupExecute
+                    | Permissions::OtherRead | Permissions::OtherExecute;
+    if ("${all}" != "rwxr-xr-x" || all.mode() != 0o755ui32) { bad = bad + 16; }
+    match (Permissions.fromMode(mode: 0o644)) {
+        case Ok(value: p): { if ("${p}" != "rw-r--r--" || p == rw) { bad = bad + 32; } }
+        case Err(error: e): { bad = bad + 32; }
+    };
+    match (Permissions.fromMode(mode: 0o600)) {
+        case Ok(value: p): { if (p != rw) { bad = bad + 64; } }
+        case Err(error: e): { bad = bad + 64; }
+    };
+    // setuid, and a file-type bit a raw `st_mode` carries: not permissions kama models, so refused
+    match (Permissions.fromMode(mode: 0o4755)) {
+        case Ok(value: p): { bad = bad + 128; }
+        case Err(error: e): {
+            match (e) { case InvalidInput: { } case _: { bad = bad + 128; } };
+        }
+    };
+    match (Permissions.fromMode(mode: 0o100644)) {
+        case Ok(value: p): { bad = bad + 256; }
+        case Err(error: e): { }
+    };
+    match (Permissions.fromMode(mode: 0)) {
+        case Ok(value: p): { if ("${p}" != "---------") { bad = bad + 512; } }
+        case Err(error: e): { bad = bad + 512; }
+    };
+    return bad;
+}
+
+// A file this program just created is its owner's to read and write, and nobody else may write it under any
+// sane umask; a directory is its owner's to enter. The exact bits are the umask's, so only those are checked.
+unsafe fn int32 recorded() {
+    int32 bad = 0;
+    string f = "_fs_permissions_api.txt";
+    match (File.open(path: f, mode: OpenMode::Write)) { case Ok(value: fh): { } case Err(error: e): { bad = bad + 1024; } };
+    match (stat(path: f)) {
+        case Ok(value: m): {
+            if (!m.permissions.has(p: Permissions::OwnerRead | Permissions::OwnerWrite)
+                || m.permissions.has(p: Permissions::OtherWrite)) { bad = bad + 2048; }
+        }
+        case Err(error: e): { bad = bad + 2048; }
+    };
+    match (remove(path: f)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4096; } };
+    string d = "_fs_permissions_api_dir";
+    match (createDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 8192; } };
+    match (stat(path: d)) {
+        case Ok(value: m): { if (!m.isDir || !m.permissions.has(p: Permissions::OwnerExecute)) { bad = bad + 16384; } }
+        case Err(error: e): { bad = bad + 16384; }
+    };
+    match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4096; } };
+    return bad;
+}
+
+fn int32 main() {
+    int32 bad = api() + recorded();
+    return bad == 0 ? 42 : 1;
+}

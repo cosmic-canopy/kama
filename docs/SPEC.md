@@ -1805,9 +1805,22 @@ A native, single-binary I/O foundation — **library over FFI, no new language s
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
 `Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
-`isDir`, `modified` (a `std::time::Timestamp`, one-second resolution) and `readOnly` (the recorded
-permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
+`isDir`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
+on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
 `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+**`Permissions`** are the nine Unix bits — read, write, execute for the owner, the group and everyone else —
+on every platform. Hand-written code names them, `Permissions::OwnerRead | Permissions::OwnerWrite` (the <!-- test: fs_permissions_api -->
+constants are `comptime` values of the type itself); `has(p:)` tests, `mode()` gives the number, and `${p}`
+renders `rw-r--r--` as `ls -l` does. A mode number from outside the program goes through
+`Permissions.fromMode(mode:)`, which returns `Err(InvalidInput)` for any bit outside `0o777` — setuid, setgid,
+the sticky bit and a raw `st_mode`'s file-type bits are not permissions kama models (they mean nothing on
+Windows), and nothing drops them silently. `Metadata.permissions` replaced the lone `readOnly` bit in
+`0.9.447`: `!m.permissions.has(p: Permissions::OwnerWrite)` asks the same question. On Windows the bits are
+read back from the file's access list — the owner's entries, the group's, and Everyone's (with Authenticated
+Users and Users, the every-user groups) — and the DOS read-only attribute clears the write bits; a list this
+process may not read falls back to what the C runtime reports. An `EPERM` ("not permitted", what changing
+another user's file answers) is `IoError::PermissionDenied`, as `EACCES` is.
 
 **A new file's permissions.** A plain create — `File.open` with `Write` or `Append`, `writeFile`, `writeText` —
 asks for `rw-rw-rw-` and lets the process umask narrow it (`rw-r--r--` under the usual `022`, `rw-rw-r--` <!-- test: fs_umask -->

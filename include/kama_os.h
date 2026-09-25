@@ -108,6 +108,7 @@ unsigned long __stdcall if_nametoindex(const char* name);
 static inline int32_t kama_last_error(void)   { return (int32_t)errno; }
 static inline int32_t kama_ENOENT(void)       { return (int32_t)ENOENT; }
 static inline int32_t kama_EACCES(void)       { return (int32_t)EACCES; }
+static inline int32_t kama_EPERM(void)        { return (int32_t)EPERM; }
 static inline int32_t kama_EAGAIN(void)       { return (int32_t)EAGAIN; }
 static inline int32_t kama_EINTR(void)        { return (int32_t)EINTR; }
 static inline int32_t kama_ECONNREFUSED(void) { return (int32_t)ECONNREFUSED; }
@@ -253,27 +254,143 @@ KAMA_NOINLINE static int32_t kama_unlink(const char* path) {
     return (int32_t)_wunlink(w);
 }
 
-// `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
-// mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::Timestamp` with no conversion at the
-// kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here.
-// `readOnly` is the write PERMISSION BIT, not an access check: it says what the file's mode records, and
-// says nothing about this process (root ignores it; an ACL can deny a writable-looking file).
-static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* outIsDir,
-                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
-    struct _stat64 st; if (_fstat64((int)fd, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
-    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
-    *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
+// ---- permissions as an access list (KR-92) --------------------------------------------------------------------
+// kama's `Permissions` are the nine Unix bits on every platform; Windows keeps an access list, so the bits are
+// written as one and read back from one. The mapping is Cygwin's, cut to what kama promises:
+//   owner bits -> an ALLOW entry for the file's OWNER: the mapped rights, plus the rights an owner always keeps
+//                 (its attributes, its access list, ownership, delete) — so an owner can always change or remove
+//                 its own file, `0o000` included, as on Unix;
+//   group bits -> an ALLOW entry for the file's GROUP, only when a group bit is set and the group is not the
+//                 owner. ⚠️ Weak by nature: a file's group is usually the machine's "None", which every local
+//                 user belongs to — documented, not pretended away;
+//   other bits -> an ALLOW entry for Everyone, only when an other bit is set: an absent bit is an absent entry,
+//                 and a DACL denies whatever it does not grant;
+//   SYSTEM     -> full access, always. The maintainer's ruling: private is owner + SYSTEM, the smallest set that
+//                 both Windows' own profile ACL and Win32-OpenSSH's key check treat as private. Administrators
+//                 get no entry — they can take ownership of any file, as root reads any file;
+//   DENY       -> first (canonical order), and only where a class has LESS than a broader class it is a member
+//                 of: under `0o077` Everyone's grant would otherwise reach the owner. A deny names data rights
+//                 only, never the control rights an owner keeps;
+//   PROTECTED  -> the list inherits nothing, so a parent's inheritable entries cannot widen `0o600`.
+// A plain create is untouched — it inherits its directory's list, as in every language. Only `permissions:`
+// promises anything, and it is EXACT, as on POSIX: set on a new file, rewritten on an existing one, read back
+// and compared. A volume that keeps no lists (FAT) fails the comparison and the call fails, rather than
+// leaving a "private" file anyone can read.
+//
+// Everything lives in the caller's frame. `--no-heap` reads this text on every target (the no-heap scan sees
+// both arms of the `#if`), so a LocalAlloc'd descriptor here would make `File.openWith` a heap fact on Linux
+// too — which is why the MARTA calls (`SetNamedSecurityInfoW`, `GetNamedSecurityInfoW`, `SetEntriesInAclW`)
+// are not used: they allocate, and <aclapi.h> defines `interface`. Every call below fills a caller buffer.
+// The well-known SIDs the mapping names, in caller storage.
+typedef struct kama__wk { BYTE world[SECURITY_MAX_SID_SIZE], auth[SECURITY_MAX_SID_SIZE],
+                               users[SECURITY_MAX_SID_SIZE], system[SECURITY_MAX_SID_SIZE]; } kama__wk;
+static inline int kama__wk_init(kama__wk* k)
+{
+    DWORD n;
+    n = sizeof k->world;  if (!CreateWellKnownSid(WinWorldSid, NULL, k->world, &n)) return -1;
+    n = sizeof k->auth;   if (!CreateWellKnownSid(WinAuthenticatedUserSid, NULL, k->auth, &n)) return -1;
+    n = sizeof k->users;  if (!CreateWellKnownSid(WinBuiltinUsersSid, NULL, k->users, &n)) return -1;
+    n = sizeof k->system; if (!CreateWellKnownSid(WinLocalSystemSid, NULL, k->system, &n)) return -1;
     return 0;
 }
+// A class's three bits, read back: the effective rights of the SIDs it answers for, in list order — the
+// first entry to decide a right wins, allow or deny, as Windows' own access check decides.
+static inline uint32_t kama__acl_class(PACL acl, PSID* sids, int nsids)
+{
+    DWORD allowed = 0, denied = 0;
+    if (!acl) return 7u;   // no list at all: everyone may do everything
+    for (DWORD i = 0; i < acl->AceCount; ++i) {
+        void* ace; if (!GetAce(acl, i, &ace)) continue;
+        ACE_HEADER* h = (ACE_HEADER*)ace;
+        if (h->AceFlags & INHERIT_ONLY_ACE) continue;
+        if (h->AceType != ACCESS_ALLOWED_ACE_TYPE && h->AceType != ACCESS_DENIED_ACE_TYPE) continue;
+        PSID sid = (PSID)&((ACCESS_ALLOWED_ACE*)ace)->SidStart;
+        int hit = 0;
+        for (int s = 0; s < nsids; ++s) if (sids[s] && EqualSid(sid, sids[s])) { hit = 1; break; }
+        if (!hit) continue;
+        DWORD m = ((ACCESS_ALLOWED_ACE*)ace)->Mask;
+        if (m & GENERIC_ALL)     m |= FILE_ALL_ACCESS;
+        if (m & GENERIC_READ)    m |= FILE_GENERIC_READ;
+        if (m & GENERIC_WRITE)   m |= FILE_GENERIC_WRITE;
+        if (m & GENERIC_EXECUTE) m |= FILE_GENERIC_EXECUTE;
+        if (h->AceType == ACCESS_DENIED_ACE_TYPE) denied |= m & ~allowed;
+        else                                      allowed |= m & ~denied;
+    }
+    return ((allowed & FILE_READ_DATA) ? 4u : 0u) | ((allowed & FILE_WRITE_DATA) ? 2u : 0u)
+         | ((allowed & FILE_EXECUTE) ? 1u : 0u);
+}
+// The nine bits a security descriptor grants: the owner answers through its own entries and every-user
+// groups it belongs to, the group through its entry and those, and other through the every-user groups
+// (Everyone, Authenticated Users, Users) alone. SYSTEM and Administrators are no class, as root is none.
+// `groupIsOwner` reports the one case the bits cannot say apart (a service running as SYSTEM).
+static inline uint32_t kama__sd_mode(PSECURITY_DESCRIPTOR sd, int* groupIsOwner)
+{
+    PSID owner = NULL, group = NULL; PACL dacl = NULL; BOOL def, present = FALSE;
+    GetSecurityDescriptorOwner(sd, &owner, &def);
+    GetSecurityDescriptorGroup(sd, &group, &def);
+    GetSecurityDescriptorDacl(sd, &present, &dacl, &def);
+    if (!present) dacl = NULL;
+    kama__wk k; if (kama__wk_init(&k) != 0) return 0u;
+    const int same = owner && group && EqualSid(owner, group);
+    if (groupIsOwner) *groupIsOwner = same;
+    PSID os[4] = { owner, (PSID)k.world, (PSID)k.auth, (PSID)k.users };
+    PSID gs[4] = { same ? NULL : group, (PSID)k.world, (PSID)k.auth, (PSID)k.users };
+    PSID ws[3] = { (PSID)k.world, (PSID)k.auth, (PSID)k.users };
+    return (kama__acl_class(dacl, os, 4) << 6) | (kama__acl_class(dacl, same ? os : gs, 4) << 3)
+         | kama__acl_class(dacl, ws, 3);
+}
+// A self-relative descriptor read into the caller's buffer: 4 KB holds every list kama writes and nearly
+// every other; a larger one is read again in a separate frame of its own, so the common case never pays for
+// the 64 KB an ACL can reach (the `kama__wpath_long` shape). -1 with errno set on failure.
+#define KAMA__SD_CAP 4096
+#define KAMA__SD_INFO (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION)
+typedef struct kama__sdbig { BYTE b[65536 + 1024]; } kama__sdbig;
+KAMA_NOINLINE static int32_t kama__sd_mode_big(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner)
+{
+    kama__sdbig big; DWORD need = 0;
+    BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, big.b, sizeof big.b, &need)
+                : GetFileSecurityW(w, KAMA__SD_INFO, big.b, sizeof big.b, &need);
+    if (!ok) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1; }
+    *mode = kama__sd_mode(big.b, groupIsOwner);
+    return 0;
+}
+static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner)
+{
+    BYTE sd[KAMA__SD_CAP]; DWORD need = 0;
+    BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, sd, sizeof sd, &need)
+                : GetFileSecurityW(w, KAMA__SD_INFO, sd, sizeof sd, &need);
+    if (!ok && GetLastError() == ERROR_INSUFFICIENT_BUFFER) return kama__sd_mode_big(h, w, mode, groupIsOwner);
+    if (!ok) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1; }
+    *mode = kama__sd_mode(sd, groupIsOwner);
+    return 0;
+}
+// The nine bits of a path: its access list, read back, with the DOS read-only attribute clearing every write
+// bit (as the CRT's own `st_mode` does, and Cygwin). A list this process may not read — another user's
+// private file — falls back to what the CRT reports (read/write from the attribute, execute from the
+// extension): an approximation, and documented as one.
+static inline uint32_t kama__path_mode(const wchar_t* w, unsigned short crtMode)
+{
+    uint32_t mode = 0; int same = 0;
+    const int e = errno;
+    if (kama__sd_read_mode(NULL, w, &mode, &same) != 0)
+        mode = ((crtMode & _S_IREAD) ? 0444u : 0u) | ((crtMode & _S_IWRITE) ? 0222u : 0u) | ((crtMode & _S_IEXEC) ? 0111u : 0u);
+    errno = e;   // the stat succeeded; an unreadable list is not its error
+    if (!(crtMode & _S_IWRITE)) mode &= ~0222u;
+    return mode;
+}
+
+// `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
+// mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::Timestamp` with no conversion at the
+// kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here. `outMode` is the
+// nine permission bits the file's access list grants (kama__path_mode), not an access check for this process.
 KAMA_NOINLINE static int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
-                                            int64_t* outMtimeNs, int32_t* outReadOnly) {
+                                            int64_t* outMtimeNs, uint32_t* outMode) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
     struct _stat64 st; int r = _wstat64(w, &st);
     if (r != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
-    *outReadOnly = (st.st_mode & _S_IWRITE) ? 0 : 1;
+    *outMode = kama__path_mode(w, (unsigned short)st.st_mode);
     return 0;
 }
 // Directory creation, rename and existence. `_wmkdir` takes no mode on Windows; `MoveFileExW` with
@@ -797,6 +914,7 @@ extern char** environ;
 static inline int32_t kama_last_error(void)   { return (int32_t)errno; }
 static inline int32_t kama_ENOENT(void)       { return (int32_t)ENOENT; }
 static inline int32_t kama_EACCES(void)       { return (int32_t)EACCES; }
+static inline int32_t kama_EPERM(void)        { return (int32_t)EPERM; }
 static inline int32_t kama_EAGAIN(void)       { return (int32_t)EAGAIN; }
 static inline int32_t kama_EINTR(void)        { return (int32_t)EINTR; }
 static inline int32_t kama_ECONNREFUSED(void) { return (int32_t)ECONNREFUSED; }
@@ -844,22 +962,14 @@ static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(p
 #else
 #  define KAMA_ST_MTIME_NSEC(st) ((int64_t)0)
 #endif
-// `readOnly` is the owner's write PERMISSION BIT, not an access check for this process (root ignores it,
-// and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
-static inline int32_t kama_fstat_meta(int32_t fd, uint64_t* outSize, int32_t* outIsDir,
-                                      int64_t* outMtimeNs, int32_t* outReadOnly) {
-    struct stat st; if (fstat((int)fd, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
-    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(st);
-    *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
-    return 0;
-}
+// `outMode` is the nine PERMISSION bits the file records, not an access check for this process (root ignores
+// them, and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
 static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
-                                     int64_t* outMtimeNs, int32_t* outReadOnly) {
+                                     int64_t* outMtimeNs, uint32_t* outMode) {
     struct stat st; if (stat(path, &st) != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(st);
-    *outReadOnly = (st.st_mode & S_IWUSR) ? 0 : 1;
+    *outMode = (uint32_t)st.st_mode & 0777u;
     return 0;
 }
 // Directory creation, rename and existence. 0777 is the POSIX default — the process umask narrows it,
