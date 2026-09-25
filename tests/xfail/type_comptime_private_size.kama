@@ -1,0 +1,7 @@
+// KR-93. The same leak through an array SIZE: another type's field was sized by a private constant, because
+// sizes are baked while types are collected and the fold never asked who was reading.
+type value V { public int32 x; comptime int32 SECRET = 3; public ctor make() { this.x = 1; } }
+@generate(zero)
+type value W { public InlineArray<int32>#(V::SECRET) a; }
+
+fn int32 main() { W w = W.zero(); return cast<int32>(w.a.length()) - 3; }

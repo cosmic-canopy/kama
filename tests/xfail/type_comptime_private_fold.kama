@@ -1,0 +1,8 @@
+// KR-93. A type's `comptime` constant obeys member visibility, and the run-time read `V::SECRET` always did —
+// but a COMPILE-TIME read went to the fold directly, so this private constant folded into a module constant
+// (and into another type's constant, and an array size) with no check at all.
+type value V { public int32 x; comptime int32 SECRET = 7; public ctor make() { this.x = 1; } }
+
+comptime int32 LEAK = V::SECRET + 1;
+
+fn int32 main() { return LEAK - 8; }

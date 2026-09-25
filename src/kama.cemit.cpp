@@ -6903,12 +6903,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // Plain `const` folds opportunistically (works as a size when it can); `comptime` is the
                     // explicit form — if it can't fold to a compile-time constant, that's an error AT the decl.
                     { int64_t cv; if (constValue(d->initializer, cv)) _constLocalVals[nm] = cv; }
-                    if (cvd && cvd->isComptime && d->initializer) {
-                        int64_t cv;
-                        if (!constValue(d->initializer, cv) && !isConstInitExpr(d->initializer.get()))
-                            unsupported(("a `comptime` local must have a compile-time-constant initializer "
-                                         "(a literal, `sizeof`, `alignof`, or const arithmetic) — `" + nm
-                                         + "`; use `const` for a runtime-initialized immutable").c_str(), n->line);
+                    // A `comptime` local holds the value the interpreter computed, baked — see evalLocalComptime.
+                    // A failure has said why, and falls through to the ordinary declaration so nothing after it
+                    // cascades (the build is already refused).
+                    if (cvd && cvd->isComptime && d->initializer && !_probingTemplate) {
+                        CTValue v;
+                        if (evalLocalComptime(declType, d->initializer, nm, n->line, v)) {
+                            _comptimeLocalVals[nm] = v;
+                            if (!v.isArray && (v.kind == CTValue::Int || v.kind == CTValue::Bool)) _constLocalVals[nm] = v.i;
+                            line(n->line); indent(depth);
+                            *_out << ty << " " << kName(nm) << " = " << ctRender(v) << ";\n";
+                            return;
+                        }
                     }
                 }
 
@@ -9995,6 +10001,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         // header's and is never emitted, but a member is an ordinary kama function, emitted like any other —
         // from the one declaration that carries the members (see the merge below and `classOf` in
         // emitModuleContent). Until KR-53 they were refused on the premise that nothing would emit the body.
+        // KR-93: whatever these members read at compile time — a `Type::NAME` in a size or another constant's
+        // initializer — is read BY this type, so its own private constants are in reach and another's are not.
+        ScopedStr _reader(_constReaderType, ci.name);
         if (cd->members) {
             for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
@@ -10418,6 +10427,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 tc.visibility = kvis; tc.owner = ci.name; tc.cName = ci.name + "__" + fn;
                                 tc.type = kd->type; tc.initializer = d->initializer; tc.line = kd->line;
                                 _typeConsts[ci.name + "::" + fn] = tc;
+                                // What the integer folder cannot finish goes to the interpreter pass, exactly as a
+                                // module constant's does — a float, a table, a `comptime fn` call, a constant
+                                // declared after it. A type constant used to have only this fold and a C fallback,
+                                // so the three scopes of one keyword accepted three different sets (KR-93).
+                                if (!tc.hasValue && d->initializer)
+                                    _ctDeferredConsts.push_back({ ci.name + "::" + fn, kd->type, d->initializer,
+                                                                  _nsCtx, kd->line, ci.name });
                                 continue;
                             }
                             FieldInfo fi;
@@ -10919,13 +10935,18 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
     if (!arg) return false;
     if (arg->constArgValue) return constValue(arg->constArgValue, out);
     // 6b-2: `Type::NAME` -> a type-associated `comptime` constant. Resolve the type name (last qualifier
-    // segment, through the file's scope) and look up its folded value. Access control is checked at the
-    // read site (emitPrimary), not here — a size position is always within the same compile.
+    // segment, through the file's scope) and look up its folded value. Its visibility is checked HERE: the
+    // comment that stood here said the read site checked it, and for a size, a module constant or another
+    // type's constant there is no later read site — a private constant folded into all three (KR-93).
     if (arg->value && arg->qualifier && !arg->qualifier->empty()) {
         auto tq = std::make_shared<StringList>();
         for (size_t i = 0; i + 1 < arg->qualifier->size(); ++i) tq->push_back((*arg->qualifier)[i]);
         std::string en = resolveUserName(*arg->qualifier->back(), tq);
         auto tc = _typeConsts.find(en + "::" + *arg->value);
+        if (tc != _typeConsts.end() && !typeConstReadable(tc->second, *arg->value)) {
+            reportTypeConstAccess(tc->second, *arg->value, arg->line);
+            return false;
+        }
         if (tc != _typeConsts.end() && tc->second.hasValue) { out = tc->second.value; return true; }
         // ...or `module::NAME`, a module `comptime` spelled qualified. This branch used to return here, so
         // `#(geo::CAP)` never reached the module lookup below and a legal size failed to fold.
@@ -12777,9 +12798,10 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         ScopedStr _ts(_thisType, mangled);
         std::map<std::string, SharedIdentifier> savedLocals = _scanLocalTys;
         std::map<std::string, int64_t> savedConsts = _constLocalVals;
+        std::map<std::string, CTValue> savedCtLocals = _comptimeLocalVals;
         auto scanBody = [&](SharedParameterList params, SharedStatement body) {
             _scanLocalTys.clear();
-            _constLocalVals.clear();
+            _constLocalVals.clear(); _comptimeLocalVals.clear();
             if (params) for (auto& p : *params)
                 if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
             scanStmtForCollections(body);
@@ -12794,6 +12816,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
                 scanBody(SharedParameterList(), m);
         _scanLocalTys = savedLocals;
         _constLocalVals = savedConsts;
+        _comptimeLocalVals = savedCtLocals;
     }
     // A view in a tagged-union PAYLOAD (`Optional<View>`) would let the borrow be stored or returned via
     // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
@@ -13304,9 +13327,9 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         // so the block is the scope: restore what it inherited when it closes. Without this a sibling
         // block's `string m` typed a later `match (Optional::Some(value: m))` whose `m` was something else
         // entirely — the subject inferred `Optional<string>` and the arms were typed off the wrong instance.
-        auto savedTys = _scanLocalTys; auto savedConsts = _constLocalVals;
+        auto savedTys = _scanLocalTys; auto savedConsts = _constLocalVals; auto savedCtLocals = _comptimeLocalVals;
         if (b->statements) for (auto& st : *b->statements) scanStmtForCollections(st);
-        _scanLocalTys = savedTys; _constLocalVals = savedConsts;
+        _scanLocalTys = savedTys; _constLocalVals = savedConsts; _comptimeLocalVals = savedCtLocals;
     } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         scanTypeForCollections(d->type);
         // A1: record each local's declared type (name->type node) so an inline variant-ctor `match` subject
@@ -13323,6 +13346,19 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         if (cd->variables) for (auto& v : *cd->variables)
             if (v && v->name && v->name->value && v->initializer) {
                 int64_t cv; if (constValue(v->initializer, cv)) _constLocalVals[*v->name->value] = cv;
+                else if (cd->isComptime) {
+                    // A local `comptime` the integer folder cannot finish is the interpreter's (KR-93), and a
+                    // later size in this body may read it — so this pre-pass evaluates it too, QUIETLY: the
+                    // evaluation at emission is the one that reports, once.
+                    bool q = _ctQuiet; _ctQuiet = true;
+                    CTValue val;
+                    if (evalLocalComptime(cd->type, v->initializer, *v->name->value, cd->line, val)) {
+                        _comptimeLocalVals[*v->name->value] = val;
+                        if (!val.isArray && (val.kind == CTValue::Int || val.kind == CTValue::Bool))
+                            _constLocalVals[*v->name->value] = val.i;
+                    }
+                    _ctQuiet = q;
+                }
                 scanExprForCollections(v->initializer);   // `comptime usize L = sizeof(Box<int32>)` (KR-62)
             }
     } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(n)) {
@@ -13386,7 +13422,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     // so an inline variant-ctor `match` subject (`match (Some(x))`) can infer its instance from `x`'s type.
     auto seedParams = [&](SharedParameterList params) {
         _scanLocalTys.clear();
-        _constLocalVals.clear();   // 6b-2: local const values are per-body
+        _constLocalVals.clear(); _comptimeLocalVals.clear();   // 6b-2: local const values are per-body
         if (params) for (auto& p : *params)
             if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
     };
@@ -13407,6 +13443,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // the program drives registerGenericTypeInst, which re-scans the specialized members
             // under _typeSubst (so `List<T>` -> `List_int32`).
             if (cd->typeParams && !cd->typeParams->empty()) continue;
+            ScopedStr _reader(_constReaderType, qualify(*cd->name->value));   // its members read as it (KR-93)
             // `class C implements Iterator<int32>` — register the specialized contract instance so its
             // vtable emits (a value/dynamic use of C needs `C__as_Iterator_int32`).
             // `This` is bound to the declaring type first: a PINNED contract writes its argument as `This`
@@ -14820,7 +14857,7 @@ void CEmitter::checkUninstantiatedTemplates()
         // the unsafe seam then rejects, a false positive against a body that only ever indexes a view.
         // Mirrors registerInstColls: seed the parameter types, then walk the block.
         _scanLocalTys.clear();
-        _constLocalVals.clear();
+        _constLocalVals.clear(); _comptimeLocalVals.clear();
         if (tmpl->parameters)
             for (auto& p : *tmpl->parameters) {
                 if (!p || !p->type) continue;
@@ -14979,7 +15016,7 @@ void CEmitter::registerInstColls()
         _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
         bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
         _scanLocalTys.clear();
-        _constLocalVals.clear();   // 6b-2: local const values are per-body
+        _constLocalVals.clear(); _comptimeLocalVals.clear();   // 6b-2: local const values are per-body
         if (tmpl->parameters) for (auto& p : *tmpl->parameters)
             if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
         scanStmtForCollections(tmpl->block);
@@ -17338,7 +17375,15 @@ SharedIdentifier CEmitter::unsizedFixedPlaceholder(const SharedIdentifier& t, co
     bool reported = false;   // the constant's own initializer already failed, and said why
     if (nArg->value && !nArg->constArgValue) {
         const std::string mk = resolveModuleVar(*nArg->value, nArg->qualifier);
-        if (_ctErroredConsts.count(mk)) reported = true;
+        // A type's constant (`V::N`) that did not fold here has already said why: its own initializer failed,
+        // or this position may not read it (KR-93). "names no `comptime` constant" would be false.
+        std::string tk;
+        if (nArg->qualifier && !nArg->qualifier->empty()) {
+            auto tq = std::make_shared<StringList>(nArg->qualifier->begin(), nArg->qualifier->end() - 1);
+            tk = resolveUserName(*nArg->qualifier->back(), tq) + "::" + *nArg->value;
+        }
+        if (!tk.empty() && _typeConsts.count(tk)) reported = true;
+        else if (_ctErroredConsts.count(mk)) reported = true;
         else if (!mk.empty() && !_constStatics.count(mk))
             why = "`" + *nArg->value + "` is a runtime `static` — declare it `comptime`";
         else if (mk.empty() && !resolveExternConst(*nArg->value, nArg->qualifier).empty())
@@ -18941,11 +18986,17 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                                 if (!d->name || !d->name->value) continue;
                                 const std::string& kn = *d->name->value;
                                 TypeConstInfo tc;
-                                tc.hasValue = d->initializer && constValue(d->initializer, tc.value);
+                                {
+                                    ScopedStr _reader(_constReaderType, name);   // read BY the enum (see collectClasses)
+                                    tc.hasValue = d->initializer && constValue(d->initializer, tc.value);
+                                }
                                 tc.visibility = visibilityOf(kc->modifiers, Visibility::Private, kc->line);
                                 tc.owner = name; tc.cName = name + "__" + kn;
                                 tc.type = kc->type; tc.initializer = d->initializer; tc.line = kc->line;
                                 _typeConsts[name + "::" + kn] = tc;
+                                if (!tc.hasValue && d->initializer)
+                                    _ctDeferredConsts.push_back({ name + "::" + kn, kc->type, d->initializer,
+                                                                  _nsCtx, kc->line, name });
                             }
                     } else if (dynamic_cast<ClassOperatorDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare an operator — write a named method "
@@ -23071,6 +23122,20 @@ bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::stri
 // emission context (`_currentClass`; null = external/free function)? Compile error if not.
 bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& memberIn, int line)
 {
+    if (accessAllowed(owner, vis, memberIn)) return true;
+    std::string member = memberIn;
+    const std::string pfx = owner->name + "__";
+    if (member.size() > pfx.size() && member.compare(0, pfx.size(), pfx) == 0)
+        member = member.substr(pfx.size());
+    const char* vs = (vis == Visibility::Private) ? "private" : "protected";
+    unsupported(("'" + member + "' is " + vs + " in '" + owner->name + "'").c_str(), line);
+    return false;
+}
+
+// The question canAccess answers, without the answer's diagnostic — for a position that must decide
+// whether to report (a compile-time fold, KR-93) and says the same sentence when it does.
+bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string& memberIn)
+{
     if (vis == Visibility::Public || !owner) return true;
     // Callers disagree about what `member` is, and a grant is matched BY MEMBER NAME, so normalize once
     // here rather than at each site. The operator paths pass a C name (`Vec2__op_add`) where the unary one
@@ -23144,9 +23209,44 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
             else                            { if (!_currentFunc.empty() && _currentFunc == acc) return true; }
         }
     }
-    const char* vs = (vis == Visibility::Private) ? "private" : "protected";
-    unsupported(("'" + member + "' is " + vs + " in '" + owner->name + "'").c_str(), line);
     return false;
+}
+
+// KR-93. A type's `comptime` constant obeys member visibility (SPEC), and the run-time read of `V::K` always
+// did — but a COMPILE-TIME position read the fold directly, so a private constant folded into another type's
+// constant, a module constant or an array size with no check at all. The reader is a TYPE when compile-time
+// evaluation or a type's own declaration is what reads it (the interpreter's current owner, or the type whose
+// members collectClasses is walking); otherwise a function body is being compiled and the run-time rule
+// answers, a `friend` grant to a free function included.
+bool CEmitter::typeConstReadable(const TypeConstInfo& tc, const std::string& name)
+{
+    if (tc.visibility == Visibility::Public) return true;
+    const std::string& reader = !_ctCurrentOwner.empty() ? _ctCurrentOwner : _constReaderType;
+    if (!reader.empty()) {
+        // A generic instance reads as its TEMPLATE, the key a generic type's constants are filed under.
+        auto gi = _genericTypeInstOf.find(reader);
+        if (reader == tc.owner || (gi != _genericTypeInstOf.end() && gi->second == tc.owner)) return true;
+        if (tc.visibility == Visibility::Protected) {
+            auto rc = _classes.find(reader);
+            for (ClassInfo* c = rc != _classes.end() ? rc->second.base : nullptr; c; c = c->base)
+                if (c->name == tc.owner) return true;
+        }
+        return comptimeFriendGrants(tc.owner, name, reader);
+    }
+    auto oc = _classes.find(tc.owner);
+    return accessAllowed(oc != _classes.end() ? &oc->second : nullptr, tc.visibility, name);
+}
+
+void CEmitter::reportTypeConstAccess(const TypeConstInfo& tc, const std::string& name, int line)
+{
+    if (_ctQuiet) return;   // a pre-pass evaluation; the emission-time one reports
+    // Once per read: collection and emission both resolve a size, and they name the file in different forms
+    // (the unit's name, the source path), so the (file, line, message) dedup in unsupported misses the pair.
+    if (!_typeConstDenied.insert(tc.owner + "::" + name + "@" + std::to_string(line)).second) return;
+    auto oc = _classes.find(tc.owner);
+    const char* vs = (tc.visibility == Visibility::Private) ? "private" : "protected";
+    unsupported(("'" + name + "' is " + vs + " in '" + (oc != _classes.end() ? oc->second.name : tc.owner) + "'").c_str(),
+                line);
 }
 
 // Field access through a resolved owner (looks up the field's visibility, then checks).
@@ -27256,7 +27356,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // field lookup, so a stale entry shadows a same-named field of a different type in a later body.
     // Latent while nothing read it for a decision; a landmine the moment a type checker does.
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-    _constLocals.clear(); _constLocalVals.clear();
+    _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
@@ -28077,7 +28177,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _refParams.clear();
     _paramNames.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-    _constLocals.clear(); _constLocalVals.clear();
+    _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
     // Per-BODY analysis state, reset here for the same reason the two paths above reset it: a destructor
     // body is a function body like any other, and inheriting the previously-emitted function's move
     // analysis makes a local's state depend on emission order. It went unnoticed while no destructor
@@ -28256,7 +28356,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _viewParams.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-    _constLocals.clear(); _constLocalVals.clear();
+    _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
     _moveState.clear();   // per-method move analysis
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
@@ -28382,7 +28482,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentClass = nullptr;
     _refParams.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-    _constLocals.clear(); _constLocalVals.clear();
+    _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
     _inStaticMethod = false;
 }
 
@@ -31691,6 +31791,15 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
 
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (!id->value) return "";
+        // `Type::NAME` — a type-associated `comptime` constant of a class type (a table; a value, KR-93). Asked
+        // FIRST: a qualified name is never a local, and a local of the same bare name must not answer for it.
+        // Without it a type's table could not be read at all — `Geo::RAMP.get(index: 3)` had no receiver.
+        if (id->qualifier && !id->qualifier->empty()) {
+            auto tq = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
+            auto tc = _typeConsts.find(resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value);
+            if (tc != _typeConsts.end()) { std::string ct = typeConstCType(tc->second); return isClass(ct) ? ct : ""; }
+        }
         auto it = _localTypes.find(*id->value);
         if (it != _localTypes.end()) return it->second;
         // A module-level `static` (MCU step 1): resolve its class type (InlineArray / value struct) so
@@ -35263,8 +35372,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
 
     // 6b-2: type-associated `comptime` constants (`Type::NAME`) — one `static const` global each, emitted
-    // once in the header before any body reads them. A folded value bakes to a literal (no C init-order
-    // dependency); a non-integer literal const falls back to its constant initializer.
+    // once in the header before any body reads them. The value is ALWAYS one kama computed — the integer fold
+    // or the interpreter's (a float, a table) — baked as a literal, so there is no C init-order dependency.
+    // There used to be a third source, the initializer handed to C when kama could not fold it: that is how
+    // `public comptime usize U = sizeof(Box<uint16>);` built here while the same line is refused at module
+    // scope — a value the target's ABI decides, which a `comptime` never holds (tests/xfail/alignof_not_foldable).
+    // The maintainer's ruling (KR-93): one rule at every scope. `sizeof` of an aggregate stays usable in a body
+    // and in a `comptime assert`, where C checks it for the real target.
     if (!_typeConsts.empty()) {
         for (auto& kv : _typeConsts) {
             TypeConstInfo& tc = kv.second;
@@ -35274,10 +35388,18 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             ScopedStr _cu(_collectingUnitPath, oc != _classes.end() ? oc->second.declFile : std::string());
             if (oc != _classes.end()) scopeOf(oc->second.declFile, oc->second.scope, oc->second.usings, oc->second.symbolAliases);
             *_out << "static const " << cType(tc.type) << " " << tc.cName << " = ";
-            if (tc.hasValue) *_out << tc.value;
-            else if (tc.initializer && isConstInitExpr(tc.initializer.get())) *_out << emitExpression(tc.initializer);
-            else { unsupported(("a `comptime` constant must be a compile-time constant (a literal, `sizeof`, "
-                               "`alignof`, or const arithmetic) — `" + kv.first + "`").c_str(), tc.line); *_out << "{0}"; }
+            auto cv = _comptimeConstVals.find(kv.first);
+            if (cv != _comptimeConstVals.end()) *_out << ctRender(cv->second);
+            else if (tc.hasValue) *_out << tc.value;
+            else {
+                // The interpreter pass evaluated every one it could not fold, and says why when it fails;
+                // reaching here without an error means no initializer at all.
+                if (!_ctErroredConsts.count(kv.first))
+                    unsupported(("a `comptime` constant needs a compile-time-constant initializer — `"
+                                 + demangleForDisplay(tc.owner) + "::" + kv.first.substr(tc.owner.size() + 2)
+                                 + "`").c_str(), tc.line);
+                *_out << "{0}";
+            }
             *_out << ";\n";
         }
         *_out << "\n";
@@ -35500,13 +35622,15 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                 auto ctv = _comptimeConstVals.find(cname);
                 if (ctv != _comptimeConstVals.end())
                     *_out << " = " << ctRender(ctv->second);   // 6b-3: a `comptime fn`-computed scalar, baked
+                else if (_ctErroredConsts.count(cname))
+                    *_out << " = {0}";   // 6b-3: interpreter eval already reported a precise error — no duplicate
+                                         // (asked before re-folding: a re-fold would report its reason again)
                 else if (constValue(d->initializer, cv))
                     *_out << " = " << cv;   // baked literal: folds cross-const refs (`B = A + 1`) and sidesteps
                                             // C's "initializer element is not constant" for a const-referencing-const
-                else if (isConstInitExpr(d->initializer.get()))
-                    *_out << " = " << emitExpression(d->initializer);   // non-integer literal const (float/bool/char)
-                else if (_ctErroredConsts.count(cname))
-                    *_out << " = {0}";   // 6b-3: interpreter eval already reported a precise error — no duplicate
+                // (No C-expression fallback: every initializer the integer fold misses went to the interpreter,
+                // which either baked it or refused it. Handing C the text is how a type constant held a value
+                // the target's ABI decides — KR-93 — and a `comptime` is a value kama computed, at every scope.)
                 else {
                     unsupported(("a `comptime` initializer must be a compile-time constant (a literal, an array "
                                  "literal, `sizeof`, const arithmetic, or a `comptime fn` call) — `" + *d->name->value + "`").c_str(), mv->line);

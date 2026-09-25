@@ -164,6 +164,7 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 
 bool CEmitter::ctFail(const char* what, int line)
 {
+    if (_ctQuiet) { _ctFailed = true; return false; }   // a pre-pass: the emission-time evaluation reports
     if (!_ctFailed) {
         ++_unsupported;
         // The structured form is the ONLY form. `kama check` and the language server decide purely from the
@@ -241,9 +242,20 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
         const std::string owner = resolveUserName(*id->qualifier->back(), tq);
         std::string key = owner + "::" + *id->value;
+        auto tc = _typeConsts.find(key);
+        if (tc != _typeConsts.end()) {
+            // Member visibility, as at run time (KR-93: this read used to skip it), and then ON DEMAND
+            // evaluation — a type constant the interpreter folds may be read before its turn, as a module
+            // constant may, and one mid-evaluation is a cycle.
+            if (!typeConstReadable(tc->second, *id->value)) {
+                reportTypeConstAccess(tc->second, *id->value, id->line);
+                _ctFailed = true;
+                return false;
+            }
+            if (!forceDeferred(key)) return false;
+        }
         auto cv = _comptimeConstVals.find(key);
         if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
-        auto tc = _typeConsts.find(key);
         if (tc != _typeConsts.end() && tc->second.hasValue) { asInt(tc->second.value); return true; }
         // A plain enum's member (`K::A`), folded ON DEMAND — so an enum initializer may name a sibling
         // declared after it, or another enum's member, whatever order the enums are collected in.
@@ -289,6 +301,8 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     }
     auto cs = _comptimeSubst.find(*id->value);
     if (cs != _comptimeSubst.end()) { asInt(cs->second.value); return true; }
+    auto cl = _comptimeLocalVals.find(*id->value);   // a local `comptime`, whatever its type (KR-93)
+    if (cl != _comptimeLocalVals.end()) { out = cl->second; return true; }
     auto lv = _constLocalVals.find(*id->value);
     if (lv != _constLocalVals.end()) { asInt(lv->second); return true; }
     if (!_localTypes.count(*id->value) && !resolveExternConst(*id->value, id->qualifier).empty())   // KR-56
@@ -465,10 +479,12 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (!inv->identifier || !inv->identifier->value)
             return ctFail("a comptime fn may call only another `comptime fn` by name", e->line);
+        std::vector<std::string> argNames;
         auto evalArgs = [&](std::vector<CTValue>& args) -> bool {
             if (inv->args) for (auto& a : *inv->args) {
                 CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
                 args.push_back(av);
+                argNames.push_back(a->name && a->name->value ? *a->name->value : std::string());
             }
             return true;
         };
@@ -502,6 +518,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                                + "` grant it to the calling type: `friend <ThatType>["
                                + *inv->identifier->value + "];`").c_str(), e->line);
             std::vector<CTValue> args; if (!evalArgs(args)) return false;
+            if (!ctBindByName(mit->second.node->params, argNames, args, disp, e->line)) return false;
             std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
             bool ok = ctEvalBody(mit->second.node->params, mit->second.node->body, mit->second.node->returnType, args, e->line, out);
             _ctCurrentOwner = saved;
@@ -513,6 +530,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             return ctFail(("a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value
                            + "` is not one").c_str(), e->line);
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
+        if (!ctBindByName(_comptimeFns[key]->parameters, argNames, args, *inv->identifier->value, e->line)) return false;
         std::string saved = _ctCurrentOwner; _ctCurrentOwner.clear();   // a free fn has no owning type
         bool ok = ctEvalCall(_comptimeFns[key], args, e->line, out);
         _ctCurrentOwner = saved;
@@ -731,6 +749,39 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 // Call + top-level const evaluation
 // ---------------------------------------------------------------------------
 
+// Put a call's arguments in PARAMETER order. kama arguments are named and may be written in any order, and the
+// interpreter bound them by POSITION, so `sub(b: 1, a: 10)` computed `1 - 10` — a silent miscompile of every
+// comptime call whose arguments were not written in declaration order (KR-93). A comptime-only call is never
+// emitted, so the emitter's named-argument checks never saw it either: an unknown, missing or repeated label
+// is refused here.
+bool CEmitter::ctBindByName(SharedParameterList params, const std::vector<std::string>& names,
+                            std::vector<CTValue>& args, const std::string& callee, int line)
+{
+    const size_t np = params ? params->size() : 0;
+    std::vector<CTValue> ordered(np);
+    std::vector<bool> seen(np, false);
+    for (size_t k = 0; k < args.size(); ++k) {
+        const std::string& nm = k < names.size() ? names[k] : std::string();
+        size_t at = np;
+        for (size_t i = 0; i < np; ++i)
+            if ((*params)[i] && (*params)[i]->identifier && (*params)[i]->identifier->value
+                && *(*params)[i]->identifier->value == nm) { at = i; break; }
+        if (at == np)
+            return ctFail(("`" + callee + "` has no parameter `" + nm + "`").c_str(), line);
+        if (seen[at])
+            return ctFail(("`" + callee + "` is given `" + nm + "` twice").c_str(), line);
+        seen[at] = true;
+        ordered[at] = args[k];
+    }
+    for (size_t i = 0; i < np; ++i)
+        if (!seen[i])
+            return ctFail(("`" + callee + "` is missing the argument `"
+                           + (params && (*params)[i] && (*params)[i]->identifier && (*params)[i]->identifier->value
+                                  ? *(*params)[i]->identifier->value : std::string("?")) + ":`").c_str(), line);
+    args.swap(ordered);
+    return true;
+}
+
 bool CEmitter::ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out)
 {
     if (!fn) return ctFail("comptime fn has no body", line);
@@ -794,8 +845,16 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
     NsCtx saved = _nsCtx;
     long savedSteps = _ctSteps; int savedDepth = _ctDepth; bool savedFailed = _ctFailed;
     std::string savedOwner = _ctCurrentOwner;
+    std::string savedUnit = _collectingUnitPath;
     _nsCtx = dc.ctx;
-    _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+    // A type constant evaluates AS its type — its own private members in reach, exactly as its comptime fns
+    // are — and a module constant as no type at all (KR-93).
+    _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner = dc.owner;
+    if (!dc.ctx.unitPath.empty()) _collectingUnitPath = dc.ctx.unitPath;   // a failure names the DECLARING file
+    // The name a diagnostic shows: a type constant as the source spells it (`Palette::SIZE`), never the
+    // mangled owner key it is filed under.
+    const std::string shown = dc.owner.empty() ? dc.cName
+                            : demangleForDisplay(dc.owner) + dc.cName.substr(dc.owner.size());
     bool good = [&]() -> bool {
         CTEnv env; CTValue v;
         // An ARRAY-typed constant may be initialized by an array literal (`[1, 2, 3]`, `[v; N]`) as well as
@@ -816,7 +875,8 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
         if (!ok) {
             if (!_ctFailed)
                 ctFail(("a `comptime` initializer must be a compile-time constant (a literal, an array literal, "
-                        "`sizeof`, const arithmetic, or a `comptime fn` call) — `" + dc.cName + "`").c_str(), dc.line);
+                        "`sizeof` of a fixed-width scalar, const arithmetic, another `comptime`, or a `comptime fn` "
+                        "call) — `" + shown + "`").c_str(), dc.line);
             _ctErroredConsts.insert(dc.cName);   // a precise error was emitted; suppress the emit-time duplicate
             return false;
         }
@@ -824,7 +884,7 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
         if (isArrayConst) {
             if (!v.isArray || (int64_t)v.elems.size() != an) {
                 ctFail(("a `comptime` array constant's initializer must return an `InlineArray` of the "
-                        "declared size — `" + dc.cName + "`").c_str(), dc.line);
+                        "declared size — `" + shown + "`").c_str(), dc.line);
                 _ctErroredConsts.insert(dc.cName);
                 return false;
             }
@@ -835,15 +895,67 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
         CTValue proto;
         if (ctTypeInfo(dc.type, proto)) ctCoerce(proto, v);
         _comptimeConstVals[dc.cName] = v;
-        if (v.kind == CTValue::Int || v.kind == CTValue::Bool)
-            _moduleConsts[dc.cName] = v.i;   // mirror for const-generic array sizing
+        if (v.kind == CTValue::Int || v.kind == CTValue::Bool) {
+            // Mirror an integer for const-generic array sizing, into the table that size reads: a module
+            // constant's, or the type constant's own record (constArgN reads `hasValue`).
+            if (dc.owner.empty()) _moduleConsts[dc.cName] = v.i;
+            else {
+                auto tc = _typeConsts.find(dc.cName);
+                if (tc != _typeConsts.end()) { tc->second.hasValue = true; tc->second.value = v.i; }
+            }
+        }
         return true;
     }();
     _nsCtx = saved;
     _ctSteps = savedSteps; _ctDepth = savedDepth; _ctFailed = savedFailed;
     _ctCurrentOwner = savedOwner;
+    _collectingUnitPath = savedUnit;
     _ctDeferredState[cName] = CTConstState::Done;
     return good;
+}
+
+// KR-93. A LOCAL `comptime`, evaluated by the same interpreter a module or type constant runs — so one keyword
+// takes one set of initializers at every scope (a `comptime fn` call, a float, a table, another constant) — with
+// the enclosing type's private members in reach, as its methods have them. It used to be checked only for
+// "C can compute this", which accepted a struct's `sizeof` (a value the target's ABI decides) and refused a
+// `comptime fn` call while the second diagnostic told the author to assign the call to a `comptime` constant.
+bool CEmitter::evalLocalComptime(SharedIdentifier type, SharedExpression init, const std::string& name, int line,
+                                 CTValue& out)
+{
+    long savedSteps = _ctSteps; int savedDepth = _ctDepth; bool savedFailed = _ctFailed;
+    std::string savedOwner = _ctCurrentOwner;
+    _ctSteps = 0; _ctDepth = 0; _ctFailed = false;
+    _ctCurrentOwner = _currentClass ? _currentClass->name : std::string();
+    bool ok = [&]() -> bool {
+        CTEnv env; CTValue v;
+        CTValue elemProto; int64_t an; std::string aelem;
+        const bool isArray = ctArrayInfo(type, elemProto, an, aelem);
+        bool good = (isArray && dynamic_cast<ArrayLiteralNode*>(init.get()))
+                  ? (v.isArray = true, ctBuildArrayInit(init, env, elemProto, (size_t)an, v.elems))
+                  : ctEvalExpr(init, env, v);
+        if (!good) {
+            if (!_ctFailed)
+                ctFail(("a `comptime` local must have a compile-time-constant initializer (a literal, an array "
+                        "literal, `sizeof` of a fixed-width scalar, const arithmetic, another `comptime`, or a "
+                        "`comptime fn` call) — `" + name + "`; use `const` for a runtime-initialized immutable").c_str(),
+                       line);
+            return false;
+        }
+        if (isArray) {
+            if (!v.isArray || (int64_t)v.elems.size() != an)
+                return ctFail(("a `comptime` array local's initializer must produce an `InlineArray` of the declared "
+                               "size — `" + name + "`").c_str(), line);
+            v.elemCType = aelem;
+            out = v;
+            return true;
+        }
+        CTValue proto;
+        if (ctTypeInfo(type, proto)) ctCoerce(proto, v);   // as evalDeferredConst: an unmodelled scalar (an enum,
+        out = v;                                           // `isize`) keeps the value it folded to
+        return true;
+    }();
+    _ctSteps = savedSteps; _ctDepth = savedDepth; _ctFailed = savedFailed; _ctCurrentOwner = savedOwner;
+    return ok;
 }
 
 // ---------------------------------------------------------------------------

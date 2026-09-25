@@ -1,0 +1,8 @@
+// KR-93, the same ruling at the third scope: a local `comptime` was checked only for "C can compute this",
+// so it held a struct's size — an ABI-decided value — that neither other scope would take.
+type value Box<T> { public T v; public ctor make(T v) { this.v = v; } }
+
+fn int32 main() {
+    comptime usize L = sizeof(Box<uint32>);
+    return cast<int32>(L) - 4;
+}

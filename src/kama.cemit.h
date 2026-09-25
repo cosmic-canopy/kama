@@ -3352,6 +3352,10 @@ private:
     // Const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope
     std::map<std::string, int64_t> _constLocalVals;           // 6b-2: local `const` name -> folded int (comptime uses: sizes/fills)
+    std::set<std::string> _typeConstDenied;                   // KR-93: `Owner::NAME@line` already refused (one report per read,
+                                                              // though collection and emission both resolve a size)
+    std::string _constReaderType;                             // KR-93: the type whose members collection is reading, for
+                                                              // the compile-time visibility of a `Type::NAME` constant
     std::map<std::string, int64_t> _moduleConsts;             // 6b-2: module `comptime` qualified name -> folded int
     std::set<std::string> _constStatics;                      // qualified names emitted as C `static const` (every `comptime` static)
     // THE FILE RUNG FOR MODULE-SCOPE VARIABLES. Qualified name -> the file that declared it. Without this
@@ -3396,16 +3400,23 @@ private:
     long _ctSteps = 0;      // step budget consumed by the current top-level comptime evaluation
     int  _ctDepth = 0;      // comptime-fn call-recursion depth
     bool _ctFailed = false; // a comptime diagnostic was already emitted this evaluation
+    bool _ctQuiet = false;  // KR-93: a pre-pass evaluation — fail without reporting; the emission-time run reports
     static const long CT_STEP_BUDGET = 1000000;   // runaway guard (cf. C++ constexpr-step limit)
     static const int  CT_MAX_DEPTH   = 256;
     // Baked comptime-fn-derived constant values, keyed by qualified cName; consulted at the const emit site.
     std::map<std::string, CTValue> _comptimeConstVals;
+    std::map<std::string, CTValue> _comptimeLocalVals;   // KR-93: a local `comptime`'s interpreted value (floats, tables too)
     std::set<std::string> _ctErroredConsts;   // consts whose interpreter eval already errored (suppress a duplicate emit-time diagnostic)
     // Module `comptime` consts whose fold needed the interpreter (a `comptime fn` call), in declaration order.
-    struct CTDeferredConst { std::string cName; SharedIdentifier type; SharedExpression init; NsCtx ctx; int line; };
+    // `owner` is "" for a module constant; for a type constant (KR-93) it is the owning type, so the
+    // evaluation runs with that type's private members in reach and mirrors its result into _typeConsts.
+    struct CTDeferredConst { std::string cName; SharedIdentifier type; SharedExpression init; NsCtx ctx; int line; std::string owner; };
     std::vector<CTDeferredConst> _ctDeferredConsts;
 
     void evalComptimeConsts();                                                    // the deferred-const evaluation pass
+    bool evalLocalComptime(SharedIdentifier type, SharedExpression init, const std::string& name, int line, CTValue& out);
+    bool ctBindByName(SharedParameterList params, const std::vector<std::string>& names, std::vector<CTValue>& args,
+                      const std::string& callee, int line);   // named args -> parameter order (KR-93)
     // ON DEMAND, so a constant may read one declared after it, in any file order; a cycle is refused by name.
     enum class CTConstState { Pending, Evaluating, Done };
     std::map<std::string, CTConstState> _ctDeferredState;   // cName -> state, for every _ctDeferredConsts entry
@@ -3466,6 +3477,11 @@ private:
     enum class MemberOwner { Type, Contract, Enum };
     void        rejectInertModifiers(ASTNode* member, const ClassInfo* owner, MemberOwner ctx);
     bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& memberIn, int line);
+    bool        accessAllowed(ClassInfo* owner, Visibility vis, const std::string& memberIn);   // canAccess, silent
+    // KR-93: may a compile-time position read this type constant here, and the one refusal every such
+    // position gives (worded as canAccess's, so the run-time read of the same line dedups onto it).
+    bool        typeConstReadable(const TypeConstInfo& tc, const std::string& name);
+    void        reportTypeConstAccess(const TypeConstInfo& tc, const std::string& name, int line);
     // Is the current function an instance of generic free function `tmplKey`, corresponding to `ownerArgs`?
     bool        fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs);
     // The comptime interpreter's slice of canAccess: does `ownerKey` grant `member` to the type `fromType`?

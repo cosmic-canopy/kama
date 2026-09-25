@@ -1,0 +1,6 @@
+// KR-93's comptime audit. A call that only the interpreter runs is never emitted, so the emitter's
+// named-argument checks never saw it: an unknown label was simply bound to the next parameter by position.
+comptime fn int32 sub(int32 a, int32 b) { return a - b; }
+comptime int32 X = sub(a: 10, c: 1);
+
+fn int32 main() { return X; }

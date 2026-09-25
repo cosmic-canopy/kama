@@ -4499,14 +4499,23 @@ fn void demo() {
   (the associated-item operator, like an enum variant `Result::Ok` or a static factory `Deque::withAllocator`);
   `.` stays reserved for constructors and instance access. A type `comptime` obeys **member visibility**
   (`public`/`private`/`protected`, default private for a `value`) — a private one is usable only inside the
-  type's own code, the same rule and diagnostic as a private field. A **local** `comptime` is scoped to its
-  function or block.
+  type's own code, the same rule and diagnostic as a private field, and that holds in a compile-time position
+  too: another constant's initializer or an array size may not read it from outside either. (Before `0.9.444` <!-- xfail: type_comptime_private_fold, type_comptime_private_size -->
+  those two read the fold directly and a private constant leaked into both.) A **local** `comptime` is scoped
+  to its function or block.
 - **Initializer must fold** — a literal, `sizeof` of a fixed-width scalar (**not** `alignof`, and not
   `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, another
   `comptime`, a `comptime fn` call, or — for an `InlineArray`-typed constant — an **array literal** of
   foldable elements (`[1, 2, 3]` or the `[v; N]` fill form), which bakes as a `static const` table. A
   `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message <!-- xfail: sizeof_usize_not_foldable, alignof_not_foldable -->
-  points you back to `const` for a runtime-initialized immutable). A plain `const` *local* whose initializer
+  points you back to `const` for a runtime-initialized immutable).
+- **One rule at every scope.** A module, a type and a local `comptime` are folded by the same interpreter, so
+  they take the same initializers and refuse the same ones — a float, a table, a `comptime fn` call and a <!-- test: comptime_type_parity, comptime_named_args -->
+  later-declared constant work at all three, and a struct's `sizeof` or any `alignof`, whose value the
+  target's ABI decides, is an error at all three. Until `0.9.444` a type's constant had only an integer fold <!-- xfail: type_comptime_sizeof_aggregate, local_comptime_sizeof_aggregate, type_comptime_alignof -->
+  (plus C evaluating what it could not) and a local one only "C can compute it", so one declaration meant
+  three things by position. A struct's size is still available at run time (`sizeof(Box<uint16>)` in a
+  body), and checkable at build time in a `comptime assert`, where C verifies it for the real target. A plain `const` *local* whose initializer
   happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs
   `constexpr`: `const` works when it can, `comptime` guarantees it); at module and type scope there is no
   runtime init point, so `comptime` is the only named-constant form.

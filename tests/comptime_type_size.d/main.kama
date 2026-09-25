@@ -1,0 +1,16 @@
+// KR-93: a field sized by ANOTHER module's type constant. Sizes are baked while types are collected, before the
+// interpreter pass, so a constant only the interpreter folds (`Buf::WIDE`) has to reach a size through the
+// record it mirrors into afterwards — and one the integer folder takes (`Buf::CAP`) must not have lost that
+// early fold when type constants joined the interpreter path.
+import { shapes::Buf };
+
+type value Frame {
+    public InlineArray<int32>#(Buf::CAP) small;
+    public InlineArray<int32>#(Buf::WIDE) wide;
+    public ctor make() { this.small = [1; (Buf::CAP)]; this.wide = [2; (Buf::WIDE)]; }
+}
+
+fn int32 main() {
+    Frame f = Frame.make();
+    return cast<int32>(f.small.length()) * 10 + cast<int32>(f.wide.length());   // 46
+}

@@ -1,0 +1,1 @@
+`sizeof` folds only for fixed-width scalars

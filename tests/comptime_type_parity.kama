@@ -1,0 +1,37 @@
+// KR-93: `comptime` is "one keyword, three scopes" (SPEC), and the three now take the same initializers. A
+// module constant went through the interpreter; a type's constant had only the integer folder (plus a C
+// fallback) and a local one only "C can compute it" — so every line marked below was refused somewhere:
+//   - a type constant that is a float, a `comptime fn` call, a table, or reads a constant declared after it;
+//   - a module constant reading a type's float constant ("unknown identifier `PI`");
+//   - a local `comptime` calling a `comptime fn` (refused while the SECOND diagnostic told the author to
+//     "assign its result to a `comptime` constant" — which is what the line did), or reading a float one.
+comptime fn int32 sq(int32 n) { return n * n; }
+comptime fn InlineArray<uint8>#(4) ramp() {
+    InlineArray<uint8>#(4) t = [0; 4];
+    for (int32 i = 0; i < 4; i = i + 1) { t[i] = cast<uint8>(i * 10); }
+    return t;
+}
+
+type value Geo {
+    public int32 x;
+    public comptime float64 PI = 3.25;                      // a float, read by a module constant below
+    public comptime int32 NINE = sq(n: 3);                  // a `comptime fn` call
+    public comptime InlineArray<uint8>#(4) RAMP = ramp();   // a table
+    public comptime int32 LATER = Later::BASE + 1;          // another type's constant, declared after this one
+    comptime int32 HIDDEN = 7;                              // private...
+    public comptime int32 SEES_HIDDEN = Geo::HIDDEN * 2;    // ...and in reach of the type's own constants
+    public ctor make() { this.x = 1; }
+}
+type value Later { public int32 y; public comptime int32 BASE = 40; public ctor make() { this.y = 1; } }
+
+comptime float64 TAU = Geo::PI * 2.0;                       // 6.5
+comptime int32 FROM_FLOAT = cast<int32>(TAU * 2.0);         // 13
+
+fn int32 main() {
+    comptime int32 LOCAL = sq(n: 2) + Geo::NINE;            // 13 — a local runs the interpreter too
+    comptime float64 HALF_TAU = TAU / 2.0;                  // 3.25
+    InlineArray<int32>#(LOCAL) cells = [0; (LOCAL)];         // ...and sizes an array
+    int32 r = cast<int32>(Geo::RAMP.get(index: 3));         // 30
+    return (FROM_FLOAT - 13) + (cast<int32>(cells.length()) - 13) + (r - 30) + (Geo::LATER - 41)
+         + (Geo::SEES_HIDDEN - 14) + (cast<int32>(HALF_TAU * 4.0) - 13) + 42;
+}

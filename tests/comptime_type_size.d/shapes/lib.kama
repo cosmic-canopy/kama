@@ -1,0 +1,10 @@
+export { Buf };
+
+comptime fn int32 twice(int32 n) { return n * 2; }
+
+type value Buf {
+    public int32 x;
+    public comptime int32 CAP = 4;              // folds at collection
+    public comptime int32 WIDE = twice(n: 3);   // only the interpreter folds it
+    public ctor make() { this.x = 0; }
+}

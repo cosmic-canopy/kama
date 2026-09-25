@@ -130,6 +130,7 @@ comptime_assert_not_assert	comptime_assert_not_assert.kama:5
 comptime_assert_runtime_cond	comptime_assert_runtime_cond.kama:6
 comptime_assert_type_bind	comptime_assert_type_bind.kama:11
 comptime_assert_unrenderable	comptime_assert_unrenderable.kama:10
+comptime_call_unknown_arg	comptime_call_unknown_arg.kama:4
 comptime_const_cycle	comptime_const_cycle.kama:5
 comptime_fn_budget	comptime_fn_budget.kama:5
 comptime_fn_impure	comptime_fn_impure.kama:6
@@ -606,6 +607,7 @@ lit_oob_variant	lit_oob_variant.kama:4
 lit_wide_into_int32	lit_wide_into_int32.kama:5
 lit_wide_negative_past_int64	lit_wide_negative_past_int64.kama:5
 lit_wide_past_uint64	lit_wide_past_uint64.kama:5
+local_comptime_sizeof_aggregate	local_comptime_sizeof_aggregate.kama:6
 local_no_initializer	local_no_initializer.kama:9
 local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
@@ -1059,6 +1061,10 @@ trycast_no_destination	trycast_no_destination.kama:7
 turbofish_nongeneric	turbofish_nongeneric.kama:3
 two_defaults	two_defaults.kama:5
 type_as_value	type_as_value.kama:6
+type_comptime_alignof	type_comptime_alignof.kama:6
+type_comptime_private_fold	type_comptime_private_fold.kama:6
+type_comptime_private_size	type_comptime_private_size.kama:5
+type_comptime_sizeof_aggregate	type_comptime_sizeof_aggregate.kama:8
 type_param_as_value	type_param_as_value.kama:4
 type_param_shadows_type	type_param_shadows_type.kama:10
 uint_retired	uint_retired.kama:5

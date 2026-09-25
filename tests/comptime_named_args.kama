@@ -1,0 +1,21 @@
+// KR-93's comptime audit: the interpreter bound a call's arguments by POSITION, but kama arguments are named
+// and may be written in any order — so `sub(b: 1, a: 10)` computed `1 - 10` at compile time while the same
+// call at run time computed `10 - 1`. A silent miscompile of every comptime call not written in declaration
+// order, in a module constant, a type constant, a local one and a `comptime fn` calling another.
+comptime fn int32 sub(int32 a, int32 b) { return a - b; }
+comptime fn int32 viaSub(int32 x, int32 y) { return sub(b: y, a: x); }
+
+type value Ranges {
+    public int32 lo;
+    public comptime fn int32 span(int32 from, int32 to) { return to - from; }
+    public comptime int32 WIDE = Ranges::span(to: 50, from: 8);   // 42
+    public ctor make() { this.lo = 0; }
+}
+
+comptime int32 NINE = sub(b: 1, a: 10);        // 9
+comptime int32 SEVEN = viaSub(y: 3, x: 10);    // 7
+
+fn int32 main() {
+    comptime int32 FOUR = sub(b: 6, a: 10);    // 4
+    return (NINE - 9) + (SEVEN - 7) + (FOUR - 4) + Ranges::WIDE;   // 42
+}

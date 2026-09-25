@@ -1,0 +1,10 @@
+// KR-93. `alignof` never folds — alignment is an ABI choice (4 on x86_64, 1 on AVR) — and the module-scope
+// refusal is tests/xfail/alignof_not_foldable. A type's constant took it through a C fallback, and KEYWORDS
+// even listed `alignof` as a foldable initializer.
+type value Cfg {
+    public int32 x;
+    public comptime int32 A = alignof(int32);
+    public ctor make() { this.x = 0; }
+}
+
+fn int32 main() { return 0; }

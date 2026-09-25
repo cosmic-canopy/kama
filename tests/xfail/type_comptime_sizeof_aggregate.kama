@@ -1,0 +1,12 @@
+// KR-93, the maintainer's ruling: one rule at every scope. A `comptime` holds what the LANGUAGE fixes and
+// never what the target's ABI decides (tests/xfail/alignof_not_foldable). At module scope this line was always
+// refused; at type scope a C fallback built it, so the same declaration meant two things by position.
+// `sizeof(Box<uint16>)` stays usable in a body, and checkable at build time in a `comptime assert`.
+type value Box<T> { public T v; public ctor make(T v) { this.v = v; } }
+type value Cfg {
+    public int32 x;
+    public comptime usize UNIT = sizeof(Box<uint16>);
+    public ctor make() { this.x = 0; }
+}
+
+fn int32 main() { return 0; }

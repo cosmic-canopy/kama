@@ -21,11 +21,13 @@ type value Box<T> {
 // (2) module scope: an aggregate `sizeof` predicate lowers to C11 `_Static_assert`.
 comptime assert(cond: sizeof(Box<int8>) == 1, msg: "a one-byte Box");
 
-// (2) type-associated `comptime`, and a member `comptime assert`.
+// (2) a type's member `comptime assert`s. (A `comptime` CONSTANT may no longer hold a struct's size at any
+// scope — the target's ABI decides it, KR-93 — so the type-associated constant this case used to carry became
+// a second assertion, which names its instance the same way.)
 type value Cfg {
     public int32 x;
     public ctor make() { this.x = 0; }
-    public comptime usize UNIT = sizeof(Box<uint16>);
+    comptime assert(cond: sizeof(Box<uint16>) == 2, msg: "a two-byte Box");
     comptime assert(cond: sizeof(Box<int64>) == 8, msg: "an eight-byte Box");
 }
 
@@ -49,10 +51,10 @@ fn int32 main() {
     if (alignof(DynamicArray<int32>) == 0) { bad = bad + 2; }
     if (sizeof(Box<Box<int32>>) != 4) { bad = bad + 4; }
     if (sizeof(Simd<float32>#(4)) != 16) { bad = bad + 8; }
-    // (2) statement scope.
-    comptime usize L = sizeof(Box<uint32>);
+    // (2) statement scope — a `const` local now (a `comptime` one may not hold a struct's size, KR-93).
+    const usize L = sizeof(Box<uint32>);
     comptime assert(cond: sizeof(Box<int16>) == 2, msg: "a two-byte Box");
-    if (L != 4 || Cfg::UNIT != 2) { bad = bad + 16; }
+    if (L != 4) { bad = bad + 16; }
     // (1) + (3)
     if (sizeOfBoxOf(x: 5i64) != 8) { bad = bad + 32; }
     W<int16> w = W::<int16>.make(w: 1i16);
