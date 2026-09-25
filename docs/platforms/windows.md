@@ -381,6 +381,44 @@ Worth knowing before debugging, because each of these produced a confident wrong
   It is the toolchain's, not kama's: kama's own intermediates go beside the output, which is why its
   per-TU `-j` path is unaffected; the single-invocation path (one TU, or `-j 1` with several) is not.
 
+- **`std::fs` permissions are an access list here (KR-92, `0.9.448`).** `File.openWith`, `createDirWith` and
+  `setPermissions` write the nine Unix bits as a protected DACL — the owner (which always keeps the right to
+  change and delete its own file), the file's group and Everyone only when granted something, SYSTEM always,
+  deny entries first where the owner has less than the others — and `stat` maps a DACL back the same way. The
+  mapping, and why each piece is what it is, is the comment block above `kama__acl_build` in
+  `include/kama_os.h`. What is Windows-only about it:
+  - ⚠️ **Everything is in caller buffers, on purpose.** The obvious API (`SetEntriesInAclW`, the MARTA
+    `Get/SetNamedSecurityInfoW`) hands back `LocalAlloc` memory, and `--no-heap` reads this header's text on
+    EVERY target — so a single such call would make `File.openWith` a heap fact on Linux. Those names are
+    listed in `CEmitter::foreignAllocators` so that the day one appears, the build says so
+    (`tools/check-header-scan.sh` plants one). `<aclapi.h>` is also where `rpc.h`'s `#define interface struct`
+    comes from — the macro that broke `std::net` in 0.9.376.
+  - ⚠️ **`SetKernelObjectSecurity`, not `SetSecurityInfo`**: the MARTA call propagates inheritable entries to
+    a directory's existing children (slow, and a surprise); the kernel call sets the one object.
+  - **An existing file is given the list of ITS owner and group**, read from the file, not the caller's —
+    `chmod` semantics. A new file names the caller's token user as owner explicitly, so an elevated
+    administrator's file belongs to the user and not to Administrators (the token's default owner). An
+    existing file the caller may write but not re-list (a shared file someone else owns) is accepted only when
+    its list already reads back as exactly the bits asked for — what POSIX does, where the `fchmod` is skipped
+    when nothing would change and refused to a non-owner otherwise.
+  - **The group maps weakly.** A file's group is usually the machine's "None" (or "Domain Users"), which every
+    local user is in, so group bits are close to other bits here. When a token's primary group IS the user
+    (a service running as SYSTEM), there is no separate group entry and the group bits echo the owner's.
+  - **Read-back**: owner bits come from entries naming the owner or an every-user group (Everyone,
+    Authenticated Users, Users), deny before allow, in list order, as Windows' own access check decides. A
+    FILE's DOS read-only attribute clears every write bit, and `setPermissions` clears the attribute when it
+    grants any write bit; a directory's is left alone both ways, because Windows does not honor it there
+    (Explorer sets it to mark a customized folder). A list this process may not read (another user's private
+    file) falls back to the CRT's `st_mode`.
+  - `tools/check-windows-acl.sh` (Windows only) reads the result back through Windows itself — SDDL via
+    PowerShell's `Get-Acl`, so no locale renames "Everyone" — and requires exactly owner + SYSTEM for a private
+    file.
+  - ⚠️ **As of `0.9.448` none of this has RUN on Windows.** It compiles and links for `x86_64-windows-gnu`
+    (`tools/check-target.sh` §6 cross-builds `tests/fs_permissions.kama` with zig on every box that has it),
+    and the POSIX half passes everywhere, but the first run of `tests/fs_permissions.kama` and
+    `check-windows-acl.sh` on this box is owed — and with it, that `ssh-keygen -y -f <a kama-written key>`
+    accepts the key, which is what the row was filed for.
+
 ## Where the remaining work is
 
 **The suite is green here: 1583 passed, 0 failed** (`./run_tests.sh`, ~1819 s — 1409 s of fixtures after

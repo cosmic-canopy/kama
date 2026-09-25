@@ -15,7 +15,7 @@ import {
 };
 
 export { File, OpenMode, Metadata, Permissions, readFile, writeFile, readText, writeText, stat, readDir, remove,
-         createDir, createDirAll, removeDir, removeDirAll, rename, exists };
+         createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
@@ -23,6 +23,9 @@ extern "kama_os.h";
 extern fn int32  kama_open_read(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_create(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_append(UnsafeConstPtr<cchar> path);
+extern fn int32  kama_open_create_mode(UnsafeConstPtr<cchar> path, uint32 mode, int32 append);
+extern fn int32  kama_mkdir_mode(UnsafeConstPtr<cchar> path, uint32 mode);
+extern fn int32  kama_set_permissions(UnsafeConstPtr<cchar> path, uint32 mode);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize  kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
@@ -150,6 +153,30 @@ type resource File implements Reader, Writer {
             case Write:  kama_open_create(path: path.cstr());
             case Append: kama_open_append(path: path.cstr());
         };
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: File.make(fd: fd));
+    }
+
+    // Open for writing with EXACTLY these permissions — the form for a file whose permissions matter (a
+    // secret, a key, an executable script). `Write` creates or truncates, `Append` creates or appends; `Read`
+    // creates nothing, so it takes no permissions and is `Err(InvalidInput)`.
+    //
+    // Exact, on every platform: the umask does not narrow what is asked for (a plain `open` is the call it
+    // narrows), and a file that already exists is given the permissions BEFORE it is truncated or written —
+    // so a secret never lands in a file someone else could already read. That is the gap Go documents and
+    // leaves open (`O_TRUNC` keeps the old mode). A filesystem that cannot hold the permissions (FAT, some
+    // network mounts) makes this an error, never a file left open; a file this call made is removed again.
+    //
+    // ⚠️ What no permission can revoke: a process that already had the file open before this call keeps
+    // reading through its descriptor. For a secret that must never have been readable, write a new file (a
+    // fresh name) and `rename` it into place.
+    //
+    // On Windows the bits become an access list — the owner and SYSTEM always, the group and Everyone only
+    // for the bits they are given, inheriting nothing wider — see `Permissions` and kama_os.h.
+    public unsafe ctor Result<File, IoError> openWith(const ref string path, OpenMode mode, Permissions permissions) {
+        if (mode == OpenMode::Read) { return Result::Err(error: IoError::InvalidInput); }
+        int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(),
+                                         append: mode == OpenMode::Append ? 1 : 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
     }
@@ -316,6 +343,23 @@ unsafe fn bool exists(const ref string path) {
 // parents.
 unsafe fn Result<Unit, IoError> createDir(const ref string path) {
     if (kama_mkdir(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Create ONE directory with EXACTLY these permissions — `createDir`'s form for a directory that must stay
+// private (`0o700` for a key store). Exact as `File.openWith` is: the umask does not narrow it, and a filesystem
+// that cannot hold the permissions is an error — the directory this call made is removed again.
+unsafe fn Result<Unit, IoError> createDirWith(const ref string path, Permissions permissions) {
+    if (kama_mkdir_mode(path: path.cstr(), mode: permissions.mode()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Set a path's permissions — exactly, and checked afterwards: a filesystem that cannot hold them is an error,
+// not a silent no-op. It follows a link, as `chmod` does. Changing another user's file is PermissionDenied. On
+// Windows, granting the owner write also clears the old DOS read-only attribute, which would otherwise still
+// refuse the write the new permissions allow.
+unsafe fn Result<Unit, IoError> setPermissions(const ref string path, Permissions permissions) {
+    if (kama_set_permissions(path: path.cstr(), mode: permissions.mode()) != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Unit::Unit);
 }
 

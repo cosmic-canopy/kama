@@ -68,6 +68,26 @@ if ! grep -qF 'malloc' "$tmp/planted.err"; then
     fail "the planted allocation was refused without naming \`malloc\` — the message must name the CAUSE, which is the half of KR-74 that makes a verdict auditable"
 fi
 
+# 2b. A WIN32 ALLOCATOR NO HEADER CALLS YET (KR-92). The permissions seam is where one was a single edit away —
+#     the obvious way to build an access list is `SetEntriesInAclW`, which hands back LocalAlloc memory — so
+#     CEmitter::foreignAllocators lists the Win32 calls that always allocate BEFORE a header reaches them. This
+#     plants the call and requires the refusal; with the name missing from the list, the program BUILDS, which
+#     is what this case is for (measured: it built before KR-92 added the names).
+{ cat "$tmp/kama_runtime.h.orig"
+  printf '#ifndef PROBE_PLANTED\n#define PROBE_PLANTED\nstatic inline void* probe_planted_alloc(size_t n) { extern void* LocalAlloc(unsigned, size_t); return LocalAlloc(0u, n); }\n#endif\n'
+} > "$tmp/stage/kama_runtime.h"
+# `check`, not `build`: off Windows `LocalAlloc` does not LINK, so a build fails whether or not the scan refused
+# it — and the name is in the linker's error too, which is how this case first passed vacuously on macOS with
+# the name removed from the list. `check` is the analysis alone: accepted, or refused by the scan.
+if "$STAGED" check "$tmp/prog.kama" >/dev/null 2>"$tmp/planted2.err"; then
+    fail "a \`@noheap\` body reached a header function that calls LocalAlloc, and it was ACCEPTED — CEmitter::foreignAllocators is missing the Win32 allocators, so a Windows-only heap fact passes on every target"
+fi
+if ! grep -qF 'LocalAlloc' "$tmp/planted2.err"; then
+    echo "  $(cat "$tmp/planted2.err")" >&2
+    fail "the planted LocalAlloc was refused without naming it — the message must name the CAUSE"
+fi
+cp "$tmp/kama_runtime.h.orig" "$tmp/stage/kama_runtime.h"
+
 # 3. THE FUNNEL IS NOT A FOREIGN HEAP — the distinction the whole row turns on, checked on the staged tree so
 #    it cannot pass by accident of the worktree. A pool-backed program that formats a number draws from the
 #    pool and must BUILD; the same program reaching a foreign allocator must not. (tests/noheap_pool_fmt.d and

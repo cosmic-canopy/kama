@@ -12177,6 +12177,10 @@ int main(int argc, char** argv)
         // (kama_args_init, kama_runtime.h). mingw-w64 links shell32 by default; zig's cross line is its
         // own, so say it — same rule, same pruning.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lshell32 ";
+        // std::fs's permissions (KR-92) are an access list on Windows — InitializeAcl, CreateWellKnownSid,
+        // GetTokenInformation, Set/GetKernelObjectSecurity — which live in advapi32.dll. Both toolchains link it
+        // by default today; said anyway, like shell32, so the rule does not rest on a default.
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-ladvapi32 ";
         // The C++ RUNTIME, by the same rule as -lpthread above: link non-system runtime statically, so a
         // binary depends only on what the target OS already has. Measured on the Windows box verifying
         // KR-71: tests/csources_cxx.d built here imported libstdc++-6.dll AND libgcc_s_seh-1.dll out of

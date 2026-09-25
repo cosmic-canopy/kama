@@ -16,6 +16,7 @@
 // refused here, which is why `createDirAll` and `removeDirAll` are not in this fixture.
 import { std::fs::File, std::fs::OpenMode, std::fs::exists, std::fs::stat,
          std::fs::createDir, std::fs::removeDir, std::fs::rename, std::fs::remove,
+         std::fs::Permissions, std::fs::setPermissions, std::fs::createDirWith,
          std::io::IoError };
 
 fn bool ok(Result<Unit, IoError> r) {
@@ -57,6 +58,23 @@ fn int32 main() {
         case Err(error: e): 8;
     };
     if (sz != 0) { return sz; }
+
+    // KR-92: permissions, set at creation and after — the Windows branch builds its access list in the
+    // caller's frame (kama_os.h), so these stay heap-free on every target too.
+    Permissions priv = Permissions::OwnerRead | Permissions::OwnerWrite;
+    match (File.openWith(path: "nh/p", mode: OpenMode::Write, permissions: priv)) {
+        case Err(error: e): { return 15; }
+        case Ok(value: f): { }
+    };
+    int32 pm = match (stat(path: "nh/p")) {
+        case Ok(value: m): (m.permissions == priv ? 0 : 16);
+        case Err(error: e): 17;
+    };
+    if (pm != 0) { return pm; }
+    if (!ok(r: setPermissions(path: "nh/p", permissions: Permissions::OwnerRead))) { return 18; }
+    if (!ok(r: remove(path: "nh/p"))) { return 19; }
+    if (!ok(r: createDirWith(path: "nh/d", permissions: priv | Permissions::OwnerExecute))) { return 20; }
+    if (!ok(r: removeDir(path: "nh/d"))) { return 21; }
 
     if (!ok(r: rename(from: "nh/a", to: "nh/b"))) { return 9; }
     if (exists(path: "nh/a"))  { return 10; }

@@ -16,6 +16,7 @@
 // VISIBLE ceiling, not the first one reached — the probe never gets that far. Both are fixed by the same
 // wide seam; the ordering claim was simply wrong, and is recorded here so it is not re-derived.
 import { core::args, core::print, std::fs::File, std::fs::OpenMode,
+         std::fs::Permissions, std::fs::setPermissions, std::fs::createDirWith,
          std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::remove, std::fs::readDir,
          std::fs::writeFile, std::fs::writeText, std::fs::readFile,
@@ -95,6 +96,31 @@ fn int32 main() {
         case Err(error: e): 11;
     };
     if (stFile != 0) { return stFile; }
+
+    // ---- permissions on the deep path (KR-92): made, read back and changed through the same wide seam ----
+    string pf = join(path: deep, with: "private.txt");
+    Permissions priv = Permissions::OwnerRead | Permissions::OwnerWrite;
+    match (File.openWith(path: pf, mode: OpenMode::Write, permissions: priv)) {
+        case Err(error: e): { return 40; }
+        case Ok(value: fh): { }
+    };
+    int32 pm = match (stat(path: pf)) {
+        case Ok(value: m): (m.permissions == priv ? 0 : 41);
+        case Err(error: e): 42;
+    };
+    if (pm != 0) { return pm; }
+    match (setPermissions(path: pf, permissions: Permissions::OwnerRead)) {
+        case Err(error: e): { return 43; }
+        case Ok(value: u): { }
+    };
+    match (remove(path: pf)) {
+        case Err(error: e): { return 44; }
+        case Ok(value: u): { }
+    };
+    match (createDirWith(path: join(path: deep, with: "private.d"), permissions: priv | Permissions::OwnerExecute)) {
+        case Err(error: e): { return 45; }
+        case Ok(value: u): { }
+    };
 
     // ---- readDir: the site that fails first on an unfixed Windows ----------------------------
     int32 seen = match (readDir(path: deep)) {

@@ -1822,6 +1822,27 @@ Users and Users, the every-user groups) — and the DOS read-only attribute clea
 process may not read falls back to what the C runtime reports. An `EPERM` ("not permitted", what changing
 another user's file answers) is `IoError::PermissionDenied`, as `EACCES` is.
 
+**Setting permissions.** `File.openWith(path:, mode:, permissions:)` opens for writing with EXACTLY the
+permissions given — `Write` creates or truncates, `Append` creates or appends, and `Read`, which creates <!-- test: fs_permissions -->
+nothing, is `Err(InvalidInput)`. `createDirWith(path:, permissions:)` is `createDir`'s form, and
+`setPermissions(path:, permissions:)` changes a path's (following a link, as `chmod` does). The permissions are
+applied at creation, never by a create and then a change — the race in which a secret sits readable. EXACT
+means what it says, on every platform: the umask does not narrow an explicit request (a plain create is what it
+narrows, below), and a file that already exists is given the permissions before it is truncated or written, so
+a secret never lands in a file someone else could already read — the gap Go documents and leaves open, since
+`O_TRUNC` keeps the old mode. A file that already holds exactly the permissions asked for is left as it is, so
+a group member may write a shared file it does not own; changing a file this process does not own is
+`PermissionDenied`, as `chmod` is. Each call reads back what the filesystem kept and fails when it differs, so a
+volume that cannot hold permissions (FAT, some network mounts) never yields a file left open, and a file or
+directory the call made is removed again. What no permission can revoke is a descriptor another process opened earlier; for a secret,
+write a fresh name and `rename` it into place. On Windows the bits become an access list — Cygwin's mapping:
+an entry for the owner (which always keeps the right to change and delete its own file), for the file's group
+and for Everyone only when they are granted something, SYSTEM always, deny entries first where an owner has
+less than the others, and protected from inheriting anything wider. A private file is therefore owner + SYSTEM,
+the set Win32-OpenSSH accepts for a private key; Administrators get no entry and can take ownership of any file,
+as root reads any file. The group maps weakly there (a file's group is usually "None", which every local user
+belongs to). The wasm target's virtual filesystem stores and reports the bits.
+
 **A new file's permissions.** A plain create — `File.open` with `Write` or `Append`, `writeFile`, `writeText` —
 asks for `rw-rw-rw-` and lets the process umask narrow it (`rw-r--r--` under the usual `022`, `rw-rw-r--` <!-- test: fs_umask -->
 under a group-shared `002`), and a directory asks for `rwxrwxrwx` the same way: the default of C `fopen`, Go,

@@ -1,0 +1,124 @@
+// KR-92: `File.openWith`, `createDirWith` and `setPermissions` — a file with EXACTLY the permissions asked for,
+// set at creation (never a create followed by a `chmod`: the race in which a secret sits world-readable), on
+// every platform. Exact means what it says: the umask does not narrow an explicit request (a plain `open` is
+// the one it narrows), and a file that already exists is given the permissions before it is truncated or
+// written — the gap Go documents and leaves open, since `O_TRUNC` keeps the old mode. On Windows the same bits
+// are written and read back as an access list; tools/check-windows-acl.sh reads that list with `icacls`.
+import { std::fs::File, std::fs::OpenMode, std::fs::Permissions, std::fs::stat, std::fs::remove,
+         std::fs::createDirWith, std::fs::removeDir, std::fs::setPermissions, std::fs::readText,
+         std::io::IoError };
+
+// The nine bits `stat` reads back, or -1.
+unsafe fn int32 modeOf(const ref string path) {
+    return match (stat(path: path)) {
+        case Ok(value: m): cast<int32>(m.permissions.mode());
+        case Err(error: e): -1;
+    };
+}
+
+unsafe fn int32 put(ref File f, const ref string text) {
+    return match (f.write(bytes: text.bytes())) { case Ok(value: n): 0; case Err(error: e): 1; };
+}
+
+unsafe fn int32 run() {
+    Permissions priv = Permissions::OwnerRead | Permissions::OwnerWrite;                        // rw-------
+    Permissions shared = priv | Permissions::GroupRead | Permissions::GroupWrite | Permissions::OtherRead;
+    string f = "_fs_permissions_key.txt";
+
+    // 1. A new private file is born private.
+    match (File.openWith(path: f, mode: OpenMode::Write, permissions: priv)) {
+        case Ok(value: fh): { if (put(f: ref fh, text: "secret") != 0) { return 1; } }
+        case Err(error: e): { return 2; }
+    };
+    if (modeOf(path: f) != 0o600) { return 3; }
+
+    // 2. An existing, WIDER file opened through `openWith` is narrowed before the write, and truncated.
+    match (setPermissions(path: f, permissions: priv | Permissions::GroupRead | Permissions::OtherRead)) {
+        case Ok(value: u): { }
+        case Err(error: e): { return 4; }
+    };
+    if (modeOf(path: f) != 0o644) { return 5; }
+    match (File.openWith(path: f, mode: OpenMode::Write, permissions: priv)) {
+        case Ok(value: fh): { if (put(f: ref fh, text: "new") != 0) { return 6; } }
+        case Err(error: e): { return 7; }
+    };
+    if (modeOf(path: f) != 0o600) { return 8; }
+    match (readText(path: f)) {
+        case Ok(value: t): { if (t != "new") { return 9; } }
+        case Err(error: e): { return 10; }
+    };
+
+    // 3. Exact: a group-writable request is kept as asked, whatever the umask would have trimmed.
+    match (remove(path: f)) { case Ok(value: u): { } case Err(error: e): { return 11; } };
+    match (File.openWith(path: f, mode: OpenMode::Write, permissions: shared)) {
+        case Ok(value: fh): { }
+        case Err(error: e): { return 12; }
+    };
+    if (modeOf(path: f) != 0o664) { return 13; }
+
+    // 4. `Append` creates with the permissions, then appends.
+    string log = "_fs_permissions_log.txt";
+    match (File.openWith(path: log, mode: OpenMode::Append, permissions: priv)) {
+        case Ok(value: fh): { if (put(f: ref fh, text: "a") != 0) { return 14; } }
+        case Err(error: e): { return 15; }
+    };
+    match (File.openWith(path: log, mode: OpenMode::Append, permissions: priv)) {
+        case Ok(value: fh): { if (put(f: ref fh, text: "b") != 0) { return 16; } }
+        case Err(error: e): { return 17; }
+    };
+    match (readText(path: log)) {
+        case Ok(value: t): { if (t != "ab") { return 18; } }
+        case Err(error: e): { return 19; }
+    };
+    if (modeOf(path: log) != 0o600) { return 20; }
+
+    // 5. `Read` creates nothing, so it takes no permissions.
+    match (File.openWith(path: f, mode: OpenMode::Read, permissions: priv)) {
+        case Ok(value: fh): { return 21; }
+        case Err(error: e): { match (e) { case InvalidInput: { } case _: { return 22; } }; }
+    };
+
+    // 6. `setPermissions` round trips — down to nothing and back, since an owner can always change its own file.
+    match (setPermissions(path: f, permissions: Permissions::OwnerRead)) { case Ok(value: u): { } case Err(error: e): { return 23; } };
+    if (modeOf(path: f) != 0o400) { return 24; }
+    match (Permissions.fromMode(mode: 0)) {
+        case Ok(value: none): {
+            match (setPermissions(path: f, permissions: none)) { case Ok(value: u): { } case Err(error: e): { return 25; } };
+        }
+        case Err(error: e): { return 25; }
+    };
+    if (modeOf(path: f) != 0) { return 26; }
+    Permissions exec = Permissions::OwnerRead | Permissions::OwnerWrite | Permissions::OwnerExecute
+                     | Permissions::GroupRead | Permissions::GroupExecute | Permissions::OtherRead | Permissions::OtherExecute;
+    match (setPermissions(path: f, permissions: exec)) { case Ok(value: u): { } case Err(error: e): { return 27; } };
+    if (modeOf(path: f) != 0o755) { return 28; }
+
+    // 7. A private directory.
+    string d = "_fs_permissions_dir";
+    match (createDirWith(path: d, permissions: priv | Permissions::OwnerExecute)) {
+        case Ok(value: u): { }
+        case Err(error: e): { return 29; }
+    };
+    if (modeOf(path: d) != 0o700) { return 30; }
+    match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { return 31; } };
+
+    // 8. A directory its owner may enter and add to but not list — the drop-box shape. Setting a mode takes a
+    //    descriptor on the directory, which needs read to open, so this is the case that proves the owner holds
+    //    read only for that moment (it is refused to anyone but root otherwise).
+    Permissions dropBox = Permissions::OwnerWrite | Permissions::OwnerExecute;                  // -wx------
+    match (createDirWith(path: d, permissions: dropBox)) {
+        case Ok(value: u): { }
+        case Err(error: e): { return 34; }
+    };
+    if (modeOf(path: d) != 0o300) { return 35; }
+    match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { return 36; } };
+
+    match (remove(path: f)) { case Ok(value: u): { } case Err(error: e): { return 32; } };
+    match (remove(path: log)) { case Ok(value: u): { } case Err(error: e): { return 33; } };
+    return 0;
+}
+
+fn int32 main() {
+    int32 r = run();
+    return r == 0 ? 42 : r;
+}

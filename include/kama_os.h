@@ -364,18 +364,20 @@ static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* m
     *mode = kama__sd_mode(sd, groupIsOwner);
     return 0;
 }
-// The nine bits of a path: its access list, read back, with the DOS read-only attribute clearing every write
-// bit (as the CRT's own `st_mode` does, and Cygwin). A list this process may not read — another user's
-// private file — falls back to what the CRT reports (read/write from the attribute, execute from the
-// extension): an approximation, and documented as one.
+// The nine bits of a path: its access list, read back, with a file's DOS read-only attribute clearing every
+// write bit (as the CRT's own `st_mode` does, and Cygwin) — a FILE's: Windows does not honor the attribute on
+// a directory (Explorer sets it there to mark a customized folder), so it clears nothing there. A list this
+// process may not read — another user's private file — falls back to what the CRT reports (read/write from
+// the attribute, execute from the extension): an approximation, and documented as one.
 static inline uint32_t kama__path_mode(const wchar_t* w, unsigned short crtMode)
 {
+    const int dir = (crtMode & _S_IFDIR) != 0, readOnly = !dir && !(crtMode & _S_IWRITE);
     uint32_t mode = 0; int same = 0;
     const int e = errno;
     if (kama__sd_read_mode(NULL, w, &mode, &same) != 0)
-        mode = ((crtMode & _S_IREAD) ? 0444u : 0u) | ((crtMode & _S_IWRITE) ? 0222u : 0u) | ((crtMode & _S_IEXEC) ? 0111u : 0u);
+        mode = ((crtMode & _S_IREAD) ? 0444u : 0u) | (readOnly ? 0u : 0222u) | ((crtMode & _S_IEXEC) ? 0111u : 0u);
     errno = e;   // the stat succeeded; an unreadable list is not its error
-    if (!(crtMode & _S_IWRITE)) mode &= ~0222u;
+    if (readOnly) mode &= ~0222u;
     return mode;
 }
 
@@ -393,6 +395,209 @@ KAMA_NOINLINE static int32_t kama_path_meta(const char* path, uint64_t* outSize,
     *outMode = kama__path_mode(w, (unsigned short)st.st_mode);
     return 0;
 }
+
+// The write side of the mapping above (KR-92): the bits become an access list.
+#define KAMA__OWNER_KEEPS (READ_CONTROL | WRITE_DAC | WRITE_OWNER | DELETE | FILE_READ_ATTRIBUTES \
+                           | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE)
+static inline DWORD kama__acl_allow(uint32_t rwx, int isDir)
+{
+    DWORD m = 0;
+    if (rwx & 4) m |= FILE_GENERIC_READ;
+    if (rwx & 2) m |= FILE_GENERIC_WRITE | (isDir ? FILE_DELETE_CHILD : 0);
+    if (rwx & 1) m |= FILE_GENERIC_EXECUTE;
+    return m;
+}
+static inline DWORD kama__acl_deny(uint32_t rwx, int isDir)
+{
+    DWORD m = 0;
+    if (rwx & 4) m |= FILE_READ_DATA | FILE_READ_EA;
+    if (rwx & 2) m |= FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | (isDir ? FILE_DELETE_CHILD : 0);
+    if (rwx & 1) m |= FILE_EXECUTE;
+    return m;
+}
+#define KAMA__ACL_CAP 1024   /* at most six entries of < 100 bytes each */
+static inline int kama__acl_build(PACL acl, uint32_t mode, int isDir, PSID owner, PSID group, kama__wk* k)
+{
+    if (!InitializeAcl(acl, KAMA__ACL_CAP, ACL_REVISION)) return -1;
+    const uint32_t u = (mode >> 6) & 7u, g = (mode >> 3) & 7u, o = mode & 7u;
+    const int groupOwn = group && !EqualSid(owner, group);
+    const uint32_t ownerDeny = (g | o) & ~u & 7u, groupDeny = o & ~g & 7u;
+    if (ownerDeny && !AddAccessDeniedAceEx(acl, ACL_REVISION, 0, kama__acl_deny(ownerDeny, isDir), owner)) return -1;
+    if (groupOwn && groupDeny && !AddAccessDeniedAceEx(acl, ACL_REVISION, 0, kama__acl_deny(groupDeny, isDir), group)) return -1;
+    if (!AddAccessAllowedAceEx(acl, ACL_REVISION, 0, kama__acl_allow(u, isDir) | KAMA__OWNER_KEEPS, owner)) return -1;
+    if (groupOwn && g && !AddAccessAllowedAceEx(acl, ACL_REVISION, 0, kama__acl_allow(g, isDir), group)) return -1;
+    if (o && !AddAccessAllowedAceEx(acl, ACL_REVISION, 0, kama__acl_allow(o, isDir), (PSID)k->world)) return -1;
+    if (!AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, (PSID)k->system)) return -1;
+    return 0;
+}
+// Does the handle's list already grant exactly `mode`? With one SID for owner and group, the group bits echo
+// the owner's, so only the bits the list can say apart are compared. 1 yes, 0 no, -1 with errno set.
+static inline int kama__mode_is(HANDLE h, const wchar_t* w, uint32_t mode)
+{
+    uint32_t got = 0; int same = 0;
+    if (kama__sd_read_mode(h, w, &got, &same) != 0) return -1;
+    const uint32_t cmp = same ? 0707u : 0777u;
+    return (got & cmp) == (mode & cmp);
+}
+// Write `mode` onto an open handle, for the file's OWN owner and group (a file this process did not create
+// may belong to someone else), then read it back and compare. -1 with errno set: EACCES when the caller may
+// not change the list, EPERM when the volume kept something else.
+static inline int32_t kama__apply_mode(HANDLE h, uint32_t mode, int isDir)
+{
+    BYTE cur[512]; DWORD need = 0;
+    if (!GetKernelObjectSecurity(h, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION, cur, sizeof cur, &need)) {
+        errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1;
+    }
+    PSID owner = NULL, group = NULL; BOOL def;
+    GetSecurityDescriptorOwner(cur, &owner, &def);
+    GetSecurityDescriptorGroup(cur, &group, &def);
+    if (!owner) { errno = EPERM; return -1; }   // a volume with no owners keeps no lists either
+    kama__wk k; if (kama__wk_init(&k) != 0) { errno = EINVAL; return -1; }
+    BYTE aclbuf[KAMA__ACL_CAP];
+    if (kama__acl_build((PACL)aclbuf, mode, isDir, owner, group, &k) != 0) { errno = EINVAL; return -1; }
+    SECURITY_DESCRIPTOR sd;
+    if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
+        || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+    if (!SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &sd)
+        && !SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION, &sd)) {
+        errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EPERM; return -1;
+    }
+    const int is = kama__mode_is(h, NULL, mode);
+    if (is < 0) return -1;
+    if (!is) { errno = EPERM; return -1; }
+    return 0;
+}
+// The process's own user and primary group, for a NEW file's owner and group entries — named in the
+// descriptor, so the owner entry matches the file's owner even for an elevated administrator, whose new
+// objects would otherwise belong to Administrators.
+typedef struct kama__tokid { BYTE user[256]; BYTE group[256]; } kama__tokid;
+static inline int kama__token_ids(kama__tokid* t, PSID* user, PSID* group)
+{
+    HANDLE tok; DWORD n;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return -1;
+    int ok = GetTokenInformation(tok, TokenUser, t->user, sizeof t->user, &n)
+          && GetTokenInformation(tok, TokenPrimaryGroup, t->group, sizeof t->group, &n);
+    CloseHandle(tok);
+    if (!ok) return -1;
+    *user = ((TOKEN_USER*)t->user)->User.Sid;
+    *group = ((TOKEN_PRIMARY_GROUP*)t->group)->PrimaryGroup;
+    return 0;
+}
+// Create or open a file for writing with exactly `mode`. A new file is born with its list (`CREATE_NEW` +
+// the descriptor — never a create followed by a separate write, the race `chmod` has); an existing one is
+// opened without truncating, given its list, checked, and only then emptied. A new file that fails the check
+// is deleted. An existing file this process may write but not re-list (a shared file someone else owns) is
+// accepted only when it already holds exactly `mode` — POSIX's answer too, where `fchmod` is skipped when
+// nothing would change and refused to a non-owner otherwise. Hands back a CRT descriptor, as every other open
+// here does.
+KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t append)
+{
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    const DWORD access = GENERIC_WRITE | READ_CONTROL | WRITE_DAC;
+    const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    kama__tokid t; PSID user, group; kama__wk k; BYTE aclbuf[KAMA__ACL_CAP]; SECURITY_DESCRIPTOR sd;
+    if (kama__token_ids(&t, &user, &group) != 0 || kama__wk_init(&k) != 0
+        || kama__acl_build((PACL)aclbuf, mode, 0, user, group, &k) != 0
+        || !InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
+        || !SetSecurityDescriptorOwner(&sd, user, FALSE) || !SetSecurityDescriptorGroup(&sd, group, FALSE)
+        || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+    SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
+    int made = 1, relist = 1;
+    HANDLE h = CreateFileW(w, access, share, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
+        made = 0;
+        h = CreateFileW(w, access, share, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED) {
+            relist = 0;
+            h = CreateFileW(w, access & ~(DWORD)WRITE_DAC, share, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        }
+    }
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES : EINVAL;
+        return -1;
+    }
+    int bad = 0;
+    if (made || !relist) {   // a new file: check what the volume actually kept; a shared one: that it already holds `mode`
+        const int is = kama__mode_is(h, NULL, mode);
+        if (is <= 0) { if (is == 0) errno = made ? EPERM : EACCES; bad = -1; }
+    } else {
+        bad = kama__apply_mode(h, mode, 0);
+    }
+    if (!bad && !made && !append) {
+        LARGE_INTEGER zero; zero.QuadPart = 0;
+        if (!SetFilePointerEx(h, zero, NULL, FILE_BEGIN) || !SetEndOfFile(h)) { errno = EACCES; bad = -1; }
+    }
+    if (bad) {
+        int e = errno;
+        CloseHandle(h);
+        if (made) DeleteFileW(w);
+        errno = e;
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | _O_WRONLY | (append ? _O_APPEND : 0));
+    if (fd < 0) { int e = errno; CloseHandle(h); if (made) DeleteFileW(w); errno = e; return -1; }
+    return (int32_t)fd;
+}
+// A directory born with its list, checked by path; one that fails the check is removed again.
+KAMA_NOINLINE static int32_t kama_mkdir_mode(const char* path, uint32_t mode)
+{
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    kama__tokid t; PSID user, group; kama__wk k; BYTE aclbuf[KAMA__ACL_CAP]; SECURITY_DESCRIPTOR sd;
+    if (kama__token_ids(&t, &user, &group) != 0 || kama__wk_init(&k) != 0
+        || kama__acl_build((PACL)aclbuf, mode, 1, user, group, &k) != 0
+        || !InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
+        || !SetSecurityDescriptorOwner(&sd, user, FALSE) || !SetSecurityDescriptorGroup(&sd, group, FALSE)
+        || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+    SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
+    if (!CreateDirectoryW(w, &sa)) {
+        DWORD e = GetLastError();
+        errno = e == ERROR_ALREADY_EXISTS ? EEXIST : e == ERROR_PATH_NOT_FOUND ? ENOENT
+              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL;
+        return -1;
+    }
+    const int is = kama__mode_is(NULL, w, mode);
+    if (is <= 0) {
+        const int e = is == 0 ? EPERM : errno;
+        RemoveDirectoryW(w);
+        errno = e;
+        return -1;
+    }
+    return 0;
+}
+// `setPermissions`: the list, on a handle opened for exactly that, and — when any class gets write — a
+// file's old DOS read-only attribute cleared, since it would still refuse every write the new bits grant. A
+// directory keeps its attribute: Windows does not honor it there. The attribute is cleared by path, after the
+// new list has granted the owner FILE_WRITE_ATTRIBUTES, so the handle asks for no more than it needs.
+KAMA_NOINLINE static int32_t kama_set_permissions(const char* path, uint32_t mode)
+{
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    HANDLE h = CreateFileW(w, READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL;
+        return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION fi;
+    if (!GetFileInformationByHandle(h, &fi)) { CloseHandle(h); errno = EACCES; return -1; }
+    const DWORD attrs = fi.dwFileAttributes;
+    const int isDir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const int32_t rc = kama__apply_mode(h, mode, isDir);
+    const int e = errno;
+    CloseHandle(h);
+    if (rc != 0) { errno = e; return -1; }
+    if (!isDir && (mode & 0222u) && (attrs & FILE_ATTRIBUTE_READONLY)
+        && !SetFileAttributesW(w, attrs & ~(DWORD)FILE_ATTRIBUTE_READONLY)) { errno = EACCES; return -1; }
+    return 0;
+}
+
 // Directory creation, rename and existence. `_wmkdir` takes no mode on Windows; `MoveFileExW` with
 // REPLACE_EXISTING is what makes rename overwrite as POSIX's does (plain MoveFileW fails on an existing
 // destination, which would have made the same kama call behave differently per platform).
@@ -906,6 +1111,7 @@ extern int   fork(void);
 extern void  _exit(int);
 extern int   kill(int, int);
 extern int   fcntl(int, int, ...);
+extern int   ftruncate(int, off_t);              // <unistd.h>'s (KR-92: `File.openWith` empties a file only after its mode is set)
 extern char** environ;
 
 // ---- errno / last-error ----------------------------------------------------
@@ -977,6 +1183,82 @@ static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_
 // Windows branch has to ask for that explicitly to match.
 static inline int32_t kama_mkdir(const char* path) { return (int32_t)mkdir(path, 0777); }
 static inline int32_t kama_rmdir(const char* path) { return (int32_t)rmdir(path); }
+
+// ---- permissions (KR-92) ------------------------------------------------------------------------------------
+// A plain create asks for 0666 (above) and the process umask narrows it — the default of C `fopen`, Go, Rust,
+// Python, Node, Zig, Java and .NET. `permissions:` is different, and EXACT (the maintainer's ruling): what the
+// code says is what the file holds, on every platform, whether the call created the file or found it. The
+// umask is the user's standing policy for DEFAULTS; an explicit request is the program's, and `install -m`,
+// `mkdir -m` and `cp -p` already set exact modes. Exactness also closes the gap Go documents and leaves open:
+// `O_TRUNC` keeps an existing file's mode, so a secret written through it lands in whatever the file was.
+//
+// The order is the point:
+//   1. `O_CREAT|O_EXCL` — this call made the file, so a failure below may remove it again;
+//   2. otherwise open WITHOUT `O_TRUNC` — an existing file is not emptied until its mode is right;
+//   3. `fchmod` to exactly `mode` when it differs, then `fstat` again — a filesystem that cannot hold a mode
+//      (FAT, some network mounts) either refuses or silently keeps its own, and the second answer is what
+//      turns that into EPERM instead of a file left open;
+//   4. only then `ftruncate` — a failed call never truncates a file it could not make private.
+// A dangling link fails `O_EXCL` (EEXIST) and then the plain open (ENOENT): the last attempt is an ordinary
+// `O_CREAT` open, which makes the link's target, and is treated as found rather than made.
+static inline int32_t kama__mode_exact(int fd, uint32_t mode)
+{
+    struct stat st;
+    if (fstat(fd, &st) != 0) return -1;
+    if (((uint32_t)st.st_mode & 0777u) == mode) return 0;
+    if (fchmod(fd, (mode_t)mode) != 0) return -1;
+    if (fstat(fd, &st) != 0) return -1;
+    if (((uint32_t)st.st_mode & 0777u) != mode) { errno = EPERM; return -1; }
+    return 0;
+}
+static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t append)
+{
+    const int flags = O_WRONLY | (append ? O_APPEND : 0);
+    int made = 1;
+    int fd = open(path, flags | O_CREAT | O_EXCL, (mode_t)mode);
+    if (fd < 0 && errno == EEXIST) {
+        made = 0;
+        fd = open(path, flags);
+        if (fd < 0 && errno == ENOENT) fd = open(path, flags | O_CREAT, (mode_t)mode);
+    }
+    if (fd < 0) return -1;
+    if (kama__mode_exact(fd, mode) != 0 || (!append && !made && ftruncate(fd, 0) != 0)) {
+        int e = errno;
+        close(fd);
+        if (made) unlink(path);
+        errno = e;
+        return -1;
+    }
+    return (int32_t)fd;
+}
+// A directory the same way: `mkdir` narrows by the umask like any create, so the mode is set exactly on a
+// descriptor opened with `O_NOFOLLOW` — never by path, which a racing rename could point at something else.
+// Opening a directory needs read on it, so the owner holds read until the descriptor sets the real bits: a
+// bit only the owner gains, for a moment, on a directory the owner could chmod anyway. Without it a mode
+// that gives the owner no read (0o300) could never be set by anyone but root.
+static inline int32_t kama_mkdir_mode(const char* path, uint32_t mode)
+{
+    if (mkdir(path, (mode_t)(mode | 0400u)) != 0) return -1;
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0 || kama__mode_exact(fd, mode) != 0) {
+        int e = errno;
+        if (fd >= 0) close(fd);
+        rmdir(path);
+        errno = e;
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+// `chmod` follows a link, as `setPermissions` means: the permissions of what the path names.
+static inline int32_t kama_set_permissions(const char* path, uint32_t mode)
+{
+    struct stat st;
+    if (chmod(path, (mode_t)mode) != 0 || stat(path, &st) != 0) return -1;
+    if (((uint32_t)st.st_mode & 0777u) != mode) { errno = EPERM; return -1; }
+    return 0;
+}
+
 // Is this path a symlink, WITHOUT following it? `lstat`, not `stat`, and the distinction is the whole
 // point: a recursive delete that follows a link empties a directory somewhere else entirely. That is
 // CVE-2022-21658 in Rust's `remove_dir_all` and the same bug in Go, Python and npm before it.

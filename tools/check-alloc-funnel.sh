@@ -94,6 +94,10 @@ HDR=$(awk '
     /THE ALLOCATION FUNNEL\./           { funnel = 1 }
     funnel && /static inline void  kama_copy/ { funnel = 0 }
     { line = $0; sub(/\/\/.*/, "", line); if (!funnel) print line }' include/*.h)
+# The LEAVES — the platform calls a header really makes — are checked both ways. The list also carries
+# DEFENSIVE names (LocalAlloc, SetEntriesInAclW, … — Win32 calls that always allocate and that no header
+# calls yet, KR-92): they are exempt from the stale half by construction, since their point is to be listed
+# BEFORE a header reaches them. tools/check-header-scan.sh proves a defensive name is enough.
 for n in getaddrinfo GetEnvironmentStringsW opendir pthread_create CreateThread CreateProcessW; do
     reached=$(printf '%s\n' "$HDR" | grep -cE "(^|[^A-Za-z0-9_.>])$n[[:space:]]*\(" || true)
     known=$(printf '%s\n' "$FOREIGN" | grep -cx "$n" || true)

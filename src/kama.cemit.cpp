@@ -26520,7 +26520,7 @@ void CEmitter::resolvePendingFacts(const void* sink, const std::string& text, bo
     }
 }
 
-// The seven names, and why a list is honest here. Everything else about the runtime's allocation is DERIVED
+// The leaf names, and why a list is honest here. Everything else about the runtime's allocation is DERIVED
 // from the headers' own text; these are the leaves that text bottoms out in — libc and Win32 entry points
 // whose bodies kama does not ship and cannot read. A leaf has to be named by somebody, so it is named once,
 // here, rather than 43 times as a `@heap` mark on the kama declaration of each caller.
@@ -26539,6 +26539,18 @@ const std::set<std::string>& CEmitter::foreignAllocators()
         "CreateProcessW",           // kama_os.h: kama_proc_spawn (Win32)
         "malloc", "calloc", "realloc", "strdup", "_strdup", "strndup",
         "aligned_alloc", "_aligned_malloc", "posix_memalign",
+        // DEFENSIVE: Win32 calls that ALWAYS hand back memory of their own, and that no header calls today —
+        // listed so that the day one does, `--no-heap` refuses it instead of accepting a heap fact nobody saw.
+        // The permissions seam (KR-92) is where they were one edit away: the obvious way to build an access
+        // list is `SetEntriesInAclW` + `LocalFree`, and every access-list reader in MARTA allocates. kama_os.h
+        // uses the caller-buffer forms instead; tools/check-header-scan.sh plants a `LocalAlloc` to prove a
+        // name here is enough. tools/check-alloc-funnel.sh stale-checks the LEAVES above, not these.
+        "LocalAlloc", "LocalReAlloc", "GlobalAlloc", "GlobalReAlloc", "HeapAlloc", "HeapReAlloc",
+        "CoTaskMemAlloc", "CommandLineToArgvW", "SHGetKnownFolderPath",
+        "SetEntriesInAclA", "SetEntriesInAclW", "GetNamedSecurityInfoA", "GetNamedSecurityInfoW",
+        "GetSecurityInfo", "AllocateAndInitializeSid", "BuildSecurityDescriptorA", "BuildSecurityDescriptorW",
+        "ConvertStringSecurityDescriptorToSecurityDescriptorA", "ConvertStringSecurityDescriptorToSecurityDescriptorW",
+        "ConvertSidToStringSidA", "ConvertSidToStringSidW", "ConvertStringSidToSidA", "ConvertStringSidToSidW",
     };
     return kForeign;
 }

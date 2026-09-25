@@ -115,6 +115,7 @@ reject() {   # reject <target> <substring> <description> [fixture]
 # 1. WINSOCK — the flagship cross-compilation case. `-lws2_32` must follow the TARGET being Windows,
 #    from any host, and must not appear for any other target.
 want   WINDOWS -lws2_32 "std::net needs Winsock on Windows"
+want   WINDOWS -ladvapi32 "std::fs permissions are an access list on Windows (advapi32)"
 reject LINUX   -lws2_32 "POSIX sockets need no extra library"
 reject MACOS   -lws2_32 "POSIX sockets need no extra library"
 
@@ -450,6 +451,24 @@ if command -v zig >/dev/null 2>&1; then
                 file "$tmp/autogui.exe" | sed 's/^/  /' >&2
                 exit 1
             fi
+            # …and the Windows branch of kama_os.h COMPILES, which nothing else here proves: the fixture
+            # above imports nothing, and kama_os.h's `#if defined(_WIN32)` half is otherwise compiled only
+            # by a Windows host. tests/fs_permissions.kama reaches the access-list seam (KR-92) — the
+            # largest Windows-only body in the header — and std::fs around it. Both architectures: this
+            # host's (what `WINDOWS` names) and x86_64, which is what CI and the release build.
+            for triple in WINDOWS x86_64-windows-gnu; do
+                if ! "$KAMA" build "$ROOT/tests/fs_permissions.kama" --target "$triple" -o "$tmp/fsperm.exe" \
+                     >/dev/null 2>"$tmp/fsperm.err"; then
+                    echo "check-target: FAIL — std::fs does not build for $triple (kama_os.h's Windows branch):" >&2
+                    sed -n '1,20p' "$tmp/fsperm.err" | sed 's/^/  /' >&2
+                    exit 1
+                fi
+                if ! file "$tmp/fsperm.exe" | grep -qi 'MS Windows'; then
+                    echo "check-target: FAIL — --target $triple did not produce a Windows binary:" >&2
+                    file "$tmp/fsperm.exe" | sed 's/^/  /' >&2
+                    exit 1
+                fi
+            done
         fi
     fi
 else

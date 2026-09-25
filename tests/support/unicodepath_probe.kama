@@ -21,6 +21,7 @@
 // names were mojibake before they reached the filesystem — at ANY length, with no MAX_PATH involved.
 import { core::args, std::fs::stat, std::fs::exists, std::fs::createDirAll, std::fs::removeDirAll,
          std::fs::rename, std::fs::readDir, std::fs::writeFile, std::fs::writeText, std::fs::readFile,
+         std::fs::File, std::fs::OpenMode, std::fs::Permissions, std::fs::setPermissions, std::fs::createDirWith,
          std::io::IoError, std::collections::DynamicArray,
          std::path::join };
 
@@ -96,6 +97,24 @@ fn int32 main() {
     // not merely round-trip its own.
     int32 theirs = listedIn(dir: work, want: shellMade(), missCode: 12, errCode: 13);
     if (theirs != 0) { return theirs; }
+
+    // ---- 4b. permissions on a UTF-8 name (KR-92): made, read back and changed through the same wide seam ----
+    string pf = join(path: dir, with: cjk() + "-private.txt");
+    Permissions priv = Permissions::OwnerRead | Permissions::OwnerWrite;
+    match (File.openWith(path: pf, mode: OpenMode::Write, permissions: priv)) {
+        case Err(error: e): { return 40; }
+        case Ok(value: fh): { }
+    };
+    int32 pm = match (stat(path: pf)) {
+        case Ok(value: m): (m.permissions == priv ? 0 : 41);
+        case Err(error: e): 42;
+    };
+    if (pm != 0) { return pm; }
+    match (setPermissions(path: pf, permissions: Permissions::OwnerRead)) { case Err(error: e): { return 43; } case Ok(value: u): { } };
+    match (createDirWith(path: join(path: dir, with: emoji() + "-private"), permissions: priv | Permissions::OwnerExecute)) {
+        case Err(error: e): { return 44; }
+        case Ok(value: u): { }
+    };
 
     // ---- 5. rename between two non-ASCII names ------------------------------------------------
     string f2 = join(path: dir, with: cjk() + emoji() + ".txt");
