@@ -1,0 +1,9 @@
+// KR-93. `extern` marks a TYPE whose layout a C header owns (`type extern value T`) or a free `extern fn`.
+// On a member it meant nothing and was silently dropped — the field and the method below were ordinary kama.
+type value V {
+    public extern int32 x;
+    public extern fn int32 get() { return this.x; }
+    public ctor make() { this.x = 1; }
+}
+
+fn int32 main() { V v = V.make(); return v.get() - 1; }

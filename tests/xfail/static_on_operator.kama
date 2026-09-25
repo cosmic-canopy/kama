@@ -1,0 +1,10 @@
+// KR-93. An operator's form comes from its ARITY — one parameter is a method on `this`, two is the free
+// form with both operands explicit — so `static` says nothing. Worse than redundant: on a one-parameter
+// operator it reads as "no `this`" while the operator is in fact a method on `this`. Silently accepted.
+@generate(of)
+type value V {
+    public int32 x;
+    public static V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
+}
+
+fn int32 main() { V a = V.of(x: 1); V b = a + a; return b.x - 2; }

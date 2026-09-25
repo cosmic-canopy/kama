@@ -1,0 +1,11 @@
+// KR-93. `default` designates the one canonical zero-argument `ctor`. The method arm already refused it on
+// a class method; on a field and on an enum's method it was silently dropped.
+type value V {
+    public default int32 x;
+    public ctor make() { this.x = 1; }
+}
+type enum E { A, B;
+    public default fn int32 one() { return 1; }
+}
+
+fn int32 main() { V v = V.make(); return v.x - 1; }

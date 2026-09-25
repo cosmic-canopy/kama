@@ -1513,7 +1513,13 @@ std::string CEmitter::typeOfExprImpl(SharedExpression e)
                     // A GENERIC enum's variant (`Optional::None`) deliberately misses: its template is in
                     // `_genericTypes`, never `_classes`, and the instance a literal belongs to comes from
                     // the target-type context, which this function does not have.
-                    if (isEnum(scalarEnumInstanceOf(en))) ct = scalarEnumInstanceOf(en);
+                    // A type-associated `comptime` constant (`Type::NAME`) is typed by its declaration — on an
+                    // enum as on any type. Asked FIRST: the payload-less arm below answers "an `E`" for every
+                    // `E::X` without checking `X`, so an enum's `E::K + 1` was refused as arithmetic on an enum
+                    // (KR-93). A class head used to answer "" here, hiding `V::K` from every numeric rule.
+                    auto tcIt = _typeConsts.find(en + "::" + *id->value);
+                    if (tcIt != _typeConsts.end()) ct = typeConstCType(tcIt->second);
+                    else if (isEnum(scalarEnumInstanceOf(en))) ct = scalarEnumInstanceOf(en);
                     else {
                         auto cit = _classes.find(en);
                         if (cit != _classes.end() && cit->second.isVariant)
@@ -9000,6 +9006,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         };
         if (cd->members)
             for (auto& m : *cd->members) {
+                rejectInertModifiers(m.get(), nullptr, MemberOwner::Contract);   // KR-93
                 // a `contract` is a public guarantee: signatures only, no bodies, no fields, no
                 // dtor (it holds no state and destroys nothing). A `ctor` IS allowed — it is what lets a
                 // bound construct (`T.fromStr(s: …)`), and it registers as an `isCtor` slot below.
@@ -9991,6 +9998,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (cd->members) {
             for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
+                rejectInertModifiers(mn, &ci, MemberOwner::Type);   // KR-93: a word no arm below reads
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
                     if (fd->modifiers)
                         for (auto& mod : *fd->modifiers) {
@@ -10392,8 +10400,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
                     // immutable. Enforcement is at the kama level; the C field is plain.
-                    // visibility follows the same per-field rule (see fieldVisibility).
-                    Visibility kvis = fieldVisibility(ci, kd->modifiers, kd->line);
+                    // visibility follows the same per-field rule (see fieldVisibility). A `comptime` member is
+                    // NOT a field, though — it is type-associated like a static method, so it takes MEMBER
+                    // visibility: the field rule refused `public comptime` inside every `resource` ("a resource
+                    // field is always private"), leaving a resource no way to publish a constant (KR-93).
+                    Visibility kvis = kd->isComptime ? visibilityOf(kd->modifiers, Visibility::Private, kd->line)
+                                                     : fieldVisibility(ci, kd->modifiers, kd->line);
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
                             std::string fn = (d->name && d->name->value) ? *d->name->value : "";
@@ -11161,11 +11173,13 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
 
 // Every `comptime assert` declared directly in a type body, under whatever substitution is bound now. For a
 // generic that is one call per instantiation (see emitGenericTypeInst), which is the entire point: the
-// predicate is checked against the arguments the use site actually passed.
-void CEmitter::emitComptimeAssertsIn(ClassDeclarationNode* cd)
+// predicate is checked against the arguments the use site actually passed. It takes the MEMBER LIST, not the
+// class node, because an enum's body holds them too: `type enum E { A, B; comptime assert(…); }` parsed and was
+// never evaluated — a false assertion built (found by KR-93's member audit).
+void CEmitter::emitComptimeAssertsIn(const SharedClassMemberDeclarationList& members)
 {
-    if (!cd || !cd->members) return;
-    for (auto& m : *cd->members)
+    if (!members) return;
+    for (auto& m : *members)
         if (auto* a = dynamic_cast<ComptimeAssertNode*>(m.get())) emitComptimeAssert(a);
 }
 
@@ -17218,16 +17232,30 @@ void CEmitter::buildVtables()
         for (auto& kv : ci->methods) {
             MethodInfo& mi = kv.second;
             const std::string& mname = kv.first;
-            if (!mi.isVirtual && !mi.isCtor && !mi.isStatic && mi.fromContract.empty() && ci->base) {
+            // A free-form operator (arity 2) is keyed by its operand types, not a name a reader writes, so it
+            // stays out of this rule as it always has.
+            if (!mi.isVirtual && mi.fromContract.empty() && ci->base && !(mi.isOperator && mi.isStatic)) {
                 ClassInfo* bowner = nullptr;
                 MethodInfo* bmi = findMethod(ci->base, mname, &bowner);
-                if (bmi && bowner && bmi->visibility != Visibility::Private)
-                    unsupported(("'" + ci->name + "' redeclares '" + mname + "', which it inherits from '"
-                                 + bowner->name + "' — shadowing is not allowed, because which body runs "
-                                 "would be decided by the static type. To redefine it, '" + bowner->name
-                                 + "' must declare it `protected virtual`/`protected abstract` and this "
-                                 "must say `override`; otherwise rename it.").c_str(),
-                                mi.node ? mi.node->line : 0);
+                if (bmi && bowner && bmi->visibility != Visibility::Private) {
+                    if (!mi.isCtor && !mi.isStatic)
+                        unsupported(("'" + ci->name + "' redeclares '" + mname + "', which it inherits from '"
+                                     + bowner->name + "' — shadowing is not allowed, because which body runs "
+                                     "would be decided by the static type. To redefine it, '" + bowner->name
+                                     + "' must declare it `protected virtual`/`protected abstract` and this "
+                                     "must say `override`; otherwise rename it.").c_str(),
+                                    mi.node ? mi.node->line : 0);
+                    // A `static fn` or a `ctor` reusing an inherited METHOD's name was exempt above, so the
+                    // derived type held two members under one name — `D::m()` and the inherited `d.m()` —
+                    // which is the shadowing the rule refuses, spelled differently (found by KR-93's modifier
+                    // matrix). A base CTOR's name stays free: ctors are not inherited, each type builds itself.
+                    else if (!bmi->isCtor)
+                        unsupported(("'" + ci->name + "' declares " + (mi.isCtor ? "a `ctor`" : "a `static fn`")
+                                     + " named '" + mname + "', but it inherits the method '" + mname + "' from '"
+                                     + bowner->name + "' — one name is one member, so a type may not reuse an "
+                                     "inherited member's name for a different member. Rename it.").c_str(),
+                                    mi.node ? mi.node->line : 0);
+                }
             }
             if (!mi.isVirtual) continue;
             // Step 3: `override` must override an actual virtual method in a base class —
@@ -18800,6 +18828,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
         for (auto& m : *members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
+            if (md->isComptime) continue;   // compile-time only — registered for the interpreter, never a method
             std::string mname = *md->name->value;
             if (tci.methods.count(mname)) {
                 unsupported(("`" + tkey + "` implements `" + contract + "`: method `" + mname
@@ -18886,8 +18915,42 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                     else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
                                      "nothing beyond its payloads, which drop themselves").c_str(), m->line);
-                    else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                    else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         checkWhenParams(md->whenParams, ed->typeParams, bare, md->line);
+                        // A type-associated `comptime fn`, exactly as collectClasses registers one: the
+                        // interpreter runs it (`E::f()`) and it is never a runtime method. It used to fall into
+                        // the method table and be emitted as C, while a comptime initializer calling it was
+                        // refused as "not a comptime fn" (KR-93's member audit).
+                        if (md->isComptime && md->name && md->name->value)
+                            _comptimeMethods[name + "::" + *md->name->value] =
+                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), name };
+                    }
+                    // A `const` field is still a field, and a `comptime` constant and an operator were never
+                    // registered: all three parsed and VANISHED (the loops downstream read methods only), so a
+                    // `const` member was silently absent, `E::K` answered "has no variant `K`", and `e + 1`
+                    // answered "define `operator+` on the type" — which the author had done. Found by KR-93's
+                    // member audit. A `comptime` constant is type-associated, like a class's (SPEC: one keyword,
+                    // three scopes), so it registers the way collectClasses registers one; the rest are refused.
+                    else if (auto* kc = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                        if (!kc->isComptime)
+                            unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
+                                         "its tag and its variant payloads; put the data in a variant payload, "
+                                         "or make a constant `comptime`").c_str(), m->line);
+                        else if (kc->declarators)
+                            for (auto& d : *kc->declarators) {
+                                if (!d->name || !d->name->value) continue;
+                                const std::string& kn = *d->name->value;
+                                TypeConstInfo tc;
+                                tc.hasValue = d->initializer && constValue(d->initializer, tc.value);
+                                tc.visibility = visibilityOf(kc->modifiers, Visibility::Private, kc->line);
+                                tc.owner = name; tc.cName = name + "__" + kn;
+                                tc.type = kc->type; tc.initializer = d->initializer; tc.line = kc->line;
+                                _typeConsts[name + "::" + kn] = tc;
+                            }
+                    } else if (dynamic_cast<ClassOperatorDeclarationNode*>(m.get()))
+                        unsupported(("`type enum " + bare + "` cannot declare an operator — write a named method "
+                                     "instead (`public fn " + bare + " next()`)").c_str(), m->line);
+                    rejectInertModifiers(m.get(), nullptr, MemberOwner::Enum);   // KR-93
                 }
             // `friend` grants, captured raw as collectClasses captures a class's, for resolveFriends to resolve
             // (it walks `_classes` and `_genericTypes`, where an enum's ClassInfo lives). They parsed and were
@@ -18921,7 +18984,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 if (ed->members)
                     for (auto& m : *ed->members) {
                         auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
-                        if (!md || !md->name || !md->name->value) continue;
+                        if (!md || !md->name || !md->name->value || md->isComptime) continue;
                         const std::string mname = *md->name->value;
                         if (tmpl.methods.count(mname)) {
                             unsupported(("duplicate method '" + mname + "' in '" + bare + "'").c_str(), md->line);
@@ -19006,6 +19069,7 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
     for (auto& m : *ed->members) {
         auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
         if (!md || !md->name || !md->name->value || !md->body) continue;
+        if (md->isComptime) continue;   // a `comptime fn` is never emitted as C
         // The return type off the method table, not the node: an infallible ctor's is synthesized there.
         auto mit = eci.methods.find(*md->name->value);
         SharedIdentifier rtype = (mit != eci.methods.end()) ? mit->second.returnType : md->returnType;
@@ -22796,10 +22860,148 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
 }
 
 // access control --------------------------------------------------------
+// The C type of a type-associated `comptime` constant, resolved where it was DECLARED: its type names the
+// owner's imports, which the reading file need not share (`Permissions::OwnerRead` read from a file that
+// imports only `Permissions`).
+std::string CEmitter::typeConstCType(const TypeConstInfo& tc)
+{
+    auto oc = _classes.find(tc.owner);
+    if (oc == _classes.end()) return cType(tc.type);
+    NsCtx saved = _nsCtx;
+    _nsCtx = NsCtx{}; _nsCtx.scope = oc->second.scope; _nsCtx.usings = oc->second.usings;
+    _nsCtx.symbolAliases = oc->second.symbolAliases;
+    restoreFileRung(_nsCtx, oc->second.declFile);
+    std::string ct = cType(tc.type);
+    _nsCtx = saved;
+    return ct;
+}
+
 bool CEmitter::modHas(SharedModifierList mods, const char* name)
 {
     if (mods) for (auto& m : *mods) if (m->value && *m->value == name) return true;
     return false;
+}
+
+// KR-93. The member modifier list is ONE grammar list shared by every member form (kama.y `modifier`), so
+// every word parses on every member, and each collection arm reads only the words it gives a meaning to.
+// Whatever an arm did not read VANISHED. Measured on 0.9.442 over a 195-cell modifier x member-kind matrix,
+// 100 cells built, and most were words the member cannot use: `public static const int32 K = 4;` built as a
+// per-INSTANCE field (so `V::K` was then refused as "a field"), `override` on a field was accepted, and a
+// destructor or an operator took any word at all. An accepted word the compiler ignores is the worst answer
+// available — the author wrote a guarantee and nothing checked it (the `immutable` note on the field arm in
+// collectClasses says the same). This speaks ONLY for the words an arm would drop: a word an arm already
+// refuses with its own sentence (`unsafe`/`immutable` on a field, `default` or `immutable` on a method or
+// ctor, `virtual` on a ctor, `unsafe` on a contract member, `protected` on a value's field or method) is left
+// to that arm, so no member is reported twice.
+void CEmitter::rejectInertModifiers(ASTNode* member, const ClassInfo* owner, MemberOwner ctx)
+{
+    enum class K { Field, ConstField, Comptime, ComptimeFn, Method, Ctor, Operator, Dtor };
+    K kind; SharedModifierList mods; int line = member ? member->line : 0;
+    if (auto* f = dynamic_cast<ClassFieldDeclarationNode*>(member))          { kind = K::Field; mods = f->modifiers; }
+    else if (auto* c = dynamic_cast<ClassConstDeclarationNode*>(member))     { kind = c->isComptime ? K::Comptime : K::ConstField; mods = c->modifiers; }
+    else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(member))   { kind = md->isComptime ? K::ComptimeFn : md->isCtor ? K::Ctor : K::Method; mods = md->modifiers; }
+    else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(member)) { kind = K::Operator; mods = od->modifiers; }
+    else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(member)) { kind = K::Dtor; mods = dd->modifiers; }
+    else return;   // a `friend` grant and a `comptime assert` refuse every modifier in the grammar/arm already
+    if (!mods) return;
+    // A contract refuses state and a destructor outright, and an enum a field and a destructor — the member
+    // itself is the error there, so its modifiers need no second sentence.
+    if (ctx == MemberOwner::Contract && kind != K::Method && kind != K::Operator && kind != K::Ctor) return;
+    if (ctx == MemberOwner::Enum && (kind == K::Field || kind == K::Dtor)) return;
+    auto noun = [&]() -> std::string {
+        if (ctx == MemberOwner::Contract) return "a `contract` member";
+        switch (kind) {
+            case K::Field:      return "a field";
+            case K::ConstField: return "a `const` field";
+            case K::Comptime:   return "a `comptime` constant";
+            case K::ComptimeFn: return "a `comptime fn`";
+            case K::Method:     return ctx == MemberOwner::Enum ? "an `enum` method" : "a method";
+            case K::Ctor:       return "a `ctor`";
+            case K::Operator:   return "an operator";
+            case K::Dtor:       return "a destructor";
+        }
+        return "a member";
+    };
+    const bool extensible = owner && (owner->isVirtualClass || owner->isAbstractClass || owner->isFinalClass);
+    for (auto& m : *mods) {
+        if (!m->value) continue;
+        const std::string& w = *m->value;
+        std::string msg;
+        if (kind == K::Dtor) {
+            // A destructor runs when its value is dropped and no code ever names it, so a visibility, a
+            // storage word or a hierarchy word has nothing to apply to. Destruction through a base handle
+            // is already virtual without being asked.
+            if (w != "unsafe")
+                msg = "a destructor runs when its value is dropped and is never called by name, so it takes no "
+                      "modifier but `unsafe` — drop `" + w + "`";
+        } else if (w == "static") {
+            switch (kind) {
+                case K::Field: case K::ConstField:
+                    msg = "a type holds no static storage, so `static` means nothing on a field — for a constant "
+                          "that belongs to the type write `public comptime T NAME = …;` and read it `Type::NAME`; "
+                          "for state every instance shares, declare a module `static` in the type's file";
+                    break;
+                case K::Comptime:
+                    msg = "a `comptime` constant already belongs to the type (read it `Type::NAME`) — drop `static`";
+                    break;
+                case K::ComptimeFn:
+                    msg = "a `comptime fn` has no `this` and is already called on the type (`Type::name()`) — "
+                          "drop `static`";
+                    break;
+                case K::Ctor:
+                    msg = "a `ctor` already belongs to the type — it is called dot-on-type (`Type.name(…)`) — "
+                          "drop `static`";
+                    break;
+                case K::Operator:
+                    msg = "an operator's form comes from its arity — one parameter makes a method on `this`, two "
+                          "make the free form with both operands explicit — so `static` says nothing; drop it";
+                    break;
+                default: break;   // a method, an enum method and a contract member may be `static`
+            }
+        } else if (w == "extern") {
+            msg = "`extern` marks a TYPE whose layout a C header owns (`type extern value T`) or a free "
+                  "`extern fn` — " + noun() + " is ordinary kama, so drop `extern`";
+        } else if (w == "default") {
+            // A ctor is where the word means something, and the method arm answers a class method itself.
+            if (kind != K::Ctor && !(ctx == MemberOwner::Type && kind == K::Method))
+                msg = "`default` applies only to a zero-arg `ctor`";
+        } else if (w == "virtual" || w == "abstract" || w == "override" || w == "final") {
+            if (ctx == MemberOwner::Contract)
+                msg = "a `contract` member is a guarantee every implementer meets — `" + w + "` belongs to a "
+                      "method of an extensible `resource`, not to a contract";
+            else if (ctx == MemberOwner::Enum && (kind == K::Method || kind == K::Ctor))
+                msg = "an `enum` is sealed — `" + w + "` belongs to a method of an extensible `resource`; for "
+                      "polymorphism, implement a `contract`";
+            else if (kind != K::Method && kind != K::Ctor)   // the method arm polices both of those
+                msg = "`" + w + "` applies to a METHOD of an extensible `resource`"
+                      + (w == "override" ? std::string() : " (or, on the type itself, `type " + w + " resource`)")
+                      + " — " + noun() + " has no vtable slot";
+        } else if (w == "unsafe") {
+            if (ctx == MemberOwner::Contract && kind == K::Operator)   // the method arm answers a contract method
+                msg = "`unsafe` marks a function BODY, and a `contract` operator has none — the implementation "
+                      "carries the marker, not the declaration";
+            else if (kind == K::ConstField || kind == K::Comptime)
+                msg = "`unsafe` marks a function BODY, and " + noun() + " has none"
+                      + std::string(kind == K::ConstField ? " — declaring an `UnsafePtr<T>` field is safe; it is "
+                                                            "reading and writing one that requires an `unsafe fn`" : "");
+            else if (kind == K::ComptimeFn)
+                msg = "a `comptime fn` runs inside the compiler, where no raw memory exists — `unsafe` has "
+                      "nothing to mark";
+        } else if (w == "immutable") {
+            // The field and method arms (a ctor goes through the method arm) say it themselves.
+            if (!(ctx == MemberOwner::Type && (kind == K::Field || kind == K::Method || kind == K::Ctor)))
+                msg = "`immutable` is a TYPE qualifier (`type immutable value T`) asserting DEEP immutability of "
+                      "the whole type — " + noun() + " cannot carry it";
+        } else if (w == "protected") {
+            // A value's field and method are answered by their arms; these three never were.
+            if (ctx == MemberOwner::Type && owner && !extensible
+                && (kind == K::Operator || kind == K::ComptimeFn || kind == K::Comptime))
+                msg = "`protected` belongs to a `virtual`/`abstract`/`final resource` — `"
+                      + demangleForDisplay(owner->name) + "` is a plain `value`/`resource`, so its members are "
+                      "`private` or `public`";
+        }
+        if (!msg.empty()) unsupported(msg.c_str(), line);
+    }
 }
 
 // At most one of public/protected/private; default `dflt` when none is written.
@@ -31079,7 +31281,11 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _emitStaticClass = true;
     // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
     // bound — so `Fixed<24>` can fail while `Fixed<16>` passes, and the diagnostic names which.
-    if (phase == 0 && tmplIt != _genericTypes.end()) emitComptimeAssertsIn(tmplIt->second.node);
+    if (phase == 0 && tmplIt != _genericTypes.end()) {
+        const ClassInfo& tmpl = tmplIt->second;
+        if (tmpl.node) emitComptimeAssertsIn(tmpl.node->members);
+        else if (tmpl.enumNode) emitComptimeAssertsIn(tmpl.enumNode->members);
+    }
     if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
     // Interface vtables BEFORE method bodies: a generic instance's own method may upcast `this` to a contract
@@ -35376,7 +35582,12 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (cd && !(cd->typeParams && !cd->typeParams->empty())) {
             ScopedStr _ts(_thisType, qualify(cd->name && cd->name->value ? *cd->name->value : std::string()));
-            emitComptimeAssertsIn(cd);
+            emitComptimeAssertsIn(cd->members);
+        }
+        auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
+        if (ed && !(ed->typeParams && !ed->typeParams->empty())) {
+            ScopedStr _ts(_thisType, enumKey(ed));
+            emitComptimeAssertsIn(ed->members);
         }
     }
     // class definitions, then free-function definitions.

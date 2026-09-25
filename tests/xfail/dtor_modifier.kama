@@ -1,0 +1,10 @@
+// KR-93. A destructor runs when its value is dropped and no code ever names it, so a visibility, `static`
+// or a hierarchy word has nothing to apply to — destruction through a base handle is already virtual. Every
+// one was silently accepted; only `unsafe` (the body touches raw memory) means something here.
+type resource R {
+    int32 h = 0;
+    public ctor make() { this.h = 1; }
+    public ~R() { }
+}
+
+fn int32 main() { R r = R.make(); return 0; }

@@ -1,0 +1,6 @@
+// KR-93. A contract member is a guarantee every implementer meets; `virtual`/`abstract` add nothing to it and
+// `override`/`final` belong to a resource hierarchy. Each was silently accepted.
+type contract C for value { abstract fn int32 m(); }
+type value V implements C { public int32 x; public fn int32 m() { return 1; } public ctor make() { this.x = 1; } }
+
+fn int32 main() { V v = V.make(); return v.m() - 1; }

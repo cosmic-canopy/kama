@@ -1,0 +1,30 @@
+// KR-93's member audit — the members that parsed and silently did nothing now work where SPEC promises
+// them (`comptime`: "one keyword, three scopes", and an enum is a type):
+//   - an enum's `comptime` constant, read `E::K` (it used to answer "`E` has no variant `K`", and inside an
+//     arithmetic expression it was even typed as the enum itself);
+//   - an enum's `comptime fn`, run by the interpreter (it used to be emitted as C and refused at compile time
+//     as "not a comptime fn");
+//   - an enum's `comptime assert`, now evaluated (a false one used to build);
+//   - a `public comptime` constant in a `resource` — the member-visibility rule, not the field rule that
+//     refused it as "a resource field is always private".
+type enum Suit { Hearts, Spades;
+    public comptime int32 COUNT = 2;
+    comptime int32 HIDDEN = 5;                               // private: read only inside the enum
+    public comptime fn int32 squared(int32 n) { return n * n; }
+    comptime assert(cond: Suit::COUNT == 2, msg: "two suits");
+    public fn int32 weight() { return Suit::COUNT + Suit::HIDDEN; }
+}
+
+type resource Pool {
+    int32 used = 0;
+    public comptime int32 CAPACITY = 8;
+    public ctor make() { this.used = 1; }
+}
+
+comptime int32 FOUR = Suit::squared(n: Suit::COUNT);
+
+fn int32 main() {
+    Suit s = Suit::Hearts;
+    Pool p = Pool.make();
+    return s.weight() + FOUR + Pool::CAPACITY + Suit::COUNT * 10;   // 7 + 4 + 8 + 20 = 39
+}

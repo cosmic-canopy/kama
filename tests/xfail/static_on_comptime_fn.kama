@@ -1,0 +1,10 @@
+// KR-93. A `comptime fn` has no `this` and is called on its type (`V::sq(x: 3)`), so `static` is redundant
+// on it — SPEC says the bare `comptime fn` form is the whole story. It was silently accepted.
+type value V {
+    public int32 x;
+    public static comptime fn int32 sq(int32 x) { return x * x; }
+    public ctor make() { this.x = 1; }
+}
+
+comptime int32 NINE = V::sq(x: 3);
+fn int32 main() { return NINE - 9; }

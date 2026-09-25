@@ -2237,7 +2237,7 @@ private:
     std::set<const void*> _litGoverned;
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
-    void emitComptimeAssertsIn(ClassDeclarationNode* cd);      // the type-member form, under the live binding
+    void emitComptimeAssertsIn(const SharedClassMemberDeclarationList& members);   // the type-member form, under the live binding
     bool ctaNeedsCLowering(SharedExpression e);                // predicate turns on a layout fact kama can't fold
     bool ctaRenderC(SharedExpression e, std::string& out);     // -> a C constant expression for _Static_assert
     std::set<std::string> _staticAsserts;                      // emitted-text dedupe (a monomorph is re-walked)
@@ -3363,6 +3363,7 @@ private:
     // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
     struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
     std::map<std::string, TypeConstInfo> _typeConsts;
+    std::string typeConstCType(const TypeConstInfo& tc);   // its declared type, resolved in the OWNER's scope
     // const-eval 6b-3: `comptime fn` registry — compile-time-only functions the interpreter runs. Free
     // fns are keyed by qualified name; type-associated ones as "<qualifiedClass>::<name>". NOT in _funcs:
     // a comptime fn is never emitted as a C symbol (comptime-only model). Populated in collect passes.
@@ -3460,6 +3461,10 @@ private:
     Visibility  visibilityOf(SharedModifierList mods, Visibility dflt, int line);
     Visibility  fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line);   // per-field
     bool        modHas(SharedModifierList mods, const char* name);
+    // KR-93: every member form shares ONE modifier list, so every word parses on every member; a word the
+    // member's kind has no use for is refused here instead of dropped. `ctx` says what owns the member.
+    enum class MemberOwner { Type, Contract, Enum };
+    void        rejectInertModifiers(ASTNode* member, const ClassInfo* owner, MemberOwner ctx);
     bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& memberIn, int line);
     // Is the current function an instance of generic free function `tmplKey`, corresponding to `ownerArgs`?
     bool        fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs);

@@ -4413,6 +4413,13 @@ fn int32 main() {
 A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch <!-- xfail: static_this -->
 `this` or a bare field.
 
+**`static` marks a method, and nothing else in a type.** A type holds no static storage, so `static` on a
+field is a compile error that points at what was meant: a constant that belongs to the type is a `comptime` <!-- xfail: static_on_field -->
+member (`public comptime int32 K = 4;`, read `V::K` — see *Compile-time constants*), and state every instance
+shares is a module `static` (below). On a `ctor` (called on the type already), a `comptime` member or `comptime fn` <!-- xfail: static_on_ctor, static_on_comptime, static_on_comptime_fn -->
+(type-associated already) and an operator (whose arity picks its form) the word adds nothing and is refused. <!-- xfail: static_on_operator -->
+It used to be dropped without a word — `public static const int32 K = 4;` built a per-instance field.
+
 **Module statics** — `static T name = const;` at module scope declares a module-level mutable variable
 (MCU step 1). It is firmware's home for state that outlives any one call: ISR↔`main` flags, peripheral
 handles, ring/DMA buffers, flash tables.
@@ -4659,7 +4666,7 @@ operands, positional by nature). The full overloadable set is supported: arithme
 |--------|------|---------|--------------------|
 | 0 | unary on `this` | `Vec2 operator-()` | `Vec2__op_neg(&a)` |
 | 1 | binary **method** (`this` is the left operand) | `Vec2 operator+(Vec2 rhs)` | `Vec2__op_add(&a, b)` |
-| 2 | binary **free/static** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__op_mul(a, b)` |
+| 2 | binary **free** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__op_mul(a, b)` |
 
 The free form handles the mixed-type case a method can't — a primitive on the **left** (`s * v`). Dispatch
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
@@ -4949,6 +4956,18 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   into extension as a `type virtual(maxDepth: N) resource`/`type abstract(maxDepth: N) resource` and seals as
   a plain `resource`/`type final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an extensible `resource`.
 - **`~dtor` ⟺ `resource`** — a destructor is allowed only on a `resource` (a `value` owns nothing).
+- **A member modifier means something on its member, or it is a compile error.** The modifier words are one <!-- xfail: extern_on_member -->
+  list shared by every member form, so each parses everywhere, and a word the member cannot use is refused <!-- xfail: dtor_modifier, default_on_non_ctor -->
+  with what the word is for — never dropped. `static` marks a method (a type holds no static storage — see
+  *Static methods*); `extern` marks a type; `virtual`/`abstract`/`override`/`final` mark a method of an
+  extensible `resource`, so a field, a `comptime` member, an operator, an enum's method and a contract member <!-- xfail: hierarchy_word_on_field, enum_hierarchy_word, contract_member_hierarchy_word -->
+  refuse them; `default` marks the zero-arg `ctor`; `unsafe` marks a body, which a `const` field, a <!-- xfail: unsafe_on_const_field, unsafe_on_comptime_fn, contract_operator_unsafe -->
+  `comptime` member, a `comptime fn` and a contract operator lack; `immutable` marks a whole type; and a <!-- xfail: immutable_on_const_field -->
+  destructor, which no code names, takes nothing but `unsafe`. Until `0.9.443` a word its member's arm did
+  not read vanished: 100 of 195 modifier × member-kind cells built, most of them meaningless.
+- **One name is one member, across inheritance too.** A derived type may not reuse the name of a method it
+  inherits — an `override` of a `protected virtual` is the one redefinition, and a `static fn` or a `ctor`
+  under that name is refused as well, since it would give the type two members spelled the same. <!-- xfail: static_shadows_inherited -->
 - **`friend`** grants are granular and owner-declared: `friend <accessor>[members];` (or `[...]` for all
   privates), where the accessor is a type, a free function, or a `Type::method` (a named `ctor` included) —
   greppable and explicit. **Member visibility is per TYPE, by design**: a non-`public` ctor or method is
@@ -5038,8 +5057,10 @@ The `;` separating variants from members is **mandatory**, and it is what makes 
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->
 they satisfy a contract — and named `ctor`s and `friend` grants, as a type does <!-- test: enum_ctor, friend_enum --> <!-- xfail: friend_enum_nongranted, friend_enum_unknown, enum_ctor_optional -->
-— but **not a field or a destructor** — its layout is its tag plus its
-variant payloads, and it owns nothing beyond them. <!-- xfail: enum_field, generic_enum_field --> Members never change
+— and its own `comptime` constants and `comptime fn`s, read `E::NAME` and `E::name()`, and `comptime assert`s, <!-- test: comptime_enum_resource_members -->
+which are checked like a type's (all three parsed and did nothing before `0.9.443`) — <!-- xfail: enum_comptime_assert -->
+but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its
+variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator --> Members never change
 what an enum IS in C: a payload-less enum stays its integer (`typedef int32_t Color`), and its methods take it
 by value (`bool Color__isWarm(Color self)`), the way a `type intrinsic` method takes a primitive; a contract
 reaches them through the ordinary vtable. An enum with payloads is a tag plus a union either way.

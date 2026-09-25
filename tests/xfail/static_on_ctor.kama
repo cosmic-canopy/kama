@@ -1,0 +1,8 @@
+// KR-93. A `ctor` is type-associated by nature — it is called dot-on-type, `V.make()` — so SPEC says it has
+// no `static`. The word was silently accepted.
+type value V {
+    public int32 x;
+    public static ctor make() { this.x = 1; }
+}
+
+fn int32 main() { V v = V.make(); return v.x - 1; }

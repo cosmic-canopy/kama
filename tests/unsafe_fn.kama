@@ -19,7 +19,7 @@ type resource Cell {
     public unsafe fn int32 get() { return this.p[0]; }
     public unsafe fn void set(int32 v) { this.p[0] = v; }
     public unsafe ref int32 operator[](usize i) { return this.p[i]; }
-    public unsafe ~Cell() { free(p: cast<UnsafePtr>(this.p)); }
+    unsafe ~Cell() { free(p: cast<UnsafePtr>(this.p)); }
 }
 
 // A FREE `unsafe fn` — `std::math`/`std::net`/`std::fs` are free-function-shaped, so requiring a host

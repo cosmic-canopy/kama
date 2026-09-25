@@ -1,0 +1,9 @@
+// KR-93. A `comptime fn` runs inside the compiler, where no raw memory exists — its subset has no pointers
+// at all — so `unsafe` has nothing to mark. It was silently accepted.
+type value V {
+    public int32 x;
+    public unsafe comptime fn int32 two() { return 2; }
+    public ctor make() { this.x = 1; }
+}
+
+fn int32 main() { return 0; }

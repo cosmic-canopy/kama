@@ -1,0 +1,7 @@
+// KR-93. An enum is sealed, so `virtual`/`abstract`/`override`/`final` on its method mean nothing — polymorphism
+// over an enum is a `contract`. All four were silently accepted on an enum's method.
+type enum E { A, B;
+    public final fn int32 one() { return 1; }
+}
+
+fn int32 main() { E e = E::A; return e.one() - 1; }

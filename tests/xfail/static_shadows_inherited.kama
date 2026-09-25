@@ -1,0 +1,15 @@
+// KR-93's member audit. Redeclaring an inherited method is refused ("shadowing is not allowed"), but the rule
+// exempted a `static fn` and a `ctor` — so a derived type could hold TWO members under one name, `D::m()` and
+// the inherited `d.m()`, which built and ran. One name is one member.
+type virtual(maxDepth: 1) resource B {
+    int32 h = 0;
+    protected virtual fn int32 m() { return 1; }
+    public ctor make() { this.h = 1; }
+}
+type final resource D extends B {
+    int32 k = 0;
+    public static fn int32 m() { return 2; }
+    public ctor make() { this.base = B.make(); this.k = 1; }
+}
+
+fn int32 main() { D d = D.make(); return D::m() - 2; }

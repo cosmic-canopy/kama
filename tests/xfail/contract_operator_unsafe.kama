@@ -1,0 +1,5 @@
+// KR-93. `unsafe` marks a BODY, and a contract member has none. The contract method arm refused it; the
+// contract OPERATOR arm did not look.
+type contract Addable<T is This> for value { unsafe T operator+(T rhs); }
+
+fn int32 main() { return 0; }

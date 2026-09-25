@@ -1,0 +1,10 @@
+// KR-93. `protected` belongs to an extensible `resource`. A value's field and method already refused it; its
+// operator, `comptime fn` and `comptime` constant accepted it — a visibility no subclass can ever use.
+@generate(of)
+type value V {
+    public int32 x;
+    protected V operator-() { return V.of(x: 0 - this.x); }
+    protected comptime int32 K = 4;
+}
+
+fn int32 main() { return 0; }

@@ -1,0 +1,7 @@
+// KR-93's member audit. A `comptime assert` in an enum body parsed and was never evaluated — only a class
+// body's were — so this FALSE assertion built.
+type enum E { A, B;
+    comptime assert(cond: false, msg: "an enum's assertion is checked too");
+}
+
+fn int32 main() { return 0; }

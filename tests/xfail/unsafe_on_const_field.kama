@@ -1,0 +1,9 @@
+// KR-93. `unsafe` marks a function BODY. The plain field arm refused it; the `const` field and `comptime`
+// arms did not, so the same word was an error on `int32 f;` and silently dropped on `const int32 f;`.
+type value V {
+    public unsafe const int32 k = 4;
+    public unsafe comptime int32 K = 4;
+    public ctor make() { }
+}
+
+fn int32 main() { return 0; }

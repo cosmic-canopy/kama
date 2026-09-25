@@ -1,0 +1,11 @@
+// KR-93. `virtual`/`abstract`/`override`/`final` apply to a METHOD of an extensible `resource` (and three
+// of them to the type itself). A field, a `comptime` constant and an operator have no vtable slot, and each
+// word below was silently accepted.
+type virtual(maxDepth: 1) resource B {
+    override int32 h = 0;
+    final comptime int32 K = 4;
+    protected virtual fn int32 hook() { return 0; }
+    public ctor make() { this.h = 1; }
+}
+
+fn int32 main() { B b = B.make(); return 0; }

@@ -1,0 +1,7 @@
+// KR-93's member audit. An enum's layout is its tag and its variant payloads, so a field is refused — but a
+// `const` field slipped past that check and VANISHED: no error, and no member either.
+type enum E { A, B;
+    const int32 k = 4;
+}
+
+fn int32 main() { return 0; }

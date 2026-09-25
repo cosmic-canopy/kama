@@ -1,0 +1,13 @@
+// KR-93. `static` on a field — the C++/Java spelling of a type-level constant — parsed and was DROPPED:
+// `public static const int32 K = 4;` built a per-INSTANCE field, so `V::K` was then refused as "a field",
+// and the same line with the type's own type reported "contains itself by value". kama has type-level
+// constants, spelled `comptime` (read `V::K`); a type holds no static storage, so the word is refused and
+// the refusal points at both things the author could have meant.
+type value V {
+    public int32 x;
+    public static const int32 K = 4;
+    static int32 count = 0;
+    public ctor make() { this.x = 1; }
+}
+
+fn int32 main() { V v = V.make(); return v.x - 1; }

@@ -6,7 +6,7 @@ type value Vec2 {
     public int32 x; public int32 y;
     public Vec2 operator+(Vec2 rhs) { return Vec2.of(x: this.x + rhs.x, y: this.y + rhs.y); }   // same-type
     public Vec2 operator*(int32 s)  { return Vec2.of(x: this.x * s, y: this.y * s); }            // v * s (method)
-    public static Vec2 operator*(int32 s, Vec2 v) { return Vec2.of(x: s * v.x, y: s * v.y); }    // s * v (free) — COEXISTS
+    public Vec2 operator*(int32 s, Vec2 v) { return Vec2.of(x: s * v.x, y: s * v.y); }    // s * v (free) — COEXISTS
 }
 @generate(of)
 type value Mat2 {

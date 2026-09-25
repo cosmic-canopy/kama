@@ -1,0 +1,10 @@
+// KR-93. `immutable` is a whole-TYPE qualifier (`type immutable value T`). The field and method arms refused
+// it (`immutable_on_field`); a `const` field, a `comptime` member and an operator dropped it silently.
+type value V {
+    public int32 x;
+    public immutable const int32 k = 4;
+    public immutable V operator-() { return V.make(x: 0 - this.x); }
+    public ctor make(int32 x) { this.x = x; }
+}
+
+fn int32 main() { return 0; }
