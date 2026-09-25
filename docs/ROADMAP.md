@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-99**
+**Next id: KR-100**
 
 ## The shape
 
@@ -72,6 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-99 | **Verify `std::fs` permissions on Windows** (shipped `0.9.446`–`0.9.448`) — the access-list code in `include/kama_os.h` compiles and links everywhere through zig but has never RUN: the fixture, `tools/check-windows-acl.sh`, and `ssh-keygen -y` accepting a kama-written key are owed on the Windows box | S | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-91 | **A literal can break `string`'s UTF-8 invariant** — invalid UTF-8 in a string or `char` literal builds (only clang warns on the emitted C), and a surrogate or out-of-range `\u{…}` escape is silently deleted from a string; reject each at lex time | S | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-95 | **A top-level `comptime fn` cannot be exported** — `export { twice }` answers "no such top-level declaration", and the importer is then told `twice` "is not" a comptime fn. A module constant exports, and a type's `public comptime fn` crosses modules (`Palette::twice`), so wrapping the function in a type is today's only route | S | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-97 | **`kama query` and the language server know no module `static`, no `comptime` constant and no `comptime fn`** — go-to-definition, references and `--search` answer nothing for any of them, at module or type scope, and the `V` in `V::K` does not resolve either (measured `0.9.448`). `extern const` is the one constant with a definition site | M? | [§10](ROADMAP_DETAIL.md#s10) |

@@ -413,7 +413,7 @@ Worth knowing before debugging, because each of these produced a confident wrong
   - `tools/check-windows-acl.sh` (Windows only) reads the result back through Windows itself — SDDL via
     PowerShell's `Get-Acl`, so no locale renames "Everyone" — and requires exactly owner + SYSTEM for a private
     file.
-  - ⚠️ **As of `0.9.448` none of this has RUN on Windows.** It compiles and links for `x86_64-windows-gnu`
+  - ⚠️ **As of `0.9.448` none of this has RUN on Windows (KR-99).** It compiles and links for `x86_64-windows-gnu`
     (`tools/check-target.sh` §6 cross-builds `tests/fs_permissions.kama` with zig on every box that has it),
     and the POSIX half passes everywhere, but the first run of `tests/fs_permissions.kama` and
     `check-windows-acl.sh` on this box is owed — and with it, that `ssh-keygen -y -f <a kama-written key>`

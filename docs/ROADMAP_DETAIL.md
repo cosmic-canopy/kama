@@ -91,6 +91,27 @@ tag or wait for 2.0.
     one byte; check what the lexer counts before a new rule changes it, and pin a column after a valid
     multi-byte literal.
 
+- **Verify `std::fs` permissions on Windows (KR-99).** Permissions shipped at `0.9.446`–`0.9.448` (SPEC
+  `std::fs`: *Setting permissions*); the Windows half — the `#if defined(_WIN32)` permissions block of
+  `include/kama_os.h`, from `kama__acl_build` down — compiles and links on every box that has zig
+  (`tools/check-target.sh` §6 cross-builds `tests/fs_permissions.kama` for `WINDOWS` and `x86_64-windows-gnu`,
+  clean under `-Wall -Wextra`), and no Windows process has run it. On the Windows box:
+  1. `./dev fixture fs_permissions` → `PASS fs_permissions (42)`; any other exit code names the section.
+  2. `sh tools/check-windows-acl.sh` → PASS: a private file and directory hold exactly the owner and SYSTEM,
+     protected (`D:P`) and uninherited; `0o644` adds the group and Everyone; the self-check refuses a planted
+     Administrators entry.
+  3. The case the row was filed for (the peer's KG-37): a key written through `File.openWith(…,
+     permissions: Permissions::OwnerRead | Permissions::OwnerWrite)` shows exactly the user and SYSTEM in
+     `icacls`, and `ssh-keygen -y -f` accepts it — Win32-OpenSSH refuses a key anyone else can read.
+  4. `./dev test` and `./dev check` (the long-path and Unicode-path probes call the new functions too).
+
+  Two things only a run answers. Does `SetKernelObjectSecurity` honor `PROTECTED_DACL_SECURITY_INFORMATION`?
+  The code falls back to plain `DACL_SECURITY_INFORMATION` with `SE_DACL_PROTECTED` in the descriptor's
+  control, so an EXISTING file re-moded by `openWith`/`setPermissions` that reads back unprotected points
+  here. Is the token's primary group accepted as a new file's group? `ERROR_INVALID_PRIMARY_GROUP` from
+  `CreateFileW` points there. When all four pass, take the "none of this has RUN" bullet out of
+  `docs/platforms/windows.md` and delete this row.
+
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
