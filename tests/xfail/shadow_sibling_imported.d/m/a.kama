@@ -1,0 +1,3 @@
+export { label };
+
+fn int32 label(int32 x) { return x + 1; }

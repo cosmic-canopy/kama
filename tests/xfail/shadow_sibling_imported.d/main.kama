@@ -1,0 +1,3 @@
+import { m::twice };
+
+fn int32 main() { return twice(label: 3) - 6; }

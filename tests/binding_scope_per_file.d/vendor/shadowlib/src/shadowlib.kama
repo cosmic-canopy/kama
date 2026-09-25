@@ -1,0 +1,7 @@
+// A dependency whose one file declares a C function PRIVATELY. The declaration is this file's own and is
+// not exported, so it is in no scope of the program that depends on it — see `free` in src/main.kama.
+export { one };
+
+extern fn void free(UnsafePtr p);
+
+fn int32 one() { return 1; }

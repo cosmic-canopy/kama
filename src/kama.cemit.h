@@ -3003,8 +3003,9 @@ private:
     long _probeTypesWalked = 0;    // generic types given a probe instance
     // THE FILE RUNG, one predicate for every position: a reference to a symbol declared in ANOTHER file
     // requires that file to have `export`ed it. See the definition for the three deliberate blind spots.
-    void checkReach(const std::string& key, const std::string& spelled, const char* what, int line,
-                    const std::string& refFile, bool qualified);
+    // True when `refFile` may name `key`; `quiet` answers without reporting (checkBindingName asks it).
+    bool checkReach(const std::string& key, const std::string& spelled, const char* what, int line,
+                    const std::string& refFile, bool qualified, bool quiet = false);
     std::string declFileOf(const std::string& key) const;   // declaring unit of a resolved symbol, or ""
     std::string refFilePath() const;                        // the file a reference is written in, or ""
     // False until `_exported` is filled. Collection resolves names too, and the rung cannot be answered

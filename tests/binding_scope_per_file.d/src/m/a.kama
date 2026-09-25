@@ -1,0 +1,9 @@
+// Every name here is PRIVATE to this file except `shared`, which is exported and which src/m/b.kama does
+// not import. None of them is in b.kama's scope — a call to any of them from there is refused as not
+// visible — so none is a name b.kama's bindings can shadow.
+export { shared };
+
+fn int32 label(int32 x) { return x + 1; }
+fn T pick<T>(T x) { return x; }
+fn int32 shared() { return 7; }
+type value Node { int32 x; public ctor make() { this.x = 1; } }

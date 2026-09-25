@@ -1,0 +1,4 @@
+// KB-34's rule, held: an `extern` this file DECLARES is in its scope like any other declaration, so a binding
+// may not take its name. A dependency's file-private one is not (tests/binding_scope_per_file.d).
+extern fn void free(UnsafePtr p);
+fn int32 main() { int32 free = 1; return free - 1; }

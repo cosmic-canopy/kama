@@ -1,0 +1,11 @@
+// KB-34 (the peer project's report): the no-shadowing rule counts what a file can SEE — what it declares
+// and what it imports, the rule a call is held to. A sibling file's private names (src/m/a.kama) and a
+// dependency's file-private `extern` (vendor/shadowlib) are neither, so a binding may take them.
+import { bindscope::m::Tally, bindscope::m::twice, bindscope::m::sumTo, shadowlib::one };
+
+fn int32 main() {
+    int32 free = one();   // shadowlib declares `extern fn void free(UnsafePtr p)`, privately
+    Tally t = Tally.make();
+    int32 r = twice(label: 10) + sumTo(n: 3) + t.label + free;   // 20 + (6 + 3 + 5) + 0 + 1
+    return r == 35 ? 42 : r;
+}

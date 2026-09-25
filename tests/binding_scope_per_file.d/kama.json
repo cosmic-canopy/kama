@@ -1,0 +1,9 @@
+{
+  "name": "bindscope",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "shadowlib": { "path": "./vendor/shadowlib" } },
+  "modules": { ".": { "visibility": "internal" }, "m": { "visibility": "internal" } }
+}

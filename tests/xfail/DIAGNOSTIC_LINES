@@ -1016,11 +1016,14 @@ ser_field_no_generate	ser_field_no_generate.kama:2
 ser_unmarked_field	ser_unmarked_field.kama:5
 serialize_isize_field	serialize_isize_field.kama:13
 shadow_enclosing	shadow_enclosing.kama:4
+shadow_extern_own	shadow_extern_own.kama:4
 shadow_field	shadow_field.kama:6
 shadow_function_field	shadow_function_field.kama:4
 shadow_function_local	shadow_function_local.kama:4
 shadow_function_param	shadow_function_param.kama:3
 shadow_param	shadow_param.kama:3
+shadow_sibling_imported	b.kama:6
+shadow_type_local	shadow_type_local.kama:4
 signflip_local	signflip_local.kama:1
 simd_bad_elem	simd_bad_elem.kama:6 simd_bad_elem.kama:7
 simd_bad_width	simd_bad_width.kama:10 simd_bad_width.kama:9

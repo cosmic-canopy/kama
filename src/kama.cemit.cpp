@@ -2958,10 +2958,10 @@ std::string CEmitter::declFileOf(const std::string& key) const
 //     synthesized node). Silence beats a wrong file in a diagnostic that names one;
 //   * before `_exported` is populated it cannot answer, so `_exportedReady` gates it. Collection
 //     resolves names too, and judging them against an empty export set would reject everything.
-void CEmitter::checkReach(const std::string& key, const std::string& spelled, const char* what,
-                          int line, const std::string& refFile, bool qualified)
+bool CEmitter::checkReach(const std::string& key, const std::string& spelled, const char* what,
+                          int line, const std::string& refFile, bool qualified, bool quiet)
 {
-    if (!_exportedReady || refFile.empty()) return;
+    if (!_exportedReady || refFile.empty()) return true;
     // THE FFI ARM, and it runs BEFORE the `declFile.empty()` return because that return is exactly the
     // hole: `declFileOf` reports "" for an extern on purpose (one table entry, many declaring files), so
     // every extern name used to walk straight out of this predicate. A file could call `malloc` having
@@ -2982,12 +2982,13 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     {
         auto ext = _externDeclSites.find(key);
         if (ext != _externDeclSites.end()) {
-            if (ext->second.count(refFile)) return;                        // declared right here — always
-            if (qualified) return;                                         // resolved only through an exporting module
+            if (ext->second.count(refFile)) return true;                   // declared right here — always
+            if (qualified) return true;                                    // resolved only through an exporting module
             const NsCtx* rc = nullptr;
             if (_nsCtx.unitPath == refFile) rc = &_nsCtx;
             else for (auto& kv : _unitCtx) if (kv.second.unitPath == refFile) { rc = &kv.second; break; }
-            if (rc) for (auto& sa : rc->symbolAliases) if (importedExtern(sa.second) == key) return;   // imported
+            if (rc) for (auto& sa : rc->symbolAliases) if (importedExtern(sa.second) == key) return true;   // imported
+            if (quiet) return false;
             std::string other;   // a USER file that declares it, when there is one — the prelude's is not importable
             for (auto& f : ext->second) if (!f.empty() && f[0] != '<') { other = f; break; }
             const bool offered = _externExportedBy.count(key) != 0;
@@ -3000,12 +3001,12 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
                                             + (offered ? "Import it (`import { … };`) from the file that exports it"
                                                        : "Export it from the file that declares it and import it here")
                                             + ", or repeat the declaration in this file")).c_str(), line);
-            return;
+            return false;
         }
     }
     const std::string declFile = declFileOf(key);
-    if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
-    if (declFile == refFile) return;                         // its own file — always
+    if (declFile.empty() || declFile[0] == '<') return true; // unresolved, synthesized, or compiler-owned
+    if (declFile == refFile) return true;                    // its own file — always
     // ...and its own file AGAIN, when a generic instantiation has installed the TEMPLATE's context under a
     // caller's `refFile`. `sorted_map.kama:31` spells `BTreeNode` inside `BTreeNode` — the template's own
     // internal self-reference — and re-walking it for a user's `BTreeNode<int32,int32>` judged that line
@@ -3013,7 +3014,7 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     // inbound clause below already defends itself this way ("_nsCtx ... is NOT always the file being
     // judged"); the outbound one did not, so the same instantiation produced a third, impossible copy of a
     // diagnostic it had already reported correctly twice.
-    if (!_nsCtx.unitPath.empty() && _nsCtx.unitPath != refFile && declFile == _nsCtx.unitPath) return;
+    if (!_nsCtx.unitPath.empty() && _nsCtx.unitPath != refFile && declFile == _nsCtx.unitPath) return true;
     // §2c FOR A QUALIFIED REFERENCE. The import site above covers what a file imports; a qualified
     // spelling reaches a module WITHOUT importing it (that is deliberate — see the inbound clause below),
     // so the same rung has to be asked here or the manifest key is enforced in one position and not the
@@ -3022,20 +3023,22 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
         const size_t cut = key.rfind("__");
         auto mn = cut == std::string::npos ? _moduleNames.end() : _moduleNames.find(key.substr(0, cut));
         if (mn != _moduleNames.end() && !_moduleVisible(_nsCtx.module, mn->second)) {
+            if (quiet) return false;
             unsupported(("module `" + mn->second + "` is not visible from "
                          + (_nsCtx.module.empty() ? std::string("a file in no module")
                                                   : "`" + _nsCtx.module + "`")
                          + " — its `visibility` in `kama.json` does not name this module, and a qualified "
                            "spelling reaches no further than an `import` would").c_str(), line);
-            return;
+            return false;
         }
     }
     if (!_exported.count(key)) {                             // OUTBOUND: it never left its file
+        if (quiet) return false;
         unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
                      + " cannot name it — visibility is per FILE, and a name leaves its file only through "
                        "that file's `export { … };`. Add it there if it is meant to be reachable").c_str(),
                     line);
-        return;
+        return false;
     }
     // INBOUND: a file names only what it declares or imports, so an `export` is an offer and an `import`
     // is the acceptance. Restricted to UNQUALIFIED spellings on purpose: a qualified `geo::area()` names
@@ -3045,12 +3048,14 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     //
     // `_nsCtx` is the file whose imports we are about to consult, and it is NOT always the file being
     // judged — generic instantiation installs the template's context. Only decide when the two agree.
-    if (qualified || _nsCtx.unitPath != refFile) return;
-    for (auto& sa : _nsCtx.symbolAliases) if (sa.second == key) return;   // per-symbol import (either form)
+    if (qualified || _nsCtx.unitPath != refFile) return true;
+    for (auto& sa : _nsCtx.symbolAliases) if (sa.second == key) return true;   // per-symbol import (either form)
+    if (quiet) return false;
     unsupported(("`" + spelled + "` is declared in `" + declFile + "` and this file does not import it — "
                  "add `import { " + spelled + " };`. A module's files share a name space but not a scope: "
                  "`export` offers a name and `import` accepts it, so every name a file uses is written "
                  "down at its top").c_str(), line, spelled);
+    return false;
 }
 
 // Why typing recovers at all: a call's RESULT type is asked for before the call is emitted wherever the
@@ -21619,6 +21624,15 @@ bool CEmitter::isLanguageName(const std::string& nm)
 // take a name in scope" needs no exception. A binding named like a FUNCTION used to be accepted, and it
 // worked only because a user function is qualified in C; a prelude one met the local bare and clang refused
 // what kama had accepted (`fn int32 count(int32 args) { … args() … }`).
+//
+// "In scope" is what it means at a USE — declared in this file, or imported into it — and `checkReach` is
+// the rule every use goes through, so it is asked here too, quietly. The resolvers alone answer wider on
+// purpose: a bare name resolves to a sibling file's PRIVATE declaration (so a call can say "not exported by
+// …" rather than "unknown"), and an `extern` spelling is one key for every file that declares it. Taking
+// their answer as "in scope" refused a parameter `label` because a sibling file had a private `label` its
+// call was refused for, and a local `free` because a DEPENDENCY declared `extern fn free` privately (peer
+// KB-34, measured at 0.9.448). A binding is emitted `k_<name>` (SPEC § C names), so a name the file cannot
+// see collides with nothing in C either.
 void CEmitter::checkBindingName(const std::string& nm, const char* kind, int srcLine)
 {
     if (nm.empty() || _probingTemplate) return;
@@ -21627,12 +21641,15 @@ void CEmitter::checkBindingName(const std::string& nm, const char* kind, int src
                      "like `string`, so nothing may be named it; rename it").c_str(), srcLine, nm);
         return;
     }
-    if (_funcs.count(resolveFuncImpl(nm, nullptr))) {
+    const std::string& here = _nsCtx.unitPath;
+    const std::string fk = resolveFuncImpl(nm, nullptr);
+    if (_funcs.count(fk) && checkReach(fk, nm, "", srcLine, here, false, /*quiet*/ true)) {
         unsupported((std::string(kind) + " `" + nm + "` has the name of a function in scope — kama has no "
                      "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
         return;
     }
-    if (isTypeKey(resolveUserNameImpl(nm, nullptr)))
+    const std::string tk = resolveUserNameImpl(nm, nullptr);
+    if (isTypeKey(tk) && checkReach(tk, nm, "", srcLine, here, false, /*quiet*/ true))
         unsupported((std::string(kind) + " `" + nm + "` has the name of a type in scope — kama has no "
                      "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
 }
