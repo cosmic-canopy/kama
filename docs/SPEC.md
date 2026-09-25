@@ -1809,6 +1809,13 @@ gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed
 permission bit, not an access check); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
 `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
+**A new file's permissions.** A plain create — `File.open` with `Write` or `Append`, `writeFile`, `writeText` —
+asks for `rw-rw-rw-` and lets the process umask narrow it (`rw-r--r--` under the usual `022`, `rw-rw-r--` <!-- test: fs_umask -->
+under a group-shared `002`), and a directory asks for `rwxrwxrwx` the same way: the default of C `fopen`, Go,
+Rust, Python, Node, Zig, Java and .NET. Until `0.9.446` a file was a hardcoded `rw-r--r--`, which under `002`
+stripped the group-write bit the user's own umask granted. On Windows a plain create inherits its directory's
+access list, as in every language; the wasm target's virtual filesystem applies the umask as POSIX does.
+
 `removeDirAll` does **not** follow a symlink — a link inside the tree is unlinked, never descended into
 (the CVE-2022-21658 shape) — and says in its doc comment what it still cannot promise (atomicity against
 a racing writer, which needs `openat`). `exists` returns a `bool`, and is a snapshot: to *use* a file, open

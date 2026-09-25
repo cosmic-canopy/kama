@@ -45,6 +45,9 @@ extern fn int32  kama_EINTR();
 // How `File.open` opens. `Write` CREATES and TRUNCATES; `Append` creates and seeks to the end on every
 // write, which is the only way concurrent appenders (a log from two processes) do not overwrite each
 // other — a seek-then-write cannot promise that, because the two steps are not one operation.
+//
+// A file either one creates asks for `rw-rw-rw-` and the process umask narrows it (`rw-r--r--` under the
+// usual `022`) — every language's default. On Windows it inherits its directory's access list.
 type enum OpenMode { Read, Write, Append }
 
 // What the filesystem records about a path.

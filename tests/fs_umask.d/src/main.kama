@@ -1,0 +1,41 @@
+// KR-92: a plain create is `0666` narrowed by the umask — every other language's default — where kama used to
+// hardcode `0644`. The two agree under the usual umask `022`; under `002` (a group-shared directory) `0644`
+// stripped the group-write bit the user's own umask granted. A directory was already `0777 & ~umask`, so files
+// and directories now agree. A C helper sets the umask and reads the mode back: what is under test is exactly
+// what a kama program cannot see without the seam. Windows has no umask — a plain create inherits its
+// directory's access list, as in every language — so there is nothing there to read.
+import { std::fs::File, std::fs::OpenMode, std::fs::remove, std::fs::createDir, std::fs::removeDir };
+
+@compileFor(!OS_WINDOWS) extern "umask_probe.h";
+@compileFor(!OS_WINDOWS) extern fn int32 kama_test_set_umask(int32 mask);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_test_mode_of(UnsafeConstPtr<cchar> path);
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 check() {
+    int32 old = kama_test_set_umask(mask: 0o002);
+    int32 bad = 0;
+    string f = "_fs_umask_probe.txt";
+    match (File.open(path: f, mode: OpenMode::Write)) {
+        case Ok(value: fh): { }
+        case Err(error: e): { bad = bad + 1; }
+    };
+    if (kama_test_mode_of(path: f.cstr()) != 0o664) { bad = bad + 2; }
+    match (remove(path: f)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4; } };
+    match (File.open(path: f, mode: OpenMode::Append)) {
+        case Ok(value: fh): { }
+        case Err(error: e): { bad = bad + 8; }
+    };
+    if (kama_test_mode_of(path: f.cstr()) != 0o664) { bad = bad + 16; }
+    match (remove(path: f)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4; } };
+    string d = "_fs_umask_dir";
+    match (createDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 32; } };
+    if (kama_test_mode_of(path: d.cstr()) != 0o775) { bad = bad + 64; }
+    match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4; } };
+    int32 restored = kama_test_set_umask(mask: old);
+    return bad;
+}
+
+@compileFor(OS_WINDOWS)
+fn int32 check() { return 0; }
+
+fn int32 main() { return check() + 42; }

@@ -1,0 +1,11 @@
+{
+  "name": "fsumask",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": [
+    { "path": "csrc/umask_probe.c", "compileFor": ["!OS_WINDOWS"] }
+  ],
+  "modules": { ".": { "visibility": "internal" } }
+}

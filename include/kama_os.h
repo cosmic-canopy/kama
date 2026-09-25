@@ -811,9 +811,14 @@ static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 
 // ---- files -----------------------------------------------------------------
+// A plain create asks for 0666 and the process umask narrows it — the default of C `fopen` (POSIX says so), Go,
+// Rust, Python, Node, Zig, Java and .NET, and what `mkdir` below already did for a directory (KR-92). It was a
+// hardcoded 0644, which agrees under the usual umask 022 and 077 but under 002 (a group-shared directory)
+// stripped the group-write bit the user's own umask granted — overriding the one setting that says what a new
+// file should allow. Only an explicit `permissions:` (kama_open_create_mode) promises a mode.
 static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY); }
-static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644); }
-static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666); }
+static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND, 0666); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)write((int)fd, buf, n); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)close((int)fd); }
