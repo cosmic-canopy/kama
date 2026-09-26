@@ -66,3 +66,31 @@ resource "cloudflare_dns_record" "www" {
   proxied = true
   ttl     = 1
 }
+
+# ---- the package registry: registry.kama-lang.org ----------------------------------------------------
+# A second Pages project serving the static tree in the kama-registry repo, which deploys `registry/` to it
+# on every push to main. Declared HERE, beside the site, so every record in the kama-lang.org zone lives in
+# one state — two states managing one zone is how records get overwritten.
+#
+# This hostname is the MACHINE endpoint: it is compiled into kama binaries as the default registry, so it
+# must never move. `packages.kama-lang.org` is reserved for a human browse/search site and has no record yet.
+resource "cloudflare_pages_project" "registry" {
+  account_id        = var.account_id
+  name              = "kama-registry"
+  production_branch = "main"
+}
+
+resource "cloudflare_pages_domain" "registry" {
+  account_id   = var.account_id
+  project_name = cloudflare_pages_project.registry.name
+  name         = "registry.kama-lang.org"
+}
+
+resource "cloudflare_dns_record" "registry" {
+  zone_id = var.zone_id
+  name    = "registry"
+  type    = "CNAME"
+  content = cloudflare_pages_project.registry.subdomain   # computed — the pages.dev name may be suffixed
+  proxied = true
+  ttl     = 1
+}

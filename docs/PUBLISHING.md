@@ -49,6 +49,10 @@ Add the GitHub secrets under **repo → Settings → Secrets and variables → A
 ./ops deploy-site      # build _site/ and push it to Cloudflare Pages (kama.pages.dev)
 ```
 
+`provision` also creates the **package registry**'s Pages project, `registry.kama-lang.org` and its DNS
+record. The registry's contents live in the separate `cosmic-canopy/kama-registry` repository, which
+deploys itself; see its README.
+
 DNS is on Cloudflare, so the cert + domain bind automatically. Until `kama-lang.org`
 resolves, the site is live at `https://kama.pages.dev`. After this, every push to `main`
 auto-deploys via `.github/workflows/deploy-site.yml` when it touches any of its trigger paths:
