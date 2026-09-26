@@ -3186,6 +3186,7 @@ struct ManifestReader {
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
     std::map<std::string, DepSpec>* overridesOut = nullptr;// set to capture `overrides` (kama.local.json, M5.3)
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
+    std::vector<std::string>* publishExcludeOut = nullptr;// set to capture `publish.exclude` (KR-100)
     std::map<std::string, TargetSpec>* targetsOut = nullptr;  // set to capture `select.TARGET` entries
     std::map<std::string, SelectGroup>* groupsOut = nullptr;  // set to capture the other `select` groups
     // The `select.TARGET` value carrying `"default": true`. TARGET needs its own sink because it is
@@ -3894,6 +3895,29 @@ struct ManifestReader {
         return true;
     }
 
+    // `publish`: what `kama publish` leaves out of the files git tracks. Closed like every object here —
+    // `{ "exclude": [ … ] }` — so a typo'd `exlude` is refused rather than quietly shipping what it named.
+    bool publishObject() {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`publish` must be a JSON object — `{ \"exclude\": [ … ] }`");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `publish`");
+            ++i; ws();
+            if (k == "exclude") {
+                std::vector<std::string> ex;
+                if (!stringArray(ex, "publish.exclude")) return false;
+                if (publishExcludeOut) *publishExcludeOut = ex;
+            } else return fail("unknown key `" + k + "` in `publish` — it takes `exclude`");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `publish`");
+        }
+        return true;
+    }
+
     bool parse() {
         int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
@@ -4092,6 +4116,7 @@ struct ManifestReader {
             // typo'd shape is caught here like every other key; the identifier itself is not validated,
             // because the SPDX list is not a table kama should carry.
             else if (key == "license") { std::string lic; if (!str(lic)) return false; }
+            else if (key == "publish") { if (!publishObject()) return false; }   // read by `kama publish`
             else return fail("unknown key `" + key + "`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -4836,6 +4861,19 @@ static bool loadManifestNameVersion(const std::string& path, std::string& nameOu
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.nameOut = &nameOut; r.versionOut = &versionOut;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a manifest's `publish.exclude` (empty if absent). Returns false + `err` only on a malformed manifest.
+static bool loadManifestPublishExclude(const std::string& path, std::vector<std::string>& out, std::string& err)
+{
+    std::ifstream in(osp(path), std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.publishExcludeOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -7814,7 +7852,7 @@ static bool vcsRead(const std::vector<VcsFile>& files, const std::string& listPa
                 if (value != "unspecified" && value != "unset") {
                     err = "`" + files[r.second[field / 3]].path + "` is stored through the git filter `" + value +
                           "`, so the bytes git committed for it are not the file (for Git LFS, they are a pointer) "
-                          "— a package cannot carry it";
+                          "— a package cannot carry it; leave it out with `publish.exclude`";
                     return false;
                 }
             }
@@ -7841,6 +7879,26 @@ static bool vcsRead(const std::vector<VcsFile>& files, const std::string& listPa
         }
     }
     return true;
+}
+
+// A file name that looks like a secret. Refused even when git tracks it (someone committed a `.env`): a
+// published version is permanent. ⚠️ The SAME list as `tools/check.py` in cosmic-canopy/kama-registry, which
+// enforces it host-side for every compiler — keep the two identical: `.env` and `.env.<anything>` except
+// the four template suffixes; `*.pem *.key *.p12 *.pfx *.jks *.keystore`; the four ssh private-key names;
+// `.netrc .npmrc .pypirc`; `kama.local.json`.
+static bool secretShaped(const std::string& path)
+{
+    const std::string b = path.substr(path.rfind('/') + 1);   // npos + 1 == 0: the whole path
+    if (b == ".env") return true;
+    if (b.size() > 5 && b.compare(0, 5, ".env.") == 0)
+        return b != ".env.example" && b != ".env.sample" && b != ".env.template" && b != ".env.dist";
+    for (const char* ext : {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}) {
+        const size_t n = strlen(ext);
+        if (b.size() >= n && b.compare(b.size() - n, n, ext) == 0) return true;
+    }
+    for (const char* nm : {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc", "kama.local.json"})
+        if (b == nm) return true;
+    return false;
 }
 
 // `kama publish --registry <dir-or-file-uri>`: archive the files git tracks, hash the archive, and record the
@@ -7874,14 +7932,53 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
                 "the manifest is the package\n", manifest.c_str());
         return 1;
     }
+    // `publish.exclude` narrows the tracked set and can only narrow it — it never adds a file, which is the
+    // trap it avoids: npm's `.npmignore` REPLACES `.gitignore`, the classic route for a `.env` onto npm. An
+    // entry is a tracked path relative to the package root; one ending in `/` names every tracked file below
+    // it. Each entry is judged against the whole tracked set, so an entry that names nothing is an error —
+    // a typo in `.claude/` must not quietly ship the directory it meant to leave out.
+    std::vector<std::string> exclude;
+    if (!loadManifestPublishExclude(manifest, exclude, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
+    auto excludes = [](const std::string& e, const std::string& p) {
+        return !e.empty() && e.back() == '/' ? p.compare(0, e.size(), e) == 0 : p == e;
+    };
+    for (const auto& e : exclude) {
+        if (e == "kama.json") {
+            fprintf(stderr, "kama publish: `publish.exclude` names kama.json — the manifest is the package\n"); return 1;
+        }
+        if (std::none_of(snap.files.begin(), snap.files.end(), [&](const VcsFile& f) { return excludes(e, f.path); })) {
+            const bool dir = std::any_of(snap.files.begin(), snap.files.end(),
+                                         [&](const VcsFile& f) { return f.path.compare(0, e.size() + 1, e + "/") == 0; });
+            fprintf(stderr, "kama publish: `publish.exclude` entry \"%s\" matches no tracked file — %s\n", e.c_str(),
+                    dir ? ("a directory needs a trailing `/`: \"" + e + "/\"").c_str()
+                        : "an entry is a path relative to the package root, the way `git ls-files` spells it");
+            return 1;
+        }
+    }
     // Never shipped, even when tracked (the exclusions from before KR-100, kept): the lock and the dev-local
     // overlay belong to one checkout, and a build-output tree is one machine's.
     std::vector<VcsFile> ship;
     for (const auto& f : snap.files) {
         const std::string& p = f.path;
+        if (std::any_of(exclude.begin(), exclude.end(), [&](const std::string& e) { return excludes(e, p); })) continue;
         if (p == "kama.lock" || p == "kama.local.json") continue;
         if (p.rfind("out/", 0) == 0 || p.rfind("build/", 0) == 0 || p.rfind(".kama/", 0) == 0) continue;
         ship.push_back(f);
+    }
+    // The backstop for the files that WILL ship: a secret committed by mistake. Judged after the excludes, so
+    // a test fixture that only looks like a key (`tests/tls/server.key`) can be left out and the package
+    // published — the same set the registry's own check reads, which is the tarball.
+    std::vector<std::string> secrets;
+    for (const auto& f : ship) if (secretShaped(f.path)) secrets.push_back(f.path);
+    if (!secrets.empty()) {
+        fprintf(stderr, "kama publish: git tracks %s that look%s like a secret, and a published version is permanent:\n",
+                secrets.size() == 1 ? "a file" : "files", secrets.size() == 1 ? "s" : "");
+        for (const auto& p : secrets) fprintf(stderr, "    %s\n", p.c_str());
+        fprintf(stderr, "  Remove %s from the repository (`git rm --cached`) and rotate what %s hold%s — %s already in "
+                "its history. A test fixture that only looks like a secret can be left out with `publish.exclude`.\n",
+                secrets.size() == 1 ? "it" : "them", secrets.size() == 1 ? "it" : "they", secrets.size() == 1 ? "s" : "",
+                secrets.size() == 1 ? "it is" : "they are");
+        return 1;
     }
     // One order on every machine. Git's own order is not it: a submodule's files are listed where the
     // submodule sits, so `vendor/sub/x` would precede `vendor/sub-b`.

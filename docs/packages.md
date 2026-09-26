@@ -610,7 +610,27 @@ Publish refuses:
   entry names, and there is no flag to publish anyway;
 - a **submodule that is not checked out**, which would ship without its files;
 - a file stored through a **git filter** such as Git LFS, whose committed bytes are a pointer, not the file;
+- a tracked file whose name **looks like a secret** — `.env` and `.env.*` (but not `.env.example`,
+  `.sample`, `.template` or `.dist`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, the ssh
+  private-key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), `.netrc`, `.npmrc`, `.pypirc` and
+  `kama.local.json`. The refusal says to remove it from the repository *and* rotate it, since it is already in
+  the history. The official registry refuses the same names in any tarball, whichever compiler wrote it;
 - a `kama.json` that git does not track.
+
+Some tracked files belong to the repository but not the package — editor and CI configuration, a notes file,
+a fixture that only *looks* like a key. Leave them out with `publish.exclude`:
+
+```json
+{
+  "publish": { "exclude": [".github/", ".claude/", "tools/", "NOTES.md", "tests/tls/server.key"] }
+}
+```
+
+Each entry is a tracked path relative to the project root; one ending in `/` names every tracked file below
+it. `publish.exclude` can only **remove** tracked files, never add an untracked one — unlike npm's
+`.npmignore`, which replaces `.gitignore` and is the classic route for a `.env` onto npm. An entry that names
+no tracked file is an error, so a typo cannot quietly ship what it meant to leave out, and the secret check
+runs on what remains, so an excluded fixture key does not stop the publish.
 
 The archive holds the **committed** bytes — read out of git, not off disk — so the same commit gives the
 same tarball, byte for byte, on every machine: a Windows checkout with `core.autocrlf` has CRLF on disk and

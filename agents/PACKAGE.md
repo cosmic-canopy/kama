@@ -66,6 +66,8 @@ is inert — so a root type may name every sibling that touches it.
 directory (or `file://` URI) you then serve or push, not an upload endpoint — and a re-publish of the same
 version is refused. The tarball holds exactly the files git tracks, as committed — so commit first: a
 project outside git, or with uncommitted changes, is refused, and an untracked `.env` can never ship.
+Tracked files that belong to the repository but not the package (`.github/`, `tools/`, notes) go in
+`"publish": { "exclude": [ … ] }`; a tracked secret-shaped file (`.env`, `*.pem`, `*.key`, …) is refused.
 Before the first publish: `--license mit` at seed time (or `"license"` in the manifest and a `LICENSE`
 file), a README that says what is vendored and why, and the `tests/` gate green on every target the
 package claims.

@@ -158,6 +158,18 @@ proj kreqbad <<'JSON'
 { "name": "kreqbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": "latest", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject kreqbad 'must be a compiler version range' "a \`kama\` value that is not a range is refused by the reader"
+proj pubok <<'JSON'
+{ "name": "pubok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "publish": { "exclude": ["tools/", "NOTES.md"] }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept pubok "a \`publish.exclude\` list is read by every command, not only by publish"
+proj pubtypo <<'JSON'
+{ "name": "pubtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "publish": { "exlude": ["tools/"] }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject pubtypo 'unknown key `exlude` in `publish`' "a typo inside \`publish\` is refused, not skipped — skipped, it would ship what it named"
+proj pubshape <<'JSON'
+{ "name": "pubshape", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "publish": ["tools/"], "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject pubshape '`publish` must be a JSON object' "a \`publish\` that is not an object is refused by the reader"
 proj kreqnum <<'JSON'
 { "name": "kreqnum", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": 1, "modules": { ".": { "visibility": "internal" } } }
 JSON

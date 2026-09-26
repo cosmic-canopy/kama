@@ -767,6 +767,47 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) : ;; *)
     fi ;;
 esac
 
+# 26k. the secret backstop: a secret-shaped file git TRACKS is refused, every one named, with the advice to rotate
+# it. The list is the registry's own (tools/check.py in cosmic-canopy/kama-registry). A template ships, and
+# doing what the message says — `git rm --cached` — is enough to publish.
+sk="$tmp/kr-secret"; kpkg "$sk" sk 1.0.0; mkdir -p "$sk/config" "$sk/certs"
+for f in .env config/.env.production certs/server.pem id_ed25519; do echo 'SECRET=x' > "$sk/$f"; done
+echo 'SECRET=' > "$sk/.env.example"
+commit_all "$sk"
+if kpub "$sk" --registry "file://$kreg" >"$tmp/sk.out" 2>&1; then kfail "tracked secret-shaped files were published" "$tmp/sk.out"; fi
+for f in .env config/.env.production certs/server.pem id_ed25519; do
+    grep -qx "    $f" "$tmp/sk.out" || kfail "the secret refusal does not name $f" "$tmp/sk.out"
+done
+grep -q "rotate" "$tmp/sk.out" || kfail "the secret refusal does not say to rotate" "$tmp/sk.out"
+if grep -q "env.example" "$tmp/sk.out"; then kfail "the template .env.example was taken for a secret" "$tmp/sk.out"; fi
+git -C "$sk" rm -q --cached .env config/.env.production certs/server.pem id_ed25519; git -C "$sk" commit -qm untrack
+kpub "$sk" --registry "file://$kreg" >"$tmp/sk2.out" 2>&1 || kfail "publish after untracking the secrets errored" "$tmp/sk2.out"
+kmembers "$kreg/sk/1.0.0.tar.gz" ".env.example
+kama.json
+src/sk.kama"
+
+# 26l. publish.exclude narrows the tracked set. An entry naming nothing is refused (with the trailing-`/` hint
+# when it named a directory), and so is naming kama.json. The backstop judges what SHIPS: with the fixture key
+# still in, it refuses; with it excluded, the package publishes — only its sources.
+ex="$tmp/kr-exclude"; kpkg "$ex" ex 1.0.0; mkdir -p "$ex/tools" "$ex/tests/tls"
+echo gen > "$ex/tools/gen.sh"; echo notes > "$ex/NOTES.md"; echo fixture > "$ex/tests/tls/server.key"
+exjson() {
+    printf '{ "name": "ex", "version": "1.0.0", "kind": "library", "publish": { "exclude": [%s] } }\n' "$1" > "$ex/kama.json"
+    commit_all "$ex"
+    if kpub "$ex" --registry "file://$kreg" >"$tmp/ex.out" 2>&1; then return 0; else return 1; fi
+}
+if exjson '"tool/"'; then kfail "an exclude entry naming nothing was accepted" "$tmp/ex.out"; fi
+grep -q 'entry "tool/" matches no tracked file' "$tmp/ex.out" || kfail "no-match refusal unclear" "$tmp/ex.out"
+if exjson '"tools"'; then kfail "a directory entry without its trailing / was accepted" "$tmp/ex.out"; fi
+grep -q 'a directory needs a trailing `/`: "tools/"' "$tmp/ex.out" || kfail "directory hint missing" "$tmp/ex.out"
+if exjson '"kama.json"'; then kfail "excluding kama.json was accepted" "$tmp/ex.out"; fi
+grep -q "names kama.json" "$tmp/ex.out" || kfail "kama.json refusal unclear" "$tmp/ex.out"
+if exjson '"tools/", "NOTES.md"'; then kfail "the unexcluded fixture key shipped" "$tmp/ex.out"; fi
+grep -qx "    tests/tls/server.key" "$tmp/ex.out" || kfail "the backstop did not name the fixture key" "$tmp/ex.out"
+exjson '"tools/", "NOTES.md", "tests/tls/"' || kfail "publish with every extra excluded errored" "$tmp/ex.out"
+kmembers "$kreg/ex/1.0.0.tar.gz" "kama.json
+src/ex.kama"
+
 # ==== M3.2a: sign-on-publish / verify-on-install (SSHSIG via ssh-keygen -Y) ============================
 # `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
 # install enforces (a present signature must verify; a missing one is an error); the default is warn-only.
@@ -1338,4 +1379,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
