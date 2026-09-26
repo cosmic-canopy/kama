@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-100**
+**Next id: KR-102**
 
 ## The shape
 
@@ -72,6 +72,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-100 | **`kama publish` ships a gitignored `.env` — publish exactly what git tracks** — measured 2026-09-26: publish tars the DIRECTORY and never reads `.gitignore`, so a project's `.env` became a recoverable file in a permanent, write-once tarball; on macOS it also adds a hidden AppleDouble `._*` entry per file (machine metadata, and a sha256 that differs per publishing machine). **DECIDED** (maintainer): ship the git-tracked files at `HEAD`, refuse outside git and on a dirty tree, narrow with `publish.exclude`, add `--dry-run`, refuse secret-shaped files, behind a VCS provider seam. **Blocks the first registry publish (`@kama/sodium`)** | M | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-101 | **Publish from Perforce (and other VCS)** — the KR-100 provider seam's second implementation: `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-99 | **Verify `std::fs` permissions on Windows** (shipped `0.9.446`–`0.9.448`) — the access-list code in `include/kama_os.h` compiles and links everywhere through zig but has never RUN: the fixture, `tools/check-windows-acl.sh`, and `ssh-keygen -y` accepting a kama-written key are owed on the Windows box | S | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-91 | **A literal can break `string`'s UTF-8 invariant** — invalid UTF-8 in a string or `char` literal builds (only clang warns on the emitted C), and a surrogate or out-of-range `\u{…}` escape is silently deleted from a string; reject each at lex time | S | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-95 | **A top-level `comptime fn` cannot be exported** — `export { twice }` answers "no such top-level declaration", and the importer is then told `twice` "is not" a comptime fn. A module constant exports, and a type's `public comptime fn` crosses modules (`Palette::twice`), so wrapping the function in a type is today's only route | S | [§5](ROADMAP_DETAIL.md#s5) |
@@ -102,7 +104,7 @@ Most of this gates on the repo going public.
 
 | id | item | detail |
 |---|---|---|
-| KR-27 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-27 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model — IN PROGRESS 2026-09-26: `registry.kama-lang.org` declared in `provisioning/pages/main.tf` (not yet applied), `cosmic-canopy/kama-registry` seeded; `kDefaultRegistry` still empty; first publish waits on KR-100 | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-28 | **Editor/registry registrations** — Zed extension registry, nvim-treesitter, linguist, Helix upstreaming, Marketplace publish | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-29 | **tree-sitter accepts 78 of the 84 reserved words as a binding name** — `Thing else = …` renders as a valid declaration in every editor on this grammar, and the compiler then rejects it. The two reserve differently by construction: `kama.l` consults one table at every identifier, tree-sitter extracts keywords CONTEXTUALLY and a binding site expects `$.identifier`. ⚠️ `check-treesitter.sh` cannot see this class, and the one fixture that looks like it covers it passes on its USE site, not its declaration | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility) | [§10](ROADMAP_DETAIL.md#s10) |
