@@ -7904,11 +7904,15 @@ static bool secretShaped(const std::string& path)
 // `kama publish --registry <dir-or-file-uri>`: archive the files git tracks, hash the archive, and record the
 // new version in the registry's `<name>/index.json` (write-once — refuses to overwrite an existing version).
 // A published registry dep reduces to a url dep on install, so the tarball IS the url-dep format.
-int cmdPublish(const std::string& base, const std::string& registryArg, const std::string& keyPath)
+// `--dry-run` runs every refusal and builds the archive, then prints what would ship and writes nothing.
+int cmdPublish(const std::string& base, const std::string& registryArg, const std::string& keyPath, bool dryRun)
 {
     std::string manifest = base + "/kama.json";
     if (!fileExists(manifest)) { fprintf(stderr, "kama publish: no kama.json in %s\n", base.c_str()); return 2; }
-    if (registryArg.empty())   { fprintf(stderr, "kama publish: --registry <dir-or-file-uri> is required\n"); return 2; }
+    if (registryArg.empty() && !dryRun) {
+        fprintf(stderr, "kama publish: --registry <dir-or-file-uri> is required (or --dry-run, to see what would ship)\n"); return 2;
+    }
+    if (dryRun && !keyPath.empty()) { fprintf(stderr, "kama publish: --dry-run records nothing, so there is nothing to sign — drop --key\n"); return 2; }
     if (!keyPath.empty() && !hasSshKeygen()) { fprintf(stderr, "kama publish: --key needs ssh-keygen (not found on PATH)\n"); return 2; }
 
     std::string name, version, err;
@@ -7984,12 +7988,13 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     // submodule sits, so `vendor/sub/x` would precede `vendor/sub-b`.
     std::sort(ship.begin(), ship.end(), [](const VcsFile& a, const VcsFile& b) { return a.path < b.path; });
 
+    // With no registry (a dry run may name none) there is no immutability to check and nowhere to put anything.
     std::string regDir;
-    if (!registryDirFromArg(registryArg, regDir, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 2; }
+    if (!registryArg.empty() && !registryDirFromArg(registryArg, regDir, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 2; }
 
     std::string pkgDir = regDir + "/" + name;
     std::string indexPath = pkgDir + "/index.json";
-    if (fileExists(indexPath)) {   // immutability: refuse to overwrite an already-published version
+    if (!regDir.empty() && fileExists(indexPath)) {   // immutability: refuse to overwrite an already-published version
         std::ifstream f(osp(indexPath), std::ios::binary);
         std::string idx((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         std::vector<IndexEntry> existing; IndexReader ir(idx);
@@ -8005,17 +8010,30 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     // (kama.archive.h) — which is what lets anyone check a `revision` by rebuilding it, and a mirror hold the
     // same integrity. The files sit under a directory named after the package, so install's
     // `--strip-components=1` peels exactly one level. `sha256Of` is the integrity a consumer re-verifies.
-    const std::string tmpBase = regDir + "/.tmp-publish-" + std::to_string((long)getpid());
+    // A real publish stages beside the registry, so placing the tarball is a same-volume rename; a dry run
+    // stages in the temp directory, so it leaves the registry exactly as it found it.
+    const std::string tmpBase = (dryRun ? tempDir() + "/kama-publish-" : regDir + "/.tmp-publish-") +
+                                std::to_string((long)getpid());
     std::vector<ArchiveEntry> entries;
     if (!vcsRead(ship, tmpBase + ".list", entries, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
     const std::string tarball = tmpBase + ".tar.gz";
+    const std::string tgz = kamaTarGz(importNameOf(name), entries);   // importNameOf: one path component (a scope has a '/')
     {
         std::ofstream o(osp(tarball), std::ios::binary | std::ios::trunc);
-        o << kamaTarGz(importNameOf(name), entries);   // importNameOf: one path component (a scope has a '/')
+        o << tgz;
         if (!o) { fprintf(stderr, "kama publish: cannot write %s\n", tarball.c_str()); remove(osp(tarball).c_str()); return 1; }
     }
     std::string integrity = sha256Of(tarball);
     if (integrity.empty()) { fprintf(stderr, "kama publish: cannot hash the tarball (is sha256sum/shasum available?)\n"); remove(osp(tarball).c_str()); return 1; }
+    if (dryRun) {   // the file list is the answer (stdout, one per line); the summary is commentary (stderr)
+        remove(osp(tarball).c_str());
+        for (const auto& f : ship) printf("%s\n", f.path.c_str());
+        fflush(stdout);   // piped, stdout is block-buffered: the summary would land above the list it sums up
+        fprintf(stderr, "kama: %s@%s would publish %zu file%s, %zu bytes (%s, %s) — a dry run, nothing written\n",
+                name.c_str(), version.c_str(), ship.size(), ship.size() == 1 ? "" : "s", tgz.size(), integrity.c_str(),
+                snap.revision.c_str());
+        return 0;
+    }
 
     // M3.2a: optionally sign the tarball. The SSHSIG blob + signer public key go into the index entry.
     std::string signature, sigKey;
@@ -8836,7 +8854,8 @@ void usage(FILE* out = stderr)
         "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
         "  kama pkg remove <kama.json> <name>\n"
         "  kama pkg update <kama.json> [<pkg>] re-resolve pins (advance a branch pin) and rewrite the lock\n"
-        "  kama publish <kama.json> --registry <dir-or-file-uri> [--key <ssh-key>]   tarball + record (+ sign) in the index\n"
+        "  kama publish <kama.json> --registry <dir-or-file-uri> [--key <ssh-key>]   the committed git-tracked files, archived + recorded (+ signed) in the index\n"
+        "  kama publish <kama.json> --dry-run [--registry <…>]   list what would ship, with its integrity; write nothing\n"
         "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
         "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
         "  kama toolchain uninstall <v>        remove an installed version\n"
@@ -10160,10 +10179,12 @@ int main(int argc, char** argv)
 
     if (subcommand == "publish") {
         std::string registry, dir, key;
+        bool dryRun = false;
         for (int i = 2; i < argc; ++i) {
             std::string a = argv[i];
             if      (a == "--registry" && i + 1 < argc) registry = argv[++i];
             else if (a == "--key" && i + 1 < argc)      key = argv[++i];
+            else if (a == "--dry-run")                  dryRun = true;
             else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama publish: unknown option '%s'\n", a.c_str()); return 2; }
             else if (dir.empty()) dir = a;
             else { fprintf(stderr, "kama publish: unexpected arg '%s'\n", a.c_str()); return 2; }
@@ -10183,7 +10204,7 @@ int main(int argc, char** argv)
                 fprintf(stderr, "    kama publish %s/kama.json\n", memberAsSpelled(dir, m).c_str());
             return 2;
         }
-        return cmdPublish(pubDir, registry, key);
+        return cmdPublish(pubDir, registry, key, dryRun);
     }
 
     if (subcommand == "pkg") {

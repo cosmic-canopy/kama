@@ -104,6 +104,10 @@ tag or wait for 2.0.
      permissions: Permissions::OwnerRead | Permissions::OwnerWrite)` shows exactly the user and SYSTEM in
      `icacls`, and `ssh-keygen -y -f` accepts it — Win32-OpenSSH refuses a key anyone else can read.
   4. `./dev test` and `./dev check` (the long-path and Unicode-path probes call the new functions too).
+  5. `sh tools/check-packages.sh` — the publish rework (`0.9.452`–`0.9.454`) has not run on Windows either: it
+     reads committed bytes through `_popen(…, "rb")` and a cmd.exe `<` redirect into `git cat-file --batch` and
+     `git check-attr`. Its case 26i pins a golden sha256 that macOS and Linux both produce; Windows matching it
+     is the proof, and a mismatch (or a CRLF in case 26g's tarball) points at those two seams.
 
   Two things only a run answers. Does `SetKernelObjectSecurity` honor `PROTECTED_DACL_SECURITY_INFORMATION`?
   The code falls back to plain `DACL_SECURITY_INFORMATION` with `SE_DACL_PROTECTED` in the descriptor's
@@ -111,6 +115,18 @@ tag or wait for 2.0.
   here. Is the token's primary group accepted as a new file's group? `ERROR_INVALID_PRIMARY_GROUP` from
   `CreateFileW` points there. When all four pass, take the "none of this has RUN" bullet out of
   `docs/platforms/windows.md` and delete this row.
+
+- **`std::io` transform adapters: compression and archives (KR-5).** kama's package format is a `.tar.gz`, and
+  since `0.9.452` the compiler writes it itself — `src/kama.archive.cpp`, deflate and gzip from RFC 1951/1952
+  plus POSIX ustar/pax — because the system `gzip` compresses the same input to different bytes on different
+  machines (measured: Apple gzip 479 vs GNU gzip 1.12) and a registry version is identified by its sha256. That
+  writer is C++ and the compiler cannot run kama, so it serves `kama publish` and nothing else. The open
+  question the maintainer raised (2026-09-26): should kama programs get the same from `std`, or from a package?
+  For `std`: deflate and tar are frozen, patent-free standards (Go and Python ship both); kama's own package
+  format already IS one, so a registry or package tool written in kama needs it; gzip `Content-Encoding` for
+  `examples/httpd` and the web-framework direction, and PNG's inflate on the engine track, are known consumers;
+  an unused stdlib module costs a program nothing (measured when the modular stdlib was declared a non-goal, `0.9.360`). A package fits a format that churns
+  (zstd, brotli). Needs the inflate half too — the compiler has only a compressor. Unscoped until the verdict.
 
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
@@ -2803,91 +2819,26 @@ rather than here, so there is one number to keep current. Forward work:
       set, plus closing the warm-store and git-dep gaps; **(b)** then CI/OIDC provenance recorded in a
       transparency log, at which point verification becomes mandatory. Both gate on a live registry, since
       mandatory verification is meaningless before one exists.
+  - **Secret scanning by content, registry-side.** `kama publish` and the registry's `tools/check.py` both
+    refuse secret-shaped file NAMES; a key pasted into `config.json` passes both. A content scanner
+    (gitleaks-style) in the registry's CI is the second layer, and host-side it covers every compiler.
 - **Longer-term — a "node.js-class" application framework in kama.** A fast, low-overhead server/app framework
   (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on the no-GC/AOT
   (or VM-scripted) runtime — the flagship *application* of the language + package manager + scripting tiers
   together. See [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md). Aspirational, post-ecosystem.
 
-### `kama publish` ships what is on disk, not what is tracked (KR-100) — measured 2026-09-26 on `0.9.440`
-
-**The leak.** A package whose `.gitignore` names `.env` published it anyway:
-
-```
-git tracks:     .gitignore  kama.json  src/leak.kama
-tarball holds:  .env  .env.local  .gitignore  kama.json  src/leak.kama
-recovered from the published tarball:  CLOUDFLARE_API_TOKEN=supersecret
-```
-
-`cmdPublish` (`kama.driver.cpp`) builds the tarball with `tar -c -C <project> --exclude=./.git --exclude=./.kama
---exclude=./out --exclude=./build --exclude=./kama.lock --exclude=./kama.local.json .` — a directory walk with a
-fixed, root-anchored exclusion list that never consults git. A registry version is write-once, so a leaked file
-would be permanent in the tarball AND in the registry repository's history. Nothing has been published yet; the
-maintainer keeps secrets in a root `.env`, which is exactly this shape.
-
-**The second defect, found while measuring the first.** On macOS, `tar` stores every file's extended attributes as
-an AppleDouble `._<name>` entry, and macOS stamps `com.apple.provenance` on nearly every file. So each package
-published from a Mac carries a hidden `._` twin per file. **macOS's own `tar -t` hides these entries** — every
-listing looks clean — while Python's `tarfile` and GNU tar see and extract them. They do not break a build
-(source discovery skips dotfiles: `if (n[0] == '.') continue;`), but they publish machine metadata and make the
-sha256 depend on the publishing machine, which quietly defeats the reproducibility `cmdPublish` works for
-(`gzip -n`, the clamped mtimes).
-
-**DECIDED by the maintainer, 2026-09-26:**
-
-1. **Publish exactly the files source control tracks at the current revision**, scoped to the package directory
-   (a package may be a subdirectory of a larger repository). An untracked `.env` then cannot ship.
-2. **Refuse outside a git work tree** — "for now"; other VCSs come through the seam below (KR-101).
-3. **Refuse a dirty tree**: a tracked file with uncommitted changes means the tarball is not the commit it claims
-   to be. No `--allow-dirty` escape — publishing uncommitted work is the bug class being closed.
-4. **`publish.exclude` in `kama.json`** narrows the tracked set (e.g. `.claude/`, `.github/`, `KAMA_GAPS.md`,
-   `tools/`). It can only REMOVE tracked files, never add untracked ones, so it cannot reintroduce npm's trap
-   (`.npmignore` REPLACES `.gitignore`, the classic route for `.env` onto npm). The name is the maintainer's pick:
-   a top-level `exclude` would read as affecting builds.
-
-**Designed, to build next session:**
-
-- **A VCS provider seam** answering three questions: which files are versioned under the package directory; is
-  the working copy identical to that revision; what is the revision id. Git: `git ls-files -z --recurse-submodules
-  -- .`, `git status --porcelain --untracked-files=no -- .`, `git rev-parse HEAD`. Anything else is refused with a
-  message naming the supported set.
-- **Tar from the list**, not the directory: `tar --null -T <list>` (bsdtar and GNU both take it).
-- **`COPYFILE_DISABLE=1`** for the tar calls, set with `setenv` under `__APPLE__` — NOT as a `VAR=1 tar …`
-  prefix, because `runCmd` goes through `cmd.exe` on Windows.
-- **Always excluded even when tracked:** the root `kama.lock` and `kama.local.json` (today's behaviour), and
-  `out/`, `build/`, `.kama/` if someone tracked them.
-- **`publish.exclude` semantics:** each entry is a path relative to the package root; one ending in `/` removes a
-  subtree. **An entry that matches no tracked file is an error** — a typo in `.claude/` must not silently ship it.
-  The manifest's top-level keys are CLOSED (an unknown key is an error), so `publish` has to join the accepted set
-  with its shape validated.
-- **A secret backstop** refusing secret-shaped names even when tracked (someone committed a `.env`): `.env`,
-  `.env.*` except `.example`/`.sample`/`.template`/`.dist`; `*.pem` `*.key` `*.p12` `*.pfx` `*.jks` `*.keystore`;
-  `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`; `.netrc` `.npmrc` `.pypirc`; `kama.local.json`. The error should say to
-  remove it from the repository AND rotate it, since it is already in the history. Keep this list identical to
-  `tools/check.py` in `cosmic-canopy/kama-registry`, which already enforces it host-side for any compiler.
-- **`kama publish --dry-run`**: the file list, the tarball's size and integrity; publishes nothing, and needs no
-  `--registry`.
-
-**Tests.** `tools/check-packages.sh` is the only guard that runs `kama publish`, and it publishes from non-git
-scratch directories — those need a `git init` and a commit once publish refuses outside git. New cases: non-git
-refused; a gitignored `.env` absent from the tarball; a dirty tracked file refused; a tracked `.env` refused;
-`publish.exclude` removing a tracked file, and an entry matching nothing refused; `--dry-run` writing nothing; a
-package in a subdirectory of a repo shipping only its own files; and, on macOS, zero `._` entries **read with
-Python's `tarfile`, never with `tar -t`**.
-
-**Docs.** `packages.md` § *Publishing* (its "tarballs the sources (excluding …)" sentence becomes the tracked-files
-rule), plus `publish.exclude`, `--dry-run` and the refusals. VERSION bump. Reaches users through the next release;
-until then the registry's own check is the backstop.
-
-**Noticed alongside, not part of this row:** a version range must have three parts (`^0.4` is refused as "an
-invalid version range" — the message could say `^0.4.0`); and content-based secret scanning (gitleaks-style) is a
-reasonable second layer for the registry's CI, since name-matching misses a key pasted into `config.json`.
-
 ### Publish from Perforce and other VCSs (KR-101)
 
-KR-100's provider seam, second implementation. Perforce answers the same three questions: `p4 have` over the
-package path for the versioned files; `p4 opened`, plus `p4 status` for edits made without opening the file, for
-local changes; the have-changelist as the revision. It has its own `.p4ignore`, so "an ignored secret never ships"
-carries over. Mercurial (`hg files` / `hg status`) and Subversion (`svn ls -R` / `svn status`) fit the same shape.
-Perforce comes first because it is the game-studio default, and studios keep packages as subdirectories of one
-large depot — which is why KR-100 scopes the file list to the package directory from the start. Not buildable
-blind: it needs a Perforce server to test against.
+The publish seam's second implementation. `kama publish` asks source control four questions (`vcsSnapshot` and
+`vcsRead` in `src/kama.driver.cpp`; the rule is [packages.md](packages.md) § *Publishing*): which files are
+versioned under the package directory, is the working copy exactly that revision, what is the revision, and what
+bytes did it record for each file. Perforce answers them with `p4 have` over the package path; `p4 opened`, plus
+`p4 status` for edits made without opening the file; the have-changelist (recorded as `"revision": "p4:<n>"`);
+and `p4 print -k` for the depot bytes. The bytes must be the depot's for the reason git's are the committed
+ones: a client's `LineEnd` rewrites line endings in the workspace, and `+k` filetypes expand keywords there, so
+the workspace is different bytes on different machines. Perforce has its own `.p4ignore`, so "an ignored secret
+never ships" carries over, and `publish.exclude` and the secret-name check sit above the seam unchanged.
+Mercurial (`hg files` / `hg status` / `hg cat`) and Subversion (`svn ls -R` / `svn status` / `svn cat`) fit the
+same shape. Perforce comes first because it is the game-studio default, and studios keep packages as
+subdirectories of one large depot — which is why the seam scopes the file list to the package directory. Not
+buildable blind: it needs a Perforce server to test against.

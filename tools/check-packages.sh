@@ -808,6 +808,26 @@ exjson '"tools/", "NOTES.md", "tests/tls/"' || kfail "publish with every extra e
 kmembers "$kreg/ex/1.0.0.tar.gz" "kama.json
 src/ex.kama"
 
+# 26m. --dry-run: every refusal and the archive, nothing written. It needs no --registry; given one, the registry
+# is byte-for-byte unchanged, and an already-published version is refused just as a real publish would. The
+# list is the shipped files, and the integrity it prints is the one the real publish then records.
+dr="$tmp/kr-dry"; kpkg "$dr" dr 1.0.0; commit_all "$dr"
+kpub "$dr" --dry-run >"$tmp/dr.out" 2>"$tmp/dr.err" || kfail "--dry-run without a registry errored" "$tmp/dr.err"
+[ "$(cat "$tmp/dr.out")" = "kama.json
+src/dr.kama" ] || kfail "--dry-run did not list exactly the files that ship" "$tmp/dr.out"
+dint=$(grep -o 'sha256-[0-9a-f]*' "$tmp/dr.err") || kfail "--dry-run printed no integrity" "$tmp/dr.err"
+kregsum() { ( cd "$kreg" && find . -type f -exec cksum {} + | sort ); }
+before=$(kregsum)
+kpub "$dr" --dry-run --registry "file://$kreg" >/dev/null 2>"$tmp/dr2.err" || kfail "--dry-run with a registry errored" "$tmp/dr2.err"
+[ "$(kregsum)" = "$before" ] || kfail "--dry-run wrote into the registry"
+kpub "$dr" --registry "file://$kreg" >/dev/null 2>&1 || kfail "the real publish after --dry-run errored"
+grep -q "\"integrity\": \"$dint\"" "$kreg/dr/index.json" || kfail "the real publish recorded a different integrity than --dry-run printed ($dint)" "$kreg/dr/index.json"
+if kpub "$dr" --dry-run --registry "file://$kreg" >/dev/null 2>"$tmp/dr3.err"; then kfail "--dry-run passed a version that is already published"; fi
+grep -qi "immutable" "$tmp/dr3.err" || kfail "--dry-run immutability refusal unclear" "$tmp/dr3.err"
+echo '// edit' >> "$dr/src/dr.kama"
+if kpub "$dr" --dry-run >/dev/null 2>"$tmp/dr4.err"; then kfail "--dry-run hid the dirty-tree refusal"; fi
+grep -q "uncommitted changes" "$tmp/dr4.err" || kfail "--dry-run dirty refusal unclear" "$tmp/dr4.err"
+
 # ==== M3.2a: sign-on-publish / verify-on-install (SSHSIG via ssh-keygen -Y) ============================
 # `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
 # install enforces (a present signature must verify; a missing one is an error); the default is warn-only.
@@ -1379,4 +1399,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

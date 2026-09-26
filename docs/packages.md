@@ -593,6 +593,11 @@ big enough for that cost to matter is a package that wants splitting by scope.
 kama publish kama.json --registry file:///srv/kama-registry
 ```
 
+`kama publish kama.json --dry-run` answers "what would ship?" first: it runs every check below and builds the
+archive, then prints the files one per line and the archive's size and integrity — the integrity the real
+publish will record — and writes nothing. It needs no `--registry`; given one, it also refuses a version that
+is already published.
+
 It archives **exactly the files git tracks** under the project's directory, hashes the archive, and adds a
 version entry to `<registry>/<name>/index.json` alongside the tarball. **Published versions are
 immutable** — re-publishing an existing version is refused; bump the `version` in `kama.json` instead.
@@ -880,7 +885,7 @@ the reason, but still a refusal and never a wrong build.
 | `kama pkg add [--dev] <kama.json> <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
 | `kama pkg remove <kama.json> <name>` | Drop a dependency and install. |
 | `kama pkg update <kama.json> [<pkg>]` | Re-resolve pins and rewrite the lock. |
-| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. |
+| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. `--dry-run` (no `--registry` needed) lists what would ship and its integrity, and writes nothing. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
 | `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |
