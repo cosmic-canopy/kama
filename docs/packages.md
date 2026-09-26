@@ -556,9 +556,14 @@ There is no registry *service* to run: a base URI plus two well-known paths, so 
       { "version": "1.2.0",
         "integrity": "sha256-<tarball-hash>",
         "tarball": "geo/1.2.0.tar.gz",
+        "revision": "git:<commit>",
         "dependencies": { "mathx": { "version": "^1.0.0" } } }
   ] }
   ```
+
+  `revision` names the commit the tarball was built from (`kama publish` records it): check that commit out
+  and you have the published source, and publishing it again — to another registry, from any machine —
+  yields the same `integrity`.
 
 - **Artifact** — whatever `tarball` points at: a gzipped tar of the package sources, the same format a
   `url` dependency takes.
@@ -588,9 +593,31 @@ big enough for that cost to matter is a package that wants splitting by scope.
 kama publish kama.json --registry file:///srv/kama-registry
 ```
 
-It tarballs the sources (excluding `.git/`, `.kama/`, `out/`, and `kama.lock`), hashes them, and adds a
+It archives **exactly the files git tracks** under the project's directory, hashes the archive, and adds a
 version entry to `<registry>/<name>/index.json` alongside the tarball. **Published versions are
 immutable** — re-publishing an existing version is refused; bump the `version` in `kama.json` instead.
+
+Because a published version is permanent, what ships is decided by source control, never by what happens
+to be on disk: a `.env` beside the manifest that `.gitignore` names — or that was simply never added —
+cannot reach the tarball. A project may be a subdirectory of a larger repository; only the files under its
+own directory ship, rooted at it, including the files of any submodule inside it. `kama.lock`,
+`kama.local.json`, and `out/`, `build/` and `.kama/` never ship, even when tracked.
+
+Publish refuses:
+
+- a project that is **not in a git work tree** — git is the source control it reads today;
+- **uncommitted changes** to tracked files, staged or not — the tarball is exactly the commit the index
+  entry names, and there is no flag to publish anyway;
+- a **submodule that is not checked out**, which would ship without its files;
+- a file stored through a **git filter** such as Git LFS, whose committed bytes are a pointer, not the file;
+- a `kama.json` that git does not track.
+
+The archive holds the **committed** bytes — read out of git, not off disk — so the same commit gives the
+same tarball, byte for byte, on every machine: a Windows checkout with `core.autocrlf` has CRLF on disk and
+still ships the LF that was committed. kama writes the archive itself (tar headers with a fixed owner, time
+and modes; the files in path order; deflate and gzip written from RFC 1951/1952) rather than handing it to
+the system `tar` and `gzip`, whose output differs between machines. That is what makes `revision` below a
+claim anyone can check, and lets a mirror hold the same integrity as the registry it copies.
 
 ### Scopes and the `registries` config
 
@@ -833,7 +860,7 @@ the reason, but still a refusal and never a wrong build.
 | `kama pkg add [--dev] <kama.json> <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
 | `kama pkg remove <kama.json> <name>` | Drop a dependency and install. |
 | `kama pkg update <kama.json> [<pkg>]` | Re-resolve pins and rewrite the lock. |
-| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Tarball the project + record (and optionally sign) it in the registry index. |
+| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
 | `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |

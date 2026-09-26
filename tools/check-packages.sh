@@ -475,12 +475,17 @@ mv "$gv.hidden" "$gv"
 # it as `C:\msys64\tmp\…`, so publish created the staging directory in one place and tar looked in another.
 # The git URLs must stay POSIX for the opposite reason — msys2's git resolves `/tmp/…` itself.
 reg="$(kama_native_path "$tmp")/reg"; mkdir -p "$reg"
+# `kama publish` ships exactly the files git tracks, and refuses a directory that is not a git work tree or has
+# uncommitted changes (KR-100) — so every package below is committed before it is published. Quiet, because
+# `mkcf` returns its directory on stdout; `--allow-empty`, because a re-publish may change nothing.
+commit_all() { git -C "$1" init -q && git -C "$1" add -A && git -C "$1" commit -qm pub --allow-empty >/dev/null; }
 
 # publish two versions of `rg` (area() returns a version-distinguishing value) by dogfooding `kama publish`.
 pub_rg() {   # pub_rg <version> <area-return>
     d="$tmp/rg-src-$1"; mkdir -p "$d/src"
     printf '{ "name": "rg", "version": "%s", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' "$1" > "$d/kama.json"
     printf 'export { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/src/rg.kama"
+    commit_all "$d"
     ( cd "$d" && "$KAMA" publish kama.json --registry "file://$reg" )
 }
 # 19. publish → index + tarball + integrity; a second publish of the same version FAILS (immutability).
@@ -502,6 +507,13 @@ cat > "$rc1/kama.json" <<JSON
 JSON
 printf 'import { rg::area };\nfn int32 main() { return area(); }\n' > "$rc1/src/main.kama"
 if ! "$KAMA" pkg install "$rc1/kama.json" >"$tmp/rc1.out" 2>&1; then echo "check-packages: FAIL — registry install errored:" >&2; sed 's/^/  /' "$tmp/rc1.out" >&2; exit 1; fi
+# a two-part range (`^1.0`) is refused, and the message names the three-part form — "an invalid version range"
+# alone left the reader to guess what was wrong with `^1.0`.
+rcr="$tmp/rc-range"; mkdir -p "$rcr/src"; cp "$rc1/src/main.kama" "$rcr/src/"
+sed 's/"\^1\.0\.0"/"^1.0"/' "$rc1/kama.json" > "$rcr/kama.json"
+if "$KAMA" pkg install "$rcr/kama.json" >"$tmp/rcr.out" 2>&1; then echo "check-packages: FAIL — a two-part range installed" >&2; exit 1; fi
+grep -q "invalid version range \"\^1\.0\".*all three MAJOR.MINOR.PATCH parts" "$tmp/rcr.out" \
+    || { echo "check-packages: FAIL — two-part range refusal does not name the three-part form:" >&2; sed 's/^/  /' "$tmp/rcr.out" >&2; exit 1; }
 lock="$rc1/kama.lock"
 grep -q '"source": "registry"' "$lock" && grep -q '"version": "1.2.0"' "$lock" && grep -q '"integrity": "sha256-' "$lock" \
     || { echo "check-packages: FAIL — registry lock missing source/version/integrity:" >&2; sed 's/^/  /' "$lock" >&2; exit 1; }
@@ -522,6 +534,7 @@ cat > "$hi/kama.json" <<JSON
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
 printf 'import { rg::area };\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
+commit_all "$hi"
 if ! ( cd "$hi" && "$KAMA" publish kama.json --registry "file://$reg" ) >"$tmp/hipub.out" 2>&1; then echo "check-packages: FAIL — publish hi errored:" >&2; sed 's/^/  /' "$tmp/hipub.out" >&2; exit 1; fi
 rc2="$tmp/rc2"; mkdir -p "$rc2/src"
 cat > "$rc2/kama.json" <<JSON
@@ -556,6 +569,7 @@ areg="$(kama_native_path "$tmp")/areg"; mkdir -p "$areg"
 sc="$tmp/sc-src"; mkdir -p "$sc/src"
 printf '{ "name": "@acme/sc", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$sc/kama.json"
 printf 'export { val };\nfn int32 val() { return 7; }\n' > "$sc/src/sc.kama"
+commit_all "$sc"
 if ! ( cd "$sc" && "$KAMA" publish kama.json --registry "file://$areg" ) >"$tmp/scpub.out" 2>&1; then echo "check-packages: FAIL — publish @acme/sc errored:" >&2; sed 's/^/  /' "$tmp/scpub.out" >&2; exit 1; fi
 [ -f "$areg/@acme/sc/index.json" ] || { echo "check-packages: FAIL — scoped publish path wrong (no @acme/sc/index.json)" >&2; find "$areg" >&2; exit 1; }
 scp="$tmp/scp"; mkdir -p "$scp/src"
@@ -586,7 +600,7 @@ grep -qi "no registry configured" "$tmp/opo.out" || { echo "check-packages: FAIL
 # Native-spelled: these three are REGISTRIES (see the note at `reg=` above), not git repos.
 ntmp=$(kama_native_path "$tmp")
 ra="$ntmp/cf-a"; rb="$ntmp/cf-b"; rc_="$ntmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
-mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d/src"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/src/cf.kama"; echo "$d"; }
+mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d/src"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/src/cf.kama"; commit_all "$d"; echo "$d"; }
 csame=$(mkcf same 3); cdiff=$(mkcf diff 4)
 ( cd "$csame" && "$KAMA" publish kama.json --registry "file://$ra" ) >/dev/null 2>&1
 ( cd "$csame" && "$KAMA" publish kama.json --registry "file://$rb" ) >/dev/null 2>&1
@@ -609,7 +623,7 @@ grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusio
 
 # 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
 creg="$(kama_native_path "$tmp")/creg"; mkdir -p "$creg"
-for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; ( cd "$d" && "$KAMA" publish kama.json --registry "file://$creg" ) >/dev/null 2>&1; done
+for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; commit_all "$d"; ( cd "$d" && "$KAMA" publish kama.json --registry "file://$creg" ) >/dev/null 2>&1; done
 colp="$tmp/colp"; mkdir -p "$colp"
 cat > "$colp/kama.json" <<JSON
 { "name": "colp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
@@ -618,6 +632,140 @@ cat > "$colp/kama.json" <<JSON
 JSON
 if "$KAMA" pkg install "$colp/kama.json" >"$tmp/colp.out" 2>&1; then echo "check-packages: FAIL — import-name collision was not rejected" >&2; exit 1; fi
 grep -qi "collision" "$tmp/colp.out" || { echo "check-packages: FAIL — collision message unclear:" >&2; sed 's/^/  /' "$tmp/colp.out" >&2; exit 1; }
+
+# ==== KR-100: publish ships exactly the files git tracks =================================================
+# Publish used to tar the DIRECTORY, so a gitignored `.env` landed in a tarball the registry keeps forever — and
+# on macOS every file gained a hidden AppleDouble `._` twin. Members are read with Python's tarfile, NEVER
+# `tar -t`: macOS's tar hides the `._` entries it writes itself, which is exactly how they went unseen. Without
+# python3 the exit-code cases still run and the member-set assertions are skipped.
+kreg="$(kama_native_path "$tmp")/kreg"; mkdir -p "$kreg"
+kfail() { echo "check-packages: FAIL — $1" >&2; if [ -n "${2:-}" ]; then sed 's/^/  /' "$2" >&2; fi; exit 1; }
+kpub() { kd=$1; shift; ( cd "$kd" && "$KAMA" publish kama.json "$@" ); }
+kpkg() {   # kpkg <dir> <name> <version>: a one-file library, not yet committed
+    mkdir -p "$1/src"
+    printf '{ "name": "%s", "version": "%s", "kind": "library" }\n' "$2" "$3" > "$1/kama.json"
+    printf 'export { v };\nfn int32 v() { return 1; }\n' > "$1/src/$2.kama"
+}
+# kmembers <tgz> <expected, one per line>: the tarball's FILES, wrapper directory peeled, must be exactly these.
+if command -v python3 >/dev/null 2>&1; then KPY=1; KRNOTE="exact member sets via tarfile"; else KPY=; KRNOTE="member sets skipped (no python3)"; fi
+kmembers() {
+    [ -n "$KPY" ] || return 0
+    got=$(python3 -c 'import sys,tarfile; print("\n".join(sorted(m.name.split("/",1)[1] for m in tarfile.open(sys.argv[1]) if not m.isdir())))' "$1")
+    [ "$got" = "$2" ] || { printf 'check-packages: FAIL — %s holds the wrong files\n  expected:\n%s\n  got:\n%s\n' "$1" "$2" "$got" >&2; exit 1; }
+}
+
+# 26a. outside a git work tree: refused, and nothing reaches the registry. The ceiling keeps an enclosing
+# repository (a TMPDIR inside one) from turning this into a pass.
+ng="$tmp/kr-nogit"; kpkg "$ng" ng 1.0.0
+if GIT_CEILING_DIRECTORIES="$tmp" kpub "$ng" --registry "file://$kreg" >"$tmp/ng.out" 2>&1; then kfail "publish outside git was allowed" "$tmp/ng.out"; fi
+grep -q "not in a git work tree" "$tmp/ng.out" || kfail "outside-git refusal message unclear" "$tmp/ng.out"
+[ ! -e "$kreg/ng" ] || kfail "a refused publish still wrote into the registry"
+
+# 26b. the leak as measured: a gitignored `.env` and an untracked (not ignored) file are NOT shipped, and the
+# untracked file does not count as a dirty tree either. The index names the commit the tarball is.
+lk="$tmp/kr-leak"; kpkg "$lk" lk 1.0.0
+printf '.env\n.env.local\n' > "$lk/.gitignore"
+echo 'API_TOKEN=supersecret' > "$lk/.env"; echo 'X=1' > "$lk/.env.local"
+commit_all "$lk"
+echo notes > "$lk/notes.txt"
+kpub "$lk" --registry "file://$kreg" >"$tmp/lk.out" 2>&1 || kfail "publish of a clean git package errored" "$tmp/lk.out"
+kmembers "$kreg/lk/1.0.0.tar.gz" ".gitignore
+kama.json
+src/lk.kama"
+if gzip -dc "$kreg/lk/1.0.0.tar.gz" | grep -q supersecret; then kfail "the gitignored .env is in the tarball"; fi
+grep -q "\"revision\": \"git:$(git -C "$lk" rev-parse HEAD)\"" "$kreg/lk/index.json" \
+    || kfail "the index entry does not record the published commit" "$kreg/lk/index.json"
+
+# 26c. a dirty tree is refused — a modified tracked file, and a staged-but-uncommitted one — and naming the
+# file. The version is bumped so immutability cannot be the reason for the refusal.
+sed 's/1\.0\.0/1.0.1/' "$lk/kama.json" > "$tmp/kj" && mv "$tmp/kj" "$lk/kama.json"
+echo '// edit' >> "$lk/src/lk.kama"
+if kpub "$lk" --registry "file://$kreg" >"$tmp/dirty.out" 2>&1; then kfail "publish of a modified tracked file was allowed" "$tmp/dirty.out"; fi
+grep -q "uncommitted changes" "$tmp/dirty.out" && grep -q "src/lk.kama" "$tmp/dirty.out" || kfail "dirty-tree refusal message unclear" "$tmp/dirty.out"
+git -C "$lk" add -A
+if kpub "$lk" --registry "file://$kreg" >"$tmp/staged.out" 2>&1; then kfail "publish of a staged, uncommitted change was allowed" "$tmp/staged.out"; fi
+grep -q "uncommitted changes" "$tmp/staged.out" || kfail "staged-change refusal message unclear" "$tmp/staged.out"
+git -C "$lk" commit -qm edit
+kpub "$lk" --registry "file://$kreg" >"$tmp/lk2.out" 2>&1 || kfail "publish after committing errored" "$tmp/lk2.out"
+
+# 26d/e. a package in a SUBDIRECTORY of a larger repository. Before it is added its manifest is untracked:
+# refused. Once committed it ships only its own files, rooted at itself — and not the files it tracks that no
+# package ships (a root `kama.lock`, a build-output tree).
+mono="$tmp/kr-mono"; mkdir -p "$mono/other"; echo top > "$mono/top.txt"; echo x > "$mono/other/x.kama"
+git -C "$mono" init -q; git -C "$mono" add -A; git -C "$mono" commit -qm top
+kpkg "$mono/pkgs/p" p 1.0.0
+if kpub "$mono/pkgs/p" --registry "file://$kreg" >"$tmp/mono1.out" 2>&1; then kfail "publish with an untracked kama.json was allowed" "$tmp/mono1.out"; fi
+grep -q "is not tracked by git" "$tmp/mono1.out" || kfail "untracked-manifest refusal message unclear" "$tmp/mono1.out"
+mkdir -p "$mono/pkgs/p/out"; echo junk > "$mono/pkgs/p/out/junk.txt"; echo '{}' > "$mono/pkgs/p/kama.lock"
+git -C "$mono" add -A; git -C "$mono" commit -qm p
+kpub "$mono/pkgs/p" --registry "file://$kreg" >"$tmp/mono2.out" 2>&1 || kfail "publish of a subdirectory package errored" "$tmp/mono2.out"
+kmembers "$kreg/p/1.0.0.tar.gz" "kama.json
+src/p.kama"
+
+# 26f. submodules: a checked-out one ships its tracked files (and not an untracked stray inside it). One that is
+# not checked out is refused: `status` cannot see it, and it would ship as an empty directory — the package
+# missing the files its commit names. `protocol.file.allow`: git refuses a local-path submodule by default.
+subr="$tmp/kr-subrepo"; mkdir -p "$subr"; echo 'int vendored;' > "$subr/lib.c"; commit_all "$subr"
+sp="$tmp/kr-sp"; kpkg "$sp" sp 1.0.0
+git -C "$sp" init -q
+git -C "$sp" -c protocol.file.allow=always submodule add -q "$subr" vendor/sub >"$tmp/spadd.out" 2>&1 || kfail "could not add a submodule" "$tmp/spadd.out"
+git -C "$sp" add -A; git -C "$sp" commit -qm sp
+echo stray > "$sp/vendor/sub/stray.txt"
+kpub "$sp" --registry "file://$kreg" >"$tmp/sp.out" 2>&1 || kfail "publish with a checked-out submodule errored" "$tmp/sp.out"
+kmembers "$kreg/sp/1.0.0.tar.gz" ".gitmodules
+kama.json
+src/sp.kama
+vendor/sub/lib.c"
+sp2="$tmp/kr-sp2"; git clone -q "$sp" "$sp2"   # no --recurse-submodules: vendor/sub is not checked out
+sed 's/1\.0\.0/1.0.1/' "$sp2/kama.json" > "$tmp/kj" && mv "$tmp/kj" "$sp2/kama.json"; git -C "$sp2" commit -qam v
+if kpub "$sp2" --registry "file://$kreg" >"$tmp/sp2.out" 2>&1; then kfail "publish with a submodule not checked out was allowed" "$tmp/sp2.out"; fi
+grep -q "is not checked out" "$tmp/sp2.out" || kfail "submodule refusal message unclear" "$tmp/sp2.out"
+
+# 26g. the COMMITTED bytes ship, not the checkout's: a clone with core.autocrlf=true has CRLF on disk (Git for
+# Windows installs that way) and a clean status, and publishes the byte-identical tarball the LF checkout
+# does. The `\r` count proves the clone really converted — otherwise this case would pass vacuously.
+eo="$tmp/kr-eol"; kpkg "$eo" eo 1.0.0; commit_all "$eo"
+eo2="$tmp/kr-eol-crlf"; git clone -q -c core.autocrlf=true "$eo" "$eo2"
+[ "$(tr -cd '\r' < "$eo2/src/eo.kama" | wc -c | tr -d ' ')" -gt 0 ] || kfail "the autocrlf clone has no CRLF on disk — this case proves nothing"
+kreg2="$(kama_native_path "$tmp")/kreg2"; mkdir -p "$kreg2"
+kpub "$eo" --registry "file://$kreg" >"$tmp/eo.out" 2>&1 || kfail "publish of the LF checkout errored" "$tmp/eo.out"
+kpub "$eo2" --registry "file://$kreg2" >"$tmp/eo2.out" 2>&1 || kfail "publish of the CRLF checkout errored" "$tmp/eo2.out"
+cmp -s "$kreg/eo/1.0.0.tar.gz" "$kreg2/eo/1.0.0.tar.gz" || kfail "a CRLF checkout of the same commit published different bytes"
+
+# 26h. a file stored through a git filter (Git LFS) is refused: its committed bytes are a pointer, not the
+# file. The attribute alone decides — git-lfs need not be installed for the shape to be caught.
+lf="$tmp/kr-lfs"; kpkg "$lf" lf 1.0.0
+printf '*.bin filter=lfs diff=lfs merge=lfs -text\n' > "$lf/.gitattributes"; printf 'bytes' > "$lf/asset.bin"
+commit_all "$lf"
+if kpub "$lf" --registry "file://$kreg" >"$tmp/lf.out" 2>&1; then kfail "a file under the lfs filter was published" "$tmp/lf.out"; fi
+grep -q "asset.bin. is stored through the git filter .lfs." "$tmp/lf.out" || kfail "filter refusal message unclear" "$tmp/lf.out"
+
+# 26i. ONE commit, ONE sha256, on every machine and every leg. The archive is written by kama itself
+# (src/kama.archive.cpp) — owner, time, modes, order and the deflate stream fixed — so this integrity is a
+# constant. A change here means every rebuild of an already-published version stops matching its index
+# entry: change the writer only on purpose, and then this number with it. Both the chmod and `--chmod=+x`:
+# the index carries the mode where core.fileMode=false (Windows) ignores the disk, and the disk has to
+# agree where it does not, or the tree is dirty.
+gd="$tmp/kr-golden"; kpkg "$gd" golden 1.0.0
+mkdir -p "$gd/tools" "$gd/docs/a_directory_name_long_enough_to_need/a_pax_path_record_in_the_tar"
+printf '#!/bin/sh\necho golden\n' > "$gd/tools/run.sh"; chmod +x "$gd/tools/run.sh"
+printf '# notes\n' > "$gd/docs/a_directory_name_long_enough_to_need/a_pax_path_record_in_the_tar/notes.md"
+git -C "$gd" init -q; git -C "$gd" add -A; git -C "$gd" add --chmod=+x tools/run.sh; git -C "$gd" commit -qm golden
+kpub "$gd" --registry "file://$kreg" >"$tmp/gd.out" 2>&1 || kfail "publish of the golden package errored" "$tmp/gd.out"
+KR_GOLDEN=sha256-c810092dce694803902974ee8b297fc27e45f3a2259e7fea8fa7a2cdbc3122d4
+grep -q "\"integrity\": \"$KR_GOLDEN\"" "$kreg/golden/index.json" \
+    || kfail "the golden package's integrity moved — the archive writer's bytes changed (expected $KR_GOLDEN)" "$kreg/golden/index.json"
+
+# 26j. a tracked symlink ships as a symlink, its target the bytes git recorded. POSIX only: msys2's `ln -s`
+# copies, so git there would record a plain file.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) : ;; *)
+    sl="$tmp/kr-link"; kpkg "$sl" sl 1.0.0; ln -s src/sl.kama "$sl/alias.kama"; commit_all "$sl"
+    kpub "$sl" --registry "file://$kreg" >"$tmp/sl.out" 2>&1 || kfail "publish with a tracked symlink errored" "$tmp/sl.out"
+    if [ -n "$KPY" ]; then
+        python3 -c 'import sys,tarfile; m=tarfile.open(sys.argv[1]).getmember("sl/alias.kama"); sys.exit(0 if m.issym() and m.linkname=="src/sl.kama" else 1)' "$kreg/sl/1.0.0.tar.gz" \
+            || kfail "the tracked symlink did not ship as a symlink to src/sl.kama"
+    fi ;;
+esac
 
 # ==== M3.2a: sign-on-publish / verify-on-install (SSHSIG via ssh-keygen -Y) ============================
 # `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
@@ -628,6 +776,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
     sg="$tmp/sg-src"; mkdir -p "$sg/src"
     printf '{ "name": "sg", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$sg/kama.json"
     printf 'export { val };\nfn int32 val() { return 5; }\n' > "$sg/src/sg.kama"
+    commit_all "$sg"
     if ! ( cd "$sg" && "$KAMA" publish kama.json --registry "file://$sreg" --key "$tmp/pubkey" ) >"$tmp/sgpub.out" 2>&1; then
         echo "check-packages: FAIL — signed publish errored:" >&2; sed 's/^/  /' "$tmp/sgpub.out" >&2; exit 1; fi
     grep -q '"signature"' "$sreg/sg/index.json" && grep -q '"key"' "$sreg/sg/index.json" \
@@ -1189,4 +1338,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

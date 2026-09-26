@@ -120,6 +120,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.lsp.o    \
             kama.driver.o \
             kama.winpath.o \
+            kama.archive.o \
             kama.prelude.gen.o \
             kama.agents.gen.o \
             kama.seed.gen.o)
@@ -176,7 +177,8 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: src/kama.l $(BUILD)/kama.parser
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
 HEADERS = $(addprefix src/, kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h \
-                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h kama.winpath.h)
+                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h kama.winpath.h \
+                            kama.archive.h)
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.

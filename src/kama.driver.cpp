@@ -90,6 +90,7 @@
 #include "kama.json.h"      // Json + serialize, for `--json` output (shared with the LSP's framing)
 #include "kama.agents.h"    // KAMA_AGENTS_MD + stubs, embedded — the `kama agents` command
 #include "kama.seed.h"      // KAMA_SEED_* project templates, embedded — the `kama seed` command
+#include "kama.archive.h"   // kamaTarGz — `kama publish`'s archive, the same bytes on every machine
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -666,7 +667,7 @@ std::string deriveCxxDriver(const std::string& cc)
 // change of directory, which would break a relative `--cc ./mycc`.
 enum class CcFamily { Clang, Gcc, Unknown };
 
-std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr);   // defined below, with the other spawns
+std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr, bool binary = false);   // defined below, with the other spawns
 
 // The compiler's answer to `-v`, asked once per distinct `cc` string. Two readers: `ccFamily` below, and the
 // object cache, which keys every stamp on it so a toolchain upgrade misses. Empty when the driver could not
@@ -2905,6 +2906,12 @@ struct VersionReq {
 
 // Operators: exact `1.2.3`; caret `^1.2.3`; tilde `~1.2.3`; comparators `>=` `>` `<=` `<`;
 // wildcard `*`/`x`/empty. Returns false on anything else (compound ranges, hyphen ranges, `||`).
+// Every form parseVersionReq accepts, for the message that refuses one. Named in full because the common
+// miss is `^0.4`: each form takes all three MAJOR.MINOR.PATCH parts, and "an invalid version range" alone
+// never said so.
+static const char* const kVersionRangeForms =
+    "`^1.2.0`, `~1.2.0`, `>=1.2.0`, `<2.0.0`, an exact `1.2.0`, or `*` — always all three MAJOR.MINOR.PATCH parts";
+
 static bool parseVersionReq(const std::string& in, VersionReq& out)
 {
     // trim surrounding whitespace
@@ -4031,8 +4038,8 @@ struct ManifestReader {
                 if (!str(rq)) return false;
                 VersionReq vr;
                 if (!parseVersionReq(rq, vr))
-                    return fail("`kama` must be a compiler version range — `>=0.9.200`, `^1.2.0`, `~1.2.0`, an "
-                                "exact version, or `*` — not \"" + rq + "\"");
+                    return fail("`kama` must be a compiler version range — " + std::string(kVersionRangeForms) +
+                                " — not \"" + rq + "\"");
                 if (kamaReqOut) *kamaReqOut = rq;
             }
             // A project's `name` is its ROOT NAMESPACE (§2a.2), so it must be spellable in an `import`.
@@ -6484,11 +6491,13 @@ int cmdUpdate(const std::string& pinned) { return runInstaller(pinned, /*makeDef
 
 // Run `cmd` and capture its stdout, trimmed of trailing newlines; *exitCode (if given) receives the
 // child's exit status. "" if the process can't be spawned. This is the one place the driver needs a
-// subprocess's OUTPUT (a hasher's hex digest, a git commit), not just its status like runCmd.
-std::string runCmdCapture(const std::string& cmd, int* exitCode)
+// subprocess's OUTPUT (a hasher's hex digest, a git commit), not just its status like runCmd. `binary`
+// returns the bytes exactly — untrimmed, and on Windows read in binary mode, where text mode would turn
+// "\r\n" into "\n" and stop at the first 0x1A (a file's committed bytes, for `kama publish`).
+std::string runCmdCapture(const std::string& cmd, int* exitCode, bool binary)
 {
 #ifdef _WIN32
-    FILE* p = _popen(cmd.c_str(), "r");
+    FILE* p = _popen(cmd.c_str(), binary ? "rb" : "r");
 #else
     FILE* p = popen(cmd.c_str(), "r");
 #endif
@@ -6501,7 +6510,7 @@ std::string runCmdCapture(const std::string& cmd, int* exitCode)
     int st = pclose(p); int rc = (st == -1) ? -1 : WEXITSTATUS(st);
 #endif
     if (exitCode) *exitCode = rc;
-    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    while (!binary && !out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
     return out;
 }
 
@@ -7187,7 +7196,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         VersionReq req;
                         if (!parseVersionReq(r.spec.version, req)) {
                             fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) has an invalid "
-                                    "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
+                                    "version range \"%s\" — a range is %s\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str(),
+                                kVersionRangeForms);
                             return 1;
                         }
                         VersionReq merged = intersect(accReq[r.name], req);
@@ -7238,7 +7248,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     VersionReq req;
                     if (!parseVersionReq(r.spec.version, req)) {
                         fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) has an invalid "
-                                "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
+                                "version range \"%s\" — a range is %s\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str(),
+                                kVersionRangeForms);
                         return 1;
                     }
                     auto sd = seeded.find(r.name);
@@ -7674,8 +7685,166 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
     o << out; return true;
 }
 
-// `kama publish --registry <dir-or-file-uri>`: tar the project sources, hash them, and record the new
-// version in the registry's `<name>/index.json` (write-once — refuses to overwrite an existing version).
+// What a package IS, for publishing: the files source control versions under its directory, with the bytes
+// it recorded for them (KR-100). Publish used to tar the DIRECTORY with a fixed exclusion list, so a
+// gitignored `.env` shipped — into a tarball the registry keeps forever. The seam is four questions, and a
+// second VCS (Perforce, KR-101) joins by answering the same four:
+//   - which files are versioned under the package directory;
+//   - is the working copy exactly that revision (refused if not: the tarball must BE the revision it names);
+//   - what is the revision (recorded in the index entry, so a version names the commit it came from);
+//   - what bytes did it record for each file (vcsRead). The COMMITTED bytes, never the checkout's: Git for
+//     Windows installs with core.autocrlf=true, so the same commit read off disk was different bytes on
+//     different machines, and a `revision` nobody else could rebuild to the same integrity.
+struct VcsFile {
+    std::string path;          // relative to the package directory
+    ArchiveEntry::Kind kind;   // from the mode the VCS recorded, never the filesystem's
+    std::string repo;          // the repository holding the object: a submodule is a repository of its own
+    std::string local;         // the path as that repository names it
+    std::string object;        // its id there
+};
+struct VcsSnapshot {
+    std::vector<VcsFile> files;
+    std::string revision;      // "git:<40-hex>"
+};
+
+// The files git records under `dir`, each named `prefix` + its path, descending into submodules.
+static bool gitFiles(const std::string& dir, const std::string& prefix, std::vector<VcsFile>& out, std::string& err)
+{
+    int rc = 0;
+    const std::string list = runCmdCapture("git -C \"" + dir + "\" ls-files -z --stage -- .", &rc, /*binary=*/true);
+    if (rc != 0) { err = "`git ls-files` failed in " + dir; return false; }
+    for (size_t i = 0; i < list.size();) {   // "<mode> <object> <stage>\t<path>", NUL-separated, never quoted
+        size_t z = list.find('\0', i); if (z == std::string::npos) z = list.size();
+        const std::string rec = list.substr(i, z - i);
+        i = z + 1;
+        const size_t sp1 = rec.find(' '), sp2 = rec.find(' ', sp1 + 1), tab = rec.find('\t');
+        if (sp1 == std::string::npos || sp2 == std::string::npos || tab == std::string::npos) {
+            err = "unexpected `git ls-files` output in " + dir; return false;
+        }
+        const std::string mode = rec.substr(0, sp1), object = rec.substr(sp1 + 1, sp2 - sp1 - 1);
+        const std::string path = prefix + rec.substr(tab + 1);
+        if (mode == "160000") {
+            // A submodule that is not checked out is invisible to `status`, and would ship as nothing at all
+            // (measured: an empty `vendor/sub/`). Checked out, its HEAD is the commit the gitlink records;
+            // an empty directory answers the SUPERPROJECT's HEAD instead, and a missing one fails.
+            const std::string sub = dir + "/" + rec.substr(tab + 1);
+            const std::string head = runCmdCapture("git -C \"" + sub + "\" rev-parse --verify -q HEAD 2>" KAMA_DEVNULL, &rc);
+            if (rc != 0 || head != object) {
+                err = "submodule " + path + " is not checked out, so its files would be missing from the package "
+                      "— run `git submodule update --init --recursive`";
+                return false;
+            }
+            if (!gitFiles(sub, path + "/", out, err)) return false;
+            continue;
+        }
+        ArchiveEntry::Kind kind;
+        if      (mode == "100644") kind = ArchiveEntry::File;
+        else if (mode == "100755") kind = ArchiveEntry::Executable;
+        else if (mode == "120000") kind = ArchiveEntry::Symlink;
+        else { err = "`" + path + "` has git mode " + mode + ", which no package file has"; return false; }
+        out.push_back({path, kind, dir, rec.substr(tab + 1), object});
+    }
+    return true;
+}
+
+static bool vcsSnapshot(const std::string& base, VcsSnapshot& out, std::string& err)
+{
+    const std::string git = "git -C \"" + base + "\" ";
+    int rc = 0;
+    if (runCmdCapture(git + "rev-parse --is-inside-work-tree 2>" KAMA_DEVNULL, &rc) != "true" || rc != 0) {
+        runCmdCapture(KAMA_WHICH "git 2>" KAMA_DEVNULL, &rc);
+        err = rc != 0 ? std::string("git is not on PATH, and publish ships exactly the files git tracks")
+                      : base + "/kama.json is not in a git work tree — publish ships exactly the files source control "
+                        "tracks, and git is the one it reads, so commit the package to a git repository first";
+        return false;
+    }
+    std::string head = runCmdCapture(git + "rev-parse --verify -q HEAD", &rc);
+    if (rc != 0 || head.empty()) { err = "the repository has no commit yet — commit the package, then publish"; return false; }
+    // Staged, unstaged and deleted tracked files all show here, and so does a submodule moved off the commit
+    // its gitlink records; untracked files cannot ship, so they are not asked about.
+    std::string dirty = runCmdCapture(git + "status --porcelain --untracked-files=no -- .", &rc);
+    if (rc != 0) { err = "`git status` failed in " + base; return false; }
+    if (!dirty.empty()) {
+        err = "uncommitted changes to tracked files — the tarball must be exactly the commit it records, so "
+              "commit or revert them first:";
+        for (size_t i = 0; i < dirty.size();) {
+            size_t nl = dirty.find('\n', i); if (nl == std::string::npos) nl = dirty.size();
+            err += "\n    " + dirty.substr(i, nl - i);
+            i = nl + 1;
+        }
+        return false;
+    }
+    if (!gitFiles(base, "", out.files, err)) return false;
+    out.revision = "git:" + head;
+    return true;
+}
+
+// The committed bytes of `files`, as archive entries in the same order. Per repository: one `git check-attr`
+// and one `git cat-file --batch`, each fed through `listPath` (a command line has a length limit; a package
+// does not).
+static bool vcsRead(const std::vector<VcsFile>& files, const std::string& listPath, std::vector<ArchiveEntry>& out,
+                    std::string& err)
+{
+    out.assign(files.size(), ArchiveEntry());
+    std::map<std::string, std::vector<size_t>> byRepo;
+    for (size_t k = 0; k < files.size(); ++k) byRepo[files[k].repo].push_back(k);
+    auto run = [&](const std::string& repo, const std::string& input, const std::string& args, std::string& output) {
+        {
+            std::ofstream o(osp(listPath), std::ios::binary | std::ios::trunc);
+            o << input;
+            if (!o) { err = "cannot write '" + listPath + "'"; return false; }
+        }
+        int rc = 0;
+        output = runCmdCapture("git -C \"" + repo + "\" " + args + " < \"" + listPath + "\"", &rc, /*binary=*/true);
+        remove(osp(listPath).c_str());
+        if (rc != 0) { err = "`git " + args + "` failed in " + repo; return false; }
+        return true;
+    };
+    for (const auto& r : byRepo) {
+        // A file stored through a filter (Git LFS is the common one) has committed bytes that are whatever
+        // the filter put in the repository — for LFS, a pointer — so its committed bytes are not the file.
+        // Refused rather than guessed at. Output: "<path>\0filter\0<value>\0" per file.
+        std::string input, attrs;
+        for (size_t k : r.second) { input += files[k].local; input.push_back('\0'); }
+        if (!run(r.first, input, "check-attr -z --stdin filter", attrs)) return false;
+        for (size_t i = 0, field = 0, start = 0; i < attrs.size(); ++i) {
+            if (attrs[i] != '\0') continue;
+            if (field % 3 == 2) {
+                const std::string value = attrs.substr(start, i - start);
+                if (value != "unspecified" && value != "unset") {
+                    err = "`" + files[r.second[field / 3]].path + "` is stored through the git filter `" + value +
+                          "`, so the bytes git committed for it are not the file (for Git LFS, they are a pointer) "
+                          "— a package cannot carry it";
+                    return false;
+                }
+            }
+            ++field;
+            start = i + 1;
+        }
+        std::string ids, batch;
+        for (size_t k : r.second) ids += files[k].object + "\n";
+        if (!run(r.first, ids, "cat-file --batch", batch)) return false;
+        size_t pos = 0;
+        for (size_t k : r.second) {   // "<object> blob <size>\n<bytes>\n", in the order asked
+            const size_t nl = batch.find('\n', pos);
+            const std::string head = nl == std::string::npos ? std::string() : batch.substr(pos, nl - pos);
+            const std::string want = files[k].object + " blob ";
+            const size_t size = head.compare(0, want.size(), want) == 0
+                              ? (size_t)strtoull(head.c_str() + want.size(), nullptr, 10) : std::string::npos;
+            if (size == std::string::npos || nl + 1 + size > batch.size()) {
+                err = "git could not read `" + files[k].path + "` (" + head + ")"; return false;
+            }
+            out[k].path = files[k].path;
+            out[k].kind = files[k].kind;
+            out[k].data = batch.substr(nl + 1, size);
+            pos = nl + 1 + size + 1;
+        }
+    }
+    return true;
+}
+
+// `kama publish --registry <dir-or-file-uri>`: archive the files git tracks, hash the archive, and record the
+// new version in the registry's `<name>/index.json` (write-once — refuses to overwrite an existing version).
 // A published registry dep reduces to a url dep on install, so the tarball IS the url-dep format.
 int cmdPublish(const std::string& base, const std::string& registryArg, const std::string& keyPath)
 {
@@ -7698,6 +7867,26 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     std::map<std::string, DepSpec> deps;
     if (!loadManifestDeps(manifest, deps, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
 
+    VcsSnapshot snap;
+    if (!vcsSnapshot(base, snap, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
+    if (std::none_of(snap.files.begin(), snap.files.end(), [](const VcsFile& f) { return f.path == "kama.json"; })) {
+        fprintf(stderr, "kama publish: %s is not tracked by git — publish ships exactly the tracked files, and "
+                "the manifest is the package\n", manifest.c_str());
+        return 1;
+    }
+    // Never shipped, even when tracked (the exclusions from before KR-100, kept): the lock and the dev-local
+    // overlay belong to one checkout, and a build-output tree is one machine's.
+    std::vector<VcsFile> ship;
+    for (const auto& f : snap.files) {
+        const std::string& p = f.path;
+        if (p == "kama.lock" || p == "kama.local.json") continue;
+        if (p.rfind("out/", 0) == 0 || p.rfind("build/", 0) == 0 || p.rfind(".kama/", 0) == 0) continue;
+        ship.push_back(f);
+    }
+    // One order on every machine. Git's own order is not it: a submodule's files are listed where the
+    // submodule sits, so `vendor/sub/x` would precede `vendor/sub-b`.
+    std::sort(ship.begin(), ship.end(), [](const VcsFile& a, const VcsFile& b) { return a.path < b.path; });
+
     std::string regDir;
     if (!registryDirFromArg(registryArg, regDir, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 2; }
 
@@ -7715,55 +7904,35 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
         }
     }
 
-    // Stage a wrapper dir named after the package (so install's `--strip-components=1` peels exactly one
-    // level), copying the sources but excluding VCS/build/lock cruft, then gzip it. `sha256Of` is the
-    // tarball integrity a consumer re-verifies.
-    std::string tmp = regDir + "/.tmp-publish-" + std::to_string((long)getpid());
-    std::string wrapper = importNameOf(name);   // a single path component (a scoped name has a '/')
-    runCmd(rmRfCmd(tmp));
-    if (!makeDirs(tmp + "/" + wrapper)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
-    // `./out` is the build-output root a project actually uses (docs/targets.md); `./build` predates
-    // that convention and stays excluded so an older layout is not suddenly published. Excluding the
-    // output is not tidiness — out/<triple>/ differs per publishing machine, so shipping it would
-    // break the REPRODUCIBLE integrity hash the block immediately below depends on.
-    std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama "
-                          "--exclude=./out --exclude=./build "
-                          "--exclude=./kama.lock --exclude=./kama.local.json -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
-    if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
-    // The integrity hash must be REPRODUCIBLE: publishing the same sources twice (e.g. to two mirrors) has
-    // to yield the same sha256, or a consumer re-pointing at a mirror trips the dependency-confusion guard.
-    // Two things break that, and neither is fixable with portable tar flags (GNU's --mtime/--sort don't
-    // exist on bsdtar), so normalize the inputs instead:
-    //   1. the staging wrapper dir is created fresh on every publish, so ITS mtime lands in the archive —
-    //      clamp every staged entry to a fixed timestamp;
-    //   2. libarchive's `tar -cz` (macOS) stamps the CURRENT TIME into the gzip header — compress through
-    //      `gzip -n`, which omits the name/timestamp. (GNU tar was reproducible here only by accident: it
-    //      pipes to gzip via stdin, which stores 0.)
-    runCmd("find \"" + tmp + "/" + wrapper + "\" -exec touch -t 198001010000 {} +");
-    std::string tarball = tmp + "/pkg.tar.gz";
-    if (runCmd("tar -cf - -C \"" + tmp + "\" \"" + wrapper + "\" | gzip -n > \"" + tarball + "\"") != 0) {
-        fprintf(stderr, "kama publish: cannot create the tarball\n"); runCmd(rmRfCmd(tmp)); return 1;
+    // The archive is built in memory from the committed bytes, and is the same bytes on every machine
+    // (kama.archive.h) — which is what lets anyone check a `revision` by rebuilding it, and a mirror hold the
+    // same integrity. The files sit under a directory named after the package, so install's
+    // `--strip-components=1` peels exactly one level. `sha256Of` is the integrity a consumer re-verifies.
+    const std::string tmpBase = regDir + "/.tmp-publish-" + std::to_string((long)getpid());
+    std::vector<ArchiveEntry> entries;
+    if (!vcsRead(ship, tmpBase + ".list", entries, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
+    const std::string tarball = tmpBase + ".tar.gz";
+    {
+        std::ofstream o(osp(tarball), std::ios::binary | std::ios::trunc);
+        o << kamaTarGz(importNameOf(name), entries);   // importNameOf: one path component (a scope has a '/')
+        if (!o) { fprintf(stderr, "kama publish: cannot write %s\n", tarball.c_str()); remove(osp(tarball).c_str()); return 1; }
     }
     std::string integrity = sha256Of(tarball);
-    if (integrity.empty()) { fprintf(stderr, "kama publish: cannot hash the tarball (is sha256sum/shasum available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
+    if (integrity.empty()) { fprintf(stderr, "kama publish: cannot hash the tarball (is sha256sum/shasum available?)\n"); remove(osp(tarball).c_str()); return 1; }
 
     // M3.2a: optionally sign the tarball. The SSHSIG blob + signer public key go into the index entry.
     std::string signature, sigKey;
     if (!keyPath.empty()) {
         std::string serr;
-        if (!sshSign(tarball, keyPath, signature, sigKey, serr)) { fprintf(stderr, "kama publish: %s\n", serr.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
+        if (!sshSign(tarball, keyPath, signature, sigKey, serr)) { fprintf(stderr, "kama publish: %s\n", serr.c_str()); remove(osp(tarball).c_str()); return 1; }
     }
 
-    if (!makeDirs(pkgDir)) { fprintf(stderr, "kama publish: cannot create %s\n", pkgDir.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
+    if (!makeDirs(pkgDir)) { fprintf(stderr, "kama publish: cannot create %s\n", pkgDir.c_str()); remove(osp(tarball).c_str()); return 1; }
     std::string finalTarball = pkgDir + "/" + version + ".tar.gz";
-    runCmd(rmRfCmd(finalTarball));
+    remove(osp(finalTarball).c_str());
     if (rename(osp(tarball).c_str(), osp(finalTarball).c_str()) != 0) {
-        // rename can fail across volumes; fall back to a copy.
-        if (runCmd("cp \"" + tarball + "\" \"" + finalTarball + "\"") != 0) {
-            fprintf(stderr, "kama publish: cannot place the tarball at %s\n", finalTarball.c_str()); runCmd(rmRfCmd(tmp)); return 1;
-        }
+        fprintf(stderr, "kama publish: cannot place the tarball at %s\n", finalTarball.c_str()); remove(osp(tarball).c_str()); return 1;
     }
-    runCmd(rmRfCmd(tmp));
 
     // Build the index entry. `dependencies` are recorded for protocol conformance (the resolver reads the
     // fetched manifest, so this is informational metadata) — a name → its declared version range.
@@ -7775,14 +7944,15 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
         depsJson += "}";
     }
     std::string entry = "{ \"version\": \"" + jsonEscape(version) + "\", \"integrity\": \"" + jsonEscape(integrity)
-                      + "\", \"tarball\": \"" + jsonEscape(name + "/" + version + ".tar.gz") + "\"";
+                      + "\", \"tarball\": \"" + jsonEscape(name + "/" + version + ".tar.gz") + "\""
+                      + ", \"revision\": \"" + jsonEscape(snap.revision) + "\"";
     if (!depsJson.empty()) entry += ", \"dependencies\": { " + depsJson + " }";
     if (!signature.empty()) entry += ", \"signature\": \"" + jsonEscape(signature) + "\", \"key\": \"" + jsonEscape(sigKey) + "\"";
     entry += " }";
 
     if (!appendIndexEntry(indexPath, name, entry, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
-    fprintf(stderr, "kama: published %s@%s (%s%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(),
-            signature.empty() ? "" : ", signed", regDir.c_str());
+    fprintf(stderr, "kama: published %s@%s (%s, %s%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(),
+            snap.revision.c_str(), signature.empty() ? "" : ", signed", regDir.c_str());
     return 0;
 }
 
