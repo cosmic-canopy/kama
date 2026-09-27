@@ -2481,6 +2481,28 @@ rather than here, so there is one number to keep current. Forward work:
   prefer `kama query --search` over grep because it answers from what the compiler resolved; for these names
   grep is today the only answer.
 
+  **Re-measured `0.9.461` (2026-09-27), wider than filed.** A two-module probe (module `static`, module
+  `comptime` constant, top-level `comptime fn`, a type's and an enum's `comptime` constant and `comptime fn`,
+  each used locally, across an `import`, in a comptime initializer and in runtime code):
+  - every one answers "no definition" at every use — including the names in the `import { … }` list and a
+    bare `LIMIT` in runtime code — "no references" at its declaration, "no symbols" to `--search`, and none
+    appears in `--symbols` (the outline lists a type's fields and an enum's variants, never its comptime members);
+  - ⚠️ **the TYPE's references miss every `Palette::K` and `Palette::scaled(…)`**, in runtime code and in a
+    comptime initializer alike, and inside the type's own body — so `textDocument/rename` of `Palette` returned
+    3 edits (declaration, export, import) and left 4 `Palette::…` sites naming a type that no longer exists.
+    That is the row's real cost: navigation that says nothing is survivable, a rename that half-applies is not
+    (`tools/check-lsp.sh` records the same judgment for methods). A variant qualifier is fine — `Suit::Hearts`
+    records its reference to `Suit` and resolves `Hearts` — so the gap is the comptime member path, plus every
+    name the comptime INTERPRETER reads: `kama.comptime.cpp` makes no `recordRef` call at all.
+  Where it lives: `CEmitter::buildDefSites` (`src/kama.query.cpp`, ~518) records no entry for `_moduleStatics`
+  / `_constStatics` / `_typeConsts` / `_comptimeFns` / `_comptimeMethods`; `recordRef` (~772) is never reached
+  from the interpreter nor from the `V::K` read paths; completion reads `_typeConsts` directly (~2226), which is
+  why it alone disagrees. Since `0.9.460` every comptime fn carries its declaring `NsCtx` (`unitPath` included), so
+  a definition site for one is its node's line in that file. Adjacent, same session: the interpreter's
+  "unknown identifier `K`" for a type's own constant read bare should say what the runtime path says ("read it
+  as `Palette::K`"). Fixtures: `tools/check-query.sh` (def/refs/search/symbols per kind) and a rename case in
+  `tools/check-lsp.sh`. The probe lives in `.scratch/kr97/` (`python3 .scratch/kr97/probe.py`).
+
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
   everywhere in this repo, and `kama query --diagnostics` is a shipped mode. `kama stats` it is. The record
