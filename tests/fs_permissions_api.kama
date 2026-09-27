@@ -44,6 +44,12 @@ fn int32 api() {
 
 // A file this program just created is its owner's to read and write, and nobody else may write it under any
 // sane umask; a directory is its owner's to enter. The exact bits are the umask's, so only those are checked.
+// POSIX only, as in fs_umask.d: Windows has no umask — a plain create inherits its directory's access list
+// (SPEC: *A new file's permissions*) — so there the bits are the checkout's, not kama's. Under a user profile
+// only the owner, SYSTEM and Administrators get an entry and this passed; in CI's `D:\a` workspace it failed
+// (0.9.457), and in msys2's temp — which lets every authenticated user modify what is created in it — it fails
+// with the other-write bit set.
+@compileFor(!OS_WINDOWS)
 unsafe fn int32 recorded() {
     int32 bad = 0;
     string f = "_fs_permissions_api.txt";
@@ -65,6 +71,9 @@ unsafe fn int32 recorded() {
     match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4096; } };
     return bad;
 }
+
+@compileFor(OS_WINDOWS)
+fn int32 recorded() { return 0; }
 
 fn int32 main() {
     int32 bad = api() + recorded();

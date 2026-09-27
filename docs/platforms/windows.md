@@ -435,6 +435,12 @@ Worth knowing before debugging, because each of these produced a confident wrong
     loads the key, the case the row was filed for. Still never run: the DOS read-only attribute (nothing kama
     writes sets it), the shared-file branch (it needs a second account) and a descriptor over 4 KB
     (`kama__sd_mode_big`).
+  - ⚠️ **A plain create's bits are its DIRECTORY's, so where a test runs decides them.** This checkout, under a
+    user profile, hands a new file entries for the owner, SYSTEM and Administrators only; msys2's `/tmp` adds Users
+    and an Authenticated-Users Modify grant; CI's `D:\a` workspace hands out something else again.
+    `fs_permissions_api` asserted POSIX umask bits of a plain create — the owner reads and writes, nobody else
+    writes — and passed here, then failed CI's Windows leg at `0.9.457`; like `fs_umask.d`, that half is POSIX-only
+    now. A test that asserts a Windows file's bits must set them (`openWith`, `createDirWith`, `setPermissions`).
   - ⚠️ **`Get-Acl`'s SDDL is not the order on disk.** It lists deny entries first and then sorts by SID, so SYSTEM
     (`S-1-5-18`) prints before a user's `S-1-5-21-…` whatever order the list holds. kama writes deny entries,
     owner, group, Everyone, SYSTEM; read the descriptor in C
@@ -643,8 +649,11 @@ the suite took **1171 s** for 2114 assertions (`KAMA_SKIP_CHECKS=1 ./dev test`),
 (single-file 283, xfail 412, analysis agreement 120, multi-file 23), and `./dev check` ran all 90 guards, the heavy
 ones included, in **375 s**. Those four phases took the emulated box 842 s for a smaller corpus (below), so the
 emulation was not the dominant cost; what is remains unmeasured, and the Defender exclusion below is still the
-untried lever. One number is structural: `proc_detach_dtor` spawns 3000
-children and took 119 s — **~40 ms per process** under the suite's load, where every other fixture took ≤ 10 s.
+untried lever. One number is this MACHINE's, not the suite's: a process start costs **~32–41 ms** here whatever it
+runs — a clang-built `return 0`, a kama program and `whoami.exe` alike, launched by `CreateProcessW` on an idle box.
+`proc_detach_dtor` spawns 3000 children, so it takes ~120 s, which is the fixture cap (`KAMA_FIXTURE_TIMEOUT`): it
+passed at 119 s and failed at 123 s. CI's runner spawns ~6× faster (18.7 s for the same fixture at `0.9.457`). On a
+box like this one, run the suite with `KAMA_FIXTURE_TIMEOUT=300` — a local setting, not a repo default.
 
 **The phase breakdown is the thing to read before optimizing anything**, because it has repeatedly been
 guessed wrong:
