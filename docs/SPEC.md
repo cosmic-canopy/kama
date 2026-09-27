@@ -1842,8 +1842,10 @@ an entry for the owner (which always keeps the right to change and delete its ow
 and for Everyone only when they are granted something, SYSTEM always, deny entries first where an owner has
 less than the others, and protected from inheriting anything wider. A private file is therefore owner + SYSTEM,
 the set Win32-OpenSSH accepts for a private key; Administrators get no entry and can take ownership of any file,
-as root reads any file. The group maps weakly there (a file's group is usually "None", which every local user
-belongs to). The wasm target's virtual filesystem stores and reports the bits.
+as root reads any file. An owner's list is written whole there, even over bits that already match — an entry no
+bit expresses, an Administrators grant say, does not survive the owner's `openWith` or `setPermissions` — so
+"left as it is" is the non-owner's case. The group maps weakly there (a file's group is usually "None", which
+every local user belongs to). The wasm target's virtual filesystem stores and reports the bits.
 
 **A new file's permissions.** A plain create — `File.open` with `Write` or `Append`, `writeFile`, `writeText` —
 asks for `rw-rw-rw-` and lets the process umask narrow it (`rw-r--r--` under the usual `022`, `rw-rw-r--` <!-- test: fs_umask -->

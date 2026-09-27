@@ -22,7 +22,8 @@
 # never the one asked: on a `noacl` mount its key check is skipped, and it accepts anything.
 #
 # The verdict is itself checked: the private file is then given an extra Administrators entry with icacls, and
-# the same verdict must refuse it — a list comparison only ever seen passing proves nothing.
+# the same verdict must refuse it — a list comparison only ever seen passing proves nothing. The owner's
+# `openWith` must then take the entry away: it writes the list whole, even over bits that already match.
 #
 # Windows only — the oracle is Windows. Everywhere else it SKIPS with exit 0, like check-winargv.
 #
@@ -163,6 +164,27 @@ MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$tmp/private.key")" /grant '*S-1-5
 r=$(verdict "$tmp/private.key" "")
 [ -n "$r" ] || fail "the verdict ACCEPTED a private file with an extra Administrators entry — it cannot tell private from not"
 
+# ...and the owner's openWith takes that entry away again: it writes the list whole, even over bits that already
+# match, so an entry no bit expresses does not survive it (SPEC, std::fs: Setting permissions).
+cat > "$tmp/again.kama" <<'EOF'
+import { std::fs::File, std::fs::OpenMode, std::fs::Permissions };
+
+unsafe fn int32 again() {
+    match (File.openWith(path: "private.key", mode: OpenMode::Append, permissions: Permissions::OwnerRead | Permissions::OwnerWrite)) {
+        case Ok(value: f): { }
+        case Err(error: e): { return 1; }
+    };
+    return 0;
+}
+
+fn int32 main() { return again(); }
+EOF
+"$KAMA" build "$tmp/again.kama" -o "$tmp/again.exe" > "$tmp/build.log" 2>&1 \
+    || { sed -n '1,20p' "$tmp/build.log" >&2; fail "the second probe did not build"; }
+( cd "$tmp" && ./again.exe ) || fail "openWith refused the owner's own private file"
+r=$(verdict "$tmp/private.key" "")
+[ -z "$r" ] || fail "the owner's openWith left the extra entry in place: $r"
+
 echo "check-windows-acl: PASS (a private file and directory, and an existing file given a private list, hold exactly"
 echo "                   owner + SYSTEM, protected; 0o644 adds group + Everyone; a deny entry keeps the owner out of"
-echo "                   0o077; $sshnote; the verdict refuses an extra entry)"
+echo "                   0o077; $sshnote; the verdict refuses an extra entry, and the owner's openWith removes it)"

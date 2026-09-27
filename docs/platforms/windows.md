@@ -28,6 +28,11 @@ pacman -S --needed --noconfirm make bison flex diffutils git \
 because a guard that cannot find `diff` does not report a missing tool — it reports the comparison as
 failed, and a clean tree gets blamed for it.
 
+`python` (msys2's, `/usr/bin/python3`) IS optional, and not in CI's list: without it `check-packages` skips its
+member-set assertions — exactly which files a publish ships — and `check-query` its JSON checks, so install it to
+run those here. ⚠️ Keep Windows' own `python3` off the PATH (Git Bash, `MSYS2_PATH_TYPE=inherit`): it is the
+Microsoft Store's stub, not a Python, and `command -v` finds it, so those guards use it instead of skipping.
+
 Everything must run with `MSYSTEM=UCRT64` set, or `uname -s` reports `MSYS_NT` and the build lands in
 a different `out/` directory than the one the tests look in. Driving that shell from *outside* msys2
 — another terminal, an editor task, an agent — needs two things that pull against each other:
@@ -394,13 +399,18 @@ Worth knowing before debugging, because each of these produced a confident wrong
     (`tools/check-header-scan.sh` plants one). `<aclapi.h>` is also where `rpc.h`'s `#define interface struct`
     comes from — the macro that broke `std::net` in 0.9.376.
   - ⚠️ **`SetKernelObjectSecurity`, not `SetSecurityInfo`**: the MARTA call propagates inheritable entries to
-    a directory's existing children (slow, and a surprise); the kernel call sets the one object.
+    a directory's existing children (slow, and a surprise); the kernel call sets the one object. ⚠️ **And it
+    IGNORES `PROTECTED_DACL_SECURITY_INFORMATION`** (measured, KR-99): given that flag alone it returns TRUE and
+    leaves an inherited list unprotected, while the descriptor's `SE_DACL_PROTECTED` bit alone protects it. So the
+    seam sets the bit and passes no flag (`0.9.456`).
   - **An existing file is given the list of ITS owner and group**, read from the file, not the caller's —
     `chmod` semantics. A new file names the caller's token user as owner explicitly, so an elevated
     administrator's file belongs to the user and not to Administrators (the token's default owner). An
     existing file the caller may write but not re-list (a shared file someone else owns) is accepted only when
     its list already reads back as exactly the bits asked for — what POSIX does, where the `fchmod` is skipped
-    when nothing would change and refused to a non-owner otherwise.
+    when nothing would change and refused to a non-owner otherwise. An owner's list, by contrast, is written
+    whole even when the bits already match, so an entry no bit expresses — an Administrators grant — does not
+    survive the owner's `openWith` or `setPermissions`.
   - **The group maps weakly.** A file's group is usually the machine's "None" (or "Domain Users"), which every
     local user is in, so group bits are close to other bits here. When a token's primary group IS the user
     (a service running as SYSTEM), there is no separate group entry and the group bits echo the owner's.
@@ -412,12 +422,32 @@ Worth knowing before debugging, because each of these produced a confident wrong
     file) falls back to the CRT's `st_mode`.
   - `tools/check-windows-acl.sh` (Windows only) reads the result back through Windows itself — SDDL via
     PowerShell's `Get-Acl`, so no locale renames "Everyone" — and requires exactly owner + SYSTEM for a private
-    file.
-  - ⚠️ **As of `0.9.448` none of this has RUN on Windows (KR-99).** It compiles and links for `x86_64-windows-gnu`
-    (`tools/check-target.sh` §6 cross-builds `tests/fs_permissions.kama` with zig on every box that has it),
-    and the POSIX half passes everywhere, but the first run of `tests/fs_permissions.kama` and
-    `check-windows-acl.sh` on this box is owed — and with it, that `ssh-keygen -y -f <a kama-written key>`
-    accepts the key, which is what the row was filed for.
+    file, a private directory and an existing file given a private list; a deny entry that keeps the owner out of
+    `0o077`, by Windows' own access check; and that Win32-OpenSSH loads a private key kama wrote and refuses the
+    same bytes at `0o644`. ⚠️ It asks System32's `ssh-keygen` by full path: msys2's and Git Bash's are MSYS
+    builds, which skip the key check on a `noacl` mount and accept anything.
+  - **Verified on Windows (KR-99), 2026-09-27, `0.9.454`–`0.9.456`,** on a native x86-64 Windows 11 26200 box as a
+    UAC-filtered administrator at medium integrity: `tests/fs_permissions.kama` and `fs_permissions_api` pass (42),
+    as do the whole suite and every guard. A private file is `D:P(A;;0x1f019f;;;<owner>)(A;;FA;;;SY)` — the owner's
+    read, write and control rights, nothing to execute. A `0o077` file leads with `(D;;CCDCLCSWRPWP;;;<owner>)` —
+    the six data rights, none of the control ones — and the owner's read of it is refused although Everyone may
+    read. The token's primary group (`None`, `…-513`) is accepted as a new file's group. And Win32-OpenSSH 9.5p2
+    loads the key, the case the row was filed for. Still never run: the DOS read-only attribute (nothing kama
+    writes sets it), the shared-file branch (it needs a second account) and a descriptor over 4 KB
+    (`kama__sd_mode_big`).
+  - ⚠️ **`Get-Acl`'s SDDL is not the order on disk.** It lists deny entries first and then sorts by SID, so SYSTEM
+    (`S-1-5-18`) prints before a user's `S-1-5-21-…` whatever order the list holds. kama writes deny entries,
+    owner, group, Everyone, SYSTEM; read the descriptor in C
+    (`ConvertSecurityDescriptorToStringSecurityDescriptorW`) when the order is the question.
+- **`kama publish` reads the committed bytes through a binary pipe — measured (KR-99, `0.9.455`).** `git cat-file
+  --batch`, fed through a cmd.exe `<` redirect and read with `_popen(…, "rb")`: the golden package's sha256 is the
+  one macOS and Linux produce (`check-packages` 26i), and a committed CR and Ctrl-Z ship intact (26n). Only 26n can
+  tell — against a compiler built with `"r"` every other publish case passed, the golden included, and 26n failed,
+  because a text-mode read folds CRLF to LF and stops at 0x1A.
+- **`rmdir /s /q` cannot delete a FILE,** where POSIX's `rm -rf` deletes either — and the driver's `rmRfCmd` is
+  exactly that here. Twelve call sites handed it a file, so until `0.9.455` every url or registry install left its
+  download (`.tmp-<pid>-<name>.tgz`) in the package store, and every `kama publish --key` its `.sig` beside the
+  registry. A file is `remove(osp(…))`; `check-packages` asserts that nothing `.tmp-*` survives.
 
 ## Where the remaining work is
 
@@ -607,6 +637,14 @@ entries here. One has shipped:
 The suite is **~1356 s** here (2026-09-12, `0.9.309`) against ~75 s in the Linux container — read the
 vintage note under [Running things](#running-things) before comparing those two. It was ~1819 s on
 2026-09-06; the difference is a guard-side campaign that is now finished, and what remains is inherent.
+
+**On a native x86-64 box (2026-09-27, `0.9.456`)** — no QEMU and no x64 translation, 20 threads, `KAMA_JOBS=10` —
+the suite took **1171 s** for 2114 assertions (`KAMA_SKIP_CHECKS=1 ./dev test`), its four fixture phases 838 s of it
+(single-file 283, xfail 412, analysis agreement 120, multi-file 23), and `./dev check` ran all 90 guards, the heavy
+ones included, in **375 s**. Those four phases took the emulated box 842 s for a smaller corpus (below), so the
+emulation was not the dominant cost; what is remains unmeasured, and the Defender exclusion below is still the
+untried lever. One number is structural: `proc_detach_dtor` spawns 3000
+children and took 119 s — **~40 ms per process** under the suite's load, where every other fixture took ≤ 10 s.
 
 **The phase breakdown is the thing to read before optimizing anything**, because it has repeatedly been
 guessed wrong:
