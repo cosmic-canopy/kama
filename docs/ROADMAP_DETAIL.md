@@ -2794,6 +2794,19 @@ rather than here, so there is one number to keep current. Forward work:
       set, plus closing the warm-store and git-dep gaps; **(b)** then CI/OIDC provenance recorded in a
       transparency log, at which point verification becomes mandatory. Both gate on a live registry, since
       mandatory verification is meaningless before one exists.
+  - **Where the official registry keeps its bytes — DECIDED 2026-09-27.** The index (`<pkg>/index.json`) lives
+    in `cosmic-canopy/kama-registry` and deploys to Pages, where every change is a reviewed commit; the tarballs
+    live in the R2 bucket `kama-registry-tarballs` behind `dl.kama-lang.org` (`provisioning/pages/main.tf`),
+    with an indefinite bucket lock, so write-once is a property of the storage. The first version shipped with
+    its tarball in git, which does not scale: a permanent version grows every clone forever, and Pages refuses
+    any file over 25 MiB. A `_redirects` rule sends each tarball path to the bucket — after a rule that keeps
+    `index.json` on Pages, since a redirect beats a static file (measured) — so index entries stay relative and
+    a lockfile never records the bucket's host. **R2 over Backblaze B2**, the maintainer's call on these
+    numbers (both vendors' pages, 2026-09-27): past the shared 10 GB free tier B2 stores for $6.95/TB against
+    R2's $15/TB, and its egress is free through Cloudflare; R2 egress is free unconditionally, it sits in the
+    same account, token and OpenTofu state as everything else, and its bucket lock is native. At today's size
+    both cost nothing. Revisit if the registry reaches terabytes (engine-track asset packages, say): the
+    redirect makes the move one line.
   - **Secret scanning by content, registry-side.** `kama publish` and the registry's `tools/check.py` both
     refuse secret-shaped file NAMES; a key pasted into `config.json` passes both. A content scanner
     (gitleaks-style) in the registry's CI is the second layer, and host-side it covers every compiler.

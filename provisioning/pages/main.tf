@@ -94,3 +94,40 @@ resource "cloudflare_dns_record" "registry" {
   proxied = true
   ttl     = 1
 }
+
+# ---- the registry's tarballs: dl.kama-lang.org (R2) ---------------------------------------------------
+# The registry's INDEX lives in git and deploys to the Pages project above; its TARBALLS live here. A
+# tarball is write-once and never deleted, so a repository holding them grows by every byte ever published
+# and every clone downloads all of it — and Pages refuses any single file over 25 MiB. R2 egress is free,
+# and the lock below makes write-once a property of the storage itself, not only of the checks publish runs.
+#
+# Clients never see this hostname. The registry's `_redirects` sends `/@kama/<pkg>/<file>` here, after a
+# rule that keeps every `index.json` on Pages, so an index entry's `tarball` stays relative to
+# registry.kama-lang.org and a lockfile records only that URL: this name can change with one line there.
+resource "cloudflare_r2_bucket" "registry_tarballs" {
+  account_id = var.account_id
+  name       = "kama-registry-tarballs"
+}
+
+resource "cloudflare_r2_custom_domain" "registry_tarballs" {
+  account_id  = var.account_id
+  bucket_name = cloudflare_r2_bucket.registry_tarballs.name
+  domain      = "dl.kama-lang.org"
+  zone_id     = var.zone_id
+  enabled     = true
+  min_tls     = "1.2"
+}
+
+# Every object, forever: a published tarball can be neither overwritten nor deleted — not by `ops`, not by a
+# leaked token, not by hand in the dashboard. ⚠️ So never upload a probe or test object to this bucket: it
+# would be permanent too. `kama-registry`'s `ops publish` uploads only after every check has passed.
+resource "cloudflare_r2_bucket_lock" "registry_tarballs" {
+  account_id  = var.account_id
+  bucket_name = cloudflare_r2_bucket.registry_tarballs.name
+  rules = [{
+    id        = "published-tarballs-are-permanent"
+    enabled   = true
+    prefix    = ""
+    condition = { type = "Indefinite" }
+  }]
+}
