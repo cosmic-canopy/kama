@@ -1,1 +1,1 @@
-invalid multibyte char literal
+:4:14: Encoding error: not UTF-8 text at byte offset 237: an encoded surrogate, U+D800

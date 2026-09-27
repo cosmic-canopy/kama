@@ -1,0 +1,17 @@
+// KR-91's other half: well-formed UTF-8 is welcome everywhere a source file holds text. This comment says
+// café, 日本 and 😀; the literals below hold 2-, 3- and 4-byte characters in every string form and as chars.
+/* A block comment: naïve, Ω, 🎉. */
+fn int32 main() {
+    string plain = "café";              // é is two bytes: length() counts bytes
+    string verbatim = @"日本";          // three bytes each
+    int32 n = 1;
+    string interp = "${n}€";            // "1" and a three-byte euro sign
+    char e = 'é';
+    char face = '😀';
+    if (cast<int32>(plain.length()) != 5) { return 1; }
+    if (cast<int32>(verbatim.length()) != 6) { return 2; }
+    if (cast<int32>(interp.length()) != 4) { return 3; }
+    if (e != '\u{E9}') { return 4; }
+    if (cast<int32>(face) != 128512) { return 5; }
+    return 42;
+}

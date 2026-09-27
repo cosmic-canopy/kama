@@ -593,6 +593,7 @@ lex_char_bad_utf8	lex_char_bad_utf8.kama:4
 lex_comment_unterminated	lex_comment_unterminated.kama:2
 lex_string_badchar	lex_string_badchar.kama:4
 lex_string_unterminated	lex_string_unterminated.kama:3
+lex_tab_column	lex_tab_column.kama:4
 lex_verbatim_unterminated	lex_verbatim_unterminated.kama:3
 linkname_bad_symbol	linkname_bad_symbol.kama:3
 linkname_c_keyword	linkname_c_keyword.kama:4
@@ -1052,6 +1053,19 @@ slot_read_before_assign	slot_read_before_assign.kama:7
 slot_with_initializer	slot_with_initializer.kama:5
 source_bom_column	source_bom_column.kama:1
 source_utf16	source_utf16.kama:1
+source_utf8_above_max	source_utf8_above_max.kama:5
+source_utf8_block_comment	source_utf8_block_comment.kama:4
+source_utf8_bom	source_utf8_bom.kama:1
+source_utf8_char	source_utf8_char.kama:5
+source_utf8_column	source_utf8_column.kama:6
+source_utf8_continuation	source_utf8_continuation.kama:5
+source_utf8_interp	source_utf8_interp.kama:6
+source_utf8_line_comment	source_utf8_line_comment.kama:3
+source_utf8_nul	source_utf8_nul.kama:6
+source_utf8_overlong	source_utf8_overlong.kama:5
+source_utf8_string	source_utf8_string.kama:5
+source_utf8_truncated	source_utf8_truncated.kama:8
+source_utf8_verbatim	source_utf8_verbatim.kama:5
 spawn_bundle_shared	spawn_bundle_shared.kama:13
 spawn_in_nested_block	spawn_in_nested_block.kama:24
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15

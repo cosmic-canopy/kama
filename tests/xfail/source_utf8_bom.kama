@@ -1,0 +1,5 @@
+ï»¿// KR-91: ÿ <- a bad byte on line 1, after a byte-order mark. Its column is counted past the mark, as
+// the lexer counts it; its byte offset is the file's own, mark included. (The bytes are written by a script.)
+fn int32 main() {
+    return 0;
+}

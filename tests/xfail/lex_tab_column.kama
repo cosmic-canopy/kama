@@ -1,0 +1,5 @@
+// A tab is ONE column: columns are 0-based byte counts, the language server's convention. The lexer used
+// to count a tab as two, so every diagnostic on a tab-indented line pointed one column right per tab.
+fn int32 main() {
+	return 1 $ 2;
+}

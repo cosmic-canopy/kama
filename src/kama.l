@@ -119,8 +119,7 @@ void error(const char *, yyscan_t scanner);
 
 
 new_line                    \n
-white_space_1               " "
-white_space_2               [\t\r]
+white_space                 [ \t\r]
 
 reserved_preprocessor       ^[ \t]*#(region|endregion).*
 
@@ -203,8 +202,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      (`buf#(4)`), and a wrapped list can start a line. Flex takes the LONGEST match, so the wide
      pattern would swallow such a line whole and always beat the `"#"` rule below. */
 {reserved_preprocessor}                        { /* ignore */ }
-{white_space_1}                                { ++(yyextra->next_column_number); }
-{white_space_2}                                { yyextra->next_column_number += 2; }
+{white_space}                                  { ++(yyextra->next_column_number); /* a byte is a column — a tab too, as the language server counts */ }
 {new_line}                                     { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
 
 {single_line_comment}                          { MARK_LINE(yyextra->next_line_number, 2); /* ignored, but counted */ }
@@ -271,7 +269,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 {simple_esc_seq_literal}                       { unsigned cp = (unsigned char)getSimpleEscape(yytext, 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {single_char_literal}                          { unsigned cp = (unsigned char)yytext[1]; std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {uni_codepoint_char_literal}                   { std::string hexString(&(yytext[4])); hexString.pop_back(); hexString.pop_back(); unsigned cp = (unsigned)strtol(hexString.c_str(), NULL, 16); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
-{multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); if (cp == 0xFFFFFFFFu) { error("invalid multibyte char literal (overlong, surrogate, or out of range)", yyscanner); } else { std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; } }
+{multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 
 {regular_string_start}                         {
                                                  MARK_CODE;   /* see the verbatim opener */
@@ -619,23 +617,15 @@ char getSimpleEscape(const char* input, int index)
   return rtn;
 }
 
-/* Decode a single UTF-8 codepoint from `len` bytes (1–4). Returns 0xFFFFFFFF on an overlong, surrogate,
-   or out-of-range encoding (the caller rejects it). The flex pattern already constrains lead/continuation
-   bytes; the min-value + surrogate + max-value checks reject the residual invalid forms. */
+/* Decode a single UTF-8 codepoint from `len` bytes (2–4). The bytes are well-formed: every text reaches
+   the lexer through the driver's whole-file UTF-8 check (utf8Fault, KR-91), so an overlong, surrogate or
+   out-of-range form was refused before this runs, and the flex pattern fixes `len` to the lead byte's. */
 unsigned decodeUTF8Codepoint(const char* bytes, int len)
 {
   const unsigned char* b = (const unsigned char*)bytes;
-  unsigned cp;
-  if (len == 1) { return b[0]; }
-  if (len == 2) { cp = ((unsigned)(b[0] & 0x1F) << 6) | (unsigned)(b[1] & 0x3F);
-                  return cp < 0x80u ? 0xFFFFFFFFu : cp; }
-  if (len == 3) { cp = ((unsigned)(b[0] & 0x0F) << 12) | ((unsigned)(b[1] & 0x3F) << 6) | (unsigned)(b[2] & 0x3F);
-                  if (cp < 0x800u || (cp >= 0xD800u && cp <= 0xDFFFu)) return 0xFFFFFFFFu;
-                  return cp; }
-  if (len == 4) { cp = ((unsigned)(b[0] & 0x07) << 18) | ((unsigned)(b[1] & 0x3F) << 12)
-                     | ((unsigned)(b[2] & 0x3F) << 6) | (unsigned)(b[3] & 0x3F);
-                  return (cp < 0x10000u || cp > 0x10FFFFu) ? 0xFFFFFFFFu : cp; }
-  return 0xFFFFFFFFu;
+  unsigned cp = b[0] & (0x7Fu >> len);
+  for (int i = 1; i < len; ++i) cp = (cp << 6) | (unsigned)(b[i] & 0x3F);
+  return cp;
 }
 
 static int getToken(const char *lexeme)

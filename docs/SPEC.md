@@ -17,6 +17,12 @@ borrow — a slice/span), or `type contract` (an interface).
 UTF-8 byte-order mark (`EF BB BF`, which Windows PowerShell 5.1 and "UTF-8 with BOM" editors write unasked) is
 ignored, so line and column positions are the same as without one. <!-- test: source_bom -->
 A UTF-16 file is refused with a message that says so, not lexed as bytes: re-save it as UTF-8. <!-- xfail: source_utf16 -->
+The rest of the file is UTF-8 **text** throughout, comments included, where no program observes the bytes;
+well-formed multi-byte text is welcome in every string form, `char` literal and comment. <!-- test: source_utf8_valid -->
+A byte that is not UTF-8 text is refused when the file is read, naming its line, byte column and offset: <!-- xfail: source_utf8_column -->
+a stray `0xFF`, an overlong form, an encoded surrogate, a sequence cut short (`// caf<E9>` in Latin-1 is one), <!-- xfail: source_utf8_line_comment -->
+and a NUL, which is valid UTF-8 but never text: a raw NUL in a string is rejected, and `\0` writes one. <!-- xfail: source_utf8_nul -->
+A column counts bytes, a tab as one, which is what the language server reports. <!-- xfail: lex_tab_column -->
 
 ## Types ✅
 
@@ -107,7 +113,8 @@ fn int32 main() {
 can't silently mix with ints). Literals: `'a'`, `'\n'`, `'\u{1F600}'`. Equality + ordering compare
 codepoints; `cast<int32>(c)` / `cast<char>(i)` convert (arithmetic on codepoints is explicit, the Rust
 model). A multibyte *source* char literal is decoded to its scalar value: `'é'` == `'\u{E9}'` == 233,
-`'😀'` == `'\u{1F600}'` == 128512.
+`'😀'` == `'\u{1F600}'` == 128512. A source byte that is not UTF-8 — `'<FF>'`, once read as 255 — is
+rejected with the file, like any other (*Model*). <!-- xfail: source_utf8_char -->
 
 **Operators & methods.** `string` carries the small, always-available ergonomic surface every language
 ships — all compiler intrinsics on the primitive (no import), byte-oriented like `s[i]`:

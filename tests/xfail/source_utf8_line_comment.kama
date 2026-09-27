@@ -1,0 +1,6 @@
+// KR-91: a kama source file is UTF-8 throughout, so a byte that is not is refused when the file is read,
+// naming its line, column and byte offset. (The bad bytes are written by a script; an editor would repair them.)
+// Here a raw 0xFF inside a line comment, where no program can observe it - refused all the same: ÿ
+fn int32 main() {
+    return 0;
+}

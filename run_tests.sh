@@ -706,7 +706,9 @@ diag_position_faults() {   # diag_position_faults <errfile> <fixture.kama>...
     local err="$1" s sb slen; shift
     if LC_ALL=C grep -qE '^:[0-9]+:[0-9]+: ' "$err"; then echo "names NO FILE at all"; fi
     for s in "$@"; do
-        sb="${s##*/}"; slen=$(wc -l < "$s" | tr -d ' ')
+        # awk's NR, not `wc -l`: a last line with no newline is still a line a diagnostic can name, and
+        # `wc -l` counts newlines — so a file ENDING mid-character (source_utf8_truncated) looked unreal.
+        sb="${s##*/}"; slen=$(LC_ALL=C awk 'END { print NR }' "$s")
         LC_ALL=C awk -v sb="$sb" -v max="$slen" '
             { i = index($0, sb ":"); if (i == 0) next
               rest = substr($0, i + length(sb) + 1)

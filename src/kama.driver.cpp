@@ -816,6 +816,70 @@ static int byteOrderMark(const char* p, size_t n)
 }
 static const char* const kUtf16Refusal = "the file is UTF-16; kama reads UTF-8 — re-save it as UTF-8";
 
+// ...and every byte after the mark is UTF-8 text too, comments included (KR-91): the first byte that does not
+// begin a well-formed RFC 3629 sequence is a fault, and so is a NUL — valid UTF-8, but never text, and the one
+// byte C-string handling eats (a raw NUL in a string literal was silently dropped; `\0` writes one). Checked
+// once, over the whole text, before anything reads it, so no literal, comment or identifier can smuggle one
+// past a rule that forgot to look. The twin of the runtime's
+// kama_utf8_bad_offset (include/kama_runtime.h), which a program uses and which names no reason. `line` is
+// 1-based and `col` a 0-based byte column — the lexer's and the language server's convention — counted past a
+// skipped byte-order mark on line 1, as the lexer counts it; `offset` is the text's own, mark included.
+struct Utf8Fault { size_t offset = 0; int line = 1; int col = 0; std::string what; };
+static bool utf8Fault(const char* p, size_t n, size_t skip, Utf8Fault& f)
+{
+    const unsigned char* b = (const unsigned char*)p;
+    size_t i = skip;
+    char buf[96];
+    while (i < n) {
+        unsigned c = b[i];
+        size_t need; unsigned cp, lo;
+        if (c == 0)                  { f.what = "a NUL byte, which text never holds (write `\\0` inside a literal)"; break; }
+        if (c < 0x80)                { ++i; continue; }
+        else if ((c & 0xE0) == 0xC0) { need = 1; cp = c & 0x1F; lo = 0x80;    }
+        else if ((c & 0xF0) == 0xE0) { need = 2; cp = c & 0x0F; lo = 0x800;   }
+        else if ((c & 0xF8) == 0xF0) { need = 3; cp = c & 0x07; lo = 0x10000; }
+        else {
+            snprintf(buf, sizeof buf, c < 0xC0 ? "0x%02X is a continuation byte, which cannot start a character"
+                                               : "0x%02X never appears in UTF-8", c);
+            f.what = buf; break;
+        }
+        size_t k = 1;
+        while (k <= need && i + k < n && (b[i + k] & 0xC0) == 0x80) { cp = (cp << 6) | (b[i + k] & 0x3F); ++k; }
+        if (k <= need) {
+            snprintf(buf, sizeof buf, "0x%02X begins a %d-byte character that is cut short", c, (int)need + 1);
+            f.what = buf; break;
+        }
+        if (cp < lo)                         snprintf(buf, sizeof buf, "an overlong encoding of U+%04X", cp);
+        else if (cp > 0x10FFFF)              snprintf(buf, sizeof buf, "a value above U+10FFFF");
+        else if (cp >= 0xD800 && cp <= 0xDFFF) snprintf(buf, sizeof buf, "an encoded surrogate, U+%04X", cp);
+        else { i += need + 1; continue; }
+        f.what = buf; break;
+    }
+    if (i >= n) return false;
+    f.offset = i;
+    size_t lineStart = skip;
+    for (size_t j = skip; j < i; ++j) if (b[j] == '\n') { ++f.line; lineStart = j + 1; }
+    f.col = (int)(i - lineStart);
+    return true;
+}
+// A source file's fault, reported where a lexer error would be. True when the text was refused.
+static bool refuseNonUtf8Source(CodeGenContext& ctx, const char* p, size_t n, size_t skip)
+{
+    Utf8Fault f;
+    if (!utf8Fault(p, n, skip, f)) return false;
+    ctx.handleError(f.line, f.col, "Encoding", "not UTF-8 text at byte offset " + std::to_string(f.offset) + ": "
+                    + f.what + " — a kama source file is UTF-8 throughout, comments included");
+    return true;
+}
+// A manifest's, lock's or index's fault, as the message its reader's fail() carries (they have no position).
+static std::string jsonUtf8Refusal(const std::string& s, size_t skip)
+{
+    Utf8Fault f;
+    if (!utf8Fault(s.data(), s.size(), skip, f)) return "";
+    return "not UTF-8 text at line " + std::to_string(f.line) + " (byte offset " + std::to_string(f.offset) + "): "
+         + f.what;
+}
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -1958,17 +2022,20 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
         yylex_destroy(scanner);
         return nullptr;
     }
-    // Past a byte-order mark by READING it, not seeking to 3: this is a text stream (CRLF-translated on
-    // Windows), where only a seek to 0 is guaranteed.
-    char head[3]; size_t got = fread(head, 1, sizeof head, input);
-    int bom = byteOrderMark(head, got);
-    if (bom < 0) {
-        extra.codeGenContext->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
+    // The encoding is judged on the file's BYTES — a second, binary read, so a fault's offset is the file's
+    // own even where the text stream below translates CRLF. The lexer still reads that stream.
+    const std::string raw = readFileText(inputFile);
+    int bom = byteOrderMark(raw.data(), raw.size());
+    if (bom < 0 || refuseNonUtf8Source(*extra.codeGenContext, raw.data(), raw.size(), (size_t)bom)) {
+        if (bom < 0) extra.codeGenContext->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
         yylex_destroy(scanner);
         fclose(input);
         return nullptr;
     }
-    if (bom == 0) fseek(input, 0, SEEK_SET);
+    // Past a byte-order mark by READING it, not seeking to 3: this is a text stream (CRLF-translated on
+    // Windows), where only a seek to 0 is guaranteed.
+    char head[3];
+    if (fread(head, 1, sizeof head, input) != sizeof head || bom == 0) fseek(input, 0, SEEK_SET);
     yy_switch_to_buffer(yy_create_buffer(input, YY_BUF_SIZE, scanner), scanner);
 
     int rc = yyparse(scanner);
@@ -2008,6 +2075,9 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
         std::make_shared<CodeGenContext>(std::make_shared<std::string>(name)),
         nullptr
     };
+    // Embedded at build time, so fixed — but it is the lexer's third door, and "nothing reaches the lexer
+    // unchecked" should be true by reading the three of them. Microseconds, once per process.
+    if (refuseNonUtf8Source(*extra.codeGenContext, src, strlen(src), 0)) return nullptr;
     yylex_init_extra(&extra, &scanner);
     yy_scan_string(src, scanner);
     int rc = yyparse(scanner);
@@ -2030,7 +2100,7 @@ struct ParseResult {
     bool partial = false;
     int  droppedTopLevelDecl = 0;
 };
-ParseResult parseForQuery(const char* src, const std::string& name)
+ParseResult parseForQuery(const std::string& src, const std::string& name)
 {
     Stopwatch sw(&timing().bufferParse);
 
@@ -2044,14 +2114,16 @@ ParseResult parseForQuery(const char* src, const std::string& name)
     };
     ParseResult r;
     r.ctx = extra.codeGenContext;
-    int bom = byteOrderMark(src, std::min(strlen(src), (size_t)3));
-    if (bom < 0) {
-        r.ctx->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
+    // The buffer's own length, not strlen: an editor can hold a NUL (JSON's \u0000), and a C-string view
+    // would stop the check and the lex there while the file door reads on past it.
+    int bom = byteOrderMark(src.data(), src.size());
+    if (bom < 0 || refuseNonUtf8Source(*r.ctx, src.data(), src.size(), (size_t)bom)) {
+        if (bom < 0) r.ctx->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
         r.partial = true;
         return r;
     }
     yylex_init_extra(&extra, &scanner);
-    yy_scan_string(src + bom, scanner);
+    yy_scan_bytes(src.data() + bom, (int)(src.size() - bom), scanner);
     int rc = yyparse(scanner);
     yylex_destroy(scanner);
     // Self-gating (M5.4): `compilationUnit` is assigned only by the `compilation_unit` action, which
@@ -3962,6 +4034,7 @@ struct ManifestReader {
 
     bool parseManifest() {
         int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
+        { std::string bad = jsonUtf8Refusal(s, (size_t)bom); if (!bad.empty()) return fail(bad.c_str()); }
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -6015,6 +6088,7 @@ struct LockReader {
     }
     bool parse(std::map<std::string, LockEntry>& pkgs) {
         int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
+        { std::string bad = jsonUtf8Refusal(s, (size_t)bom); if (!bad.empty()) return fail(bad.c_str()); }
         ws(); if (i >= s.size() || s[i] != '{') return fail("lock must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -7045,6 +7119,7 @@ struct IndexReader {
     }
     bool parse(std::vector<IndexEntry>& out) {
         int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
+        { std::string bad = jsonUtf8Refusal(s, (size_t)bom); if (!bad.empty()) return fail(bad.c_str()); }
         ws(); if (i >= s.size() || s[i] != '{') return fail("index must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -9300,7 +9375,7 @@ bool lspIndexIsPartial(const SharedLspIndex& idx) { return idx && idx->partial; 
 SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
                           std::vector<Diagnostic>& diags, const char* argv0)
 {
-    ParseResult pr = parseForQuery(text.c_str(), path);
+    ParseResult pr = parseForQuery(text, path);
     if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) diags.push_back(d);
     if (!pr.unit) {   // the parse aborted outright (garbage at the very first token, essentially) —
         timingDump("analyze-failed", path);   // the diags carry the errors; there is no AST to index
@@ -9639,7 +9714,7 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     // file shouldn't blind the whole workspace.
     std::vector<std::pair<std::string, SharedCompilationUnit>> live;
     for (const auto& ov : overlays) {
-        ParseResult pr = parseForQuery(ov.second.c_str(), ov.first);
+        ParseResult pr = parseForQuery(ov.second, ov.first);
         if (pr.unit) live.push_back({ absolutePath(ov.first), pr.unit });
     }
 

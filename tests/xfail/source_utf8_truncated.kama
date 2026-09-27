@@ -1,0 +1,8 @@
+// KR-91: a kama source file is UTF-8 throughout, so a byte that is not is refused when the file is read,
+// naming its line, column and byte offset. (The bad bytes are written by a script; an editor would repair them.)
+// Here the file ENDS inside a character: the last line has no newline and stops after two of the
+// three bytes of a euro sign.
+fn int32 main() {
+    return 0;
+}
+// â‚

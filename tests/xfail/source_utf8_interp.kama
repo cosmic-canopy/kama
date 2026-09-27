@@ -1,0 +1,8 @@
+// KR-91: a kama source file is UTF-8 throughout, so a byte that is not is refused when the file is read,
+// naming its line, column and byte offset. (The bad bytes are written by a script; an editor would repair them.)
+// Here a raw 0xFF beside an interpolation hole.
+fn int32 main() {
+    int32 x = 1;
+    string s = "${x} ÿ";
+    return cast<int32>(s.length());
+}

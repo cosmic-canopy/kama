@@ -186,7 +186,7 @@ if ! diff -u "$tmp/expected" "$tmp/ts-bad" > "$tmp/delta" 2>&1; then
     comm -3 "$tmp/expected" "$tmp/ts-bad" | tr -d '\t' | sort -u > "$tmp/disputed"
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        if "$KAMA" check "$ROOT/$f" 2>&1 | grep -qE 'Parse error:|Lexical error:'; then
+        if "$KAMA" check "$ROOT/$f" 2>&1 | grep -qE 'Parse error:|Lexical error:|Encoding error:'; then
             compiler=reject
         else
             compiler=accept
