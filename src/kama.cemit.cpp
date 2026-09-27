@@ -2907,6 +2907,19 @@ void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationN
                  "with no exit)").c_str(), body->line);
 }
 
+// kama has no overloading: a name is declared once in its module, whatever KIND of function each declaration
+// is — runtime or `comptime`. `firstFile`/`firstLine` locate the one collected first.
+// ⚠️ Keep the literal prefix `duplicate function '<name>'` — tests/xfail/dup_fn.msg and dup_generic_fn.msg
+// assert exactly that substring.
+void CEmitter::duplicateFunction(const std::string& name, const std::string& firstFile, int firstLine, int line)
+{
+    std::string where;
+    if (firstLine > 0) where = " (first declared at " + (firstFile.empty() ? std::string() : firstFile + ":")
+                             + std::to_string(firstLine) + ")";
+    unsupported(("duplicate function '" + name + "' — kama has no overloading, so a name may be declared only "
+                 "once in its module" + where).c_str(), line);
+}
+
 // The file that DECLARED a resolved symbol, or "" when the key names nothing this emitter collected.
 // "" is the safe answer in both directions: an unresolved name is someone else's diagnostic, and a
 // synthesized key (a generic INSTANCE, an FFI spelling) has no source file to be judged against.
@@ -2928,6 +2941,7 @@ std::string CEmitter::declFileOf(const std::string& key) const
     auto f  = _funcs.find(key);
     if (f  != _funcs.end())             return isExtern(f->second.node) ? std::string() : f->second.declFile;
     auto mv = _moduleVarFile.find(key);     if (mv != _moduleVarFile.end())     return mv->second;
+    auto cf = _comptimeFns.find(key);       if (cf != _comptimeFns.end())       return cf->second.ctx.unitPath;
     return std::string();
 }
 
@@ -8662,7 +8676,17 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // interpreter (NOT in _funcs — it is never emitted as a C symbol) and reject an impure body
         // now. It is monomorphic in v1 (the grammar admits no type/const params or `expose`).
         if (fn->isComptime) {
-            _comptimeFns[qualify(*fn->name->value)] = { fn, _nsCtx };
+            // No overloading, and a `comptime fn` is no exception. Two of one name — or one beside a runtime fn —
+            // built, the LAST collected silently answering every call (KR-95); the runtime-fn arm below asks
+            // this table too, so the order the two are collected in does not matter.
+            const std::string key = qualify(*fn->name->value);
+            auto pc = _comptimeFns.find(key);
+            auto pf = _funcs.find(key);
+            if (pc != _comptimeFns.end())
+                duplicateFunction(*fn->name->value, pc->second.ctx.unitPath, pc->second.node->name->line, fn->name->line);
+            else if (pf != _funcs.end() && pf->second.node && !isExtern(pf->second.node) && pf->second.node->name)
+                duplicateFunction(*fn->name->value, pf->second.declFile, pf->second.node->name->line, fn->name->line);
+            _comptimeFns[key] = { fn, _nsCtx };
             continue;
         }
 
@@ -8761,6 +8785,9 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // arm's own comment says so ("an unmodified fn's @$ starts at the previous token"). A duplicate
         // must point at the duplicate, so the accurate span is the one worth reading.
         if (!isExtern(fn)) {
+            auto pc = _comptimeFns.find(sig.cName);   // a `comptime fn` of the name came first
+            if (pc != _comptimeFns.end())
+                duplicateFunction(*fn->name->value, pc->second.ctx.unitPath, pc->second.node->name->line, fn->name->line);
             auto prev = _funcs.find(sig.cName);
             if (prev != _funcs.end() && !(prev->second.node && isExtern(prev->second.node))) {
                 FunctionDeclarationNode* first = prev->second.node;
@@ -8788,9 +8815,8 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                                    "`a::helper` and `b::helper` would not").c_str(),
                                 fn->name->line);
                 else
-                    unsupported(("duplicate function '" + *fn->name->value + "' — kama has no overloading, "
-                                 "so a name may be declared only once in its module" + where).c_str(),
-                                fn->name->line);
+                    duplicateFunction(*fn->name->value, prev->second.declFile, first && first->name ? first->name->line : 0,
+                                      fn->name->line);
             }
         }
 
@@ -21664,6 +21690,15 @@ void CEmitter::checkBindingName(const std::string& nm, const char* kind, int src
                      "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
         return;
     }
+    // A `comptime fn` is a function in scope too. It lives in a table of its own (it is never emitted), so the
+    // check above could not see it, and `int32 twice = 4;` beside one built (KR-95). isComptimeFnName climbs
+    // only what this file declares or imports, so it needs no reach check.
+    { std::string ck;
+      if (isComptimeFnName(nm, nullptr, ck)) {
+          unsupported((std::string(kind) + " `" + nm + "` has the name of a `comptime fn` in scope — kama has no "
+                       "shadowing, so one name means one thing; rename it").c_str(), srcLine, nm);
+          return;
+      } }
     // A module `static` or constant is a name in scope like a function: its own file's, or one imported.
     // The rule's first version named functions and types only, so `int32 LIMIT = 5;` beside `comptime int32
     // LIMIT = 4;` built and quietly read 5, and a FIELD named like a module `static` won every bare read in
@@ -35130,7 +35165,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 auto anyTable = [&](const std::string& k) {
                     return _funcs.count(k) || _classes.count(k) || _enums.count(k) || _interfaces.count(k)
                         || _genericTypes.count(k) || _genericContracts.count(k) || _sigs.count(k)
-                        || _constStatics.count(k);   // a module `comptime` is importable by name
+                        || _constStatics.count(k)    // a module `comptime` is importable by name
+                        || _comptimeFns.count(k);    // ...and so is a top-level `comptime fn` (KR-95)
                 };
                 // `live` under the MODULE key, or under some sibling file's PRIVATE key: a name declared
                 // in this module and never exported now lives under its file's scope, and case 2 below

@@ -599,10 +599,25 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         }
         // Free `comptime fn`.
         std::string key;
-        if (!isComptimeFnName(*inv->identifier->value, inv->identifier->qualifier, key))
-            return ctFail((_ctRunning.empty()
-                           ? "a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value + "` is not one"
-                           : "it calls `" + *inv->identifier->value + "`, which is not a `comptime fn`").c_str(), e->line);
+        if (!isComptimeFnName(*inv->identifier->value, inv->identifier->qualifier, key)) {
+            // Say what is CALLING: a type member run by name, a comptime fn's body (depth > 0), or a
+            // compile-time expression itself — a constant's initializer was told "a comptime fn may call only
+            // another comptime fn", about a caller that is not one (KR-95).
+            const std::string& nm = *inv->identifier->value;
+            // ...unless it IS one, declared where this file cannot reach it — then say that, and why.
+            for (auto& kv : _comptimeFns)
+                if (kv.first.size() > nm.size() + 2
+                    && kv.first.compare(kv.first.size() - nm.size() - 2, std::string::npos, "__" + nm) == 0)
+                    return ctFail(("`" + nm + "` is a `comptime fn` of `" + kv.second.ctx.unitPath + "`, out of this "
+                                   "file's reach — " + (_exported.count(kv.first)
+                                       ? std::string("import it (`import { … };`)")
+                                       : std::string("it is private to that file, and leaves it only through that "
+                                                     "file's `export { … };`"))).c_str(), e->line);
+            return ctFail((!_ctRunning.empty() ? "it calls `" + nm + "`, which is not a `comptime fn`"
+                         : _ctDepth > 0        ? "a comptime fn may call only another `comptime fn` — `" + nm + "` is not one"
+                                               : "a compile-time expression may call only a `comptime fn` — `" + nm
+                                                 + "` is not one").c_str(), e->line);
+        }
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
         const ComptimeFn& cf = _comptimeFns[key];
         if (!ctBindByName(cf.node->parameters, argNames, args, *inv->identifier->value, e->line)) return false;

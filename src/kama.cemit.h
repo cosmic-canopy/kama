@@ -3384,6 +3384,7 @@ private:
     std::string _ctCurrentOwner;   // type whose comptime fn body is evaluating (for private-visibility checks)
     bool isComptimeFnName(const std::string& name, SharedStringList qualifier, std::string& outKey) const;  // runtime-call rejection
     bool ctInDeclaringFile(const NsCtx& ctx, const std::function<bool()>& run);   // run a comptime body where it was written
+    void duplicateFunction(const std::string& name, const std::string& firstFile, int firstLine, int line);
     // Purity is enforced structurally at evaluation time (the interpreter has no case for an impure
     // node → a clean "unsupported in comptime fn" diagnostic), the C++ constexpr model. See kama.comptime.cpp.
 

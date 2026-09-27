@@ -1,0 +1,3 @@
+import { cx::m::SIX };
+
+fn int32 main() { return SIX; }

@@ -1,0 +1,5 @@
+// KR-95: a compile-time value may be computed only by a `comptime fn`. The refusal used to say "a comptime fn
+// may call only another comptime fn" about a caller that is a CONSTANT, not a comptime fn.
+fn int32 helper(int32 n) { return n; }
+comptime int32 X = helper(n: 5);
+fn int32 main() { return X; }

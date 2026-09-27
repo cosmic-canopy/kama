@@ -1,0 +1,1 @@
+has the name of a `comptime fn` in scope

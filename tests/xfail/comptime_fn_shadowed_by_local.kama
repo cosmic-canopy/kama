@@ -1,0 +1,7 @@
+// KR-95: kama has no shadowing, and a `comptime fn` is a function in scope like any other — a local may not
+// take its name. It used to build, `twice` meaning the local in the body and the fn in a constant.
+comptime fn int32 twice(int32 n) { return n * 2; }
+fn int32 main() {
+    int32 twice = 4;
+    return twice;
+}

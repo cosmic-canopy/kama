@@ -4640,6 +4640,10 @@ type value Palette {
   reached by `import`, exactly as a function is, `as` included; its body runs in the file that DECLARED it,
   so it may use that file's private helpers and constants wherever it is called from. <!-- test: comptime_fn_export -->
   An imported one is still compile-time only: a runtime call to it is rejected. <!-- xfail: comptime_fn_imported_runtime_call -->
+  It shares the one name space of functions: kama has no overloading, so a second function of its name in
+  the module — `comptime` or not — is rejected, <!-- xfail: comptime_fn_duplicate, comptime_fn_dup_runtime_fn -->
+  and no binding may take its name (kama has no shadowing). <!-- xfail: comptime_fn_shadowed_by_local -->
+  A compile-time expression that calls a runtime `fn` is rejected, saying so. <!-- xfail: comptime_const_calls_runtime_fn -->
 - **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
   entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, fixed
   `InlineArray<T>#(N)`, and a `type value` whose fields are those. Statements: local + `const` decls, `=`

@@ -1,0 +1,6 @@
+// KR-95: kama has no overloading, and a `comptime fn` is no exception — a name is declared once in its
+// module. Two of them used to build, the LAST one silently answering every call: this returned 15, not 10.
+comptime fn int32 twice(int32 n) { return n * 2; }
+comptime fn int32 twice(int32 n) { return n * 3; }
+comptime int32 X = twice(n: 5);
+fn int32 main() { return X; }

@@ -1,0 +1,5 @@
+// KR-95: a sibling file's `export` is an offer, and this file never accepted it — no `import { twice };`. A
+// comptime fn is reached exactly as a function is, and the refusal says where the name lives.
+export { SIX };
+
+comptime int32 SIX = twice(n: 3);

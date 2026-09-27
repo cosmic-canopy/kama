@@ -1,0 +1,6 @@
+// KR-95: a `comptime fn` and a runtime `fn` of one name are two declarations of one name. They built side by
+// side, the call's position deciding which one it meant.
+comptime fn int32 twice(int32 n) { return n * 2; }
+fn int32 twice(int32 n) { return n * 3; }
+comptime int32 X = twice(n: 5);
+fn int32 main() { return X; }
