@@ -943,18 +943,21 @@ if "$KAMA" pkg install "$ovp/kama.json" >"$tmp/ovbad.out" 2>&1; then
 grep -qi "not a dependency" "$tmp/ovbad.out" \
     || { echo "check-packages: FAIL — non-dependency override message unclear:" >&2; sed 's/^/  /' "$tmp/ovbad.out" >&2; exit 1; }
 
-# 27. registries local override: a registry dep with NO `registry`/`registries` configured in kama.json
-#     fails to resolve (no built-in default in a dev build); a kama.local.json `registries.default`
-#     supplies the base and the dep resolves — proving the local registries override is consulted. (Reuses
-#     the `rg` package published to $reg above.)
+# 27. registries local override: kama.json drops every default (`"default": false`, the built-in official
+#     registry included), so the registry dep does not resolve; a kama.local.json `registries.default`
+#     supplies the base and it does — proving the local override is consulted, and replaces a `false`.
+#     (Reuses the `rg` package published to $reg above.) Hermetic: nothing here may reach the built-in
+#     default, which is a live host.
 rp="$tmp/rp"; mkdir -p "$rp/src"
 cat > "$rp/kama.json" <<JSON
-{ "name": "rpc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+{ "name": "rpc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "registries": { "default": false },
   "dependencies": { "rg": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 printf 'import { rg::area };\nfn int32 main() { return area(); }\n' > "$rp/src/main.kama"
 if "$KAMA" pkg install "$rp/kama.json" >"$tmp/rp0.out" 2>&1; then
-    echo "check-packages: FAIL — registry dep resolved with no registry configured" >&2; exit 1; fi
+    echo "check-packages: FAIL — registry dep resolved with every default dropped" >&2; exit 1; fi
+grep -qi "no registry configured" "$tmp/rp0.out" \
+    || { echo "check-packages: FAIL — dropped-default refusal unclear:" >&2; sed 's/^/  /' "$tmp/rp0.out" >&2; exit 1; }
 cat > "$rp/kama.local.json" <<JSON
 { "registries": { "default": "file://$reg" } }
 JSON
@@ -962,6 +965,39 @@ if ! "$KAMA" pkg install "$rp/kama.json" >"$tmp/rp1.out" 2>&1; then
     echo "check-packages: FAIL — kama.local.json registries override did not resolve the dep:" >&2; sed 's/^/  /' "$tmp/rp1.out" >&2; exit 1; fi
 grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
+
+# 27a. a DEPENDENCY written for a newer compiler: its manifest carries a key this one has never heard of,
+#     under a `kama` range this one misses. The install says to update rather than naming the key alone —
+#     the shape 0.9.440 met with a package that used `publish` (it said only "unknown key", at a store path).
+fut="$tmp/fut"; mkdir -p "$fut/src"
+printf '{ "name": "fut", "version": "1.0.0", "kind": "library", "kama": ">=99.0.0", "futurekey": true }\n' > "$fut/kama.json"
+printf 'export { v };\nfn int32 v() { return 1; }\n' > "$fut/src/fut.kama"
+tar -czf "$tmp/fut.tgz" -C "$tmp" fut
+fc="$tmp/futc"; mkdir -p "$fc/src"
+cat > "$fc/kama.json" <<JSON
+{ "name": "futc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "fut": { "url": "$furl/fut.tgz" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'fn int32 main() { return 0; }\n' > "$fc/src/main.kama"
+if "$KAMA" pkg install "$fc/kama.json" >"$tmp/fut.out" 2>&1; then echo "check-packages: FAIL — a dependency needing kama >=99 installed" >&2; exit 1; fi
+grep -q "needs kama >=99.0.0" "$tmp/fut.out" && grep -q 'could not read: unknown key `futurekey`' "$tmp/fut.out" \
+    || { echo "check-packages: FAIL — a too-new dependency's refusal does not say to update:" >&2; sed 's/^/  /' "$tmp/fut.out" >&2; exit 1; }
+
+# 27b. with NOTHING configured, a registry dep resolves through the built-in official registry. Proven without
+#     the network: a `curl` on PATH that fails at once, so the install reports which index it asked for. POSIX
+#     only — on Windows the driver spawns through cmd.exe, which would not run a shell-script `curl`.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) : ;; *)
+    shim="$tmp/nocurl"; mkdir -p "$shim"; printf '#!/bin/sh\nexit 22\n' > "$shim/curl"; chmod +x "$shim/curl"
+    dd="$tmp/dflt"; mkdir -p "$dd/src"
+    cat > "$dd/kama.json" <<JSON
+{ "name": "dflt", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "@kama/sodium": { "version": "^0.4.0" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+    printf 'fn int32 main() { return 0; }\n' > "$dd/src/main.kama"
+    if PATH="$shim:$PATH" "$KAMA" pkg install "$dd/kama.json" >"$tmp/dflt.out" 2>&1; then
+        echo "check-packages: FAIL — an install with a failing curl succeeded" >&2; exit 1; fi
+    grep -q "https://registry.kama-lang.org/@kama/sodium/index.json" "$tmp/dflt.out" \
+        || { echo "check-packages: FAIL — an unconfigured registry dep did not go to the built-in official registry:" >&2; sed 's/^/  /' "$tmp/dflt.out" >&2; exit 1; } ;;
+esac
 
 # ---- workspace-internal dependencies -----------------------------------------------------------------
 # The five-file workspace from docs/packages.md § Workspaces: a root `kama_workspace.json` composing two
@@ -1424,4 +1460,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

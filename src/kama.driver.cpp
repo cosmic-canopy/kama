@@ -3918,7 +3918,49 @@ struct ManifestReader {
         return true;
     }
 
+    // A manifest written for a NEWER compiler can carry what this one has never heard of — a key, an inner
+    // key, a value — and the reader refuses it, because an unknown key is a swallowed decision. But when the
+    // manifest's own `kama` range already says this compiler is too old, THAT is the answer: measured,
+    // 0.9.440 installing a package that used `publish` (new in 0.9.453) said only "unknown key `publish`",
+    // against a store path, with nothing to say an update would fix it. So a refusal consults the range
+    // first, and keeps what it could not read as the detail. (It helps every compiler from this one on; the
+    // ones already shipped say what they say.)
     bool parse() {
+        if (parseManifest()) return true;
+        std::string req, why;
+        if (topLevelString("kama", req) && !kamaReqSatisfied(req, "the package", why))
+            err = why + ". What this compiler could not read: " + err;
+        return false;
+    }
+
+    // The string value of top-level `key`, read tolerantly — every other value is skipped unexamined — so it
+    // answers for a manifest the full parse refused. False when absent, not a string, or the JSON is broken.
+    bool topLevelString(const char* key, std::string& out) {
+        const std::string saved = err;
+        const int bom = byteOrderMark(s.data(), s.size());
+        i = bom < 0 ? s.size() : (size_t)bom;
+        bool found = false;
+        ws();
+        if (i < s.size() && s[i] == '{') {
+            ++i;
+            while (true) {
+                ws();
+                std::string k;
+                if (!str(k)) break;
+                ws(); if (i >= s.size() || s[i] != ':') break;
+                ++i; ws();
+                if (k == key) { found = str(out); break; }
+                if (!skipValue()) break;
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                break;
+            }
+        }
+        err = saved;
+        return found;
+    }
+
+    bool parseManifest() {
         int bom = byteOrderMark(s.data(), s.size()); if (bom < 0) return fail(kUtf16Refusal); i = bom;
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
@@ -6924,10 +6966,11 @@ static bool selectHighestTag(const std::vector<std::pair<SemVer, std::string>>& 
 }
 
 // ---- registry (M3.1) -------------------------------------------------------------------------
-// The built-in default registry base URI. A compile constant (overridable per-project by a
-// `registries.default`, M3.1b). Empty until M3.3 wires a live host — so an unconfigured, unscoped
-// registry dep errors clearly rather than silently reaching a dead URL.
-static const char* kDefaultRegistry = "";
+// The built-in default registry base URI: the official registry, where `@kama/*` is served. A compile
+// constant, overridden per project by `registries.default` and dropped by `"default": false` (M3.1b).
+// ⚠️ It is compiled into every binary ever shipped, so this host never moves — `packages.` is kept for a
+// human browse site, and the machine endpoint is this one.
+static const char* kDefaultRegistry = "https://registry.kama-lang.org";
 
 // Join a registry base and a relative path into one URI. An absolute `rel` (has a scheme, or is an
 // absolute path) is returned unchanged, so an index may point its tarballs at a different host.
@@ -7193,10 +7236,15 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 }
                 // Priority order: the first base that HAS a satisfying version wins (a higher-priority
                 // private registry shadows a lower-priority public one). A base whose index is missing or
-                // lacks a satisfying version is skipped (not a hard error).
+                // lacks a satisfying version is skipped (not a hard error) — unless NO base could be read at
+                // all: then "no version satisfies" would be false, and the fetch failure is the answer
+                // (offline, a mistyped name, a registry that is down).
+                std::string unread;
+                bool anyRead = false;
                 for (const std::string& base : bases) {
                     std::vector<IndexEntry>* idx = nullptr; std::string ferr;
-                    if (!ensureIndex(base, name, idx, ferr)) continue;
+                    if (!ensureIndex(base, name, idx, ferr)) { unread += (unread.empty() ? "" : "; ") + ferr; continue; }
+                    anyRead = true;
                     IndexEntry e;
                     if (selectHighestIndex(*idx, req, sv, e)) {
                         matched = true;
@@ -7205,6 +7253,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         break;
                     }
                 }
+                if (!anyRead) { terr = unread; return false; }
                 return true;
             }
             std::vector<std::pair<SemVer, std::string>>* tags = nullptr;

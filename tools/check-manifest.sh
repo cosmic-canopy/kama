@@ -158,6 +158,23 @@ proj kreqbad <<'JSON'
 { "name": "kreqbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": "latest", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject kreqbad 'must be a compiler version range' "a \`kama\` value that is not a range is refused by the reader"
+# A manifest written for a NEWER compiler: what this one cannot read is refused, but when the manifest's own
+# `kama` range excludes this compiler, the refusal leads with THAT — an update is the fix, not an edit. A
+# satisfied range leaves the refusal alone (then it IS a typo), and the rule reaches an inner key too.
+proj kreqfuture <<'JSON'
+{ "name": "kreqfuture", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "futurekey": true, "kama": ">=99.0.0", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqfuture 'the package needs kama >=99.0.0' "a key from a newer compiler, under a range this one misses, says to update"
+grep -q 'could not read: unknown key `futurekey`' "$tmp/e" || bad "the too-old refusal dropped what it could not read"
+proj kreqtypo <<'JSON'
+{ "name": "kreqtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "futurekey": true, "kama": ">=0.0.1", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqtypo 'unknown key `futurekey`' "an unknown key under a range this compiler satisfies is a plain typo"
+if grep -q 'needs kama' "$tmp/e"; then bad "a satisfied range still blamed the compiler's version"; fi
+proj kreqinner <<'JSON'
+{ "name": "kreqinner", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "kama": ">=99.0.0", "publish": { "include": ["x"] }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject kreqinner 'the package needs kama >=99.0.0' "an unknown INNER key under a range this compiler misses says to update too"
 proj pubok <<'JSON'
 { "name": "pubok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "publish": { "exclude": ["tools/", "NOTES.md"] }, "modules": { ".": { "visibility": "internal" } } }
 JSON

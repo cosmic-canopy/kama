@@ -383,6 +383,10 @@ The same applies to values with a closed set: `"kind": "libary"` is refused by n
 read as "not an executable" — and to the workspace file, which has its own closed set: `"name"` there is
 refused rather than ignored, because a workspace does not have one.
 
+One refusal reads differently: a manifest written for a **newer** compiler. When its `kama` range excludes
+the compiler reading it, the error says to update first and names what it could not read second — see
+[What compiler a package needs](#what-compiler-a-package-needs--kama).
+
 ### Members are self-contained — declare what you import
 
 A member should be **extractable**: liftable out of the monorepo to stand alone. That requires it to
@@ -526,8 +530,10 @@ naming both ranges.
 ## Registry dependencies
 
 A **registry dependency** names just a `version` range — no `git`/`url`/`path`. It resolves through a
-**registry**: a package index that lists published versions and their tarballs. Give it an explicit
-`registry` base, or configure one (see below):
+**registry**: a package index that lists published versions and their tarballs. With nothing configured it
+resolves through the **official registry, `https://registry.kama-lang.org`** — built into the compiler, and
+where `@kama/*` is served — so `"@kama/sodium": { "version": "^0.4.0" }` needs nothing else. Give a dependency
+an explicit `registry` base, or configure one (see below):
 
 ```json
 {
@@ -673,8 +679,9 @@ name. Bind scopes (and the default) with a top-level `registries` object:
   resolves through `default`.
 - A value may be an **ordered array** of bases to **layer** sources — lookup walks them in priority order
   and the first base that has a satisfying version wins (a private registry shadows a public one).
-- `"default": false` **drops** the default entirely — a fully-private / air-gapped setup where an unscoped
-  name with no other source is simply unresolvable.
+- With no `default`, the default is the built-in official registry, `https://registry.kama-lang.org`.
+- `"default": false` **drops** the default entirely — the built-in one too — a fully-private / air-gapped
+  setup where an unscoped name with no other source is simply unresolvable.
 - Two scopes cannot expose the **same** bare name in one project (both would import as `name`) — that's a
   hard error; alias one by renaming.
 
@@ -873,6 +880,14 @@ registry index does not carry the requirement yet, so resolution picks the highe
 version and the compiler check happens at install rather than steering the choice; and the key cannot
 reach backwards — a compiler older than the key itself reports `unknown key \`kama\``, a refusal without
 the reason, but still a refusal and never a wrong build.
+
+The range is also what makes a **new manifest key** safe to use. A compiler refuses a key it has never heard
+of, and a package that uses one — `publish`, say, new in `0.9.453` — is unreadable to every older compiler.
+When a manifest's `kama` range excludes the compiler reading it, that refusal leads with the range: *"the
+package needs kama >=0.9.453 … — `kama update` … What this compiler could not read: unknown key
+\`publish\`"* — an update is the fix, not an edit. So when a package starts using a manifest key, raise its
+`kama` floor to the release that introduced the key. (Compilers from `0.9.457` on; an older one names only
+the key.)
 
 ## Command reference
 
