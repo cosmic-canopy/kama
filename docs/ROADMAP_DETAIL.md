@@ -2481,22 +2481,6 @@ rather than here, so there is one number to keep current. Forward work:
   prefer `kama query --search` over grep because it answers from what the compiler resolved; for these names
   grep is today the only answer.
 
-- **The fixture harness holds less than it says (KR-98).** Two gaps:
-  1. **A `.d` fixture's warnings pass.** `run_tests.sh`'s `test_one` fails a single-file fixture that builds
-     with any warning ("A clean build means NO WARNINGS"); `multi_one` has no such check, so a project
-     fixture's C warnings — the emitter generating something the C compiler does not believe — go unseen.
-     Adding the gate may surface warnings already in the corpus; fix them in the same change.
-  2. **Every fixture runs in the repo root.** The executable is built into a per-fixture `mktemp -d`
-     directory but RUN with the harness's working directory — the worktree — in `run_tests.sh` and in
-     `./dev fixture` alike. A fixture that writes relative paths (`fs_permissions`, `fs_dirs`, …) writes into
-     the repo, and one that fails midway leaves its files there: a deliberately failing `fs_permissions` run
-     left two on 2026-09-24. Run each from its own directory. No fixture spells a repo-relative path
-     (`tests/`, `lib/`, `docs/`, `include/`) today, so nothing should depend on the current behavior —
-     confirm that with the change.
-  3. **`./dev fixture` gates no warnings at all** — not even for a single-file fixture (measured `0.9.457`: no
-     `warning` check anywhere in its task). The inner-loop rung the repo tells everyone to iterate with passes a
-     fixture the suite then fails. It should hold the suite's rule, from the same code where it can.
-
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
   everywhere in this repo, and `kama query --diagnostics` is a shipped mode. `kama stats` it is. The record

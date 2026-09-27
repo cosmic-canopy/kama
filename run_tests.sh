@@ -11,13 +11,33 @@ set -u
 
 ROOT="."                        # run_tests.sh already assumes cwd == repo root
 . tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
-# Overridable so THIS HARNESS can be pointed at a chosen fixture set. `./dev fixture <name>` already runs
-# one fixture, but on the host only and without the watchdog — so neither the wasm leg nor the hang
-# instrumentation could be exercised on a single fixture, which is exactly what diagnosing an intermittent
-# hang (or rehearsing the diagnostics for one) needs.
+# Overridable so THIS HARNESS can be pointed at a chosen fixture set.
 TESTS_DIR="${KAMA_TESTS_DIR:-tests}"
+TESTS_ABS="$(cd "$TESTS_DIR" && pwd)"   # every fixture RUNS in its own directory, so a path it is handed is absolute
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+# `./run_tests.sh name…` runs only the fixtures named, through every phase and every check below — which is
+# what `./dev fixture` IS (KR-98). It used to be a second, smaller harness in `dev`: no warning gate, no
+# watchdog, no xfail positions, no `.d` fixtures, the worktree as every fixture's working directory — so the
+# rung the repo tells everyone to iterate with passed fixtures this suite then failed. A name is spelled as
+# the suite spells it (`comparable`, `generic_dtor_static.d`, `xfail/dup_fn`, `trap/neg_min`); `tests/…` and a
+# trailing `.kama` or `/` are accepted, and a bare name takes both a `.kama` and a `.d` of that name.
+ONLY=" "
+for a in "$@"; do
+    a="${a#./}"; a="${a#"$TESTS_DIR"/}"; a="${a%/}"; a="${a%.kama}"
+    if [ -e "$TESTS_DIR/$a.kama" ] || [ -d "$TESTS_DIR/$a.d" ] || { [ "${a%.d}" != "$a" ] && [ -d "$TESTS_DIR/$a" ]; }; then
+        ONLY="$ONLY$a "
+    else
+        echo "MISSING $a (no $TESTS_DIR/$a.kama and no $TESTS_DIR/${a%.d}.d)"; exit 1
+    fi
+done
+selected() {   # selected <fixture path> — is it in this run?
+    [ "$ONLY" = " " ] && return 0
+    local id="${1#"$TESTS_DIR"/}"; id="${id%.kama}"
+    case "$ONLY" in *" $id "*|*" ${id%.d} "*) return 0 ;; esac
+    return 1
+}
 
 pass=0
 fail=0
@@ -195,6 +215,19 @@ spawn() {
 }
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
+# A clean build means NO WARNINGS, from kama or from the C compiler. An exit-code suite is blind to them,
+# which is how a `static inline` that was declared in the shared header but defined only in one translation
+# unit, a `void**` passed where `uint8_t**` was declared, and 72 spurious shift-count warnings all sat in the
+# corpus unnoticed. Warnings are the C compiler telling us the emitter is generating something it does not
+# believe; treat that as a failure while the tree is clean. It holds for every build this harness makes, a
+# single file, a `.d` project, a trap fixture or the procutil helper (the `.d` and trap legs had no gate,
+# so a project's C warnings, the emitter generating something the C compiler does not believe, passed —
+# KR-98). `warned <errfile> <label>` prints the FAIL and up to five warning lines, and succeeds, if it warned.
+warned() {
+    grep -qi 'warning' "$1" 2>/dev/null || return 1
+    echo "FAIL $2 (built, but with warnings)"; grep -i 'warning' "$1" | head -5
+}
+
 build_one() {
     local out="$1"; shift
     if [ "$WASM" = 1 ]; then
@@ -327,11 +360,17 @@ watchdog_run() {
 run_one() {
     # --report-on-signal costs nothing until the signal arrives, and both the report and the watchdog's
     # marker land in the fixture's own build dir, which is already per-fixture and already swept.
+    #
+    # ...and that directory is also where the fixture RUNS (KR-98). It used to run in the harness's working
+    # directory — the worktree — so a fixture that writes relative paths (fs_permissions, fs_dirs, …) wrote
+    # into the repo, and one that failed midway left its files there. Its own directory holds its executable
+    # (fs_readdir needs a non-empty one) and never the procutil helper (proc_cwd needs its absence). Every
+    # path handed to it is absolute. A subshell, because callers read `$TESTS_DIR/…` relative afterwards.
     local rdir; rdir="$(dirname -- "$1")"
     if [ "$WASM" = 1 ]; then
         if [ "${BROWSER:-0}" = 1 ]; then
-            KAMA_WT_CERT_HASH="$WT_CERT_HASH" \
-            watchdog_run "$rdir/timed_out" node "$TESTS_DIR/support/browser_run.js" "$1.js" 2>"$2"
+            (cd "$rdir" && KAMA_WT_CERT_HASH="$WT_CERT_HASH" \
+             watchdog_run "$rdir/timed_out" node "$TESTS_ABS/support/browser_run.js" "$1.js") 2>"$2"
         else
             # ⚠️ `--no-concurrent-recompilation` is not a performance knob — it is the fs_raii hang.
             # node's shutdown deadlocks against V8's own background threads:
@@ -355,11 +394,11 @@ run_one() {
             # recompilation anyway. Deliberately NOT pushed into what kama EMITS — forcing `process.exit()`
             # into every user's wasm output truncates piped stdout (300,000 lines -> 309 against a slow
             # reader, measured), which is a far worse bug than a rare teardown deadlock.
-            NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
-            watchdog_run "$rdir/timed_out" node --no-concurrent-recompilation "$1.js" 2>"$2"
+            (cd "$rdir" && NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
+             watchdog_run "$rdir/timed_out" node --no-concurrent-recompilation "$1.js") 2>"$2"
         fi
     else
-        watchdog_run "$rdir/timed_out" "$1" 2>"$2"
+        (cd "$rdir" && watchdog_run "$rdir/timed_out" "$1") 2>"$2"
     fi
     actual=$?
 }
@@ -431,10 +470,12 @@ fi
 # native — it's a child process, so the parent fixture's sanitizers still cover std::process; skipped on the
 # wasm leg (proc_* are skipped there). Fixtures locate it (and, for the cwd test, its dir + basename) via
 # these exported vars. The dir is passed OS-native (CreateProcess's lpCurrentDirectory wants a Windows path).
-if [ "$WASM" = 0 ] && [ -f "$TESTS_DIR/support/procutil.kama" ]; then
+case "$ONLY" in " "|*" proc_"*) need_procutil=1 ;; *) need_procutil=0 ;; esac   # a filtered run builds it only if used
+if [ "$WASM" = 0 ] && [ "$need_procutil" = 1 ] && [ -f "$TESTS_DIR/support/procutil.kama" ]; then
     procutil_bin="$TMP/procutil"
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) procutil_bin="$TMP/procutil.exe" ;; esac
     if "$KAMA" build "$TESTS_DIR/support/procutil.kama" -o "$procutil_bin" >/dev/null 2>"$TMP/procutil.err"; then
+        warned "$TMP/procutil.err" procutil && fail=$((fail+1))   # see warned()
         procutil_dir="$(dirname "$procutil_bin")"
         export KAMA_PROCUTIL_BASE="$(basename "$procutil_bin")"
         case "$(uname -s)" in
@@ -501,15 +542,7 @@ test_one() {
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
-    # A clean build means NO WARNINGS, from kama or from the C compiler. An exit-code suite is blind to
-    # them, which is how a `static inline` that was declared in the shared header but defined only in one
-    # translation unit, a `void**` passed where `uint8_t**` was declared, and 72 spurious shift-count
-    # warnings all sat in the corpus unnoticed. Warnings are the C compiler telling us the emitter is
-    # generating something it does not believe; treat that as a failure while the tree is clean.
-    if grep -qi 'warning' "$TMP/$name.err"; then
-        { echo "FAIL $name (built, but with warnings)"; grep -i 'warning' "$TMP/$name.err" | head -5; } >"$out"
-        echo FAIL >"$res"; return
-    fi
+    if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
     run_one "$exe" "$TMP/$name.san"
     [ "$HAVE_MS" = 1 ] && echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock
     if timed_out "$wd"; then
@@ -556,7 +589,7 @@ SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
 phase_start "single-file fixtures"
 fixture_pids=()
 for src in "$TESTS_DIR"/*.kama; do
-    [ -e "$src" ] || continue
+    [ -e "$src" ] && selected "$src" || continue
     spawn test_one "$src"
     fixture_pids+=($!)
 done
@@ -634,6 +667,7 @@ multi_one() {
     if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
+    if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
     run_one "$exe" "$TMP/$name.san"
     if timed_out "$wd"; then
         { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
@@ -656,7 +690,7 @@ multi_one() {
 phase_start "multi-file fixtures"
 multi_pids=()
 for dir in "$TESTS_DIR"/*.d; do
-    [ -d "$dir" ] || continue
+    [ -d "$dir" ] && selected "$dir" || continue
     spawn multi_one "$dir"
     multi_pids+=($!)
 done
@@ -725,8 +759,9 @@ diag_position_faults() {   # diag_position_faults <errfile> <fixture.kama>...
 #
 # `tests/xfail/DIAGNOSTIC_LINES` records, per fixture, every `<file>:<line>` its diagnostics name. Only the
 # fixture's OWN sources — a cascade into lib/std must not make this file churn when the stdlib is edited.
-# Regenerate with `KAMA_UPDATE_DIAG_LINES=1 ./dev test`, which writes it from this same extractor, so the
-# record and the check cannot drift into two different ideas of what a position is.
+# Regenerate with `KAMA_UPDATE_DIAG_LINES=1 ./dev test` — or `… ./dev fixture xfail/<name>` for just that row —
+# which writes it from this same extractor, so the record and the check cannot drift into two different ideas
+# of what a position is.
 #
 # ⚠️ REGENERATING IS NOT A FIX. A row moves for exactly two reasons: the fixture was edited, or a
 # diagnostic changed where it points. The second is the one this file exists to show you — READ THE DIFF
@@ -838,7 +873,7 @@ xfail_one() {
                    "$TESTS_DIR/xfail/DIAGNOSTIC_LINES")
         if [ "$want" = $'\001' ]; then
             { echo "FAIL xfail/$name (no row in tests/xfail/DIAGNOSTIC_LINES — a new fixture records its"
-              echo "  diagnostic positions too; run: KAMA_UPDATE_DIAG_LINES=1 ./dev test)"
+              echo "  diagnostic positions too; run: KAMA_UPDATE_DIAG_LINES=1 ./dev fixture xfail/$name)"
               echo "  this run saw: $got"; } >"$out"; echo FAIL >"$res"; return
         fi
         if [ "$want" != "$got" ]; then
@@ -856,7 +891,7 @@ phase_end
 phase_start "xfail fixtures"
 xfail_pids=()
 for src in "$TESTS_DIR"/xfail/*.kama "$TESTS_DIR"/xfail/*.d; do
-    [ -e "$src" ] || continue
+    [ -e "$src" ] && selected "$src" || continue
     spawn xfail_one "$src"
     xfail_pids+=($!)
 done
@@ -866,6 +901,16 @@ phase_end
 # regardless of which worker finished when, and a real diff is a real move.
 if [ "${KAMA_UPDATE_DIAG_LINES:-0}" = 1 ]; then
     dl="$TESTS_DIR/xfail/DIAGNOSTIC_LINES"
+    # A run narrowed to some fixtures rewrites THEIR rows and keeps every other one — so a new fixture's row
+    # is `KAMA_UPDATE_DIAG_LINES=1 ./dev fixture xfail/<name>`, not a whole-suite run. Without this, a
+    # filtered regenerate wrote a file holding only the rows it ran.
+    : >"$TMP/dl_kept"
+    if [ "$ONLY" != " " ] && [ -f "$dl" ]; then
+        tab=$(printf '\t')
+        grep -v '^#' "$dl" | while IFS= read -r row; do
+            [ -n "$row" ] && [ ! -e "$TMP/dl_${row%%"$tab"*}" ] && printf '%s\n' "$row"
+        done >"$TMP/dl_kept"
+    fi
     { cat <<'HDR'
 # Every <file>:<line> each tests/xfail fixture's diagnostics name — one row per fixture, "-" for none.
 # GENERATED by `KAMA_UPDATE_DIAG_LINES=1 ./dev test`; the check that reads it lives in run_tests.sh.
@@ -878,12 +923,12 @@ if [ "${KAMA_UPDATE_DIAG_LINES:-0}" = 1 ]; then
 # changed where it points. The second is what this file is for — read the diff, satisfy yourself the new
 # line is MORE right than the old one, and commit it with the change that moved it.
 HDR
-      LC_ALL=C sort "$TMP"/dl_* 2>/dev/null; } > "$dl"
+      LC_ALL=C sort "$TMP"/dl_* 2>/dev/null | grep -v '^$'; } > "$dl"
     echo "wrote $dl ($(grep -cv '^#' "$dl") rows) — READ THE DIFF; a moved line is a changed diagnostic."
 fi
 # Tally in fixture order, so output is identical to the serial version regardless of completion order.
 for src in "$TESTS_DIR"/xfail/*.kama "$TESTS_DIR"/xfail/*.d; do
-    [ -e "$src" ] || continue
+    [ -e "$src" ] && selected "$src" || continue
     name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     [ -f "$TMP/xf_$name.out" ] && cat "$TMP/xf_$name.out"
     if [ "$(cat "$TMP/xf_$name.res" 2>/dev/null)" = "PASS" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
@@ -921,20 +966,23 @@ else case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_STYLE=windows ;; *) TRAP_S
 fi
 ulimit -c 0
 for src in "$TESTS_DIR"/trap/*.kama; do
-    [ -e "$src" ] || continue
+    [ -e "$src" ] && selected "$src" || continue
     name="${src##*/}"; name="${name%.kama}"
     err="$TMP/trap_$name.err"
+    tdir="$TMP/t_$name"; mkdir -p "$tdir"   # its own directory, to build into and to run in (see run_one)
     if [ "$TRAP_STYLE" = wasm ]; then
-        if ! "$KAMA" build "$src" --target wasm --cc "${EMCC:-emcc}" -o "$TMP/trap_$name.js" \
+        if ! "$KAMA" build "$src" --target wasm --cc "${EMCC:-emcc}" -o "$tdir/$name.js" \
                 >/dev/null 2>"$TMP/trap_$name.builderr"; then
             echo "FAIL trap/$name (wasm build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
         fi
-        node --no-concurrent-recompilation "$TMP/trap_$name.js" >/dev/null 2>"$err"; actual=$?
+        if warned "$TMP/trap_$name.builderr" "trap/$name"; then fail=$((fail+1)); continue; fi
+        (cd "$tdir" && node --no-concurrent-recompilation "$tdir/$name.js") >/dev/null 2>"$err"; actual=$?
     else
-        if ! "$KAMA" build "$src" -o "$TMP/trap_$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
+        if ! "$KAMA" build "$src" -o "$tdir/$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
             echo "FAIL trap/$name (build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
         fi
-        "$TMP/trap_$name" 2>"$err"; actual=$?
+        if warned "$TMP/trap_$name.builderr" "trap/$name"; then fail=$((fail+1)); continue; fi
+        (cd "$tdir" && exec "$tdir/$name") 2>"$err"; actual=$?
     fi
     # The exit-code predicate is the ONLY thing that differs between targets; keep it that way.
     case "$TRAP_STYLE" in
@@ -1112,7 +1160,7 @@ done
 # the belief that `kama check` takes one file; it takes a program, and KR-46 needed a generic body's
 # `check`/`build` disagreement asserted over the multi-file fixtures that exhibit it.)
 for src in "$TESTS_DIR"/xfail/*.kama; do
-    [ -e "$src" ] || continue
+    [ -e "$src" ] && selected "$src" || continue
     name="${src##*/}"; name="${name%.kama}"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1))
@@ -1140,7 +1188,7 @@ for dir in "$TESTS_DIR"/*.d; do
     ck_pos=$((ck_pos+1)); spawn check_dir_pos_one "$dir"; ck_pids+=($!)
 done
 for dir in "$TESTS_DIR"/xfail/*.d; do
-    [ -d "$dir" ] || continue
+    [ -d "$dir" ] && selected "$dir" || continue
     name="${dir##*/}"; name="${name%.d}"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name.d (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1)); spawn check_dir_neg_one "$dir"; ck_pids+=($!)
