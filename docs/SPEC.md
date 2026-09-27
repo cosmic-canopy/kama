@@ -4636,6 +4636,10 @@ type value Palette {
   **type-associated** one is read `Type::name()` and obeys member visibility — **default private** (scoped
   and access-restricted, like any member), callable from outside only when marked `public`. A private
   type-associated comptime fn is callable from within its own type's comptime fns.
+- **A function like any other.** A top-level `comptime fn` leaves its file through `export { … };` and is
+  reached by `import`, exactly as a function is, `as` included; its body runs in the file that DECLARED it,
+  so it may use that file's private helpers and constants wherever it is called from. <!-- test: comptime_fn_export -->
+  An imported one is still compile-time only: a runtime call to it is rejected. <!-- xfail: comptime_fn_imported_runtime_call -->
 - **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
   entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, fixed
   `InlineArray<T>#(N)`, and a `type value` whose fields are those. Statements: local + `const` decls, `=`

@@ -1,0 +1,2 @@
+// No `export { twice };` — the name never leaves this file.
+comptime fn int32 twice(int32 n) { return n * 2; }

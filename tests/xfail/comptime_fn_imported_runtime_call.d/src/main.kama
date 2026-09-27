@@ -1,0 +1,8 @@
+// KR-95: an imported `comptime fn` is still compile-time only. Called at run time it is refused as what it
+// is — before, the importer did not know it as a comptime fn at all and said "unknown function".
+import { cx::m::twice };
+
+fn int32 main() {
+    int32 n = 3;
+    return twice(n: n);
+}

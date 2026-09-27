@@ -8662,7 +8662,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // interpreter (NOT in _funcs — it is never emitted as a C symbol) and reject an impure body
         // now. It is monomorphic in v1 (the grammar admits no type/const params or `expose`).
         if (fn->isComptime) {
-            _comptimeFns[qualify(*fn->name->value)] = fn;
+            _comptimeFns[qualify(*fn->name->value)] = { fn, _nsCtx };
             continue;
         }
 
@@ -10189,7 +10189,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (md->isComptime) {
                         if (md->name && md->name->value)
                             _comptimeMethods[ci.name + "::" + *md->name->value] =
-                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), ci.name };
+                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), ci.name, _nsCtx };
                         continue;
                     }
                     if (md->name && md->name->value) {
@@ -19000,7 +19000,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                         // refused as "not a comptime fn" (KR-93's member audit).
                         if (md->isComptime && md->name && md->name->value)
                             _comptimeMethods[name + "::" + *md->name->value] =
-                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), name };
+                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), name, _nsCtx };
                     }
                     // A `const` field is still a field, and a `comptime` constant and an operator were never
                     // registered: all three parsed and VANISHED (the loops downstream read methods only), so a
@@ -35050,6 +35050,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             std::string q = qualify(*name);
             bool exists = _classes.count(q) || _enums.count(q) || _interfaces.count(q) || _funcs.count(q)
                        || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q)
+                       || _comptimeFns.count(q)     // a top-level `comptime fn` (KR-95)
                        || _constStatics.count(q);   // a module `comptime` — SPEC: "subject to the module
                                                     // `export { }` surface". It is a named constant, so it
                                                     // publishes like a function; see emitHeaderContent.

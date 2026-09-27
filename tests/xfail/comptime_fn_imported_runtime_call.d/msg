@@ -1,0 +1,1 @@
+it runs only at compile time

@@ -1,0 +1,10 @@
+import { cx::m::twice, cx::m::Palette, cx::quad };
+
+comptime int32 SIX = twice(n: 3);
+comptime int32 TWELVE = quad(n: 3);
+comptime int32 NINE = Palette::scaled(n: 3);
+
+fn int32 main() {
+    int32 r = SIX + TWELVE + NINE;   // 6 + 12 + 9
+    return r == 27 ? 42 : r;
+}

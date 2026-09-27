@@ -19,10 +19,12 @@
 #include <cstdio>
 #include <sstream>
 
-// Does `name` (with an optional scope qualifier) resolve to a registered `comptime fn`? Used at the
-// call-emit sites to reject a runtime-position call with a diagnostic that points at the `comptime`
-// constant form. Mirrors the common resolveFunc search (same-module, `using`, prelude) over _comptimeFns;
-// an explicit `mod::f()` qualifier that misses simply falls through to the generic unknown-fn diagnostic.
+// Does `name` (with an optional scope qualifier) resolve to a registered `comptime fn`? The interpreter's
+// callee lookup, and the call-emit sites' too, which reject a runtime-position call with a diagnostic that
+// points at the `comptime` constant form. Climbs resolveFuncImpl's ladder, minus the rungs a runtime call
+// leaves to checkReach (the interpreter has no reach check): what this file IMPORTS — which the import site
+// already held to the exporting file's `export` and the module's `visibility` — then what it declares, then
+// its `using`s. The import rung was missing, so an exported comptime fn was "not one" to its importer (KR-95).
 bool CEmitter::isComptimeFnName(const std::string& name, SharedStringList /*qualifier*/, std::string& outKey) const
 {
     auto hit = [&](const std::string& k) -> bool {
@@ -30,7 +32,9 @@ bool CEmitter::isComptimeFnName(const std::string& name, SharedStringList /*qual
         if (i != _comptimeFns.end()) { outKey = k; return true; }
         return false;
     };
-    if (hit(qualify(name))) return true;                                  // same-module `f()`
+    auto sa = _nsCtx.symbolAliases.find(name);                           // `import { m::f };` (or `as g`)
+    if (sa != _nsCtx.symbolAliases.end() && hit(sa->second)) return true;
+    if (hit(qualify(name))) return true;                                  // this file's own `f()`
     for (auto& u : _nsCtx.usings) if (hit(u + "__" + name)) return true;  // imported via `using`
     return hit(name);                                                     // prelude / global namespace
 }
@@ -587,7 +591,9 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             std::vector<CTValue> args; if (!evalArgs(args)) return false;
             if (!ctBindByName(mit->second.node->params, argNames, args, disp, e->line)) return false;
             std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
-            bool ok = ctEvalBody(mit->second.node->params, mit->second.node->body, mit->second.node->returnType, args, e->line, out);
+            const ComptimeMethod& cm = mit->second;
+            bool ok = ctInDeclaringFile(cm.ctx, [&] {
+                return ctEvalBody(cm.node->params, cm.node->body, cm.node->returnType, args, e->line, out); });
             _ctCurrentOwner = saved;
             return ok;
         }
@@ -598,9 +604,10 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                            ? "a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value + "` is not one"
                            : "it calls `" + *inv->identifier->value + "`, which is not a `comptime fn`").c_str(), e->line);
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
-        if (!ctBindByName(_comptimeFns[key]->parameters, argNames, args, *inv->identifier->value, e->line)) return false;
+        const ComptimeFn& cf = _comptimeFns[key];
+        if (!ctBindByName(cf.node->parameters, argNames, args, *inv->identifier->value, e->line)) return false;
         std::string saved = _ctCurrentOwner; _ctCurrentOwner.clear();   // a free fn has no owning type
-        bool ok = ctEvalCall(_comptimeFns[key], args, e->line, out);
+        bool ok = ctInDeclaringFile(cf.ctx, [&] { return ctEvalCall(cf.node, args, e->line, out); });
         _ctCurrentOwner = saved;
         return ok;
     }
@@ -894,6 +901,20 @@ bool CEmitter::ctBindByName(SharedParameterList params, const std::vector<std::s
                                   ? *(*params)[i]->identifier->value : std::string("?")) + ":`").c_str(), line);
     args.swap(ordered);
     return true;
+}
+
+// Run a comptime fn's body where it was WRITTEN: its file's scope, imports and file rung, and that file named
+// by a diagnostic. The caller's context is the wrong one the moment the two files differ — an exported fn
+// calling its own private helper resolved the helper in the IMPORTER's file, and a failure in the body was
+// blamed on the importer's file at the body's line (KR-95). Argument values are the caller's, evaluated first.
+bool CEmitter::ctInDeclaringFile(const NsCtx& ctx, const std::function<bool()>& run)
+{
+    NsCtx saved = _nsCtx; std::string savedUnit = _collectingUnitPath;
+    _nsCtx = ctx;
+    if (!ctx.unitPath.empty()) _collectingUnitPath = ctx.unitPath;
+    bool ok = run();
+    _nsCtx = saved; _collectingUnitPath = savedUnit;
+    return ok;
 }
 
 bool CEmitter::ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out)

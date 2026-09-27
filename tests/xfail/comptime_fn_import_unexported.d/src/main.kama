@@ -1,0 +1,6 @@
+// KR-95: a comptime fn leaves its file only through that file's `export`, like any other name.
+import { cx::m::twice };
+
+comptime int32 SIX = twice(n: 3);
+
+fn int32 main() { return SIX; }

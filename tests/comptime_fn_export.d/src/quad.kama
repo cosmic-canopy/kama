@@ -1,0 +1,5 @@
+// An import under another name, used inside a `comptime fn` of this file.
+import { cx::m::twice as dbl };
+export { quad };
+
+comptime fn int32 quad(int32 n) { return dbl(n: dbl(n: n)); }

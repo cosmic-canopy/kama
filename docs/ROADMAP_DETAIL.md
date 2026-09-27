@@ -1969,14 +1969,6 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
   **Before code:** where the assertions go (per use, or once per type; header or unit); how a generic
   instance's layout is keyed; whether the model sits beside `cType` or is derived from it; targets like AVR,
   where every alignment is 1.
-- **A top-level `comptime fn` cannot be exported (KR-95).** Measured `0.9.448`, two modules: `export {
-  twice };` over `comptime fn int32 twice(int32 n)` fails with "export list names `twice` but there is no such
-  top-level declaration in this module", and the importer's `comptime int32 SIX = twice(n: 3);` with "a
-  comptime fn may call only another `comptime fn` — `twice` is not one". Both are wrong: it is declared, it
-  is one, and the caller is a constant rather than a comptime fn. A module `comptime` constant exports and
-  imports fine, and a type's `public comptime fn` crosses modules as `Palette::twice(n: 3)` — so the language
-  already means a compile-time function to be shareable, and the export list simply does not consult the
-  comptime-fn table. Wants a two-module positive fixture, and the importer's message fixed at its cause.
 - **Platform tag-type compilation.** The `@compileFor`-gated contract-impl seam is the sanctioned platform-variance
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.

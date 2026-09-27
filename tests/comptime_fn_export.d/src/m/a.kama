@@ -1,0 +1,16 @@
+// KR-95: a top-level `comptime fn` exports and imports like any function. `twice` is offered here; its body
+// reaches a PRIVATE helper and a PRIVATE constant of this file, which it must resolve HERE — where it was
+// written — and never in the importer's file, which can name neither.
+export { twice, Palette };
+
+comptime int32 BASE = 1;
+comptime fn int32 bump(int32 n) { return n + BASE; }
+comptime fn int32 twice(int32 n) { return bump(n: n) * 2 - BASE * 2; }   // 2n, by way of both privates
+
+// The same rule for a type's `public comptime fn` called from another module: `scaled` reads this file's
+// private `SCALE`.
+type value Palette {
+    int32 dummy;
+    public comptime fn int32 scaled(int32 n) { return n * SCALE; }
+}
+comptime int32 SCALE = 3;

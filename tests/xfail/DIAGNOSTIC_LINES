@@ -133,6 +133,8 @@ comptime_assert_unrenderable	comptime_assert_unrenderable.kama:10
 comptime_call_unknown_arg	comptime_call_unknown_arg.kama:4
 comptime_const_cycle	comptime_const_cycle.kama:5
 comptime_fn_budget	comptime_fn_budget.kama:5
+comptime_fn_import_unexported	main.kama:2 main.kama:4
+comptime_fn_imported_runtime_call	main.kama:7
 comptime_fn_impure	comptime_fn_impure.kama:6
 comptime_fn_runtime_call	comptime_fn_runtime_call.kama:6
 comptime_fn_size_failed	comptime_fn_size_failed.kama:3

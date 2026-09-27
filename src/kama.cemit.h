@@ -3373,13 +3373,17 @@ private:
     // const-eval 6b-3: `comptime fn` registry — compile-time-only functions the interpreter runs. Free
     // fns are keyed by qualified name; type-associated ones as "<qualifiedClass>::<name>". NOT in _funcs:
     // a comptime fn is never emitted as a C symbol (comptime-only model). Populated in collect passes.
-    std::map<std::string, FunctionDeclarationNode*> _comptimeFns;
+    // Each keeps the context of the file that DECLARED it — scope, imports, file rung — because its body
+    // resolves names where it was written, never where it is called from (KR-95).
+    struct ComptimeFn { FunctionDeclarationNode* node; NsCtx ctx; };
+    std::map<std::string, ComptimeFn> _comptimeFns;
     // Type-associated `comptime fn` (`Type::name()`), keyed "<qualifiedClass>::<name>", with its visibility
     // (default private — a comptime fn is scoped/access-restricted by default) and owning type.
-    struct ComptimeMethod { ClassMethodDeclarationNode* node; Visibility vis; std::string owner; };
+    struct ComptimeMethod { ClassMethodDeclarationNode* node; Visibility vis; std::string owner; NsCtx ctx; };
     std::map<std::string, ComptimeMethod> _comptimeMethods;
     std::string _ctCurrentOwner;   // type whose comptime fn body is evaluating (for private-visibility checks)
     bool isComptimeFnName(const std::string& name, SharedStringList qualifier, std::string& outKey) const;  // runtime-call rejection
+    bool ctInDeclaringFile(const NsCtx& ctx, const std::function<bool()>& run);   // run a comptime body where it was written
     // Purity is enforced structurally at evaluation time (the interpreter has no case for an impure
     // node → a clean "unsupported in comptime fn" diagnostic), the C++ constexpr model. See kama.comptime.cpp.
 
