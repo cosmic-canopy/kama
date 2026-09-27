@@ -459,8 +459,10 @@ static inline int32_t kama__apply_mode(HANDLE h, uint32_t mode, int isDir)
     if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
         || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
         || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
-    if (!SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &sd)
-        && !SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION, &sd)) {
+    // The control bit is what protects the list. SetKernelObjectSecurity accepts PROTECTED_DACL_SECURITY_INFORMATION
+    // and IGNORES it — measured (KR-99, Windows 11): on a file that had inherited BA/SY/BU/AU, the flag alone
+    // returned TRUE and left the list unprotected, and the bit alone protected it. So no flag is passed.
+    if (!SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION, &sd)) {
         errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EPERM; return -1;
     }
     const int is = kama__mode_is(h, NULL, mode);
