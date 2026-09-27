@@ -6552,8 +6552,10 @@ std::string runCmdCapture(const std::string& cmd, int* exitCode, bool binary)
     return out;
 }
 
-// Cross-platform recursive delete of `p` (staging cleanup / dedup). Same shell-out as cmdInstall's
-// view rebuild.
+// Cross-platform recursive delete of the DIRECTORY `p` (staging cleanup / dedup). Same shell-out as
+// cmdInstall's view rebuild. ⚠️ Never a file: `rmdir` cannot delete one, so on Windows the file stayed while
+// POSIX's `rm -rf` hid the difference — every url install left its download in the store, and every signed
+// publish its `.sig` beside the registry (KR-99). A file is `remove(osp(p).c_str())`.
 static std::string rmRfCmd(const std::string& p)
 {
 #ifdef _WIN32
@@ -6625,12 +6627,12 @@ static bool sshSign(const std::string& file, const std::string& keyPath,
                     std::string& sigOut, std::string& pubKeyOut, std::string& err)
 {
     std::string sigfile = file + ".sig";
-    runCmd(rmRfCmd(sigfile));
+    remove(osp(sigfile).c_str());
     int rc = runCmd("ssh-keygen -Y sign -f \"" + keyPath + "\" -n " + kSigNamespace + " \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
     if (rc != 0) { err = "ssh-keygen -Y sign failed (is the key '" + keyPath + "' an SSH private key?)"; return false; }
     { std::ifstream f(osp(sigfile), std::ios::binary); sigOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
     { std::ifstream f(osp(keyPath + ".pub"), std::ios::binary); pubKeyOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
-    runCmd(rmRfCmd(sigfile));
+    remove(osp(sigfile).c_str());
     // trim a trailing newline on the public key line (keeps the index tidy)
     while (!pubKeyOut.empty() && (pubKeyOut.back() == '\n' || pubKeyOut.back() == '\r')) pubKeyOut.pop_back();
     if (sigOut.empty()) { err = "ssh-keygen produced no signature"; return false; }
@@ -6645,7 +6647,7 @@ static bool sshVerify(const std::string& file, const std::string& signature, con
     { std::ofstream o(osp(sigTmp), std::ios::binary); if (!o) return false; o << signature; }
     int rc = runCmd("ssh-keygen -Y check-novalidate -n " + std::string(kSigNamespace) +
                     " -s \"" + sigTmp + "\" < \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
-    runCmd(rmRfCmd(sigTmp));
+    remove(osp(sigTmp).c_str());
     return rc == 0;
 }
 // -----------------------------------------------------------------------------------------------
@@ -6765,42 +6767,42 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
     } else {
         std::string tgz = staging + ".tgz";
         if (runCmd("curl -fsSL \"" + d.url + "\" -o \"" + tgz + "\"") != 0) {
-            err = "download failed for '" + name + "' (" + d.url + ")"; runCmd(rmRfCmd(tgz)); return false;
+            err = "download failed for '" + name + "' (" + d.url + ")"; remove(osp(tgz).c_str()); return false;
         }
         std::string tarballHash = sha256Of(tgz);   // the artifact identity a re-download can re-verify
-        if (tarballHash.empty()) { err = "cannot hash tarball for '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
+        if (tarballHash.empty()) { err = "cannot hash tarball for '" + name + "'"; remove(osp(tgz).c_str()); return false; }
         if (!d.integrity.empty() && d.integrity != tarballHash) {
             err = "integrity mismatch for '" + name + "': expected " + d.integrity + ", got " + tarballHash;
-            runCmd(rmRfCmd(tgz)); return false;   // hard fail — nothing enters the store
+            remove(osp(tgz).c_str()); return false;   // hard fail — nothing enters the store
         }
         // M3.2a: verify the tarball signature while the tgz still exists (SSHSIG is over its bytes).
         // Enforced under `--verify`; otherwise warn-only. Skips gracefully if ssh-keygen is absent.
         if (!d.signature.empty()) {
             if (!hasSshKeygen()) {
-                if (g_verifySignatures) { err = "cannot verify '" + name + "': ssh-keygen not available"; runCmd(rmRfCmd(tgz)); return false; }
+                if (g_verifySignatures) { err = "cannot verify '" + name + "': ssh-keygen not available"; remove(osp(tgz).c_str()); return false; }
             } else if (!sshVerify(tgz, d.signature, staging)) {
                 if (g_verifySignatures) {
                     err = "signature verification failed for '" + name + "' (" + d.url + ")";
-                    runCmd(rmRfCmd(tgz)); return false;
+                    remove(osp(tgz).c_str()); return false;
                 }
                 fprintf(stderr, "kama: warning: signature check failed for '%s' — continuing (verification "
                         "is not enforced; pass --verify to require it)\n", name.c_str());
             }
         } else if (g_verifySignatures) {
             err = "'" + name + "' is unsigned but --verify requires a signature";
-            runCmd(rmRfCmd(tgz)); return false;
+            remove(osp(tgz).c_str()); return false;
         }
         lockIntegrity = tarballHash;   // trust-on-first-use when the manifest omits `integrity`
-        if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
+        if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; remove(osp(tgz).c_str()); return false; }
         // --force-local on Windows: GNU tar reads a `:` in a file argument as a REMOTE HOST separator, so an
         // ordinary absolute path becomes a network fetch —
         //     tar (child): Cannot connect to C: resolve failed
         // and every url-tarball dependency failed to unpack. The flag says "that colon is part of a path".
         // POSIX paths have no colon to misread, and the flag is GNU-only, so it stays on this side.
         if (runCmd("tar " KAMA_TAR_LOCAL "-xzf \"" + tgz + "\" -C \"" + staging + "\" --strip-components=1") != 0) {
-            err = "cannot unpack '" + name + "'"; runCmd(rmRfCmd(staging)); runCmd(rmRfCmd(tgz)); return false;
+            err = "cannot unpack '" + name + "'"; runCmd(rmRfCmd(staging)); remove(osp(tgz).c_str()); return false;
         }
-        runCmd(rmRfCmd(tgz));
+        remove(osp(tgz).c_str());
     }
 
     std::string hash = treeHashOf(staging);   // "sha256-<hex>" — the store dir name + dedup key

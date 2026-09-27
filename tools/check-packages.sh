@@ -139,6 +139,14 @@ fi
 if ! grep -q '"integrity": "sha256-' "$proj2/kama.lock"; then
     echo "check-packages: FAIL — url TOFU did not record a computed integrity in kama.lock" >&2; exit 1
 fi
+# Nothing kama stages may outlive the command: the download beside the store entry, the signature beside a
+# registry's tarball. Windows kept every one until 0.9.455 — its `rmdir /s /q` cannot delete a FILE (KR-99).
+no_tmp_left() {
+    if ls -A "$1" | grep -q '^\.tmp-'; then
+        echo "check-packages: FAIL — $2 left a temp file behind in $1:" >&2; ls -A "$1" | sed 's/^/  /' >&2; exit 1
+    fi
+}
+no_tmp_left "$KAMA_STORE" "a url install"
 
 # 4. tamper: pin a WRONG integrity -> install must fail non-zero and not populate the store.
 proj3="$tmp/proj3"
@@ -157,6 +165,7 @@ if ! grep -qi "integrity mismatch" "$tmp/tamper.out"; then
     echo "check-packages: FAIL — integrity failure, but not with the expected diagnostic:" >&2
     sed 's/^/  /' "$tmp/tamper.out" >&2; exit 1
 fi
+no_tmp_left "$KAMA_STORE" "a refused url install"
 
 # ---- M2.2: resolver + parseLock + dev-deps + pkg add/remove/update ------------------------------------
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -842,6 +851,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
         echo "check-packages: FAIL — signed publish errored:" >&2; sed 's/^/  /' "$tmp/sgpub.out" >&2; exit 1; fi
     grep -q '"signature"' "$sreg/sg/index.json" && grep -q '"key"' "$sreg/sg/index.json" \
         || { echo "check-packages: FAIL — signed publish did not record signature+key in the index" >&2; exit 1; }
+    no_tmp_left "$sreg" "a signed publish"
     sgp="$tmp/sgp"; mkdir -p "$sgp/src"
     cat > "$sgp/kama.json" <<JSON
 { "name": "sgp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
@@ -851,6 +861,7 @@ JSON
     # 25a. --verify install of a signed package passes.
     if ! "$KAMA" pkg install "$sgp/kama.json" --verify >"$tmp/sv.out" 2>&1; then
         echo "check-packages: FAIL — --verify install of a signed package errored:" >&2; sed 's/^/  /' "$tmp/sv.out" >&2; exit 1; fi
+    no_tmp_left "$KAMA_STORE" "a verified registry install"
     # 25b. tamper the signature blob in the index → --verify FAILS (cold store forces a re-fetch+re-verify).
     rm -rf "$KAMA_STORE" "$sgp/kama.lock" "$sgp/.kama"
     awk '{ if (!done && index($0,"BEGIN SSH SIGNATURE")>0) { done=1 } print }' "$sreg/sg/index.json" >/dev/null
@@ -864,7 +875,7 @@ JSON
     if ! "$KAMA" pkg install "$sgp/kama.json" >"$tmp/svwarn.out" 2>&1; then
         echo "check-packages: FAIL — warn-only install (bad sig, no --verify) errored:" >&2; sed 's/^/  /' "$tmp/svwarn.out" >&2; exit 1; fi
     grep -qi "signature check failed" "$tmp/svwarn.out" || { echo "check-packages: FAIL — warn-only did not warn on a bad signature:" >&2; sed 's/^/  /' "$tmp/svwarn.out" >&2; exit 1; }
-    SIGNOTE="signed publish/verify/tamper/warn-only"
+    SIGNOTE="signed publish/verify/tamper/warn-only, no .sig left behind"
 else
     echo "check-packages: NOTE — ssh-keygen absent, skipping M3.2a signing cases"
     SIGNOTE="signing skipped (no ssh-keygen)"
@@ -1399,4 +1410,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
