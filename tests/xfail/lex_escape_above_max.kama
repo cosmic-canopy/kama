@@ -1,0 +1,6 @@
+// KR-91: a `\u{…}` escape names one Unicode scalar value — never a surrogate (U+D800–U+DFFF) and never
+// above U+10FFFF. Before 0.9.459 a string silently DELETED such an escape: this length() was 2.
+fn int32 main() {
+    string s = "a\u{110000}b";
+    return cast<int32>(s.length());
+}

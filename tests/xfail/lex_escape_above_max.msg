@@ -1,0 +1,1 @@
+:4:17: Lexical error: a `\u{...}` escape is above U+10FFFF, the last Unicode scalar value

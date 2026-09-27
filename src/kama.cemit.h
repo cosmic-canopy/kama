@@ -3291,6 +3291,7 @@ private:
 
     // Expressions -> C expression text
     static std::string cEscapeStringBody(const std::string& s);   // escape a string's bytes for a C `"..."` body (no quotes/wrapper)
+    static std::string kamaStrLit(const std::string& s);          // `kama_string_lit("…", n)` for a serde wire name
     std::string emitExpression(SharedExpression expr);
     std::string emitInterpolation(InterpolatedStringNode* is);   // `"a ${x} b"` -> a hoisted Formatter build
     std::string emitTaggedInterpolation(InterpolatedStringNode* is);   // `tag"a ${x} b"` -> a Template + a `<tag>(ref Template)` call

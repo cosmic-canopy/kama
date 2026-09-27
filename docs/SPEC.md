@@ -81,8 +81,11 @@ You never spell the borrowed-vs-owned distinction; the type carries it, and RAII
 ones. There is no separate capital-`String` collection type.
 
 **UTF-8 everywhere.** A `string` is **UTF-8 bytes**; `length()` is the **byte** length (O(1)), and literals
-encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
-never blur:
+encode `\u{…}` escapes to UTF-8 — `\u{0}` is one NUL byte, the same as `\0`, and a literal's bytes reach the
+program exactly as written (C's trigraphs never touch `"??="`). <!-- test: string_escapes_exact -->
+An escape names one Unicode scalar value: a surrogate (`\u{D800}`–`\u{DFFF}`) is rejected, <!-- xfail: lex_escape_surrogate -->
+and so is a value above `\u{10FFFF}`, in a string or a `char`. <!-- xfail: lex_char_escape_above_max -->
+Two ways to traverse it, kept distinct by type so bytes and characters never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
   iterates bytes; `s.bytes()` hands out a **`ConstView<uint8>`** over the string's own storage — borrowed,

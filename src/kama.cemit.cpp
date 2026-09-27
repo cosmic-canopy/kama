@@ -4919,9 +4919,14 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
     return _funcs[tagKey].cName + "(&" + tv + ")";
 }
 
-// Escape a decoded string's bytes into the body of a C `"..."` literal (no surrounding quotes). Shared by
-// `StringNode` lowering and inline-asm lowering — the asm path in particular relies on `\n`/quote/backslash
-// escaping so a multi-instruction `asm("cpsid i\n\tdsb")` produces a well-formed C string.
+// Escape a decoded string's bytes into the body of a C `"..."` literal (no surrounding quotes) — the ONE
+// escaper, for every literal the emitter writes: `StringNode` lowering, inline asm (a multi-instruction
+// `asm("cpsid i\n\tdsb")` relies on the `\n`), serde wire names, diagnostics baked into the C. The bytes
+// must come out of the C compiler exactly as kama holds them, because `kama_string_lit` is told their count:
+//   * any other control byte, NUL included, is a 3-digit octal escape (never hex, which is greedy and would
+//     swallow a following hex digit). Written raw, clang warned on a NUL and kept it only by courtesy.
+//   * `?` is `\?`, because C still has TRIGRAPHS: `"a??=b"` compiled to `a#b` in strict C mode while kama
+//     said it was 5 bytes long, so `length()` counted — and a read walked — past the literal's end (KR-91).
 std::string CEmitter::cEscapeStringBody(const std::string& s)
 {
     std::string out;
@@ -4930,10 +4935,15 @@ std::string CEmitter::cEscapeStringBody(const std::string& s)
         switch (c) {
             case '\\': out += "\\\\"; break;
             case '"':  out += "\\\""; break;
+            case '?':  out += "\\?";  break;
             case '\n': out += "\\n";  break;
             case '\t': out += "\\t";  break;
             case '\r': out += "\\r";  break;
-            default:   out += c;      break;
+            default:
+                if ((unsigned char)c < 0x20 || c == 0x7F) {
+                    char esc[5]; snprintf(esc, sizeof esc, "\\%03o", (unsigned)(unsigned char)c); out += esc;
+                } else out += c;
+                break;
         }
     }
     return out;
@@ -28744,19 +28754,10 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
 // collection field calls its own `<CType>__serialize`/`__deserialize` (emitted per-instance elsewhere);
 // `Optional<E>` is inlined. (`Fixed<T,N>` is unused by any `@generate` type today — deferred.)
 
-// A `kama_string_lit("…", n)` for a wire name (same escaping the StringNode lowering uses).
-static std::string kamaStrLit(const std::string& s)
+// A `kama_string_lit("…", n)` for a wire name — through the one escaper the StringNode lowering uses.
+std::string CEmitter::kamaStrLit(const std::string& s)
 {
-    std::ostringstream os;
-    os << "kama_string_lit(\"";
-    for (char c : s)
-        switch (c) {
-            case '\\': os << "\\\\"; break;  case '"': os << "\\\""; break;
-            case '\n': os << "\\n";  break;  case '\t': os << "\\t"; break;
-            case '\r': os << "\\r";  break;  default:  os << c;      break;
-        }
-    os << "\", " << s.size() << ")";
-    return os.str();
+    return "kama_string_lit(\"" + cEscapeStringBody(s) + "\", " + std::to_string(s.size()) + ")";
 }
 
 // The Serializer/Deserializer scalar method suffix for a builtin ("I32"/"U8"/"F64"/"Bool"/"Char"), "" otherwise.

@@ -1,0 +1,6 @@
+// KR-91: a `\u{…}` escape names one Unicode scalar value — never a surrogate (U+D800–U+DFFF) and never
+// above U+10FFFF. Before 0.9.459 a `char` accepted one, holding a value no `char` may hold.
+fn int32 main() {
+    char c = '\u{110000}';
+    return cast<int32>(c) & 1;
+}

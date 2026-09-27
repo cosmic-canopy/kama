@@ -1,0 +1,7 @@
+// KR-91: a `\u{…}` escape names one Unicode scalar value — never a surrogate (U+D800–U+DFFF) and never
+// above U+10FFFF. Before 0.9.459 it was deleted. Here the COLUMN is pinned: the error names
+// the escape itself, a 0-based byte column counted after the two-byte `é` before it.
+fn int32 main() {
+    string s = "é\u{DFFF}";
+    return cast<int32>(s.length());
+}

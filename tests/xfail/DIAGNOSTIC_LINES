@@ -590,7 +590,12 @@ layout_attr_on_enum	layout_attr_on_enum.kama:8
 layout_attr_on_static	layout_attr_on_static.kama:4
 leading_zero	leading_zero.kama:2
 lex_char_bad_utf8	lex_char_bad_utf8.kama:4
+lex_char_escape_above_max	lex_char_escape_above_max.kama:4
+lex_char_escape_surrogate	lex_char_escape_surrogate.kama:4
 lex_comment_unterminated	lex_comment_unterminated.kama:2
+lex_escape_above_max	lex_escape_above_max.kama:4
+lex_escape_column	lex_escape_column.kama:5
+lex_escape_surrogate	lex_escape_surrogate.kama:4
 lex_string_badchar	lex_string_badchar.kama:4
 lex_string_unterminated	lex_string_unterminated.kama:3
 lex_tab_column	lex_tab_column.kama:4

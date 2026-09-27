@@ -1,0 +1,17 @@
+// A string's bytes come out of the C compiler exactly as kama holds them (KR-91). Each of these used to
+// differ: `\u{0}` was DELETED (length 2); a NUL and the other control bytes were written raw into the C
+// source, where clang warned; and `??=` / `??!` are C TRIGRAPHS, which strict C turned into `#` / `|` while
+// kama still said 5 bytes — so length() counted, and a read walked, past the literal's end.
+fn int32 main() {
+    string nul = "a\u{0}b";
+    if (cast<int32>(nul.length()) != 3) { return 1; }
+    if (nul != "a\0b") { return 2; }
+    string ctl = "\a\b\f\v\u{1}\u{1F}\u{7F}";
+    if (cast<int32>(ctl.length()) != 7) { return 3; }
+    string tri = "a??=b??!c??/d";
+    if (cast<int32>(tri.length()) != 13) { return 4; }
+    if (tri != "a?" + "?=b?" + "?!c?" + "?/d") { return 5; }
+    string verb = @"??(??)";
+    if (verb != "?" + "?(?" + "?)") { return 6; }
+    return 42;
+}

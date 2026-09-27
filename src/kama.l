@@ -104,7 +104,8 @@ static bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading 
 }
 static std::string cReservedWhy(const std::string&);
 char getSimpleEscape(const char* input, int index);
-std::string hexToUTF8(int cp);
+std::string hexToUTF8(unsigned cp);
+bool scalarEscape(unsigned cp, int column, yyscan_t scanner);
 unsigned decodeUTF8Codepoint(const char* bytes, int len);
 
 void error(const char *, yyscan_t scanner);
@@ -268,7 +269,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      `char` is exactly one scalar value — a multi-codepoint grapheme is a string, not a char. */
 {simple_esc_seq_literal}                       { unsigned cp = (unsigned char)getSimpleEscape(yytext, 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {single_char_literal}                          { unsigned cp = (unsigned char)yytext[1]; std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
-{uni_codepoint_char_literal}                   { std::string hexString(&(yytext[4])); hexString.pop_back(); hexString.pop_back(); unsigned cp = (unsigned)strtol(hexString.c_str(), NULL, 16); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
+{uni_codepoint_char_literal}                   { unsigned cp = (unsigned)strtoul(&(yytext[4]), NULL, 16); scalarEscape(cp, yyextra->next_column_number + 1, yyscanner); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 
 {regular_string_start}                         {
@@ -316,12 +317,10 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                  yyextra->workString->append(&c, 1);
                                                }
 <IN_REGULAR_STRING>{uni_codepoint_esc_seq}     {
+                                                 unsigned cp = (unsigned)strtoul(&(yytext[3]), NULL, 16);
+                                                 if (scalarEscape(cp, yyextra->next_column_number, yyscanner))
+                                                     yyextra->workString->append(hexToUTF8(cp));
                                                  yyextra->next_column_number += yyleng;
-                                                 std::string hexString(&(yytext[3]));
-                                                 hexString.pop_back();
-
-                                                 int hexVal = strtol( hexString.c_str(), NULL, 16);
-                                                 yyextra->workString->append(hexToUTF8(hexVal));
                                                }
 <IN_REGULAR_STRING>{regular_string_end}        {
                                                  bool interp = yyextra->strInterp;
@@ -752,15 +751,38 @@ const char *kamaKeywordAt(size_t i)
   return i < kamaKeywordCount() ? keywords[i].name : "";
 }
 
-std::string hexToUTF8(int cp)
+/* A `\u{…}` escape names one Unicode scalar value: never a surrogate (U+D800–U+DFFF, which UTF-8 cannot
+   encode alone) and never above U+10FFFF. Such an escape used to be DELETED from a string without a word, and
+   accepted as a `char` (KR-91). The error points at the escape itself; the position the enclosing token will
+   carry is put back afterwards. */
+bool scalarEscape(unsigned cp, int column, yyscan_t scanner)
 {
-    char c[5]={ 0x00,0x00,0x00,0x00,0x00 };
-    if     (cp<=0x7F) { c[0] = cp;  }
-    else if(cp<=0x7FF) { c[0] = (cp>>6)+192; c[1] = (cp&63)+128; }
-    else if(0xd800<=cp && cp<=0xdfff) {} //invalid block of utf8
-    else if(cp<=0xFFFF) { c[0] = (cp>>12)+224; c[1]= ((cp>>6)&63)+128; c[2]=(cp&63)+128; }
-    else if(cp<=0x10FFFF) { c[0] = (cp>>18)+240; c[1] = ((cp>>12)&63)+128; c[2] = ((cp>>6)&63)+128; c[3]=(cp&63)+128; }
-    return std::string(c);
+    const char* why = cp > 0x10FFFF ? "is above U+10FFFF, the last Unicode scalar value"
+                    : (cp >= 0xD800 && cp <= 0xDFFF) ? "names a surrogate (U+D800-U+DFFF), which is not a Unicode scalar value"
+                    : nullptr;
+    if (!why) return true;
+    LexerInstanceData* data = yyget_extra(scanner);
+    int savedLine = data->codeGenContext->line, savedCol = data->codeGenContext->col;
+    data->codeGenContext->line = data->next_line_number;
+    data->codeGenContext->col  = column;
+    error((std::string("a `\\u{...}` escape ") + why).c_str(), scanner);
+    data->codeGenContext->line = savedLine;
+    data->codeGenContext->col  = savedCol;
+    return false;
+}
+
+/* One Unicode scalar value (scalarEscape refused anything else) as its UTF-8 bytes. U+0000 is one NUL byte:
+   it used to come back EMPTY, because the result was built from a C string. */
+std::string hexToUTF8(unsigned cp)
+{
+    std::string s;
+    if (cp < 0x80)         s += (char)cp;
+    else if (cp < 0x800)   s += (char)(0xC0 | (cp >> 6));
+    else if (cp < 0x10000) { s += (char)(0xE0 | (cp >> 12)); s += (char)(0x80 | ((cp >> 6) & 63)); }
+    else                   { s += (char)(0xF0 | (cp >> 18)); s += (char)(0x80 | ((cp >> 12) & 63));
+                             s += (char)(0x80 | ((cp >> 6) & 63)); }
+    if (cp >= 0x80) s += (char)(0x80 | (cp & 63));
+    return s;
 }
 
 void error(const char *msg, yyscan_t scanner)

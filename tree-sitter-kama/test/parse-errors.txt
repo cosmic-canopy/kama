@@ -18,7 +18,10 @@
 # partition. The compiler refuses the file before it lexes, while tree-sitter reads decoded text and accepts
 # most such files (a stray 0xFF in a string or comment parses fine). So only the ones tree-sitter DOES reject
 # are listed — a NUL, and a surrogate encoded in a char literal — and the guard counts an encoding refusal as
-# the compiler rejecting when the two disagree.
+# the compiler rejecting when the two disagree. An out-of-range `\u{…}` escape (tests/xfail/lex_escape_*,
+# lex_char_escape_*) is outside it too, though the compiler calls it a `Lexical error:`: it is a VALUE check
+# — a surrogate, or past U+10FFFF — and a grammar checks an escape's shape, not its number. The derivation
+# above lists those files; they do not belong here.
 tests/syntax/bad.kama
 tests/xfail/brace_do_bare.kama
 tests/xfail/brace_else_bare.kama

@@ -1,0 +1,1 @@
+:4:17: Lexical error: a `\u{...}` escape names a surrogate (U+D800-U+DFFF), which is not a Unicode scalar value
