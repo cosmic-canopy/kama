@@ -62,7 +62,7 @@ tag or wait for 2.0.
   | `"a\u{110000}b"` — above U+10FFFF | builds, `length()` **2**: silently deleted | error |
   | `'\u{D800}'` — a surrogate `char` escape | builds | error |
   | `'<FF>'` — one raw non-ASCII byte as a `char` | builds, value **255**: read as Latin-1, not UTF-8 | error |
-  | `// a<FF>b` and `/* a<FF>b */` | build | decide: error, or pass-through (a comment reaches nothing) |
+  | `// a<FF>b` and `/* a<FF>b */` | build | error — **decided 2026-09-27** (below) |
 
   (`<FF>` = the raw byte, written with `printf`; an editor will not produce it on purpose. Interpolated
   strings were not probed. The lexer rule behind each is: `single_string_char` `[^\\\"]` and
@@ -74,9 +74,13 @@ tag or wait for 2.0.
   **What to do.** Reject malformed UTF-8 in every string and `char` literal form at lex time, with a message
   that names the byte offset rather than "invalid token". Reject a surrogate or > U+10FFFF `\u{…}` escape
   in both. Make a raw one-byte `char` literal ASCII-only (a non-ASCII `char` is written as its UTF-8
-  bytes, which `multibyte_char_literal` already takes). Comments are the open decision in the table: GOALS'
-  "one way" argues for rejecting (a file is UTF-8 or it is not), but no program observes a comment byte —
-  write the verdict down. Each refusal is a negative claim, so it needs a `tests/xfail/` fixture and a SPEC
+  bytes, which `multibyte_char_literal` already takes). **Comments — DECIDED by the maintainer 2026-09-27:
+  refuse**, like any other byte. A kama source file is UTF-8, full stop, even where no program observes the
+  bytes. That also sets the shape of the fix: one validation pass over the whole buffer at load, beside the
+  BOM/UTF-16 check `0.9.441` added, covers every literal, comment and identifier at once — naming line,
+  column and byte offset — so only the `\u{…}` range check (surrogates, > U+10FFFF, in strings and `char`s)
+  and the one-byte `char` rule stay in the lexer. **Re-measured on `0.9.457`: every row of the table still
+  reproduces**, the deleted escapes included (`"a\u{D800}b"` and `"a\u{110000}b"` both have `length()` 2). Each refusal is a negative claim, so it needs a `tests/xfail/` fixture and a SPEC
   line with its `<!-- xfail: … -->` marker (SPEC "The `string` type" is the natural home).
 
   **Traps:**
@@ -2547,6 +2551,9 @@ rather than here, so there is one number to keep current. Forward work:
      left two on 2026-09-24. Run each from its own directory. No fixture spells a repo-relative path
      (`tests/`, `lib/`, `docs/`, `include/`) today, so nothing should depend on the current behavior —
      confirm that with the change.
+  3. **`./dev fixture` gates no warnings at all** — not even for a single-file fixture (measured `0.9.457`: no
+     `warning` check anywhere in its task). The inner-loop rung the repo tells everyone to iterate with passes a
+     fixture the suite then fails. It should hold the suite's rule, from the same code where it can.
 
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
