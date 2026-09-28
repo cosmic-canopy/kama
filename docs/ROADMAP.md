@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-102**
+**Next id: KR-103**
 
 ## The shape
 
@@ -72,7 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-97 | **`kama query` and the language server know no module `static`, no `comptime` constant and no `comptime fn`** — go-to-definition, references, `--search` and the outline answer nothing for any of them, at module, type or enum scope; and a type's references miss every `Type::K` / `Type::f()`, so an LSP **rename of the type returns a partial edit that breaks the build** (re-measured `0.9.461`). `extern const` is the one constant with a definition site | M | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-102 | **A `comptime fn` body is checked only along the path the interpreter runs** — a name that resolves to nothing, in a branch no evaluation takes or in a `comptime fn` no constant calls, builds clean (measured `0.9.463`: `if (n > 100) { return nosuch + 1; }` passes `kama check` and `kama build`). The uninstantiated-template hole, for compile-time code: the error is found by whoever first takes the branch. The emitter already walks every such body for the index, diagnostics muted — what is missing is the compile-time rules on every path, not the walk | M? | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |
@@ -102,9 +102,9 @@ Most of this gates on the repo going public.
 | KR-27 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model — IN PROGRESS: `registry.kama-lang.org` is live and the built-in default since `0.9.457`, and `@kama/sodium@0.5.0` is its first package (2026-09-27). The index lives in git and deploys to Pages; the tarballs live in a locked R2 bucket (`dl.kama-lang.org`) behind a `_redirects` rule. What remains is the trust model — an allowed-signers set, then CI/OIDC provenance — and a resolution-time compiler check | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-28 | **Editor/registry registrations** — Zed extension registry, nvim-treesitter, linguist, Helix upstreaming, Marketplace publish | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-29 | **tree-sitter accepts 78 of the 84 reserved words as a binding name** — `Thing else = …` renders as a valid declaration in every editor on this grammar, and the compiler then rejects it. The two reserve differently by construction: `kama.l` consults one table at every identifier, tree-sitter extracts keywords CONTEXTUALLY and a binding site expects `$.identifier`. ⚠️ `check-treesitter.sh` cannot see this class, and the one fixture that looks like it covers it passes on its USE site, not its declaration | [§10](ROADMAP_DETAIL.md#s10) |
-| KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility) | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility); a type argument's span runs into a NAMED size (`InlineArray<int32>#(LIMIT)`: hover on `LI` answers `int32`) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
-| KR-33 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-33 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode; a `fnptr` signature type has no definition site | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-84 | **`kama describe --json`** — the language surface as data, the other half of `kama query --json` (GOALS §7) | [§10](ROADMAP_DETAIL.md#s10) |
 
 ## FUTURE — the big arcs, in this order

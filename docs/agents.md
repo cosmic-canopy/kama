@@ -84,6 +84,13 @@ $ kama query tests/query/shapes.kama --symbols
 24:9 function main
 ```
 
+A kind names what the declaration is. Beside the types, members and functions above: `static` is a module
+`static` (mutable, so never a `constant`), `constant` is every `comptime` constant — module, type
+(`Palette::K`) and enum — and an `extern const`, and `comptime-fn` is a `comptime fn` at either scope, which
+runs only at compile time (a run-time call to one is refused). Compile-time code is indexed like run-time code:
+a name in a `comptime fn` body or a compile-time initializer answers `--def` and `--refs`, including in a
+branch the compiler never evaluates.
+
 ### `--complete L:C` — candidates, with real signatures
 
 The highest-value mode for an agent, because the `detail` column is the **actual signature

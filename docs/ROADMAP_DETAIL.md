@@ -259,6 +259,28 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+### A `comptime fn` is checked only along the path the interpreter runs (KR-102)
+
+Found indexing compile-time code for `kama query` (`0.9.463`). The interpreter is the only reader of a
+`comptime fn` body, and it reads what it EXECUTES — one side of an `if` or a ternary, the left of a
+short-circuited `&&`/`||`, and nothing of a `comptime fn` no constant calls. So a name that resolves to nothing
+there is never diagnosed. Measured, `kama check` and `kama build` both pass:
+
+```kama fragment
+comptime fn int32 f(int32 n) { if (n > 100) { return nosuch + 1; } return n; }
+comptime fn int32 g() { return alsoMissing; }     // never called
+comptime int32 X = f(n: 1);
+```
+
+It is `checkUninstantiatedTemplates`' hole for compile-time code, at the same cost: the error is found by
+whoever first takes the branch, in their build, pointing at code they did not write. Already in place:
+`indexComptimeCode` (`src/kama.cemit.cpp`) walks every such body through the emitter for the index, with
+every diagnostic muted — muted because the RUN-TIME rules are the wrong ones there (a call to another
+`comptime fn` is a runtime-position refusal). Wanted: the compile-time rules on every path — name resolution
+first, then what the interpreter refuses structurally (an impure construct in a branch it did not take).
+Decide whether that is a non-evaluating mode of the interpreter or the emitter walk under a compile-time rule
+set, and pin both halves — an untaken branch and an uncalled fn — with `tests/xfail/` fixtures.
+
 ### Operators on an enum (KR-96) — support them, or declare a non-goal
 
 Until `0.9.443` an `operator` declared in an enum body parsed and was never registered, so `e + 1` answered
@@ -2468,41 +2490,6 @@ rather than here, so there is one number to keep current. Forward work:
   agent or an editor reads it rather than scraping KEYWORDS.md. `kama query --json` is the program half and
   ships. Unscheduled; GOALS.md names this row.
 
-- **`kama query` and the language server know no module `static`, no `comptime` constant and no `comptime
-  fn` (KR-97).** Measured `0.9.448` with `kama query --def`/`--refs`/`--search` over `static int32 counter`,
-  `comptime int32 LIMIT`, `comptime fn twice` and a type's `public comptime int32 K`: go-to-definition says
-  "no definition", references "no references", `--search` "no symbols" — and the `V` in `V::K` does not
-  resolve, though the `V` in `V v` does. `CEmitter::buildDefSites` (`src/kama.query.cpp`) records types,
-  fields, methods, ctors, contracts, enums and their members, free functions and `extern const`, and nothing
-  from the module-constant/static tables, `_typeConsts` or the comptime-fn table. Completion DOES offer
-  `Type::K` (it reads `_typeConsts` directly), so completion and navigation disagree. Wants: a definition
-  site for each at both scopes, a reference recorded at each read (`V::K`, a bare `LIMIT`, `twice(…)` in an
-  initializer), the qualifier resolved, and fixtures in `tools/check-query.sh`. The repo tells an agent to
-  prefer `kama query --search` over grep because it answers from what the compiler resolved; for these names
-  grep is today the only answer.
-
-  **Re-measured `0.9.461` (2026-09-27), wider than filed.** A two-module probe (module `static`, module
-  `comptime` constant, top-level `comptime fn`, a type's and an enum's `comptime` constant and `comptime fn`,
-  each used locally, across an `import`, in a comptime initializer and in runtime code):
-  - every one answers "no definition" at every use — including the names in the `import { … }` list and a
-    bare `LIMIT` in runtime code — "no references" at its declaration, "no symbols" to `--search`, and none
-    appears in `--symbols` (the outline lists a type's fields and an enum's variants, never its comptime members);
-  - ⚠️ **the TYPE's references miss every `Palette::K` and `Palette::scaled(…)`**, in runtime code and in a
-    comptime initializer alike, and inside the type's own body — so `textDocument/rename` of `Palette` returned
-    3 edits (declaration, export, import) and left 4 `Palette::…` sites naming a type that no longer exists.
-    That is the row's real cost: navigation that says nothing is survivable, a rename that half-applies is not
-    (`tools/check-lsp.sh` records the same judgment for methods). A variant qualifier is fine — `Suit::Hearts`
-    records its reference to `Suit` and resolves `Hearts` — so the gap is the comptime member path, plus every
-    name the comptime INTERPRETER reads: `kama.comptime.cpp` makes no `recordRef` call at all.
-  Where it lives: `CEmitter::buildDefSites` (`src/kama.query.cpp`, ~518) records no entry for `_moduleStatics`
-  / `_constStatics` / `_typeConsts` / `_comptimeFns` / `_comptimeMethods`; `recordRef` (~772) is never reached
-  from the interpreter nor from the `V::K` read paths; completion reads `_typeConsts` directly (~2226), which is
-  why it alone disagrees. Since `0.9.460` every comptime fn carries its declaring `NsCtx` (`unitPath` included), so
-  a definition site for one is its node's line in that file. Adjacent, same session: the interpreter's
-  "unknown identifier `K`" for a type's own constant read bare should say what the runtime path says ("read it
-  as `Palette::K`"). Fixtures: `tools/check-query.sh` (def/refs/search/symbols per kind) and a rename case in
-  `tools/check-lsp.sh`. The probe lives in `.scratch/kr97/` (`python3 .scratch/kr97/probe.py`).
-
 - **`kama stats <op>` — SHIPPED 2026-09-16, kept for the two things it measured.** Asked for as
   "kama diagnostics"; ⚠️ **that name was taken** — *diagnostics* means compiler errors and warnings
   everywhere in this repo, and `kama query --diagnostics` is a shipped mode. `kama stats` it is. The record
@@ -2567,6 +2554,10 @@ rather than here, so there is one number to keep current. Forward work:
     hierarchy (`implementors-of`), though the contract rename group already holds the data.
   - **No stdin / unsaved-buffer mode.** Every query reads the file from disk, so an agent cannot ask
     about an edit it has not written out. The LSP can; the CLI deliberately cannot.
+  - **A `fnptr` signature type is not in the index** (measured `0.9.463`, found beside the fixture that indexed compile-time names).
+    `fnptr int32 Op(int32 x);` has no definition site: its declaration answers nothing, a use is `unresolved`
+    in `--coverage`, and a label in a call through one (`g_op(x: 1)`) is indexed nowhere. A rename is
+    REFUSED, not half-applied — there is no def site to offer F2 on — so this is navigation, not data loss.
   - **One full `analyze()` per invocation** — the §9 front-end cache is the fix, and a batch mode the
     cheaper rung.
 
@@ -2680,6 +2671,10 @@ rather than here, so there is one number to keep current. Forward work:
     by shrinking what a keystroke has to analyze at all. Two large cuts have landed under this number
     since it was taken, so whether the floor is still worth a campaign is an open question, not a settled
     one — and note the *prelude* share is the part neither cut touches.
+  - **A type argument's span runs into a NAMED size.** In `InlineArray<int32>#(LIMIT) a`, hover and
+    go-to-definition on the first two letters of `LIMIT` answer `int32`; with a literal (`#(4)`) the `int32`
+    span is exact (measured `0.9.463`, and so on `0.9.461`). References and rename use `LIMIT`'s own span,
+    which is exact, so an edit is never affected — only what the cursor lands on.
   - **One build configuration per server process.** It is pinned by the first opened document that resolves
     a manifest, so in a monorepo whose packages declare *different* flag universes the unpinned packages get
     the pinned one's configuration. Softened, not fixed: the status bar says which is active and
