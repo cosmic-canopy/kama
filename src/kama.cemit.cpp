@@ -70,6 +70,7 @@ int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
         emitProgram(units, "<analysis>.h", sink, moduleStreams, paths);
         _out = &_analysisSink;           // restore (emitProgram left `_out` at the now-dying local sink)
     }
+    indexComptimeCode(units);            // LAST: nothing after it reads what emission recorded (KR-97)
     // Tables are stable after the analysis walk — build the read-only query index over them (T4/T5).
     buildDefSites();
     buildPositions();
@@ -464,6 +465,11 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
 // than "nobody got round to it".
 void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& subject)
 {
+    // An index-only walk says nothing (KR-97). It runs code the emitter was never meant to see — in a
+    // `comptime fn` body every call to another is a runtime-position refusal — and its C is thrown away; the
+    // interpreter reports what is wrong with compile-time code. Ahead of the dedup below, so a real diagnostic
+    // of the same text is never swallowed as a repeat of one nobody saw.
+    if (_indexWalk) return;
     std::string display = demangleForDisplay(rawWhat);
     std::string dfile = reportPath(diagFile());
     attributeToInstSite(dfile, srcLine, display);
@@ -6958,7 +6964,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     { int64_t cv; if (constValue(d->initializer, cv)) _constLocalVals[nm] = cv; }
                     // A `comptime` local holds the value the interpreter computed, baked — see evalLocalComptime.
                     // A failure has said why, and falls through to the ordinary declaration so nothing after it
-                    // cascades (the build is already refused).
+                    // cascades (the build is already refused). Its initializer is never EMITTED, so it is walked
+                    // for the index here, where this body's scopes are live (KR-97).
+                    if (cvd && cvd->isComptime && d->initializer)
+                        indexOnly([&] { ScopedStr _tv(_variantTargetType, ty); emitExpression(d->initializer); });
                     if (cvd && cvd->isComptime && d->initializer && !_probingTemplate) {
                         CTValue v;
                         if (evalLocalComptime(declType, d->initializer, nm, n->line, v)) {
@@ -11210,6 +11219,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     }
     const std::string condText = unparseExpr(cond);
     const std::string message  = *lit->value;
+    indexOnly([&] { emitExpression(cond); });   // evaluated, never emitted: walked for the index (KR-97)
 
     // --- lowering 2: a layout fact only the target knows -> let the C compiler answer it ---
     if (ctaNeedsCLowering(cond)) {
@@ -14665,6 +14675,119 @@ template <class M, class S> static void snapKeys(const M& m, S& out)
 { out.clear(); for (auto& kv : m) out.insert(kv.first); }
 template <class M, class S> static void eraseNew(M& m, const S& snap)
 { for (auto it = m.begin(); it != m.end(); ) { if (snap.count(it->first)) ++it; else it = m.erase(it); } }
+
+// KR-97. The sandbox is the template probe's, and may already be open around this walk (a local `comptime`
+// in an uninstantiated generic), so the enclosing snapshot is kept and put back — nested, the inner begin
+// would overwrite it and the outer end would then keep what this walk registered.
+void CEmitter::indexOnly(const std::function<void()>& walk)
+{
+    if (!_analysis) return;
+    std::ostringstream sink;
+    std::ostream* savedOut = _out;
+    const ProbeSnapshot savedSnap = _probeSnap;
+    const bool savedScan = _strictNumericScan, savedFailed = _ctFailed;
+    ClassInfo* savedClass = _currentClass;
+    _out = &sink;
+    _strictNumericScan = false;   // `--strict-numeric` tallies are a report too
+    ++_indexWalk;
+    probeSandboxBegin();
+    walk();
+    probeSandboxEnd();
+    --_indexWalk;
+    _probeSnap = savedSnap;
+    _strictNumericScan = savedScan;
+    _ctFailed = savedFailed;
+    _currentClass = savedClass;
+    _out = savedOut;
+}
+
+// Walked the way run-time code is walked, so a name here resolves exactly as it would there — which is the
+// point: a `comptime fn` is never emitted as C, and every compile-time initializer is FOLDED rather than
+// emitted, by the integer folder (whose names `constArgN` indexes) or by the interpreter, which reads only the
+// branches it takes and never a `comptime fn` nobody calls. Without this a rename reached none of it and the
+// build broke. Runs after every pass that reads what emission recorded — the reach walks, the `--no-heap`
+// verdict — so nothing it leaves behind can surface as a diagnostic.
+void CEmitter::indexComptimeCode(const std::vector<SharedCompilationUnit>& units)
+{
+    if (!_analysis) return;
+    NsCtx saved = _nsCtx;
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        RefUnitScope refScope(this, u.get());
+        // Under its declared type, as a declaration emits one: an array literal takes its type from context.
+        auto init = [&](ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& e) {
+            if (!e) return;
+            indexOnly([&] {
+                _currentClass = owner;
+                ScopedStr _tv(_variantTargetType, type ? cType(type) : std::string());
+                emitExpression(e);
+            });
+        };
+        // A type's or an enum's members: its `comptime` constants, its `comptime fn`s (a comptime fn takes no
+        // `this`, so it is walked as a `static` one) and its `comptime assert`s.
+        auto members = [&](ClassInfo* owner, const SharedClassMemberDeclarationList& ms) {
+            if (!ms) return;
+            for (auto& m : *ms) {
+                if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                    if (kd->isComptime && kd->declarators)
+                        for (auto& d : *kd->declarators) if (d) init(owner, kd->type, d->initializer);
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                    if (!md->isComptime || !md->body || !owner || !md->name || !md->name->value) continue;
+                    const std::string ret = cType(md->returnType);
+                    indexOnly([&] {
+                        emitMethodOrCtorBody(owner->name + "__" + *md->name->value, ret.c_str(), md->params,
+                                             md->body, *owner, false, /*isStatic*/ true, false,
+                                             md->name->value->c_str(), md->attributes);
+                    });
+                }
+            }
+            indexOnly([&] { _currentClass = owner; emitComptimeAssertsIn(ms); });
+        };
+        auto classFor = [&](const std::string& key) -> ClassInfo* {
+            auto c = _classes.find(key);
+            if (c != _classes.end()) return &c->second;
+            auto g = _genericTypes.find(key);
+            return g != _genericTypes.end() ? &g->second : nullptr;
+        };
+        for (auto& decl : *u->codeDeclarationList) {
+            ASTNode* d = decl.get();
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(d)) {
+                if (fn->isComptime && fn->block) indexOnly([&] { emitFunction(fn); });
+            } else if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(d)) {
+                if (mv->isComptime && mv->variables)
+                    for (auto& v : *mv->variables) if (v) init(nullptr, mv->type, v->initializer);
+            } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
+                if (cd->name && cd->name->value) members(classFor(qualify(*cd->name->value)), cd->members);
+            } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
+                ClassInfo* owner = classFor(enumKey(ed));
+                members(owner, ed->members);
+                if (ed->body)
+                    for (auto& m : *ed->body) if (m) init(owner, nullptr, m->constantExpression);   // `Low = LIMIT`
+            }
+        }
+    }
+    _nsCtx = saved;
+}
+
+// The refusal that follows a run-time-position `comptime fn` call returns before a label or an argument is
+// reached — and inside a `comptime fn` body walked for the index, EVERY call to another one lands there. So
+// each label is recorded against the parameter it names, as the named-argument matcher does for any other
+// call, and each argument walked; index-only, since in run-time code the call is an error already.
+void CEmitter::indexComptimeCallArgs(InvocationNode* call, const SharedParameterList& params)
+{
+    if (!call || !call->args) return;
+    indexOnly([&] {
+        for (auto& a : *call->args) {
+            if (!a) continue;
+            if (a->name && a->name->value && params)
+                for (auto& p : *params)
+                    if (p && p->identifier && p->identifier->value && *p->identifier->value == *a->name->value)
+                        recordNodeRef(a->name.get(), p->identifier.get());
+            if (a->expression) emitExpression(a->expression);
+        }
+    });
+}
 
 void CEmitter::probeSandboxBegin()
 {
@@ -26047,6 +26170,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // const-eval 6b-3: a type-associated `comptime fn` (`Type::table()`) runs only at compile time.
         if (_comptimeMethods.count(typeName + "::" + name)) {
             recordRef(comptimeMethodKey(typeName, name), call->identifier.get());   // it names one all the same (KR-97)
+            indexComptimeCallArgs(call, _comptimeMethods[typeName + "::" + name].node->params);
             unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
                          "assign its result to a `comptime` constant and use that").c_str(), call->line);
             return "0";
@@ -26108,6 +26232,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // with a diagnostic that points at the `comptime` constant form.
         if (comptimeCallee) {
             recordRef(ck, call->identifier.get());   // it names one all the same (KR-97)
+            indexComptimeCallArgs(call, _comptimeFns[ck].node->parameters);
             unsupported(("`" + name + "` is a `comptime fn` — it runs only at compile time; assign its "
                          "result to a `comptime` constant and use that").c_str(), call->line);
             return "0";

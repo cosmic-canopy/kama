@@ -4555,7 +4555,7 @@ fn void demo() {
   consumer may `import` it, spell it `mod::NAME`, size a type with it, or take its address — the same
   file rung a function obeys, so an unexported one stays private to its file. (Contrast the mutable <!-- xfail: export_const_unexported -->
   `static` above, which is file-private and not exportable at all.) A **type** `comptime` is read as
-  **`Type::NAME`** — via `::`
+  **`Type::NAME`**, in its own type's `comptime fn` too — via `::` <!-- xfail: comptime_fn_own_const_bare -->
   (the associated-item operator, like an enum variant `Result::Ok` or a static factory `Deque::withAllocator`);
   `.` stays reserved for constructors and instance access. A type `comptime` obeys **member visibility**
   (`public`/`private`/`protected`, default private for a `value`) — a private one is usable only inside the

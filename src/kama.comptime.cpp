@@ -169,7 +169,8 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 
 bool CEmitter::ctFail(const char* what, int line)
 {
-    if (_ctQuiet) { _ctFailed = true; return false; }   // a pre-pass: the emission-time evaluation reports
+    if (_ctQuiet || _indexWalk) { _ctFailed = true; return false; }   // a pre-pass reports at emission; an
+                                                                      // index-only walk never does (KR-97)
     if (!_ctFailed) {
         ++_unsupported;
         // The structured form is the ONLY form. `kama check` and the language server decide purely from the
@@ -390,6 +391,12 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 for (size_t k = 0; k < self->second.fieldNames.size(); ++k)
                     if (self->second.fieldNames[k] == *id->value) { out = self->second.elems[k]; return true; }
         }
+        // A type's own constant read bare, in that type's `comptime fn`: the run-time body's hint, in its words
+        // (rejectUnresolvedName) — one mistake is told one thing, whichever scope it is made in (KR-97).
+        if (id->value && (!id->qualifier || id->qualifier->empty()) && !_ctCurrentOwner.empty()
+            && _typeConsts.count(_ctCurrentOwner + "::" + *id->value))
+            return ctFail(("`" + *id->value + "` is a `comptime` constant of `" + _ctCurrentOwner
+                           + "` — read it as `" + _ctCurrentOwner + "::" + *id->value + "`").c_str(), e->line);
         // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
         // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
         return ctFail(("unknown identifier `" + (id->value ? *id->value : std::string("?"))

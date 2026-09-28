@@ -1,0 +1,69 @@
+// LSP reference-index COVERAGE fixture for COMPILE-TIME code (KR-97) — exercised by `kama query --coverage`
+// via tools/check-query.sh, NOT by the main run_tests loop.
+//
+// Every construct the comptime interpreter accepts (its dispatch in kama.comptime.cpp: ctEvalExpr and
+// ctEvalStmt), each spelled INSIDE compile-time code, so the table beside this file (comptime.coverage) says
+// what the index knows about every name a `comptime fn` body or a compile-time initializer can hold. That
+// code is never emitted as C and the interpreter reads only the branches it takes, so until KR-97 every
+// line below was `-` — and a rename reached none of it. A construct the interpreter learns belongs here too.
+//
+// Re-generate the table with:
+//     ./kama query tests/query/coverage/comptime.kama --coverage > tests/query/coverage/comptime.coverage
+// and read the diff: a line that flips to `-` is a regression, a line that flips off `-` is a fix.
+
+comptime int32 BASE = 4;
+comptime float64 RATIO = 1.5;
+comptime bool ON = true;
+comptime char MARK = 'k';
+
+type value Pair {
+    public int32 a;
+    public int32 b;
+    public ctor of(int32 a, int32 b) { this.a = a; this.b = b; }
+    public static fn int32 one() { return 1; }
+    public const fn int32 sum() { return this.a + this.b; }
+    public Pair operator+(Pair o) { return Pair.of(a: this.a + o.a, b: this.b + o.b); }
+    public comptime int32 WIDTH = 2;
+    public comptime Pair UNIT = Pair.of(a: 1, b: 1);
+    public comptime fn int32 twice(int32 n) { return n * Pair::WIDTH; }
+    comptime assert(cond: Pair::WIDTH == 2, msg: "a member assertion");
+}
+
+type enum Mode { Off, On;
+    public comptime int32 COUNT = 2;
+    public comptime fn int32 last() { return Mode::COUNT - 1; }
+}
+
+comptime fn int32 square(int32 n) { return n * n; }
+
+comptime fn int32 every(int32 n) {
+    int32 acc = BASE;                                     // a local, a module constant
+    const int32 lim = Pair::WIDTH + Mode::COUNT;          // a `const` local, a type's and an enum's constant
+    comptime int32 LOCAL = BASE * 2;                      // a `comptime` local inside a comptime body
+    InlineArray<int32>#(BASE) t = [0; (BASE)];            // a size, a fill
+    Pair p = Pair.of(a: n, b: lim);                       // a ctor and its labels
+    Pair q = Pair.of(a: Pair::one(), b: 0) + Pair::UNIT;  // a static fn, an operator, a type's value constant
+    p.a = p.b + q.sum();                                  // a field write, a field read, a method call
+    t[0] = cast<int32>(RATIO * 2.0) + sizeof(int32);      // an element write, a cast, `sizeof`
+    if (ON && MARK == 'k') { acc = acc + LOCAL; } else { acc = -acc; }
+    while (acc < lim) { acc = acc + 1; if (acc == BASE) { break; } }
+    do { acc = acc + ~n; } while (n < 0 || !ON);          // `~`, `!`, a short-circuited `||`
+    for (int32 i = 0; i < BASE; i = i + 1) { if (i == 1) { continue; } acc = acc + t[i]; }
+    foreach (int32 v in t) { acc = acc + v; }
+    acc = n > 1000 ? square(n: BASE) + Pair::twice(n: n) : acc + Mode::last();   // a branch never taken
+    return acc + p.a;
+}
+
+comptime fn int32 neverCalled() { return square(n: BASE) + Mode::COUNT; }
+
+comptime int32 EVERY = every(n: 3);
+comptime int32 SQ = square(n: BASE) + Pair::twice(n: Pair::WIDTH) + Mode::last();
+comptime Pair TOTAL = Pair::UNIT + Pair.of(a: BASE, b: SQ);
+comptime InlineArray<int32>#(3) TABLE = [BASE, SQ, EVERY];
+comptime assert(cond: TABLE[0] == BASE && EVERY > 0, msg: "a module assertion");
+
+fn int32 main() {
+    comptime int32 HERE = EVERY + TABLE[1];
+    comptime assert(cond: HERE > BASE, msg: "a body assertion");
+    return HERE + TOTAL.sum() > 0 ? 0 : 1;
+}

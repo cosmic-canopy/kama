@@ -144,6 +144,18 @@ QREN='type enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::G
 CTURI="file:///ctrename.kama"
 CTREN='type value Palette { public int32 hue; public comptime int32 K = 3; }\nfn int32 dbl(int32 x) { return x + x; }\nfnptr int32 Op(int32 x);\nfn int32 main() { Op f = dbl; return Palette::K + f(x: 1); }\n'
 
+# ...and inside COMPILE-TIME code, which the emit walk never entered: a `comptime fn` body is not emitted as C,
+# a compile-time initializer is folded, and the interpreter that folds it reads only the branches it takes. So
+# a rename reached none of it — not the type's own `Palette::K`, not an untaken branch, and not even a run-time
+# name used there (`p.x`). Layout (LSP 0-based lines, 0-based chars):
+#   L0 `type value Palette { … scaled(int32 n) { return n * Palette::K; } }` -> `Palette` 11..18 and 122..129,
+#                                                                              `scaled` 93..99
+#   L1 `comptime fn int32 walk(int32 n) { … n > 100 ? Palette::K : p.x; }`    -> `Palette` 71..78 (UNTAKEN), `x` 86..87
+#   L2 `comptime int32 NINE = Palette::scaled(n: Palette::K) + walk(n: 1);`   -> `Palette` 22..29, 41..48; `scaled` 31..37
+#   L3 `type value Pt { public int32 x; public ctor at(int32 x) { this.x = x; } }` -> the field `x` 29..30, `this.x` 63..64
+CTBURI="file:///ctbody.kama"
+CTBODY='type value Palette { public int32 hue; public comptime int32 K = 3; public comptime fn int32 scaled(int32 n) { return n * Palette::K; } }\ncomptime fn int32 walk(int32 n) { Pt p = Pt.at(x: n); return n > 100 ? Palette::K : p.x; }\ncomptime int32 NINE = Palette::scaled(n: Palette::K) + walk(n: 1);\ntype value Pt { public int32 x; public ctor at(int32 x) { this.x = x; } }\nfn int32 main() { return NINE; }\n'
+
 TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
 
@@ -553,6 +565,12 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":81,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":0,"character":11},"newName":"Hue"}}'
 frame '{"jsonrpc":"2.0","id":82,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":0,"character":61},"newName":"SIZE"}}'
 frame '{"jsonrpc":"2.0","id":83,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":1,"character":9},"newName":"twice"}}'
+# --- ...and the same inside compile-time code. 84: the type; 85: a FIELD read in a comptime body; 86: a type's
+#     `comptime fn`, which is not renameable at all before KR-97 (no def site).
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CTBURI"'","languageId":"kama","version":1,"text":"'"$CTBODY"'"}}}'
+frame '{"jsonrpc":"2.0","id":84,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":0,"character":11},"newName":"Hue"}}'
+frame '{"jsonrpc":"2.0","id":85,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":3,"character":29},"newName":"y"}}'
+frame '{"jsonrpc":"2.0","id":86,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":0,"character":93},"newName":"times"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -972,6 +990,13 @@ expect '"id":82,"result":{"changes":{"file:///ctrename.kama":[{"range":{"start":
        "renaming a type's \`comptime\` constant rewrites its read"
 expect '"id":83,"result":{"changes":{"file:///ctrename.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":12}},"newText":"twice"},{"range":{"start":{"line":3,"character":25},"end":{"line":3,"character":28}},"newText":"twice"}]}}' \
        "renaming a function rewrites where it is bound by name"
+
+expect '"id":84,"result":{"changes":{"file:///ctbody.kama":[{"range":{"start":{"line":0,"character":11},"end":{"line":0,"character":18}},"newText":"Hue"},{"range":{"start":{"line":0,"character":122},"end":{"line":0,"character":129}},"newText":"Hue"},{"range":{"start":{"line":1,"character":71},"end":{"line":1,"character":78}},"newText":"Hue"},{"range":{"start":{"line":2,"character":22},"end":{"line":2,"character":29}},"newText":"Hue"},{"range":{"start":{"line":2,"character":41},"end":{"line":2,"character":48}},"newText":"Hue"}]}}' \
+       "renaming a type reaches its own comptime fn, an untaken branch and a comptime initializer"
+expect '"id":85,"result":{"changes":{"file:///ctbody.kama":[{"range":{"start":{"line":1,"character":86},"end":{"line":1,"character":87}},"newText":"y"},{"range":{"start":{"line":3,"character":29},"end":{"line":3,"character":30}},"newText":"y"},{"range":{"start":{"line":3,"character":63},"end":{"line":3,"character":64}},"newText":"y"}]}}' \
+       "renaming a field reaches its read inside a \`comptime fn\` body"
+expect '"id":86,"result":{"changes":{"file:///ctbody.kama":[{"range":{"start":{"line":0,"character":93},"end":{"line":0,"character":99}},"newText":"times"},{"range":{"start":{"line":2,"character":31},"end":{"line":2,"character":37}},"newText":"times"}]}}' \
+       "a type's \`comptime fn\` renames, at its declaration and its call"
 
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
 # rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the

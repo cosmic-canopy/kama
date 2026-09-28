@@ -1193,5 +1193,44 @@ expect --project --complete 17:50 -- "comptime-fn	twice	comptime fn int32 twice(
 reject --project --complete 17:50 -- "counter"          # a `static` is file-private: never offered elsewhere
 expect --project --complete 17:32 -- "comptime-fn	scaled	comptime fn int32 scaled(n: int32)"
 
+# ...and every name INSIDE compile-time code, which is the half that needed a walk of its own. A `comptime fn`
+# body is never emitted as C and a compile-time initializer is folded rather than emitted, and the interpreter
+# that folds it reads only the branches it TAKES and never a `comptime fn` nobody calls — so recording from it
+# would still have left a rename half-applied. The emitter walks this code for the index instead, the way it
+# walks run-time code, with every diagnostic silenced (the interpreter reports compile-time errors).
+FIXTURE="$ROOT/tests/query/comptime/src/m/defs.kama"
+echo "check-query: KR-97 names inside compile-time code"
+expect --project --refs 9:11  -- "defs.kama:13:58"      # `Palette::K` in the type's own `comptime fn`
+expect --project --refs 9:11  -- "defs.kama:26:46"      # an enum member's value
+expect --project --refs 9:11  -- "defs.kama:34:29"      # the branch the interpreter never takes
+expect --project --refs 9:11  -- "defs.kama:38:44"      # a `comptime fn` nobody calls
+expect --project --refs 9:11  -- "main.kama:5:22"       # a module constant's initializer, across the import
+expect --project --refs 9:11  -- "main.kama:5:41"       # ...and the qualifier of its argument
+expect --project --refs 6:15  -- "defs.kama:26:32"      # `Low = LIMIT`
+expect --project --refs 6:15  -- "defs.kama:33:26"      # a loop bound in a comptime body
+expect --project --refs 6:15  -- "defs.kama:34:21"
+expect --project --refs 6:15  -- "defs.kama:38:36"
+expect --project --refs 6:15  -- "defs.kama:40:22"      # a module `comptime assert`
+expect --project --refs 6:15  -- "main.kama:4:32"       # a comptime call's argument
+expect --project --refs 6:15  -- "main.kama:10:27"      # a local `comptime`
+expect --project --refs 7:18  -- "defs.kama:33:58"      # a `comptime fn` called from another
+expect --project --refs 7:18  -- "main.kama:4:23"       # ...and from a constant, across the import
+expect --project --refs 13:29 -- "defs.kama:38:53"
+expect --project --refs 13:29 -- "main.kama:5:31"
+expect --project --refs 23:29 -- "defs.kama:34:54"      # `Suit::squared` on the untaken side
+expect --project --refs 16:11 -- "defs.kama:31:4"       # a local's TYPE inside a comptime body...
+expect --project --refs 18:16 -- "defs.kama:31:14"      # ...the ctor it calls...
+expect --project --refs 17:17 -- "defs.kama:32:18"      # ...and a FIELD it reads: a run-time name, in compile-time code
+expect --project --refs 30:29 -- "defs.kama:34:11"      # a comptime fn's parameter, read in its body
+expect --project --refs 30:29 -- "main.kama:7:29"       # ...and named by a call's label, across the import
+expect --project --def 33:64  -- "defs.kama:7:30"       # the label in `twice(n: i)` is `twice`'s `n`, not `walk`'s
+FIXTURE="$ROOT/tests/query/comptime/src/main.kama"
+expect --project --def 4:32  -- "defs.kama:6:15"
+expect --project --def 5:50  -- "defs.kama:12:26"
+expect --project --def 6:45  -- "defs.kama:22:26"
+expect --project --def 7:24  -- "defs.kama:30:18"
+expect --project --def 10:35 -- "main.kama:4:15"        # a module constant, read by a local `comptime`
+expect --project --def 11:26 -- "main.kama:10:19"       # a local `comptime`, read by a `comptime assert`
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

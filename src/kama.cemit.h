@@ -1113,6 +1113,15 @@ private:
     // Nodes the index points at that the program no longer holds: `bakeConstSizes` swaps a field type's named
     // size for its value, and `recordRef` keeps only a raw pointer. Filled in analysis mode only.
     std::vector<SharedIdentifier> _indexKeepAlive;
+    // Walk code for the index ALONE: into a throwaway sink, with every diagnostic channel silent and every
+    // instance it registers erased after. Analysis mode only — a build never runs one (KR-97).
+    void indexOnly(const std::function<void()>& walk);
+    int  _indexWalk = 0;   // >0 inside indexOnly: `unsupported` and `ctFail` say nothing
+    // The compile-time code the emit walk never enters — every `comptime fn` body and every module, type
+    // and enum compile-time initializer — walked for the index, after every other pass (KR-97).
+    void indexComptimeCode(const std::vector<SharedCompilationUnit>& units);
+    // A `comptime fn` call's labels and arguments, which the run-time refusal stops short of (KR-97).
+    void indexComptimeCallArgs(InvocationNode* call, const SharedParameterList& params);
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).
     // `dotted` is that same prefix as a source spelling, for the module case.
     std::string listSegmentKey(const StringList& segs, size_t i, const std::string& dotted);

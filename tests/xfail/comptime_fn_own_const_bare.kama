@@ -1,0 +1,8 @@
+// KR-97: a type's own `comptime` constant is read `Type::K` in its `comptime fn` too. The run-time body said
+// so, and the compile-time one said only "unknown identifier" — one mistake, told two different things.
+type value Palette {
+    public comptime int32 K = 3;
+    public comptime fn int32 scaled(int32 n) { return n * K; }
+}
+comptime int32 NINE = Palette::scaled(n: 3);
+fn int32 main() { return NINE; }
