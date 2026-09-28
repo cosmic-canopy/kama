@@ -134,6 +134,16 @@ MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }
 QRURI="file:///qualrename.kama"
 QREN='type enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
 
+# KR-97 — the same half-applied rename one layer down. A type's `comptime` constant had no def site and its
+# read recorded nothing, so the `Palette` in `Palette::K` was indexed nowhere: F2 on the type rewrote the
+# declaration and left the qualifier naming a type that no longer existed. A function bound BY NAME
+# (`Op f = dbl;`) was the same hole. Layout (LSP 0-based lines, 0-based chars):
+#   L0 `type value Palette { public int32 hue; public comptime int32 K = 3; }` -> `Palette` 11..18, `K` 61..62
+#   L1 `fn int32 dbl(int32 x) { return x + x; }`                               -> `dbl` 9..12
+#   L3 `fn int32 main() { Op f = dbl; return Palette::K + f(x: 1); }`          -> `dbl` 25..28, `Palette` 37..44, `K` 46..47
+CTURI="file:///ctrename.kama"
+CTREN='type value Palette { public int32 hue; public comptime int32 K = 3; }\nfn int32 dbl(int32 x) { return x + x; }\nfnptr int32 Op(int32 x);\nfn int32 main() { Op f = dbl; return Palette::K + f(x: 1); }\n'
+
 TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
 
@@ -537,6 +547,12 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocumen
 frame '{"jsonrpc":"2.0","id":78,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":4}}}'
 frame '{"jsonrpc":"2.0","id":79,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":13}}}'
 frame '{"jsonrpc":"2.0","id":80,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":4}}}'
+# --- KR-97: a compile-time name, and the type that qualifies one. 81 renames the TYPE and must reach its
+#     `Palette::` qualifier; 82 renames the constant; 83 a function bound by name.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CTURI"'","languageId":"kama","version":1,"text":"'"$CTREN"'"}}}'
+frame '{"jsonrpc":"2.0","id":81,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":0,"character":11},"newName":"Hue"}}'
+frame '{"jsonrpc":"2.0","id":82,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":0,"character":61},"newName":"SIZE"}}'
+frame '{"jsonrpc":"2.0","id":83,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTURI"'"},"position":{"line":1,"character":9},"newName":"twice"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -946,6 +962,16 @@ expect '"id":79,"result":{"uri":"'"$(furi "$ROOT/prelude/builtin.kama")"'"' \
     "definition: ...and on \`s.length()\`, an intrinsic with no declaration node of its own"
 expect '"id":80,"result":null' \
     "prepareRename: a built-in is read-only too — F2 stays greyed out"
+
+echo "check-lsp: KR-97 renaming a compile-time name, and a type through its qualifier"
+# The WHOLE edit set each time: the old reply held the first edit and not the second, and the buffer that came
+# back no longer compiled.
+expect '"id":81,"result":{"changes":{"file:///ctrename.kama":[{"range":{"start":{"line":0,"character":11},"end":{"line":0,"character":18}},"newText":"Hue"},{"range":{"start":{"line":3,"character":37},"end":{"line":3,"character":44}},"newText":"Hue"}]}}' \
+       "renaming a type rewrites the \`Palette::\` qualifier of its constant"
+expect '"id":82,"result":{"changes":{"file:///ctrename.kama":[{"range":{"start":{"line":0,"character":61},"end":{"line":0,"character":62}},"newText":"SIZE"},{"range":{"start":{"line":3,"character":46},"end":{"line":3,"character":47}},"newText":"SIZE"}]}}' \
+       "renaming a type's \`comptime\` constant rewrites its read"
+expect '"id":83,"result":{"changes":{"file:///ctrename.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":12}},"newText":"twice"},{"range":{"start":{"line":3,"character":25},"end":{"line":3,"character":28}},"newText":"twice"}]}}' \
+       "renaming a function rewrites where it is bound by name"
 
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
 # rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the

@@ -1,0 +1,53 @@
+// KR-97 — every kind of compile-time name, declared here and used from ../main.kama. APPEND ONLY:
+// tools/check-query.sh asserts on line:column positions in this file.
+export { LIMIT, twice, walk, Palette, Pt, Suit, Level, bump, total };
+
+static int32 counter = 0;
+comptime int32 LIMIT = 4;
+comptime fn int32 twice(int32 n) { return n * 2; }
+
+type value Palette {
+    public int32 hue;
+    public InlineArray<int32>#(LIMIT) cells;
+    public comptime int32 K = 3;
+    public comptime fn int32 scaled(int32 n) { return n * Palette::K; }
+}
+
+type value Pt {
+    public int32 x;
+    public ctor at(int32 x) { this.x = x; }
+}
+
+type enum Suit { Hearts, Spades;
+    public comptime int32 COUNT = 2;
+    public comptime fn int32 squared(int32 n) { return n * n; }
+}
+
+type enum Level : int32 { Low = LIMIT, High = Palette::K }
+
+// A type, a ctor, a field, a param, a local and a call, all inside a compile-time body — and a branch
+// the interpreter never takes (`walk` is only ever called with a small `n`).
+comptime fn int32 walk(int32 n) {
+    Pt p = Pt.at(x: n);
+    int32 acc = p.x;
+    for (int32 i = 0; i < LIMIT; i = i + 1) { acc = acc + twice(n: i); }
+    return n > 100 ? LIMIT + Palette::K : acc + Suit::squared(n: Suit::COUNT);
+}
+
+// Never called: its body is still code a rename must reach.
+comptime fn int32 unused() { return LIMIT * Palette::scaled(n: 1); }
+
+comptime assert(cond: LIMIT == 4, msg: "LIMIT is four");
+
+fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x + x; }
+static Op g_op;
+
+fn int32 bump() {
+    counter = counter + LIMIT;
+    counter += 1;
+    g_op = dbl;
+    return counter + g_op(x: 1);
+}
+
+fn int32 total(InlineArray<int32>#(LIMIT) xs) { return xs[0] + LIMIT; }

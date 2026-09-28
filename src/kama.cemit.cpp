@@ -5093,6 +5093,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 if (tc != _typeConsts.end()) {
                     auto oc = _classes.find(tc->second.owner);
                     canAccess(oc != _classes.end() ? &oc->second : nullptr, tc->second.visibility, nm, v->line);
+                    recordRef(typeConstKey(tc->second.owner, nm), v);   // and the qualifier with it (KR-97)
                     return tc->second.cName;
                 }
             }
@@ -5150,7 +5151,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // pointer — enables binding/passing a free function to a FunctionPtr.
         if (!_localTypes.count(nm)) {
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
-            if (fit != _funcs.end()) return symbolOf(fit->second);
+            if (fit != _funcs.end()) {
+                // Recorded on a HIT only: handed the site, `resolveFunc` would record its fallback key on
+                // every name that is not a function, and the index keeps the first key at a position (KR-97).
+                recordRef(fit->first, v);
+                return symbolOf(fit->second);
+            }
             // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
             // The file rung applies here exactly as it does to a type or a call: a module-scope name
             // reaches another file only through that file's `export { … };`. Without this the reference
@@ -5161,6 +5167,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                     checkReach(key, nm, "this reference", v->line, refFilePath(),
                                v->qualifier && !v->qualifier->empty());
                 recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
+                recordRef(key, v);                    // reads AND writes arrive here: `=`, `+=`, `++`, `ref` (KR-97)
                 return key;
             }
             // `extern const T NAME;` (KR-56) → the C constant's own spelling; the header owns the value.
@@ -8614,6 +8621,7 @@ void CEmitter::collectModuleVars(SharedCompilationUnit unit)
                     if (d && d->name && d->name->value) {
                         _moduleStatics[qualify(*d->name->value)] = mv->type;
                         _moduleVarFile[qualify(*d->name->value)] = _collectingUnitPath;   // the file rung's key
+                        _moduleVarDecl[qualify(*d->name->value)] = { mv, d->name };           // its def site (KR-97)
                         // A `comptime` static emits as C `static const`, so anything that takes its ADDRESS
                         // must take a `const` one — see the const-correct foreach lowering. Recorded for
                         // every comptime static, not just the foldable ones, since constness is a property
@@ -10184,7 +10192,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // leaks a private constant into every consumer's import block. Doing it at the read
                     // site instead means swapping `_nsCtx` on every member-type resolution, which is the
                     // five-site partial-swap hazard and measured at 30 corpus failures when tried.
-                    if (fd->type) bakeConstSizes(fd->type, cd->comptimeParams);
+                    if (fd->type) {
+                        RefUnitScope refScope(this, unitOfDecl(cd));   // index the size the bake replaces (KR-97)
+                        bakeConstSizes(fd->type, cd->comptimeParams);
+                    }
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -10484,6 +10495,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 tc.hasValue = d->initializer && constValue(d->initializer, tc.value);
                                 tc.visibility = kvis; tc.owner = ci.name; tc.cName = ci.name + "__" + fn;
                                 tc.type = kd->type; tc.initializer = d->initializer; tc.line = kd->line;
+                                tc.decl = kd; tc.nameId = d->name;
                                 _typeConsts[ci.name + "::" + fn] = tc;
                                 // What the integer folder cannot finish goes to the interpreter pass, exactly as a
                                 // module constant's does — a float, a table, a `comptime fn` call, a constant
@@ -10981,6 +10993,7 @@ void CEmitter::bakeConstSizes(SharedIdentifier t, const SharedStringList& shadow
     if (shadowed) for (auto& sp : *shadowed) if (sp && *sp == *n->value) return;
     int64_t v;
     if (!constArgN(n, v)) return;                                       // still symbolic: leave it alone
+    if (_analysis) _indexKeepAlive.push_back(n);                        // constArgN indexed it (KR-97)
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
     id->synthesized   = true;
@@ -10992,6 +11005,13 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
 {
     if (!arg) return false;
     if (arg->constArgValue) return constValue(arg->constArgValue, out);
+    // Every integer fold reads its names here — a size, a fill count, `#(…)`, a constant folding another — so
+    // this is where each is indexed, on what it NAMES and whether or not it folds (KR-97). A local `comptime`
+    // is a binding; the rest are module or type constants. A comptime PARAMETER is neither, and not indexed.
+    if (_analysis && _refUnit && arg->value && !arg->genericArg && !_comptimeSubst.count(*arg->value)) {
+        const bool local = (!arg->qualifier || arg->qualifier->empty()) && _constLocalVals.count(*arg->value);
+        recordRef(local ? bindingKeyOf(*arg->value) : constRefKey(*arg), arg.get());
+    }
     // 6b-2: `Type::NAME` -> a type-associated `comptime` constant. Resolve the type name (last qualifier
     // segment, through the file's scope) and look up its folded value. Its visibility is checked HERE: the
     // comment that stood here said the read site checked it, and for a size, a module constant or another
@@ -19051,6 +19071,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                                 tc.visibility = visibilityOf(kc->modifiers, Visibility::Private, kc->line);
                                 tc.owner = name; tc.cName = name + "__" + kn;
                                 tc.type = kc->type; tc.initializer = d->initializer; tc.line = kc->line;
+                                tc.decl = kc; tc.nameId = d->name;
                                 _typeConsts[name + "::" + kn] = tc;
                                 if (!tc.hasValue && d->initializer)
                                     _ctDeferredConsts.push_back({ name + "::" + kn, kc->type, d->initializer,
@@ -23710,6 +23731,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
                 out.display = "function '" + *id->value + "'";
                 out.noHeap  = fnHasNoHeap(fit->second.node);
                 out.name    = *id->value;
+                out.id      = id;
                 return true;
             }
             // `Type::method` — an unbound method reference. The method lowers
@@ -24055,7 +24077,8 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
     FnPtrTarget t;
     if (resolveFnPtrTarget(init, t)) {
         if (t.kind == FnPtrTarget::SigValue) return emitExpression(init);
-        if (t.id) recordNodeRef(t.id, t.node);   // M6 B3a: `Type::m` as a fn pointer references m
+        if (t.kind == FnPtrTarget::Function) recordRef(t.sig.cName, t.id);   // a function bound BY NAME (KR-97)
+        else if (t.id) recordNodeRef(t.id, t.node);   // M6 B3a: `Type::m` as a fn pointer references m
         checkFnPtrBind(sigCName, t, line);
         return t.cName;
     }
@@ -25731,6 +25754,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             && isSigType(cType(mit->second))) {
             const SigInfo& sig = _sigs.at(cType(mit->second));
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
+            recordRef(ms, call->identifier.get());
             return emitReorderedCall(ms, "", sig.params, call->args, call->line);
         }
     }
@@ -26022,6 +26046,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         // const-eval 6b-3: a type-associated `comptime fn` (`Type::table()`) runs only at compile time.
         if (_comptimeMethods.count(typeName + "::" + name)) {
+            recordRef(comptimeMethodKey(typeName, name), call->identifier.get());   // it names one all the same (KR-97)
             unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
                          "assign its result to a `comptime` constant and use that").c_str(), call->line);
             return "0";
@@ -26060,8 +26085,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "0";
     }
 
-    // Free-function call — resolve the name through the file's scope + usings.
-    auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier, call->identifier.get()));
+    // Free-function call — resolve the name through the file's scope + usings. A `comptime fn` is asked first,
+    // and `resolveFunc` is then handed no site: it would record its fallback key on the call, and the index
+    // keeps the FIRST key recorded at a position — so the comptime fn's own key, recorded below, would lose.
+    std::string ck;
+    const bool comptimeCallee = isComptimeFnName(name, call->identifier->qualifier, ck);
+    auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier,
+                                      comptimeCallee ? nullptr : call->identifier.get()));
     // A bare call to a function this file does not import: refuse it with the import, then carry on through
     // the one function it would mean, so its ARGUMENTS are judged as arguments (`println(s: give a)` said
     // nothing else wrong, and a `give` outside an argument position is itself an error) — the same recovery
@@ -26076,8 +26106,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (it == _funcs.end()) {
         // const-eval 6b-3: a `comptime fn` is not a runtime symbol — reject a runtime-position call
         // with a diagnostic that points at the `comptime` constant form.
-        std::string ck;
-        if (isComptimeFnName(name, call->identifier->qualifier, ck)) {
+        if (comptimeCallee) {
+            recordRef(ck, call->identifier.get());   // it names one all the same (KR-97)
             unsupported(("`" + name + "` is a `comptime fn` — it runs only at compile time; assign its "
                          "result to a `comptime` constant and use that").c_str(), call->line);
             return "0";

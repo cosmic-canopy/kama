@@ -26,7 +26,9 @@ struct SrcRange {
 enum class SymKind { Class, Value, Resource, Contract, Enum, EnumMember,
                      Function, Method, Ctor, Field, GenericType, GenericFn,
                      Local, Param,     // M3.4: function-scoped bindings — indexed, but kept OUT of outlines
-                     Constant };       // KR-56: `extern const T NAME;`
+                     Constant,         // KR-56: `extern const T NAME;`; KR-97: every `comptime` constant
+                     Static,           // KR-97: a module `static` (mutable, so never a `constant`)
+                     ComptimeFn };     // KR-97: a `comptime fn`, module or type scope — it runs only at compile time
 const char* symKindName(SymKind k);      // stable lowercase tag ("class", "method", …) for text/JSON output
 
 // A declaration's location + identity. Keyed in `_defSites` by its RESOLVED mangled name (exactly what
@@ -135,7 +137,8 @@ struct SourceIdent { int line = 0, column = 0; std::string name; };   // line 1-
 std::vector<SourceIdent> sourceIdentifiers(const std::string& text);
 
 enum class CompletionKind { Field, Method, Ctor, Variant, EnumMember, Type, Contract,
-                            Function, Local, Param, Label, Keyword, Module, Constant };
+                            Function, Local, Param, Label, Keyword, Module, Constant,
+                            Static, ComptimeFn };   // KR-97: the SymKinds of the same names
 const char* completionKindName(CompletionKind k);   // stable lowercase tag, mirrors symKindName
 
 struct CompletionItem {

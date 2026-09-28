@@ -1127,5 +1127,71 @@ else
     echo "  FAIL: single --json question envelope changed: $mqj1" >&2; fail=1
 fi
 
+# ---------------------------------------------------------------------------------------------------
+# KR-97 — a module `static`, a `comptime` constant and a `comptime fn`, at module, type and enum scope.
+#
+# None of them had a definition site until 0.9.462, so every question about one answered nothing — and the
+# cost was not the silence. A TYPE's references missed every `Palette::K` and `Palette::scaled(…)`, so a
+# rename of `Palette` rewrote its declaration, export and import and left each `Palette::` naming a type
+# that no longer existed: a rename that breaks the build. tests/query/comptime/ is a two-module package —
+# m/defs.kama declares every kind, main.kama uses each one across the import. Always asked at project
+# scope: a bare query of either file is a loose build, which loads no import.
+FIXTURE="$ROOT/tests/query/comptime/src/m/defs.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: KR-97 module statics, comptime constants and comptime fns"
+# The outline lists each kind, spelled the way a use spells it. A `static` is not a `constant`: it is
+# mutable. A `comptime fn` is not a `function`: calling one at run time is refused.
+expect --project --symbols -- "5:13 static counter"
+expect --project --symbols -- "6:15 constant LIMIT"
+expect --project --symbols -- "7:18 comptime-fn twice"
+expect --project --symbols -- "12:26 constant Palette::K"
+expect --project --symbols -- "13:29 comptime-fn Palette::scaled"
+expect --project --symbols -- "22:26 constant Suit::COUNT"
+expect --project --symbols -- "23:29 comptime-fn Suit::squared"
+expect --project --symbols -- "44:10 static g_op"
+expect --project --type 5:13  -- "static counter"
+expect --project --type 12:26 -- "constant Palette::K"
+expect --project --type 13:29 -- "comptime-fn Palette::scaled"
+# A module `static`: a write and a read in one statement, `+=`, and a CALL through one of `fnptr` type.
+expect --project --def 47:4   -- "defs.kama:5:13"
+expect --project --def 47:14  -- "defs.kama:5:13"
+expect --project --refs 5:13  -- "defs.kama:48:4"
+expect --project --refs 44:10 -- "defs.kama:50:21"
+# A function bound BY NAME (`g_op = dbl;`) is a reference to it: renaming `dbl` used to leave this behind.
+expect --project --refs 43:9  -- "defs.kama:49:11"
+# A module `comptime`, wherever a constant can stand. The field's size is REPLACED by its value at
+# collection, and a parameter type's size is a signature position, which is indexed as a type — so both
+# needed their own path to the constant.
+expect --project --refs 6:15  -- "defs.kama:11:31"      # a field's size
+expect --project --refs 6:15  -- "defs.kama:53:35"      # a parameter type's size
+expect --project --refs 6:15  -- "main.kama:2:17"       # the import list
+expect --project --refs 6:15  -- "main.kama:12:24"      # a local's size
+expect --project --refs 6:15  -- "main.kama:12:40"      # a fill count
+expect --project --refs 6:15  -- "main.kama:17:50"      # a run-time read in another module
+expect --project --refs 7:18  -- "defs.kama:3:16"       # a `comptime fn` in the export list...
+expect --project --refs 7:18  -- "main.kama:2:32"       # ...and the import list
+# A type's constant, and the TYPE through every `Palette::` qualifier — the half-applied rename.
+expect --project --refs 12:26 -- "main.kama:17:32"
+expect --project --refs 12:26 -- "main.kama:19:32"      # a return type's size
+expect --project --refs 22:26 -- "main.kama:17:42"      # an enum's constant
+expect --project --refs 9:11  -- "main.kama:17:23"
+expect --project --refs 9:11  -- "main.kama:19:23"
+expect --project --search counter -- "defs.kama:5:13 static counter"
+expect --project --search scaled  -- "defs.kama:13:29 comptime-fn Palette::scaled"
+expect --project --complete 50:4  -- "static	counter	int32"
+
+FIXTURE="$ROOT/tests/query/comptime/src/main.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+expect --project --def 2:17  -- "defs.kama:6:15"        # an import-list name
+expect --project --def 17:23 -- "defs.kama:9:11"        # the qualifier in `Palette::K`
+expect --project --def 17:32 -- "defs.kama:12:26"
+expect --project --def 17:42 -- "defs.kama:22:26"
+expect --project --search LIMIT -- "defs.kama:6:15 constant LIMIT"
+expect --project --complete 17:50 -- "constant	LIMIT	int32"
+expect --project --complete 17:50 -- "comptime-fn	twice	comptime fn int32 twice(n: int32)"
+reject --project --complete 17:50 -- "counter"          # a `static` is file-private: never offered elsewhere
+expect --project --complete 17:32 -- "comptime-fn	scaled	comptime fn int32 scaled(n: int32)"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

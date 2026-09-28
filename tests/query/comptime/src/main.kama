@@ -1,0 +1,19 @@
+// KR-97 — the USE side of m/defs.kama. APPEND ONLY: tools/check-query.sh asserts on line:column positions.
+import { ctq::m::LIMIT, ctq::m::twice, ctq::m::walk, ctq::m::Palette, ctq::m::Suit, ctq::m::Level, ctq::m::bump, ctq::m::total };
+
+comptime int32 EIGHT = twice(n: LIMIT);
+comptime int32 NINE = Palette::scaled(n: Palette::K);
+comptime int32 FOUR = Suit::squared(n: Suit::COUNT);
+comptime int32 WALKED = walk(n: 1);
+
+fn int32 main() {
+    comptime int32 LOCAL = LIMIT + EIGHT;
+    comptime assert(cond: LOCAL == 12, msg: "a body assertion");
+    InlineArray<int32>#(LIMIT) a = [0; (LIMIT)];
+    int32 r = EIGHT + NINE + FOUR + WALKED + LIMIT + bump() + total(xs: a) + three()[0];
+    return r > 0 ? 0 : 1;
+}
+
+fn int32 rt() { return Palette::K + Suit::COUNT + LIMIT + cast<int32>(Level::High); }
+fn bool variant() { Suit s = Suit::Hearts; return s == Suit::Spades; }
+fn InlineArray<int32>#(Palette::K) three() { InlineArray<int32>#(Palette::K) t = [1; (Palette::K)]; return t; }

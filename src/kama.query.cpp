@@ -61,6 +61,8 @@ const char* symKindName(SymKind k)
         case SymKind::Local:       return "local";
         case SymKind::Param:       return "param";
         case SymKind::Constant:    return "constant";
+        case SymKind::Static:      return "static";
+        case SymKind::ComptimeFn:  return "comptime-fn";
     }
     return "symbol";
 }
@@ -102,6 +104,8 @@ const char* completionKindName(CompletionKind k)
         case CompletionKind::Keyword:    return "keyword";
         case CompletionKind::Module:     return "module";
         case CompletionKind::Constant:   return "constant";
+        case CompletionKind::Static:     return "static";
+        case CompletionKind::ComptimeFn: return "comptime-fn";
     }
     return "symbol";
 }
@@ -655,6 +659,57 @@ void CEmitter::buildDefSites()
             addDefSite(kv.first, SymKind::Constant, unitOfDecl(kv.second.node), kv.second.node, kv.second.node->name,
                        kv.first, "");
 
+    // KR-97: module `static`s and `comptime` constants, keyed as the resolver keys them (`qualify(name)`). That
+    // is also the key an `import { … }` list and an `export { … }` list record, so both resolve with no more work.
+    for (auto& kv : _moduleVarDecl) {
+        const ModuleVarDecl& mv = kv.second;
+        if (!mv.node || !mv.name || !mv.name->value) continue;
+        addDefSite(kv.first, _constStatics.count(kv.first) ? SymKind::Constant : SymKind::Static,
+                   unitOfDecl(mv.node), mv.node, mv.name, *mv.name->value, "");
+    }
+    // KR-97: a module `comptime fn` — the key space `_funcs` uses, since a name is one or the other (KR-95).
+    for (auto& kv : _comptimeFns) {
+        FunctionDeclarationNode* fn = kv.second.node;
+        if (!fn || !fn->name || !fn->name->value) continue;
+        addDefSite(kv.first, SymKind::ComptimeFn, unitOfDecl(fn), fn, fn->name, *fn->name->value, "");
+    }
+    // KR-97: a type's or an enum's `comptime` constant and `comptime fn`. Both tables are keyed
+    // "<owner>::<name>", and a member is not a top-level declaration, so the OWNER's declaration supplies the
+    // unit and the file — as it does for methods. Shown as spelled at a use: `Palette::K`.
+    struct Owner { const CompilationUnit* unit = nullptr; std::string bare, bfile; };
+    auto ownerOf = [&](const std::string& owner, Owner& o) -> bool {
+        ASTNode* decl = nullptr;
+        SharedIdentifier id;
+        auto en = _enumDeclNodes.find(owner);
+        if (en != _enumDeclNodes.end() && en->second) { decl = en->second; id = en->second->identifier; }
+        for (auto* table : { &_classes, &_genericTypes }) {
+            if (decl) break;
+            auto c = table->find(owner);
+            if (c != table->end() && c->second.node) { decl = c->second.node; id = c->second.node->name; }
+        }
+        if (!decl) return false;
+        o.unit = unitOfDecl(decl);
+        o.bfile = builtinFileOfDecl(decl);
+        o.bare = bareOf(id, owner);
+        return true;
+    };
+    for (auto& kv : _typeConsts) {
+        const TypeConstInfo& tc = kv.second;
+        Owner o;
+        if (!tc.decl || !tc.nameId || !tc.nameId->value || !ownerOf(tc.owner, o)) continue;
+        const std::string& nm = *tc.nameId->value;
+        addDefSite(typeConstKey(tc.owner, nm), SymKind::Constant, o.unit, tc.decl, tc.nameId,
+                   o.bare + "::" + nm, o.bare, o.bfile);
+    }
+    for (auto& kv : _comptimeMethods) {
+        const ComptimeMethod& cm = kv.second;
+        Owner o;
+        if (!cm.node || !cm.node->name || !cm.node->name->value || !ownerOf(cm.owner, o)) continue;
+        const std::string& nm = *cm.node->name->value;
+        addDefSite(comptimeMethodKey(cm.owner, nm), SymKind::ComptimeFn, o.unit, cm.node, cm.node->name,
+                   o.bare + "::" + nm, o.bare, o.bfile);
+    }
+
     // Bindings the walk recorded (M3.4): locals, params, foreach/match bindings. Their key already encodes
     // the declaration site, and the identifier node IS the declaration — range and selectionRange coincide.
     for (const auto& d : _localDefs) {
@@ -844,6 +899,30 @@ std::string CEmitter::contractMethodKey(const std::string& contractKey, const st
 {
     if (contractKey.empty() || name.empty()) return "";
     return "contract:" + contractKey + "::" + name;
+}
+
+std::string CEmitter::typeConstKey(const std::string& ownerKey, const std::string& name)
+{
+    if (ownerKey.empty() || name.empty()) return "";
+    return "const:" + ownerKey + "::" + name;
+}
+
+std::string CEmitter::comptimeMethodKey(const std::string& ownerKey, const std::string& name)
+{
+    if (ownerKey.empty() || name.empty()) return "";
+    return "ctfn:" + ownerKey + "::" + name;
+}
+
+std::string CEmitter::constRefKey(const IdentifierNode& id)
+{
+    if (!id.value) return "";
+    if (id.qualifier && !id.qualifier->empty()) {
+        auto tq = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < id.qualifier->size(); ++i) tq->push_back((*id.qualifier)[i]);
+        auto tc = _typeConsts.find(resolveUserName(*id.qualifier->back(), tq) + "::" + *id.value);
+        if (tc != _typeConsts.end()) return typeConstKey(tc->second.owner, *id.value);
+    }
+    return resolveModuleVar(*id.value, id.qualifier);
 }
 
 // The index key for a MODULE/NAMESPACE path, given its dotted source spelling — or "" if the path names
@@ -1040,8 +1119,16 @@ void CEmitter::buildPositions()
             if (uit == _unitCtx.end()) continue;
             _nsCtx = uit->second;
             for (auto& e : kv.second) {
-                if (e.declKey.empty() && e.id && e.id->value)
+                if (e.declKey.empty() && e.id && e.id->value) {
                     e.declKey = resolveUserName(*e.id->value, e.id->qualifier);   // no `site` => not re-recorded
+                    // A signature type's SIZE (`InlineArray<int32>#(LIMIT) a`) is the one non-type a type
+                    // spells, and it names a constant. No binding shares a type's name in scope, so a miss as
+                    // a type is not ambiguous (KR-97).
+                    if (!_defSites.count(e.declKey)) {
+                        const std::string ck = constRefKey(*e.id);
+                        if (_defSites.count(ck)) e.declKey = ck;
+                    }
+                }
                 // A BUILT-IN: `int32`, `string`, `isize`. Resolution had nothing to find — these are
                 // reserved words, not declarations — so the entry is left naming a key no def-site
                 // answers, which is why the jump landed nowhere. Point it at the documentation file.
@@ -2222,6 +2309,17 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
         }
         break;
     }
+    // Type-associated `comptime fn`s, called `Type::name(…)` — beside the constants, since both read the same way.
+    for (auto& kv : _comptimeMethods) {
+        const ComptimeMethod& cm = kv.second;
+        if (cm.owner != key || !cm.node || !cm.node->name || !cm.node->name->value) continue;
+        const std::string& nm = *cm.node->name->value;
+        const ClassInfo* owner = nullptr;
+        { auto c = _classes.find(key); if (c != _classes.end()) owner = &c->second; }
+        if (!visibleFrom(owner, cm.vis, nm, qc)) continue;
+        out.push_back(CompletionItem{ nm, CompletionKind::ComptimeFn,
+                                      comptimeFnDetail(key, cm.node->returnType, cm.node->params, nm), key });
+    }
     // Type-associated `comptime` constants, read as `Type::NAME`.
     for (auto& kv : _typeConsts) {
         if (kv.second.owner != key) continue;
@@ -2237,6 +2335,19 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
     // through a `type intrinsic` conformance, which lives in a different table.
     if (_classes.count(key)) addMembers(key, /*wantStatic*/ true, qc, out);
     else if (ClassInfo* rt = implTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
+}
+
+// `comptime fn int32 twice(n: int32)` — a completion's detail for a `comptime fn`, at either scope.
+std::string CEmitter::comptimeFnDetail(const std::string& ownerKey, const SharedIdentifier& ret,
+                                       const SharedParameterList& params, const std::string& name)
+{
+    std::string d = "comptime fn " + spellTypeIn(ownerKey, ret) + " " + name + "(";
+    if (params) for (size_t i = 0; i < params->size(); ++i) {
+        const auto& p = (*params)[i];
+        if (!p || !p->identifier || !p->identifier->value) continue;
+        d += (i ? ", " : "") + *p->identifier->value + ": " + spellTypeIn(ownerKey, p->type);
+    }
+    return d + ")";
 }
 
 // ---- M4.3: bare names ---------------------------------------------------------------------------------
@@ -2334,13 +2445,47 @@ void CEmitter::addNamesInScope(const QueryCtx& qc, const std::vector<QueryBindin
         if (d != _defSites.end() && d->second.unit == qc.unit)
             emit(kv.first, CompletionKind::Constant, "extern const " + spellTypeIn("", kv.second.type), "");
     }
+    // Module `static`s, `comptime` constants and `comptime fn`s (KR-97): offered when the bare name resolves
+    // back to the very declaration from here AND the file rung lets this file name it — the resolver's own
+    // answer, asked backwards, as bareNameOf does for types. A `static` is file-private, so only its own file.
+    const std::string here = (qc.unit && qc.unit->name) ? *qc.unit->name : std::string();
+    auto reachable = [&](const std::string& key, const std::string& nm) {
+        return checkReach(key, nm, "this reference", 0, here, false, /*quiet*/ true);
+    };
+    auto emitModuleVar = [&](const std::string& label, const std::string& key) {
+        auto t = _moduleStatics.find(key);
+        emit(label, _constStatics.count(key) ? CompletionKind::Constant : CompletionKind::Static,
+             t == _moduleStatics.end() ? std::string() : spellTypeIn("", t->second), "");
+    };
+    auto emitComptimeFn = [&](const std::string& label, const std::string& key) {
+        FunctionDeclarationNode* fn = _comptimeFns[key].node;
+        if (fn) emit(label, CompletionKind::ComptimeFn, comptimeFnDetail("", fn->returnType, fn->parameters, label), "");
+    };
+    for (auto& kv : _moduleVarDecl) {
+        if (!kv.second.name || !kv.second.name->value) continue;
+        const std::string& nm = *kv.second.name->value;
+        if (resolveModuleVar(nm, nullptr) == kv.first && reachable(kv.first, nm)) emitModuleVar(nm, kv.first);
+    }
+    for (auto& kv : _comptimeFns) {
+        if (!kv.second.node || !kv.second.node->name || !kv.second.node->name->value) continue;
+        const std::string& nm = *kv.second.node->name->value;
+        std::string k;
+        if (isComptimeFnName(nm, nullptr, k) && k == kv.first && reachable(kv.first, nm)) emitComptimeFn(nm, kv.first);
+    }
     // Per-symbol imports (`import a::b::{X as Y}`) bind a LOCAL spelling that no key-prefix walk can find.
-    for (auto& a : _nsCtx.symbolAliases) {
+    // A COPY: the detail's `spellTypeIn` swaps `_nsCtx` out and back by value, which reassigns this very map
+    // under a live iterator — completion spun forever the first time a detail was spelled from in here.
+    const std::map<std::string, std::string> aliases = _nsCtx.symbolAliases;
+    for (auto& a : aliases) {
         if (_classes.count(a.second) || _funcs.count(a.second) || _enums.count(a.second)
             || _interfaces.count(a.second) || _genericTypes.count(a.second))
             emit(a.first, _funcs.count(a.second) ? CompletionKind::Function : CompletionKind::Type, "", "");
         else if (_externConsts.count(importedExtern(a.second)))
             emit(a.first, CompletionKind::Constant, "", "");
+        else if (_moduleStatics.count(a.second))
+            emitModuleVar(a.first, a.second);
+        else if (_comptimeFns.count(a.second))
+            emitComptimeFn(a.first, a.second);
     }
 
     for (size_t i = 0; i < kamaKeywordCount(); ++i) emit(kamaKeywordAt(i), CompletionKind::Keyword, "", "");

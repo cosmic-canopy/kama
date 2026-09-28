@@ -1102,6 +1102,17 @@ private:
     static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
     // "contract:Contract::name" — a contract method declares a vtbl slot, so it has no cName to key on.
     static std::string contractMethodKey(const std::string& contractKey, const std::string& name);
+    // KR-97: a type's `comptime` constant and `comptime fn`. Neither is a name a resolver returns — the
+    // constant's `Owner__K` is only its C spelling, and would share a key with a method's cName.
+    static std::string typeConstKey(const std::string& ownerKey, const std::string& name);       // "const:Owner::name"
+    static std::string comptimeMethodKey(const std::string& ownerKey, const std::string& name);  // "ctfn:Owner::name"
+    // The def-site key of the compile-time constant `id` names — `Type::K`, or a module `static`/`comptime` —
+    // resolved in the current scope; "" when it names neither. For a position only a constant can fill: a size,
+    // a fill count, a comptime argument.
+    std::string constRefKey(const IdentifierNode& id);
+    // Nodes the index points at that the program no longer holds: `bakeConstSizes` swaps a field type's named
+    // size for its value, and `recordRef` keeps only a raw pointer. Filled in analysis mode only.
+    std::vector<SharedIdentifier> _indexKeepAlive;
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).
     // `dotted` is that same prefix as a source spelling, for the module case.
     std::string listSegmentKey(const StringList& segs, size_t i, const std::string& dotted);
@@ -1198,6 +1209,8 @@ private:
     // (a field of `DynamicArray_Cell` is declared `T` on the template).
     std::string classOfTypeNodeIn(const std::string& ownerKey, SharedIdentifier t);
     std::string spellTypeIn(const std::string& ownerKey, const SharedIdentifier& t);   // source spelling, for `detail`
+    std::string comptimeFnDetail(const std::string& ownerKey, const SharedIdentifier& ret,
+                                 const SharedParameterList& params, const std::string& name);   // KR-97
     void installOwnerScope(const std::string& ownerKey);   // _nsCtx + _typeSubst for reading ownerKey's members
     // A canonicalized receiver path (`h.cell`, `makeHolder()`, `cells[]`, `this`, `Point`) -> the class key
     // it names. `isType` distinguishes `Point.` (offer ctors + statics) from `p.` (offer instance members);
@@ -3366,8 +3379,15 @@ private:
     // check/build divergence, and the reason KB-3 read as "a comptime cannot be exported" when the real
     // state was that module-scope variables had never been wired into the module system at all.
     std::map<std::string, std::string> _moduleVarFile;
+    // KR-97: the declaration and its NAME node, same key — the def site `kama query` and the language server
+    // point at. `_moduleStatics` holds only the type, and a def site without its name node would make a
+    // rename rewrite the whole declaration.
+    struct ModuleVarDecl { ASTNode* node; SharedIdentifier name; };
+    std::map<std::string, ModuleVarDecl> _moduleVarDecl;
     // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
-    struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
+    // `decl`/`nameId` are the declaration and its NAME node, for the def site (KR-97).
+    struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line;
+                           ASTNode* decl = nullptr; SharedIdentifier nameId; };
     std::map<std::string, TypeConstInfo> _typeConsts;
     std::string typeConstCType(const TypeConstInfo& tc);   // its declared type, resolved in the OWNER's scope
     // const-eval 6b-3: `comptime fn` registry — compile-time-only functions the interpreter runs. Free

@@ -279,6 +279,8 @@ int symKindToLsp(SymKind k) {
         case SymKind::Local:       return 13;   // Variable
         case SymKind::Param:       return 13;   // Variable
         case SymKind::Constant:    return 14;   // Constant
+        case SymKind::Static:      return 13;   // Variable — a module `static` is mutable, so not a Constant
+        case SymKind::ComptimeFn:  return 12;   // Function — at a type's scope too: it takes no receiver
     }
     return 5;
 }
@@ -315,6 +317,8 @@ int semTokenType(SymKind k) {
         case SymKind::Local:       return 8;   // variable
         case SymKind::Param:       return 9;   // parameter
         case SymKind::Constant:    return 8;   // variable — the legend has no constant; `readonly` is not sent
+        case SymKind::Static:      return 8;   // variable
+        case SymKind::ComptimeFn:  return 5;   // function
     }
     return 0;
 }
@@ -337,6 +341,8 @@ int completionKindToLsp(CompletionKind k) {
         case CompletionKind::Keyword:    return 14;   // Keyword
         case CompletionKind::Module:     return 9;    // Module
         case CompletionKind::Constant:   return 21;   // Constant
+        case CompletionKind::Static:     return 6;    // Variable — a module `static` is mutable
+        case CompletionKind::ComptimeFn: return 3;    // Function
     }
     return 6;
 }
