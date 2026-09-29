@@ -259,27 +259,24 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### A `comptime fn` is checked only along the path the interpreter runs (KR-102)
+### The named-argument matcher's refusals (KR-103)
 
-Found indexing compile-time code for `kama query` (`0.9.463`). The interpreter is the only reader of a
-`comptime fn` body, and it reads what it EXECUTES — one side of an `if` or a ternary, the left of a
-short-circuited `&&`/`||`, and nothing of a `comptime fn` no constant calls. So a name that resolves to nothing
-there is never diagnosed. Measured, `kama check` and `kama build` both pass:
+`emitReorderedCall` is kama's one named-argument matcher: free fns, methods, ctors, bound closures, operators,
+and since `0.9.465` a `comptime fn` called from compile-time code (the ruling that compile-time code answers
+to the run-time rules). Its refusals were written for a C-name world — `add(a: 1, c: 2)` answers
 
-```kama fragment
-comptime fn int32 f(int32 n) { if (n > 100) { return nosuch + 1; } return n; }
-comptime fn int32 g() { return alsoMissing; }     // never called
-comptime int32 X = f(n: 1);
+```text
+error: unknown argument name 'c' in call
+error: missing argument in call
 ```
 
-It is `checkUninstantiatedTemplates`' hole for compile-time code, at the same cost: the error is found by
-whoever first takes the branch, in their build, pointing at code they did not write. Already in place:
-`indexComptimeCode` (`src/kama.cemit.cpp`) walks every such body through the emitter for the index, with
-every diagnostic muted — muted because the RUN-TIME rules are the wrong ones there (a call to another
-`comptime fn` is a runtime-position refusal). Wanted: the compile-time rules on every path — name resolution
-first, then what the interpreter refuses structurally (an impure construct in a branch it did not take).
-Decide whether that is a non-evaluating mode of the interpreter or the emitter walk under a compile-time rule
-set, and pin both halves — an untaken branch and an uncalled fn — with `tests/xfail/` fixtures.
+— two diagnostics for one mistake, and neither names the function or the parameter. The comptime interpreter
+said `` `add` has no parameter `c` `` and `` `add` is missing the argument `b:` `` (`ctBindByName`), which is
+the wording compile-time calls gave up for one rule (`tests/xfail/comptime_call_unknown_arg.msg`). Wanted: that
+wording for EVERY call — the callee's source name (the matcher is handed a C name, and for the four indirect
+forms an expression, so the display name has to come from its call sites), and the missing-argument line
+dropped when an unknown label already explains it. `tests/xfail/arg_unknown` and `generic_turbofish_arg` pin
+the current wording.
 
 ### Operators on an enum (KR-96) — support them, or declare a non-goal
 

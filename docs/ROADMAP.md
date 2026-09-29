@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-103**
+**Next id: KR-104**
 
 ## The shape
 
@@ -72,7 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-102 | **A `comptime fn` body is checked only along the path the interpreter runs** — a name that resolves to nothing, in a branch no evaluation takes or in a `comptime fn` no constant calls, builds clean (measured `0.9.463`: `if (n > 100) { return nosuch + 1; }` passes `kama check` and `kama build`). The uninstantiated-template hole, for compile-time code: the error is found by whoever first takes the branch. The emitter already walks every such body for the index, diagnostics muted — what is missing is the compile-time rules on every path, not the walk | M? | [§2](ROADMAP_DETAIL.md#s2) |
+| KR-103 | **The named-argument matcher names no callee, and a mistyped label is two diagnostics** — `add(a: 1, c: 2)` answers "unknown argument name 'c' in call" AND "missing argument in call" for one mistake, naming neither the function nor the parameter it lacks. The comptime interpreter said "`add` has no parameter `c`" until `0.9.465` put compile-time calls through this one matcher (29 call forms, some with no source name to show) | S | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |
