@@ -259,25 +259,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-### The named-argument matcher's refusals (KR-103)
-
-`emitReorderedCall` is kama's one named-argument matcher: free fns, methods, ctors, bound closures, operators,
-and since `0.9.465` a `comptime fn` called from compile-time code (the ruling that compile-time code answers
-to the run-time rules). Its refusals were written for a C-name world — `add(a: 1, c: 2)` answers
-
-```text
-error: unknown argument name 'c' in call
-error: missing argument in call
-```
-
-— two diagnostics for one mistake, and neither names the function or the parameter. The comptime interpreter
-said `` `add` has no parameter `c` `` and `` `add` is missing the argument `b:` `` (`ctBindByName`), which is
-the wording compile-time calls gave up for one rule (`tests/xfail/comptime_call_unknown_arg.msg`). Wanted: that
-wording for EVERY call — the callee's source name (the matcher is handed a C name, and for the four indirect
-forms an expression, so the display name has to come from its call sites), and the missing-argument line
-dropped when an unknown label already explains it. `tests/xfail/arg_unknown` and `generic_turbofish_arg` pin
-the current wording.
-
 ### Operators on an enum (KR-96) — support them, or declare a non-goal
 
 Until `0.9.443` an `operator` declared in an enum body parsed and was never registered, so `e + 1` answered
