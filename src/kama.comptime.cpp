@@ -25,6 +25,64 @@
 // leaves to checkReach (the interpreter has no reach check): what this file IMPORTS — which the import site
 // already held to the exporting file's `export` and the module's `visibility` — then what it declares, then
 // its `using`s. The import rung was missing, so an exported comptime fn was "not one" to its importer (KR-95).
+// ---- The compile-time subset, stated once (KR-102) ----------------------------------------------------------
+// The kinds the dispatch in ctEvalExpr / ctEvalStmt evaluates. Each is asked FIRST there, so an arm added below
+// without its kind here is refused before it is reached — the drift is loud — and the check walk asks the same
+// question of every node on every path, including the ones no evaluation takes.
+bool CEmitter::ctExprKindSupported(const ASTNode* n)
+{
+    return dynamic_cast<const Int8Node*>(n)    || dynamic_cast<const Int16Node*>(n)   || dynamic_cast<const Int32Node*>(n)
+        || dynamic_cast<const Int64Node*>(n)   || dynamic_cast<const UInt8Node*>(n)   || dynamic_cast<const UInt16Node*>(n)
+        || dynamic_cast<const UInt32Node*>(n)  || dynamic_cast<const UInt64Node*>(n)  || dynamic_cast<const Float32Node*>(n)
+        || dynamic_cast<const Float64Node*>(n) || dynamic_cast<const BooleanNode*>(n) || dynamic_cast<const CharNode*>(n)
+        || dynamic_cast<const SizeofNode*>(n)  || dynamic_cast<const IdentifierNode*>(n)
+        || dynamic_cast<const ThisAccessNode*>(n) || dynamic_cast<const MemberAccessNode*>(n)
+        || dynamic_cast<const CastNode*>(n)    || dynamic_cast<const SimpleUnaryExpressionNode*>(n)
+        || dynamic_cast<const LogicalAndOrNode*>(n) || dynamic_cast<const BinaryExpressionNode*>(n)
+        || dynamic_cast<const TernaryExpressionNode*>(n) || dynamic_cast<const ElementAccessNode*>(n)
+        || dynamic_cast<const InvocationNode*>(n);
+}
+bool CEmitter::ctStmtKindSupported(const ASTNode* n)
+{
+    return dynamic_cast<const BlockNode*>(n) || dynamic_cast<const LocalVariableDeclaration*>(n)
+        || dynamic_cast<const ConstLocalVariableDeclaration*>(n) || dynamic_cast<const AssignmentNode*>(n)
+        || dynamic_cast<const IfNode*>(n) || dynamic_cast<const WhileNode*>(n) || dynamic_cast<const DoWhileNode*>(n)
+        || dynamic_cast<const ForNode*>(n) || dynamic_cast<const ForEachNode*>(n) || dynamic_cast<const BreakNode*>(n)
+        || dynamic_cast<const ContinueNode*>(n) || dynamic_cast<const ReturnNode*>(n)
+        || dynamic_cast<const ExpressionStatementNode*>(n);
+}
+const char* const CEmitter::kCtUnsupportedExpr = "unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)";
+const char* const CEmitter::kCtUnsupportedStmt = "unsupported statement in comptime fn (no I/O, allocation, unsafe, or spawn)";
+const char* const CEmitter::kCtPlainAssign = "only plain `=` assignment is supported in a comptime fn";
+const char* const CEmitter::kCtLocalType =
+    "a compile-time local holds a number, `bool`, `char`, fixed array, or a `type value` of those";
+const char* const CEmitter::kCtConstLocalType =
+    "a compile-time const local holds a number, `bool`, `char`, or a `type value` of those";
+const char* const CEmitter::kCtParamType =
+    "a comptime fn parameter holds a number, `bool`, `char`, fixed array, or a `type value` of those";
+const char* const CEmitter::kCtForeachRef =
+    "`foreach (ref …)` write-back is not supported in a comptime fn — use indexed `a[i] = …`";
+const char* const CEmitter::kCtForeachArray = "`foreach` in a comptime fn iterates a fixed array only";
+std::string CEmitter::ctUnknownIdentifier(const std::string& name)
+{
+    return "unknown identifier `" + name + "` — a compile-time expression reads only `comptime` constants, comptime "
+           "parameters, and (inside a `comptime fn`) that function's params and locals";
+}
+std::string CEmitter::ctNotComptimeCall(const std::string& name, bool inComptimeFn)
+{
+    return inComptimeFn ? "a comptime fn may call only another `comptime fn` — `" + name + "` is not one"
+                        : "a compile-time expression may call only a `comptime fn` — `" + name + "` is not one";
+}
+std::string CEmitter::ctNotCompileTimeCallee(const std::string& shown)
+{
+    return "a compile-time call names a `comptime fn`, a value type's ctor, method or `static fn` — `" + shown
+         + "` is none of those";
+}
+std::string CEmitter::ctNotValueMethod(const std::string& member)
+{
+    return "`" + member + "` — only a `type value`'s methods run at compile time";
+}
+
 bool CEmitter::isComptimeFnName(const std::string& name, SharedStringList /*qualifier*/, std::string& outKey) const
 {
     auto hit = [&](const std::string& k) -> bool {
@@ -343,6 +401,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (_ctFailed) return false;
     if (!e) return ctFail("empty expression", 0);
     if (++_ctSteps > CT_STEP_BUDGET) return ctFail("step budget exceeded — a comptime fn must terminate quickly (raise the loop bound or simplify)", e->line);
+    if (!ctExprKindSupported(e.get())) return ctFail(kCtUnsupportedExpr, e->line);
     ASTNode* n = e.get();
 
     // --- literals ---
@@ -399,9 +458,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                            + "` — read it as `" + _ctCurrentOwner + "::" + *id->value + "`").c_str(), e->line);
         // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
         // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
-        return ctFail(("unknown identifier `" + (id->value ? *id->value : std::string("?"))
-                       + "` — a compile-time expression reads only `comptime` constants, comptime "
-                         "parameters, and (inside a `comptime fn`) that function's params and locals").c_str(), e->line);
+        return ctFail(ctUnknownIdentifier(id->value ? *id->value : std::string("?")).c_str(), e->line);
     }
 
     // --- `this` and a field read `x.f` — a value type's member, running (KR-93) ---
@@ -573,8 +630,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 bool handled = false;   // a value type's `static fn` runs too (KR-93)
                 bool ok = ctStaticMember(owner, *inv->identifier->value, disp, inv, env, e->line, out, handled);
                 if (handled) return ok;
-                return ctFail(("a compile-time call names a `comptime fn`, a value type's ctor, method or `static fn` — `"
-                               + disp + "` is none of those").c_str(), e->line);
+                return ctFail(ctNotCompileTimeCallee(disp).c_str(), e->line);
             }
             // ...or a `friend` grant names it. This is the THIRD access-check path — canAccess (emitter)
             // and visibleFrom (query) are the other two — and it was the one that knew nothing about
@@ -621,9 +677,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                                        : std::string("it is private to that file, and leaves it only through that "
                                                      "file's `export { … };`"))).c_str(), e->line);
             return ctFail((!_ctRunning.empty() ? "it calls `" + nm + "`, which is not a `comptime fn`"
-                         : _ctDepth > 0        ? "a comptime fn may call only another `comptime fn` — `" + nm + "` is not one"
-                                               : "a compile-time expression may call only a `comptime fn` — `" + nm
-                                                 + "` is not one").c_str(), e->line);
+                                               : ctNotComptimeCall(nm, _ctDepth > 0)).c_str(), e->line);
         }
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
         const ComptimeFn& cf = _comptimeFns[key];
@@ -634,7 +688,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         return ok;
     }
 
-    return ctFail("unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)", e->line);
+    return ctFail(kCtUnsupportedExpr, e->line);
 }
 
 // Build a fixed array's element values from its initializer: `[v; N]` (fill), `[a, b, c]` (list), or
@@ -674,6 +728,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     if (_ctFailed) return CTFlow::Fail;
     if (!s) return CTFlow::Normal;
     if (++_ctSteps > CT_STEP_BUDGET) { ctFail("step budget exceeded — a comptime fn must terminate quickly", s->line); return CTFlow::Fail; }
+    if (!ctStmtKindSupported(s.get())) { ctFail(kCtUnsupportedStmt, s->line); return CTFlow::Fail; }
     ASTNode* n = s.get();
 
     if (auto* blk = dynamic_cast<BlockNode*>(n)) {
@@ -701,7 +756,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
         CTValue proto;
         if (!ctValueProto(d->type, proto)) {
-            ctFail("a compile-time local holds a number, `bool`, `char`, fixed array, or a `type value` of those", s->line);
+            ctFail(kCtLocalType, s->line);
             return CTFlow::Fail;
         }
         if (d->variables) for (auto& v : *d->variables) {
@@ -718,7 +773,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     if (auto* d = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         CTValue proto;
         if (!ctValueProto(d->type, proto)) {
-            ctFail("a compile-time const local holds a number, `bool`, `char`, or a `type value` of those", s->line);
+            ctFail(kCtConstLocalType, s->line);
             return CTFlow::Fail;
         }
         if (d->variables) for (auto& v : *d->variables) {
@@ -732,7 +787,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* a = dynamic_cast<AssignmentNode*>(n)) {
-        if (a->token != EQ) { ctFail("only plain `=` assignment is supported in a comptime fn", s->line); return CTFlow::Fail; }
+        if (a->token != EQ) { ctFail(kCtPlainAssign, s->line); return CTFlow::Fail; }
         // Fixed-array element write `t[i] = v` — the table-fill primitive.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
             SharedExpression base = ea->expression ? ea->expression
@@ -853,9 +908,9 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
-        if (fe->isRef) { ctFail("`foreach (ref …)` write-back is not supported in a comptime fn — use indexed `a[i] = …`", s->line); return CTFlow::Fail; }
+        if (fe->isRef) { ctFail(kCtForeachRef, s->line); return CTFlow::Fail; }
         CTValue arr; if (!ctEvalExpr(fe->expression, env, arr)) return CTFlow::Fail;
-        if (!arr.isArray) { ctFail("`foreach` in a comptime fn iterates a fixed array only", s->line); return CTFlow::Fail; }
+        if (!arr.isArray) { ctFail(kCtForeachArray, s->line); return CTFlow::Fail; }
         if (!fe->name || !fe->name->value) return CTFlow::Normal;
         const std::string& bind = *fe->name->value;
         for (auto& elv : arr.elems) {
@@ -884,7 +939,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
     }
 
-    ctFail("unsupported statement in comptime fn (no I/O, allocation, unsafe, or spawn)", s->line);
+    ctFail(kCtUnsupportedStmt, s->line);
     return CTFlow::Fail;
 }
 
@@ -962,7 +1017,9 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
         CTValue proto;
         if (!ctValueProto(p->type, proto)) {
             _ctDepth--;
-            return ctFail("a comptime fn parameter holds a number, `bool`, `char`, fixed array, or a `type value` of those", line);
+            // At the PARAMETER, which is where the fix goes — and where the check walk, which reads every
+            // `comptime fn`, reports the same thing, so the two are one diagnostic (KR-102).
+            return ctFail(kCtParamType, p->identifier->line);
         }
         CTValue v = args[i]; ctCoerceTo(proto, v);
         env.vars[*p->identifier->value] = v;
@@ -1249,7 +1306,7 @@ bool CEmitter::ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out)
         }
     CTValue recv; if (!ctEvalExpr(ma->expression, env, recv)) return false;
     if (!recv.isStruct)
-        return ctFail(("`" + member + "` — only a `type value`'s methods run at compile time").c_str(), line);
+        return ctFail(ctNotValueMethod(member).c_str(), line);
     ClassInfo& ci = _classes[recv.structClass];
     const std::string shown = demangleForDisplay(ci.name) + "." + member;
     auto mit = ci.methods.find(member);

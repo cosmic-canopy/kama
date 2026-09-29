@@ -1,0 +1,19 @@
+// KR-102: the compile-time subset holds on EVERY path of a `comptime fn`, not just the branch the interpreter
+// runs. Each line in `never` broke a rule and built, because nothing ever evaluated it — one refusal per line.
+import { core::println };
+
+static int32 counter = 0;
+fn int32 helper(int32 x) { return x; }
+type resource Res { public ctor make() { } }
+
+comptime fn int32 never(int32 n) {
+    string s = "a";
+    int32 a = 1; a += 1;
+    int32 b = counter;
+    int32 c = helper(x: 1);
+    Res r = Res.make();
+    println(s: "hi");
+    InlineArray<int32>#(2) t = [1, 2]; foreach (ref int32 v in t) { v = 2; }
+    return n;
+}
+fn int32 main() { return 0; }

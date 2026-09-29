@@ -1132,6 +1132,26 @@ private:
     std::string checkComptimeCall(InvocationNode* call, const SharedParameterList& params, const NsCtx& ctx,
                                   const std::string& shown);
     void dropShadowedComptimeDiags();
+    // THE COMPILE-TIME SUBSET, stated once (KR-102). The interpreter asks these before it evaluates a node and
+    // the check walk asks them on every path, so a kind the interpreter learns is learned by both, and one it
+    // lacks is refused by both in the same words.
+    static bool ctExprKindSupported(const ASTNode* n);
+    static bool ctStmtKindSupported(const ASTNode* n);
+    static const char* const kCtUnsupportedExpr;
+    static const char* const kCtUnsupportedStmt;
+    static const char* const kCtPlainAssign;
+    static const char* const kCtLocalType;
+    static const char* const kCtConstLocalType;
+    static const char* const kCtParamType;
+    static const char* const kCtForeachRef;
+    static const char* const kCtForeachArray;
+    static std::string ctUnknownIdentifier(const std::string& name);
+    static std::string ctNotComptimeCall(const std::string& name, bool inComptimeFn);
+    static std::string ctNotCompileTimeCallee(const std::string& shown);
+    static std::string ctNotValueMethod(const std::string& member);
+    void checkComptimeParams(const SharedParameterList& params);
+    void ctRefuse(const std::string& what, int line);   // a subset refusal: the first on its line (KR-102)
+    std::set<std::string> _ctRefusedAt;
     // A `comptime fn` call's labels and arguments, which the run-time refusal stops short of (KR-97).
     void indexComptimeCallArgs(InvocationNode* call, const SharedParameterList& params);
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).

@@ -4662,8 +4662,10 @@ type value Palette {
 - **Purity → reproducible builds.** A comptime fn is deterministic and effect-free: no I/O, no `new`/`spawn`,
   no FFI, no reads of mutable `static`s, no pointers/strings, and it may call **only** another `comptime fn`
   or a value type's member whose body keeps the same rules.
-  These are enforced structurally — anything outside the subset is a clean "unsupported in comptime fn"
-  diagnostic — so the same inputs always bake the same output.
+  These are enforced structurally, on every path of the `comptime fn` — a branch no evaluation takes too — so <!-- xfail: comptime_subset_every_path -->
+  anything outside the subset is a clean diagnostic, and the same inputs always bake the same output. A value
+  type's member stays run-time code that also runs at compile time: its body keeps the rules on the paths a
+  compile-time call runs, and a branch only run time takes (a `panic` guard, say) is its own business.
 - **Bounded.** A step budget (and call-depth cap) guarantees a runaway comptime fn can't hang the compiler
   (as C++ constexpr-steps / Zig `@setEvalBranchQuota`); exceeding it is a clean diagnostic naming the fn.
 

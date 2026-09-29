@@ -5006,6 +5006,15 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (!expr) return "";
     ASTNode* n = expr.get();
 
+    // Compile-time code, on every path: the subset the interpreter evaluates, and nothing else (KR-102). An array
+    // literal is the interpreter's too, as an initializer — the one place the run-time rules let one stand — and
+    // a statement's assignment arrives here as an expression; its `=`-only rule is the statement gate's.
+    if (_ctCheck && !n->synthesized && !ctExprKindSupported(n) && !dynamic_cast<ArrayLiteralNode*>(n)
+        && !dynamic_cast<AssignmentNode*>(n)) {
+        ctRefuse(kCtUnsupportedExpr, n->line);
+        return "0";
+    }
+
     if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // value-producing match (lifted)
     if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) return emitArrayLiteral(al);   // `[…]` -> a Fixed value
     if (auto* iso = dynamic_cast<IsolateNode*>(n)) return emitIsolateExpr(iso);   // `= isolate worker(...)` handle
@@ -5206,6 +5215,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                v->qualifier && !v->qualifier->empty());
                 recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
                 recordRef(key, v);                    // reads AND writes arrive here: `=`, `+=`, `++`, `ref` (KR-97)
+                // Compile-time code reads constants, never a mutable `static` (KR-102) — nor writes one.
+                if (_ctCheck && !_constStatics.count(key) && !v->synthesized)
+                    ctRefuse(ctUnknownIdentifier(nm), v->line);
                 return key;
             }
             // `extern const T NAME;` (KR-56) → the C constant's own spelling; the header owns the value.
@@ -6794,6 +6806,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (!stmt) return;
     ASTNode* n = stmt.get();
 
+    // A `comptime fn` body, on every path: the statements the interpreter runs, and plain `=` (KR-102).
+    if (_ctFnBody && !n->synthesized) {
+        if (!ctStmtKindSupported(n)) { ctRefuse(kCtUnsupportedStmt, n->line); return; }
+        if (auto* as = dynamic_cast<AssignmentNode*>(n))
+            if (as->token != EQ) { ctRefuse(kCtPlainAssign, n->line); return; }
+    }
+
     // `:= expr;` is the value of a value-producing `match` arm — the match emitter consumes it as the
     // arm's final statement. Reaching it here means it is misplaced (not last, or in a match used as a
     // statement, or outside any match).
@@ -6902,6 +6921,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (d) { rejectNullInit(declType, d->initializer, "a local", n->line);
                              rejectInitKindMismatch(declType, d->initializer, "a local", n->line);
                              rejectConstPtrWiden(ty, d->initializer, "a local's initializer", n->line); }
+            // Inside a `comptime fn` body a local holds a compile-time value, on every path (KR-102).
+            if (_ctFnBody && !n->synthesized) {
+                CTValue proto, ep; int64_t n64 = 0; std::string ect;
+                if (lvd && !ctArrayInfo(declType, ep, n64, ect) && !ctValueProto(declType, proto))
+                    ctRefuse(kCtLocalType, n->line);
+                else if (cvd && !ctValueProto(declType, proto))
+                    ctRefuse(kCtConstLocalType, n->line);
+            }
             // ...and a `const` or `comptime` local, which is a local all the same. It skipped all three, so
             // `const int8 g = 300;` built and held 44 while `int8 g = 300;` was refused (KR-102).
             if (cvd && cvd->variables)
@@ -7789,6 +7816,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        // A `comptime fn` iterates a fixed array, by value (KR-102).
+        if (_ctFnBody && !n->synthesized) {
+            if (fe->isRef) ctRefuse(kCtForeachRef, n->line);
+            else if (!isFixedColl(typeOfExpr(fe->expression)) && !isFixedColl(exprClass(fe->expression)))
+                ctRefuse(kCtForeachArray, n->line);
+        }
         // Ahead of the iterator/collection split below, so BOTH shapes are covered by the one check.
         if (fe->name && fe->name->value) {
             checkConstParamBinder(*fe->name->value, "`foreach` variable", fe->name->line);
@@ -14766,7 +14799,12 @@ void CEmitter::walkComptimeCode(const std::vector<SharedCompilationUnit>& units)
             ASTNode* d = decl.get();
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(d)) {
                 if (fn->isComptime && fn->block)
-                    ctCheckOnly([&] { const bool b = _ctFnBody; _ctFnBody = true; emitFunction(fn); _ctFnBody = b; });
+                    ctCheckOnly([&] {
+                        const bool b = _ctFnBody; _ctFnBody = true;
+                        checkComptimeParams(fn->parameters);
+                        emitFunction(fn);
+                        _ctFnBody = b;
+                    });
             } else if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(d)) {
                 if (mv->isComptime && mv->variables)
                     for (auto& v : *mv->variables) if (v) checkComptimeInit(nullptr, mv->type, v->initializer);
@@ -14807,12 +14845,33 @@ void CEmitter::checkComptimeMembersIn(const SharedClassMemberDeclarationList& me
             const std::string ret = cType(md->returnType);
             ctCheckOnly([&] {
                 const bool b = _ctFnBody; _ctFnBody = true;
+                checkComptimeParams(md->params);
                 emitMethodOrCtorBody(owner->name + "__" + *md->name->value, ret.c_str(), md->params, md->body,
                                      *owner, false, /*isStatic*/ true, false, md->name->value->c_str(),
                                      md->attributes);
                 _ctFnBody = b;
             });
         }
+    }
+}
+
+// A compile-time-subset refusal. The FIRST on its line, as the interpreter stops at its first: a local whose type
+// holds no compile-time value has an initializer that usually cannot build one either, and that is one mistake.
+void CEmitter::ctRefuse(const std::string& what, int line)
+{
+    if (_indexWalk) return;   // silent, and must not claim the line for a real report later
+    if (!_ctRefusedAt.insert(reportPath(diagFile()) + ":" + std::to_string(line)).second) return;
+    unsupported(what.c_str(), line);
+}
+
+// A `comptime fn`'s parameters hold compile-time values — checked with its body, not only when a call binds one.
+void CEmitter::checkComptimeParams(const SharedParameterList& params)
+{
+    if (!params) return;
+    for (auto& p : *params) {
+        CTValue proto;
+        if (p && p->type && !ctValueProto(p->type, proto))
+            ctRefuse(kCtParamType, p->identifier ? p->identifier->line : p->line);
     }
 }
 
@@ -25693,6 +25752,19 @@ static inline std::string placeWrap(const std::string& c, bool isPlace)
 
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
+    // Compile-time code calls a `comptime fn`, or a value type's ctor, method or `static fn` — nothing else, on
+    // every path (KR-102). A bare name that is a run-time function or a builtin is refused here in the
+    // interpreter's words; one that resolves to nothing falls through to the ordinary diagnostic (the import).
+    if (_ctCheck && call->identifier && call->identifier->value && !call->expression
+        && (!call->identifier->qualifier || call->identifier->qualifier->empty())) {
+        const std::string& nm = *call->identifier->value;
+        std::string ck;
+        if (!isComptimeFnName(nm, nullptr, ck)
+            && (isFloorBuiltinCall(call->identifier.get()) || _funcs.count(resolveFuncImpl(nm, nullptr)))) {
+            ctRefuse(ctNotComptimeCall(nm, _ctFnBody), call->line);
+            return "0";
+        }
+    }
     // Containment, on ACQUISITION-BY-CALL. A call that RETURNS a raw pointer hands one to its caller, and
     // that caller may be unmarked: `kfree(p: make())` never binds the value to a local or a field, so the
     // declaration, local and field rules all miss it, and the pointer is used twice with no marker in
@@ -25768,7 +25840,25 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     if (!_typeSubst.count(spelled))
                         checkReach(dotType, spelled, "a construction", call->line, refFilePath(),
                                    rid && rid->qualifier && !rid->qualifier->empty());
+                    if (_ctCheck) {   // a compile-time value is built by a `type value`'s ctor (KR-102)
+                        auto ci = _classes.find(dotType);
+                        CTValue self; std::string why;
+                        if (ci != _classes.end() && !ctStructProto(ci->second.name, self, why)) {
+                            const std::string m = ma->identifier && ma->identifier->value ? *ma->identifier->value : "";
+                            ctRefuse(why + " — so `" + demangleForDisplay(ci->second.name) + "." + m
+                                     + "` cannot build a compile-time value", call->line);
+                            return "0";
+                        }
+                    }
                     return emitDotOnTypeCtorCall(call, ma, dotType);
+                }
+                if (_ctCheck) {   // only a `type value`'s methods run at compile time (KR-102)
+                    auto ci = _classes.find(exprClass(ma->expression));
+                    if (ci == _classes.end() || ci->second.kind != TypeKind::Value || ci->second.isIntrinsicColl) {
+                        ctRefuse(ctNotValueMethod(ma->identifier && ma->identifier->value ? *ma->identifier->value
+                                                                                          : "?"), call->line);
+                        return "0";
+                    }
                 }
                 return emitMethodCall(call, ma);
             }
@@ -25963,6 +26053,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             const SigInfo& sig = _sigs.at(cType(mit->second));
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
+            if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
             return emitReorderedCall(ms, "", sig.params, call->args, call->line);
         }
     }
@@ -26180,6 +26271,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     // `Union::Variant` read does (the IdentifierNode branch already records that one) —
                     // the CONSTRUCTION form simply returned before reaching any recorder.
                     recordRef(enumMemberKey(vt->name, name), call->identifier.get());
+                    if (_ctCheck) {   // no tagged value is a compile-time value (KR-102)
+                        ctRefuse(ctNotCompileTimeCallee(*qual->back() + "::" + name), call->line);
+                        return "0";
+                    }
                     return emitVariantConstruction(*vt, name, call->args, call->line);
                 }
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
@@ -26241,6 +26336,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
                              "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
                              "(static functions, enum variants, modules)").c_str(), call->line);
+                return "0";
+            }
+            if (mi && mi->isStatic && _ctCheck && stci->kind != TypeKind::Value) {   // KR-102
+                ctRefuse(ctNotCompileTimeCallee(*qual->back() + "::" + name), call->line);
                 return "0";
             }
             if (mi && mi->isStatic) {
