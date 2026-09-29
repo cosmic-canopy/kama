@@ -1113,13 +1113,25 @@ private:
     // Nodes the index points at that the program no longer holds: `bakeConstSizes` swaps a field type's named
     // size for its value, and `recordRef` keeps only a raw pointer. Filled in analysis mode only.
     std::vector<SharedIdentifier> _indexKeepAlive;
-    // Walk code for the index ALONE: into a throwaway sink, with every diagnostic channel silent and every
-    // instance it registers erased after. Analysis mode only — a build never runs one (KR-97).
-    void indexOnly(const std::function<void()>& walk);
-    int  _indexWalk = 0;   // >0 inside indexOnly: `unsupported` and `ctFail` say nothing
-    // The compile-time code the emit walk never enters — every `comptime fn` body and every module, type
-    // and enum compile-time initializer — walked for the index, after every other pass (KR-97).
-    void indexComptimeCode(const std::vector<SharedCompilationUnit>& units);
+    // Walk code into a throwaway sink with every instance it registers erased after. `indexOnly` is for the
+    // index ALONE — analysis mode only, every diagnostic channel silent (KR-97). `ctCheckOnly` REPORTS, in a
+    // build as in a check: it is how compile-time code meets the run-time rules on every path (KR-102).
+    void sandboxWalk(const std::function<void()>& walk, bool report);
+    void indexOnly(const std::function<void()>& walk)   { sandboxWalk(walk, false); }
+    void ctCheckOnly(const std::function<void()>& walk) { sandboxWalk(walk, true); }
+    int  _indexWalk = 0;      // >0 inside indexOnly: `unsupported` and `ctFail` say nothing
+    int  _ctCheck = 0;        // >0 inside ctCheckOnly: compile-time code, so a `comptime fn` call is a call
+    bool _ctFnBody = false;   // ...inside a `comptime fn` BODY, whose `comptime` locals are its own locals
+    std::set<std::string> _ctCheckedAt;   // "file:line" a check walk reported: the interpreter's twin is dropped
+    // Compile-time code is checked by the SAME rules as run-time code, on every path (KR-102, a maintainer
+    // ruling). The interpreter reads only the branches it takes and nothing of a `comptime fn` no constant
+    // calls, so this walk — after every other pass, in a build and a check alike — is what reaches the rest.
+    void walkComptimeCode(const std::vector<SharedCompilationUnit>& units);
+    void checkComptimeMembersIn(const SharedClassMemberDeclarationList& members, ClassInfo* owner);
+    void checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init);
+    std::string checkComptimeCall(InvocationNode* call, const SharedParameterList& params, const NsCtx& ctx,
+                                  const std::string& shown);
+    void dropShadowedComptimeDiags();
     // A `comptime fn` call's labels and arguments, which the run-time refusal stops short of (KR-97).
     void indexComptimeCallArgs(InvocationNode* call, const SharedParameterList& params);
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).

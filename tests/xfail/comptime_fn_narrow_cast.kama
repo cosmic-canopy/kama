@@ -1,0 +1,5 @@
+// KR-102: one rule at every scope. `cast<uint8>(300)` is refused in a run-time fn and in a `comptime` constant,
+// and inside a `comptime fn` it built and wrapped to 44. A VALUE's cast still wraps, as at run time.
+comptime fn uint8 wrap() { return cast<uint8>(300); }
+comptime uint8 W = wrap();
+fn int32 main() { return cast<int32>(W); }

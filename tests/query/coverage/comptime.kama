@@ -44,7 +44,7 @@ comptime fn int32 every(int32 n) {
     Pair p = Pair.of(a: n, b: lim);                       // a ctor and its labels
     Pair q = Pair.of(a: Pair::one(), b: 0) + Pair::UNIT;  // a static fn, an operator, a type's value constant
     p.a = p.b + q.sum();                                  // a field write, a field read, a method call
-    t[0] = cast<int32>(RATIO * 2.0) + sizeof(int32);      // an element write, a cast, `sizeof`
+    t[0] = cast<int32>(RATIO * 2.0) + cast<int32>(sizeof(int32));         // an element write, a cast, `sizeof`
     if (ON && MARK == 'k') { acc = acc + LOCAL; } else { acc = -acc; }
     while (acc < lim) { acc = acc + 1; if (acc == BASE) { break; } }
     do { acc = acc + ~n; } while (n < 0 || !ON);          // `~`, `!`, a short-circuited `||`

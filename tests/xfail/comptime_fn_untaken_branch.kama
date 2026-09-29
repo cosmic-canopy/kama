@@ -1,0 +1,8 @@
+// KR-102: compile-time code answers to the run-time rules on EVERY path. The interpreter reads only the branch
+// it takes, so a name resolving to nothing on the other one built — until the day a caller took it.
+comptime fn int32 pick(int32 n) {
+    if (n > 100) { return nosuch + 1; }
+    return n;
+}
+comptime int32 X = pick(n: 1);
+fn int32 main() { return X; }

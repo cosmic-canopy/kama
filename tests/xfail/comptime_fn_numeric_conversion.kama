@@ -1,0 +1,5 @@
+// KR-102: no implicit numeric conversion inside a `comptime fn` either — `sizeof` is a `usize`, and a run-time fn
+// returning it as an `int32` was refused while this built.
+comptime fn int32 words() { return 1 + sizeof(int64); }
+comptime int32 N = words();
+fn int32 main() { return N; }

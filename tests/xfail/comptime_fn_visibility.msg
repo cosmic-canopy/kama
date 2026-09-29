@@ -1,1 +1,1 @@
-is a private `comptime fn`
+'hidden' is private in 'Secret'

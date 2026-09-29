@@ -15,7 +15,9 @@ comptime fn int32 fib(int32 n) {
     return a;
 }
 
-comptime fn uint8 wrap8() { return cast<uint8>(300); }   // 300 & 0xFF == 44 — wraps exactly as runtime C
+comptime fn uint8 wrap8() { int32 v = 300; return cast<uint8>(v); }   // a VALUE's cast wraps, 300 & 0xFF == 44,
+                                                                     // as at run time; `cast<uint8>(300)` is refused
+                                                                     // at every scope (KR-102)
 comptime fn bool  isBig() { return 100 > 5; }
 
 comptime int32 NINE = square(x: 3);   // 9

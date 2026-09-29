@@ -1,1 +1,1 @@
-is a private `comptime fn`
+'slack' is private in 'Limits'

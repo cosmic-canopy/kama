@@ -1,0 +1,7 @@
+// KR-102: a generic type's `comptime fn` is checked with its member bodies — per instantiation, and for a
+// template nothing instantiates, by the same probe that checks its run-time members.
+type value Box<T> {
+    public T v;
+    public comptime fn int32 k() { return nosuch; }
+}
+fn int32 main() { return 0; }

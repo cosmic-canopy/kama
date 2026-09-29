@@ -1,0 +1,5 @@
+// KR-102: a `comptime fn` no constant calls is still code, checked like any function — here a call inside it
+// names a parameter `twice` does not have. It was never read, so it built.
+comptime fn int32 twice(int32 n) { return n * 2; }
+comptime fn int32 never() { return twice(m: 3); }
+fn int32 main() { return 0; }

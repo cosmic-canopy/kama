@@ -1,0 +1,3 @@
+// KR-102: a compile-time initializer is checked on every path too — the side of a `?:` the fold never takes.
+comptime int32 X = true ? 1 : nosuch;
+fn int32 main() { return X; }

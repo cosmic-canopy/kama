@@ -4653,6 +4653,12 @@ type value Palette {
   `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions: arithmetic / bitwise / comparison /
   logical (short-circuit) / ternary / cast, array index and field reads, and calls to other comptime fns and
   to a value type's ctors, methods, operators and `static fn`s.
+- **Checked like run-time code, on every path.** A `comptime fn` body and every compile-time initializer answer to
+  the rules run-time code answers to — names, types, argument labels, no implicit numeric conversion — on EVERY
+  path: the branch no evaluation takes, and a `comptime fn` no constant calls, are checked like the rest, and a <!-- xfail: comptime_fn_untaken_branch, comptime_fn_uncalled_checked, comptime_init_untaken_ternary -->
+  generic type's `comptime fn` with its member bodies. A call to another `comptime fn` there is a call like any <!-- xfail: comptime_generic_member_checked -->
+  other. One rule at every scope, so `cast<uint8>(300)` is refused inside a `comptime fn` exactly as in a <!-- xfail: comptime_fn_narrow_cast -->
+  run-time fn, while a value's cast wraps in both; and a `sizeof` is a `usize` there too. <!-- xfail: comptime_fn_numeric_conversion -->
 - **Purity → reproducible builds.** A comptime fn is deterministic and effect-free: no I/O, no `new`/`spawn`,
   no FFI, no reads of mutable `static`s, no pointers/strings, and it may call **only** another `comptime fn`
   or a value type's member whose body keeps the same rules.
@@ -4676,6 +4682,7 @@ type value Fixed comptime(int32 F) {
     comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit the backing");
 }
 
+type value Vertex { public float32 x; public float32 y; public float32 z; public float32 u; public float32 v; }
 comptime assert(cond: sizeof(Vertex) == 20, msg: "vertex buffer stride");       // a layout claim
 
 fn void render() {
