@@ -82,6 +82,18 @@ std::string CEmitter::ctNotValueMethod(const std::string& member)
 {
     return "`" + member + "` — only a `type value`'s methods run at compile time";
 }
+std::string CEmitter::argNoParam(const std::string& callee, const std::string& nm, const std::string& meant)
+{
+    return "`" + callee + "` has no parameter `" + nm + "`" + (meant.empty() ? "" : " — did you mean `" + meant + ":`?");
+}
+std::string CEmitter::argTwice(const std::string& callee, const std::string& nm)
+{
+    return "`" + callee + "` is given `" + nm + "` twice";
+}
+std::string CEmitter::argMissing(const std::string& callee, const std::string& nm)
+{
+    return "`" + callee + "` is missing the argument `" + nm + ":`";
+}
 
 bool CEmitter::isComptimeFnName(const std::string& name, SharedStringList /*qualifier*/, std::string& outKey) const
 {
@@ -956,26 +968,41 @@ bool CEmitter::ctBindByName(SharedParameterList params, const std::vector<std::s
                             std::vector<CTValue>& args, const std::string& callee, int line)
 {
     const size_t np = params ? params->size() : 0;
+    auto pname = [&](size_t i) {
+        return (*params)[i] && (*params)[i]->identifier && (*params)[i]->identifier->value
+                   ? *(*params)[i]->identifier->value : std::string("?");
+    };
+    // The one parameter a single mistyped label left unfilled, named as the fix — as the matcher does (KR-103).
+    std::string meant;
+    {
+        size_t unknown = 0;
+        std::vector<std::string> unfilled;
+        for (size_t i = 0; i < np; ++i)
+            if (std::find(names.begin(), names.end(), pname(i)) == names.end()) unfilled.push_back(pname(i));
+        for (auto& nm : names) {
+            bool known = false;
+            for (size_t i = 0; i < np; ++i) known = known || pname(i) == nm;
+            if (!known) ++unknown;
+        }
+        if (unknown == 1 && unfilled.size() == 1) meant = unfilled[0];
+    }
     std::vector<CTValue> ordered(np);
     std::vector<bool> seen(np, false);
     for (size_t k = 0; k < args.size(); ++k) {
         const std::string& nm = k < names.size() ? names[k] : std::string();
         size_t at = np;
         for (size_t i = 0; i < np; ++i)
-            if ((*params)[i] && (*params)[i]->identifier && (*params)[i]->identifier->value
-                && *(*params)[i]->identifier->value == nm) { at = i; break; }
+            if (pname(i) == nm) { at = i; break; }
         if (at == np)
-            return ctFail(("`" + callee + "` has no parameter `" + nm + "`").c_str(), line);
+            return ctFail(argNoParam(callee, nm, meant).c_str(), line);
         if (seen[at])
-            return ctFail(("`" + callee + "` is given `" + nm + "` twice").c_str(), line);
+            return ctFail(argTwice(callee, nm).c_str(), line);
         seen[at] = true;
         ordered[at] = args[k];
     }
     for (size_t i = 0; i < np; ++i)
         if (!seen[i])
-            return ctFail(("`" + callee + "` is missing the argument `"
-                           + (params && (*params)[i] && (*params)[i]->identifier && (*params)[i]->identifier->value
-                                  ? *(*params)[i]->identifier->value : std::string("?")) + ":`").c_str(), line);
+            return ctFail(argMissing(callee, pname(i)).c_str(), line);
     args.swap(ordered);
     return true;
 }

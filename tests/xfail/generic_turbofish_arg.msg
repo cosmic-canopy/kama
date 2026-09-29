@@ -1,1 +1,1 @@
-unknown argument name 'cont' in call
+`helper` has no parameter `cont` — did you mean `count:`?

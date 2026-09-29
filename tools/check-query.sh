@@ -1232,5 +1232,21 @@ expect --project --def 7:24  -- "defs.kama:30:18"
 expect --project --def 10:35 -- "main.kama:4:15"        # a module constant, read by a local `comptime`
 expect --project --def 11:26 -- "main.kama:10:19"       # a local `comptime`, read by a `comptime assert`
 
+# ---------------------------------------------------------------------------------------------------
+# KR-103 — ONE mistake, ONE diagnostic, for a call's labels. Counted here because a `.msg` can only say a line
+# is present, never that its twin is gone: a mistyped label used to answer "unknown argument name 'c' in call"
+# AND "missing argument in call", naming neither the function nor the parameter — and two such calls on one
+# line collapsed into one message, since the two read alike. Each now names the callee and the fix.
+echo "check-query: KR-103 a mistyped label is one diagnostic"
+lb=$("$KAMA" query "$ROOT/tests/xfail/arg_label_one_diagnostic.kama" --diagnostics 2>&1 || true)
+if [ "$(printf '%s\n' "$lb" | grep -c ': error: ')" = 2 ] \
+   && printf '%s\n' "$lb" | grep -qF '`add` has no parameter `c` — did you mean `b:`?' \
+   && printf '%s\n' "$lb" | grep -qF '`add` has no parameter `d` — did you mean `b:`?'; then
+    echo "  ok: two mistyped labels on one line are two diagnostics, each naming the callee and the fix"
+else
+    echo "  FAIL: expected exactly the two label diagnostics, got:" >&2
+    printf '%s\n' "$lb" | sed 's/^/      /' >&2; fail=1
+fi
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

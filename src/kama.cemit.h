@@ -1149,6 +1149,12 @@ private:
     static std::string ctNotComptimeCall(const std::string& name, bool inComptimeFn);
     static std::string ctNotCompileTimeCallee(const std::string& shown);
     static std::string ctNotValueMethod(const std::string& member);
+    // A call's LABELS, worded once for every call — the named-argument matcher and the interpreter's binder —
+    // naming the callee and the parameter (KR-103). `meant` names the fix when a mistyped label left exactly
+    // one parameter unfilled.
+    static std::string argNoParam(const std::string& callee, const std::string& nm, const std::string& meant);
+    static std::string argTwice(const std::string& callee, const std::string& nm);
+    static std::string argMissing(const std::string& callee, const std::string& nm);
     void checkComptimeParams(const SharedParameterList& params);
     void ctRefuse(const std::string& what, int line);   // a subset refusal: the first on its line (KR-102)
     std::set<std::string> _ctRefusedAt;
@@ -3628,14 +3634,16 @@ private:
     InvocationNode* bindableBindCall(const SharedExpression& e);
     void        emitBindablePromote(const std::string& nm, const std::string& ty,
                                     SharedExpression init, int depth, int handoff);
-    std::string emitBindableInvoke(const std::string& recv, const std::string& cls,
+    std::string emitBindableInvoke(const std::string& shown, const std::string& recv, const std::string& cls,
                                    SharedArgumentList args, int line);
     // Emit `cName(leadArg, <args reordered to params>)`. leadArg "" omits self.
     // `trailingArg` is a RAW C argument appended after the declared ones — the mirror of `leadArg`, which
     // has always carried `self` the same way. It exists for the serde graph parameter, which is a C fact
     // with no kama parameter to match: a synthetic ParamSig cannot work, because every declared param is
     // looked up BY NAME in the argument list and a missing one is "missing argument in call".
-    std::string emitReorderedCall(const std::string& cName, const std::string& leadArg,
+    // `shown` is the callee as the SOURCE spells it (`add`, `Point.at`, `Box::tag`) — what a label diagnostic
+    // names; `cName` is what the C calls, an expression for an indirect callee (KR-103).
+    std::string emitReorderedCall(const std::string& shown, const std::string& cName, const std::string& leadArg,
                                   const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine,
                                   const std::string& trailingArg = "");
     // Field-wise init of an extern (C-POD) struct from NAMED args (`nm.f = e; …`). The struct is

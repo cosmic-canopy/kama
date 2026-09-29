@@ -1,0 +1,5 @@
+// KR-103: a mistyped label is ONE diagnostic, naming the callee, the label and the parameter it meant. It was two
+// naming none of them — "unknown argument name 'c' in call" and "missing argument in call" — and two such calls on
+// one line collapsed into a single message, since the two read alike. tools/check-query.sh counts them.
+fn int32 add(int32 a, int32 b) { return a + b; }
+fn int32 main() { return add(a: 1, c: 2) + add(a: 3, d: 4); }

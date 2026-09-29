@@ -14896,7 +14896,7 @@ std::string CEmitter::checkComptimeCall(InvocationNode* call, const SharedParame
 {
     std::vector<ParamSig> sigs;
     { NsCtx saved = _nsCtx; _nsCtx = ctx; sigs = paramSigsOf(params); _nsCtx = saved; }
-    return emitReorderedCall(shown, "", sigs, call->args, call->line);
+    return emitReorderedCall(shown, shown, "", sigs, call->args, call->line);
 }
 
 // ONE mistake, ONE diagnostic. On a path the interpreter runs, a compile-time mistake is reported twice — by
@@ -20873,7 +20873,7 @@ static std::string ctorDisp(const InvocationNode* iv, const std::string& fallbac
     return (iv && iv->identifier && iv->identifier->value) ? *iv->identifier->value : fallback;
 }
 
-std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
+std::string CEmitter::emitReorderedCall(const std::string& shown, const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine,
                                         const std::string& trailingArg)
@@ -20890,14 +20890,22 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
 
     // Step 5: named arguments ARE kama's calling convention — validate them so a typo or
     // a duplicate can't silently do the wrong thing. (Missing args are caught per-param below.)
-    if (named != byName.size())
-        unsupported("duplicate named argument in call", srcLine);   // map collapsed a repeat
+    // Named for the callee and the parameter, in the words the interpreter uses for a compile-time call (KR-103),
+    // and ONE diagnostic per mistake: a mistyped label leaves its parameter unfilled, so that parameter is named
+    // as the fix rather than reported beside it — when it is the only one, it is the only thing the label meant.
+    if (named != byName.size()) {   // the map collapsed a repeat: name it
+        std::set<std::string> once;
+        for (auto& a : *args)
+            if (a->name && a->name->value && !once.insert(*a->name->value).second)
+                unsupported(argTwice(shown, *a->name->value).c_str(), srcLine);
+    }
+    std::vector<std::string> unknownLabels, unfilled;
     {
         std::set<std::string> paramNames;
-        for (auto& p : params) paramNames.insert(p.name);
-        for (auto& kv : byName)
-            if (!paramNames.count(kv.first))
-                unsupported(("unknown argument name '" + kv.first + "' in call").c_str(), srcLine);
+        for (auto& p : params) { paramNames.insert(p.name); if (!byName.count(p.name)) unfilled.push_back(p.name); }
+        for (auto& kv : byName) if (!paramNames.count(kv.first)) unknownLabels.push_back(kv.first);
+        const std::string meant = (unknownLabels.size() == 1 && unfilled.size() == 1) ? unfilled[0] : std::string();
+        for (auto& u : unknownLabels) unsupported(argNoParam(shown, u, meant).c_str(), srcLine);
     }
 
     // Mutable-borrow uniqueness. Two `ref`/`out` arguments naming overlapping places hand the callee two
@@ -20945,7 +20953,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (!first) s += ", ";
         first = false;
         auto f = byName.find(p.name);
-        if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
+        if (f == byName.end()) {   // beside a mistyped label, this is that label's parameter — already named
+            if (unknownLabels.empty()) unsupported(argMissing(shown, p.name).c_str(), srcLine);
+            s += "0"; continue;
+        }
         // M6 A2: the label is a REFERENCE to the parameter it just matched, so renaming the parameter
         // rewrites the call sites too. This is the single named-argument matcher for every call form
         // (free fns, methods, virtual dispatch, ctors, bound closures, operators — 29 call sites), so one
@@ -24551,7 +24562,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
 
 // invoke a bindable — branch on obj (bound: pass it first; free: call directly).
 // The signature drives the fn-pointer casts and the named-arg reorder.
-std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::string& cls,
+std::string CEmitter::emitBindableInvoke(const std::string& shown, const std::string& recv, const std::string& cls,
                                          SharedArgumentList args, int line)
 {
     const SigInfo& sig = _sigs.at(_classes[cls].collElemClass);
@@ -24570,8 +24581,8 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
         const std::string f = "((" + t + ")" + recv + ".kama_fn)";
         return sig.noHeap ? ("KAMA_NOHEAP_SLOT(" + f + ")") : f;
     };
-    std::string boundCall = emitReorderedCall(slot(boundT), recv + ".kama_obj", sig.params, args, line);
-    std::string freeCall  = emitReorderedCall(slot(freeT), "", sig.params, args, line);
+    std::string boundCall = emitReorderedCall(shown, slot(boundT), recv + ".kama_obj", sig.params, args, line);
+    std::string freeCall  = emitReorderedCall(shown, slot(freeT), "", sig.params, args, line);
     return "(" + recv + ".kama_obj ? " + boundCall + " : " + freeCall + ")";
 }
 
@@ -25890,7 +25901,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 canAccess(owner, mi->visibility, m, call->line);
                 recordNodeRef(ba->identifier.get(), mi->node);   // M6 B3a: `base.m()` references the base's m
                 std::string self = "(" + owner->name + "*)&self->kama_base";
-                return emitReorderedCall(mi->cName, self, mi->params, call->args, call->line);
+                return emitReorderedCall("base." + m, mi->cName, self, mi->params, call->args, call->line);
             }
 #endif
         }
@@ -25918,7 +25929,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             // mangled name has no def-site, and two instantiations must not split one declaration's
             // references. This path returns before the resolveFunc that records every other call.
             recordRef(gi.templateKey, call->identifier.get());
-            return placeWrap(emitReorderedCall(gi.mangledName, "", instParamSigs(gi), call->args, call->line),
+            return placeWrap(emitReorderedCall(name, gi.mangledName, "", instParamSigs(gi), call->args, call->line),
                              tmpl.isPlaceReturn);
         }
     }
@@ -25984,7 +25995,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     const FuncSig& tsig = _funcs[k];
                     recordRef(k, call->identifier.get());   // the reference is to the TEMPLATE, as above
                     ++_probeResolved;
-                    return placeWrap(emitReorderedCall(gi.mangledName, "", instParamSigs(gi), call->args,
+                    return placeWrap(emitReorderedCall(name, gi.mangledName, "", instParamSigs(gi), call->args,
                                                        call->line), tsig.isPlaceReturn);
                 }
             }
@@ -26036,7 +26047,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // gate existed to make necessary rather than decorative.
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
-        return emitReorderedCall(callee, "", sig.params, call->args, call->line);
+        return emitReorderedCall(name, callee, "", sig.params, call->args, call->line);
     }
 
     // ...and the same call through a module `static`/`comptime` of signature type. A `fnptr` could be
@@ -26054,7 +26065,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
             if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
-            return emitReorderedCall(ms, "", sig.params, call->args, call->line);
+            return emitReorderedCall(name, ms, "", sig.params, call->args, call->line);
         }
     }
 
@@ -26068,7 +26079,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // dereferences a NULL function pointer: measured, it built clean and exited 139. Every other read
         // of a moved-from value is a diagnostic; this one was a SIGSEGV.
         checkNotMoved(name, call->line);
-        return emitBindableInvoke(kName(name), _localTypes[name], call->args, call->line);
+        return emitBindableInvoke(name, kName(name), _localTypes[name], call->args, call->line);
     }
 
     // FFI: `addr(x)` is a builtin — the address of a local/value (`&(x)`), for out-params and passing a
@@ -26346,7 +26357,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 canAccess(owner, mi->visibility, name, call->line);
                 recordNodeRef(call->identifier.get(), mi->node);   // M6 B3a: `Type::m()` references m
                 // a place-returning `static fn ref T` returns a `T*` — deref like a free fn (no self)
-                return placeWrap(emitReorderedCall(mi->cName, "", mi->params, call->args, call->line),
+                return placeWrap(emitReorderedCall(*qual->back() + "::" + name, mi->cName, "", mi->params, call->args, call->line),
                                  mi->isPlaceReturn);
             }
             if (mi && !mi->isStatic)
@@ -26361,7 +26372,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (_ctCheck) {   // compile-time code: a call, checked as one (KR-102)
                 auto oc = _classes.find(typeName);
                 canAccess(oc != _classes.end() ? &oc->second : nullptr, cm.vis, name, call->line);
-                return checkComptimeCall(call, cm.node->params, cm.ctx, typeName + "::" + name);
+                return checkComptimeCall(call, cm.node->params, cm.ctx, *qual->back() + "::" + name);
             }
             indexComptimeCallArgs(call, cm.node->params);
             unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
@@ -26371,7 +26382,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         auto fit = _funcs.find(resolveFunc(name, qual, call->identifier.get()));
         if (fit != _funcs.end()) {
             gateExternCall(fit->second, name, call->line);
-            return placeWrap(emitReorderedCall(symbolOf(fit->second), "", fit->second.params, call->args, call->line),
+            return placeWrap(emitReorderedCall(*qual->back() + "::" + name, symbolOf(fit->second), "", fit->second.params, call->args, call->line),
                              fit->second.isPlaceReturn);
         }
         // The head names a GENERIC template with no turbofish (`Box::tag()`). `typeName` is the bare
@@ -26426,7 +26437,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (comptimeCallee) {
             recordRef(ck, call->identifier.get());   // it names one all the same (KR-97)
             const ComptimeFn& cf = _comptimeFns[ck];
-            if (_ctCheck) return checkComptimeCall(call, cf.node->parameters, cf.ctx, ck);   // KR-102
+            if (_ctCheck) return checkComptimeCall(call, cf.node->parameters, cf.ctx, name);   // KR-102
             indexComptimeCallArgs(call, cf.node->parameters);
             unsupported(("`" + name + "` is a `comptime fn` — it runs only at compile time; assign its "
                          "result to a `comptime` constant and use that").c_str(), call->line);
@@ -26453,7 +26464,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return s + ")";
     }
     gateExternCall(it->second, name, call->line);
-    return placeWrap(emitReorderedCall(symbolOf(it->second), "", it->second.params, call->args, call->line),
+    return placeWrap(emitReorderedCall(name, symbolOf(it->second), "", it->second.params, call->args, call->line),
                      it->second.isPlaceReturn);
 }
 
@@ -28563,7 +28574,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
         // so the call is an lvalue everywhere, exactly as the class and free-function paths do — a contract
         // place call used to come back as a bare pointer, so `x.at(i: 0).value()` fed a `T const*` to a
         // method expecting a `T`.
-        return placeWrap(emitReorderedCall(slot, "(" + recv + ").kama_obj",
+        return placeWrap(emitReorderedCall(iface + "." + method, slot, "(" + recv + ").kama_obj",
                                            params, args, srcLine), m.isPlaceReturn);
     }
     unsupported("unknown contract method", srcLine);
@@ -32819,7 +32830,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (!_serGraphArg.empty() && method == "serialize" && _graphEdgeHelperFor.count(clsName)) {
         std::vector<ParamSig> ps;
         ParamSig w; w.name = "w"; w.byRef = true; w.className = preludeName("Serializer"); ps.push_back(w);
-        return emitReorderedCall(clsName + "__serializeEdge", "(" + clsName + "*)" + recvPtr,
+        return emitReorderedCall(clsName + ".serialize", clsName + "__serializeEdge", "(" + clsName + "*)" + recvPtr,
                                  ps, args, srcLine, _serGraphArg);
     }
     ClassInfo* owner = nullptr;
@@ -32896,7 +32907,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             canAccess(fo, f.visibility, method, srcLine);
                             const SigInfo& sig = _sigs.at(fc);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
-                            return emitReorderedCall(sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
+                            return emitReorderedCall(method, sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
                                                                 : ("(" + recvPtr + ")->" + kMember(*fo, method)), "", sig.params,
                                                      args, srcLine);
                         }
@@ -32905,7 +32916,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         // holding one — the shape a UI event table is — could store it and never fire it.
                         if (isBindableClass(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
-                            return emitBindableInvoke("(" + recvPtr + ")->" + kMember(*fo, method), fc, args, srcLine);
+                            return emitBindableInvoke(method, "(" + recvPtr + ")->" + kMember(*fo, method), fc, args, srcLine);
                         }
                     }
         }
@@ -32990,7 +33001,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             // call is marked for the call graph, exactly as a `@noheap` contract member's is.
             std::string slot = vptr + "->" + kName(method);
             if (mi->noHeap) slot = "KAMA_NOHEAP_SLOT(" + slot + ")";
-            return emitReorderedCall(slot, self, mi->params, args, srcLine);
+            return emitReorderedCall(clsName + "." + method, slot, self, mi->params, args, srcLine);
         }
     }
 #endif
@@ -33003,7 +33014,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (!_serGraphArg.empty() && method == "serialize") {
         auto pc = _classes.find(clsName);
         if (pc != _classes.end() && graphTwinNeeded(pc->second, /*write=*/true))
-            return emitReorderedCall(clsName + "__serializeInto", "(" + clsName + "*)" + recvPtr,
+            return emitReorderedCall(clsName + ".serialize", clsName + "__serializeInto", "(" + clsName + "*)" + recvPtr,
                                      mi->params, args, srcLine, _serGraphArg);
     }
     // A marked DELEGATE — a helper the element write is handed to, so the table has to go with it. This is
@@ -33015,7 +33026,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (inWriteCopy || inReadCopy) {
         const bool write = inWriteCopy;
         if (graphDelegateNeeded(*owner, *mi, write) && graphSinkIsOurs(*mi, args, write))
-            return emitReorderedCall(graphDelegateTwinName(*mi), self, mi->params, args, srcLine,
+            return emitReorderedCall(clsName + "." + method, graphDelegateTwinName(*mi), self, mi->params, args, srcLine,
                                      write ? _serGraphArg : _deGraphArg);
         // Rule 3: handed our own sink, but nothing carries the table onward. Left alone this is the silent
         // wrong write — inline, duplicated pointees, and a read that fails with "unresolved reference"
@@ -33036,7 +33047,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                          + std::string(write ? "write" : "read")
                          + " the elements in the container's own body the way `Map` does").c_str(), srcLine);
     }
-    return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
+    return emitReorderedCall(clsName + "." + method, mi->cName, self, mi->params, args, srcLine);
 }
 
 // obj.method(args) — the member-access callee form (incl. this.method()).
@@ -33196,7 +33207,7 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
         return "";
     }
     canAccess(owner, mi->visibility, cn, lineNo);
-    return emitReorderedCall(mi->cName, "", mi->params, oc->args, lineNo);
+    return emitReorderedCall(disp + "." + cn, mi->cName, "", mi->params, oc->args, lineNo);
 }
 
 // The local-decl form of a named-ctor `new`: emit `*(slotPtr) = Type__name(args);` into `_out`. Written as
@@ -33302,7 +33313,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         // libc malloc + `kama_ctrl_new()` path. `ifaceNewAllocator` validates the box/handle allocator match.
         bool useAlloc = ifaceNewAllocator(S, oc, srcLine);
         std::string RT  = cType(mi->returnType);
-        std::string cc  = emitReorderedCall(mi->cName, "", mi->params, oc->args, srcLine);
+        std::string cc  = emitReorderedCall(disp + "." + cn, mi->cName, "", mi->params, oc->args, srcLine);
         std::string tmp = "kama_fnew"   + std::to_string(_tempCounter++);
         std::string box = "kama_fbox"   + std::to_string(_tempCounter++);
         std::string ap  = "kama_falloc" + std::to_string(_tempCounter++);
@@ -33380,7 +33391,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     }
 
     std::string RT = cType(mi->returnType);           // the factory's `Result<T, E>`
-    std::string cc = emitReorderedCall(mi->cName, "", mi->params, oc->args, srcLine);   // pushes arg hand-offs
+    std::string cc = emitReorderedCall(disp + "." + cn, mi->cName, "", mi->params, oc->args, srcLine);   // pushes arg hand-offs
     std::string tmp = "kama_fnew" + std::to_string(_tempCounter++);
     std::string hp  = "kama_fheap" + std::to_string(_tempCounter++);
     const std::string okName  = kName(okV->payload[0].name);   // "value" -> "k_value"
@@ -33973,13 +33984,13 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         if (_graphEdgeHelperFor.count(tn)) {
             std::vector<ParamSig> ps;
             ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); ps.push_back(r);
-            return emitReorderedCall(tn + "__deserializeEdge", "", ps, call->args, call->line, _deGraphArg);
+            return emitReorderedCall(tn + ".deserialize", tn + "__deserializeEdge", "", ps, call->args, call->line, _deGraphArg);
         }
         auto pc = _classes.find(tn);
         if (pc != _classes.end() && graphTwinNeeded(pc->second, /*write=*/false)) {
             std::vector<ParamSig> ps;
             ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); ps.push_back(r);
-            return emitReorderedCall(tn + "__deserializeFrom", "", ps, call->args, call->line, _deGraphArg);
+            return emitReorderedCall(tn + ".deserialize", tn + "__deserializeFrom", "", ps, call->args, call->line, _deGraphArg);
         }
     }
     ClassInfo* owner = nullptr;
@@ -34106,7 +34117,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     if (!stci->isBorrow || _mintGrant != tn)
         canAccess(owner, mi->visibility, method, call->line);
     recordNodeRef(recv->identifier.get(), mi->node);   // M6 B3a: `Type.name(...)` references the ctor
-    return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);
+    return emitReorderedCall(disp + "." + method, mi->cName, "", mi->params, call->args, call->line);
 }
 
 // The C scalar type of a receiver whose class is a PRIMITIVE (so `exprClass` is "") — lets the primitive
@@ -34470,7 +34481,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             ClassInfo* powner = nullptr;
             MethodInfo* pmi = findMethod(pci, method, &powner);
             if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call->line); return "0"; }
-            return emitReorderedCall(pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
+            return emitReorderedCall(primTy + "." + method, pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
         }
     }
     if (cls.empty() || !_classes.count(cls)) {

@@ -1,1 +1,1 @@
-duplicate named argument
+`add` is given `a` twice
