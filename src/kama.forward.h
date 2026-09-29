@@ -57,6 +57,7 @@ class ClassDeclarationNode;
 class ClassBaseDeclarationNode;
 class ClassMemberDeclarationNode;
 class ClassFieldDeclarationNode;
+class ClassConstDeclarationNode;
 class ClassMethodDeclarationNode;
 class ClassConstructorDeclarationNode;
 class ClassDestructorDeclarationNode;

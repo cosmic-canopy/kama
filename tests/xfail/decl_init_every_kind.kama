@@ -1,0 +1,16 @@
+// KR-102: an initializer answers to its declared type at EVERY kind of declaration. The rule held at a run-time
+// local and a field and nowhere else, so each line below built until 0.9.464 — `const int8 g = 300;` held 44.
+static int32 S = 1 + sizeof(int32);
+comptime int32 C = sizeof(int64);
+type value P {
+    public int32 x;
+    public comptime int32 K = sizeof(uint16);
+    const int8 f = 300;
+    public ctor make() { this.x = 0; }
+}
+type enum E { A, B; public comptime int8 M = 300; }
+fn int32 main() {
+    const int8 g = 300;
+    comptime int32 L = sizeof(float64);
+    return 0;
+}

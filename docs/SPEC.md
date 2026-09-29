@@ -1566,7 +1566,9 @@ predict which lines need a cast. The emitted C carries an explicit narrowing so 
 
 - **Wherever a value crosses into a destination of a stated type** — a local, a field, an assignment, a
   `return`, a `match` arm, an argument, an enum payload. `int8 a = big;` is an error wanting <!-- xfail: narrow_local, narrow_return, narrow_argument -->
-  `cast<int8>(big)`.
+  `cast<int8>(big)`. Every declaration's initializer is such a crossing — a `const` or `comptime` local, a
+  module `static` or `comptime`, a type's `const` field or `comptime` constant — so `comptime int32 W = <!-- xfail: decl_init_every_kind -->
+  sizeof(int64);` wants `cast<int32>(…)` exactly as `int32 w = sizeof(int64);` does.
 - **Between an operator's two operands.** `int32 + uint8` does not compile, and neither does <!-- xfail: op_mixed_width, op_mixed_sign, op_compare_usize -->
   `int32 < usize`. That second one is the point: C answers `-1 < 1u32` with *false*, and a rule that
   covered assignments but not comparisons would leave the sharpest edge in place.

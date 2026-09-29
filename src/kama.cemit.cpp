@@ -2496,6 +2496,21 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
                  + kindName(vk)).c_str(), line);
 }
 
+// A type's `const` field and its `comptime` constant answer to their declared type as any field does (KR-102):
+// both were outside the walk that checks a field's initializer, so `public comptime int32 G = 1 +
+// sizeof(int32);` built. One body for a class's members and an enum's.
+void CEmitter::checkConstMemberInits(ClassConstDeclarationNode* kd, ClassInfo* owner)
+{
+    if (!kd || !kd->declarators) return;
+    const char* what = kd->isComptime ? "a constant" : "a field";
+    ClassInfo* saved = _currentClass;
+    _currentClass = owner;   // read AS the type: its own private constants are in reach of its initializers
+    for (auto& d : *kd->declarators)
+        if (d) { rejectNullInit(kd->type, d->initializer, what, kd->line);
+                 rejectInitKindMismatch(kd->type, d->initializer, what, kd->line); }
+    _currentClass = saved;
+}
+
 void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init,
                                       const char* what, int line)
 {
@@ -3563,6 +3578,12 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             if (d) { constParamShadow("field", d->name);
                                      rejectNullInit(fld->type, d->initializer, "a field", fld->line);
                                      rejectInitKindMismatch(fld->type, d->initializer, "a field", fld->line); }
+                    } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                        const std::string key = qualify(*cd->name->value);
+                        auto c = _classes.find(key);
+                        auto g = _genericTypes.find(key);
+                        checkConstMemberInits(kd, c != _classes.end() ? &c->second
+                                                : g != _genericTypes.end() ? &g->second : nullptr);
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         ownerExported = typeExported
                             && visibilityOf(md->modifiers, Visibility::Private, md->line) == Visibility::Public;
@@ -3596,6 +3617,11 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 checkContracts(ed->baseTypes, ed->typeBounds);
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
+                if (ed->members) for (auto& m : *ed->members)
+                    if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                        auto owner = _classes.find(enumKey(ed));
+                        checkConstMemberInits(kd, owner != _classes.end() ? &owner->second : nullptr);
+                    }
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
                 tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
@@ -3622,6 +3648,12 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     if (d && d->name && d->name->value && _exported.count(qualify(*d->name->value))) ownerExported = true;
                 tp.clear(); cp.clear();
                 check(mv->type, mv->isComptime ? "a constant" : "a static");
+                // The initializer answers to its declared type, as a local's does (KR-102): neither a
+                // `static` nor a `comptime` was checked, so `static int32 G = 1 + sizeof(int32);` built.
+                if (mv->variables) for (auto& d : *mv->variables)
+                    if (d) { rejectNullInit(mv->type, d->initializer, mv->isComptime ? "a constant" : "a static", mv->line);
+                             rejectInitKindMismatch(mv->type, d->initializer, mv->isComptime ? "a constant" : "a static",
+                                                    mv->line); }
             }
         }
     }
@@ -6867,6 +6899,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                                         : std::string("?")) + "`").c_str(), n->line);
             if (lvd && lvd->variables)
                 for (auto& d : *lvd->variables)
+                    if (d) { rejectNullInit(declType, d->initializer, "a local", n->line);
+                             rejectInitKindMismatch(declType, d->initializer, "a local", n->line);
+                             rejectConstPtrWiden(ty, d->initializer, "a local's initializer", n->line); }
+            // ...and a `const` or `comptime` local, which is a local all the same. It skipped all three, so
+            // `const int8 g = 300;` built and held 44 while `int8 g = 300;` was refused (KR-102).
+            if (cvd && cvd->variables)
+                for (auto& d : *cvd->variables)
                     if (d) { rejectNullInit(declType, d->initializer, "a local", n->line);
                              rejectInitKindMismatch(declType, d->initializer, "a local", n->line);
                              rejectConstPtrWiden(ty, d->initializer, "a local's initializer", n->line); }

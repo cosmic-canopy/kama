@@ -2997,6 +2997,7 @@ private:
     void checkDeclaredNames(const std::vector<SharedCompilationUnit>& units);
     std::set<std::string> _languageNames;   // filled on first use, after collection — see isLanguageName
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
+    void checkConstMemberInits(ClassConstDeclarationNode* kd, ClassInfo* owner);   // a `const` field's / `comptime` constant's initializer (KR-102)
     // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
     //
     // `analyze()` IS `emit()`, and the emit walk SKIPS a template body (`emitModuleContent`'s

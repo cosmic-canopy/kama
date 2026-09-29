@@ -253,6 +253,7 @@ ctor_missing_owning_ptr	ctor_missing_owning_ptr.kama:8
 ctor_turbofish_argcount	ctor_turbofish_argcount.kama:11
 ctor_turbofish_on_ctor	ctor_turbofish_on_ctor.kama:12
 ctor_unassigned_field	ctor_unassigned_field.kama:8
+decl_init_every_kind	decl_init_every_kind.kama:11 decl_init_every_kind.kama:13 decl_init_every_kind.kama:14 decl_init_every_kind.kama:3 decl_init_every_kind.kama:4 decl_init_every_kind.kama:7 decl_init_every_kind.kama:8
 def_assign_bare_owning_read	def_assign_bare_owning_read.kama:8
 def_assign_field_read	def_assign_field_read.kama:11
 def_assign_one_arm	def_assign_one_arm.kama:6
