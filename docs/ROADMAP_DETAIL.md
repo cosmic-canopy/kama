@@ -269,11 +269,12 @@ decided by the maintainer the same day: "the accurate rule".
   `filled` or an elected `default`; `tests/support/simd_probe.kama` (`Vec4`) marks its existing `ctor zero()`
   `default`. New xfails for the refused shapes; SPEC's `FixedArray` text states the rule. The peers need a relay:
   a `FixedArray` of their own types may need `default` or `filled`.
-- **Same principle, the maintainer's call (asked 2026-09-30).** A `slot` of a `value` exposes a public field before
-  its fill: `slot Pt p; int32 y = p.y;` compiles and reads the field's default, and a field with none reads `0` — a
+- **Same principle, in the same pass — the maintainer: "close that too" (2026-09-30).** A `slot` of a `value` exposes
+  a public field before its fill: `slot Pt p; int32 y = p.y;` compiles and reads the field's default, and a field with none reads `0` — a
   read of a value no ctor made, memory-safe but the same gap. SPEC § *Uninitialized storage*'s "Two consequences"
   paragraph also says handing an unfilled slot to a callee is fine; the compiler refuses it (measured `0.9.477`),
-  so that paragraph is stale whichever way the field read goes.
+  so that paragraph is stale either way. Closed means: a read of an unfilled slot is refused, field or whole, and
+  the paragraph says so with an xfail behind it.
 
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
