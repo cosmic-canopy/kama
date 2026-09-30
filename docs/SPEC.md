@@ -2355,8 +2355,10 @@ fn string demo(ConstView<uint8> v, ref DynamicArray<uint8> key, ref DynamicArray
 }
 ```
 
-**Why a digest is in `std` when ciphers are not.** TLS, ciphers, key exchange and signatures are a
-package (`@kama/sodium`), because they are libsodium's job and carry the constant-time burden. A digest
+**Why a digest is in `std` when ciphers are not.** Ciphers, key exchange and signatures are a package,
+`@kama/sodium`, because they carry the constant-time burden and that is libsodium's job. TLS is a package
+too, and a different one — libsodium has no TLS: a C TLS stack behind a `ReliableStream` wrapper (the planned
+`@kama/tls`, over Mbed TLS), or TLS terminated at a reverse proxy in front of a plain `TcpListener`. A digest
 is what NON-cryptographic protocols need — the WebSocket handshake, git object ids, content addressing,
 ETags, the registry's own `sha256-…` integrity strings — and every peer with a batteries stdlib (Go,
 Zig, Python, .NET, Java, Node) ships one; only Rust leaves it to a crate, and the `sha1`/`sha2` crates
