@@ -1968,6 +1968,19 @@ a NUL, or longer than `sun_path` less its terminator (103 bytes on macOS, 107 on
 never removed behind the caller — and **a listener removes the socket file it made when it drops**, so a clean
 restart just works (a crash still leaves the file). SIGPIPE is handled as for TCP (above).
 
+Each OS keeps what is its own. **`UnixDatagram`** (Linux, macOS) sends whole messages between local processes —
+systemd's notify socket, syslog's `/dev/log`: `unbound()`, `bind(path:)`/`bindTo(address:)`, `sendTo(bytes:, to:)`, <!-- test: net_unix_datagram -->
+`recvFrom(into:)` → `UnixRecvFrom { count, from }`, `connect`/`send`/`recv`, and it removes a file it bound when it
+drops. It is `UdpSocket`'s shape over a `UnixAddr`, which is why it does not implement `DatagramSocket`, whose
+addresses are `SocketAddr`s. Windows' AF_UNIX is stream-only, so the type is not declared there. On **Linux**
+`UnixAddr.fromAbstract(name:)` names the abstract namespace — no file behind it, nothing a crash leaves, gone
+when the last socket holding it closes, and, with no file, no file permissions either: any process in the
+network namespace may connect — read back by `abstractName()` and rendered `@name`. An API one OS lacks is a
+compile error on that OS, never a run-time one (`tools/check-target.sh` builds both for every target); a
+portable program keeps its use of one in a file gated to where it exists, with a twin answering the same call
+elsewhere (`tests/net_unix_datagram.d`), because an `import` of a name its build excludes is refused even when <!-- xfail: import_gated_out -->
+every use is gated.
+
 **Multicast (`std::net`).** A `UdpSocket` joins a group **per interface**, and the families name an interface
 differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
 the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the
@@ -5747,9 +5760,9 @@ A `view` and a bare `contract` value need no rule here: neither can be a field a
 reaches a bundle. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
-`UnixStream`, `UnixListener`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`, `StringWriter`,
-`SliceReader`, `PeerCredentials`, and the values `SocketAddr`, `UnixAddr`, `IpAddr`, `RecvFrom`, `Ready`,
-`Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
+`UnixStream`, `UnixListener`, `UnixDatagram`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
+`StringWriter`, `SliceReader`, `PeerCredentials`, and the values `SocketAddr`, `UnixAddr`, `UnixRecvFrom`,
+`IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
 dropped exactly once — received, or buffered when the queue's last holder goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->

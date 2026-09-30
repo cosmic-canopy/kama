@@ -1,0 +1,41 @@
+file @compileFor(OS_LINUX);
+// Linux's abstract namespace: a listener and a datagram socket bound to `@names`, reached through `connectTo` /
+// `sendTo`, read back as abstract names (rendered with the notation's `@`), and nothing left on disk.
+import {
+    std::net::UnixListener, std::net::UnixStream, std::net::UnixDatagram, std::net::UnixAddr, std::net::UnixRecvFrom,
+    std::io::IoError, std::collections::FixedArray, std::fs::exists,
+};
+export { abstractNames };
+
+fn int32 abstractNames() {
+    UnixAddr name = match (UnixAddr.fromAbstract(name: "kama-unix-dgram-fixture")) { case Ok(value: a): a; case Err(error: e): { return 31; } };
+    Result<UnixListener, IoError> rl = UnixListener.bindTo(address: name);
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
+    Result<UnixStream, IoError> rc = UnixStream.connectTo(address: name);
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 33; } };
+    bool isAbstract = match (l.localAddr()) {
+        case Ok(value: a): match (a.abstractName()) { case Some(value: n): n == "kama-unix-dgram-fixture"; case None: false; };
+        case Err(error: e): false;
+    };
+    if (!isAbstract) { return 34; }
+    string shown = "${name}";
+    if (shown != "@kama-unix-dgram-fixture") { return 35; }
+    bool held = match (UnixListener.bindTo(address: name)) {
+        case Err(error: e): match (e) { case AddrInUse: true; case _: false; };
+        case Ok(value: x): false;
+    };
+    if (!held) { return 36; }
+    // A datagram to an abstract name, the shape systemd's `NOTIFY_SOCKET=@…` takes.
+    UnixAddr notify = match (UnixAddr.fromAbstract(name: "kama-unix-notify-fixture")) { case Ok(value: a): a; case Err(error: e): { return 37; } };
+    Result<UnixDatagram, IoError> rs = UnixDatagram.bindTo(address: notify);
+    UnixDatagram sink = match (give rs) { case Ok(value: x): give x; case Err(error: e): { return 38; } };
+    Result<UnixDatagram, IoError> ru = UnixDatagram.unbound();
+    UnixDatagram src = match (give ru) { case Ok(value: x): give x; case Err(error: e): { return 39; } };
+    FixedArray<uint8> ready = FixedArray.filled(size: 7, value: 82ui8);
+    if (match (src.sendTo(bytes: ready.view(), to: notify)) { case Ok(value: n): n != 7; case Err(error: e): true; }) { return 40; }
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    bool got = match (sink.recvFrom(into: buf.viewMut())) { case Ok(value: x): x.count == 7; case Err(error: e): false; };
+    if (!got) { return 41; }
+    if (exists(path: "kama-unix-dgram-fixture") || exists(path: "@kama-unix-dgram-fixture")) { return 42; }
+    return 0;
+}

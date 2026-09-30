@@ -1921,6 +1921,23 @@ static inline ptrdiff_t kama_unix_name(ptrdiff_t fd, int32_t peer, int32_t* kind
     return kama__sun_read(&a, len, kind, out, cap);
 }
 
+// One datagram to a named Unix socket, and one received with its sender's name (UnixDatagram — Linux, macOS).
+static inline ptrdiff_t kama_sendto_unix(ptrdiff_t fd, const uint8_t* buf, size_t n, const uint8_t* p, size_t pn, int32_t kind) {
+    struct sockaddr_un a; socklen_t len = kama__sun_fill(&a, p, pn, kind);
+    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, 0, (struct sockaddr*)&a, len);
+    if (r < 0) return kama__sock_fail();
+    return r;
+}
+static inline ptrdiff_t kama_recvfrom_unix(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t* kind, uint8_t* name, size_t cap,
+                                           ptrdiff_t* nameLen) {
+    struct sockaddr_un a; memset(&a, 0, sizeof a);
+    socklen_t len = (socklen_t)sizeof a;
+    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, 0, (struct sockaddr*)&a, &len);
+    if (r < 0) return kama__sock_fail();
+    *nameLen = kama__sun_read(&a, len, kind, name, cap);
+    return r;
+}
+
 // ---- TCP keepalive, user timeout, half-close (KR-105) -------------------------------------------------
 // How a client notices a peer that vanished without a FIN — a NAT that forgot the flow, a failed-over
 // primary. Each knob is ONE option on every stack, and the three keepalive knobs take whole seconds on all

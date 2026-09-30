@@ -1,0 +1,4 @@
+file @compileFor(OS_WINDOWS);
+// Windows' AF_UNIX is stream-only, so `UnixDatagram` does not exist here and there is nothing to check.
+export { datagrams };
+fn int32 datagrams() { return 0; }

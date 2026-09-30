@@ -623,6 +623,18 @@ multi_one() {
     expected="$(<"$expect_file")"
 
     local BROWSER=0   # multi-file fixtures never use a browser transport
+    # The same target split test_one applies, read off EVERY file of the fixture: a multi-file program can use
+    # native sockets or std::process from any unit, and `net_unix_datagram.d` does from a file main never
+    # names. Before it, no multi-file fixture touched either, so this leg had no skip and ran it under node,
+    # where the bind fails (exit 11).
+    if [ "$WASM" = 1 ]; then
+        if grep -rqE 'std::net' --include='*.kama' "$dir" && ! grep -rqE 'std::net::web|kama_net_web\.h' --include='*.kama' "$dir"; then
+            echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
+        fi
+        if grep -rqE 'std::process' --include='*.kama' "$dir"; then
+            echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
+        fi
+    fi
     # Its own build dir, for the reason test_one has one: the driver writes multi-unit intermediates to
     # dirname(-o) and names an imported module's .c after the MODULE, so two fixtures importing the same
     # stdlib module collide. Serial, `$TMP/$name` was safe; the moment this leg fans out it is not, which

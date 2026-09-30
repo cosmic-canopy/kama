@@ -1,0 +1,4 @@
+file @compileFor(!OS_LINUX);
+// Only Linux has an abstract namespace; elsewhere `UnixAddr` names paths and nothing else.
+export { abstractNames };
+fn int32 abstractNames() { return 0; }

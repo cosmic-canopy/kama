@@ -727,9 +727,39 @@ printf 'fn int32 main() { return 9; }\n' > "$loose/hello.kama"
 # ...and still leaves no generated .c behind it
 [ ! -f "$loose/hello.c" ] || { echo "check-target: FAIL — a manifest-less build left hello.c behind" >&2; exit 1; }
 
+# An API one OS lacks is ABSENT there, not a run-time error (KR-104, the maintainer's rule): `UnixDatagram` —
+# Windows' AF_UNIX is stream-only — and `UnixAddr.fromAbstract` — only Linux has the abstract namespace — are
+# refused by the build for a target that lacks them, and the same source builds for every target that has them.
+# No host can check this for the others by running a fixture, which is why it is here: the stubbed `--cc echo`
+# build needs no toolchain for the target.
+absent="$tmp/absent"; mkdir -p "$absent"
+printf 'import { std::net::UnixDatagram };\nfn int32 main() { return match (UnixDatagram.unbound()) { case Ok(value: d): 0; case Err(error: e): 1; }; }\n' > "$absent/dgram.kama"
+printf 'import { std::net::UnixAddr };\nfn int32 main() { return match (UnixAddr.fromAbstract(name: "n")) { case Ok(value: a): 0; case Err(error: e): 1; }; }\n' > "$absent/abstract.kama"
+absentBuild() {   # absentBuild <program> <target> — succeeds iff the program builds for that target
+    "$KAMA" build --release --cc "echo" "$absent/$1.kama" --target "$2" -o "$tmp/absent_out" >"$tmp/absent.out" 2>&1
+}
+for t in LINUX MACOS; do
+    absentBuild dgram "$t" || { echo "check-target: FAIL — UnixDatagram was refused for $t, which has it" >&2
+                                sed 's/^/    /' "$tmp/absent.out" >&2; exit 1; }
+done
+if absentBuild dgram WINDOWS; then
+    echo "check-target: FAIL — UnixDatagram built for WINDOWS, whose AF_UNIX has no datagrams" >&2; exit 1
+fi
+grep -q "not available in this build configuration" "$tmp/absent.out" || {
+    echo "check-target: FAIL — UnixDatagram on WINDOWS was refused, but not by its @compileFor gate:" >&2
+    sed 's/^/    /' "$tmp/absent.out" >&2; exit 1; }
+absentBuild abstract LINUX || { echo "check-target: FAIL — UnixAddr.fromAbstract was refused for LINUX" >&2
+                                sed 's/^/    /' "$tmp/absent.out" >&2; exit 1; }
+for t in MACOS WINDOWS; do
+    if absentBuild abstract "$t"; then
+        echo "check-target: FAIL — UnixAddr.fromAbstract built for $t, which has no abstract namespace" >&2; exit 1
+    fi
+done
+
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
   a Windows runtime linked statically so the .exe ships (with --dynamic-runtime / a target \"runtime\" key to opt out),
-  shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
+  shared-library extension, freestanding keyed on os=none rather than a target name; an API one OS lacks
+  (UnixDatagram on Windows, abstract names off Linux) is refused for that target and builds for the others; cross builds refuse
   without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;
   a declared default target applies and loses to --target;
   OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output;

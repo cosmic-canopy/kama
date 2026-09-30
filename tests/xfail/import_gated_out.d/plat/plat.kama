@@ -1,0 +1,4 @@
+export { onlyNoHeap };
+// Declared only for a `--no-heap` build — a gate no ordinary build of this fixture satisfies, so on every host
+// the name is excluded, the way `UnixDatagram` is on Windows and `UnixAddr.fromAbstract` off Linux.
+@compileFor(NOHEAP) fn int32 onlyNoHeap() { return 1; }

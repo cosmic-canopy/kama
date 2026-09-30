@@ -1,0 +1,7 @@
+// An `import` of a name its build excludes is refused, EVEN WHEN every use of it is gated the same way: the
+// import itself names what does not exist. So a portable program keeps its use of an API one OS lacks in a
+// FILE gated to where it exists (`file @compileFor(…);`), with a twin answering the same call elsewhere —
+// tests/net_unix_datagram.d is that shape. The refusal names the gate rather than calling the name unknown.
+import { plat::onlyNoHeap };
+@compileFor(NOHEAP) fn int32 useIt() { return onlyNoHeap(); }
+fn int32 main() { return 0; }

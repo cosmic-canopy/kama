@@ -1,0 +1,45 @@
+file @compileFor(!OS_WINDOWS);
+// Datagrams where they exist. A bound socket receives from an unbound one (whose name reads back unnamed) and
+// from a bound one (whose path reads back); a connected pair sends and receives without addresses; a second
+// bind of a live path is `AddrInUse`; and each bound socket removes its file when it drops.
+import {
+    std::net::UnixDatagram, std::net::UnixAddr, std::net::UnixRecvFrom,
+    std::io::IoError, std::collections::FixedArray, std::fs::exists,
+};
+export { datagrams };
+
+fn int32 datagrams() {
+    {
+        Result<UnixDatagram, IoError> rs = UnixDatagram.bind(path: "server.sock");
+        UnixDatagram server = match (give rs) { case Ok(value: x): give x; case Err(error: e): { return 11; } };
+        Result<UnixDatagram, IoError> ru = UnixDatagram.unbound();
+        UnixDatagram anon = match (give ru) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
+        UnixAddr to = match (UnixAddr.fromPath(path: "server.sock")) { case Ok(value: a): a; case Err(error: e): { return 13; } };
+        FixedArray<uint8> msg = FixedArray.filled(size: 4, value: 5ui8);
+        usize sent = match (anon.sendTo(bytes: msg.view(), to: to)) { case Ok(value: n): n; case Err(error: e): 0; };
+        if (sent != 4) { return 14; }
+        FixedArray<uint8> buf = FixedArray.make(size: 16);
+        Result<UnixRecvFrom, IoError> rr = server.recvFrom(into: buf.viewMut());
+        UnixRecvFrom got = match (rr) { case Ok(value: x): x; case Err(error: e): { return 15; } };
+        if (got.count != 4 || buf[3] != 5ui8) { return 16; }
+        if (!got.from.isUnnamed()) { return 17; }                 // the sender never bound a name
+        // A bound sender is named by its path, and a connected pair needs no addresses.
+        Result<UnixDatagram, IoError> rc = UnixDatagram.bind(path: "client.sock");
+        UnixDatagram client = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 18; } };
+        if (match (client.connectTo(address: to)) { case Ok(value: u): false; case Err(error: e): true; }) { return 19; }
+        if (match (client.send(bytes: msg.view())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 20; }
+        Result<UnixRecvFrom, IoError> rb = server.recvFrom(into: buf.viewMut());
+        bool fromClient = match (rb) {
+            case Ok(value: x): match (x.from.path()) { case Some(value: p): p == "client.sock"; case None: false; };
+            case Err(error: e): false;
+        };
+        if (!fromClient) { return 21; }
+        bool inUse = match (UnixDatagram.bind(path: "server.sock")) {
+            case Err(error: e): match (e) { case AddrInUse: true; case _: false; };
+            case Ok(value: x): false;
+        };
+        if (!inUse) { return 22; }
+    }   // both bound sockets drop here, and their files with them
+    if (exists(path: "server.sock") || exists(path: "client.sock")) { return 23; }
+    return 0;
+}

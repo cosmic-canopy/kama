@@ -1,16 +1,21 @@
 // Unix-domain sockets (KR-104): a byte stream between two processes on one machine, named by a path in the
 // filesystem instead of an address and port — how a database's local connection, container runtimes, systemd
-// and most local daemons are reached. Linux, macOS, and Windows 10 1803+ (whose AF_UNIX is stream-only).
+// and most local daemons are reached. Linux, macOS, and Windows 10 1803+.
 //
 // It is TCP's shape with a path for an address: `UnixStream` is a `ReliableStream` like `TcpStream` (so
 // every stream helper and serde backend runs over it) and `UnixListener` accepts like `TcpListener`. What a
 // local socket adds is WHO is on the other end — `UnixStream.peerCredentials()`, the same call on every OS,
 // returning each OS's own `PeerCredentials` (unix_posix.kama, unix_windows.kama).
 //
+// One interface on every OS, and each OS keeps what is its own (the maintainer, 2026-09-30: a platform is
+// never cut down to the common subset). So Linux's `UnixAddr` also names the ABSTRACT namespace, and Linux and
+// macOS have `UnixDatagram`, which Windows' stream-only AF_UNIX has no counterpart for. Each is a whole type
+// gated by `@compileFor`, since a member cannot be.
+//
 // The rules a path brings, each a decision (ROADMAP_DETAIL records the reasoning):
 // - `bind` over a path that exists is `AddrInUse`, as in Go and Rust: nothing is removed behind the caller.
-// - A listener REMOVES the socket file it created when it drops (Go's rule), so a clean restart just works.
-//   A crash still leaves the file, and the next `bind` says `AddrInUse`.
+// - A listener (and a bound datagram socket) REMOVES the socket file it created when it drops (Go's rule),
+//   so a clean restart just works. A crash still leaves the file, and the next `bind` says `AddrInUse`.
 // - A path is at most `sun_path` bytes less its terminator (103 on macOS, 107 on Linux and Windows); an
 //   empty path, a longer one, or one holding a NUL is `InvalidInput` before the OS is asked.
 import {
@@ -20,7 +25,7 @@ import {
     ReliableStream, Shutdown, PeerCredentials,
 };
 
-export { UnixStream, UnixListener, UnixAddr };
+export { UnixStream, UnixListener, UnixAddr, UnixDatagram, UnixRecvFrom };
 
 extern "kama_os.h";
 extern fn int32 kama_net_init();
@@ -29,6 +34,9 @@ extern fn int32 kama_unix_path_max();
 extern fn int32 kama_bind_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
 extern fn int32 kama_connect_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
 extern fn isize kama_unix_name(isize fd, int32 peer, UnsafePtr<int32> kind, UnsafePtr<uint8> into, usize cap);
+extern fn isize kama_sendto_unix(isize fd, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<uint8> path, usize pn, int32 kind);
+extern fn isize kama_recvfrom_unix(isize fd, UnsafePtr<uint8> buf, usize n, UnsafePtr<int32> kind, UnsafePtr<uint8> name,
+                                   usize cap, UnsafePtr<isize> nameLen);
 extern fn int32 kama_listen(isize fd, int32 backlog);
 extern fn isize kama_accept(isize fd);
 extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
@@ -40,54 +48,56 @@ extern fn int32 kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 
-// A Unix-domain socket address: a filesystem path, or UNNAMED — a socket that was never bound, which is
-// what a connecting client's own end usually is.
-type value UnixAddr implements Formattable, Equatable<This>, Sendable {
-    int32 kind;                          // 0 unnamed, 1 a path
-    InlineArray<uint8>#(108) name;       // the path's bytes, unterminated (108 = the largest sun_path)
-    int32 len;
-    friend UnixStream[kind, name, len];
-    friend UnixListener[kind, name, len];
-    friend unixNameOf[raw];
-    ctor raw(int32 kind, const ref InlineArray<uint8>#(108) name, int32 len) { this.kind = kind; this.name = name; this.len = len; }
+// ---- addresses ----------------------------------------------------------------------------------------------
+// Everything that reads or writes an address's bytes lives in these helpers, so the two `UnixAddr` twins share
+// one implementation and the socket types never touch its fields. kind: 0 unnamed, 1 a path, 2 abstract (Linux).
 
-    // A path to bind or connect to, checked here: empty, longer than this OS's `sun_path` holds, or holding a
-    // NUL is `InvalidInput`. Relative paths are relative to the working directory, as for a file.
-    public unsafe ctor Result<UnixAddr, IoError> fromPath(const ref string path) {
-        isize n = path.length();
-        if (n == 0 || n > cast<isize>(kama_unix_path_max())) { return Result::Err(error: IoError::InvalidInput); }
-        InlineArray<uint8>#(108) b = [0; 108];
-        isize i = 0;
-        while (i < n) {
-            uint8 c = path[i];
-            if (c == 0ui8) { return Result::Err(error: IoError::InvalidInput); }
-            b[i] = c;
-            i = i + 1;
-        }
-        return Result::Ok(value: UnixAddr.raw(kind: 1, name: b, len: cast<int32>(n)));
+// The name's bytes, checked: 1..sun_path-1 of them, and — for a path — no NUL. `InvalidInput` otherwise.
+unsafe fn Result<UnixAddr, IoError> addrOf(const ref string text, int32 kind) {
+    isize n = text.length();
+    if (n == 0 || n > cast<isize>(kama_unix_path_max())) { return Result::Err(error: IoError::InvalidInput); }
+    InlineArray<uint8>#(108) b = [0; 108];
+    isize i = 0;
+    while (i < n) {
+        uint8 c = text[i];
+        if (c == 0ui8 && kind == 1) { return Result::Err(error: IoError::InvalidInput); }   // a path ends at a NUL
+        b[i] = c;
+        i = i + 1;
     }
-
-    public const fn bool isUnnamed() { return this.kind == 0; }
-    // The path, or `None` for an unnamed socket. (A path kama bound is UTF-8 text; one some other program
-    // bound that is not reads as `None` too, since a kama `string` cannot hold it.)
-    public unsafe const fn Optional<string> path() {
-        if (this.kind != 1) { return Optional::None; }
-        Result<string, Utf8Error> r = decode(bytes: this.name.view().slice(from: 0, count: cast<isize>(this.len)));
-        return match (give r) { case Ok(value: s): Optional::Some(value: give s); case Err(error: e): Optional::None; };
-    }
-    public const fn bool equals(const ref UnixAddr other) {
-        if (this.kind != other.kind || this.len != other.len) { return false; }
-        isize i = 0;
-        while (i < cast<isize>(this.len)) { if (this.name[i] != other.name[i]) { return false; } i = i + 1; }
-        return true;
-    }
-    public const fn void format(ref Formatter f) {
-        if (this.kind == 0) { f.writeStr(s: "(unnamed)"); return; }
-        match (this.path()) { case Some(value: p): { f.writeStr(s: p); } case None: { f.writeStr(s: "(not UTF-8)"); } };
-    }
+    return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(n)));
 }
-
-// The name a socket has (`peer` false) or its peer has (true), read back from the OS.
+unsafe fn Optional<string> addrText(const ref UnixAddr a, int32 kind) {
+    if (a.kind != kind) { return Optional::None; }
+    Result<string, Utf8Error> r = decode(bytes: a.name.view().slice(from: 0, count: cast<isize>(a.len)));
+    return match (give r) { case Ok(value: s): Optional::Some(value: give s); case Err(error: e): Optional::None; };
+}
+fn bool addrEqual(const ref UnixAddr a, const ref UnixAddr b) {
+    if (a.kind != b.kind || a.len != b.len) { return false; }
+    isize i = 0;
+    while (i < cast<isize>(a.len)) { if (a.name[i] != b.name[i]) { return false; } i = i + 1; }
+    return true;
+}
+unsafe fn void addrFormat(const ref UnixAddr a, ref Formatter f) {
+    if (a.kind == 0) { f.writeStr(s: "(unnamed)"); return; }
+    if (a.kind == 2) { f.writeStr(s: "@"); }                           // the abstract namespace's usual notation
+    match (addrText(a: a, kind: a.kind)) { case Some(value: t): { f.writeStr(s: t); } case None: { f.writeStr(s: "(not UTF-8)"); } };
+}
+// bind / connect / sendto through an address; the name a socket (or its peer) has; one datagram and its sender.
+unsafe fn int32 addrBind(isize fd, const ref UnixAddr a) {
+    InlineArray<uint8>#(108) b = a.name;
+    return kama_bind_unix(fd: fd, path: addr(of: b[0]), n: cast<usize>(a.len), kind: a.kind);
+}
+unsafe fn int32 addrConnect(isize fd, const ref UnixAddr a) {
+    InlineArray<uint8>#(108) b = a.name;
+    return kama_connect_unix(fd: fd, path: addr(of: b[0]), n: cast<usize>(a.len), kind: a.kind);
+}
+unsafe fn isize addrSendTo(isize fd, ConstView<uint8> bytes, const ref UnixAddr a) {
+    InlineArray<uint8>#(108) b = a.name;
+    return kama_sendto_unix(fd: fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), path: addr(of: b[0]),
+                            pn: cast<usize>(a.len), kind: a.kind);
+}
+fn bool addrNamed(const ref UnixAddr a) { return a.kind != 0; }
+fn bool addrIsPath(const ref UnixAddr a) { return a.kind == 1; }
 unsafe fn Result<UnixAddr, IoError> unixNameOf(isize fd, bool peer) {
     InlineArray<uint8>#(108) b = [0; 108];
     int32 kind = 0;
@@ -96,6 +106,78 @@ unsafe fn Result<UnixAddr, IoError> unixNameOf(isize fd, bool peer) {
     if (n > 108) { n = 108; }
     return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(n)));
 }
+unsafe fn Result<UnixAddr, IoError> recvFromInto(isize fd, View<uint8> into, ref isize count) {
+    InlineArray<uint8>#(108) b = [0; 108];
+    int32 kind = 0;
+    isize nameLen = 0;
+    while (true) {
+        isize n = kama_recvfrom_unix(fd: fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), kind: addr(of: kind),
+                                     name: addr(of: b[0]), cap: 108, nameLen: addr(of: nameLen));
+        if (n >= 0) {
+            count = n;
+            if (nameLen > 108) { nameLen = 108; }
+            return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(nameLen)));
+        }
+        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+    }
+}
+
+// A Unix-domain socket address. On Linux: a filesystem path, a name in the ABSTRACT namespace, or unnamed —
+// a socket that was never bound, which is what a connecting client's own end usually is.
+@compileFor(OS_LINUX)
+type value UnixAddr implements Formattable, Equatable<This>, Sendable {
+    int32 kind;                          // 0 unnamed, 1 a path, 2 an abstract name
+    InlineArray<uint8>#(108) name;       // the name's bytes, unterminated (108 = the largest sun_path)
+    int32 len;
+    friend addrOf[raw]; friend addrText[kind, name, len]; friend addrEqual[kind, name, len]; friend addrFormat[kind];
+    friend addrBind[kind, name, len]; friend addrConnect[kind, name, len]; friend addrSendTo[kind, name, len];
+    friend addrNamed[kind]; friend addrIsPath[kind]; friend unixNameOf[raw]; friend recvFromInto[raw];
+    ctor raw(int32 kind, const ref InlineArray<uint8>#(108) name, int32 len) { this.kind = kind; this.name = name; this.len = len; }
+
+    // A path to bind or connect to: empty, longer than `sun_path` holds, or holding a NUL is `InvalidInput`.
+    // Relative paths are relative to the working directory, as for a file.
+    public unsafe ctor Result<UnixAddr, IoError> fromPath(const ref string path) { return addrOf(text: path, kind: 1); }
+    // A name in Linux's abstract namespace (`@name`): no file behind it, so nothing to remove and nothing a
+    // crash leaves behind, and gone when the last socket holding it closes. ⚠️ No file means no file
+    // permissions either: any process in this network namespace may connect. Empty or longer than `sun_path`
+    // less one is `InvalidInput`; unlike a path it may hold any byte.
+    public unsafe ctor Result<UnixAddr, IoError> fromAbstract(const ref string name) { return addrOf(text: name, kind: 2); }
+
+    public const fn bool isUnnamed() { return this.kind == 0; }
+    // The path, or `None` for an unnamed socket or an abstract name. (A path kama bound is UTF-8 text; one some
+    // other program bound that is not reads as `None` too, since a kama `string` cannot hold it.)
+    public unsafe const fn Optional<string> path() { return addrText(a: this, kind: 1); }
+    // The abstract name, without the notation's `@`, or `None` for a path or an unnamed socket.
+    public unsafe const fn Optional<string> abstractName() { return addrText(a: this, kind: 2); }
+    public const fn bool equals(const ref UnixAddr other) { return addrEqual(a: this, b: other); }
+    public const fn void format(ref Formatter f) { addrFormat(a: this, f: ref f); }
+}
+
+// A Unix-domain socket address on macOS and Windows: a filesystem path, or unnamed.
+@compileFor(!OS_LINUX)
+type value UnixAddr implements Formattable, Equatable<This>, Sendable {
+    int32 kind;                          // 0 unnamed, 1 a path
+    InlineArray<uint8>#(108) name;
+    int32 len;
+    friend addrOf[raw]; friend addrText[kind, name, len]; friend addrEqual[kind, name, len]; friend addrFormat[kind];
+    friend addrBind[kind, name, len]; friend addrConnect[kind, name, len]; friend addrSendTo[kind, name, len];
+    friend addrNamed[kind]; friend addrIsPath[kind]; friend unixNameOf[raw]; friend recvFromInto[raw];
+    ctor raw(int32 kind, const ref InlineArray<uint8>#(108) name, int32 len) { this.kind = kind; this.name = name; this.len = len; }
+
+    public unsafe ctor Result<UnixAddr, IoError> fromPath(const ref string path) { return addrOf(text: path, kind: 1); }
+    public const fn bool isUnnamed() { return this.kind == 0; }
+    public unsafe const fn Optional<string> path() { return addrText(a: this, kind: 1); }
+    public const fn bool equals(const ref UnixAddr other) { return addrEqual(a: this, b: other); }
+    public const fn void format(ref Formatter f) { addrFormat(a: this, f: ref f); }
+}
+
+// The path a socket just bound, to remove at drop — "" for an abstract name, which has no file.
+unsafe fn string createdPath(const ref UnixAddr a) {
+    Optional<string> p = a.path();
+    return match (give p) { case Some(value: s): give s; case None: ""; };
+}
+
+// ---- streams --------------------------------------------------------------------------------------------------
 
 // A connected Unix-domain stream. Closes its socket on drop (RAII). Move-only, and `Sendable` like `TcpStream`,
 // so a connection accepted on one isolate is served on another.
@@ -111,14 +193,14 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
             case Ok(value: a): UnixStream.connectTo(address: a);
         };
     }
+    // Connect to an address value — on Linux, the one spelling that reaches an abstract name.
     public unsafe ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
-        if (address.kind == 0) { return Result::Err(error: IoError::InvalidInput); }   // nothing to connect to
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError::InvalidInput); }   // nothing to connect to
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        InlineArray<uint8>#(108) name = address.name;
-        if (kama_connect_unix(fd: fd, path: addr(of: name[0]), n: cast<usize>(address.len), kind: address.kind) != 0) {
+        if (addrConnect(fd: fd, a: address) != 0) {
             IoError e = lastError();                          // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
@@ -179,26 +261,25 @@ type resource UnixListener implements Sendable {
             case Ok(value: a): UnixListener.bindTo(address: a);
         };
     }
-    // Bind + listen. A path that already exists — a live listener's or a stale file — is `AddrInUse`.
+    // Bind + listen. A path that already exists — a live listener's or a stale file — is `AddrInUse`, and so
+    // is an abstract name another socket holds.
     public unsafe ctor Result<UnixListener, IoError> bindTo(const ref UnixAddr address) {
-        if (address.kind == 0) { return Result::Err(error: IoError::InvalidInput); }
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError::InvalidInput); }
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        InlineArray<uint8>#(108) name = address.name;
-        if (kama_bind_unix(fd: fd, path: addr(of: name[0]), n: cast<usize>(address.len), kind: address.kind) != 0) {
+        if (addrBind(fd: fd, a: address) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        // The file exists from here: remove it again if listening fails, so a failed bind leaves nothing behind.
-        Optional<string> made0 = address.path();
-        string made = match (give made0) { case Some(value: p): give p; case None: ""; };
+        // A path's file exists from here: remove it again if listening fails, so a failed bind leaves nothing.
+        string made = createdPath(a: address);
         if (kama_listen(fd: fd, backlog: 128) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
-            int32 ru = kama_unlink(path: made.cstr());
+            if (made.length() > 0) { int32 ru = kama_unlink(path: made.cstr()); }
             return Result::Err(error: e);
         }
         return Result::Ok(value: UnixListener.adopt(fd: fd, created: give made));
@@ -222,6 +303,117 @@ type resource UnixListener implements Sendable {
     // Close, then remove the file this listener made — closing first, so nothing can connect to a name that
     // is about to disappear.
     unsafe ~UnixListener() {
+        if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); }
+        if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
+    }
+}
+
+// ---- datagrams (Linux, macOS) ---------------------------------------------------------------------------------
+
+// One datagram received: how many bytes landed, and who sent it (unnamed when the sender never bound a name).
+@compileFor(!OS_WINDOWS)
+type value UnixRecvFrom implements Sendable {
+    public usize count;
+    public UnixAddr from;
+    public ctor of(usize count, UnixAddr from) { this.count = count; this.from = from; }
+}
+
+// A Unix-domain datagram socket — each send one whole message, as `UdpSocket`'s, between processes on one
+// machine: systemd's notify socket, syslog's `/dev/log`. Linux and macOS: Windows' AF_UNIX is stream-only,
+// and nothing there is a local datagram socket. Its methods are `UdpSocket`'s over a `UnixAddr`, which is why
+// it does not implement `DatagramSocket`, whose addresses are `SocketAddr`s. Closes on drop, removing a socket
+// file it bound. Move-only, `Sendable`.
+@compileFor(!OS_WINDOWS)
+type resource UnixDatagram implements Sendable {
+    isize fd = -1;
+    string created;   // the path this socket bound and so removes at drop; "" for none
+    ctor adopt(isize fd, string created) { this.fd = fd; this.created = give created; }
+
+    // A socket with no name — enough to send (`sd_notify` sends from one), and to receive replies only on a
+    // connected pair.
+    public unsafe ctor Result<UnixDatagram, IoError> unbound() {
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        isize fd = kama_socket_unix(datagram: 1);
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: UnixDatagram.adopt(fd: fd, created: ""));
+    }
+    public unsafe ctor Result<UnixDatagram, IoError> bind(const ref string path) {
+        return match (UnixAddr.fromPath(path: path)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): UnixDatagram.bindTo(address: a);
+        };
+    }
+    // Bind to a name others send to. A path that exists, or an abstract name that is held, is `AddrInUse`.
+    public unsafe ctor Result<UnixDatagram, IoError> bindTo(const ref UnixAddr address) {
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError::InvalidInput); }
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        isize fd = kama_socket_unix(datagram: 1);
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        if (addrBind(fd: fd, a: address) != 0) {
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        return Result::Ok(value: UnixDatagram.adopt(fd: fd, created: createdPath(a: address)));
+    }
+
+    // A default peer: `send`/`recv` then need no address, and only its datagrams are received.
+    public unsafe fn Result<Unit, IoError> connect(const ref string path) {
+        return match (UnixAddr.fromPath(path: path)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): this.connectTo(address: a);
+        };
+    }
+    public unsafe fn Result<Unit, IoError> connectTo(const ref UnixAddr address) {
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError::InvalidInput); }
+        if (addrConnect(fd: this.fd, a: address) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Send one datagram to `to`. EINTR-retried. `MessageTooLong` past the socket's limit.
+    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref UnixAddr to) {
+        if (!addrNamed(a: to)) { return Result::Err(error: IoError::InvalidInput); }
+        while (true) {
+            isize n = addrSendTo(fd: this.fd, bytes: bytes, a: to);
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    // Receive one datagram (truncated to into.length()) and who sent it. Non-blocking + nothing queued is
+    // `WouldBlock`. EINTR-retried.
+    public unsafe fn Result<UnixRecvFrom, IoError> recvFrom(View<uint8> into) {
+        if (into.length() == 0) { return Result::Err(error: IoError::InvalidInput); }
+        isize count = 0;
+        return match (recvFromInto(fd: this.fd, into: into, count: ref count)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: from): Result::Ok(value: UnixRecvFrom.of(count: cast<usize>(count), from: from));
+        };
+    }
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
+        while (true) {
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        while (true) {
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
+        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
+    public const fn isize rawHandle() { return this.fd; }
+
+    unsafe ~UnixDatagram() {
         if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); }
         if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
     }

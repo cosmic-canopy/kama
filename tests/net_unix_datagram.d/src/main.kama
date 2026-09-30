@@ -1,0 +1,14 @@
+// std::net Unix-domain datagrams and Linux abstract names (KR-104) — and the shape a PORTABLE program takes
+// around an API one OS lacks. `UnixDatagram` exists on Linux and macOS only (Windows' AF_UNIX is stream-only)
+// and `UnixAddr.fromAbstract` on Linux only, so each lives in a file gated to where it exists, with a twin that
+// answers the same call elsewhere: an import of a name a build excludes is refused even when every use is gated,
+// so the FILE is the unit, as it is for any platform-specific code. Returns 55.
+import { unixdgram::datagrams, unixdgram::abstractNames };
+
+fn int32 main() {
+    int32 d = datagrams();
+    if (d != 0) { return d; }
+    int32 a = abstractNames();
+    if (a != 0) { return a; }
+    return 55;
+}
