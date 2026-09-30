@@ -241,6 +241,40 @@ them") for their own session. Both are stdlib surface over the OS seam (`include
   there is no way to learn an ephemeral port, so every net fixture pins a fixed port — the cause of the recorded
   `net_resolve` twin race.
 
+<a id="s1-fixedarray-fill"></a>
+
+### `FixedArray.make(size:)` builds only what may be filled (KR-106)
+
+Found 2026-09-30 beside KPG-3's channel fix (the channel zeroed a sent item on the same "zero is drop-safe" claim),
+decided by the maintainer the same day: "the accurate rule".
+
+- **The defect.** `allocBuffer` ([fixed_array.kama](../lib/std/collections/fixed_array.kama)) `memset`s the buffer
+  to zero for every `T`: no ctor runs and no field default applies. Measured: a `FixedArray<File>` of 3 closes
+  descriptor 0 three times when it drops (`File` spells empty `fd = -1`); a value declaring `float32 scale = 1.0`
+  reads `0.0`; a resource declaring `int32 id = -1` reads `0`. And [array_dtor](../tests/array_dtor.kama) builds
+  three `Probe`, a resource with **no ctor at all**, which SPEC says cannot be built — `make` is a back door around
+  "nothing is constructible by default" and "a constructor must assign every field". Filling with field defaults
+  (the option first recommended) fixes `File` but keeps the door open, which is why it lost.
+- **The rule.** Fill an element exactly as the compiler fills a field a ctor leaves unassigned
+  (`CEmitter::isDefaultFillable`): zero where all-zero bytes are a valid value (primitives, enums, pointers,
+  intrinsic collections; confirm `string`), `T.default()` per element for a type that elected a `default` ctor, and
+  for anything else `make(size:)` does not exist — "not available for this instantiation", as
+  `DynamicArray<T, BumpAllocator>.empty()` is. Primitives have no ctor (`uint8.default()` does not parse), so the
+  gate is "default-fillable", not "has a `default` ctor"; check what `when [T: default]` accepts before choosing
+  its spelling. `withAllocator(allocator:, size:)` follows the same rule.
+- **The companion.** `FixedArray.filled(size:, value:)` for a copyable `T`: every element a copy of a constructed
+  value — the `FixedArray` spelling of `InlineArray`'s `[v; n]`. A resource with no default is built by pushing
+  into a `DynamicArray`.
+- **What it breaks, measured.** `elem_method` (`Counter`), `array_find` (`Tag`) and `array_dtor` (`Probe`) move to
+  `filled` or an elected `default`; `tests/support/simd_probe.kama` (`Vec4`) marks its existing `ctor zero()`
+  `default`. New xfails for the refused shapes; SPEC's `FixedArray` text states the rule. The peers need a relay:
+  a `FixedArray` of their own types may need `default` or `filled`.
+- **Same principle, the maintainer's call (asked 2026-09-30).** A `slot` of a `value` exposes a public field before
+  its fill: `slot Pt p; int32 y = p.y;` compiles and reads the field's default, and a field with none reads `0` — a
+  read of a value no ctor made, memory-safe but the same gap. SPEC § *Uninitialized storage*'s "Two consequences"
+  paragraph also says handing an unfilled slot to a callee is fine; the compiler refuses it (measured `0.9.477`),
+  so that paragraph is stale whichever way the field read goes.
+
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
    later tool rides on; the residuals are in §10.
@@ -1397,7 +1431,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   which is the same profile as the `fnptr` entry above and the same reason it waits. Note also that the
   turbofish's absence on a method is *not* an extra restriction: `3c9b441` removed the one receiver
   turbofish (`r.deserialize::<T>()`, sugar for a `__kamaDeserialize<T>` free trampoline), and with no
-  generic methods a method turbofish has nothing to name. Verdict (audit, 2026-09-07): a **non-goal** — a method's own type parameter would need a second turbofish grammar on a receiver call, and the free-function spelling above is the idiom.
+  generic methods a method turbofish has nothing to name. Verdict (audit, 2026-09-07): a **non-goal** — a method's own type parameter would need a second turbofish grammar on a receiver call, and the free-function spelling above is the idiom. Reaffirmed by the maintainer 2026-09-30 when `@kama/postgres` asked for `row.get::<int32>(index: 0)` (KPG-8): beside `column::<int32>(row: r, index: 0)` it would be two ways to do one thing, and it buys a spelling, not a capability.
 
 - **A `comptime` parameter's type is an integer, `bool` or `char`** ([kama.y](../src/kama.y),
   `comptime_param_type`) — no compile-time float, array or struct parameter. This is where a
