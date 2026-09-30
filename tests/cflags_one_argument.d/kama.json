@@ -1,0 +1,10 @@
+{
+  "name": "cflagsonearg",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "cflags": [ "-DONEARG_CONFIG_FILE=\"onearg_config.h\"", "-DONEARG_GREETING=\"a b & c; d\"" ],
+  "csources": ["csrc/onearg.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

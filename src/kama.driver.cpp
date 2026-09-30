@@ -3308,6 +3308,33 @@ struct ManifestReader {
         }
     }
 
+    // A flag array — `cflags`, `ldflags`, `cxxflags`, `objcflags`, `link`. Each element is ONE argument to the C
+    // compiler, passed exactly as written (shellArg), so a string means the same on every host (KPG-7). They used
+    // to be pasted into a shell command, so a manifest carried shell syntax: `-DX=\"h.h\"` to keep a quote,
+    // `-Wl,-rpath,\$ORIGIN` to keep a dollar. Passed as written, those backslashes would reach the compiler and
+    // silently mean something else — so an element carrying one is refused, naming the spelling that now works.
+    bool flagArray(std::vector<std::string>& out, const char* key) {
+        const size_t first = out.size();
+        if (!stringArray(out, key)) return false;
+        for (size_t k = first; k < out.size(); ++k) {
+            const std::string& f = out[k];
+            for (size_t j = 0; j + 1 < f.size(); ++j)
+                if (f[j] == '\\' && (f[j + 1] == '"' || f[j + 1] == '$' || f[j + 1] == '\'' || f[j + 1] == '`')) {
+                    std::string fixed;
+                    for (size_t m = 0; m < f.size(); ++m) {
+                        if (f[m] == '\\' && m + 1 < f.size()
+                            && (f[m + 1] == '"' || f[m + 1] == '$' || f[m + 1] == '\'' || f[m + 1] == '`')) continue;
+                        fixed += f[m];
+                    }
+                    return fail(std::string("`") + key + "` entry `" + f + "` escapes a character for a shell — each "
+                                "entry is now passed to the compiler as one argument, exactly as written, on every host, "
+                                "so the backslash would reach it. Write `" + fixed + "`"
+                                + (fixed.find('"') != std::string::npos ? " (in the JSON string a quote is still `\\\"`)" : ""));
+                }
+        }
+        return true;
+    }
+
     // A `csources`/`cincludes` array: each element a path string, or an object with `path` and an
     // optional `compileFor` — a non-empty array of `"FLAG"` / `"!FLAG"`, exactly the literals `@compileFor`
     // takes. Closed like every other object in the manifest. Whether the gate holds is decided once the
@@ -3736,16 +3763,16 @@ struct ManifestReader {
                     if (t.subsystem != "console" && t.subsystem != "windows")
                         return fail("a target's `subsystem` must be \"console\" or \"windows\"");
                 }
-                else if (k == "cflags")  { if (!stringArray(t.cflags,  "cflags"))  return false; }
-                else if (k == "ldflags") { if (!stringArray(t.ldflags, "ldflags")) return false; }
-                else if (k == "cxxflags")  { if (!stringArray(t.cxxflags,  "cxxflags"))  return false; }
-                else if (k == "objcflags") { if (!stringArray(t.objcflags, "objcflags")) return false; }
+                else if (k == "cflags")  { if (!flagArray(t.cflags,  "cflags"))  return false; }
+                else if (k == "ldflags") { if (!flagArray(t.ldflags, "ldflags")) return false; }
+                else if (k == "cxxflags")  { if (!flagArray(t.cxxflags,  "cxxflags"))  return false; }
+                else if (k == "objcflags") { if (!flagArray(t.objcflags, "objcflags")) return false; }
                 else if (k == "cxx")       { if (!str(t.cxx)) return false; }
                 // A target OVERRIDES the project's `link` rather than adding to it — that is what
                 // "overridable" means, and it is the only way to say "not on this target". Note this is
                 // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
                 // over; the two have always differed and the difference is deliberate.
-                else if (k == "link")    { if (!stringArray(t.link, "link")) return false; t.linkSet = true; }
+                else if (k == "link")    { if (!flagArray(t.link, "link")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
                 else if (k == "reproducible-float") {
@@ -4081,14 +4108,14 @@ struct ManifestReader {
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut, "link")) return false; } else if (!skipValue()) return false; }
+            else if (key == "link") { if (linkOut) { if (!flagArray(*linkOut, "link")) return false; } else if (!skipValue()) return false; }
             // The project tier of `cflags`/`ldflags`. A target's list APPENDS onto these (the same
             // direction a target appends onto the built-in it merges over), so the order on the command
             // line is project-then-target and the more specific one gets the last word.
-            else if (key == "cflags") { if (cflagsOut) { if (!stringArray(*cflagsOut, "cflags")) return false; } else if (!skipValue()) return false; }
-            else if (key == "ldflags") { if (ldflagsOut) { if (!stringArray(*ldflagsOut, "ldflags")) return false; } else if (!skipValue()) return false; }
-            else if (key == "cxxflags")  { if (cxxflagsOut)  { if (!stringArray(*cxxflagsOut,  "cxxflags"))  return false; } else if (!skipValue()) return false; }
-            else if (key == "objcflags") { if (objcflagsOut) { if (!stringArray(*objcflagsOut, "objcflags")) return false; } else if (!skipValue()) return false; }
+            else if (key == "cflags") { if (cflagsOut) { if (!flagArray(*cflagsOut, "cflags")) return false; } else if (!skipValue()) return false; }
+            else if (key == "ldflags") { if (ldflagsOut) { if (!flagArray(*ldflagsOut, "ldflags")) return false; } else if (!skipValue()) return false; }
+            else if (key == "cxxflags")  { if (cxxflagsOut)  { if (!flagArray(*cxxflagsOut,  "cxxflags"))  return false; } else if (!skipValue()) return false; }
+            else if (key == "objcflags") { if (objcflagsOut) { if (!flagArray(*objcflagsOut, "objcflags")) return false; } else if (!skipValue()) return false; }
             // The project's own C sources, compiled alongside the C kama emits. PARSED and VALIDATED
             // unconditionally, like `modules` and unlike the sink-guarded keys above: the value set is
             // closed (a `.c` path, relative to this manifest), and a swallowed entry would be a
@@ -6347,6 +6374,42 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     remove(osp(headerPath).c_str());
     for (auto& cp : cPaths) remove(osp(cp).c_str());
     return 0;
+}
+
+// One manifest flag — a `cflags`/`ldflags`/`cxxflags`/`objcflags` entry, a `link` library, a `--link` — as exactly
+// ONE argument of a command the host's shell reads (KPG-7). They were pasted in raw, so `sh` stripped the quotes
+// from `-DCFG="my_config.h"` (the Mbed TLS idiom) and a manifest had to carry POSIX shell escapes that cmd.exe
+// reads differently. A flag made only of characters no shell treats specially is emitted as-is, so the command —
+// and the object cache keyed on it — is byte-identical for every manifest that already worked; anything else is
+// quoted: single quotes for `sh`, and on Windows the MSVCRT/CommandLineToArgvW rules (kama__win_cmdline in
+// kama_os.h) inside double quotes, where cmd.exe also leaves `& | < > ^ ( )` alone. ⚠️ cmd.exe still expands a
+// `%NAME%` that names an environment variable, even quoted: the one spelling that is not the same on every host.
+static std::string shellArg(const std::string& a)
+{
+#if defined(_WIN32)
+    const char* plainPunct = "_@+=:,./\\-";
+#else
+    const char* plainPunct = "_@%+=:,./-";
+#endif
+    bool plain = !a.empty();
+    for (char c : a)
+        if (!(std::isalnum((unsigned char)c) || (c != '\0' && std::strchr(plainPunct, c)))) { plain = false; break; }
+    if (plain) return a;
+#if defined(_WIN32)
+    std::string q = "\"";
+    for (size_t i = 0; i < a.size(); ) {
+        size_t nbs = 0;
+        while (i < a.size() && a[i] == '\\') { ++nbs; ++i; }
+        if (i == a.size())   { q.append(nbs * 2, '\\'); break; }
+        if (a[i] == '"')     { q.append(nbs * 2 + 1, '\\'); q += '"'; ++i; }
+        else                 { q.append(nbs, '\\'); q += a[i]; ++i; }
+    }
+    return q + "\"";
+#else
+    std::string q = "'";
+    for (char c : a) { if (c == '\'') q += "'\\''"; else q += c; }
+    return q + "'";
+#endif
 }
 
 int runCmd(const std::string& cmd)
@@ -12176,7 +12239,7 @@ int main(int argc, char** argv)
         // override it. Appending at the end would silently reverse both. The compile command is therefore
         // byte-for-byte what it always was; only the link-only command has this span cut out.
         const size_t cflagsPos = (size_t)cmd.tellp();
-        for (const auto& f : g_target.cflags) cmd << f << " ";
+        for (const auto& f : g_target.cflags) cmd << shellArg(f) << " ";
         const size_t cflagsEnd = (size_t)cmd.tellp();
         // --shared: emit a position-independent shared library. -fvisibility=hidden hides everything
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
@@ -12460,7 +12523,7 @@ int main(int argc, char** argv)
                 // `cxxflags` wins over the pinned one. The standard itself is spliced in by `prefixFor`.
                 const CLang lang = csourceLang(cs.path);
                 std::string tok;
-                auto flags = [&](const std::vector<std::string>& fs) { for (const auto& f : fs) tok += f + " "; };
+                auto flags = [&](const std::vector<std::string>& fs) { for (const auto& f : fs) tok += shellArg(f) + " "; };
                 switch (lang) {
                     case CLang::Cxx:    tok = "-x c++ "; flags(g_target.cxxflags); break;
                     case CLang::ObjC:   tok = "-x objective-c "; flags(g_target.objcflags); break;
@@ -12548,8 +12611,8 @@ int main(int argc, char** argv)
         // The manifest's `link` first, then `--link` from the command line — same form, and a one-off on
         // the CLI should be able to come after what the project always needs.
         if (!stopsAtObject) {
-            for (const auto& lib : g_target.link) link << "-l" << lib << " ";   // kama.json `link`
-            for (const auto& lib : links)         link << "-l" << lib << " ";   // --link (FFI)
+            for (const auto& lib : g_target.link) link << shellArg("-l" + lib) << " ";   // kama.json `link`
+            for (const auto& lib : links)         link << shellArg("-l" + lib) << " ";   // --link (FFI)
         }
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
@@ -12731,7 +12794,7 @@ int main(int argc, char** argv)
                 if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
         }
         // The target's own link flags from kama.json, last so they can override anything above.
-        if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << f << " ";
+        if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << shellArg(f) << " ";
 
         // ---- How many C compiles may run at once.
         //

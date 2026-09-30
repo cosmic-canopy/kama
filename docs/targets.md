@@ -100,6 +100,14 @@ to say *"not that one, here"*. This is deliberately the opposite of `cflags`/`ld
 onto the built-in target they merge over. A target that never mentions `link` inherits the project's
 list unchanged. The CLI `--link` is unaffected and still appends, after both.
 
+**Each entry is one argument to the C compiler, exactly as written, on every host** — `cflags`, `ldflags`, <!-- test: cflags_one_argument -->
+`cxxflags`, `objcflags` and `link` alike. `"-DCFG=\"my_config.h\""` reaches the compiler with its quotes (the
+Mbed TLS `MBEDTLS_CONFIG_FILE` idiom), a value with spaces stays one value, and two arguments are two entries
+(`"-framework", "Metal"`). Until `0.9.473` the entries were pasted into a shell command, so a manifest carried shell
+syntax — `\"` to keep a quote, `\$ORIGIN` to keep a dollar — which cmd.exe reads differently; an entry that still
+escapes `"`, `$`, `'` or `` ` `` with a backslash is refused, naming the spelling that works. ⚠️ On Windows,
+cmd.exe still expands a `%NAME%` that names an environment variable.
+
 **`cflags` and `ldflags` sit on the project too**, exactly like `link`:
 
 ```json

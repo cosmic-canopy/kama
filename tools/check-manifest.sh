@@ -857,5 +857,25 @@ JSON
 wsreject 'belongs in a project'"'"'s kama.json' "\`modules\` in a kama_workspace.json"
 
 # ---------------------------------------------------------------------------------------------------
+# KPG-7: a flag entry is ONE argument, exactly as written — so a flag written for the shell that used to read it is
+# refused, naming the spelling that works now (tests/cflags_one_argument.d is the positive half). A manifest error
+# says `kama: <path>:`, never `error:`, which is why this is here and not an xfail fixture.
+proj flagdollar <<'JSON'
+{ "name": "flagdollar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } }, "ldflags": [ "-Wl,-rpath,\\$ORIGIN" ] }
+JSON
+reject flagdollar 'Write `-Wl,-rpath,$ORIGIN`' "an ldflags entry keeping a \$ from a shell"
+proj flagquote <<'JSON'
+{ "name": "flagquote", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } }, "cflags": [ "-DCFG=\\\"cfg.h\\\"" ] }
+JSON
+reject flagquote 'Write `-DCFG="cfg.h"` (in the JSON string a quote is still' "a cflags entry keeping a quote from a shell"
+proj flagplain <<'JSON'
+{ "name": "flagplain", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } }, "cflags": [ "-DCFG=\"cfg.h\"", "-DMSG=\"a b & c\"" ] }
+JSON
+accept flagplain "flag entries with quotes, spaces and & are each one argument"
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"

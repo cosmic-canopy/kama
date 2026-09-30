@@ -1,0 +1,6 @@
+// A manifest `cflags` entry reaches the C compiler as one argument, exactly as written (KPG-7, from @kama/postgres):
+// `-DONEARG_CONFIG_FILE="onearg_config.h"` keeps its quotes, and a value with spaces, `&` and `;` stays one value.
+extern "onearg.h";
+extern fn int32 onearg_answer();
+unsafe fn int32 answer() { return onearg_answer(); }
+fn int32 main() { return answer(); }
