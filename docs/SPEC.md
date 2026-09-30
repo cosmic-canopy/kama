@@ -4103,7 +4103,11 @@ openInto(path: p, dst: out f);        // now it is live, and drops normally from
 A `slot` is **illegal to read until it is filled**, and — the point — **no destructor is emitted where it is
 provably still empty**. "Drop only if live" is therefore *proven*, not defended against at runtime. Move
 state is tracked in emission order, so this is decided **per exit point**: a `return` that precedes the fill
-drops nothing, while one after it drops normally. A local with no initializer and no `slot` is a compile
+drops nothing, while one after it drops normally. A slot **filled on only some paths** is dropped where the
+paths join — on the others its storage is the type's field defaults, whose drop does nothing — but a slot
+**given away on only some paths** is the ordinary "moved on some paths but not others" error, exactly as for any <!-- xfail: slot_given_on_some_paths -->
+local: there its storage still holds the moved bytes, and the join would free them twice (until `0.9.474` it
+did, in safe code). A local with no initializer and no `slot` is a compile
 error, and `slot` with an initializer is one too: each thing is said exactly one way. `slot` does **not**
 run the type's `default` constructor; spell `T x = T.empty();` if that is what you want.
 
@@ -5649,6 +5653,15 @@ each `implements Job` must declare `Sendable` too and is verified like any other
 queue of `Owned<Job>` cross. <!-- test: sendable_contract_refine -->
 A `view` and a bare `contract` value need no rule here: neither can be a field at all, so neither ever
 reaches a bundle. <!-- xfail: view_field, iface_field -->
+**The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
+rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
+`UdpSocket`, `Poller`, `Process`, `Command`, `Output`, `StringWriter`, `SliceReader`, and the values `SocketAddr`,
+`IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`. So a connection accepted on one isolate is
+served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
+of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
+dropped exactly once — received, or buffered when the last endpoint goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->
+empty value is the one it states (`fd = -1`), not zero, and until `0.9.474` every send closed descriptor 0.
+
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
 bundle is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
 closing brace, or an explicit `h.join()` — is what orders the write against the parent's read. It is the

@@ -90,7 +90,7 @@ fn Result<string, IoError> readAll(Reader r) {
 
 // The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8
 // string via `finish()`. This is the sink behind serde's `serializeJsonBuffer -> string` and fmt's to-string.
-type resource StringWriter implements Writer, Viewable<ConstView<uint8>> {
+type resource StringWriter implements Writer, Viewable<ConstView<uint8>>, Sendable {
     DynamicArray<uint8> buf;
 
     public ctor make() {
@@ -152,7 +152,7 @@ type resource StringWriter implements Writer, Viewable<ConstView<uint8>> {
 // The in-memory `Reader`: reads out of an owned byte source (a `string`'s UTF-8 bytes). This is the source
 // behind serde's `deserializeJsonBuffer(string)`. Single-pass, fully streamable, bounded memory in the reader's own
 // buffer (the source itself is held whole — that is the caller's `string`, by design for the sugar path).
-type resource SliceReader implements Reader {
+type resource SliceReader implements Reader, Sendable {
     string src;
     isize pos;
     isize len;

@@ -49,7 +49,7 @@ type contract DatagramSocket for resource {
 
 // A UDP socket. Closes its handle on drop (RAII). Move-only. Blocking by default; `setNonBlocking(true)`
 // makes recv/recvFrom return `Err(WouldBlock)` instead of stalling (the game-loop drain model).
-type resource UdpSocket implements DatagramSocket {
+type resource UdpSocket implements DatagramSocket, Sendable {
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable

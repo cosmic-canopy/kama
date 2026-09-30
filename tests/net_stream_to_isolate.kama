@@ -1,0 +1,59 @@
+// A connection accepted on one isolate is SERVED on another (KPG-3, from @kama/postgres): `TcpStream` crosses a
+// `Channel` because it declares `Sendable` — a descriptor is process-wide, and the type is move-only, so one owner at
+// a time is guaranteed. Without it a connection pool could not be shared by worker isolates, and a server could not
+// hand each accepted socket to a worker. The whole std I/O vocabulary declares it the same way: `File`, the
+// listener, `UdpSocket`, `Poller`, `Process`, the address values. A browser `WebSocket` does not — it is a JS object
+// bound to one thread — which is why `ReliableStream` does not require it of an implementor.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::net::TcpListener, std::net::TcpStream,
+         std::net::SocketAddr, std::io::IoError, std::collections::FixedArray };
+
+// The worker: takes connections off the channel and answers each with one byte, the count it has served.
+fn void serve(Receiver<TcpStream> rx) {
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    int32 served = 0;
+    bool going = true;
+    while (going) {
+        Optional<TcpStream> next = rx.recv();
+        match (give next) {
+            case Some(value: s): {
+                served = served + 1;
+                one[0] = cast<uint8>(served);
+                Result<isize, IoError> w = s.write(bytes: one.view());
+            }
+            case None: { going = false; }
+        };
+    }
+}
+
+fn int32 readOne(ref TcpStream c) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    return match (c.read(into: buf.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 90; case Err(error: e): 91; };
+}
+
+fn int32 main() {
+    string host = "127.0.0.1";
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 47812);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Channel<TcpStream> ch = Channel.bounded(capacity: 4);
+    Receiver<TcpStream> rx = ch.receiver();
+    int32 total = 0;
+    scope {
+        spawn serve(rx: give rx);
+        {
+            Sender<TcpStream> tx = ch.sender();
+            int32 i = 0;
+            while (i < 3) {
+                Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: 47812);
+                TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+                Result<TcpStream, IoError> ra = l.accept();
+                TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+                tx.send(item: give s);                    // the accepted socket moves to the worker
+                total = total * 10 + readOne(c: ref c);   // 1, then 12, then 123
+                i = i + 1;
+            }
+        }   // the sender closes here, so the worker's recv() ends and the scope can join it
+    }
+    // The address values cross too — a pool hands a worker where to connect.
+    Channel<SocketAddr> addrs = Channel.bounded(capacity: 1);
+    return total == 123 ? 42 : total;
+}

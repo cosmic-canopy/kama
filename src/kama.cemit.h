@@ -1415,6 +1415,12 @@ private:
     // which for an ordinary value is an undecidable-drop ERROR — but a slot's storage is always valid
     // (the declaration's field-default fill saw to that), so the honest answer there is just to drop it.
     std::set<std::string> _slotDeclared;
+    // ...and the slots a `give` moved on SOME path. The exemption above holds only for a slot whose live-here paths
+    // never FILLED it: its storage is then the field-default fill, and dropping that is a no-op. A slot that was filled
+    // and then GIVEN on one path still holds the moved bytes there, so dropping it at the join frees the value twice —
+    // `slot Res x; fill(r: out x); if (c) { take(r: give x); }` did, in safe code. That is the ordinary
+    // "moved on some paths" error, and a slot in this set gets it (markMoved records; emitScopeCleanup refuses).
+    std::set<std::string> _slotGiven;
     // Owning payload bindings of a BORROWING `match (x)` arm — each aliases the box the subject still
     // owns, so `give`ing one out double-frees. Non-giveable: a give of a name in here is a hard error
     // (the consuming `match (give x)` is the way to move a payload out). Scoped per-arm.
@@ -1430,7 +1436,7 @@ private:
     struct SavedLocalType {
         std::string name;
         bool had = false, hadC = false, hadNode = false, hadConst = false, hadConstVal = false,
-             hadSlot = false, hadSlotDecl = false, hadRef = false, hadMove = false;
+             hadSlot = false, hadSlotDecl = false, hadSlotGiven = false, hadRef = false, hadMove = false;
         std::string prev, prevC; SharedIdentifier prevNode; int64_t prevConstVal = 0;
         MoveState prevMove = MoveState::NotMoved;
     };

@@ -59,7 +59,7 @@ type enum Stdio { Inherit, Piped, Null }
 // A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly
 // one): `code` is -1 when signalled, `signal` is 0 when it exited normally.
 @generate(of)
-type value ExitStatus {
+type value ExitStatus implements Sendable {
     public int32 code;
     public int32 signal;
     public const fn bool success() { return this.signal == 0 && this.code == 0; }
@@ -68,7 +68,7 @@ type value ExitStatus {
 // The captured result of `run()`: the finished status plus the fully-drained stdout/stderr bytes. Move-only
 // (owns the buffers); read via the accessors — `status()` (a value copy), `stdout()`/`stderr()` (borrows,
 // e.g. `out.stdout().length()`).
-type resource Output {
+type resource Output implements Sendable {
     ExitStatus st;
     DynamicArray<uint8> outBytes;
     DynamicArray<uint8> errBytes;
@@ -140,7 +140,7 @@ unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
 // A subprocess builder. Accumulates program + args + env overrides + cwd + per-stream Stdio, then
 // spawn()/run(). Move-only (owns its lists/strings). Not injection-prone: args are a vector, never a shell
 // string (use the explicit `shell` ctor for `sh -c`).
-type resource Command {
+type resource Command implements Sendable {
     string program;
     DynamicArray<string> arguments;
     DynamicArray<string> envKeys;
@@ -304,7 +304,7 @@ type resource Command {
 
 // A spawned child. Move-only, RAII. Holds the pid + the parent-side pipe ends (a File per Piped stream, else
 // a moved-from File{0} the drop-guard skips).
-type resource Process {
+type resource Process implements Sendable {
     isize handle;             // OS wait handle (POSIX: pid; Windows: (isize)hProcess). != 0 live/reapable;
                               //   0 = reaped / moved-from sentinel. wait/kill/dtor act on THIS.
     int32 pid;                // the real OS pid, reported by id() on both platforms

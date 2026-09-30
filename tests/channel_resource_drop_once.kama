@@ -1,0 +1,42 @@
+// Every element of a `Channel<T>` is dropped exactly ONCE — received, or still buffered when the last endpoint goes —
+// and no destructor ever runs on a value the program did not make. The channel used to zero a sent item "so its drop
+// is a no-op", on the claim that a zero value is drop-safe. It is not the language's rule: a type states its empty
+// value (`File`, `TcpStream`: `fd = -1`, so descriptor 0 is ownable), and each send ran a destructor on a zeroed
+// copy — for a socket, `close(0)`, which took down whatever held descriptor 0 next (found building KPG-3). Here `id`
+// states its empty value as -1, and a destructor that sees 0 is one run on bytes nobody constructed.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver };
+
+static int32 g_real;     // destructors run on a value the program made (id > 0)
+static int32 g_zeroed;   // destructors run on zeroed bytes — must stay 0
+
+type resource Token implements Sendable {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    ~Token() {
+        if (this.id > 0) { g_real = g_real + 1; }
+        if (this.id == 0) { g_zeroed = g_zeroed + 1; }
+    }
+}
+
+fn int32 main() {
+    Channel<Token> ch = Channel.bounded(capacity: 8);
+    Receiver<Token> rx = ch.receiver();
+    {
+        Sender<Token> tx = ch.sender();
+        int32 i = 1;
+        while (i <= 5) { Token t = Token.make(id: i); tx.send(item: give t); i = i + 1; }
+    }   // the sender is gone: two receives below, and three elements left buffered
+    int32 received = 0;
+    {
+        Optional<Token> a = rx.recv();
+        Optional<Token> b = rx.recv();
+        int32 ra = match (a) { case Some(value: t): 1; case None: 0; };
+        int32 rb = match (b) { case Some(value: t): 1; case None: 0; };
+        received = ra + rb;
+    }   // the two received tokens drop here
+    {
+        Receiver<Token> last = give rx;   // the last endpoint: dropping it drains the three still buffered
+    }
+    if (g_zeroed != 0) { return 10 + g_zeroed; }
+    return received == 2 && g_real == 5 ? 42 : 30 + g_real;
+}

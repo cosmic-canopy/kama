@@ -39,7 +39,7 @@ extern fn int32 kama_EAGAIN();
 // A connected TCP stream. Closes its socket on drop (RAII). Move-only. Implements the `ReliableStream`
 // contract (a `Reader` + `Writer` + `setNonBlocking`; shared with the WebSocket backend). Blocking by
 // default; `setNonBlocking(true)` makes read/write return `Err(WouldBlock)` instead of stalling.
-type resource TcpStream implements ReliableStream, Reader, Writer {
+type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
@@ -199,7 +199,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 }
 
 // A listening TCP socket. Closes on drop (RAII). Move-only.
-type resource TcpListener {
+type resource TcpListener implements Sendable {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
     private ctor make(isize fd) { this.fd = fd; }
 

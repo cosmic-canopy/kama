@@ -21,13 +21,13 @@ type enum Interest { Read, Write, ReadWrite }
 // A socket's readiness after wait(). `readable` also covers hangup/error (so a follow-up read sees EOF/err);
 // `writable` on a connecting socket means the non-blocking connect resolved (then call checkConnected()).
 @generate(of)
-type value Ready {
+type value Ready implements Sendable {
     public bool readable;
     public bool writable;
 }
 
 // A readiness set. Move-only; frees its C cursor on drop (RAII).
-type resource Poller {
+type resource Poller implements Sendable {
     UnsafePtr state;
     private unsafe ctor make(UnsafePtr state) { this.state = state; }
 

@@ -1282,6 +1282,7 @@ CEmitter::SavedLocalType CEmitter::saveLocalBinding(const std::string& name)
     sv.hadConst    = _constLocals.count(name);
     sv.hadSlot     = _slotLocals.count(name);
     sv.hadSlotDecl = _slotDeclared.count(name);
+    sv.hadSlotGiven = _slotGiven.count(name);
     sv.hadRef      = _refParams.count(name);
     return sv;
 }
@@ -1300,6 +1301,7 @@ void CEmitter::restoreLocalBindings(const std::vector<SavedLocalType>& saved)
         if (sv.hadConst)    _constLocals.insert(sv.name);    else _constLocals.erase(sv.name);
         if (sv.hadSlot)     _slotLocals.insert(sv.name);     else _slotLocals.erase(sv.name);
         if (sv.hadSlotDecl) _slotDeclared.insert(sv.name);   else _slotDeclared.erase(sv.name);
+        if (sv.hadSlotGiven) _slotGiven.insert(sv.name);     else _slotGiven.erase(sv.name);
         if (sv.hadRef)      _refParams.insert(sv.name);      else _refParams.erase(sv.name);
     }
 }
@@ -1324,7 +1326,7 @@ void CEmitter::hideShadowedLocal(const std::string& name, bool refBinder)
 {
     _localCTypes.erase(name);
     _constLocals.erase(name); _constLocalVals.erase(name);
-    _slotLocals.erase(name);  _slotDeclared.erase(name);
+    _slotLocals.erase(name);  _slotDeclared.erase(name); _slotGiven.erase(name);
     _moveState.erase(name);
     if (!refBinder) _refParams.erase(name);
 }
@@ -5828,7 +5830,7 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
                 // so "filled on some paths" just means DROP IT — the drop is correct when it was filled and
                 // a no-op on the zero value when it was not. Only a slot untouched on EVERY path keeps its
                 // drop elided, which is the case that retires the runtime liveness guards.
-                if (!_slotDeclared.count(it->cVar))
+                if (!_slotDeclared.count(it->cVar) || _slotGiven.count(it->cVar))
                     unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
                                  "scope exit — move it on all paths or none, or use Optional<T>").c_str(), _curLine);
             }
@@ -6505,6 +6507,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         auto savedConstLocals         = _constLocals;
         auto savedSlotLocals          = _slotLocals;
         auto savedSlotDeclared        = _slotDeclared;
+        auto savedSlotGiven           = _slotGiven;
         auto savedMoveState           = _moveState;
         auto savedScopes              = _scopes;
         auto savedHoisted             = _hoisted;
@@ -6515,7 +6518,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _out = &body;
         _refParams.clear(); _paramNames.clear();
         _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-        _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _scopes.clear(); _hoisted.clear();
+        _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear(); _scopes.clear(); _hoisted.clear();
         _currentClass = nullptr;
         _currentReturnCType = "void";
         _tempCounter = 0;
@@ -6548,7 +6551,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _refParams       = savedRefParams;   _paramNames      = savedParamNames;
         _localTypes      = savedLocalTypes;  _localCTypes     = savedLocalCTypes;
         _localTypeNodes  = savedLocalTypeNodes; _constLocals  = savedConstLocals;
-        _slotLocals      = savedSlotLocals;  _slotDeclared    = savedSlotDeclared;
+        _slotLocals      = savedSlotLocals;  _slotDeclared    = savedSlotDeclared;  _slotGiven = savedSlotGiven;
         _moveState       = savedMoveState;   _scopes          = savedScopes;
         _hoisted         = savedHoisted;     _currentClass    = savedClass;
         _currentReturnCType = savedRetC;     _tempCounter     = savedTemp;
@@ -16878,6 +16881,7 @@ void CEmitter::markMoved(const std::string& cVar)
             unsupported(("cannot `give` `" + cVar + "` inside a loop — it would be moved again on the next "
                          "iteration; move it after the loop, or move a value declared in the loop body").c_str(), _curLine);
     }
+    if (_slotDeclared.count(cVar)) _slotGiven.insert(cVar);   // see _slotGiven: a GIVE, not a missing fill
     _moveState[cVar] = MoveState::Moved;
 }
 
@@ -16892,7 +16896,7 @@ void CEmitter::checkNotMoved(const std::string& cVar, int line)
     // MaybeMoved on a slot means "filled on some paths" (a branch merge against its seeded state), not
     // "moved" — the storage is valid either way, so using it is fine. A real `give` still sets Moved, so
     // use-after-move on a filled slot is still caught.
-    if (it != _moveState.end() && it->second == MoveState::MaybeMoved && _slotDeclared.count(cVar)) return;
+    if (it != _moveState.end() && it->second == MoveState::MaybeMoved && _slotDeclared.count(cVar) && !_slotGiven.count(cVar)) return;
     if (it != _moveState.end() && it->second != MoveState::NotMoved)
         unsupported(("use of `" + cVar + "` after it was moved (a `give` consumed it)").c_str(), line);
 }
@@ -28095,7 +28099,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _currentReturnCType = cType(fn->returnType);
     _tempCounter = 0;
     _scopes.clear();
-    _slotLocals.clear(); _slotDeclared.clear();
+    _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
 
     line(fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)`; its `return e` addresses the place (the
@@ -28883,7 +28887,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     // analysis makes a local's state depend on emission order. It went unnoticed while no destructor
     // happened to reuse a name another body had left moved-from.
     _moveState.clear();
-    _slotLocals.clear(); _slotDeclared.clear();
+    _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -29062,7 +29066,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentReturnCType = retType;
     _tempCounter = 0;
     _scopes.clear();
-    _slotLocals.clear(); _slotDeclared.clear();
+    _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
     if (params) {

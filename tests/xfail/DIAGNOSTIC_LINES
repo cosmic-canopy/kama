@@ -1072,6 +1072,7 @@ sizeof_ptr_not_pointer	sizeof_ptr_not_pointer.kama:4
 sizeof_usize_not_foldable	sizeof_usize_not_foldable.kama:9
 slot_assignment_fill	slot_assignment_fill.kama:8
 slot_conditional_fill	slot_conditional_fill.kama:10
+slot_given_on_some_paths	slot_given_on_some_paths.kama:18
 slot_match_diverging_only	slot_match_diverging_only.kama:6
 slot_match_partial	slot_match_partial.kama:6
 slot_match_read_in_arm	slot_match_read_in_arm.kama:8

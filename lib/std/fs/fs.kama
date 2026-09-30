@@ -62,7 +62,7 @@ type enum OpenMode { Read, Write, Append }
 // `Permissions` never holds a bit outside the nine: setuid, setgid and the sticky bit mean nothing on
 // Windows, and a bit that does nothing on one platform is what this type exists to avoid.
 @generate(Equatable)
-type value Permissions implements Formattable {
+type value Permissions implements Formattable, Sendable {
     uint32 bits;
 
     ctor fromBits(uint32 bits) { this.bits = bits; }
@@ -119,7 +119,7 @@ type value Permissions implements Formattable {
 // access list can say more than nine bits can (see `Permissions`). The one bit that used to stand alone
 // here, `readOnly`, is `!permissions.has(p: Permissions::OwnerWrite)` — one way to ask it (KR-92).
 @generate(of)
-type value Metadata {
+type value Metadata implements Sendable {
     public usize size;
     public bool isDir;
     public Timestamp modified;
@@ -128,7 +128,7 @@ type value Metadata {
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
 // (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonSerializer::<File>` / `deserializeJsonStream`).
-type resource File implements Reader, Writer {
+type resource File implements Reader, Writer, Sendable {
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable

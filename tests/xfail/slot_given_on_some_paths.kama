@@ -1,0 +1,21 @@
+// A `slot` filled on every path and then `give`n on only one is still live at scope exit on the other — the ordinary
+// "moved on some paths" error. A slot was exempt from that rule, on the reasoning that an unfilled slot holds its
+// field defaults and dropping those is a no-op; true for a slot never FILLED on some path, false for one GIVEN on
+// some path, whose storage still holds the moved bytes. So this built and dropped `x` twice — a double free, in safe
+// code (found building KPG-3, where the channel's drain loop had exactly this shape).
+type resource Res {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    ~Res() { }
+}
+fn void take(Res r) { }
+fn void fill(out Res r) { r = Res.make(id: 9); }
+fn int32 main() {
+    bool c = true;
+    {
+        slot Res x;
+        fill(r: out x);
+        if (c) { take(r: give x); }
+    }
+    return 0;
+}
