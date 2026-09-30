@@ -216,65 +216,33 @@ Everything else here is library or toolchain work that does **not** gate the tag
      `HostUnreachable` rather than an empty list). *(UDP and ephemeral-port `getsockname` ship —
      `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2 — and DNS is the first
      concrete reason to want that row: the resolver already sees the AAAA records it has to drop.)*
-<a id="s1-net-postgres"></a>
+   - **`std::net` local sockets and TCP options — the verdicts (shipped `0.9.482`–`0.9.485`).** The
+     record is SPEC's net section; what stays here is what was decided NOT to ship, each with its reason:
+     `UnixStream.pair()` (socketpair) is genuinely optional until `std::process` can hand a descriptor to a child —
+     between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; a
+     non-blocking Unix `connect` is genuinely optional — a local connect completes or fails at once (Linux's
+     full-backlog `EAGAIN` aside, which a caller retries like any `WouldBlock`); getters for the keepalive and
+     user-timeout knobs are genuinely optional — no std option has one, and a program sets what it wants;
+     `UnixDatagram` does not implement `DatagramSocket` YET — that contract's addresses are `SocketAddr`s — and that
+     is SCHEDULED, not optional: a syslog client sends to `/dev/log` or to UDP 514 through one code path, which is
+     `DatagramSocket` generic over its address type (KR-108). And one ruling that outlives
+     the rows (the maintainer, 2026-09-30): **a platform is never cut down to the common subset** — the primary
+     interface is the same everywhere and each OS's deltas live in the per-platform TYPES it returns
+     (`PeerCredentials`, `UserId`, Linux's `UnixAddr` with abstract names, POSIX's `UnixDatagram`), because
+     `@compileFor` gates types, not members, by design.
+<a id="s1-datagram-address"></a>
 
-### `std::net` reach the first database client needs (KR-104, KR-105)
+### `DatagramSocket` generic over its address, so `UnixDatagram` implements it (KR-108)
 
-Filed 2026-09-30 from `@kama/postgres`'s KAMA_GAPS (KPG-4, KPG-6), scheduled by the maintainer ("we need all of
-them") for their own session. Both are stdlib surface over the OS seam (`include/kama_os.h`), no language change.
+`DatagramSocket` (`udp.kama`) is written over `SocketAddr` — `sendTo(bytes:, to: SocketAddr)`,
+`recvFrom → RecvFrom { count, from: SocketAddr }` — so `UdpSocket` and the web's `WtConnection` implement it and
+`UnixDatagram` (`0.9.484`) cannot, though its methods are the same shape over a `UnixAddr`. A consumer that needs
+the one code path: a syslog client, which sends to `/dev/log` (a Unix datagram socket) or to UDP 514 depending on
+configuration; likewise a metrics emitter (statsd over UDP, or a local agent's socket). The shape to decide: a
+contract with the address as a type parameter (`DatagramSocket<A>`, with `RecvFrom<A>`), which is a source break
+for every `fn f<S: DatagramSocket>` today, against a second contract beside the first. One-way-to-do-a-thing
+argues for the parameter; the maintainer rules on the break.
 
-- **KR-104 — Unix-domain sockets.** `std::net` offers TCP and UDP only: no `AF_UNIX` anywhere in `include/`, `lib/`
-  or `src/`. libpq's default when `host` is unset is the socket in `/var/run/postgresql`, `peer` authentication works
-  only over one, containerised deployments share the socket directory instead of a port, and the same gap blocks
-  every local daemon API. Shape: `UnixStream.connect(path:)`, `UnixListener.bind(path:)` + `accept()`, implementing
-  `ReliableStream`/`Reader`/`Writer`/`Sendable` like `TcpStream`; the SIGPIPE rule (`MSG_NOSIGNAL`/`SO_NOSIGPIPE`,
-  `0.9.471`) applies to it unchanged. Windows has `AF_UNIX` since 10 1803 (`afunix.h`). To decide in the design
-  pass, each with a written verdict: what `bind` does with a path that already exists (refuse, as Go and Rust do),
-  whether Linux's abstract namespace is surfaced, and peer credentials (`SO_PEERCRED`/`getpeereid`) — which the
-  server side of `peer` auth needs and a client does not. The peer's workaround adopts a C-made descriptor with
-  `TcpStream.make(fd:)`, which works because `read`/`write`/`setNonBlocking` are descriptor-generic.
-- **KR-105 — TCP socket options.** `kama_os.h` sets only `SO_REUSEADDR`, `SO_BROADCAST`, `TCP_NODELAY`,
-  `IPV6_V6ONLY` and the unicast TTL. Missing: keepalive with its three knobs (Linux `TCP_KEEPIDLE`/`INTVL`/`CNT`,
-  macOS `TCP_KEEPALIVE`/`INTVL`/`CNT`, Windows `TCP_KEEPIDLE`… or `SIO_KEEPALIVE_VALS`), a user timeout (Linux
-  `TCP_USER_TIMEOUT`, macOS `TCP_RXT_CONNDROPTIME`, Windows `TCP_MAXRT`), and a half-close `shutdown(how:)`. Read
-  and write deadlines stay with `Poller`, which the peer agrees. Add `TcpListener.localAddr()` in the same pass:
-  there is no way to learn an ephemeral port, so every net fixture pins a fixed port — the cause of the recorded
-  `net_resolve` twin race.
-
-<a id="s1-fixedarray-fill"></a>
-
-### `FixedArray.make(size:)` builds only what may be filled (KR-106)
-
-Found 2026-09-30 beside KPG-3's channel fix (the channel zeroed a sent item on the same "zero is drop-safe" claim),
-decided by the maintainer the same day: "the accurate rule".
-
-- **The defect.** `allocBuffer` ([fixed_array.kama](../lib/std/collections/fixed_array.kama)) `memset`s the buffer
-  to zero for every `T`: no ctor runs and no field default applies. Measured: a `FixedArray<File>` of 3 closes
-  descriptor 0 three times when it drops (`File` spells empty `fd = -1`); a value declaring `float32 scale = 1.0`
-  reads `0.0`; a resource declaring `int32 id = -1` reads `0`. And [array_dtor](../tests/array_dtor.kama) builds
-  three `Probe`, a resource with **no ctor at all**, which SPEC says cannot be built — `make` is a back door around
-  "nothing is constructible by default" and "a constructor must assign every field". Filling with field defaults
-  (the option first recommended) fixes `File` but keeps the door open, which is why it lost.
-- **The rule.** Fill an element exactly as the compiler fills a field a ctor leaves unassigned
-  (`CEmitter::isDefaultFillable`): zero where all-zero bytes are a valid value (primitives, enums, pointers,
-  intrinsic collections; confirm `string`), `T.default()` per element for a type that elected a `default` ctor, and
-  for anything else `make(size:)` does not exist — "not available for this instantiation", as
-  `DynamicArray<T, BumpAllocator>.empty()` is. Primitives have no ctor (`uint8.default()` does not parse), so the
-  gate is "default-fillable", not "has a `default` ctor"; check what `when [T: default]` accepts before choosing
-  its spelling. `withAllocator(allocator:, size:)` follows the same rule.
-- **The companion.** `FixedArray.filled(size:, value:)` for a copyable `T`: every element a copy of a constructed
-  value — the `FixedArray` spelling of `InlineArray`'s `[v; n]`. A resource with no default is built by pushing
-  into a `DynamicArray`.
-- **What it breaks, measured.** `elem_method` (`Counter`), `array_find` (`Tag`) and `array_dtor` (`Probe`) move to
-  `filled` or an elected `default`; `tests/support/simd_probe.kama` (`Vec4`) marks its existing `ctor zero()`
-  `default`. New xfails for the refused shapes; SPEC's `FixedArray` text states the rule. The peers need a relay:
-  a `FixedArray` of their own types may need `default` or `filled`.
-- **Same principle, in the same pass — the maintainer: "close that too" (2026-09-30).** A `slot` of a `value` exposes
-  a public field before its fill: `slot Pt p; int32 y = p.y;` compiles and reads the field's default, and a field with none reads `0` — a
-  read of a value no ctor made, memory-safe but the same gap. SPEC § *Uninitialized storage*'s "Two consequences"
-  paragraph also says handing an unfilled slot to a callee is fine; the compiler refuses it (measured `0.9.477`),
-  so that paragraph is stale either way. Closed means: a read of an unfilled slot is refused, field or whole, and
-  the paragraph says so with an xfail behind it.
 
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
@@ -318,6 +286,20 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
+
+<a id="s2-fnptr-type-arg"></a>
+
+### An `fnptr` type is not a type argument (KR-107)
+
+Found 2026-09-30 while probing the one default rule (`0.9.480`). SPEC calls a stored `fnptr` "the callback-registry shape",
+and a registry is a collection — but `DynamicArray<Op>` for `fnptr int32 Op(int32 x);` does not instantiate:
+`DynamicArray::<Op>.empty()` reports *"cannot tell which `DynamicArray` to construct"* (the turbofish IS
+written), `.add(item: twice)` reports the instance *"has no method `add`"*, and the element store trips *"a
+FunctionPtr binds a free function name or another FunctionPtr"*. `Op` itself resolves — an unknown name there
+reports "unknown type" first — so it is not KR-21's unresolved-generic-argument item, though the first message
+is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctionPtr<Op>` as an argument all fail
+the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
+for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
 
 ### Operators on an enum (KR-96) — support them, or declare a non-goal
 
