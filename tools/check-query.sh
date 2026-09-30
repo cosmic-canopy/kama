@@ -1248,5 +1248,23 @@ else
     printf '%s\n' "$lb" | sed 's/^/      /' >&2; fail=1
 fi
 
+# ---------------------------------------------------------------------------------------------------
+# KB-36 — a call THROUGH a `fnptr` value reads that value. A call through a local, a parameter, a field or a bindable
+# was indexed as nothing (a module `static` alone was), so a rename of the local left every call site behind — and
+# the parameter `decode` below was typed as `std::encoding::hex::decode` wherever that module was compiled. KB-38:
+# `F h = r.handler;` was refused, so the field read on line 10 was never emitted and never indexed either.
+echo "check-query: KB-36 calls through a fnptr value"
+FIXTURE="$ROOT/tests/query/fnptr_calls.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+expect --def 5:46  -- "fnptr_calls.kama:5:20"    # a parameter, called
+expect --def 11:14 -- "fnptr_calls.kama:7:6"     # a local, called
+expect --def 12:14 -- "fnptr_calls.kama:3:9"     # a module `static`, called
+expect --def 13:16 -- "fnptr_calls.kama:4:26"    # a field, called
+expect --def 10:12 -- "fnptr_calls.kama:4:26"    # a field, bound to a local (KB-38)
+expect --def 15:14 -- "fnptr_calls.kama:14:27"   # a `BindableFunctionPtr` local, called
+expect --refs 7:6  -- "fnptr_calls.kama:11:14"
+expect --refs 4:26 -- "fnptr_calls.kama:13:16"
+expect --refs 14:27 -- "fnptr_calls.kama:15:14"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

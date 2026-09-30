@@ -1,0 +1,36 @@
+// A `fnptr` local binds any expression of its `fnptr` type, not only a function name or another local (KB-38). The rule
+// recognised "another FunctionPtr" through `exprClass`, which keeps only classes, so every route below but the ternary
+// was refused with "a FunctionPtr binds a free function name or another FunctionPtr" — the rule that admits it. Calling
+// the field directly and handing it to a parameter both worked, which is why it read as a rule, not a bug.
+fnptr int32 F(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+
+static F g_s;
+
+fn F pick(bool t) {
+    if (t) { return twice; }
+    return thrice;
+}
+
+type value Holder {
+    F cb;
+    InlineArray<F>#(2) table;
+    public ctor make() { this.cb = twice; this.table = [twice, thrice]; }
+    public fn int32 viaField() { F local = this.cb; return local(x: 5); }      // 10
+    public fn int32 viaElement() { F e = this.table[1]; return e(x: 2); }     // 6
+    public fn F get() { return this.cb; }
+}
+
+fn int32 main() {
+    Holder h = Holder.make();
+    g_s = thrice;
+    F a = g_s;                   // a module `static`
+    F b = pick(t: true);         // a function's result
+    F c = true ? a : b;          // a ternary of two
+    F d = h.get();               // a method's result
+    F e = thrice;
+    e = h.get();                 // assigned, not initialized
+    return h.viaField() + h.viaElement() + a(x: 1) + b(x: 1) + c(x: 1) + d(x: 1) + e(x: 1);   // 10+6+3+2+3+2+2 = 28
+}

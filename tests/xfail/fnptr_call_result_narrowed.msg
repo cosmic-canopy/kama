@@ -1,0 +1,1 @@
+kama has no implicit numeric conversion

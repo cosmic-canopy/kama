@@ -1,0 +1,17 @@
+fnptr int32 F(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+static F g_h;
+type value Reg { public F handler; public ctor make() { this.handler = dbl; } }
+fn int32 viaParam(F decode, int32 x) { return decode(x: x); }
+fn int32 main() {
+    F f = dbl;
+    g_h = dbl;
+    Reg r = Reg.make();
+    F h = r.handler;
+    int32 a = f(x: 1);
+    int32 b = g_h(x: 2);
+    int32 c = r.handler(x: 3);
+    BindableFunctionPtr<F> bf = dbl;
+    int32 d = bf(x: 4);
+    return a + b + c + d + h(x: 0) + viaParam(decode: dbl, x: 0);
+}

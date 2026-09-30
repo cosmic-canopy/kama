@@ -400,6 +400,7 @@ floatint_local	floatint_local.kama:1
 fn_type_param_default	fn_type_param_default.kama:10
 fnptr_bind_arg_shape	fnptr_bind_arg_shape.kama:11
 fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16
+fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12 fnptr_call_result_narrowed.kama:13 fnptr_call_result_narrowed.kama:14
 for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12

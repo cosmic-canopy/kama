@@ -12509,6 +12509,22 @@ bool CEmitter::isBindableClass(const std::string& cls) const
     return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Bindable;
 }
 
+bool CEmitter::callsThroughLocal(const InvocationNode* inv) const
+{
+    return inv && inv->identifier && inv->identifier->value && !inv->expression
+        && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
+        && _localTypes.count(*inv->identifier->value);
+}
+
+const SigInfo* CEmitter::calledSig(const std::string& ct) const
+{
+    auto s = _sigs.find(ct);
+    if (s != _sigs.end()) return &s->second;
+    if (!isBindableClass(ct)) return nullptr;
+    s = _sigs.find(_classes.at(ct).collElemClass);
+    return s != _sigs.end() ? &s->second : nullptr;
+}
+
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
 {
     if (!t) return;
@@ -16896,7 +16912,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
     // Must be a BARE top-level fn call: `spawn worker(...)`. A receiver call (`spawn obj.m(...)`) or an
     // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
-    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression) {
+    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression || callsThroughLocal(inv)) {
         unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso->line);
         return "";   // `inv`/`identifier` may be the null this guard rejected — never fall through and deref it
     }
@@ -22104,6 +22120,7 @@ bool CEmitter::invocationIsConstPlace(InvocationNode* iv)
 {
     if (!iv) return false;
     if (iv->identifier && iv->identifier->value) {
+        if (callsThroughLocal(iv)) return false;   // a `fnptr` returns a value (KB-36)
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
         return fit != _funcs.end() && fit->second.isConstPlace;
     }
@@ -24041,7 +24058,10 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
             }
         }
     }
-    if (isSigType(exprClass(init))) {   // copy from another FunctionPtr
+    // Copy from another FunctionPtr — any expression of `fnptr` type. `exprClass` answers a local, but it keeps only
+    // what `isClass` accepts, so a FIELD (`this.cb`, `r.handler`) read as no FunctionPtr at all and `F f = this.cb;`
+    // was refused by the very rule that names it (KB-38). `typeOfExpr` is the unfiltered answer.
+    if (isSigType(exprClass(init)) || isSigType(typeOfExpr(init))) {
         out.kind = FnPtrTarget::SigValue;
         return true;
     }
@@ -24360,6 +24380,9 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
         checkFnPtrBind(sigCName, t, line);
         return t.cName;
     }
+    // A source with a type of its own (`F f = n;`, an `int32`) was already named by the identity rule at the local's
+    // declaration — one mistake, one message. What is left is what has no type: `null`, an unknown name.
+    if (idFamilyOf(typeOfExpr(init)) != IdFamily::None) return "0";
     unsupported("a FunctionPtr binds a free function name or another FunctionPtr (and may not be null)", line);
     return "0";
 }
@@ -26026,7 +26049,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // (discovery never walks that body, so `_callInst` is legitimately empty — the turbofish arm above says
     // the same), and when discovery already LOOKED and diagnosed, which would otherwise make one mistake
     // report twice.
-    if (!_probingTemplate && !_genericInferFailed.count(call)) {
+    if (!_probingTemplate && !_genericInferFailed.count(call) && !callsThroughLocal(call)) {
         const std::string gk = resolveFunc(name, call->identifier->qualifier);
         if (_generics.count(gk)) {
             unsupported(("`" + name + "` is a generic function and no instantiation was resolved for this "
@@ -26046,6 +26069,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
         // gate existed to make necessary rather than decorative.
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
+        recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it (KB-36)
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
         return emitReorderedCall(name, callee, "", sig.params, call->args, call->line);
     }
@@ -26079,6 +26103,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // dereferences a NULL function pointer: measured, it built clean and exited 139. Every other read
         // of a moved-from value is a diagnostic; this one was a SIGSEGV.
         checkNotMoved(name, call->line);
+        recordRef(bindingKeyOf(name), call->identifier.get());
         return emitBindableInvoke(name, kName(name), _localTypes[name], call->args, call->line);
     }
 
@@ -32095,6 +32120,13 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
             // auto-deref via a user Deref<T> contract: the method may live on the pointee T.
             if (!mi) { std::string dt = derefTarget(cls);
                        if (!dt.empty() && _classes.count(dt)) mi = findMethod(&_classes[dt], method, &owner); }
+            // A FIELD of `fnptr` type, called: `reg.handler(x: 1)` — its signature's type. After the method
+            // lookup, in the emitter's order, so a field can never shadow a method here either.
+            if (!mi)
+                if (ClassInfo* fo = findFieldOwner(&_classes[cls], method))
+                    for (auto& f : fo->fields)
+                        if (f.name == method && f.type)
+                            if (const SigInfo* s = calledSig(fieldCType(cls, f))) return s->retCType;
             if (mi && mi->returnType) {
                 // A method on a generic INSTANCE returns the template's unbound type
                 // (`Weak<T>.tryUpgrade() -> Optional<Shared<T>>`). Bind the owning instance's
@@ -32202,6 +32234,21 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         }
     }
 
+    // A call THROUGH a `fnptr` value — a local or parameter, then a module `static` — is typed by the value's
+    // signature, asked first and in the emitter's order. A bare name that is a local is never a function: the
+    // function tables below answer by NAME across the whole program (`unimportedFuncKey` searches every unit),
+    // so a parameter `decode` read as `std::encoding::hex::decode` wherever that module was compiled (KB-36).
+    if (inv->identifier && inv->identifier->value && !inv->expression) {
+        const std::string& nm = *inv->identifier->value;
+        if (callsThroughLocal(inv)) {
+            const SigInfo* s = calledSig(_localTypes[nm]);
+            return s ? s->retCType : std::string();
+        }
+        const std::string ms = resolveModuleVar(nm, inv->identifier->qualifier);
+        auto mit = ms.empty() ? _moduleStatics.end() : _moduleStatics.find(ms);
+        if (mit != _moduleStatics.end() && mit->second && mit->second->value)
+            if (const SigInfo* s = calledSig(cType(mit->second))) return s->retCType;
+    }
     // A module `comptime fn` — its declared return type, read where it was declared (KR-102). It shares one
     // name space with every other function, so no run-time fn answers to the same name.
     if (inv->identifier && inv->identifier->value && !inv->expression) {
@@ -32905,6 +32952,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         const std::string fc = fieldCType(clsName, f);
                         if (isSigType(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
+                            recordFieldRef(fo, method, site);   // a call through the field reads it (KB-36)
                             const SigInfo& sig = _sigs.at(fc);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
                             return emitReorderedCall(method, sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
@@ -32916,6 +32964,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         // holding one — the shape a UI event table is — could store it and never fire it.
                         if (isBindableClass(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
+                            recordFieldRef(fo, method, site);
                             return emitBindableInvoke(method, "(" + recvPtr + ")->" + kMember(*fo, method), fc, args, srcLine);
                         }
                     }
@@ -33120,6 +33169,7 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
     if (!iv) return false;
     if (isGlobalHeapCall(iv)) return true;   // `ref Pool`, so a caller binds a borrow and never a copy
     if (iv->identifier && iv->identifier->value) {           // bare call: a free fn (or an inline ctor)
+        if (callsThroughLocal(iv)) return false;             // a `fnptr` returns a value (KB-36)
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
         return fit != _funcs.end() && fit->second.isPlaceReturn;   // a ctor isn't in _funcs -> false (a value)
     }

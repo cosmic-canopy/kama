@@ -1,0 +1,15 @@
+// KB-36's wider shape, with no stdlib involved: a `fnptr` parameter named like an `extern fn` declared in ANOTHER
+// file. The call through the parameter was typed as the extern's `uint32`, so `int32 y = compress(x: x);` was refused
+// as an implicit conversion — in a file that neither declares nor imports `compress`. It is typed by `F` now.
+fnptr int32 F(int32 x);
+
+fn int32 dbl(int32 x) { return x * 2; }
+
+fn int32 callIt(F compress, int32 x) {
+    int32 y = compress(x: x);
+    return y;
+}
+
+fn int32 main() {
+    return callIt(compress: dbl, x: 20);   // 40
+}

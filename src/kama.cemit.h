@@ -3706,6 +3706,13 @@ private:
     // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the
     // classes; exprEnumType keeps the enums. See the .cpp.
     std::string callReturnTypeRaw(InvocationNode* inv);
+    // The signature a value of C type `ct` is called through — a `fnptr` type, or a `BindableFunctionPtr`'s — or
+    // nullptr when `ct` is not callable.
+    const SigInfo* calledSig(const std::string& ct) const;
+    // Is this call's callee a bare name bound to a local or parameter? Then it is a call THROUGH that value and
+    // never a function: the function tables answer a name the file cannot see (an `extern` is one global key,
+    // a sibling's private function is resolved for its diagnostic), so they must not be asked (KB-36).
+    bool callsThroughLocal(const InvocationNode* inv) const;
     // The extern-call gate. CALLING a C function is the unsafe act — the declaration is bodiless, so it
     // carries no marker of its own. No scalar exemption: see the definition.
     void gateExternCall(const FuncSig& sig, const std::string& name, int line);

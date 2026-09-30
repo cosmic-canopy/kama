@@ -1,0 +1,16 @@
+// A call through a `fnptr` value has its signature's type, so the no-implicit-conversion rule sees it on every route a
+// `fnptr` is called through — a local, a module `static`, a field. Each was typed as nothing (KB-36), so an `int32`
+// result narrowed into an `int8` silently.
+fnptr int32 F(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+static F g_h;
+type value Reg { public F handler; public ctor make() { this.handler = dbl; } }
+fn int32 main() {
+    F f = dbl;
+    g_h = dbl;
+    Reg r = Reg.make();
+    int8 a = f(x: 1);
+    int8 b = g_h(x: 2);
+    int8 c = r.handler(x: 3);
+    return 0;
+}

@@ -1,0 +1,32 @@
+// A call THROUGH a `fnptr` value is typed by the value's signature, whatever functions of the same name the program
+// compiles elsewhere (KB-36). `std::encoding::hex` is compiled here — only `encode` is imported — so its `decode`, which
+// returns a `Result`, is a function this file cannot see. The call through the parameter `decode` read as that one:
+// "a local is declared `int32`, so it cannot be initialized with a type value". The local and the field are the
+// other two routes a `fnptr` is called through, and a call through any of them was typed as nothing before, so
+// `int8 n = f(x: 1)` narrowed silently and `string s = f(x: 1)` reached the C compiler.
+import { std::encoding::hex::encode };
+
+fnptr int32 F(int32 x);
+
+fn int32 dbl(int32 x) { return x * 2; }
+
+type value Reg {
+    public F decode;
+    public ctor make() { this.decode = dbl; }
+}
+
+fn int32 viaParam(F decode, int32 x) {
+    int32 y = decode(x: x);
+    return y;
+}
+
+fn int32 main() {
+    F decode = dbl;
+    int32 a = viaParam(decode: decode, x: 5);    // 10
+    int32 b = decode(x: 6);                      // 12
+    Reg r = Reg.make();
+    int32 c = r.decode(x: 10);                   // 20
+    BindableFunctionPtr<F> bound = dbl;
+    int32 d = bound(x: 1);                       // 2
+    return a + b + c + d;                        // 44
+}

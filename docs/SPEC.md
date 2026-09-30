@@ -3265,6 +3265,12 @@ positions, not only in a local's initializer: a shape-mismatched bind elsewhere 
 call through it then passed the wrong number of arguments — an indirect call through a mismatched
 function-pointer type, which is undefined behavior.
 
+Any **value** of an `fnptr` type binds another of that type — a field, an element, a module `static`, a call's <!-- test: fnptr_bind_from_expr -->
+result — and a call through any of them has the signature's return type, so the numeric, kind and identity <!-- xfail: fnptr_call_result_narrowed -->
+rules judge its result like any call's. The callee of such a call is the value, never a function that happens to
+share its name: a parameter `decode` is called through, whatever `decode` the program compiles elsewhere <!-- test: fnptr_call_named_like_fn -->
+([tests/fnptr_call_named_like_fn.kama](../tests/fnptr_call_named_like_fn.kama)).
+
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
 slot is legal inside a no-heap region — the escape hatch for the blind seam. See *No-heap subset*.
