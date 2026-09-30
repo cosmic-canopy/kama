@@ -626,7 +626,12 @@ Publish refuses:
   private-key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), `.netrc`, `.npmrc`, `.pypirc` and
   `kama.local.json`. The refusal says to remove it from the repository *and* rotate it, since it is already in
   the history. The official registry refuses the same names in any tarball, whichever compiler wrote it;
-- a `kama.json` that git does not track.
+- a `kama.json` that git does not track;
+- a **`path` dependency** in `dependencies`. A fetched package arrives without the directory it names, so no
+  consumer could install the version, and a published version is permanent. Depend on a released version and
+  develop against the local copy with `overrides` in `kama.local.json`, which never ships. A `path`
+  **dev**-dependency is fine: nobody follows a fetched package's dev-dependencies. (Until `0.9.472` publish let
+  one through and recorded it as `{}`, and the version was spent.)
 
 Some tracked files belong to the repository but not the package — editor and CI configuration, a notes file,
 a fixture that only *looks* like a key. Leave them out with `publish.exclude`:

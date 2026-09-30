@@ -8054,6 +8054,20 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     }
     std::map<std::string, DepSpec> deps;
     if (!loadManifestDeps(manifest, deps, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
+    // A `path` dependency names a directory on THIS machine, and a fetched package arrives without it: the
+    // resolver refuses one below a fetched package (cmdPkgInstall), so every consumer's install would fail — and a
+    // published version is permanent (KPG-2, from @kama/postgres: the index recorded the dep as `{}` and the version
+    // was spent). Refused before anything is written, so `--dry-run` refuses it too. A `path` DEV-dependency is
+    // not read here, and is harmless: nobody follows a fetched package's dev-dependencies.
+    for (auto& kv : deps)
+        if (!kv.second.path.empty()) {
+            fprintf(stderr, "kama publish: dependency '%s' is a `path` dependency (\"%s\") — a published package is "
+                    "fetched without that directory, so no consumer could install it, and a published version is "
+                    "permanent. Depend on a released version (`\"%s\": { \"version\": \"^1.0.0\" }`), and develop "
+                    "against the local copy with `overrides` in kama.local.json, which is never published\n",
+                    kv.first.c_str(), kv.second.path.c_str(), kv.first.c_str());
+            return 1;
+        }
 
     VcsSnapshot snap;
     if (!vcsSnapshot(base, snap, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
