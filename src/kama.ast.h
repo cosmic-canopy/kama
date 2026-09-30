@@ -295,6 +295,10 @@ public:
 class Float64Node : public ExpressionNode {
 public:
     double value;
+    // An UNSUFFIXED literal is typed by its destination and by the other operand of an operator (D2a), so it also
+    // carries the value it has as a `float32` — parsed from the source text, since rounding `value` again would be
+    // a double rounding (KB-37). Unused for a `f64`-suffixed literal.
+    float value32 = 0.0f;
     Float64Node(CodeGenContext& context, double value) : ASTNode(context),  ExpressionNode(context), value(value) { }
 };
 

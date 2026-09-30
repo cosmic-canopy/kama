@@ -1587,6 +1587,12 @@ are all conversions. What is **not** a conversion, and needs no cast:
 A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
 cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local, lit_oob_constref_argument -->
 
+**A float literal is typed the same way.** Beside a `float32` — an operand, a ternary's other arm, a destination, <!-- test: float32_literal_typed -->
+a `cast<float32>` — an unsuffixed `0.319` *is* a `float32`, so `x == 0.319` compares two `float32`s and `x * 0.1`
+is `float32` arithmetic, exactly as `x == 0.319f32` and `x * 0.1f32` are. Its value is the decimal rounded once, to
+`float32`, and compile-time code computes it the same way (`tests/comptime_float32_literal.kama`). One past the <!-- test: comptime_float32_literal -->
+range it is typed to is rejected: `float32 f = 1e39;`, like `1e39f32` and `1e999`, has no value to give. <!-- xfail: float32_literal_out_of_range, float_literal_suffix_overflow, float64_literal_overflow -->
+
 **A `ref` parameter is a destination like any other.** A literal has no address, so one bound to a
 `const ref` is materialised into a temp — and that temp is the parameter's storage, typed by the
 parameter: `a.contains(item: 2)` on a `DynamicArray<int64>` stores an `int64`, and the same call on a

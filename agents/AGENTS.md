@@ -93,8 +93,8 @@ platform-varying types, which is why a crossing to a fixed width (`cast<int32>(x
 narrowing on a 64-bit host. Bare `int`, `uint`, `double` and `float` are **not** kama types — write
 `int32`/`isize` and `float64`/`float32`.
 
-A **literal** is typed by its destination, so it is not a conversion and needs no cast: `int8 a = 100;`,
-`float32 f = 3;` and `int8 a = 2 + 3;` are all fine, while a constant that does not fit its destination
+A **literal** is typed by its destination — or the other operand: `int8 a = 100;`, `float32 f = 3;`, `int8 a = 2 + 3;`
+and, on a `float32 x`, `x == 0.319` (a float32 compare) are fine; a constant that does not fit its destination <!-- test: float32_literal_typed -->
 (`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. <!-- xfail: lit_oob_assign, cast_const_oob --> A **named** constant is not a literal —
 `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a cast like any other value.
 

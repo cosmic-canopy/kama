@@ -1,0 +1,6 @@
+// A float literal past float64's range, suffixed or not — float64 is the widest float, so no destination can claim
+// it. It reached C as `inf`, an undeclared name.
+fn int32 main() {
+    float64 x = 1e999;
+    return 0;
+}

@@ -4,6 +4,7 @@
 #include "kama.parser.hpp"   // bison token constants (PLUS, STAR, EQEQ, ...)
 
 #include <cstdio>
+#include <cmath>
 #include <sstream>
 #include <fstream>       // the shipped runtime headers, read by the no-heap call graph (KR-74)
 #include <functional>
@@ -2074,6 +2075,54 @@ void CEmitter::governWideLiterals(SharedExpression e)
     if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { governWideLiterals(t->LHS); governWideLiterals(t->RHS); }
 }
 
+// Does this literal subtree hold an unsuffixed float literal? The gate that keeps `claimFloatLiterals` from lowering a
+// declared type for the integer initializers that are almost every initializer (see rejectInitKindMismatch).
+static bool hasUnsuffixedFloat(const ASTNode* n)
+{
+    if (auto* f = dynamic_cast<const Float64Node*>(n)) return f->unsuffixed;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return hasUnsuffixedFloat(u->expression.get());
+    if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n))
+        return hasUnsuffixedFloat(b->LHS.get()) || hasUnsuffixedFloat(b->RHS.get());
+    if (auto* t = dynamic_cast<const TernaryExpressionNode*>(n))
+        return hasUnsuffixedFloat(t->LHS.get()) || hasUnsuffixedFloat(t->RHS.get());
+    return false;
+}
+
+// Walks the shapes a literal expression is made of (isLiteralExpr's), so a claim reaches every literal whose type the
+// position decides: `float32 f = 0.1 + 0.2;` is float32 arithmetic on two float32 literals, as `2 + 3` is `int8`
+// arithmetic in an `int8` destination. A ternary's CONDITION is not the destination's, and is not walked.
+void CEmitter::claimFloatLiterals(SharedExpression e, const std::string& ctype, const char* what, bool isInit, int line)
+{
+    if (!e) return;
+    ASTNode* n = e.get();
+    if (auto* f = dynamic_cast<Float64Node*>(n)) {
+        if (!f->unsuffixed) return;
+        if (ctype != "float") { _float32Lits.erase(n); return; }
+        _float32Lits.insert(n);
+        // The float32 twin of rejectConstOutOfRange, and phrased like it. Past float32's range the value has no
+        // float32 spelling, and converting it to `float` in C is undefined — it came out as `inf`.
+        if (std::isinf(f->value32) && !std::isinf(f->value)) {
+            char shown[64];
+            std::snprintf(shown, sizeof shown, "%.9g", f->value);
+            unsupported((std::string(what) + (isInit ? " is declared `float32`, so it cannot be initialized with "
+                                                     : " expects `float32`, so it cannot be given ")
+                         + shown + " — the largest `float32` magnitude is 3.40282347e38. Write a value in range, or "
+                           "use `float64`").c_str(), line);
+        }
+        return;
+    }
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { claimFloatLiterals(u->expression, ctype, what, isInit, line); return; }
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        claimFloatLiterals(b->LHS, ctype, what, isInit, line);
+        claimFloatLiterals(b->RHS, ctype, what, isInit, line);
+        return;
+    }
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) {
+        claimFloatLiterals(t->LHS, ctype, what, isInit, line);
+        claimFloatLiterals(t->RHS, ctype, what, isInit, line);
+    }
+}
+
 void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
                                      const char* what, bool isInit, int line)
 {
@@ -2348,6 +2397,7 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
     if (lLit != rLit) {
         SharedExpression lit = lLit ? lhs : rhs;
         const std::string& otherT = lLit ? rt : lt;
+        claimFloatLiterals(lit, otherT, ("an operand of `" + opName + "`").c_str(), false, line);   // KB-37, before any return
         if (otherT.empty() || !(cNumBits(otherT) || cNumTargetWidth(otherT))) return;
         governWideLiterals(lit);
         rejectConstOutOfRange(otherT, lit, ("an operand of `" + opName + "`").c_str(), false, line);
@@ -2479,6 +2529,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
     // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
     if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
+    if (value && isLiteralExpr(value.get())) claimFloatLiterals(value, dstCType, what, false, line);   // KB-37, the same
     rejectConstOutOfRange(dstCType, value, what, false, line);
     rejectNumericConversion(dstCType, value, what, /*isInit*/false, line);   // milestone 6
     rejectTypeIdentityMismatch(dstCType, value, what, /*isInit*/false, line);
@@ -2523,6 +2574,8 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // half-resolved and the rule below is careful not to lower one unless it must. `constValue` fails in
     // a few dynamic_casts for anything that is not a constant, which is almost every initializer.
     governWideLiterals(init);                           // 5b-B — a declared type is always a destination
+    if (init && isLiteralExpr(init.get()) && hasUnsuffixedFloat(init.get()))   // KB-37, gated as the comment below asks
+        claimFloatLiterals(init, classifierCType(declType), what, true, line);
     int64_t folded;
     if (init && constValue(init, folded))
         rejectConstOutOfRange(classifierCType(declType), init, what, true, line);
@@ -4742,14 +4795,18 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     // declared parameter type — so `Mat4 * Vec4` against `Mat4 operator*(Mat4)` resolved, emitted, and
     // failed in the C compiler. The consumer filed this as ergonomic friction; it is a check/build
     // divergence, and the same hole reached every by-value hand-off (see rejectClassIdentityMismatch).
+    //
+    // ...and it was only ever the CLASS half. A primitive parameter took any number C would convert to it, so
+    // `v * k` against `operator*(float32 s)` narrowed an `int64` silently, and a literal operand stayed a C
+    // `double` (KB-37). An operand is judged by the argument funnel, which is every rule an argument answers to.
     if (mi->arity == 1) {   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
         if (!mi->params.empty())
-            rejectClassIdentityMismatch(mi->params[0].className, rhs, "the right-hand operand", line);
+            rejectValueKindMismatch(mi->params[0].className, rhs, "the right-hand operand", line);
         return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitOperandByValue(rhs) + ")";
     }
     if (mi->params.size() >= 2) {   // free form: both by value
-        rejectClassIdentityMismatch(mi->params[0].className, lhs, "the left-hand operand", line);
-        rejectClassIdentityMismatch(mi->params[1].className, rhs, "the right-hand operand", line);
+        rejectValueKindMismatch(mi->params[0].className, lhs, "the left-hand operand", line);
+        rejectValueKindMismatch(mi->params[1].className, rhs, "the right-hand operand", line);
     }
     return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
 }
@@ -5048,7 +5105,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CharNode*>(n))   return std::to_string(v->value) + "U";   // codepoint literal
     if (auto* v = dynamic_cast<UInt64Node*>(n)) return std::to_string((unsigned long long)v->value) + "ULL";
 
+    // A float32 literal: `%.9g` round-trips every float, and a whole number (`16`) needs its decimal point before the
+    // `f` — `16f` is an INVALID C literal (an integer with a float suffix).
+    auto float32Spelling = [](float f) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.9g", (double)f);
+        std::string s(buf);
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos
+            && s.find('E') == std::string::npos && s.find_first_of("0123456789") != std::string::npos)
+            s += ".0";
+        return s + "f";
+    };
     if (auto* v = dynamic_cast<Float64Node*>(n)) {
+        // An unsuffixed literal a `float32` position claimed (KB-37) — its own float32 value, never the double
+        // rounded again. One past float32's range was refused where it was claimed.
+        if (v->unsuffixed && _float32Lits.count(n))
+            return std::isinf(v->value32) ? std::string("0.0f") : float32Spelling(v->value32);
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.17g", v->value);
         std::string s(buf);
@@ -5059,17 +5131,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             s += ".0";
         return s;
     }
-    if (auto* v = dynamic_cast<Float32Node*>(n)) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.9g", (double)v->value);
-        std::string s(buf);
-        // A whole-number %g (`16`) needs a decimal point before the `f` suffix — `16f` is an INVALID C
-        // literal (integer with a float suffix). Make it `16.0f`. (`2.5`/`1e9` already have `.`/`e`.)
-        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos
-            && s.find('E') == std::string::npos && s.find_first_of("0123456789") != std::string::npos)
-            s += ".0";
-        return s + "f";
-    }
+    if (auto* v = dynamic_cast<Float32Node*>(n)) return float32Spelling(v->value);
     if (auto* v = dynamic_cast<BooleanNode*>(n)) return v->value ? "true" : "false";
     if (dynamic_cast<NullNode*>(n))              return "NULL";
 
@@ -5314,6 +5376,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<TernaryExpressionNode*>(n)) {
+        // A literal arm is typed by the other arm, as `typeOfExpr` types the ternary (KB-37): `c ? 0.1 : x` on a
+        // `float32 x` is a float32 expression, and C would otherwise make it a `double` one.
+        const bool lLit = isLiteralExpr(v->LHS.get()), rLit = isLiteralExpr(v->RHS.get());
+        if (lLit != rLit)
+            claimFloatLiterals(lLit ? v->LHS : v->RHS, typeOfExpr(lLit ? v->RHS : v->LHS), "a branch of `?:`", false,
+                               v->line);
         return "(" + emitExpression(v->condition) + " ? " + emitExpression(v->LHS)
                    + " : " + emitExpression(v->RHS) + ")";
     }
@@ -5521,6 +5589,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
+        // The target is a literal operand's destination, as it is for `cast<int8>(300)`: `cast<float32>(0.1)` is the
+        // float32 literal, not a double rounded again (KB-37).
+        if (isLiteralExpr(v->unaryExpression.get())) claimFloatLiterals(v->unaryExpression, target, "a cast", false, v->line);
         if (rejectBareCChar(v->type, "a cast target", v->line)) return "0";
         checkBodyType(v->type, "a cast target", v->line);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
@@ -16256,8 +16327,11 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
         std::string s = isSimd ? ("(" + ty + "){") : ("(" + ty + "){ .kama_v = {");
         // Each element by value — an inline constructor element (`[Point(x:1,y:2), …]`) is
         // materialized into a hoisted temp (ISO C, no statement-expression), like an operator operand.
-        for (size_t i = 0; i < al->elements->size(); ++i)
-            s += (i ? ", " : " ") + emitOperandByValue((*al->elements)[i]);
+        for (size_t i = 0; i < al->elements->size(); ++i) {
+            const SharedExpression& el = (*al->elements)[i];
+            if (isLiteralExpr(el.get())) claimFloatLiterals(el, elemCType, "an element", false, al->line);   // KB-37
+            s += (i ? ", " : " ") + emitOperandByValue(el);
+        }
         s += isSimd ? " }" : " } }";
         return s;
     }
@@ -16274,6 +16348,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
     }
     // `[v; N]` on a lane batch IS a splat — the same literal, and the operation every SIMD API names
     // separately. One spelling covers both because they mean the same thing: N copies of one value.
+    if (isLiteralExpr(al->fillValue.get())) claimFloatLiterals(al->fillValue, elemCType, "an element", false, al->line);
     return ty + (isSimd ? "__splat(" : "__fill(") + emitOperandByValue(al->fillValue) + ")";
 }
 

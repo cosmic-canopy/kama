@@ -23,6 +23,7 @@
 #include <string>
 #include <cstdlib>
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <cctype>
 #include "kama.parser.hpp"
@@ -37,6 +38,10 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner);
 static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner);
+/* A float literal: `bits` is 32 or 64 for a suffixed one, 0 for unsuffixed (a `Float64Node` that also carries its
+   `float32` value, for a destination that makes it one — KB-37). A value past the type's range is an error. */
+static SharedExpression makeFloatLiteral(CodeGenContext& ctx, const std::string& spelling, int bits,
+                                         YYLTYPE* loc, yyscan_t scanner);
 /* Digit separators (0.9.227): the lexer admits `_` between two digits of a run; every numeric parse below
    strips them first, so strtoull/strtod see the plain digits. The token keeps the source spelling. */
 static std::string stripDigitSeps(const std::string& s);
@@ -677,9 +682,9 @@ literal
   /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
      std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
      saturate to ±inf on overflow (C-idiomatic) instead — no crash on a boundary literal. */
-  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod (stripDigitSeps(*$1).c_str(), nullptr)); $$->unsuffixed = true; }
-  | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, strtof (stripDigitSeps($1->substr(0,$1->length() - 3)).c_str(), nullptr)); }
-  | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod (stripDigitSeps($1->substr(0,$1->length() - 3)).c_str(), nullptr)); }
+  | FLOAT_LITERAL_NO_SUFFIX   { $$ = makeFloatLiteral(SCANNER_CODEGENCONTEXT, *$1, 0,  &@1, scanner); }
+  | FLOAT_LITERAL_32   { $$ = makeFloatLiteral(SCANNER_CODEGENCONTEXT, *$1, 32, &@1, scanner); }
+  | FLOAT_LITERAL_64   { $$ = makeFloatLiteral(SCANNER_CODEGENCONTEXT, *$1, 64, &@1, scanner); }
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
   | interp_expr
@@ -2608,6 +2613,37 @@ static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, Y
 
 /* `str` is the token with any base prefix already stripped (the grammar hands `0x1FFi8` in as `1FFi8`);
    `spelling` is what the author actually typed, and is used only for the diagnostic. */
+/* strtof/strtod rather than std::stof/stod: at or above the type's max the std:: versions THROW, which killed the
+   compiler on a boundary literal. They saturate to ±inf instead, and that inf is what is refused here: it has no C
+   spelling (`inf`/`inff` reached the C compiler as undeclared names), and converting an out-of-range value to a
+   float type is undefined in C. The UNSUFFIXED literal's float32 value is parsed from the TEXT, never by rounding
+   the double: decimal -> double -> float is a double rounding, and can land one ulp away from decimal -> float. */
+static SharedExpression makeFloatLiteral(CodeGenContext& ctx, const std::string& spelling, int bits,
+                                         YYLTYPE* loc, yyscan_t scanner)
+{
+    const std::string text = stripDigitSeps(bits ? spelling.substr(0, spelling.length() - 3) : spelling);
+    SharedExpression rtn;
+    bool overflow;
+    if (bits == 32) {
+        const float f = strtof(text.c_str(), nullptr);
+        overflow = std::isinf(f);
+        rtn = std::make_shared<Float32Node>(ctx, f);
+    } else {
+        const double d = strtod(text.c_str(), nullptr);
+        overflow = std::isinf(d);
+        auto n = std::make_shared<Float64Node>(ctx, d);
+        if (!bits) { n->unsuffixed = true; n->value32 = strtof(text.c_str(), nullptr); }
+        rtn = n;
+    }
+    if (overflow)
+        yyerror(loc, scanner, (bits == 32
+            ? "float literal `" + spelling + "` does not fit `float32` (largest magnitude 3.40282347e38) -- the suffix "
+              "states the width, so write a value in range or a wider suffix"
+            : "float literal `" + spelling + "` does not fit `float64` (largest magnitude 1.7976931348623157e308), "
+              "the widest float type").c_str());
+    return rtn;
+}
+
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
                                           const std::string& spelling, YYLTYPE* loc, yyscan_t scanner)
 {

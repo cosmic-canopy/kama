@@ -1,0 +1,6 @@
+// A suffixed float literal past its type's range. `strtof` saturates to `inf`, which reached C as `inff` — an
+// undeclared name — rather than a kama diagnostic.
+fn int32 main() {
+    float32 x = 1e39f32;
+    return 0;
+}

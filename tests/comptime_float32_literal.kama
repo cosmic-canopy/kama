@@ -1,0 +1,29 @@
+// The float32 literal rule of tests/float32_literal_typed.kama, at compile time — the same rules as run-time code, with
+// the same answers (KR-102). The interpreter did float arithmetic in double and let its `float32` results drop to
+// float64, so `comptime bool EQ = A == 0.1;` was false exactly as the run-time comparison was, and `9.0 * 0.1` into a
+// `float32` gave 0.899999976 where float32 arithmetic gives 0.900000036. A literal now carries its float64 AND
+// float32 value until a store, a cast or a typed operand says which it is. `inf` and `nan` had no C spelling either.
+comptime float32 A = 0.1;
+comptime bool EQ = A == 0.1;
+comptime float32 NINE = 9.0;
+comptime float32 P = NINE * 0.1;                  // a typed operand: float32 arithmetic
+comptime float32 M = 9.0 * 0.1;                   // two literals, in a float32 destination: float32 arithmetic too
+comptime fn float32 tenthOf(float32 v) { return v * 0.1; }
+comptime float32 Q = tenthOf(v: 9.0);
+comptime float32 C = cast<float32>(0.1);
+comptime float32 BIG = 3.0e38f32 * 10.0;          // past float32's range at compile time: `inf`
+comptime float64 QUIET = 0.0 / 0.0;               // `nan`
+
+fn int32 main() {
+    float32 nine = 9.0;
+    float32 tenth = 0.1;
+    int32 r = 0;
+    if (EQ) { r = r + 1; }
+    if (P == nine * 0.1) { r = r + 2; }           // compile time and run time agree...
+    if (M == P) { r = r + 4; }                    // ...on every spelling of one computation
+    if (Q == P) { r = r + 8; }
+    if (C == tenth) { r = r + 16; }
+    if (BIG > 3.0e38f32) { r = r + 32; }
+    if (QUIET != QUIET) { r = r + 64; }
+    return r;                                     // 127
+}

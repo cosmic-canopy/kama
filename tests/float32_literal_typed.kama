@@ -1,0 +1,28 @@
+// An unsuffixed float literal is typed by its destination, and by the other operand of an operator — so beside a
+// `float32` it IS a `float32` (KB-37). It was emitted as a C `double` wherever it stood, so C's usual arithmetic
+// conversions did the operation in `double`: `x == 0.319` compared the float against 0.31900000000000001 and was
+// false for every literal a `float32` cannot hold exactly, `x * 0.1` multiplied by a `double` 0.1, and `x += 0.1`
+// added one. Each check below is false before the fix. Exact binary fractions (0.5, 0.25) were never affected,
+// which is why a grep of a corpus for `== 0.` found nothing wrong.
+fn float32 tenth() { return 0.1; }
+
+fn int32 main() {
+    int32 n = 319;
+    float32 x = cast<float32>(n) / 1000.0;   // 0.319 as a float32
+    int32 r = 0;
+    if (x == 0.319) { r = r + 1; }                        // the report: a comparison, literal on the right
+    if (0.319 == x) { r = r + 2; }                        // ...and on the left
+    if (!(x != 0.319)) { r = r + 4; }
+    if (!(x < 0.319) && !(x > 0.319)) { r = r + 8; }      // ordering, at the last ulp
+    float32 nine = 9.0;
+    float32 p = nine * 0.1;                               // float32 arithmetic: 0.900000036, as `9.0f32 * 0.1f32`
+    if (p == nine * 0.1f32) { r = r + 16; }               // in double it was 0.899999976
+    float32 acc = nine;
+    acc *= 0.1;                                           // a compound assignment is an operand pair
+    if (acc == p) { r = r + 32; }
+    if (tenth() == 0.1) { r = r + 128; }                  // a `return` hands the literal to a float32
+    bool c = n > 0;
+    float32 t = c ? 0.1 : x;                              // a ternary arm, typed by the other arm
+    if (t == 0.1) { r = r + 64; }
+    return r;                                             // 255
+}

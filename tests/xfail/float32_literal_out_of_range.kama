@@ -1,0 +1,9 @@
+// An unsuffixed float literal a `float32` position types must fit `float32`, as an integer literal must fit its
+// destination (`int8 a = 300;`). It was emitted as a C double and converted — undefined in C, `inf` in practice — and
+// a compile-time one reached the C compiler as the undeclared name `inff`.
+fn int32 main() {
+    float32 x = 1e39;
+    float32 y = 2.0;
+    bool b = y < 1e39;
+    return 0;
+}

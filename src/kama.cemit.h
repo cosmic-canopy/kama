@@ -2295,6 +2295,14 @@ private:
     void governWideLiterals(SharedExpression e);
     std::string moduleStaticCTypeRaw(SharedExpression e);   // a module static's type, NOT filtered by isClass
     std::set<const void*> _litGoverned;
+    // KB-37. An unsuffixed float literal is typed by its destination and by an operator's other operand, so next to
+    // a `float32` it IS one — and must be spelled as a C `float`, or C's usual arithmetic conversions do the
+    // operation in `double` (`x == 0.319` was always false). Each position that types a literal CLAIMS the float
+    // literals of its literal subtree for the type it gives them, at that position and before the value is
+    // emitted; a claim for any other type withdraws an earlier one, since a generic body's one node is emitted
+    // once per instantiation. On the side, not on the node, for `_litGoverned`'s reason above.
+    void claimFloatLiterals(SharedExpression e, const std::string& ctype, const char* what, bool isInit, int line);
+    std::set<const void*> _float32Lits;
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
     void emitComptimeAssertsIn(const SharedClassMemberDeclarationList& members);   // the type-member form, under the live binding
@@ -3466,6 +3474,11 @@ private:
         bool    isSigned = true;
         double  f = 0.0;      // Float payload
         bool    isF32 = false;
+        // KB-37: an unsuffixed float LITERAL (or arithmetic on literals only) that no position has typed yet — `f` is
+        // its value as a float64 and `lit32` as a float32, each rounded once from the source. A store, a cast and a
+        // typed operand decide which one it is, exactly as the emitter's claims decide how it is spelled.
+        bool    isLit = false;
+        float   lit32 = 0.0f;
         std::vector<CTValue> elems;   // Stage 3: InlineArray<T,N> element values (kind is unused when set)
         bool isArray = false;         // Stage 3: this value is a fixed array (elems holds the elements)
         std::string elemCType;        // Stage 3: element C type, for baking `static const T name[N] = {…}`

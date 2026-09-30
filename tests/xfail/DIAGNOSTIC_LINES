@@ -394,7 +394,10 @@ file_gate_operand	file_gate_operand.kama:12
 file_gate_still_parsed	file_gate_still_parsed.kama:13
 fixed_backing_int64	fixed_backing_int64.kama:12
 fixed_bad_pairing	fixed_bad_pairing.kama:13
+float32_literal_out_of_range	float32_literal_out_of_range.kama:5 float32_literal_out_of_range.kama:7
+float64_literal_overflow	float64_literal_overflow.kama:4
 float_bare_dot	float_bare_dot.kama:6
+float_literal_suffix_overflow	float_literal_suffix_overflow.kama:4
 float_literal_to_int	float_literal_to_int.kama:1
 floatint_local	floatint_local.kama:1
 fn_type_param_default	fn_type_param_default.kama:10

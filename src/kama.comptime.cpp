@@ -17,6 +17,7 @@
 #include "kama.parser.hpp"   // token constants (PLUS, EQEQ, LTLT, …)
 
 #include <cstdio>
+#include <cmath>
 #include <sstream>
 
 // Does `name` (with an optional scope qualifier) resolve to a registered `comptime fn`? The interpreter's
@@ -225,14 +226,15 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 {
     if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // an aggregate keeps its shape (KR-93)
     if (proto.kind == CTValue::Float) {
-        double d = ctAsF(v);
-        v.kind = CTValue::Float; v.isF32 = proto.isF32;
+        // A literal stored to a float32 is its own float32 value, never its float64 value rounded again (KB-37).
+        double d = (proto.isF32 && v.kind == CTValue::Float && v.isLit) ? (double)v.lit32 : ctAsF(v);
+        v.kind = CTValue::Float; v.isF32 = proto.isF32; v.isLit = false;
         v.f = proto.isF32 ? (double)(float)d : d;
         return;
     }
     // Int / Bool target
     int64_t iv = ctAsI(v);
-    v.kind = proto.kind; v.width = proto.width; v.isSigned = proto.isSigned; v.f = 0.0;
+    v.kind = proto.kind; v.width = proto.width; v.isSigned = proto.isSigned; v.f = 0.0; v.isLit = false;
     v.i = iv;
     ctTruncate(v);
 }
@@ -294,6 +296,10 @@ std::string CEmitter::ctRender(const CTValue& v) const
     }
     if (v.kind == CTValue::Bool)  return v.i ? "true" : "false";
     if (v.kind == CTValue::Float) {
+        // A value with no decimal spelling — compile-time arithmetic can reach one (`1.0 / 0.0`, a float32 product
+        // past its range) — spelled the way C constant expressions can: `inf`/`nan` are no C names at all.
+        if (std::isinf(v.f)) return std::string(v.f < 0 ? "(-" : "(") + (v.isF32 ? "__builtin_inff()" : "__builtin_inf()") + ")";
+        if (std::isnan(v.f)) return v.isF32 ? "__builtin_nanf(\"\")" : "__builtin_nan(\"\")";
         std::ostringstream os;
         os.precision(17);
         os << v.f;
@@ -426,7 +432,8 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = CTValue{}; out.width = 32; out.isSigned = false; out.i = v->value; return true; }
     if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = CTValue{}; out.width = 64; out.isSigned = false; out.i = (int64_t)v->value; return true; }
     if (auto* v = dynamic_cast<Float32Node*>(n)) { out = CTValue{}; out.kind = CTValue::Float; out.isF32 = true;  out.f = v->value; return true; }
-    if (auto* v = dynamic_cast<Float64Node*>(n)) { out = CTValue{}; out.kind = CTValue::Float; out.isF32 = false; out.f = v->value; return true; }
+    if (auto* v = dynamic_cast<Float64Node*>(n)) { out = CTValue{}; out.kind = CTValue::Float; out.isF32 = false; out.f = v->value;
+                                                   out.isLit = v->unsuffixed; out.lit32 = v->value32; return true; }
     if (auto* v = dynamic_cast<BooleanNode*>(n)) { out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false; out.i = v->value ? 1 : 0; return true; }
     if (auto* v = dynamic_cast<CharNode*>(n))    { out = CTValue{}; out.width = 32; out.isSigned = false; out.i = (int64_t)v->value; return true; }
 
@@ -515,7 +522,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         switch (u->token) {
             case PLUS:  out = v; return true;
             case MINUS:
-                if (v.kind == CTValue::Float) { out = v; out.f = -v.f; return true; }
+                if (v.kind == CTValue::Float) { out = v; out.f = -v.f; out.lit32 = -v.lit32; return true; }
                 out = v; out.i = -v.i; ctTruncate(out); return true;
             case TILDE:
                 if (v.kind == CTValue::Float) return ctFail("`~` needs an integer operand", e->line);
@@ -557,12 +564,30 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         auto mkInt = [&](int64_t r) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = r; };
         auto mkBool = [&](bool r) { out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false; out.i = r ? 1 : 0; };
         if (flt) {
-            double a = ctAsF(lv), c = ctAsF(rv);
+            // The run-time rule, at compile time (KB-37): a literal takes the other operand's type. Beside a typed
+            // `float32` it is its float32 value and the arithmetic is float32's — each result rounded to float, which
+            // is what one C `float` operation gives, since a double holds the exact result of one. Beside a typed
+            // `float64` it is its float64 value. Between two literals the result is still a literal, carried as both.
+            auto typedF32 = [](const CTValue& v) { return v.kind == CTValue::Float && v.isF32 && !v.isLit; };
+            auto typedFloat = [](const CTValue& v) { return v.kind == CTValue::Float && !v.isLit; };
+            const bool f32 = typedF32(lv) || typedF32(rv);
+            const bool lit = !typedFloat(lv) && !typedFloat(rv);   // literals, and integers beside one
+            auto as32 = [&](const CTValue& v) -> double {
+                return v.kind == CTValue::Float ? (v.isLit ? (double)v.lit32 : v.f) : (double)(float)ctAsI(v);
+            };
+            double a = f32 ? as32(lv) : ctAsF(lv), c = f32 ? as32(rv) : ctAsF(rv);
+            auto mkFloat = [&](double r, double r32) {
+                out = CTValue{}; out.kind = CTValue::Float;
+                if (f32)      { out.isF32 = true; out.f = (double)(float)r; }
+                else if (lit) { out.isLit = true; out.f = r; out.lit32 = (float)r32; }
+                else          out.f = r;
+            };
+            const double a32 = as32(lv), c32 = as32(rv);
             switch (b->token) {
-                case PLUS:  out = CTValue{}; out.kind = CTValue::Float; out.f = a + c; return true;
-                case MINUS: out = CTValue{}; out.kind = CTValue::Float; out.f = a - c; return true;
-                case STAR:  out = CTValue{}; out.kind = CTValue::Float; out.f = a * c; return true;
-                case SLASH: out = CTValue{}; out.kind = CTValue::Float; out.f = a / c; return true;
+                case PLUS:  mkFloat(a + c, a32 + c32); return true;
+                case MINUS: mkFloat(a - c, a32 - c32); return true;
+                case STAR:  mkFloat(a * c, a32 * c32); return true;
+                case SLASH: mkFloat(a / c, a32 / c32); return true;
                 case EQEQ:  mkBool(a == c); return true;
                 case NOTEQ: mkBool(a != c); return true;
                 case LT:    mkBool(a <  c); return true;
