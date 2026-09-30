@@ -26,6 +26,9 @@
         },
         "sha256": {
           "visibility": "public"
+        },
+        "sha512": {
+          "visibility": "public"
         }
       }
     },

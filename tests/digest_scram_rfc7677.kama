@@ -1,0 +1,34 @@
+// SCRAM-SHA-256 (RFC 5802 / RFC 7677) — PostgreSQL's default authentication since 14 — computed end to end from
+// std::digest, reproducing RFC 7677's own example: the client proof `dHzbZapW…` and the server signature `6rriTRBi…`.
+// This is the call sequence `@kama/postgres` needs (KPG-9), which had to carry its own HMAC and PBKDF2 until they
+// were in std: SaltedPassword = Hi(password, salt, i) is PBKDF2-HMAC-SHA-256; the keys are HMACs and a SHA-256.
+import { std::digest::pbkdf2, std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha256::hmacSha256,
+         std::encoding::base64::encode as b64Encode, std::encoding::base64::decode as b64Decode,
+         std::encoding::base64::DecodeError, std::collections::DynamicArray };
+
+fn int32 main() {
+    string password = "pencil";
+    string saltText = "W22ZaJ0SNY7soEsUEjb6gQ==";
+    Result<DynamicArray<uint8>, DecodeError> decoded = b64Decode(text: saltText);
+    DynamicArray<uint8> salt = match (give decoded) { case Ok(value: s): give s; case Err(error: e): { return 1; } };
+    InlineArray<uint8>#(32) salted = [0; 32];
+    pbkdf2(hash: Sha256.make(), password: password.bytes(), salt: salt.view(), iterations: 4096, into: salted.viewMut());
+
+    string clientKeyLabel = "Client Key";
+    string serverKeyLabel = "Server Key";
+    InlineArray<uint8>#(32) clientKey = hmacSha256(key: salted.view(), message: clientKeyLabel.bytes());
+    InlineArray<uint8>#(32) storedKey = sha256(bytes: clientKey.view());
+    string auth = "n=user,r=rOprNGfwEbeRWgbNEkqO,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096,c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0";
+    InlineArray<uint8>#(32) clientSignature = hmacSha256(key: storedKey.view(), message: auth.bytes());
+    InlineArray<uint8>#(32) proof = [0; 32];
+    isize i = 0;
+    while (i < 32) { proof[cast<usize>(i)] = clientKey[cast<usize>(i)] ^ clientSignature[cast<usize>(i)]; i = i + 1; }
+
+    InlineArray<uint8>#(32) serverKey = hmacSha256(key: salted.view(), message: serverKeyLabel.bytes());
+    InlineArray<uint8>#(32) serverSignature = hmacSha256(key: serverKey.view(), message: auth.bytes());
+
+    int32 r = 0;
+    if (b64Encode(bytes: proof.view()).equals(other: "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=")) { r = r + 1; }
+    if (b64Encode(bytes: serverSignature.view()).equals(other: "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=")) { r = r + 2; }
+    return r;   // 3
+}

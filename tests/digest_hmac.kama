@@ -1,0 +1,43 @@
+// HMAC over SHA-1, SHA-256 and SHA-512 (RFC 2104) against RFC 2202 and RFC 4231 vectors, cross-checked with Python's
+// `hmac` when written. Case 6 keys with 131 bytes — longer than a block, so the key is hashed first — and the
+// streaming `Hmac<H>` fed in two pieces must equal the one-shot. Bits sum to 127.
+import { std::digest::Hmac, std::digest::sha1::hmacSha1, std::digest::sha256::Sha256, std::digest::sha256::hmacSha256,
+         std::digest::sha512::hmacSha512, std::encoding::hex::encode as hexEncode, std::collections::DynamicArray };
+
+fn DynamicArray<uint8> repeat(uint8 b, isize n) {
+    DynamicArray<uint8> a = DynamicArray::<uint8>.withCapacity(capacity: n);
+    isize i = 0;
+    while (i < n) { a.add(item: b); i = i + 1; }
+    return a;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    DynamicArray<uint8> k11 = repeat(b: 0x0bui8, n: 20);   // RFC 4231 / RFC 2202 case 1
+    string hiThere = "Hi There";
+    InlineArray<uint8>#(32) a = hmacSha256(key: k11.view(), message: hiThere.bytes());
+    if (hexEncode(bytes: a.view()).equals(other: "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")) { r = r + 1; }
+    InlineArray<uint8>#(64) b = hmacSha512(key: k11.view(), message: hiThere.bytes());
+    if (hexEncode(bytes: b.view()).equals(other: "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854")) { r = r + 2; }
+    InlineArray<uint8>#(20) c = hmacSha1(key: k11.view(), message: hiThere.bytes());
+    if (hexEncode(bytes: c.view()).equals(other: "b617318655057264e28bc0b6fb378c8ef146be00")) { r = r + 4; }
+    string jefe = "Jefe";                                           // RFC 4231 case 2: a key shorter than the digest
+    string what = "what do ya want for nothing?";
+    InlineArray<uint8>#(32) d = hmacSha256(key: jefe.bytes(), message: what.bytes());
+    if (hexEncode(bytes: d.view()).equals(other: "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")) { r = r + 8; }
+    DynamicArray<uint8> kaa = repeat(b: 0xaaui8, n: 131);           // RFC 4231 case 6: a key longer than a block
+    string big = "Test Using Larger Than Block-Size Key - Hash Key First";
+    InlineArray<uint8>#(32) e = hmacSha256(key: kaa.view(), message: big.bytes());
+    if (hexEncode(bytes: e.view()).equals(other: "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")) { r = r + 16; }
+    InlineArray<uint8>#(64) f = hmacSha512(key: kaa.view(), message: big.bytes());
+    if (hexEncode(bytes: f.view()).equals(other: "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598")) { r = r + 32; }
+    Hmac<Sha256> mac = Hmac.make(hash: Sha256.make(), key: jefe.bytes());   // streaming, in two pieces
+    borrow what.bytes() as v {
+        mac.update(bytes: v.slice(from: 0, count: 9));
+        mac.update(bytes: v.slice(from: 9, count: 19));
+    }
+    InlineArray<uint8>#(32) g = [0; 32];
+    mac.finishInto(tag: g.viewMut());
+    if (hexEncode(bytes: g.view()).equals(other: "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")) { r = r + 64; }
+    return r;   // 127
+}

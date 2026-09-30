@@ -1,5 +1,5 @@
-import { std::collections::View, std::collections::ConstView };
-export { Sha256, sha256, DIGESTBYTES, BLOCKBYTES };
+import { std::collections::View, std::collections::ConstView, std::digest::BlockDigest, std::digest::Hmac };
+export { Sha256, sha256, hmacSha256, DIGESTBYTES, BLOCKBYTES };
 
 // SHA-256 (FIPS 180-4): a 32-byte digest, streaming or one-shot. The default digest — content ids,
 // integrity checks, HMAC, anything new. Same shape as `std::digest::sha1`:
@@ -38,7 +38,7 @@ comptime InlineArray<uint32>#(64) K = [
     0x90befffaui32, 0xa4506cebui32, 0xbef9a3f7ui32, 0xc67178f2ui32
 ];
 
-type value Sha256 {
+type value Sha256 implements BlockDigest {
     InlineArray<uint32>#(8)  h;
     InlineArray<uint8>#(64)  block;
     isize  filled;
@@ -92,6 +92,16 @@ type value Sha256 {
         }
         return digest;
     }
+
+    // `BlockDigest`: the digest into a caller's buffer, which must be exactly 32 bytes.
+    public fn void finishInto(View<uint8> digest) {
+        if (digest.length() != DIGESTBYTES) { panic(msg: "Sha256.finishInto: `digest` must be 32 bytes"); }
+        InlineArray<uint8>#(32) d = this.finish();
+        isize i = 0;
+        while (i < DIGESTBYTES) { digest[i] = d[cast<usize>(i)]; i = i + 1; }
+    }
+    public const fn isize digestBytes() { return DIGESTBYTES; }
+    public const fn isize blockBytes() { return BLOCKBYTES; }
 
     fn void compress() {
         InlineArray<uint32>#(64) w = [0; 64];
@@ -151,4 +161,13 @@ fn InlineArray<uint8>#(32) sha256(ConstView<uint8> bytes) {
     Sha256 h = Sha256.make();
     h.update(bytes: bytes);
     return h.finish();
+}
+
+// HMAC-SHA-256 (RFC 2104) in one call — `std::digest::Hmac` is the streaming form.
+fn InlineArray<uint8>#(32) hmacSha256(ConstView<uint8> key, ConstView<uint8> message) {
+    Hmac<Sha256> mac = Hmac.make(hash: Sha256.make(), key: key);
+    mac.update(bytes: message);
+    InlineArray<uint8>#(32) tag = [0; 32];
+    mac.finishInto(tag: tag.viewMut());
+    return tag;
 }

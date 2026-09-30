@@ -1,5 +1,5 @@
-import { std::collections::View, std::collections::ConstView };
-export { Sha1, sha1, DIGESTBYTES, BLOCKBYTES };
+import { std::collections::View, std::collections::ConstView, std::digest::BlockDigest, std::digest::Hmac };
+export { Sha1, sha1, hmacSha1, DIGESTBYTES, BLOCKBYTES };
 
 // SHA-1 (RFC 3174 / FIPS 180-4): a 20-byte digest, streaming or one-shot.
 //
@@ -23,7 +23,7 @@ comptime isize BLOCKBYTES  = 64;
 
 fn uint32 rotl(uint32 x, uint32 n) { return (x << n) | (x >> (32ui32 - n)); }
 
-type value Sha1 {
+type value Sha1 implements BlockDigest {
     InlineArray<uint32>#(5)  h;
     InlineArray<uint8>#(64)  block;
     isize  filled;    // bytes waiting in `block`
@@ -80,6 +80,16 @@ type value Sha1 {
     }
 
     // One 64-byte block into the state.
+    // `BlockDigest`: the digest into a caller's buffer, which must be exactly 20 bytes.
+    public fn void finishInto(View<uint8> digest) {
+        if (digest.length() != DIGESTBYTES) { panic(msg: "Sha1.finishInto: `digest` must be 20 bytes"); }
+        InlineArray<uint8>#(20) d = this.finish();
+        isize i = 0;
+        while (i < DIGESTBYTES) { digest[i] = d[cast<usize>(i)]; i = i + 1; }
+    }
+    public const fn isize digestBytes() { return DIGESTBYTES; }
+    public const fn isize blockBytes() { return BLOCKBYTES; }
+
     fn void compress() {
         InlineArray<uint32>#(80) w = [0; 80];
         isize t = 0;
@@ -127,4 +137,15 @@ fn InlineArray<uint8>#(20) sha1(ConstView<uint8> bytes) {
     Sha1 h = Sha1.make();
     h.update(bytes: bytes);
     return h.finish();
+}
+
+// HMAC-SHA-1 (RFC 2104) in one call — `std::digest::Hmac` is the streaming form.
+// HMAC-SHA-1 is not broken by SHA-1's collisions (an HMAC needs a preimage, not a collision), which is why
+// protocols that already use it — TOTP, SCRAM-SHA-1 — may keep it; anything new uses `hmacSha256`.
+fn InlineArray<uint8>#(20) hmacSha1(ConstView<uint8> key, ConstView<uint8> message) {
+    Hmac<Sha1> mac = Hmac.make(hash: Sha1.make(), key: key);
+    mac.update(bytes: message);
+    InlineArray<uint8>#(20) tag = [0; 20];
+    mac.finishInto(tag: tag.viewMut());
+    return tag;
 }

@@ -1,0 +1,181 @@
+import { std::collections::View, std::collections::ConstView, std::digest::BlockDigest, std::digest::Hmac };
+export { Sha512, sha512, hmacSha512, DIGESTBYTES, BLOCKBYTES };
+
+// SHA-512 (FIPS 180-4): a 64-byte digest, streaming or one-shot, with the same shape as `std::digest::sha256`:
+//
+//   Sha512 h = Sha512.make();
+//   h.update(bytes: part);         // any number of times
+//   InlineArray<uint8>#(64) d = h.finish();
+//   InlineArray<uint8>#(64) e = sha512(bytes: whole);
+//   InlineArray<uint8>#(64) tag = hmacSha512(key: secret, message: data);   // HMAC-SHA-512 (RFC 4231)
+//
+// 64-bit words, 80 rounds, a 128-byte block and a 128-bit length. Pure kama, no allocation, big-endian by hand, the
+// same bytes on every target. `finish` spends the hasher. Its round constants and initial state are the first 64
+// bits of the fractional parts of the cube roots of the first 80 primes, and of the square roots of the first 8.
+
+comptime isize DIGESTBYTES = 64;
+comptime isize BLOCKBYTES  = 128;
+
+fn uint64 rotr(uint64 x, uint64 n) { return (x >> n) | (x << (64ui64 - n)); }
+
+comptime InlineArray<uint64>#(80) K = [
+    0x428a2f98d728ae22ui64, 0x7137449123ef65cdui64, 0xb5c0fbcfec4d3b2fui64, 0xe9b5dba58189dbbcui64,
+    0x3956c25bf348b538ui64, 0x59f111f1b605d019ui64, 0x923f82a4af194f9bui64, 0xab1c5ed5da6d8118ui64,
+    0xd807aa98a3030242ui64, 0x12835b0145706fbeui64, 0x243185be4ee4b28cui64, 0x550c7dc3d5ffb4e2ui64,
+    0x72be5d74f27b896fui64, 0x80deb1fe3b1696b1ui64, 0x9bdc06a725c71235ui64, 0xc19bf174cf692694ui64,
+    0xe49b69c19ef14ad2ui64, 0xefbe4786384f25e3ui64, 0x0fc19dc68b8cd5b5ui64, 0x240ca1cc77ac9c65ui64,
+    0x2de92c6f592b0275ui64, 0x4a7484aa6ea6e483ui64, 0x5cb0a9dcbd41fbd4ui64, 0x76f988da831153b5ui64,
+    0x983e5152ee66dfabui64, 0xa831c66d2db43210ui64, 0xb00327c898fb213fui64, 0xbf597fc7beef0ee4ui64,
+    0xc6e00bf33da88fc2ui64, 0xd5a79147930aa725ui64, 0x06ca6351e003826fui64, 0x142929670a0e6e70ui64,
+    0x27b70a8546d22ffcui64, 0x2e1b21385c26c926ui64, 0x4d2c6dfc5ac42aedui64, 0x53380d139d95b3dfui64,
+    0x650a73548baf63deui64, 0x766a0abb3c77b2a8ui64, 0x81c2c92e47edaee6ui64, 0x92722c851482353bui64,
+    0xa2bfe8a14cf10364ui64, 0xa81a664bbc423001ui64, 0xc24b8b70d0f89791ui64, 0xc76c51a30654be30ui64,
+    0xd192e819d6ef5218ui64, 0xd69906245565a910ui64, 0xf40e35855771202aui64, 0x106aa07032bbd1b8ui64,
+    0x19a4c116b8d2d0c8ui64, 0x1e376c085141ab53ui64, 0x2748774cdf8eeb99ui64, 0x34b0bcb5e19b48a8ui64,
+    0x391c0cb3c5c95a63ui64, 0x4ed8aa4ae3418acbui64, 0x5b9cca4f7763e373ui64, 0x682e6ff3d6b2b8a3ui64,
+    0x748f82ee5defb2fcui64, 0x78a5636f43172f60ui64, 0x84c87814a1f0ab72ui64, 0x8cc702081a6439ecui64,
+    0x90befffa23631e28ui64, 0xa4506cebde82bde9ui64, 0xbef9a3f7b2c67915ui64, 0xc67178f2e372532bui64,
+    0xca273eceea26619cui64, 0xd186b8c721c0c207ui64, 0xeada7dd6cde0eb1eui64, 0xf57d4f7fee6ed178ui64,
+    0x06f067aa72176fbaui64, 0x0a637dc5a2c898a6ui64, 0x113f9804bef90daeui64, 0x1b710b35131c471bui64,
+    0x28db77f523047d84ui64, 0x32caab7b40c72493ui64, 0x3c9ebe0a15c9bebcui64, 0x431d67c49c100d4cui64,
+    0x4cc5d4becb3e42b6ui64, 0x597f299cfc657e2aui64, 0x5fcb6fab3ad6faecui64, 0x6c44198c4a475817ui64
+];
+
+type value Sha512 implements BlockDigest {
+    InlineArray<uint64>#(8)  h;
+    InlineArray<uint8>#(128) block;
+    isize  filled;
+    uint64 total;   // bytes so far; the 128-bit length field is its bit count
+
+    public ctor make() {
+        this.h = [0x6a09e667f3bcc908ui64, 0xbb67ae8584caa73bui64, 0x3c6ef372fe94f82bui64, 0xa54ff53a5f1d36f1ui64,
+                  0x510e527fade682d1ui64, 0x9b05688c2b3e6c1fui64, 0x1f83d9abfb41bd6bui64, 0x5be0cd19137e2179ui64];
+        this.block = [0; 128];
+        this.filled = 0;
+        this.total = 0ui64;
+    }
+
+    public fn void update(ConstView<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            this.block[cast<usize>(this.filled)] = bytes[i];
+            this.filled = this.filled + 1;
+            i = i + 1;
+            if (this.filled == BLOCKBYTES) { this.compress(); this.filled = 0; }
+        }
+        this.total = this.total + cast<uint64>(n);
+    }
+
+    public fn InlineArray<uint8>#(64) finish() {
+        uint64 high = this.total >> 61ui64;   // the 128-bit bit count: bytes * 8, split across two words
+        uint64 low = this.total << 3ui64;
+        this.block[cast<usize>(this.filled)] = 128ui8;
+        this.filled = this.filled + 1;
+        if (this.filled > 112) {
+            while (this.filled < BLOCKBYTES) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+            this.compress();
+            this.filled = 0;
+        }
+        while (this.filled < 112) { this.block[cast<usize>(this.filled)] = 0ui8; this.filled = this.filled + 1; }
+        isize i = 0;
+        while (i < 8) {
+            this.block[cast<usize>(112 + i)] = truncate<uint8>((high >> cast<uint64>(56 - i * 8)) & 255ui64);
+            this.block[cast<usize>(120 + i)] = truncate<uint8>((low >> cast<uint64>(56 - i * 8)) & 255ui64);
+            i = i + 1;
+        }
+        this.compress();
+        InlineArray<uint8>#(64) digest = [0; 64];
+        i = 0;
+        while (i < 8) {
+            uint64 w = this.h[cast<usize>(i)];
+            isize b = 0;
+            while (b < 8) {
+                digest[cast<usize>(i * 8 + b)] = truncate<uint8>((w >> cast<uint64>(56 - b * 8)) & 255ui64);
+                b = b + 1;
+            }
+            i = i + 1;
+        }
+        return digest;
+    }
+
+    // `BlockDigest`: the digest into a caller's buffer, which must be exactly 64 bytes.
+    public fn void finishInto(View<uint8> digest) {
+        if (digest.length() != DIGESTBYTES) { panic(msg: "Sha512.finishInto: `digest` must be 64 bytes"); }
+        InlineArray<uint8>#(64) d = this.finish();
+        isize i = 0;
+        while (i < DIGESTBYTES) { digest[i] = d[cast<usize>(i)]; i = i + 1; }
+    }
+    public const fn isize digestBytes() { return DIGESTBYTES; }
+    public const fn isize blockBytes() { return BLOCKBYTES; }
+
+    fn void compress() {
+        InlineArray<uint64>#(80) w = [0; 80];
+        isize t = 0;
+        while (t < 16) {
+            usize j = cast<usize>(t * 8);
+            uint64 v = 0ui64;
+            isize b = 0;
+            while (b < 8) { v = (v << 8ui64) | cast<uint64>(this.block[j + cast<usize>(b)]); b = b + 1; }
+            w[cast<usize>(t)] = v;
+            t = t + 1;
+        }
+        while (t < 80) {
+            uint64 w15 = w[cast<usize>(t - 15)];
+            uint64 w2 = w[cast<usize>(t - 2)];
+            uint64 s0 = rotr(x: w15, n: 1ui64) ^ rotr(x: w15, n: 8ui64) ^ (w15 >> 7ui64);
+            uint64 s1 = rotr(x: w2, n: 19ui64) ^ rotr(x: w2, n: 61ui64) ^ (w2 >> 6ui64);
+            w[cast<usize>(t)] = w[cast<usize>(t - 16)] + s0 + w[cast<usize>(t - 7)] + s1;
+            t = t + 1;
+        }
+        uint64 a = this.h[0];
+        uint64 b2 = this.h[1];
+        uint64 c = this.h[2];
+        uint64 d = this.h[3];
+        uint64 e = this.h[4];
+        uint64 f = this.h[5];
+        uint64 g = this.h[6];
+        uint64 hh = this.h[7];
+        t = 0;
+        while (t < 80) {
+            uint64 S1 = rotr(x: e, n: 14ui64) ^ rotr(x: e, n: 18ui64) ^ rotr(x: e, n: 41ui64);
+            uint64 ch = (e & f) ^ ((~e) & g);
+            uint64 temp1 = hh + S1 + ch + K[cast<usize>(t)] + w[cast<usize>(t)];
+            uint64 S0 = rotr(x: a, n: 28ui64) ^ rotr(x: a, n: 34ui64) ^ rotr(x: a, n: 39ui64);
+            uint64 maj = (a & b2) ^ (a & c) ^ (b2 & c);
+            uint64 temp2 = S0 + maj;
+            hh = g;
+            g = f;
+            f = e;
+            e = d + temp1;
+            d = c;
+            c = b2;
+            b2 = a;
+            a = temp1 + temp2;
+            t = t + 1;
+        }
+        this.h[0] = this.h[0] + a;
+        this.h[1] = this.h[1] + b2;
+        this.h[2] = this.h[2] + c;
+        this.h[3] = this.h[3] + d;
+        this.h[4] = this.h[4] + e;
+        this.h[5] = this.h[5] + f;
+        this.h[6] = this.h[6] + g;
+        this.h[7] = this.h[7] + hh;
+    }
+}
+
+fn InlineArray<uint8>#(64) sha512(ConstView<uint8> bytes) {
+    Sha512 h = Sha512.make();
+    h.update(bytes: bytes);
+    return h.finish();
+}
+
+// HMAC-SHA-512 (RFC 2104, vectors RFC 4231) in one call — `std::digest::Hmac` is the streaming form.
+fn InlineArray<uint8>#(64) hmacSha512(ConstView<uint8> key, ConstView<uint8> message) {
+    Hmac<Sha512> mac = Hmac.make(hash: Sha512.make(), key: key);
+    mac.update(bytes: message);
+    InlineArray<uint8>#(64) tag = [0; 64];
+    mac.finishInto(tag: tag.viewMut());
+    return tag;
+}

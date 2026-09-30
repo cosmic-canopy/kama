@@ -2336,11 +2336,19 @@ covers a `DynamicArray`, a `FixedArray` or a sub-range alike — the `sort` shap
 
 ### Digest (`std::digest`) ✅
 
-`import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha1::sha1 };` — two
-submodules, `sha1` and `sha256`, each exporting a streaming hasher (`make()`, `update(ConstView<uint8>)`,
-`finish()`), a one-shot function of the same name as the module, and `DIGESTBYTES`/`BLOCKBYTES`. The
-digest is an `InlineArray<uint8>#(N)` — 20 or 32 bytes on the stack, no allocation anywhere, so both are
-present in a `--no-heap` build.
+`import { std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha1::sha1 };` — three
+submodules, `sha1`, `sha256` and `sha512`, each exporting a streaming hasher (`make()`, `update(ConstView<uint8>)`, <!-- test: digest_sha512 -->
+`finish()`), a one-shot function of the same name as the module, its HMAC one-shot (`hmacSha1`, `hmacSha256`,
+`hmacSha512`), and `DIGESTBYTES`/`BLOCKBYTES`. The digest is an `InlineArray<uint8>#(N)` — 20, 32 or 64 bytes on
+the stack, no allocation anywhere, so all three are present in a `--no-heap` build.
+
+`std::digest` itself holds what is written once over any of them. Each hasher implements the `BlockDigest`
+contract (`update`, `finishInto(digest:)`, `digestBytes()`, `blockBytes()`), and over it: **`Hmac<H>`**, the <!-- test: digest_hmac -->
+streaming HMAC (RFC 2104) — `Hmac.make(hash: Sha256.make(), key: k)`, `update`, `finishInto(tag:)` — keyed once,
+so a copy MACs another message under the same key; and **`pbkdf2(hash:, password:, salt:, iterations:, into:)`** <!-- test: digest_pbkdf2 -->
+(RFC 8018), which fills `into` with the derived key. Together they are SCRAM-SHA-256, PostgreSQL's default
+authentication — `tests/digest_scram_rfc7677.kama` reproduces RFC 7677's client proof and server signature from <!-- test: digest_scram_rfc7677 -->
+them. MD5 is not here: it serves only deprecated protocols, and a package that needs one carries it.
 
 ```kama
 import { std::digest::sha256::sha256, std::digest::sha1::Sha1, std::encoding::base64::encode as b64Encode,
@@ -2367,8 +2375,9 @@ being among its most-downloaded is the argument against copying that. <!-- test:
 SHA-1 is **legacy** — not collision-resistant — and its header says so; it exists for the protocols that
 still require it. Anything new is `sha256`. Both are pure kama, spell their loads and stores big-endian
 by hand, and give the same bytes on every target; the fixtures pin the FIPS 180-4 vectors (including the
-million-`a` message, streamed in odd-sized pieces) and the RFC 6455 example. HMAC and SHA-512 are the
-recorded next cut.
+million-`a` message, streamed in odd-sized pieces), RFC 2202 and RFC 4231 for HMAC, RFC 6070 and RFC 7914 for
+PBKDF2, and the RFC 6455 example. ⚠️ Comparing a received MAC with `==` leaks through timing how many leading bytes
+matched; a verifier compares every byte before deciding.
 
 ### UUID (`std::uuid`) ✅
 

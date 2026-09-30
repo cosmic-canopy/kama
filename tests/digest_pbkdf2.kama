@@ -1,0 +1,30 @@
+// PBKDF2 (RFC 8018) over HMAC-SHA-1 and HMAC-SHA-256 against RFC 6070 and RFC 7914 §11 vectors, cross-checked with
+// Python's `hashlib.pbkdf2_hmac` when written. The 25- and 64-byte outputs need two blocks (the block index is the
+// part a one-block test never exercises). Bits sum to 31.
+import { std::digest::pbkdf2, std::digest::sha1::Sha1, std::digest::sha256::Sha256,
+         std::encoding::hex::encode as hexEncode, std::collections::FixedArray };
+
+fn int32 main() {
+    int32 r = 0;
+    string password = "password";
+    string salt = "salt";
+    FixedArray<uint8> a = FixedArray.make(size: 20);
+    pbkdf2(hash: Sha1.make(), password: password.bytes(), salt: salt.bytes(), iterations: 1, into: a.viewMut());
+    if (hexEncode(bytes: a.view()).equals(other: "0c60c80f961f0e71f3a9b524af6012062fe037a6")) { r = r + 1; }
+    FixedArray<uint8> b = FixedArray.make(size: 20);
+    pbkdf2(hash: Sha1.make(), password: password.bytes(), salt: salt.bytes(), iterations: 4096, into: b.viewMut());
+    if (hexEncode(bytes: b.view()).equals(other: "4b007901b765489abead49d926f721d065a429c1")) { r = r + 2; }
+    string longPass = "passwordPASSWORDpassword";
+    string longSalt = "saltSALTsaltSALTsaltSALTsaltSALTsalt";
+    FixedArray<uint8> c = FixedArray.make(size: 25);
+    pbkdf2(hash: Sha1.make(), password: longPass.bytes(), salt: longSalt.bytes(), iterations: 4096, into: c.viewMut());
+    if (hexEncode(bytes: c.view()).equals(other: "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038")) { r = r + 4; }
+    string passwd = "passwd";
+    FixedArray<uint8> d = FixedArray.make(size: 64);
+    pbkdf2(hash: Sha256.make(), password: passwd.bytes(), salt: salt.bytes(), iterations: 1, into: d.viewMut());
+    if (hexEncode(bytes: d.view()).equals(other: "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")) { r = r + 8; }
+    FixedArray<uint8> e = FixedArray.make(size: 32);          // SCRAM-SHA-256's own call shape: 4096 rounds, 32 bytes
+    pbkdf2(hash: Sha256.make(), password: password.bytes(), salt: salt.bytes(), iterations: 4096, into: e.viewMut());
+    if (hexEncode(bytes: e.view()).equals(other: "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a")) { r = r + 16; }
+    return r;   // 31
+}

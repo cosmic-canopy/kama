@@ -1,0 +1,41 @@
+// std::digest::sha512 against FIPS 180-4 vectors, cross-checked with Python's hashlib when written. The million-`a`
+// message is streamed in 999-byte pieces, so updates straddle the 128-byte block at every offset. Bits sum to 63.
+import { std::digest::sha512::Sha512, std::digest::sha512::sha512, std::digest::sha512::DIGESTBYTES,
+         std::encoding::hex::encode as hexEncode, std::collections::DynamicArray };
+
+fn bool hashIs(const ref string text, const ref string want) {
+    InlineArray<uint8>#(64) d = sha512(bytes: text.bytes());
+    string got = hexEncode(bytes: d.view());
+    return got.equals(other: want);
+}
+
+fn int32 main() {
+    int32 r = 0;
+    if (DIGESTBYTES == 64) { r = r + 1; }
+    if (hashIs(text: "", want: "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")) { r = r + 2; }
+    if (hashIs(text: "abc", want: "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")) { r = r + 4; }
+    // 896 bits: the padding needs a second block, which is where the 128-bit length field goes.
+    if (hashIs(text: "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+               want: "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909")) { r = r + 8; }
+    DynamicArray<uint8> chunk = DynamicArray::<uint8>.withCapacity(capacity: 999);
+    isize i = 0;
+    while (i < 999) { chunk.add(item: 97ui8); i = i + 1; }
+    Sha512 h = Sha512.make();
+    isize fed = 0;
+    while (fed + 999 <= 1000000) { h.update(bytes: chunk.view()); fed = fed + 999; }
+    borrow chunk.view() as rest { h.update(bytes: rest.slice(from: 0, count: 1000000 - fed)); }
+    InlineArray<uint8>#(64) big = h.finish();
+    string bigHex = hexEncode(bytes: big.view());
+    if (bigHex.equals(other: "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b")) { r = r + 16; }
+    // Streaming equals one-shot.
+    Sha512 s = Sha512.make();
+    string abc = "abc";
+    borrow abc.bytes() as v {
+        s.update(bytes: v.slice(from: 0, count: 1));
+        s.update(bytes: v.slice(from: 1, count: 2));
+    }
+    InlineArray<uint8>#(64) two = s.finish();
+    string twoHex = hexEncode(bytes: two.view());
+    if (twoHex.equals(other: "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")) { r = r + 32; }
+    return r;   // 63
+}

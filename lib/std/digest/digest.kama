@@ -1,0 +1,107 @@
+import { std::collections::View, std::collections::ConstView };
+export { BlockDigest, Hmac, pbkdf2 };
+
+// What every hash in `std::digest` is — `Sha1`, `Sha256` and `Sha512` implement it — so that HMAC and PBKDF2 are
+// written once, over any of them. A fresh hasher is its own prototype: a hasher is a `value`, so copying one starts
+// another stream from the same state, which is what lets HMAC key a hash once and reuse the keyed state.
+type contract BlockDigest for value {
+    fn void update(ConstView<uint8> bytes);
+    // Close the stream and write the digest into `digest`, which is exactly `digestBytes()` long. The hasher is spent.
+    fn void finishInto(View<uint8> digest);
+    const fn isize digestBytes();
+    const fn isize blockBytes();
+}
+
+// HMAC (RFC 2104) over any `BlockDigest`, streaming:
+//
+//   Hmac<Sha256> mac = Hmac.make(hash: Sha256.make(), key: secret);
+//   mac.update(bytes: part);                  // any number of times
+//   InlineArray<uint8>#(32) tag = [0; 32];
+//   mac.finishInto(tag: tag.viewMut());
+//
+// `hmacSha1`, `hmacSha256` and `hmacSha512`, in each hash's own module, are the one-shots. Keyed once: the key is
+// folded into the inner and outer states at construction, and a copy of an `Hmac` MACs another message under the same
+// key without re-keying (which is how `pbkdf2` below runs thousands of rounds). ⚠️ Comparing a received tag with
+// `==` leaks, through timing, how many leading bytes matched; a verifier compares every byte before deciding.
+type value Hmac<H: BlockDigest> {
+    H inner;
+    H outer;
+
+    public ctor make(H hash, ConstView<uint8> key) {
+        isize block = hash.blockBytes();
+        InlineArray<uint8>#(128) k = [0; 128];   // the largest block in std::digest, SHA-512's
+        if (key.length() > block) {
+            H folded = hash;                     // a key longer than a block is hashed first (RFC 2104 §2)
+            folded.update(bytes: key);
+            folded.finishInto(digest: k.viewMut().slice(from: 0, count: hash.digestBytes()));
+        } else {
+            isize c = 0;
+            while (c < key.length()) { k[cast<usize>(c)] = key[c]; c = c + 1; }
+        }
+        InlineArray<uint8>#(128) pad = [0; 128];
+        isize i = 0;
+        while (i < block) { pad[cast<usize>(i)] = k[cast<usize>(i)] ^ 0x36ui8; i = i + 1; }
+        this.inner = hash;
+        this.inner.update(bytes: pad.view().slice(from: 0, count: block));
+        i = 0;
+        while (i < block) { pad[cast<usize>(i)] = k[cast<usize>(i)] ^ 0x5cui8; i = i + 1; }
+        this.outer = hash;
+        this.outer.update(bytes: pad.view().slice(from: 0, count: block));
+    }
+
+    public fn void update(ConstView<uint8> bytes) { this.inner.update(bytes: bytes); }
+
+    // Close the MAC and write it into `tag`, which is exactly the hash's `digestBytes()` long. Spends the `Hmac`.
+    public fn void finishInto(View<uint8> tag) {
+        InlineArray<uint8>#(64) innerTag = [0; 64];   // the largest digest in std::digest, SHA-512's
+        isize n = this.inner.digestBytes();
+        this.inner.finishInto(digest: innerTag.viewMut().slice(from: 0, count: n));
+        this.outer.update(bytes: innerTag.view().slice(from: 0, count: n));
+        this.outer.finishInto(digest: tag);
+    }
+
+    public const fn isize digestBytes() { return this.outer.digestBytes(); }
+}
+
+// PBKDF2 (RFC 8018 §5.2) with HMAC over `hash`'s function: fills `into` with a key derived from `password` and `salt`
+// through `iterations` rounds (at least 1). SCRAM-SHA-256 — PostgreSQL's default authentication — is
+// `pbkdf2(hash: Sha256.make(), password: p, salt: s, iterations: 4096, into: salted.viewMut())` (its `Hi()`).
+// The password keys the HMAC once; every round after is a copy of that keyed state.
+fn void pbkdf2<H: BlockDigest>(H hash, ConstView<uint8> password, ConstView<uint8> salt, int32 iterations,
+                               View<uint8> into) {
+    if (iterations < 1) { panic(msg: "pbkdf2: `iterations` must be at least 1"); }
+    Hmac<H> keyed = Hmac.make(hash: hash, key: password);
+    isize hlen = hash.digestBytes();
+    InlineArray<uint8>#(64) u = [0; 64];
+    InlineArray<uint8>#(64) t = [0; 64];
+    InlineArray<uint8>#(4) index = [0; 4];
+    isize done = 0;
+    uint32 block = 1ui32;
+    while (done < into.length()) {
+        // U1 = PRF(P, S || INT(i)): the block index, big-endian.
+        index[0] = truncate<uint8>(block >> 24ui32);
+        index[1] = truncate<uint8>(block >> 16ui32);
+        index[2] = truncate<uint8>(block >> 8ui32);
+        index[3] = truncate<uint8>(block);
+        Hmac<H> first = keyed;
+        first.update(bytes: salt);
+        first.update(bytes: index.view());
+        first.finishInto(tag: u.viewMut().slice(from: 0, count: hlen));
+        isize b = 0;
+        while (b < hlen) { t[cast<usize>(b)] = u[cast<usize>(b)]; b = b + 1; }
+        int32 round = 1;
+        while (round < iterations) {   // U_j = PRF(P, U_{j-1}); T_i = U1 ^ U2 ^ … ^ Uc
+            Hmac<H> next = keyed;
+            next.update(bytes: u.view().slice(from: 0, count: hlen));
+            next.finishInto(tag: u.viewMut().slice(from: 0, count: hlen));
+            b = 0;
+            while (b < hlen) { t[cast<usize>(b)] = t[cast<usize>(b)] ^ u[cast<usize>(b)]; b = b + 1; }
+            round = round + 1;
+        }
+        isize take = into.length() - done < hlen ? into.length() - done : hlen;
+        b = 0;
+        while (b < take) { into[done + b] = t[cast<usize>(b)]; b = b + 1; }
+        done = done + take;
+        block = block + 1ui32;
+    }
+}
