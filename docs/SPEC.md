@@ -1835,9 +1835,11 @@ kernel reports it) — POSIX raises SIGPIPE there instead, whose default ends th
 signal from the start of `main`, as Go, Rust, Python and Node do, and every socket is also made not to raise it
 (`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple), so a `--shared` kama library is covered without touching its
 host's signals. Two things keep the Unix convention: **stdout and stderr** still end the program by SIGPIPE
-when the reader goes away — `prog | head -n 1` stops `prog` with exit 141 — and a **child** is started with the
-disposition it would have had without kama (`tools/check-sigpipe.sh` holds both). A program started with
-SIGPIPE already ignored keeps it ignored. Until `0.9.471` the first write after a peer hung up killed the process.
+when the reader goes away — `prog | head -n 1` stops `prog` with exit 141 — and a **child** starts with SIGPIPE
+at its default (`tools/check-sigpipe.sh` holds both). Both hold whatever the program inherited: a parent that
+leaves SIGPIPE ignored — the GitHub Actions runner does — used to make `prog | head` write its whole loop into a
+closed pipe, and pass the ignore on to every child, until `0.9.478`. Until `0.9.471` the first write after a peer
+hung up killed the process.
 
 **`Permissions`** are the nine Unix bits — read, write, execute for the owner, the group and everyone else —
 on every platform. Hand-written code names them, `Permissions::OwnerRead | Permissions::OwnerWrite` (the <!-- test: fs_permissions_api -->

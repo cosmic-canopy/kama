@@ -20573,9 +20573,12 @@ void CEmitter::emitRuntimeSlotDefinitions()
     //   * stdout and stderr keep the Unix convention: a write that fails with EPIPE there ends the program by
     //     SIGPIPE exactly as before, so `prog | head` still stops `prog` (kama_raw_write, kama_write);
     //   * a child is handed back the disposition it would have inherited (kama_proc_spawn).
-    // Only when the program did not start with SIGPIPE already ignored — then nothing changes at all — and never
-    // in a `--shared` library, which has no `main`: `kama__sigpipe_owned` stays 0 there, and sockets are covered
-    // by MSG_NOSIGNAL / SO_NOSIGPIPE on their own. Defined here, not in kama_runtime.h, so that header stays free
+    // Whatever the program inherited, default or ignored: a parent that leaks an ignore (the GitHub Actions runner
+    // does — measured, every CI leg) must not turn `prog | head` into a program writing its whole loop into a closed
+    // pipe, nor hand the leak on to a child. Until 0.9.478 an inherited ignore was left alone, and did both. Only a
+    // real handler, installed by something that ran before `main` (a C++ static initializer in a csource), is put
+    // back and left to its owner. Never in a `--shared` library, which has no `main`: `kama__sigpipe_owned` stays 0
+    // there, and sockets are covered by MSG_NOSIGNAL / SO_NOSIGPIPE on their own. Defined here, not in kama_runtime.h, so that header stays free
     // of system headers.
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED) && !defined(_WIN32) && !defined(__EMSCRIPTEN__)\n"
           << "#include <errno.h>\n"
@@ -20583,7 +20586,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "int kama__sigpipe_owned = 0;\n"
           << "void kama__sigpipe_init(void) {\n"
           << "    void (*prev)(int) = signal(SIGPIPE, SIG_IGN);\n"
-          << "    if (prev == SIG_DFL) kama__sigpipe_owned = 1;\n"
+          << "    if (prev == SIG_DFL || prev == SIG_IGN) kama__sigpipe_owned = 1;\n"
           << "    else if (prev != SIG_IGN && prev != SIG_ERR) (void)signal(SIGPIPE, prev);\n"
           << "}\n"
           << "void kama__stdio_write_failed(void) {\n"

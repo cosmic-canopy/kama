@@ -4,7 +4,8 @@
   "kind": "executable",
   "entry": "src/main.kama",
   "source": "src",
-  "cflags": [ "-DONEARG_CONFIG_FILE=\"onearg_config.h\"", "-DONEARG_GREETING=\"a b & c; d\"" ],
+  "cflags": [ "-DONEARG_CONFIG_FILE=\"onearg_config.h\"", "-DONEARG_GREETING=\"a b & c; d\"",
+              "-DONEARG_META=\"%PATH% ^!()<>|\"" ],
   "csources": ["csrc/onearg.c"],
   "modules": { ".": { "visibility": "internal" } }
 }

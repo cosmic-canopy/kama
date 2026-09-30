@@ -128,6 +128,13 @@ static inline void kama__capture_wsa(void) {
         case WSAEWOULDBLOCK:  errno = EAGAIN;        break;
         case WSAECONNREFUSED: errno = ECONNREFUSED;  break;
         case WSAECONNRESET:   errno = ECONNRESET;    break;
+        // Winsock reports a send after the peer's reset as WSAECONNRESET or WSAECONNABORTED ("aborted by the
+        // software in your host machine": the local stack tore the connection down on the RST), where POSIX says
+        // EPIPE or ECONNRESET — the same event, so the same IoError. A send after our own shutdown(SD_SEND) is
+        // POSIX's EPIPE. Unmapped, both arrived as IoError::Other: the likeliest reading of the Windows leg's
+        // failure of tests/net_write_closed_peer at 0.9.477, which that fixture now names by code if it recurs.
+        case WSAECONNABORTED: errno = ECONNRESET;    break;
+        case WSAESHUTDOWN:    errno = EPIPE;         break;
         case WSAEADDRINUSE:   errno = EADDRINUSE;    break;
         case WSAEINTR:        errno = EINTR;         break;
         case WSAEACCES:       errno = EACCES;        break;
@@ -1360,7 +1367,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     int pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
-        // The disposition the child would have inherited without kama: an ignored signal survives exec, so a
+        // SIGPIPE at its default, which is what an exec'd program expects: an ignored signal survives exec, so a
         // `head` or `yes` spawned from here would otherwise get EPIPE where it expects to be stopped (KPG-1).
         { extern int kama__sigpipe_owned; if (kama__sigpipe_owned) (void)signal(SIGPIPE, SIG_DFL); }
         if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }

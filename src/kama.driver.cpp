@@ -6404,7 +6404,17 @@ static std::string shellArg(const std::string& a)
         if (a[i] == '"')     { q.append(nbs * 2 + 1, '\\'); q += '"'; ++i; }
         else                 { q.append(nbs, '\\'); q += a[i]; ++i; }
     }
-    return q + "\"";
+    q += '"';
+    // ...and then cmd.exe's, because every command built here reaches the compiler THROUGH cmd — system() and the
+    // `-j` pool's `cmd /c` alike (user flags never move into a response file; see SpillList). cmd has no `\"`: it
+    // toggles its quote state on every `"`, so the inner quote of `-DMSG="a b & c"` ended cmd's quoted run and the
+    // `&` split the command (`'c\""' is not recognized`, the Windows CI leg at 0.9.477). A `^` before each cmd
+    // metacharacter — every quote included — keeps cmd out of quote mode for the whole argument, and it hands the
+    // child the CRT string byte for byte. That covers `%` as well: each `%` here follows a `^`, so any `%NAME%`
+    // cmd tries to expand is named `…^`, which no environment defines, and the caret is removed afterwards.
+    std::string e;
+    for (char c : q) { if (std::strchr("\"%!^&|<>()", c)) e += '^'; e += c; }
+    return e;
 #else
     std::string q = "'";
     for (char c : a) { if (c == '\'') q += "'\\''"; else q += c; }

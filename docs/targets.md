@@ -105,8 +105,9 @@ list unchanged. The CLI `--link` is unaffected and still appends, after both.
 Mbed TLS `MBEDTLS_CONFIG_FILE` idiom), a value with spaces stays one value, and two arguments are two entries
 (`"-framework", "Metal"`). Until `0.9.473` the entries were pasted into a shell command, so a manifest carried shell
 syntax — `\"` to keep a quote, `\$ORIGIN` to keep a dollar — which cmd.exe reads differently; an entry that still
-escapes `"`, `$`, `'` or `` ` `` with a backslash is refused, naming the spelling that works. ⚠️ On Windows,
-cmd.exe still expands a `%NAME%` that names an environment variable.
+escapes `"`, `$`, `'` or `` ` `` with a backslash is refused, naming the spelling that works. On Windows the
+command passes through cmd.exe, and each of its metacharacters is escaped for it, so `&`, `|` and `%PATH%` are text
+there too (until `0.9.478` a quote inside a value let cmd split the command at the next `&`).
 
 **`cflags` and `ldflags` sit on the project too**, exactly like `link`:
 

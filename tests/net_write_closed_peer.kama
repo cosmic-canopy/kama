@@ -20,10 +20,12 @@ fn int32 main() {
     while (i < 64) {
         int32 got = match (c.write(bytes: buf.view())) {
             case Ok(value: n): 0;
-            case Err(error: e): match (e) { case BrokenPipe: 1; case ConnectionReset: 1; case _: 5; };
+            // An unmapped OS code exits 100 + its last two digits (Windows' WSAECONNABORTED, 10053, would be 153), so a
+            // failure on a leg nobody can run locally names the code. The Windows leg's plain `5` at 0.9.477 did not.
+            case Err(error: e): match (e) { case BrokenPipe: 1; case ConnectionReset: 1; case Other(code: code): 100 + code % 100; case _: 5; };
         };
         if (got == 1) { return 42; }
-        if (got == 5) { return 5; }
+        if (got >= 5) { return got; }
         i = i + 1;
     }
     return 6;   // 64 writes of 4 KiB into a closed peer and no error
