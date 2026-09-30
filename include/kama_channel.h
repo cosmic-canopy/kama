@@ -19,6 +19,26 @@
 #include <errno.h>    /* ETIMEDOUT */
 #include "kama_runtime.h"   /* kama_panic, kama_string_lit */
 
+// `clock_gettime` and the clock ids are POSIX, and the strict `-std=c11` build may hide them: emscripten's <time.h>
+// always does (every channel fixture failed to compile on the wasm leg at 0.9.475). kama_time.h's convention, and its
+// id table: declare the one libc symbol, and name the ids (stable kernel ABI constants). Restated rather than reached
+// by including kama_time.h, which on Windows is <windows.h> — and headers are included in name order, so it would land
+// in front of a kama_os.h whose <winsock2.h> must come first.
+#ifdef CLOCK_MONOTONIC
+#  define KAMA__CHANNEL_MONO CLOCK_MONOTONIC
+#  define KAMA__CHANNEL_WALL CLOCK_REALTIME
+#else
+extern int clock_gettime(int clk_id, struct timespec* ts);
+#  if defined(__APPLE__)
+#    define KAMA__CHANNEL_MONO 6
+#  elif defined(__FreeBSD__)
+#    define KAMA__CHANNEL_MONO 4
+#  else
+#    define KAMA__CHANNEL_MONO 1      /* glibc, musl (and so emscripten) */
+#  endif
+#  define KAMA__CHANNEL_WALL 0
+#endif
+
 // A bounded (ring-buffer) channel. `cap` is the buffer capacity in elements; `elemSize` the bitwise
 // size of the moved value T. `count`/`head`/`tail` drive the ring.
 //
@@ -32,9 +52,11 @@
 // ⚠️ A side is also OPEN BEFORE IT IS EVER CLAIMED, which is why `claimed` exists beside each count. A
 // channel is born open on both sides (the flags started at 1), and programs depend on it: a worker that
 // receives the Channel itself and mints its Sender inside the isolate races main's first recv(), which
-// must BLOCK rather than see "zero senders, closed" and return None. Giving the Channel handle its own
-// share instead would break the opposite case — channel_close leaves `ch` alive in main for the whole
-// run while close must come from the producer's Sender drop.
+// must BLOCK rather than see "zero senders, closed" and return None. The Channel holds no share of a SIDE —
+// that would break the opposite case: channel_close leaves `ch` alive in main for the whole run while close
+// must come from the producer's Sender drop. It holds a share of the MEMORY (`factoryLive`): an unclaimed side
+// is open only while the factory that could claim it exists, and the queue is freed by whichever of the
+// senders, the receivers and the factory lets go last (`kama__channel_unheld`).
 typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t  notEmpty;   /* a blocked recv waits here; a send / last-sender-drop signals it */
@@ -51,25 +73,33 @@ typedef struct {
     int             receiverClaimed; /* has receiver() ever been called */
     unsigned long   takenSeq;        /* rendezvous only: bumped each time a receiver takes the slot */
     int             monotonic;       /* `notEmpty`'s timed wait runs on CLOCK_MONOTONIC (see kama__channel_cond_init) */
+    int             factoryLive;     /* the `Channel` factory still exists, so an unclaimed side may yet be claimed */
 } kama_channel_t;
 
-// "The sender side can still deliver" — a live sender exists, or none has been claimed yet. Callers hold
-// `mu`. The recv-side twin is what tells a blocked `send` whether anyone is left to receive.
+// "The sender side can still deliver" — a live sender exists, or none has been claimed yet while the factory that
+// could still claim one exists ("born open"). Callers hold `mu`. The recv-side twin is what tells a blocked `send`
+// whether anyone is left to receive. The factory half used to be missing: an unclaimed side stayed open forever, so a
+// receiver waiting on a sender nobody could mint any more blocked forever.
 static inline int kama_channel_send_open(kama_channel_t* ch) {
-    return ch->senders > 0 || !ch->senderClaimed;
+    return ch->senders > 0 || (!ch->senderClaimed && ch->factoryLive);
 }
 static inline int kama_channel_recv_open(kama_channel_t* ch) {
-    return ch->receivers > 0 || !ch->receiverClaimed;
+    return ch->receivers > 0 || (!ch->receiverClaimed && ch->factoryLive);
 }
 
-// Create a bounded channel over T (elemSize bytes) with `cap` buffered elements (cap >= 1 for M3.1).
-// Returns an opaque handle held by kama as an `UnsafePtr`. Panics on allocation failure (spawn-like: not a
-// recoverable condition in the M3 surface).
+// The queue has three kinds of holder — senders, receivers, and the factory — and whichever lets go LAST frees it.
+// Callers hold `mu`. It used to be "both sides closed", which leaked the queue of a channel whose factory was dropped
+// with a side never claimed (safe code; LeakSanitizer on tests/net_stream_to_isolate.kama), and would have freed the
+// queue under a live factory once the factory gets a destructor.
+static inline int kama__channel_unheld(kama_channel_t* ch) {
+    return ch->senders == 0 && ch->receivers == 0 && !ch->factoryLive;
+}
+
 // A timed receive (`Receiver.recvTimeout`, KPG-5) must not be stretched or cut short by the wall clock moving, so the
 // condvar a receiver waits on is put on CLOCK_MONOTONIC where the platform lets a condvar choose its clock. Apple
 // does not (no pthread_condattr_setclock); it has a RELATIVE timed wait instead, used below. Anywhere setclock is
-// refused, `monotonic` stays 0 and each wait slice is recomputed from the monotonic clock, so a wall-clock jump
-// costs at most one slice rather than the whole deadline.
+// refused, `monotonic` stays 0 and the wait runs in wall-clock slices of at most KAMA__CHANNEL_SLICE_NS, each
+// recomputed from the monotonic clock — so a wall-clock jump costs at most one slice, never the deadline.
 static inline int kama__channel_cond_init(pthread_cond_t* c) {
 #if defined(__APPLE__)
     pthread_cond_init(c, NULL);
@@ -78,7 +108,7 @@ static inline int kama__channel_cond_init(pthread_cond_t* c) {
     pthread_condattr_t a;
     int mono = 0;
     if (pthread_condattr_init(&a) == 0) {
-        mono = pthread_condattr_setclock(&a, CLOCK_MONOTONIC) == 0;
+        mono = pthread_condattr_setclock(&a, KAMA__CHANNEL_MONO) == 0;
         pthread_cond_init(c, &a);
         pthread_condattr_destroy(&a);
     } else {
@@ -87,27 +117,34 @@ static inline int kama__channel_cond_init(pthread_cond_t* c) {
     return mono;
 #endif
 }
-static inline int64_t kama__channel_now_ns(clockid_t clk) {
+static inline int64_t kama__channel_now_ns(int clk) {
     struct timespec t;
     clock_gettime(clk, &t);
     return (int64_t)t.tv_sec * 1000000000LL + (int64_t)t.tv_nsec;
 }
-// Wait on `notEmpty` until `deadline` (CLOCK_MONOTONIC ns). Returns ETIMEDOUT once the deadline has passed; any other
-// return is a wakeup, real or spurious, and the caller re-checks its predicate either way.
+#define KAMA__CHANNEL_SLICE_NS 50000000LL   /* 50 ms: the most a wall-clock jump can stretch a fallback wait */
+// Wait on `notEmpty` until `deadline` (monotonic ns). Returns ETIMEDOUT, without waiting, once the deadline has
+// passed — the monotonic clock is the only judge of that. Any wait returns 0: a wakeup, a spurious one, or a slice
+// ending early are all "look again", and the caller re-checks its predicate and calls back in.
 static inline int kama__channel_wait_until(kama_channel_t* ch, int64_t deadline) {
-    int64_t left = deadline - kama__channel_now_ns(CLOCK_MONOTONIC);
+    int64_t left = deadline - kama__channel_now_ns(KAMA__CHANNEL_MONO);
     if (left <= 0) return ETIMEDOUT;
     struct timespec ts;
 #if defined(__APPLE__)
     ts.tv_sec = (time_t)(left / 1000000000LL); ts.tv_nsec = (long)(left % 1000000000LL);
-    return pthread_cond_timedwait_relative_np(&ch->notEmpty, &ch->mu, &ts);
+    (void)pthread_cond_timedwait_relative_np(&ch->notEmpty, &ch->mu, &ts);
 #else
-    int64_t at = ch->monotonic ? deadline : kama__channel_now_ns(CLOCK_REALTIME) + left;
+    if (!ch->monotonic && left > KAMA__CHANNEL_SLICE_NS) left = KAMA__CHANNEL_SLICE_NS;
+    int64_t at = ch->monotonic ? deadline : kama__channel_now_ns(KAMA__CHANNEL_WALL) + left;
     ts.tv_sec = (time_t)(at / 1000000000LL); ts.tv_nsec = (long)(at % 1000000000LL);
-    return pthread_cond_timedwait(&ch->notEmpty, &ch->mu, &ts);
+    (void)pthread_cond_timedwait(&ch->notEmpty, &ch->mu, &ts);
 #endif
+    return 0;
 }
 
+// Create a bounded channel over T (elemSize bytes) with `cap` buffered elements (cap >= 1 for M3.1).
+// Returns an opaque handle held by kama as an `UnsafePtr`. Panics on allocation failure (spawn-like: not a
+// recoverable condition in the M3 surface).
 static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     kama_channel_t* ch = (kama_channel_t*)kama_alloc(sizeof(kama_channel_t), _Alignof(kama_channel_t));
     if (!ch) kama_panic(kama_string_lit("channel alloc failed", 20));
@@ -125,6 +162,7 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     ch->senders = ch->receivers = 0;
     ch->senderClaimed = ch->receiverClaimed = 0;   /* unclaimed == open; see the struct's note */
     ch->takenSeq = 0;
+    ch->factoryLive = 1;
     return ch;
 }
 
@@ -146,8 +184,8 @@ static inline void kama_channel_add_receiver(void* h) {
     pthread_mutex_unlock(&ch->mu);
 }
 
-// Free the queue + its buffer + sync primitives. Precondition: called by the LAST endpoint to close
-// (both liveness flags down), with the mutex UNLOCKED, so no other thread can reach it. Any items still
+// Free the queue + its buffer + sync primitives. Precondition: called by the queue's LAST holder
+// (`kama__channel_unheld`), with the mutex UNLOCKED, so no other thread can reach it. Any items still
 // buffered must already have been drained by the caller (kama-side, where element type T is known) —
 // this frees the raw buffer without touching element contents.
 static inline void kama_channel_free(kama_channel_t* ch) {
@@ -249,14 +287,13 @@ static inline int kama_channel_try_recv(void* h, void* out) {
 // kama_channel_try_recv. A zero or negative span is a try. The deadline is monotonic; see kama__channel_cond_init.
 static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
     kama_channel_t* ch = (kama_channel_t*)h;
-    const int64_t now = kama__channel_now_ns(CLOCK_MONOTONIC);
+    const int64_t now = kama__channel_now_ns(KAMA__CHANNEL_MONO);
     const int64_t deadline = nanos > INT64_MAX - now ? INT64_MAX : now + (nanos > 0 ? nanos : 0);
     pthread_mutex_lock(&ch->mu);
     while (ch->count == 0 && kama_channel_send_open(ch)) {
-        if (kama__channel_wait_until(ch, deadline) == ETIMEDOUT && ch->count == 0) {
-            int open = kama_channel_send_open(ch);
+        if (kama__channel_wait_until(ch, deadline) == ETIMEDOUT) {   /* still empty, still open: not yet */
             pthread_mutex_unlock(&ch->mu);
-            return open ? 1 : -1;
+            return 1;
         }
     }
     if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }
@@ -264,8 +301,8 @@ static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
 }
 
 // Non-blocking pop of one buffered element into `out` (elemSize bytes). Returns 1 if an element was
-// written, 0 if the ring is empty. Used ONLY by the last-endpoint teardown drain (below): at that point
-// both endpoints are closing and the queue is quiescent, so the lock is a formality. The element is
+// written, 0 if the ring is empty. Used ONLY by the last holder's teardown drain (below): at that point
+// every holder is gone and the queue is quiescent, so the lock is a formality. The element is
 // relocated out (memcpy) exactly like recv — the caller (kama, which knows T) then drops it.
 static inline int kama_channel_try_pop(void* h, void* out) {
     kama_channel_t* ch = (kama_channel_t*)h;
@@ -280,11 +317,11 @@ static inline int kama_channel_try_pop(void* h, void* out) {
 
 // Drop one sender endpoint. The sender SIDE closes only when the last one goes, and that is when any
 // receiver parked in recv is woken (to re-check and return None once drained). Returns 1 if this was the
-// last endpoint on BOTH sides — the caller must then drain any buffered items (kama-side, running each
-// element's ~dtor) and call kama_channel_free. Returns 0 otherwise (someone else frees later).
+// last holder of the queue (`kama__channel_unheld`) — the caller must then drain any buffered items (kama-side,
+// running each element's ~dtor) and call kama_channel_free. Returns 0 otherwise (someone else frees later).
 //
-// The decrement and the other side's state are read under one lock hold, so no two endpoints can both
-// observe "last": whichever closes second sees the first's count already at zero → exactly one frees.
+// The decrement and the other holders' state are read under one lock hold, so no two holders can both
+// observe "last": whichever lets go last sees the others already gone → exactly one frees.
 static inline int kama_channel_close_sender(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
@@ -292,7 +329,21 @@ static inline int kama_channel_close_sender(void* h) {
     /* Broadcast — not signal: EVERY blocked receiver must observe the closure, or the ones not woken
        park forever on a channel that will never deliver again. That is the whole point of a worker pool. */
     if (ch->senders == 0) pthread_cond_broadcast(&ch->notEmpty);
-    int last = (ch->senders == 0) && !kama_channel_recv_open(ch);
+    int last = kama__channel_unheld(ch);
+    pthread_mutex_unlock(&ch->mu);
+    return last;
+}
+
+// Drop the `Channel` factory. No side can be claimed after this, so an unclaimed side closes now: wake everyone
+// parked on it. Returns 1 when no endpoint is left either — the factory was the last holder, and the caller drains
+// any buffered items and frees the queue, exactly as a last endpoint does.
+static inline int kama_channel_close_factory(void* h) {
+    kama_channel_t* ch = (kama_channel_t*)h;
+    pthread_mutex_lock(&ch->mu);
+    ch->factoryLive = 0;
+    pthread_cond_broadcast(&ch->notEmpty);
+    pthread_cond_broadcast(&ch->notFull);
+    int last = kama__channel_unheld(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
 }
@@ -304,7 +355,7 @@ static inline int kama_channel_close_receiver(void* h) {
     pthread_mutex_lock(&ch->mu);
     ch->receivers--;
     if (ch->receivers == 0) pthread_cond_broadcast(&ch->notFull);
-    int last = (ch->receivers == 0) && !kama_channel_send_open(ch);
+    int last = kama__channel_unheld(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
 }

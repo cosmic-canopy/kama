@@ -33,6 +33,33 @@ unsafe fn void forget<T>(T value) {
     at[0] = give value;
 }
 
+// The last holder of a queue — a `Sender`, a `Receiver` or the `Channel` — drops what is still buffered, each element
+// once, and frees it. A channel abandoned with buffered resource items leaks none of them.
+unsafe fn void release<T>(UnsafePtr handle) {
+    bool more = true;
+    while (more) {
+        Optional<T> next = popBuffered::<T>(handle: handle);   // an element nobody will receive drops with `next`
+        more = match (next) { case Some(value: buffered): true; case None: false; };
+    }
+    kama_channel_free(ch: handle);
+}
+
+// One buffered element, or `None` once the ring is empty. `dst` is given on BOTH paths — into `Some`, or forgotten
+// when the queue left it unfilled — so no path drops a slot that holds nothing of its own.
+unsafe fn Optional<T> popBuffered<T>(UnsafePtr handle) {
+    slot T dst;
+    if (popBufferedInto::<T>(handle: handle, item: out dst) != 0) { return Optional::Some(value: give dst); }
+    forget(value: give dst);
+    return Optional::None;
+}
+
+// The `out` boundary over the type-erased C call: `item` IS an out-parameter, spelled `void*` across the FFI. It is
+// written only on success, reported in the return, so the caller branches on that; `addr(of: item)` here satisfies
+// the fill obligation unconditionally.
+unsafe fn int32 popBufferedInto<T>(UnsafePtr handle, out T item) {
+    return kama_channel_try_pop(ch: handle, dst: cast<UnsafePtr>(addr(of: item)));
+}
+
 extern "kama_channel.h";
 extern fn UnsafePtr   kama_channel_new(usize elemSize, usize cap);
 extern fn int32 kama_channel_send(UnsafePtr ch, UnsafePtr elem);
@@ -40,11 +67,12 @@ extern fn int32 kama_channel_recv(UnsafePtr ch, UnsafePtr dst);
 extern fn int32 kama_channel_try_recv(UnsafePtr ch, UnsafePtr dst);                 // 0 got, 1 empty, -1 closed
 extern fn int32 kama_channel_recv_timeout(UnsafePtr ch, UnsafePtr dst, int64 nanos); // 0 got, 1 timed out, -1 closed
 extern fn int32 kama_channel_try_pop(UnsafePtr ch, UnsafePtr dst);         // non-blocking pop, for teardown drain
+extern fn int32 kama_channel_close_factory(UnsafePtr ch);                  // 1 = the factory was the last holder
 extern fn void  kama_channel_add_sender(UnsafePtr ch);               // register one more endpoint on a side
 extern fn void  kama_channel_add_receiver(UnsafePtr ch);
 extern fn int32 kama_channel_close_sender(UnsafePtr ch);             // returns 1 if this endpoint is the last
 extern fn int32 kama_channel_close_receiver(UnsafePtr ch);           // returns 1 if this endpoint is the last
-extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the last endpoint after draining
+extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the queue's last holder after draining
 
 // The outcome of a `send`. `Sent` means the value was delivered (the queue now owns the sole copy).
 // `Undelivered(item)` hands the value BACK to the caller intact — send failed because the receiver is
@@ -85,35 +113,12 @@ type resource Sender<T: Sendable> implements Sendable {
         return SendResult::Undelivered(item: give item);
     }
 
-    // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
-    // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
-    // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
-    unsafe fn int32 tryPopInto(out T item) {
-        return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item)));
-    }
-
-    // One buffered element, or `None` once the ring is empty. `dst` is given on BOTH paths — into `Some`, or forgotten
-    // when the queue left it unfilled — so no path drops a slot that holds nothing of its own.
-    unsafe fn Optional<T> tryPop() {
-        slot T dst;
-        if (this.tryPopInto(item: out dst) != 0) { return Optional::Some(value: give dst); }
-        forget(value: give dst);
-        return Optional::None;
-    }
-
-    // Close the sender side. If this is the LAST live endpoint, the queue is now quiescent (the receiver
-    // is already gone and no further send can enqueue), so we DRAIN any items still buffered — relocating
-    // each into a local so its `~dtor` runs exactly once — before freeing the queue. This is the M8
-    // no-leak fix: a channel abandoned with buffered resource items no longer leaks them.
+    // Close the sender side. If this was the queue's LAST holder it is now quiescent (no receiver is left, no
+    // further send can enqueue, and the factory that could mint either is gone), so `release` drains and frees it.
     unsafe ~Sender() {
         if (this.handle != null) {
             if (kama_channel_close_sender(ch: this.handle) != 0) {
-                bool more = true;
-                while (more) {
-                    Optional<T> next = this.tryPop();   // an element nobody will receive drops with `next`, once
-                    more = match (next) { case Some(value: buffered): true; case None: false; };
-                }
-                kama_channel_free(ch: this.handle);
+                release::<T>(handle: this.handle);
             }
         }
     }
@@ -176,42 +181,19 @@ type resource Receiver<T: Sendable> implements Sendable {
         return kama_channel_recv_timeout(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)), nanos: nanos);
     }
 
-    // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
-    // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
-    // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
-    unsafe fn int32 tryPopInto(out T item) {
-        return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item)));
-    }
-
-    // One buffered element, or `None` once the ring is empty. `dst` is given on BOTH paths — into `Some`, or forgotten
-    // when the queue left it unfilled — so no path drops a slot that holds nothing of its own.
-    unsafe fn Optional<T> tryPop() {
-        slot T dst;
-        if (this.tryPopInto(item: out dst) != 0) { return Optional::Some(value: give dst); }
-        forget(value: give dst);
-        return Optional::None;
-    }
-
-    // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the
-    // remaining buffered items (dropping each) before freeing the queue — the M8 no-leak fix.
+    // Close the receiver side. Symmetric to ~Sender: the queue's last holder releases it.
     unsafe ~Receiver() {
         if (this.handle != null) {
             if (kama_channel_close_receiver(ch: this.handle) != 0) {
-                bool more = true;
-                while (more) {
-                    Optional<T> next = this.tryPop();   // an element nobody will receive drops with `next`, once
-                    more = match (next) { case Some(value: buffered): true; case None: false; };
-                }
-                kama_channel_free(ch: this.handle);
+                release::<T>(handle: this.handle);
             }
         }
     }
 }
 
-// The channel factory. `bounded(capacity:)` creates the queue (capacity >= 1 is a ring buffer). The
-// queue's lifetime is governed SOLELY by the endpoint COUNTS — the last Sender/Receiver to drop frees it
-// — so a `Channel` is a thin factory: its own drop does NOT touch the queue (its handle is a non-owning
-// copy), and it deliberately holds no share of its own. Extract the endpoints before discarding it.
+// The channel factory. `bounded(capacity:)` creates the queue (capacity >= 1 is a ring buffer). The queue has three
+// kinds of holder — the counted senders, the counted receivers, and this factory — and the last of them to drop
+// frees it (`kama__channel_unheld`), so the factory and its endpoints may go in any order.
 //
 // `sender()` / `receiver()` may each be called any number of times: every call registers another endpoint,
 // which is what makes a fixed pool of worker isolates over one channel correct. The `Channel` itself is a
@@ -239,7 +221,16 @@ type resource Channel<T: Sendable> implements Sendable {
         return Receiver::<T>.make(handle: this.handle);
     }
 
-    // No destructor, deliberately: the endpoints own the queue's lifetime (last-dropper-frees), so a
-    // `Channel` has nothing to tear down. See the note on `Atomic` — an empty dtor is not a comment, it
-    // sets `hasDtor` and makes the type `destructible`.
+    // The factory is what keeps an unclaimed side open ("born open"): while it exists, `sender()` or `receiver()` may
+    // still be called. Dropping it closes every side nobody claimed — a receiver waiting on a sender that can no
+    // longer be minted sees `None` — and when no endpoint is left at all, the factory releases the queue. It used
+    // to have no destructor, so a channel dropped before minting both sides leaked its queue in safe code, and such a
+    // receiver blocked forever (tests/channel_factory_drop).
+    unsafe ~Channel() {
+        if (this.handle != null) {
+            if (kama_channel_close_factory(ch: this.handle) != 0) {
+                release::<T>(handle: this.handle);
+            }
+        }
+    }
 }

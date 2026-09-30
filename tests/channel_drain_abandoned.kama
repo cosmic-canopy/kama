@@ -27,7 +27,7 @@ unsafe fn int32 run() {
         Owned<Tracked> a = new Tracked.make(tally: tally);   tx.send(item: give a);
         Owned<Tracked> b = new Tracked.make(tally: tally);   tx.send(item: give b);
         Owned<Tracked> c = new Tracked.make(tally: tally);   tx.send(item: give c);
-        // tx and rx drop here with 3 items still buffered and recv never called: the last endpoint
+        // ch, tx and rx drop here with 3 items still buffered and recv never called: the last holder
         // to close must drain all three (dropping each Owned<Tracked> → Tracked bumps the tally).
     }
     int32 n = 0;

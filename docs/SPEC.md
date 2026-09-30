@@ -5636,13 +5636,16 @@ last endpoint drops. Several `Receiver`s over one channel is a **worker pool** �
 exactly one of them <!-- test: channel_pool_recv --> — and several `Senders` is a fan-in,
 <!-- test: channel_multi_send --> rendezvous included <!-- test: channel_rendezvous_multi -->. The
 count moves exactly where ownership does, the same way a `Shared<T>` control block works, so the
-last endpoint to drop is the one that frees the queue. There is no `clone()` on an endpoint and none
+last holder to drop — endpoint or the `Channel` itself — is the one that frees the queue. There is no `clone()` on an endpoint and none
 is needed: a `Channel<T>` is itself a move-only `resource`, so it can be moved *into* an isolate
 whose worker then mints its own endpoint there. <!-- test: channel_mint_in_isolate -->
 
 A side is also open **before it is ever claimed**, which is what lets that last pattern work: a
 receiver may call `recv()` before the isolate holding the `Channel` has minted its `Sender`, and it
-blocks rather than reading "no senders yet" as end-of-stream.
+blocks rather than reading "no senders yet" as end-of-stream. That lasts exactly as long as the
+`Channel`: dropping it closes every side nobody claimed, so a receiver whose sender can no longer be
+minted sees `None`, a send nobody can receive comes back `Undelivered`, and a channel dropped before
+minting both sides frees its queue (until `0.9.477` it blocked, and leaked, forever). <!-- test: channel_factory_drop -->
 
 **Sendability is declared, and verified — the `immutable` model at the isolate seam.** A type says
 `implements Sendable`, and the compiler checks the claim over every field, base and variant payload; a
@@ -5679,7 +5682,7 @@ rather than bound to a thread, and each owning type is move-only: `File`, `TcpSt
 `IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
-dropped exactly once — received, or buffered when the last endpoint goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->
+dropped exactly once — received, or buffered when the queue's last holder goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->
 empty value is the one it states (`fd = -1`), not zero, and until `0.9.474` every send closed descriptor 0.
 
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the

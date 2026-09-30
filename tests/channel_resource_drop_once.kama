@@ -1,4 +1,4 @@
-// Every element of a `Channel<T>` is dropped exactly ONCE — received, or still buffered when the last endpoint goes —
+// Every element of a `Channel<T>` is dropped exactly ONCE — received, or still buffered when its last holder goes —
 // and no destructor ever runs on a value the program did not make. The channel used to zero a sent item "so its drop
 // is a no-op", on the claim that a zero value is drop-safe. It is not the language's rule: a type states its empty
 // value (`File`, `TcpStream`: `fd = -1`, so descriptor 0 is ownable), and each send ran a destructor on a zeroed
@@ -35,7 +35,8 @@ fn int32 main() {
         received = ra + rb;
     }   // the two received tokens drop here
     {
-        Receiver<Token> last = give rx;   // the last endpoint: dropping it drains the three still buffered
+        Channel<Token> factory = give ch;   // the queue's last holders: while the factory lives it could still mint a
+        Receiver<Token> last = give rx;     // receiver for what is buffered, so dropping BOTH drains the three
     }
     if (g_zeroed != 0) { return 10 + g_zeroed; }
     return received == 2 && g_real == 5 ? 42 : 30 + g_real;

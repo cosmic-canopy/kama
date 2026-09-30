@@ -1,0 +1,76 @@
+// A `Channel` is the third holder of its queue, beside its senders and receivers: while it exists a side nobody has
+// claimed is still open ("born open" — `sender()` may yet be called), and dropping it closes that side for good. The
+// factory used to have no destructor, so an unclaimed side stayed open forever: a channel dropped before minting both
+// sides leaked its queue in safe code (LeakSanitizer, on the `Channel<SocketAddr>` in tests/net_stream_to_isolate),
+// and a receiver whose sender could no longer be minted blocked forever in `recv`. Every case below is one of those.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::concurrent::SendResult, std::concurrent::RecvResult };
+
+static int32 g_dropped;
+
+type resource Token implements Sendable {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 ident() { return this.id; }
+    ~Token() { if (this.id > 0) { g_dropped = g_dropped + 1; } }
+}
+
+// The factory goes before any sender was minted: the receiver's sender side is closed, not "not yet".
+fn Receiver<int32> orphanReceiver() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    return ch.receiver();
+}
+
+fn Sender<int32> orphanSender() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    return ch.sender();
+}
+
+fn int32 main() {
+    {
+        Channel<int32> never = Channel.bounded(capacity: 4);   // no endpoint at all: the factory frees the queue
+    }
+
+    Receiver<int32> rx = orphanReceiver();
+    Optional<int32> got = rx.recv();                         // used to block forever
+    bool none = match (got) { case Some(value: v): false; case None: true; };
+    if (!none) { return 1; }
+    RecvResult<int32> tried = rx.tryRecv();
+    bool closed = match (tried) { case Closed: true; case Received(item: v): false; case Empty: false; };
+    if (!closed) { return 2; }
+
+    Sender<int32> tx = orphanSender();
+    SendResult<int32> sent = tx.send(item: 7);                // nobody can ever receive it: handed back
+    bool refused = match (sent) { case Undelivered(item: v): v == 7; case Sent: false; };
+    if (!refused) { return 3; }
+
+    {
+        // A sender only, two items buffered, then every holder goes: the last one (the factory, declared first and
+        // so dropped last) drains the queue and drops each item once.
+        Channel<Token> ch = Channel.bounded(capacity: 4);
+        Sender<Token> only = ch.sender();
+        Token a = Token.make(id: 1);
+        Token b = Token.make(id: 2);
+        only.send(item: give a);
+        only.send(item: give b);
+    }
+    if (g_dropped != 2) { return 10 + g_dropped; }
+
+    {
+        // The factory goes FIRST, with both sides minted: the endpoints hold the queue on without it.
+        Receiver<Token> keep = orphanTokens();
+        Optional<Token> t = keep.recv();
+        bool one = match (t) { case Some(value: k): k.ident() == 3; case None: false; };
+        if (!one) { return 4; }
+    }
+    return g_dropped == 3 ? 42 : 20 + g_dropped;
+}
+
+fn Receiver<Token> orphanTokens() {
+    Channel<Token> ch = Channel.bounded(capacity: 1);
+    Receiver<Token> rx = ch.receiver();
+    Sender<Token> tx = ch.sender();
+    Token t = Token.make(id: 3);
+    tx.send(item: give t);
+    return rx;
+}
