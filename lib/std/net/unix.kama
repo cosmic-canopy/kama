@@ -1,0 +1,228 @@
+// Unix-domain sockets (KR-104): a byte stream between two processes on one machine, named by a path in the
+// filesystem instead of an address and port — how a database's local connection, container runtimes, systemd
+// and most local daemons are reached. Linux, macOS, and Windows 10 1803+ (whose AF_UNIX is stream-only).
+//
+// It is TCP's shape with a path for an address: `UnixStream` is a `ReliableStream` like `TcpStream` (so
+// every stream helper and serde backend runs over it) and `UnixListener` accepts like `TcpListener`. What a
+// local socket adds is WHO is on the other end — `UnixStream.peerCredentials()`, the same call on every OS,
+// returning each OS's own `PeerCredentials` (unix_posix.kama, unix_windows.kama).
+//
+// The rules a path brings, each a decision (ROADMAP_DETAIL records the reasoning):
+// - `bind` over a path that exists is `AddrInUse`, as in Go and Rust: nothing is removed behind the caller.
+// - A listener REMOVES the socket file it created when it drops (Go's rule), so a clean restart just works.
+//   A crash still leaves the file, and the next `bind` says `AddrInUse`.
+// - A path is at most `sun_path` bytes less its terminator (103 on macOS, 107 on Linux and Windows); an
+//   empty path, a longer one, or one holding a NUL is `InvalidInput` before the OS is asked.
+import {
+    std::io::IoError, std::io::lastError, std::io::Reader, std::io::Writer,
+    std::collections::View, std::collections::ConstView,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+    ReliableStream, Shutdown, PeerCredentials,
+};
+
+export { UnixStream, UnixListener, UnixAddr };
+
+extern "kama_os.h";
+extern fn int32 kama_net_init();
+extern fn isize kama_socket_unix(int32 datagram);
+extern fn int32 kama_unix_path_max();
+extern fn int32 kama_bind_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
+extern fn int32 kama_connect_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
+extern fn isize kama_unix_name(isize fd, int32 peer, UnsafePtr<int32> kind, UnsafePtr<uint8> into, usize cap);
+extern fn int32 kama_listen(isize fd, int32 backlog);
+extern fn isize kama_accept(isize fd);
+extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
+extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
+extern fn int32 kama_close_socket(isize fd);
+extern fn int32 kama_set_nonblocking(isize fd, int32 on);
+extern fn int32 kama_shutdown(isize fd, int32 how);
+extern fn int32 kama_unlink(UnsafeConstPtr<cchar> path);
+extern fn int32 kama_last_error();
+extern fn int32 kama_EINTR();
+
+// A Unix-domain socket address: a filesystem path, or UNNAMED — a socket that was never bound, which is
+// what a connecting client's own end usually is.
+type value UnixAddr implements Formattable, Equatable<This>, Sendable {
+    int32 kind;                          // 0 unnamed, 1 a path
+    InlineArray<uint8>#(108) name;       // the path's bytes, unterminated (108 = the largest sun_path)
+    int32 len;
+    friend UnixStream[kind, name, len];
+    friend UnixListener[kind, name, len];
+    friend unixNameOf[raw];
+    ctor raw(int32 kind, const ref InlineArray<uint8>#(108) name, int32 len) { this.kind = kind; this.name = name; this.len = len; }
+
+    // A path to bind or connect to, checked here: empty, longer than this OS's `sun_path` holds, or holding a
+    // NUL is `InvalidInput`. Relative paths are relative to the working directory, as for a file.
+    public unsafe ctor Result<UnixAddr, IoError> fromPath(const ref string path) {
+        isize n = path.length();
+        if (n == 0 || n > cast<isize>(kama_unix_path_max())) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(108) b = [0; 108];
+        isize i = 0;
+        while (i < n) {
+            uint8 c = path[i];
+            if (c == 0ui8) { return Result::Err(error: IoError::InvalidInput); }
+            b[i] = c;
+            i = i + 1;
+        }
+        return Result::Ok(value: UnixAddr.raw(kind: 1, name: b, len: cast<int32>(n)));
+    }
+
+    public const fn bool isUnnamed() { return this.kind == 0; }
+    // The path, or `None` for an unnamed socket. (A path kama bound is UTF-8 text; one some other program
+    // bound that is not reads as `None` too, since a kama `string` cannot hold it.)
+    public unsafe const fn Optional<string> path() {
+        if (this.kind != 1) { return Optional::None; }
+        Result<string, Utf8Error> r = decode(bytes: this.name.view().slice(from: 0, count: cast<isize>(this.len)));
+        return match (give r) { case Ok(value: s): Optional::Some(value: give s); case Err(error: e): Optional::None; };
+    }
+    public const fn bool equals(const ref UnixAddr other) {
+        if (this.kind != other.kind || this.len != other.len) { return false; }
+        isize i = 0;
+        while (i < cast<isize>(this.len)) { if (this.name[i] != other.name[i]) { return false; } i = i + 1; }
+        return true;
+    }
+    public const fn void format(ref Formatter f) {
+        if (this.kind == 0) { f.writeStr(s: "(unnamed)"); return; }
+        match (this.path()) { case Some(value: p): { f.writeStr(s: p); } case None: { f.writeStr(s: "(not UTF-8)"); } };
+    }
+}
+
+// The name a socket has (`peer` false) or its peer has (true), read back from the OS.
+unsafe fn Result<UnixAddr, IoError> unixNameOf(isize fd, bool peer) {
+    InlineArray<uint8>#(108) b = [0; 108];
+    int32 kind = 0;
+    isize n = kama_unix_name(fd: fd, peer: peer ? 1 : 0, kind: addr(of: kind), into: addr(of: b[0]), cap: 108);
+    if (n < 0) { return Result::Err(error: lastError()); }
+    if (n > 108) { n = 108; }
+    return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(n)));
+}
+
+// A connected Unix-domain stream. Closes its socket on drop (RAII). Move-only, and `Sendable` like `TcpStream`,
+// so a connection accepted on one isolate is served on another.
+type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
+    isize fd = -1;   // the -1 empty niche, as `TcpStream`'s — descriptor 0 stays ownable
+    // Adopt an already-connected socket descriptor (what `UnixListener.accept` does).
+    public ctor make(isize fd) { this.fd = fd; }
+
+    // Connect to the socket at `path`.
+    public unsafe ctor Result<UnixStream, IoError> connect(const ref string path) {
+        return match (UnixAddr.fromPath(path: path)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): UnixStream.connectTo(address: a);
+        };
+    }
+    public unsafe ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
+        if (address.kind == 0) { return Result::Err(error: IoError::InvalidInput); }   // nothing to connect to
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        isize fd = kama_socket_unix(datagram: 0);
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        InlineArray<uint8>#(108) name = address.name;
+        if (kama_connect_unix(fd: fd, path: addr(of: name[0]), n: cast<usize>(address.len), kind: address.kind) != 0) {
+            IoError e = lastError();                          // capture before close (close may clear errno)
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        return Result::Ok(value: UnixStream.make(fd: fd));
+    }
+
+    // `Reader`: up to into.length() bytes; 0 = the peer closed. EINTR-retried.
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    // `Writer` primitive: one send, possibly short (`std::io::writeAll` loops it). A write to a peer that has
+    // gone is `BrokenPipe`, never SIGPIPE. EINTR-retried.
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
+        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Close one half (see `Shutdown`).
+    public unsafe fn Result<Unit, IoError> shutdown(Shutdown how) {
+        int32 h = match (how) { case Read: 0; case Write: 1; case Both: 2; };
+        if (kama_shutdown(fd: this.fd, how: h) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
+    // Who is on the other end: its process, user and groups — the same call on every OS, answered by each OS's
+    // own `PeerCredentials`. What a server needs for postgres-style `peer` authentication.
+    public unsafe fn Result<PeerCredentials, IoError> peerCredentials() { return PeerCredentials.of(fd: this.fd); }
+    // The raw socket handle — the bridge to a `std::net::Poller`.
+    public const fn isize rawHandle() { return this.fd; }
+
+    unsafe ~UnixStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
+}
+
+// A listening Unix-domain socket. Closes on drop and REMOVES the socket file it created. Move-only, `Sendable`.
+type resource UnixListener implements Sendable {
+    isize fd = -1;
+    string created;   // the path this listener made and so removes at drop; "" for nothing to remove
+    ctor adopt(isize fd, string created) { this.fd = fd; this.created = give created; }
+
+    public unsafe ctor Result<UnixListener, IoError> bind(const ref string path) {
+        return match (UnixAddr.fromPath(path: path)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): UnixListener.bindTo(address: a);
+        };
+    }
+    // Bind + listen. A path that already exists — a live listener's or a stale file — is `AddrInUse`.
+    public unsafe ctor Result<UnixListener, IoError> bindTo(const ref UnixAddr address) {
+        if (address.kind == 0) { return Result::Err(error: IoError::InvalidInput); }
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        isize fd = kama_socket_unix(datagram: 0);
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        InlineArray<uint8>#(108) name = address.name;
+        if (kama_bind_unix(fd: fd, path: addr(of: name[0]), n: cast<usize>(address.len), kind: address.kind) != 0) {
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        // The file exists from here: remove it again if listening fails, so a failed bind leaves nothing behind.
+        Optional<string> made0 = address.path();
+        string made = match (give made0) { case Some(value: p): give p; case None: ""; };
+        if (kama_listen(fd: fd, backlog: 128) != 0) {
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            int32 ru = kama_unlink(path: made.cstr());
+            return Result::Err(error: e);
+        }
+        return Result::Ok(value: UnixListener.adopt(fd: fd, created: give made));
+    }
+
+    // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried.
+    public unsafe fn Result<UnixStream, IoError> accept() {
+        while (true) {
+            isize cfd = kama_accept(fd: this.fd);
+            if (cfd >= 0) { return Result::Ok(value: UnixStream.make(fd: cfd)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
+        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public const fn isize rawHandle() { return this.fd; }
+
+    // Close, then remove the file this listener made — closing first, so nothing can connect to a name that
+    // is about to disappear.
+    unsafe ~UnixListener() {
+        if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); }
+        if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
+    }
+}

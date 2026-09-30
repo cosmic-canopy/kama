@@ -1,0 +1,236 @@
+// Who a process runs as — its user and group accounts (KR-104).
+//
+// ONE interface on every OS (the maintainer, 2026-09-30: the primary interface is the same, and each platform's
+// deltas live in the types it returns — a platform is never cut down to the common subset). `UserId` and
+// `GroupId` compare with `==`, name their account with `name()` and render with `${…}` everywhere. What an
+// identity IS differs, and each OS's twin keeps its own native form: a numeric uid/gid on Linux and macOS
+// (`raw()`, `of(raw:)`), a security identifier on Windows (`sid()`, `fromSid(bytes:)`, and the account's
+// `domain()`), whose process identity is an access token (`AccessToken`, Windows' own addition).
+//
+// The twins are whole types gated by `@compileFor` — a member cannot be gated, by design, so each OS's body
+// lives in that OS's type rather than behind a conditional inside one.
+import {
+    std::io::IoError, std::io::lastError,
+    std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+};
+
+export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId };
+
+extern "kama_os.h";
+extern fn int32 kama_getpid();
+@compileFor(!OS_WINDOWS) extern fn uint32 kama_getuid();
+@compileFor(!OS_WINDOWS) extern fn uint32 kama_getgid();
+@compileFor(!OS_WINDOWS) extern fn isize  kama_id_name(int32 group, uint32 id, UnsafePtr<uint8> into, usize cap);
+@compileFor(OS_WINDOWS)  extern fn isize  kama_token_open(int32 pid);
+@compileFor(OS_WINDOWS)  extern fn void   kama_token_close(isize tok);
+@compileFor(OS_WINDOWS)  extern fn int32  kama_token_sid(isize tok, int32 which, UnsafePtr<uint8> into, usize cap);
+@compileFor(OS_WINDOWS)  extern fn int32  kama_sid_name(UnsafeConstPtr<uint8> sid, UnsafePtr<uint8> name, usize ncap, UnsafePtr<int32> nlen,
+                                                        UnsafePtr<uint8> dom, usize dcap, UnsafePtr<int32> dlen);
+
+// This process's id — what `Process.id()` reports for a child, and `PeerCredentials.processId()` for the
+// process on the other end of a Unix socket.
+unsafe fn int32 currentProcessId() { return kama_getpid(); }
+
+// Account text off the OS is outside input: it is UTF-8 on every system kama targets, and checked as such.
+unsafe fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
+    Result<string, Utf8Error> r = decode(bytes: bytes);
+    return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError::InvalidInput); };
+}
+
+// ---- Linux, macOS (and the wasm build, whose libc answers as a single user) ---------------------------------
+
+// The account name of a uid (`group` 0) or gid (1): `NotFound` when no account has that id.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<string, IoError> idName(int32 group, uint32 id) {
+    isize cap = 256;
+    while (true) {
+        FixedArray<uint8> buf = FixedArray.make(size: cap);
+        isize n = kama_id_name(group: group, id: id, into: buf.dataPtrMut(), cap: cast<usize>(cap));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        if (n <= cap) { return textOf(bytes: buf.slice(from: 0, count: n)); }
+        cap = n;   // the name is longer than the buffer: ask again with room for it
+    }
+}
+
+@compileFor(!OS_WINDOWS)
+type value UserId implements Equatable<This>, Formattable, Sendable {
+    uint32 uid;
+    public ctor of(uint32 raw) { this.uid = raw; }            // a uid is a number, and any number may be asked about
+    public const fn uint32 raw() { return this.uid; }
+    public unsafe fn Result<string, IoError> name() { return idName(group: 0, id: this.uid); }
+    public const fn bool equals(const ref UserId other) { return this.uid == other.uid; }
+    public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this.uid)); }
+}
+
+@compileFor(!OS_WINDOWS)
+type value GroupId implements Equatable<This>, Formattable, Sendable {
+    uint32 gid;
+    public ctor of(uint32 raw) { this.gid = raw; }
+    public const fn uint32 raw() { return this.gid; }
+    public unsafe fn Result<string, IoError> name() { return idName(group: 1, id: this.gid); }
+    public const fn bool equals(const ref GroupId other) { return this.gid == other.gid; }
+    public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this.gid)); }
+}
+
+// The account this process runs as, and its primary group. Fallible on every OS because Windows reads them
+// from the process's token; here they cannot fail.
+@compileFor(!OS_WINDOWS) unsafe fn Result<UserId, IoError> currentUser() { return Result::Ok(value: UserId.of(raw: kama_getuid())); }
+@compileFor(!OS_WINDOWS) unsafe fn Result<GroupId, IoError> currentGroup() { return Result::Ok(value: GroupId.of(raw: kama_getgid())); }
+
+// ---- Windows ------------------------------------------------------------------------------------------------
+
+// A security identifier as the OS hands it over: revision 1, 1..15 sub-authorities, 8 + 4n bytes (at most 68).
+// Anything else is `InvalidInput` — the bytes arrive from outside, so they are checked, not trusted.
+@compileFor(OS_WINDOWS)
+fn bool sidValid(ConstView<uint8> bytes) {
+    isize n = bytes.length();
+    if (n < 8 || n > 68 || bytes[0] != 1ui8) { return false; }
+    return n == 8 + 4 * cast<isize>(bytes[1]);
+}
+
+// The SID's text form, `S-1-5-21-…`: revision, the 48-bit big-endian authority, then each 32-bit little-endian
+// sub-authority — what `ConvertSidToStringSid` prints, written out rather than pulling in <sddl.h>.
+@compileFor(OS_WINDOWS)
+fn void sidText(const ref InlineArray<uint8>#(68) b, ref Formatter f) {
+    f.writeStr(s: "S-");
+    f.writeU64(v: cast<uint64>(b[0]));
+    uint64 auth = 0ui64;
+    isize i = 2;
+    while (i < 8) { auth = auth * 256ui64 + cast<uint64>(b[i]); i = i + 1; }
+    f.writeStr(s: "-");
+    f.writeU64(v: auth);
+    isize k = 0;
+    while (k < cast<isize>(b[1])) {
+        isize o = 8 + 4 * k;
+        uint64 sub = cast<uint64>(b[o]) + cast<uint64>(b[o + 1]) * 256ui64 + cast<uint64>(b[o + 2]) * 65536ui64
+                   + cast<uint64>(b[o + 3]) * 16777216ui64;
+        f.writeStr(s: "-");
+        f.writeU64(v: sub);
+        k = k + 1;
+    }
+}
+
+@compileFor(OS_WINDOWS)
+fn bool sidEqual(const ref InlineArray<uint8>#(68) a, int32 alen, const ref InlineArray<uint8>#(68) b, int32 blen) {
+    if (alen != blen) { return false; }
+    isize i = 0;
+    while (i < cast<isize>(alen)) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+// The account a SID names: `domain` false for its name, true for its domain (`MACHINE` or `DOMAIN`).
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> sidAccount(const ref InlineArray<uint8>#(68) b, bool domain) {
+    FixedArray<uint8> name = FixedArray.make(size: 1024);
+    FixedArray<uint8> dom = FixedArray.make(size: 1024);
+    int32 nl = 0;
+    int32 dl = 0;
+    if (kama_sid_name(sid: addr(of: b[0]), name: name.dataPtrMut(), ncap: 1024, nlen: addr(of: nl),
+                      dom: dom.dataPtrMut(), dcap: 1024, dlen: addr(of: dl)) != 0) { return Result::Err(error: lastError()); }
+    return domain ? textOf(bytes: dom.slice(from: 0, count: cast<isize>(dl)))
+                  : textOf(bytes: name.slice(from: 0, count: cast<isize>(nl)));
+}
+
+@compileFor(OS_WINDOWS)
+type value UserId implements Equatable<This>, Formattable, Sendable {
+    InlineArray<uint8>#(68) sidBytes;
+    int32 sidLen;
+    public unsafe ctor Result<UserId, IoError> fromSid(ConstView<uint8> bytes) {
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(68) b = [0; 68];
+        isize i = 0;
+        while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }
+        return Result::Ok(value: UserId.raw(bytes: b, len: cast<int32>(bytes.length())));
+    }
+    ctor raw(const ref InlineArray<uint8>#(68) bytes, int32 len) { this.sidBytes = bytes; this.sidLen = len; }
+    public const fn string sid() { return "${this}"; }
+    public unsafe fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
+    public unsafe fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
+    public const fn bool equals(const ref UserId other) { return sidEqual(a: this.sidBytes, alen: this.sidLen, b: other.sidBytes, blen: other.sidLen); }
+    public const fn void format(ref Formatter f) { sidText(b: this.sidBytes, f: ref f); }
+}
+
+@compileFor(OS_WINDOWS)
+type value GroupId implements Equatable<This>, Formattable, Sendable {
+    InlineArray<uint8>#(68) sidBytes;
+    int32 sidLen;
+    public unsafe ctor Result<GroupId, IoError> fromSid(ConstView<uint8> bytes) {
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
+        InlineArray<uint8>#(68) b = [0; 68];
+        isize i = 0;
+        while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }
+        return Result::Ok(value: GroupId.raw(bytes: b, len: cast<int32>(bytes.length())));
+    }
+    ctor raw(const ref InlineArray<uint8>#(68) bytes, int32 len) { this.sidBytes = bytes; this.sidLen = len; }
+    public const fn string sid() { return "${this}"; }
+    public unsafe fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
+    public unsafe fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
+    public const fn bool equals(const ref GroupId other) { return sidEqual(a: this.sidBytes, alen: this.sidLen, b: other.sidBytes, blen: other.sidLen); }
+    public const fn void format(ref Formatter f) { sidText(b: this.sidBytes, f: ref f); }
+}
+
+// A process's access token — who a Windows process runs as: its user, its primary group and every group it
+// belongs to. `current()` is this process's; `ofProcess(id:)` another's, which a less privileged process may
+// be refused (`PermissionDenied`). Closed on drop.
+@compileFor(OS_WINDOWS)
+type resource AccessToken implements Sendable {
+    isize handle = -1;
+    ctor adopt(isize handle) { this.handle = handle; }
+    public unsafe ctor Result<AccessToken, IoError> current() { return AccessToken.ofProcess(id: 0); }
+    public unsafe ctor Result<AccessToken, IoError> ofProcess(int32 id) {
+        isize h = kama_token_open(pid: id);
+        if (h < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: AccessToken.adopt(handle: h));
+    }
+    // The SID at `which` (0 user, 1 primary group, 2+i the i-th group) into `b`; its length, 0 past the end.
+    unsafe fn Result<int32, IoError> sidAt(int32 which, ref InlineArray<uint8>#(68) b) {
+        int32 n = kama_token_sid(tok: this.handle, which: which, into: addr(of: b[0]), cap: 68);
+        if (n < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: n);
+    }
+    public unsafe fn Result<UserId, IoError> user() {
+        InlineArray<uint8>#(68) b = [0; 68];
+        return match (this.sidAt(which: 0, b: ref b)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: n): UserId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(n)));
+        };
+    }
+    public unsafe fn Result<GroupId, IoError> primaryGroup() {
+        InlineArray<uint8>#(68) b = [0; 68];
+        return match (this.sidAt(which: 1, b: ref b)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: n): GroupId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(n)));
+        };
+    }
+    public unsafe fn Result<DynamicArray<GroupId>, IoError> groups() {
+        DynamicArray<GroupId> all = DynamicArray.empty();
+        int32 i = 0;
+        bool more = true;
+        while (more) {
+            InlineArray<uint8>#(68) b = [0; 68];
+            int32 n = 0;
+            match (this.sidAt(which: 2 + i, b: ref b)) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: v): { n = v; } };
+            if (n == 0) {
+                more = false;                                      // past the last group
+            } else {
+                match (GroupId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(n)))) {
+                    case Err(error: e): { return Result::Err(error: e); }
+                    case Ok(value: g): { all.add(item: g); }
+                };
+                i = i + 1;
+            }
+        }
+        return Result::Ok(value: give all);
+    }
+    unsafe ~AccessToken() { if (this.handle >= 0) { kama_token_close(tok: this.handle); } }
+}
+
+@compileFor(OS_WINDOWS)
+unsafe fn Result<UserId, IoError> currentUser() {
+    return match (AccessToken.current()) { case Ok(value: t): t.user(); case Err(error: e): Result::Err(error: e); };
+}
+@compileFor(OS_WINDOWS)
+unsafe fn Result<GroupId, IoError> currentGroup() {
+    return match (AccessToken.current()) { case Ok(value: t): t.primaryGroup(); case Err(error: e): Result::Err(error: e); };
+}

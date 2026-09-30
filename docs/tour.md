@@ -588,7 +588,7 @@ fn int32 main()
 ```
 
 The rest follows the same shape — a `Result` where something can fail, RAII where something is held:
-`std::net` (TCP, UDP, IPv4 and IPv6, multicast, WebSockets), `std::math`, `std::random`, `std::digest`,
+`std::net` (TCP, UDP, Unix-domain sockets, IPv4 and IPv6, multicast, WebSockets), `std::math`, `std::random`, `std::digest`,
 `std::uuid`, `std::encoding` (base64, hex), `std::path`, `std::fmt` (parsing), and `std::concurrent`
 below. Each has its section in [the specification](SPEC.md).
 

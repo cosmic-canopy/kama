@@ -1,0 +1,66 @@
+file @compileFor(!OS_WINDOWS);
+// `PeerCredentials` on Linux and macOS (the Windows one is unix_windows.kama; see unix.kama). The kernel says
+// who is on the other end of a Unix socket: Linux as it recorded at connect (SO_PEERCRED, SO_PEERGROUPS on
+// 4.13+), macOS as the peer's credentials now (LOCAL_PEERCRED, LOCAL_PEERPID).
+import {
+    std::io::IoError, std::io::lastError,
+    std::collections::DynamicArray, std::collections::FixedArray,
+    std::process::UserId, std::process::GroupId,
+};
+
+export { PeerCredentials };
+
+extern "kama_os.h";
+extern fn int32 kama_unix_peer(isize fd, UnsafePtr<int32> pid, UnsafePtr<uint32> uid, UnsafePtr<uint32> gid);
+extern fn isize kama_unix_peer_groups(isize fd, UnsafePtr<uint32> into, usize cap);
+
+// Who is on the other end of a `UnixStream`: its process, its user, its primary group and every group it
+// belongs to (`groups()`: the primary first, each once). The same members on every OS; each identity is this
+// OS's own (`UserId.raw()` is the uid).
+type resource PeerCredentials implements Sendable {
+    int32 pid;
+    UserId who;
+    GroupId primary;
+    DynamicArray<GroupId> all;
+    friend UnixStream[of];
+
+    ctor adopt(int32 pid, UserId who, GroupId primary, DynamicArray<GroupId> all) {
+        this.pid = pid; this.who = who; this.primary = primary; this.all = give all;
+    }
+    unsafe ctor Result<PeerCredentials, IoError> of(isize fd) {
+        int32 pid = 0;
+        uint32 uid = 0ui32;
+        uint32 gid = 0ui32;
+        if (kama_unix_peer(fd: fd, pid: addr(of: pid), uid: addr(of: uid), gid: addr(of: gid)) != 0) {
+            return Result::Err(error: lastError());
+        }
+        // Every group, the primary FIRST: Linux lists only the supplementary groups (none at all for a root
+        // process in a container), macOS leads with the effective group, so the list is normalized here.
+        DynamicArray<GroupId> all = DynamicArray.empty();
+        all.add(item: GroupId.of(raw: gid));
+        isize cap = 64;
+        bool more = true;
+        while (more) {
+            FixedArray<uint32> buf = FixedArray.make(size: cap);
+            isize n = kama_unix_peer_groups(fd: fd, into: buf.dataPtrMut(), cap: cast<usize>(cap));
+            if (n < 0) { return Result::Err(error: lastError()); }
+            if (n > cap) {
+                cap = n;                                   // more groups than room: ask again with enough
+            } else {
+                isize i = 0;
+                while (i < n) {
+                    GroupId g = GroupId.of(raw: buf[i]);
+                    if (all.indexOf(item: g) < 0) { all.add(item: g); }   // each group once
+                    i = i + 1;
+                }
+                more = false;
+            }
+        }
+        return Result::Ok(value: PeerCredentials.adopt(pid: pid, who: UserId.of(raw: uid), primary: GroupId.of(raw: gid), all: give all));
+    }
+
+    public const fn int32 processId() { return this.pid; }
+    public const fn UserId user() { return this.who; }
+    public const fn GroupId group() { return this.primary; }
+    public fn DynamicArray<GroupId> groups() { return copy this.all; }
+}

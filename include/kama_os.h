@@ -85,6 +85,7 @@ static inline char* kama__sized_strdup(const char* s) {
 #endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
+#include <afunix.h>       // sockaddr_un, SIO_AF_UNIX_GETPEERPID (Windows 10 1803+). Adds five macros, none lowercase.
 // `if_nametoindex` (kama_interface_index) lives in iphlpapi.dll, linked for a Windows target, and is DECLARED here
 // rather than through <iphlpapi.h>, whose chain (iprtrmib.h -> mprapi.h -> ... -> rpc.h/rpcndr.h) ignores
 // WIN32_LEAN_AND_MEAN and defines 21 lowercase macros, `#define interface struct` and `hyper` among them. Any kama
@@ -731,6 +732,77 @@ static inline ptrdiff_t kama_socket_udp(int32_t family) {
     return (ptrdiff_t)s;
 }
 
+// ---- Unix-domain sockets (Winsock2, Windows 10 1803+) and who is on the other end -------------------------
+// AF_UNIX here is stream-only: `datagram` is refused by the OS, and `UnixDatagram` is not declared for Windows.
+static inline ptrdiff_t kama_socket_unix(int32_t datagram) {
+    SOCKET s = socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
+    return (ptrdiff_t)s;
+}
+// A Windows AF_UNIX socket carries no credentials: the peer's process id is the one fact it knows. Who that
+// process runs as is its token's (kama_token_open), read when asked — so unlike Linux's SO_PEERCRED, which
+// the kernel recorded at connect, it describes the process that holds that id NOW.
+static inline int32_t kama_unix_peer_pid(ptrdiff_t fd, int32_t* pid) {
+    ULONG p = 0; DWORD got = 0;
+    if (WSAIoctl((SOCKET)fd, SIO_AF_UNIX_GETPEERPID, NULL, 0, &p, (DWORD)sizeof p, &got, NULL, NULL) != 0) {
+        kama__capture_wsa(); return -1;
+    }
+    *pid = (int32_t)p;
+    return 0;
+}
+// A process's access token, to read who it runs as. `pid` 0 is this process. -1 with EACCES when the token
+// may not be read (a more privileged process's), ESRCH when there is no such process.
+static inline ptrdiff_t kama_token_open(int32_t pid) {
+    HANDLE proc = pid == 0 ? GetCurrentProcess() : OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!proc) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : ESRCH; return -1; }
+    HANDLE tok = NULL;
+    BOOL ok = OpenProcessToken(proc, TOKEN_QUERY, &tok);
+    if (pid != 0) CloseHandle(proc);
+    if (!ok) { errno = EACCES; return -1; }
+    return (ptrdiff_t)tok;
+}
+static inline void kama_token_close(ptrdiff_t tok) { CloseHandle((HANDLE)tok); }
+static inline int32_t kama_getpid(void) { return (int32_t)GetCurrentProcessId(); }
+// A SID of a token — `which` 0 its user, 1 its primary group, 2+i its i-th group — copied into out[cap].
+// Returns the SID's length (at most SECURITY_MAX_SID_SIZE, 68), 0 past the last group, or -1.
+static inline int32_t kama_token_sid(ptrdiff_t tok, int32_t which, uint8_t* out, size_t cap) {
+    TOKEN_INFORMATION_CLASS cls = which == 0 ? TokenUser : which == 1 ? TokenPrimaryGroup : TokenGroups;
+    DWORD n = 0;
+    (void)GetTokenInformation((HANDLE)tok, cls, NULL, 0, &n);
+    if (n == 0) { errno = EACCES; return -1; }
+    // Through the allocation funnel (check-alloc-funnel.sh), with the size it was asked for: `n` is rewritten
+    // by the second call, so the release names `sz`. Aligned for the pointers the TOKEN_* structs hold.
+    const size_t sz = (size_t)n, al = sizeof(void*);
+    BYTE* buf = (BYTE*)kama_alloc(sz, al);
+    if (!buf) { errno = ENOMEM; return -1; }
+    if (!GetTokenInformation((HANDLE)tok, cls, buf, n, &n)) { kama_free(buf, sz, al); errno = EACCES; return -1; }
+    PSID sid;
+    if (which == 0)      sid = ((TOKEN_USER*)(void*)buf)->User.Sid;
+    else if (which == 1) sid = ((TOKEN_PRIMARY_GROUP*)(void*)buf)->PrimaryGroup;
+    else {
+        TOKEN_GROUPS* g = (TOKEN_GROUPS*)(void*)buf;
+        DWORD i = (DWORD)(which - 2);
+        if (i >= g->GroupCount) { kama_free(buf, sz, al); return 0; }
+        sid = g->Groups[i].Sid;
+    }
+    DWORD len = GetLengthSid(sid);
+    memcpy(out, sid, len < cap ? len : cap);
+    kama_free(buf, sz, al);
+    return (int32_t)len;
+}
+// The account a SID names: its name and its domain, each as UTF-8 into its own buffer with its length.
+// -1 with ENOENT when no account has that SID.
+static inline int32_t kama_sid_name(const uint8_t* sid, uint8_t* name, size_t ncap, int32_t* nlen,
+                                    uint8_t* dom, size_t dcap, int32_t* dlen) {
+    WCHAR wn[257], wd[257]; DWORD cn = 257, cd = 257; SID_NAME_USE use;
+    if (!LookupAccountSidW(NULL, (PSID)sid, wn, &cn, wd, &cd, &use)) {
+        errno = GetLastError() == ERROR_NONE_MAPPED ? ENOENT : EACCES; return -1;
+    }
+    *nlen = cn ? WideCharToMultiByte(CP_UTF8, 0, wn, (int)cn, (char*)name, (int)ncap, NULL, NULL) : 0;
+    *dlen = cd ? WideCharToMultiByte(CP_UTF8, 0, wd, (int)cd, (char*)dom, (int)dcap, NULL, NULL) : 0;
+    return 0;
+}
+
 // The two pieces the shared address calls (below the platform split) need from each platform: the native
 // handle type, and turning a failed call's error into errno.
 typedef SOCKET kama__sock;
@@ -1091,6 +1163,12 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // htons, ntohs
 #include <net/if.h>       // if_nametoindex (kama_interface_index)
+#include <sys/un.h>       // sockaddr_un (Unix-domain sockets)
+#include <pwd.h>          // getpwuid_r (UserId.name)
+#include <grp.h>          // getgrgid_r (GroupId.name)
+#if defined(__APPLE__)
+#include <sys/ucred.h>    // struct xucred, LOCAL_PEERCRED (a Unix socket's peer)
+#endif
 // getaddrinfo, freeaddrinfo, EAI_* (kama_resolve_host). ⚠️ All three are past the ISO C line glibc draws
 // under `-std=c11`, which is why kama_runtime.h asks for `_DEFAULT_SOURCE` at the top of every generated
 // TU — see the block there before moving this include or "simplifying" that one.
@@ -1121,6 +1199,9 @@ extern void  _exit(int);
 extern int   kill(int, int);
 extern int   fcntl(int, int, ...);
 extern int   ftruncate(int, off_t);              // <unistd.h>'s (KR-92: `File.openWith` empties a file only after its mode is set)
+extern uid_t getuid(void);                       // <unistd.h>'s (std::process::currentUser)
+extern gid_t getgid(void);
+extern pid_t getpid(void);                       // (std::process::currentProcessId)
 extern char** environ;
 
 // ---- errno / last-error ----------------------------------------------------
@@ -1544,6 +1625,77 @@ static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n)        {
 static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, KAMA__SEND_FLAGS); }
 static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close((int)fd); }
 
+// ---- Unix-domain sockets and who is on the other end ---------------------------------------------------------
+// The SIGPIPE rule of the TCP sockets above holds here unchanged: SO_NOSIGPIPE at creation (Apple), MSG_NOSIGNAL
+// on every send, and kama_accept already applies it to an accepted socket of any family.
+static inline ptrdiff_t kama_socket_unix(int32_t datagram) {
+    ptrdiff_t fd = (ptrdiff_t)socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
+    kama__nosigpipe(fd);
+    return fd;
+}
+// The peer of a connected Unix socket: its process, user and primary group. Linux reports what the kernel
+// recorded at connect (SO_PEERCRED); macOS the peer's credentials (LOCAL_PEERCRED, whose first group is the
+// effective one) and its pid (LOCAL_PEERPID).
+static inline int32_t kama_unix_peer(ptrdiff_t fd, int32_t* pid, uint32_t* uid, uint32_t* gid) {
+#if defined(__APPLE__)
+    struct xucred xc; socklen_t l = (socklen_t)sizeof xc;
+    if (getsockopt((int)fd, SOL_LOCAL, LOCAL_PEERCRED, &xc, &l) != 0) return -1;
+    if (xc.cr_version != XUCRED_VERSION || xc.cr_ngroups < 1) { errno = EINVAL; return -1; }
+    pid_t p = 0; socklen_t pl = (socklen_t)sizeof p;
+    if (getsockopt((int)fd, SOL_LOCAL, LOCAL_PEERPID, &p, &pl) != 0) return -1;
+    *pid = (int32_t)p; *uid = (uint32_t)xc.cr_uid; *gid = (uint32_t)xc.cr_groups[0];
+    return 0;
+#elif defined(SO_PEERCRED)
+    // `struct ucred`'s layout, spelled here: glibc declares the name only under _GNU_SOURCE.
+    struct { int32_t pid; uint32_t uid; uint32_t gid; } c; socklen_t l = (socklen_t)sizeof c;
+    if (getsockopt((int)fd, SOL_SOCKET, SO_PEERCRED, &c, &l) != 0) return -1;
+    *pid = c.pid; *uid = c.uid; *gid = c.gid;
+    return 0;
+#else
+    (void)fd; (void)pid; (void)uid; (void)gid; errno = ENOPROTOOPT; return -1;
+#endif
+}
+// Every group the peer belongs to, up to `cap` into out[]. Returns how many there are, which may exceed cap —
+// the caller asks again with room. Linux 4.13+ (SO_PEERGROUPS); macOS lists up to 16 (LOCAL_PEERCRED).
+static inline ptrdiff_t kama_unix_peer_groups(ptrdiff_t fd, uint32_t* out, size_t cap) {
+#if defined(__APPLE__)
+    struct xucred xc; socklen_t l = (socklen_t)sizeof xc;
+    if (getsockopt((int)fd, SOL_LOCAL, LOCAL_PEERCRED, &xc, &l) != 0) return -1;
+    if (xc.cr_version != XUCRED_VERSION) { errno = EINVAL; return -1; }
+    for (int i = 0; i < xc.cr_ngroups && (size_t)i < cap; ++i) out[i] = (uint32_t)xc.cr_groups[i];
+    return (ptrdiff_t)xc.cr_ngroups;
+#elif defined(SO_PEERGROUPS)
+    socklen_t l = (socklen_t)(cap * sizeof(uint32_t));
+    if (getsockopt((int)fd, SOL_SOCKET, SO_PEERGROUPS, out, &l) != 0) {
+        if (errno == ERANGE) return (ptrdiff_t)(l / sizeof(uint32_t));   // l now says how much room it needs
+        return -1;
+    }
+    return (ptrdiff_t)(l / sizeof(uint32_t));
+#else
+    (void)fd; (void)out; (void)cap; errno = ENOPROTOOPT; return -1;
+#endif
+}
+static inline uint32_t kama_getuid(void) { return (uint32_t)getuid(); }
+static inline int32_t  kama_getpid(void) { return (int32_t)getpid(); }
+static inline uint32_t kama_getgid(void) { return (uint32_t)getgid(); }
+// The account name of a uid (`group` 0) or gid (`group` 1): its length, with up to `cap` bytes of it copied
+// into out (the caller asks again with room when it is longer), or -1 with ENOENT when no account has that id.
+static inline ptrdiff_t kama_id_name(int32_t group, uint32_t id, uint8_t* out, size_t cap) {
+    for (size_t sz = 4096; ; sz *= 4) {                     // through the allocation funnel, like every heap block
+        char* buf = (char*)kama_alloc(sz, sizeof(void*));
+        if (!buf) { errno = ENOMEM; return -1; }
+        const char* name = NULL; int e;
+        if (!group) { struct passwd pw, *r = NULL; e = getpwuid_r((uid_t)id, &pw, buf, sz, &r); if (!e && r) name = pw.pw_name; }
+        else        { struct group  gr, *r = NULL; e = getgrgid_r((gid_t)id, &gr, buf, sz, &r); if (!e && r) name = gr.gr_name; }
+        if (e == ERANGE && sz < ((size_t)1 << 22)) { kama_free(buf, sz, sizeof(void*)); continue; }
+        if (!name) { kama_free(buf, sz, sizeof(void*)); errno = e ? e : ENOENT; return -1; }
+        size_t n = strlen(name);
+        memcpy(out, name, n < cap ? n : cap);
+        kama_free(buf, sz, sizeof(void*));
+        return (ptrdiff_t)n;
+    }
+}
+
 // ---- readiness poller (poll(2)) --------------------------------------------
 // A heap `struct pollfd[]` cursor stays OPAQUE to kama (behind an `UnsafePtr`). interest bits: 1=read, 2=write.
 // ready bits: 1=readable (incl. hangup/error so the caller reads EOF/err), 2=writable (a connect resolved).
@@ -1712,6 +1864,61 @@ static inline int32_t kama_getpeername_addr(ptrdiff_t fd, int32_t* outFamily, ui
     if (getpeername((kama__sock)fd, (struct sockaddr*)&ss, &len) != 0) return kama__sock_fail();
     kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
     return 0;
+}
+
+// ---- Unix-domain socket addresses (both platforms) ---------------------------------------------------------
+// A name crosses as bytes, a length and its kind — 1 a path, 2 a Linux abstract-namespace name (the kama type
+// that makes one exists only there), the same numbers kama_unix_name reports. kama has already refused an
+// empty path, one holding a NUL, and one longer than kama_unix_path_max, so the fill never truncates. An
+// abstract name has a NUL at sun_path[0] and follows it unterminated.
+static inline int32_t kama_unix_path_max(void) { struct sockaddr_un a; return (int32_t)sizeof a.sun_path - 1; }
+static inline socklen_t kama__sun_fill(struct sockaddr_un* a, const uint8_t* p, size_t n, int32_t kind) {
+    memset(a, 0, sizeof *a);
+    a->sun_family = AF_UNIX;
+    memcpy(a->sun_path + (kind == 2 ? 1 : 0), p, n);
+    socklen_t len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);   // a path's NUL, or abstract's lead
+#if defined(__APPLE__)
+    a->sun_len = (unsigned char)len;
+#endif
+    return len;
+}
+static inline int32_t kama_bind_unix(ptrdiff_t fd, const uint8_t* p, size_t n, int32_t kind) {
+    struct sockaddr_un a; socklen_t len = kama__sun_fill(&a, p, n, kind);
+    if (bind((kama__sock)fd, (struct sockaddr*)&a, len) != 0) return kama__sock_fail();
+    return 0;
+}
+static inline int32_t kama_connect_unix(ptrdiff_t fd, const uint8_t* p, size_t n, int32_t kind) {
+    struct sockaddr_un a; socklen_t len = kama__sun_fill(&a, p, n, kind);
+    if (connect((kama__sock)fd, (struct sockaddr*)&a, len) != 0) return kama__sock_fail();
+    return 0;
+}
+// The inverse, for what getsockname/getpeername/recvfrom hand back: *kind is 0 for an unnamed socket, 1 for a
+// path, 2 for an abstract name; the name's bytes (no terminator) go into out[cap]; returns their length.
+static inline ptrdiff_t kama__sun_read(const struct sockaddr_un* a, socklen_t len, int32_t* kind, uint8_t* out, size_t cap) {
+    size_t base = offsetof(struct sockaddr_un, sun_path);
+    size_t room = len > (socklen_t)base ? (size_t)len - base : 0;
+    if (room > sizeof a->sun_path) room = sizeof a->sun_path;
+    size_t n = 0, from = 0;
+    *kind = 0;
+    if (room > 0 && a->sun_path[0] != 0) {
+        *kind = 1;
+        while (n < room && a->sun_path[n] != 0) ++n;
+    }
+#if defined(__linux__)
+    // Only Linux has the abstract namespace. Elsewhere a leading NUL is an UNNAMED socket: macOS reports an
+    // unbound client as a whole zeroed sun_path, which read as an "abstract name" of 103 NULs.
+    else if (room > 1) { *kind = 2; from = 1; n = room - 1; }
+#endif
+    memcpy(out, a->sun_path + from, n < cap ? n : cap);
+    return (ptrdiff_t)n;
+}
+static inline ptrdiff_t kama_unix_name(ptrdiff_t fd, int32_t peer, int32_t* kind, uint8_t* out, size_t cap) {
+    struct sockaddr_un a; memset(&a, 0, sizeof a);
+    socklen_t len = (socklen_t)sizeof a;
+    int rc = peer ? getpeername((kama__sock)fd, (struct sockaddr*)&a, &len)
+                  : getsockname((kama__sock)fd, (struct sockaddr*)&a, &len);
+    if (rc != 0) return kama__sock_fail();
+    return kama__sun_read(&a, len, kind, out, cap);
 }
 
 // ---- TCP keepalive, user timeout, half-close (KR-105) -------------------------------------------------

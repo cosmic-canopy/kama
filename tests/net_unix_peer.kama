@@ -1,0 +1,71 @@
+// Who is on the other end of a Unix socket (KR-104): `peerCredentials()`, the same call on every OS, answered by
+// each OS's own `PeerCredentials` — Linux from what the kernel recorded at connect, macOS from the peer's
+// credentials, Windows from the peer process's access token. Here both ends are this process, so each side's
+// peer is itself: the same process id, the same user by `==` and by account name, the same primary group, and
+// a group list that leads with it — Linux lists only supplementary groups, none at all for root in a container,
+// so `groups()` puts the primary first on every OS (which the Linux leg of 0.9.483's first run caught). Then an accepted `UnixStream` crosses a `Channel` to a worker
+// isolate, which answers on it — it is `Sendable`, as `TcpStream` is. Returns 42.
+import {
+    std::net::UnixListener, std::net::UnixStream, std::net::PeerCredentials,
+    std::process::currentUser, std::process::currentGroup, std::process::currentProcessId,
+    std::process::UserId, std::process::GroupId,
+    std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+    std::io::IoError, std::collections::FixedArray, std::collections::DynamicArray,
+};
+
+fn int32 check(ref UnixStream s) {
+    Result<PeerCredentials, IoError> rp = s.peerCredentials();
+    PeerCredentials p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 11; } };
+    if (p.processId() != currentProcessId()) { return 12; }
+    UserId me = match (currentUser()) { case Ok(value: x): x; case Err(error: e): { return 13; } };
+    if (!(p.user() == me)) { return 14; }
+    bool sameName = match (p.user().name()) {
+        case Ok(value: a): match (me.name()) { case Ok(value: b): a == b && a.length() > 0; case Err(error: e): false; };
+        case Err(error: e): false;
+    };
+    if (!sameName) { return 15; }
+    GroupId mine = match (currentGroup()) { case Ok(value: x): x; case Err(error: e): { return 16; } };
+    if (!(p.group() == mine)) { return 17; }
+    DynamicArray<GroupId> gs = p.groups();
+    if (gs.length() < 1 || !(gs[0] == mine)) { return 18; }        // every group, the primary first
+    return 0;
+}
+
+fn void answer(Receiver<UnixStream> rx) {
+    FixedArray<uint8> one = FixedArray.filled(size: 1, value: 7ui8);
+    bool going = true;
+    while (going) {
+        Optional<UnixStream> next = rx.recv();
+        match (give next) {
+            case Some(value: s): { Result<isize, IoError> w = s.write(bytes: one.view()); }
+            case None: { going = false; }
+        };
+    }
+}
+
+fn int32 main() {
+    Result<UnixListener, IoError> rl = UnixListener.bind(path: "peer.sock");
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<UnixStream, IoError> rc = UnixStream.connect(path: "peer.sock");
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<UnixStream, IoError> ra = l.accept();
+    UnixStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    int32 r = check(s: s);                 // the server's view of the client…
+    if (r != 0) { return r; }
+    r = check(s: c);                       // …and the client's of the server
+    if (r != 0) { return 20 + r; }
+    // The accepted stream moves to a worker isolate, which answers the client on it.
+    Channel<UnixStream> ch = Channel.bounded(capacity: 1);
+    Receiver<UnixStream> rx = ch.receiver();
+    int32 got = 0;
+    scope {
+        spawn answer(rx: give rx);
+        {
+            Sender<UnixStream> tx = ch.sender();
+            tx.send(item: give s);
+            FixedArray<uint8> buf = FixedArray.make(size: 1);
+            got = match (c.read(into: buf.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 90; case Err(error: e): 91; };
+        }   // the sender closes, the worker's recv() ends, and the scope joins it
+    }
+    return got == 7 ? 42 : got;
+}

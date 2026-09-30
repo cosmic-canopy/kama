@@ -1,0 +1,53 @@
+file @compileFor(OS_WINDOWS);
+// `PeerCredentials` on Windows (the POSIX one is unix_posix.kama; see unix.kama). A Windows AF_UNIX socket
+// carries no credentials — only the peer's process id (SIO_AF_UNIX_GETPEERPID) — so who that process runs as
+// is read from its access token when asked. Unlike Linux, which recorded the credentials at connect, this
+// describes the process holding that id NOW; and a peer more privileged than this process may refuse to
+// have its token read (`PermissionDenied`).
+import {
+    std::io::IoError, std::io::lastError,
+    std::collections::DynamicArray,
+    std::process::UserId, std::process::GroupId, std::process::AccessToken,
+};
+
+export { PeerCredentials };
+
+extern "kama_os.h";
+extern fn int32 kama_unix_peer_pid(isize fd, UnsafePtr<int32> pid);
+
+// Who is on the other end of a `UnixStream`: its process, its user, its primary group and every group it
+// belongs to (`groups()`: the primary first, each once). The same members on every OS; each identity is this
+// OS's own (`UserId.sid()`).
+type resource PeerCredentials implements Sendable {
+    int32 pid;
+    UserId who;
+    GroupId primary;
+    DynamicArray<GroupId> all;
+    friend UnixStream[of];
+
+    ctor adopt(int32 pid, UserId who, GroupId primary, DynamicArray<GroupId> all) {
+        this.pid = pid; this.who = who; this.primary = primary; this.all = give all;
+    }
+    unsafe ctor Result<PeerCredentials, IoError> of(isize fd) {
+        int32 pid = 0;
+        if (kama_unix_peer_pid(fd: fd, pid: addr(of: pid)) != 0) { return Result::Err(error: lastError()); }
+        Result<AccessToken, IoError> rt = AccessToken.ofProcess(id: pid);
+        AccessToken t = match (give rt) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: e); } };
+        Result<UserId, IoError> ru = t.user();
+        UserId who = match (ru) { case Ok(value: x): x; case Err(error: e): { return Result::Err(error: e); } };
+        Result<GroupId, IoError> rg = t.primaryGroup();
+        GroupId primary = match (rg) { case Ok(value: x): x; case Err(error: e): { return Result::Err(error: e); } };
+        Result<DynamicArray<GroupId>, IoError> ra = t.groups();
+        DynamicArray<GroupId> theirs = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: e); } };
+        // Every group, the primary FIRST and each once — the same list every OS's `PeerCredentials` gives.
+        DynamicArray<GroupId> all = DynamicArray.empty();
+        all.add(item: primary);
+        foreach (GroupId g in theirs) { if (all.indexOf(item: g) < 0) { all.add(item: g); } }
+        return Result::Ok(value: PeerCredentials.adopt(pid: pid, who: who, primary: primary, all: give all));
+    }
+
+    public const fn int32 processId() { return this.pid; }
+    public const fn UserId user() { return this.who; }
+    public const fn GroupId group() { return this.primary; }
+    public fn DynamicArray<GroupId> groups() { return copy this.all; }
+}

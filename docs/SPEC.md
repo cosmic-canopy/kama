@@ -1833,14 +1833,14 @@ gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed
 `Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
 `isDir`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
-on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
-`UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP),
+`UnixListener`/`UnixStream` (Unix-domain) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
 **A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
 closed, or to the stdin of a child that exited, returns `IoError::BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
 kernel reports it) — POSIX raises SIGPIPE there instead, whose default ends the process. A program ignores that
 signal from the start of `main`, as Go, Rust, Python and Node do, and every socket is also made not to raise it
-(`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple), so a `--shared` kama library is covered without touching its
+(`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple) — TCP and Unix-domain alike — so a `--shared` kama library is covered without touching its
 host's signals. Two things keep the Unix convention: **stdout and stderr** still end the program by SIGPIPE
 when the reader goes away — `prog | head -n 1` stops `prog` with exit 141 — and a **child** starts with SIGPIPE
 at its default (`tools/check-sigpipe.sh` holds both). Both hold whatever the program inherited: a parent that
@@ -1955,6 +1955,19 @@ reads end-of-file while this side still reads its reply, and a later write here 
 socket fixture binds that way, so no two can collide (`tools/check-fixture-ports.sh`) — and a `TcpStream` has
 `localAddr()` and `peerAddr()`, the peer being how a server learns who an accepted stream belongs to.
 
+**Unix-domain sockets (`std::net`).** A byte stream between two processes on one machine, named by a path:
+`UnixStream.connect(path:)` and `UnixListener.bind(path:)` + `accept()`, on Linux, macOS and Windows 10 1803+.
+`UnixStream` is a `ReliableStream` like `TcpStream`, with `shutdown(how:)`, `localAddr()`/`peerAddr()` (a
+`UnixAddr`: a path, or unnamed, which a connecting client's own end is) and **`peerCredentials()`** — who is on
+the other end: its `processId()`, `user()`, `group()` and `groups()` (every group, the primary first and each <!-- test: net_unix_peer -->
+once — Linux itself lists only supplementary ones), the same members on every OS (Linux reads
+what the kernel recorded at connect, macOS the peer's credentials, Windows the peer process's access token,
+which a more privileged peer may refuse to show). A path is **checked before the OS is asked**: empty, holding
+a NUL, or longer than `sun_path` less its terminator (103 bytes on macOS, 107 on Linux and Windows) is <!-- test: net_unix_stream -->
+`InvalidInput`. **`bind` over an existing path is `AddrInUse`** — a live listener's or a stale file, which is
+never removed behind the caller — and **a listener removes the socket file it made when it drops**, so a clean
+restart just works (a crash still leaves the file). SIGPIPE is handled as for TCP (above).
+
 **Multicast (`std::net`).** A `UdpSocket` joins a group **per interface**, and the families name an interface
 differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
 the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the
@@ -1998,6 +2011,17 @@ explicit `wait()` is how you get the status. **POSIX and Windows both ship**: `p
 across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
 and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
 Windows) so both platforms take the same code path. wasm has no process model.
+
+**Who a process runs as (`std::process`).** `currentUser()`, `currentGroup()` and `currentProcessId()` answer
+for this process, and `UnixStream.peerCredentials()` (below) for the one on the other end of a socket. The
+**interface is the same on every OS** and each OS keeps what is its own — the rule for every platform
+difference in std: one primary interface, and the deltas in the types it returns, never a platform cut down to
+the common subset. `UserId` and `GroupId` compare with `==`, name their account with `name()` (`NotFound` when <!-- test: net_unix_peer -->
+no account has the id) and render with `${…}`; on Linux and macOS they are the uid and gid (`raw()`,
+`of(raw:)`), on Windows security identifiers (`sid()` renders `S-1-5-21-…`, `fromSid(bytes:)` checks what it
+is given, and `domain()` names the account's domain). Windows adds `AccessToken`, its own process identity:
+`current()`, `ofProcess(id:)`, and its `user()`, `primaryGroup()` and every one of its `groups()`. Each twin is
+a whole type gated by `@compileFor`, since a member cannot be (*Conditional compilation*).
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<isize, IoError>` +
@@ -5723,8 +5747,9 @@ A `view` and a bare `contract` value need no rule here: neither can be a field a
 reaches a bundle. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
-`UdpSocket`, `Poller`, `Process`, `Command`, `Output`, `StringWriter`, `SliceReader`, and the values `SocketAddr`,
-`IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`. So a connection accepted on one isolate is
+`UnixStream`, `UnixListener`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`, `StringWriter`,
+`SliceReader`, `PeerCredentials`, and the values `SocketAddr`, `UnixAddr`, `IpAddr`, `RecvFrom`, `Ready`,
+`Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
 dropped exactly once — received, or buffered when the queue's last holder goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->

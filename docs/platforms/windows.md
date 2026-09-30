@@ -253,6 +253,15 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `HostUnreachable`, which reads like a network answer rather than a missing init. `tests/net_resolve`
   scored 111 of 127 on exactly that: the flag lost was the `resolve("localhost")` that ran before its
   listener bound.
+- **AF_UNIX (`std::net::UnixStream`/`UnixListener`, KR-104) is Windows 10 1803+ and STREAM-ONLY.** There is no
+  `SOCK_DGRAM` for it, so `UnixDatagram` is not declared for Windows. A socket file is a reparse point that
+  `kama_unlink` (`_wunlink`) removes like any file, which is how a listener drops its path. The socket carries NO
+  credentials: `SIO_AF_UNIX_GETPEERPID` gives the peer's process id and nothing else, so `peerCredentials()`
+  reads who that process runs as from its access token (`OpenProcess` + `OpenProcessToken`, advapi32, which is
+  already linked) — at the time of the call, not at connect as Linux's `SO_PEERCRED` does, and a more privileged
+  peer's token may be refused. `sun_path` is a narrow `char[108]`; how Windows reads a non-ASCII path there is
+  unmeasured. `<afunix.h>` was diffed as the note below asks: it adds five macros, none lowercase.
+  ⚠️ All of it unverified on a Windows machine when written (2026-09-30) — the cross build compiles; CI runs it.
 - **`<iphlpapi.h>` defines `interface`, `hyper` and 19 more lowercase macros**, despite `WIN32_LEAN_AND_MEAN`:
   its chain reaches `<rpc.h>`/`<rpcndr.h>` (`#define interface struct`). A kama name spelled that way then breaks
   the C, and at `0.9.376` `UdpSocket.joinMulticastV4(interface:)` failed to compile EVERY program importing

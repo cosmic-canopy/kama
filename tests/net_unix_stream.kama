@@ -1,0 +1,83 @@
+// std::net Unix-domain streams (KR-104): a byte stream between two processes on one machine, named by a path.
+// A listener binds a relative path (each fixture runs in its own directory, so the name is unique and short),
+// a client connects, a request goes one way and a reply the other, and a `shutdown(how: Shutdown::Write)` ends
+// the request as end-of-file while the reply still arrives. The listener's name is its path, the client's own
+// end is unnamed. Then the path rules: a second `bind` of a live path and of a stale file is `AddrInUse` (nothing
+// is removed behind the caller), an empty path, one holding a NUL and one longer than `sun_path` are
+// `InvalidInput` before the OS is asked, connecting where nothing listens is an error, and a listener removes
+// the socket file it made when it drops. Returns 55.
+import {
+    std::net::UnixListener, std::net::UnixStream, std::net::UnixAddr, std::net::Shutdown,
+    std::io::IoError, std::io::writeAll, std::collections::FixedArray, std::fs::exists, std::fs::writeText,
+    std::fs::remove,
+};
+
+fn bool isAddrInUse(Result<UnixListener, IoError> r) {
+    return match (r) { case Err(error: e): match (e) { case AddrInUse: true; case _: false; }; case Ok(value: l): false; };
+}
+fn bool isInvalid(Result<UnixListener, IoError> r) {
+    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: l): false; };
+}
+
+fn int32 serve(ref UnixStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    int32 total = 0;
+    bool eof = false;
+    while (!eof) {
+        int32 got = match (s.read(into: buf.viewMut())) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
+        if (got < 0) { return 21; }
+        if (got == 0) { eof = true; } else { total = total + got; }
+    }
+    if (total != 5) { return 22; }
+    FixedArray<uint8> reply = FixedArray.filled(size: 3, value: 9ui8);
+    return match (writeAll(w: s, bytes: reply.view())) { case Ok(value: u): 0; case Err(error: e): 23; };
+}
+
+fn int32 roundTrip(ref UnixListener l) {
+    Result<UnixStream, IoError> rc = UnixStream.connect(path: "stream.sock");
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 11; } };
+    FixedArray<uint8> req = FixedArray.filled(size: 5, value: 1ui8);
+    if (match (writeAll(w: c, bytes: req.view())) { case Ok(value: u): false; case Err(error: e): true; }) { return 12; }
+    if (match (c.shutdown(how: Shutdown::Write)) { case Ok(value: u): false; case Err(error: e): true; }) { return 13; }
+    int32 served = match (l.accept()) { case Ok(value: s): serve(s: s); case Err(error: e): 14; };
+    if (served != 0) { return served; }
+    FixedArray<uint8> back = FixedArray.make(size: 8);
+    int32 got = match (c.read(into: back.viewMut())) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
+    if (got != 3 || back[2] != 9ui8) { return 15; }
+    // Names: the client's own end was never bound, the listener's is its path.
+    bool unnamed = match (c.localAddr()) { case Ok(value: a): a.isUnnamed(); case Err(error: e): false; };
+    if (!unnamed) { return 16; }
+    bool named = match (l.localAddr()) {
+        case Ok(value: a): match (a.path()) { case Some(value: p): p == "stream.sock"; case None: false; };
+        case Err(error: e): false;
+    };
+    if (!named) { return 17; }
+    return 0;
+}
+
+fn int32 main() {
+    {
+        Result<UnixListener, IoError> rl = UnixListener.bind(path: "stream.sock");
+        UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+        int32 r = roundTrip(l: l);
+        if (r != 0) { return r; }
+        if (!isAddrInUse(r: UnixListener.bind(path: "stream.sock"))) { return 31; }   // a live listener's path
+        if (!exists(path: "stream.sock")) { return 32; }
+    }   // the listener drops here, and its socket file with it
+    if (exists(path: "stream.sock")) { return 33; }
+    // A stale file is not removed behind the caller either.
+    if (match (writeText(path: "stale.sock", text: "x")) { case Ok(value: n): false; case Err(error: e): true; }) { return 34; }
+    if (!isAddrInUse(r: UnixListener.bind(path: "stale.sock"))) { return 35; }
+    if (match (remove(path: "stale.sock")) { case Ok(value: u): false; case Err(error: e): true; }) { return 36; }
+    // Paths the OS is never asked about.
+    if (!isInvalid(r: UnixListener.bind(path: ""))) { return 41; }
+    if (!isInvalid(r: UnixListener.bind(path: "a\u{0}b.sock"))) { return 42; }
+    string longPath = "";
+    int32 i = 0;
+    while (i < 120) { longPath = longPath + "x"; i = i + 1; }
+    if (!isInvalid(r: UnixListener.bind(path: longPath))) { return 43; }
+    // Nothing listens at a path that does not exist.
+    bool refused = match (UnixStream.connect(path: "nobody.sock")) { case Ok(value: s): false; case Err(error: e): true; };
+    if (!refused) { return 44; }
+    return 55;
+}
