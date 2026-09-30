@@ -5612,6 +5612,15 @@ all gone hands the item **back** rather than dropping it on the floor, so nothin
 and the sender decides what to do. `recv()` returns `Optional<T>`: `None` means the channel is
 closed and empty, which is why dropping the last `Sender` is how a producer signals end-of-stream.
 
+**A receive can decline to wait.** `tryRecv()` takes a value only if one is buffered, and <!-- test: channel_try_and_timed_recv -->
+`recvTimeout(timeout:)` waits at most a `Duration` for one; both answer `RecvResult<T> { Received(T item), Empty,
+Closed }` — `Empty` when none was there, or none arrived before the deadline, while a sender is live; `Closed` is
+`recv`'s `None`. "Not yet" and "never" are two answers because they want two responses: a connection pool shared
+by worker isolates retries `acquire` on one and gives up on the other, which a blocking `recv` could not express
+(an exhausted pool waited forever). The deadline runs on the monotonic clock, so moving the wall clock neither
+stretches nor cuts it, and a zero timeout is a `tryRecv`. A lock (`Mutex`/`Condvar`) is still not in `std` — the
+shared-nothing model makes a channel the seam, and this is that seam's missing half.
+
 **Endpoints are counted, so a channel is many-to-many.** `sender()` and `receiver()` may each be
 called any number of times; every call registers another endpoint, and a *side* closes only when its
 last endpoint drops. Several `Receiver`s over one channel is a **worker pool** — each item goes to

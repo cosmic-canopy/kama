@@ -1,0 +1,71 @@
+// A receive that does not block forever (KPG-5, from @kama/postgres): `tryRecv()` takes a value only if one is
+// buffered, `recvTimeout(timeout:)` waits at most that long. Each answers `Received(item)`, `Empty` (none yet, a
+// sender is live) or `Closed` (every sender gone, drained). A pool shared by worker isolates needs exactly this: an
+// `acquire` that waits for a returned connection until a deadline, then fails — with only the blocking `recv()`, an
+// exhausted pool blocked forever. Element drops are counted, so an `Empty`/`Closed` answer is seen to drop nothing.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvResult,
+         std::time::Duration, std::time::Instant, std::time::monotonicNow, std::time::sleep };
+
+static int32 g_real;
+static int32 g_zeroed;
+
+type resource Conn implements Sendable {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~Conn() {
+        if (this.id > 0) { g_real = g_real + 1; }
+        if (this.id == 0) { g_zeroed = g_zeroed + 1; }
+    }
+}
+
+// 1 = Received (the id added to *sum), 2 = Empty, 3 = Closed.
+fn int32 kind(RecvResult<Conn> r, ref int32 sum) {
+    return match (give r) {
+        case Received(item: c): { sum = sum + c.get(); := 1; }
+        case Empty: 2;
+        case Closed: 3;
+    };
+}
+
+fn void returnLater(Sender<Conn> tx) {
+    sleep(d: Duration.fromMillis(ms: 20i64));
+    Conn c = Conn.make(id: 7);
+    tx.send(item: give c);
+}
+
+fn int32 main() {
+    int32 sum = 0;
+    int32 fails = 0;
+    Channel<Conn> ch = Channel.bounded(capacity: 4);
+    Receiver<Conn> rx = ch.receiver();
+    {
+        Sender<Conn> tx = ch.sender();
+        if (kind(r: rx.tryRecv(), sum: ref sum) != 2) { fails = fails + 1; }                        // nothing yet
+        Conn a = Conn.make(id: 1);
+        tx.send(item: give a);
+        if (kind(r: rx.tryRecv(), sum: ref sum) != 1) { fails = fails + 10; }                       // there now
+        Instant t0 = monotonicNow();
+        if (kind(r: rx.recvTimeout(timeout: Duration.fromMillis(ms: 15i64)), sum: ref sum) != 2) { fails = fails + 100; }
+        if (t0.elapsed().asMillis() < 10i64) { fails = fails + 1000; }                              // it did wait
+        scope {
+            spawn returnLater(tx: give tx);   // another isolate returns a "connection" 20 ms from now
+            if (kind(r: rx.recvTimeout(timeout: Duration.fromSecs(s: 5i64)), sum: ref sum) != 1) { fails = fails + 10000; }
+        }
+    }   // every sender is gone now
+    if (kind(r: rx.tryRecv(), sum: ref sum) != 3) { fails = fails + 100000; }
+    if (kind(r: rx.recvTimeout(timeout: Duration.fromSecs(s: 5i64)), sum: ref sum) != 3) { fails = fails + 1000000; }
+    // A rendezvous channel (capacity 0): the sender parks until a receiver takes its value, so the timed receive
+    // must release it exactly as `recv` does.
+    Channel<Conn> meet = Channel.bounded(capacity: 0);
+    Receiver<Conn> mrx = meet.receiver();
+    {
+        Sender<Conn> mtx = meet.sender();
+        scope {
+            spawn returnLater(tx: give mtx);
+            if (kind(r: mrx.recvTimeout(timeout: Duration.fromSecs(s: 5i64)), sum: ref sum) != 1) { fails = fails + 10000000; }
+        }
+    }
+    if (fails != 0 || sum != 15 || g_real != 3 || g_zeroed != 0) { return 1; }
+    return 42;
+}
