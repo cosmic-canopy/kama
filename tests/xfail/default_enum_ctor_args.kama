@@ -1,0 +1,3 @@
+// KR-106: an enum elects its default exactly as a value does — one zero-argument `default ctor`.
+type enum Level { Debug, Info; public default ctor at(int32 n) { return Level::Info; } }
+fn int32 main() { return 0; }

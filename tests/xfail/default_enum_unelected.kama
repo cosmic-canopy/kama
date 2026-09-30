@@ -1,0 +1,6 @@
+// KR-106: `X.default()` on an enum that elected nothing names the election, as it does for a value.
+type enum Color { Red, Green }
+fn int32 main() {
+    Color c = Color.default();
+    return 0;
+}

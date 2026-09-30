@@ -27,6 +27,7 @@ type value Leaf { public isize a; public ctor at(isize a) { this.a = a; } }
 type value Board {
     InlineArray<Leaf>#(DERIVED) s;            // KB-23: a field sized by the alias
     public ctor e() {
+        this.s = [Leaf.at(a: 0); DERIVED];    // built whole: `Leaf` elected no default (KR-106)
         isize i = 0;
         while (i < DERIVED) { this.s[i] = Leaf.at(a: i); i = i + 1; }
     }

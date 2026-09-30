@@ -18,7 +18,10 @@ type value Frame<P> { public P e; public ctor at(P e) { this.e = e; } }
 
 type value Holder {
     public InlineArray<Frame<int32>>#(4) gs;             // a FIELD over a generic instance (the filed repro)
-    public ctor make() { this.gs[2] = Frame::<int32>.at(e: 7); }
+    public ctor make() {
+        this.gs = [Frame::<int32>.at(e: 0); 4];             // built whole: `Frame` elected no default (KR-106)
+        this.gs[2] = Frame::<int32>.at(e: 7);
+    }
 }
 
 fn int32 main() {

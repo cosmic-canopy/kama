@@ -1,0 +1,33 @@
+// KR-106's one rule (the maintainer, 2026-09-30): `X.default()` exists exactly where `when [X: default]` holds.
+// A language-owned type whose zero IS its value has one BY NATURE — a number, `bool`, `char`, `string`, an
+// `InlineArray` element by element — and every type a program declares, an `enum` included, has one only by
+// ELECTING it. So a generic body can do what the compiler's own field fill does, which is what lets a
+// container written in kama (`FixedArray.make`) fill its elements.
+type enum Level { Debug, Info, Warn; public default ctor info() { return Level::Info; } }
+type value Scaled { public int32 n; public float32 scale = 1.5f32; public default ctor unit() { this.n = 3; } }
+// A ctor's fill of a field it leaves unassigned is the same default, element by element for an InlineArray.
+type value Grid { public InlineArray<Scaled>#(2) cells; public int32 w; public ctor make(int32 w) { this.w = w; } }
+type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
+fn int32 main() {
+    Holder<int32> a = Holder.fresh();
+    Holder<bool> b = Holder.fresh();
+    Holder<string> s = Holder.fresh();
+    Holder<Level> l = Holder.fresh();
+    Holder<Scaled> sc = Holder.fresh();
+    Holder<InlineArray<int32>#(3)> ia = Holder.fresh();
+    Holder<InlineArray<Level>#(2)> il = Holder.fresh();          // element by element: each an elected Info
+    Holder<InlineArray<Scaled>#(2)> is = Holder.fresh();
+    Level direct = Level.default();
+    int32 r = a.get();                                             // 0
+    if (!b.get()) { r = r + 1; }                                   // 1
+    r = r + cast<int32>(s.get().length()) * 100;                   // "" -> 1
+    if (l.get() == Level::Info) { r = r + 2; }                     // 3
+    if (sc.get().n == 3 && sc.get().scale == 1.5f32) { r = r + 4; } // 7
+    r = r + ia.get()[0] + ia.get()[2];                              // 7
+    if (il.get()[0] == Level::Info && il.get()[1] == Level::Info) { r = r + 8; }       // 15
+    if (is.get()[1].n == 3 && is.get()[1].scale == 1.5f32) { r = r + 16; }              // 31
+    if (direct == Level::Info) { r = r + 32; }                    // 63
+    Grid g = Grid.make(w: 1);
+    if (g.cells[0].n == 3 && g.cells[1].scale == 1.5f32) { r = r + 64; }            // 127
+    return r;
+}

@@ -41,6 +41,11 @@ type value Holder {
     public InlineArray<Plain>#(4) ps;                    // …a plain class (the control)
 
     public ctor make(Optional<int32> o) {
+        // The three whose element has no default are built whole first (KR-106: an `InlineArray` has a
+        // default only element by element, and these elements elected none); the stores below replace one.
+        this.gs = [Frame::<int32>.at(e: 0); 4];
+        this.os = [Optional::None; 4];
+        this.ps = [Plain.at(e: 0); 4];
         this.gs[2] = Frame::<int32>.at(e: 7);            // 1. generic-instance ctor
         this.gs[3] = viaCall(v: 5);                      //    control: a plain call of the same type
         this.os[2] = Optional::Some(value: 11);          // 2. qualified variant construction

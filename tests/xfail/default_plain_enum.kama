@@ -1,0 +1,9 @@
+// KR-106: a plain enum has no default — variant order must not pick a value, so an enum ELECTS one like any
+// type a program declares. It used to satisfy `when [T: default]` and zero-fill to its first variant, and an
+// enum with no zero member (`Code : uint8 { Ok = 3, Bad = 200 }`) held a value that is none of them.
+type enum Code : uint8 { Ok = 3, Bad = 200 }
+type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
+fn int32 main() {
+    Holder<Code> h = Holder.fresh();
+    return 0;
+}

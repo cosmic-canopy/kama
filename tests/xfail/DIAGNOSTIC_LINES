@@ -267,9 +267,14 @@ def_assign_bare_owning_read	def_assign_bare_owning_read.kama:8
 def_assign_field_read	def_assign_field_read.kama:11
 def_assign_one_arm	def_assign_one_arm.kama:6
 default_ctor_missing	default_ctor_missing.kama:7
+default_enum_ctor_args	default_enum_ctor_args.kama:2
+default_enum_unelected	default_enum_unelected.kama:4
+default_inline_array_elem	default_inline_array_elem.kama:6
 default_named_unknown	default_named_unknown.kama:3
+default_never_null_handles	default_never_null_handles.kama:7
 default_nonzero_arg	default_nonzero_arg.kama:5
 default_on_non_ctor	default_on_non_ctor.kama:4 default_on_non_ctor.kama:8
+default_plain_enum	default_plain_enum.kama:7
 default_positional_after_named	default_positional_after_named.kama:3
 default_too_many_args	default_too_many_args.kama:3
 deref_missing	deref_missing.kama:16

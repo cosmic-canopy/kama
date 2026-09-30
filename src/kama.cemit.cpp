@@ -6868,13 +6868,17 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
         auto cit = _classes.find(fcls);
         if (cit == _classes.end()) continue;
         bool filled = false;
-        for (auto& kv : cit->second.methods)
-            if (kv.second.isDefaultCtor) {
+        // The field's default when it is not all-zero bytes: an elected `default` ctor, or an `InlineArray`
+        // of elements that elected one (whose zero would skip every element's ctor). One helper, so this
+        // fill and `T.default()` cannot disagree.
+        if (isDefaultFillable(fcls)) {
+            std::string dv = defaultValueExpr(fcls);
+            if (!dv.empty()) {
                 line(lineNo); indent(depth);
-                *_out << nm << "." << kMember(_classes[ty], f.name) << " = " << kv.second.cName << "();\n";
+                *_out << nm << "." << kMember(_classes[ty], f.name) << " = " << dv << ";\n";
                 filled = true;
-                break;
             }
+        }
         // Drop-only-if-live (A): a move-only-value field left `{0}` by the fill (no inline initializer, no
         // `default` ctor — e.g. a raw-handle `resource` field) is NOT yet live. Seed its `local.field`
         // move-state Moved so the first `f.field = give …` does NOT drop the zeroed slot (which for a raw
@@ -19341,6 +19345,21 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                 continue;
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
+            // An enum ELECTS its default exactly as a value does (KR-106): one zero-argument `default ctor`.
+            // Only its own members can — a contract's members belong to the contract, not to the type.
+            if (contract.empty() && modHas(md->modifiers, "default")) {
+                if (!md->isCtor)
+                    unsupported("`default` applies only to a zero-arg `ctor`", md->line);
+                else if (!mi.params.empty())
+                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md->line);
+                else {
+                    for (auto& kv : tci.methods)
+                        if (kv.second.isDefaultCtor)
+                            unsupported(("a type may mark at most one `default` ctor — `" + kv.first
+                                         + "` is already the default").c_str(), md->line);
+                    mi.isDefaultCtor = true;
+                }
+            }
             // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
             // only matters when the program uses serde — skip registering it otherwise (the impl itself
             // is likewise gated off in emitHeaderContent). Every other return scans normally.
@@ -22605,17 +22624,98 @@ void CEmitter::analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::
 //   - otherwise (a value with no `default`, e.g. a stateful `BumpAllocator`): NO — a zero handle is garbage,
 //     so it must be assigned. This is the M7.2 allocator footgun, gated structurally per instantiation.
 // Owning pointers (`Owned`/`Shared`) are handled by the caller's never-null set, NOT here.
+// Does the type have a DEFAULT — what `when [T: default]` asks, what `T.default()` produces, and what a ctor
+// fills an unassigned field with? ONE rule (KR-106, the maintainer 2026-09-30): a type has one BY NATURE when
+// it is the language's own and its all-zero bytes ARE a usable value — a number, `bool`, `char`, a raw
+// `UnsafePtr`/`UnsafeConstPtr` (null is the unsafe world's empty), `string` (""), a `Simd`/`Mask` (zero
+// lanes), and an `InlineArray` whose element has one — and otherwise only by ELECTING it (`default ctor`).
+// Everything a program declares elects: a `value`, a `resource`, and an `enum` too, because variant order
+// must not pick a value (and `: uint8 { Ok = 3 }` has no zero member at all). Never: an `fnptr` (non-null —
+// zero is no function), the `Owned`/`Shared`/`Weak` handles (a null "never-null" pointer) and a
+// `BindableFunctionPtr` (zero binds nothing). Until KR-106 every one of those answered true here, so
+// `FixedArray<Owned<Shape>>.make(size: 1)` built null handles in safe code.
 bool CEmitter::isDefaultFillable(const std::string& c)
 {
+    if (_sigs.count(c)) return false;                      // an `fnptr` signature type
     auto it = _classes.find(c);
-    if (it == _classes.end()) return true;                 // primitive / UnsafePtr / enum-not-in-_classes
+    // Not a class: a primitive or a raw pointer — unless it is a plain enum, which elects like any other.
+    // (A generic instance not yet registered also lands here and answers true; `regateGenericInstances`
+    // re-judges it once it is.)
+    if (it == _classes.end()) return !_enums.count(c);
     ClassInfo& fc = it->second;
-    if (fc.isIntrinsicColl) return true;                   // zero = valid empty collection / null Weak
+    if (fc.isIntrinsicColl) switch (fc.collKind) {
+        case CollKind::String: case CollKind::Simd: case CollKind::Mask: return true;
+        case CollKind::Fixed: {                            // element by element
+            auto co = _collections.find(c);
+            return co != _collections.end() && isDefaultFillable(co->second.elemCType);
+        }
+        default: return false;                             // Owned / Shared / Weak / Bindable
+    }
     // Scan `methods` (NOT `ctors`): the `when [A: default]` gate (registerGenericTypeInst) drops a gated-away
     // `empty()` from `methods` per-monomorph but leaves it in `ctors`, so `methods` is the gate-ACCURATE set.
     // A custom-`A` collection whose `default` ctor was gated off is therefore correctly NOT default-fillable.
     for (auto& kv : fc.methods) if (kv.second.isDefaultCtor) return true;
     return false;
+}
+
+// The C expression for the default of `c` when it is NOT all-zero bytes, or "" when `(T){0}` is the value.
+// Only two kinds of type need one: a type that ELECTED a `default` ctor (its call), and an `InlineArray`
+// whose element needs one (`Arr__fill(<element default>)`). Everything else with a default has it by nature.
+// Asked only where `isDefaultFillable(c)` already holds.
+std::string CEmitter::defaultValueExpr(const std::string& c)
+{
+    auto it = _classes.find(c);
+    if (it == _classes.end()) return "";
+    ClassInfo& fc = it->second;
+    if (fc.isIntrinsicColl) {
+        if (fc.collKind != CollKind::Fixed) return "";
+        auto co = _collections.find(c);
+        if (co == _collections.end()) return "";
+        std::string e = defaultValueExpr(co->second.elemCType);
+        return e.empty() ? "" : c + "__fill(" + e + ")";
+    }
+    for (auto& kv : fc.methods) if (kv.second.isDefaultCtor) return kv.second.cName + "()";
+    return "";
+}
+
+// `X.default()` for a type that has its default BY NATURE (see isDefaultFillable): there is no ctor to call,
+// so the value is `(T){0}`, or an `InlineArray`'s element-wise fill. Returns "" whenever the ordinary dot-on-
+// type path should answer instead — an ELECTED default (its ctor call), or no default at all (that path names
+// the missing election). Reached through a type parameter (`T.default()` with `T = int32`), which is what lets
+// a container written in kama fill what the compiler's own field fill does; before KR-106 `when [T: default]`
+// held for `int32` and `T.default()` still refused it. A plain enum is the one concrete spelling answered
+// HERE, because it has no class entry for the ordinary path to report against.
+std::string CEmitter::emitNaturalDefault(InvocationNode* call, MemberAccessNode* ma)
+{
+    if (!ma || !ma->identifier || !ma->identifier->value || *ma->identifier->value != "default") return "";
+    if (call->args && !call->args->empty()) return "";
+    SharedIdentifier ty;
+    std::string spelled;
+    if (ma->classType && ma->classType->value) { ty = ma->classType; spelled = *ma->classType->value; }
+    else if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
+        if (!id->value || !exprClass(ma->expression).empty() || _localTypeNodes.count(*id->value)) return "";   // a binding
+        spelled = *id->value;
+        auto s = _typeSubst.find(*id->value);
+        if (s != _typeSubst.end() && (!id->qualifier || id->qualifier->empty())) ty = s->second;
+        else if (isEnum(resolveUserName(*id->value, id->qualifier))) ty = ma->expression
+                 ? std::static_pointer_cast<IdentifierNode>(ma->expression) : nullptr;
+        else return "";
+    }
+    if (!ty) return "";
+    std::string ct = cType(ty);
+    auto ci = _classes.find(ct);
+    if (!isDefaultFillable(ct)) {
+        if (ci == _classes.end() && _enums.count(ct)) {
+            unsupported(("`" + spelled + "` has no `default` constructor — electing one is the type's own "
+                         "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
+                         "named constructor").c_str(), call->line);
+            return "0";
+        }
+        return "";
+    }
+    if (ci != _classes.end() && !ci->second.isIntrinsicColl) return "";   // elected: the ctor path calls it
+    std::string dv = defaultValueExpr(ct);
+    return dv.empty() ? "(" + ct + "){0}" : dv;
 }
 
 // Enforce complete-init on a NAMED ctor (`ctor make(…)`) — a static factory returning the enclosing type
@@ -26016,6 +26116,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 // instance. An in-scope binding wins (instance `.method` first), so this fires only when
                 // the receiver is a bare type name with no live binding. Distinct from `Type::staticFn()`
                 // (a static fn stays `::`); the strict-ctor gate inside points a static-fn dot at `::`.
+                {   // `X.default()` where X has its default BY NATURE — no ctor to call (KR-106's one rule)
+                    std::string nd = emitNaturalDefault(call, ma);
+                    if (!nd.empty()) return nd;
+                }
                 std::string dotType;
                 if (isTypeReceiver(ma, dotType)) {
                     // The file rung, for the CONSTRUCTION position. It does not arrive through the
@@ -34228,13 +34332,52 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         if (gt != _genericTypes.end()) {
             auto mit = gt->second.methods.find(method);
             if (mit != gt->second.methods.end() && mit->second.isCtor && !mit->second.whenParams.empty()) {
+                const MethodInfo& gm = mit->second;
                 std::string cond;
-                for (size_t i = 0; i < mit->second.whenParams.size(); ++i)
-                    cond += (i ? ", " : "") + mit->second.whenParams[i] + ": " + mit->second.whenBounds[i];
+                for (size_t i = 0; i < gm.whenParams.size(); ++i)
+                    cond += (i ? ", " : "") + gm.whenParams[i] + ": " + gm.whenBounds[i];
+                // Say WHICH condition this instance fails, and the fix for that one: a `default` bound on an
+                // allocator wants the allocator-taking twin, one on an element wants an elected default (or a
+                // ctor that takes the value), and any other bound is the argument's own contract to satisfy.
+                std::string why;
+                // The argument as the reader wrote it (`Owned<Shape>`), not its instance's C name, whose
+                // demangling spells the file prefix and the defaulted allocator. Keywords have no `value`.
+                std::function<std::string(const SharedIdentifier&)> spelled = [&](const SharedIdentifier& t) {
+                    if (!t) return std::string();
+                    std::string r = t->value ? *t->value : cType(t);
+                    std::string args;
+                    if (t->genericArgs)
+                        for (auto& g : *t->genericArgs)
+                            if (g && (g->value || cType(g) != "void"))   // a compile-time VALUE has no type spelling
+                                args += (args.empty() ? "" : ", ") + spelled(g);
+                    return args.empty() ? r : r + "<" + args + ">";
+                };
+                auto gi = _genericTypeInsts.find(tn);
+                auto gp = _genericTypeParams.find(typeName);
+                if (gi != _genericTypeInsts.end() && gp != _genericTypeParams.end())
+                    for (size_t c = 0; c < gm.whenParams.size() && why.empty(); ++c) {
+                        std::vector<std::string> wp{gm.whenParams[c]}, wb{gm.whenBounds[c]};
+                        std::vector<SharedIdentifier> wn;
+                        if (c < gm.whenBoundNodes.size()) wn.push_back(gm.whenBoundNodes[c]);
+                        if (whenConditionsHold(wp, wb, wn, gp->second, gi->second.typeArgs)) continue;
+                        std::string arg;
+                        for (size_t k = 0; k < gp->second.size() && k < gi->second.typeArgs.size(); ++k)
+                            if (gp->second[k] == gm.whenParams[c] && gi->second.typeArgs[k])
+                                arg = spelled(gi->second.typeArgs[k]);
+                        if (gm.whenBounds[c] != "default")
+                            why = "; `" + arg + "` (for `" + gm.whenParams[c] + "`) is not `" + gm.whenBounds[c] + "`";
+                        else if (gm.whenParams[c] == "A")
+                            why = "; the allocator `" + arg + "` has no `default` — use an allocator-taking "
+                                  "constructor instead";
+                        else
+                            why = "; `" + arg + "` has no `default` (a type a program declares has one only by "
+                                  "electing it — `default ctor name()`); use a constructor that takes the value "
+                                  "instead";
+                    }
+                if (why.empty()) why = " (e.g. a custom allocator has no `default`); use an allocator-taking "
+                                       "constructor instead";
                 unsupported(("constructor `" + disp + "." + method + "` is not available for this "
-                             "instantiation — it requires `when [" + cond + "]` (e.g. a custom allocator "
-                             "has no `default`); use an allocator-taking constructor instead").c_str(),
-                            call->line);
+                             "instantiation — it requires `when [" + cond + "]`" + why).c_str(), call->line);
                 return "0";
             }
         }

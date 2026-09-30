@@ -10,7 +10,7 @@ export { Vec2, Vec3, Vec4 };
 type value Vec2 implements Equatable<This> {
     public float32 x;
     public float32 y;
-    public ctor zero()            { return Vec2.of(x: 0.0f32, y: 0.0f32); }
+    public default ctor zero()    { return Vec2.of(x: 0.0f32, y: 0.0f32); }
     public ctor one()             { return Vec2.of(x: 1.0f32, y: 1.0f32); }
     public ctor splat(float32 s)  { return Vec2.of(x: s, y: s); }
     public ctor unitX()           { return Vec2.of(x: 1.0f32, y: 0.0f32); }
@@ -41,7 +41,7 @@ type value Vec3 implements Equatable<This> {
     public float32 x;
     public float32 y;
     public float32 z;
-    public ctor zero()            { return Vec3.of(x: 0.0f32, y: 0.0f32, z: 0.0f32); }
+    public default ctor zero()    { return Vec3.of(x: 0.0f32, y: 0.0f32, z: 0.0f32); }
     public ctor one()             { return Vec3.of(x: 1.0f32, y: 1.0f32, z: 1.0f32); }
     public ctor splat(float32 s)  { return Vec3.of(x: s, y: s, z: s); }
     public ctor unitX()           { return Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32); }
@@ -74,7 +74,7 @@ type value Vec4 implements Equatable<This> {
     public float32 y;
     public float32 z;
     public float32 w;
-    public ctor zero()            { return Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32); }
+    public default ctor zero()    { return Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32); }
     public ctor splat(float32 s)  { return Vec4.of(x: s, y: s, z: s, w: s); }
     public ctor fromVec3(Vec3 v, float32 w) { return Vec4.of(x: v.x, y: v.y, z: v.z, w: w); }
 

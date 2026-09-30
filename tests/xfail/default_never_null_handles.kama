@@ -1,0 +1,9 @@
+// KR-106: a never-null handle has no default — its zero is a null pointer. `Owned<Shape>` used to satisfy
+// `when [T: default]` (it is registered as an intrinsic), and `FixedArray<Owned<Shape>>.make(size: 1)` then
+// crashed on the first call through an element, in safe code.
+type contract Shape for value, resource { fn int32 area(); }
+type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
+fn int32 main() {
+    Holder<Owned<Shape>> h = Holder.fresh();
+    return 0;
+}

@@ -1,0 +1,8 @@
+// KR-106: an `InlineArray` has a default only element by element, so one over an enum that elected nothing
+// has none. It used to be zero-filled as an intrinsic collection, whatever its element.
+type enum Code : uint8 { Ok = 3, Bad = 200 }
+type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
+fn int32 main() {
+    Holder<InlineArray<Code>#(2)> h = Holder.fresh();
+    return 0;
+}

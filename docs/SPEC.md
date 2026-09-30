@@ -3833,10 +3833,11 @@ Two escape hatches, both **explicit and at the declaration** rather than hidden 
   it runs in every ctor (and for a bare local);
 - **`@generate(zero)`** blesses a whole data bag's zero state (a transparent all-public `value`).
 
-What is exempt is not a carve-out but a guarantee the compiler supplies: an **intrinsic collection**, whose
-zero representation *is* its valid empty value, and a type with a **`default` ctor**, which the compiler
-calls at the fill site. (A generic field could not spell the latter anyway — there is no expression for
-"the default `A`".)
+What is exempt is not a carve-out but a guarantee the compiler supplies: a field whose type has a
+**default** — `string` and the other language-owned types whose zero representation *is* their empty value
+(see *Collections — the four-ctor matrix* for the one rule), and a type with a **`default` ctor**, which the
+compiler calls at the fill site (element by element for an `InlineArray` of them). A number and a raw
+pointer field are still assigned: their zero is a value, but a forgotten one is a bug, not a choice.
 
 ```kama
 type resource Ring {
@@ -3876,10 +3877,23 @@ bound to `A` must itself have a `default` ctor; there is no nominal `Default` co
 `DynamicArray<T, BumpAllocator>.empty()` **does not exist**: you get a clean "not available for this
 instantiation" error rather than a collection with a zero allocator. Use `withAllocator` for a custom `A`.
 
+**One rule for a default.** `when [T: default]` holds, and `T.default()` exists, for exactly the same
+types. A **language-owned** type whose all-zero bytes are a real value has its default **by nature**: the
+numbers, `bool`, `char`, `UnsafePtr`/`UnsafeConstPtr` (null), `string` (`""`), `Simd`/`Mask` (zero lanes),
+and an `InlineArray` whose element has one (element by element). **Every type a program declares** — a
+`value`, a `resource` and an **`enum`** — has one only by **electing** it: variant order must not pick a <!-- test: default_one_rule -->
+value, and `type enum Code : uint8 { Ok = 3, Bad = 200 }` has no zero member at all. An enum elects the <!-- xfail: default_plain_enum, default_enum_unelected -->
+way a value does, `type enum Level { Debug, Info; public default ctor info() { return Level::Info; } }`.
+A never-null handle (`Owned`, `Shared`, `Weak`), an `fnptr` and a `BindableFunctionPtr` have none: each <!-- xfail: default_never_null_handles, default_inline_array_elem -->
+one's zero is a null pointer. Until `0.9.480` the bound held for every enum and every intrinsic, so
+`FixedArray<Owned<Shape>>.make(size: 1)` built a null handle in safe code, and `T.default()` still refused
+`int32` though the bound admitted it.
+
 **Calling the election — `T.default()`.** The mark names *which* ctor is canonical; `T.default()` calls it
 without the caller knowing the name the author chose (`empty`, `zero`, `closed`, …). It works on any type
-that elected one, `value` or `resource`, and it is what makes the `when [A: default]` bound usable from
-kama rather than only by the compiler's field fill:
+that has a default by the rule above — for one that has it by nature there is no ctor, and the value is its
+zero — and it is what makes the `when [A: default]` bound usable from kama rather than only by the
+compiler's field fill:
 
 ```kama fragment
 ctor fresh() when [A: default] { this.item = A.default(); }
@@ -5201,6 +5215,8 @@ The `;` separating variants from members is **mandatory**, and it is what makes 
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->
 they satisfy a contract — and named `ctor`s and `friend` grants, as a type does <!-- test: enum_ctor, friend_enum --> <!-- xfail: friend_enum_nongranted, friend_enum_unknown, enum_ctor_optional -->
+(one of those ctors may be marked `default`, the enum's only way to have a default — see *Collections — the <!-- xfail: default_enum_ctor_args -->
+four-ctor matrix*)
 — and its own `comptime` constants and `comptime fn`s, read `E::NAME` and `E::name()`, and `comptime assert`s, <!-- test: comptime_enum_resource_members -->
 which are checked like a type's (all three parsed and did nothing before `0.9.443`) — <!-- xfail: enum_comptime_assert -->
 but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its

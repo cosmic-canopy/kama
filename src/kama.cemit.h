@@ -3630,11 +3630,15 @@ private:
                                 std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
     void        checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode* mnode);   // a view ctor may only borrow its params
-    // Construction-model M8b: a value field may be left unassigned in a ctor iff its type is DEFAULT-FILLABLE
-    // (a primitive / raw `UnsafePtr` — zero is a valid value; an intrinsic collection — zero is a valid empty; or a
-    // type with an explicit `default` ctor). Otherwise it must be explicitly assigned. `concreteCType` is the
-    // field's type ALREADY resolved to its concrete C name (under the active _typeSubst / per instance).
+    // Does the type have a DEFAULT (`when [T: default]`, `T.default()`, a ctor's fill of an unassigned field)?
+    // By nature for the language's own types whose zero IS a value; by election for everything a program
+    // declares, enums included (KR-106). See the definition. `concreteCType` is the type ALREADY resolved to
+    // its concrete C name (under the active _typeSubst / per instance).
     bool        isDefaultFillable(const std::string& concreteCType);
+    // That default's C expression when it is not all-zero bytes (an elected ctor's call, an `InlineArray`'s
+    // element-wise fill), else "" — `(T){0}` is then the value. Asked only where isDefaultFillable holds.
+    std::string defaultValueExpr(const std::string& concreteCType);
+    std::string emitNaturalDefault(InvocationNode* call, MemberAccessNode* ma);   // `X.default()`, X default by nature
     // Owning read-before-assign is a compile error. `params` (optional) brings the `out` parameters into
     // the analysis: they start UNASSIGNED, so reading one is an error and every return must have filled it.
     void        checkDefiniteAssignment(SharedBlock body, SharedParameterList params = SharedParameterList());

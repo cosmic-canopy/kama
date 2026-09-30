@@ -27,6 +27,10 @@ type value BTreeFrame<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     public UnsafePtr<BTreeNode<K,V,A>> node = null;
     public isize i = 0;
     public unsafe ctor at(UnsafePtr<BTreeNode<K,V,A>> node, isize i) { this.node = node; this.i = i; }
+    // Elected so an iterator's `path` stack of these is filled frame by frame when it is made (KR-106: an
+    // `InlineArray` has a default only element by element). A view ctor may assign only from its
+    // parameters, so the fill is the one way the stack starts out as frames rather than as bytes.
+    public default ctor empty() { }
 }
 
 // A MUTABLE in-order iterator over a sorted map's VALUES (`foreach (ref V v in sm.valuesMut())`), for ANY
