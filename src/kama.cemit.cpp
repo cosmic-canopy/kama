@@ -20561,6 +20561,31 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "char** kama_argv = 0;\n"
           << "int kama__argv_state = 0;\n"
           << "#endif\n";
+    // SIGPIPE (KPG-1). A write to a closed socket or pipe raised it, and its default action ended the process —
+    // `TcpStream.write` to a peer that hung up, or to the stdin of a child that exited — where the API promises
+    // `Err(IoError::BrokenPipe)`. A program's `main` ignores it (kama__sigpipe_init, called from kama_args_init),
+    // as Go, Rust, Python and Node do, so every such write returns EPIPE. Two things keep that from being
+    // observable anywhere else:
+    //   * stdout and stderr keep the Unix convention: a write that fails with EPIPE there ends the program by
+    //     SIGPIPE exactly as before, so `prog | head` still stops `prog` (kama_raw_write, kama_write);
+    //   * a child is handed back the disposition it would have inherited (kama_proc_spawn).
+    // Only when the program did not start with SIGPIPE already ignored — then nothing changes at all — and never
+    // in a `--shared` library, which has no `main`: `kama__sigpipe_owned` stays 0 there, and sockets are covered
+    // by MSG_NOSIGNAL / SO_NOSIGPIPE on their own. Defined here, not in kama_runtime.h, so that header stays free
+    // of system headers.
+    *_out << "#if !defined(KAMA_TARGET_EMBEDDED) && !defined(_WIN32) && !defined(__EMSCRIPTEN__)\n"
+          << "#include <errno.h>\n"
+          << "#include <signal.h>\n"
+          << "int kama__sigpipe_owned = 0;\n"
+          << "void kama__sigpipe_init(void) {\n"
+          << "    void (*prev)(int) = signal(SIGPIPE, SIG_IGN);\n"
+          << "    if (prev == SIG_DFL) kama__sigpipe_owned = 1;\n"
+          << "    else if (prev != SIG_IGN && prev != SIG_ERR) (void)signal(SIGPIPE, prev);\n"
+          << "}\n"
+          << "void kama__stdio_write_failed(void) {\n"
+          << "    if (kama__sigpipe_owned && errno == EPIPE) { (void)signal(SIGPIPE, SIG_DFL); (void)raise(SIGPIPE); }\n"
+          << "}\n"
+          << "#endif\n";
     if (externsHeader("kama_log.h"))
         *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
     // `@globalAllocator`: THE heap — one object for the whole process, so one definition, here. Zero bytes (the

@@ -332,10 +332,16 @@ static inline long kama_raw_write(int fd, const void* bytes, size_t n) {
     return _write(fd, bytes, (unsigned int)n);
 #elif defined(__APPLE__)
     extern long write(int, const void*, size_t) __asm("_write");
-    return write(fd, bytes, n);
+    long r = write(fd, bytes, n);
+    if (r < 0 && (fd == 1 || fd == 2)) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }
+    return r;
 #else
     extern long write(int, const void*, size_t);
-    return write(fd, bytes, n);
+    long r = write(fd, bytes, n);
+#if !defined(__EMSCRIPTEN__)
+    if (r < 0 && (fd == 1 || fd == 2)) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }
+#endif
+    return r;
 #endif
 }
 #endif
@@ -2017,6 +2023,11 @@ static inline int kama__fd_is_bound(int fd) {
 #endif
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    // A write to a closed peer or pipe returns `IoError::BrokenPipe` instead of killing the process (KPG-1) —
+    // defined beside the runtime slots, where <signal.h> is included; see kama__sigpipe_init there.
+    { extern void kama__sigpipe_init(void); kama__sigpipe_init(); }
+#endif
     // The Windows argv conversion used to run HERE, eagerly, and drew from the funnel before `main` — see
     // kama__argv_ensure below for why it now runs on first use instead.
 #if defined(_WIN32) && defined(KAMA_SUBSYSTEM_WINDOWS)

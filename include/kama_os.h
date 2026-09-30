@@ -1146,7 +1146,13 @@ static inline int32_t   kama_open_read(const char* path)   { return (int32_t)ope
 static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666); }
 static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND, 0666); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
-static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)write((int)fd, buf, n); }
+static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) {
+    ptrdiff_t r = (ptrdiff_t)write((int)fd, buf, n);
+#if !defined(__EMSCRIPTEN__)
+    if (r < 0 && (fd == 1 || fd == 2)) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }   // KPG-1
+#endif
+    return r;
+}
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)close((int)fd); }
 static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(path); }
 
@@ -1354,6 +1360,9 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     int pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
+        // The disposition the child would have inherited without kama: an ignored signal survives exec, so a
+        // `head` or `yes` spawned from here would otherwise get EPIPE where it expects to be stopped (KPG-1).
+        { extern int kama__sigpipe_owned; if (kama__sigpipe_owned) (void)signal(SIGPIPE, SIG_DFL); }
         if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }
         if (inFd  >= 0) { dup2(inFd,  0); if (inFd  > 2) close(inFd);  }
         if (outFd >= 0) { dup2(outFd, 1); if (outFd > 2) close(outFd); }
@@ -1495,14 +1504,37 @@ fail:
 // Handles are `ptrdiff_t` (isize). The address calls (bind/connect/sendto/recvfrom/getsockname) are written
 // once, below the platform split. `family` is kama's 4 or 6, never an AF_* value, which differ per OS.
 static inline int32_t   kama_net_init(void) { return 0; }   // POSIX: nothing to init (Windows: WSAStartup)
-static inline ptrdiff_t kama_socket_tcp(int32_t family) { return (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0); }
+// A write to a peer that has closed must return EPIPE, not raise SIGPIPE (KPG-1): MSG_NOSIGNAL on every send, and on
+// Apple SO_NOSIGPIPE on every socket kama makes or accepts as well. Per SOCKET, so it holds in a `--shared` library
+// too, where the process-wide disposition belongs to the host (see kama__sigpipe_init).
+static inline void kama__nosigpipe(ptrdiff_t fd) {
+#if defined(SO_NOSIGPIPE)
+    if (fd >= 0) { int one = 1; (void)setsockopt((int)fd, SOL_SOCKET, SO_NOSIGPIPE, &one, (socklen_t)sizeof one); }
+#else
+    (void)fd;
+#endif
+}
+#if defined(MSG_NOSIGNAL)
+#define KAMA__SEND_FLAGS MSG_NOSIGNAL
+#else
+#define KAMA__SEND_FLAGS 0
+#endif
+static inline ptrdiff_t kama_socket_tcp(int32_t family) {
+    ptrdiff_t fd = (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+    kama__nosigpipe(fd);
+    return fd;
+}
 static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
     int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, (socklen_t)sizeof one);
 }
 static inline int32_t   kama_listen(ptrdiff_t fd, int32_t backlog) { return (int32_t)listen((int)fd, (int)backlog); }
-static inline ptrdiff_t kama_accept(ptrdiff_t fd)                  { return (ptrdiff_t)accept((int)fd, (struct sockaddr*)0, (socklen_t*)0); }
+static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
+    ptrdiff_t c = (ptrdiff_t)accept((int)fd, (struct sockaddr*)0, (socklen_t*)0);
+    kama__nosigpipe(c);
+    return c;
+}
 static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)recv((int)fd, buf, n, 0); }
-static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, 0); }
+static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, KAMA__SEND_FLAGS); }
 static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close((int)fd); }
 
 // ---- readiness poller (poll(2)) --------------------------------------------

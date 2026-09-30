@@ -1,0 +1,21 @@
+// A write to the stdin of a child that has exited returns an error — it used to raise SIGPIPE and end the parent
+// (exit 141): the same defect as tests/net_write_closed_peer.kama, through a pipe instead of a socket (KPG-1).
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
+         std::io::IoError, std::collections::FixedArray };
+
+fn int32 main() {
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "exit"); c.arg(a: "0");
+    c.stdin(s: Stdio::Piped);
+    Result<Process, IoError> rp = c.start();
+    Process p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<ExitStatus, IoError> w = p.wait();   // the read end is gone before the first write
+    FixedArray<uint8> buf = FixedArray.make(size: 65536);
+    int32 i = 0;
+    while (i < 64) {
+        bool failed = match (p.stdin().write(bytes: buf.view())) { case Ok(value: n): false; case Err(error: e): true; };
+        if (failed) { return 42; }
+        i = i + 1;
+    }
+    return 6;
+}

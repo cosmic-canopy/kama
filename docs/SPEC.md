@@ -1829,6 +1829,16 @@ gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed
 on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP) and
 `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
+**A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
+closed, or to the stdin of a child that exited, returns `IoError::BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
+kernel reports it) — POSIX raises SIGPIPE there instead, whose default ends the process. A program ignores that
+signal from the start of `main`, as Go, Rust, Python and Node do, and every socket is also made not to raise it
+(`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple), so a `--shared` kama library is covered without touching its
+host's signals. Two things keep the Unix convention: **stdout and stderr** still end the program by SIGPIPE
+when the reader goes away — `prog | head -n 1` stops `prog` with exit 141 — and a **child** is started with the
+disposition it would have had without kama (`tools/check-sigpipe.sh` holds both). A program started with
+SIGPIPE already ignored keeps it ignored. Until `0.9.471` the first write after a peer hung up killed the process.
+
 **`Permissions`** are the nine Unix bits — read, write, execute for the owner, the group and everyone else —
 on every platform. Hand-written code names them, `Permissions::OwnerRead | Permissions::OwnerWrite` (the <!-- test: fs_permissions_api -->
 constants are `comptime` values of the type itself); `has(p:)` tests, `mode()` gives the number, and `${p}`
