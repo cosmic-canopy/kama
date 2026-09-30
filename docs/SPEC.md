@@ -4101,14 +4101,14 @@ openInto(path: p, dst: out f);        // now it is live, and drops normally from
 
 **Three rules, and they are what make a hole worth declaring:**
 
-1. **Only an `out` argument fills a slot.** Not an assignment, not a field write, not a method call, not
-   `addr(of: x)`. A value that arrives one line late is an ordinary local — `T x = …;` says so with the
+1. **Only an `out` argument fills a slot.** Not an assignment (a nested one included), not a field write, <!-- xfail: slot_assignment_fill, slot_assign_nested -->
+   not a method call, not `addr(of: x)`. A value that arrives one line late is an ordinary local — `T x = …;` says so with the
    value in hand, and a branch has a stronger spelling still, since `match` and the ternary are
    value-producing and can build a `resource` (`Conn c = match (k) { case A: Conn.tcp(fd: 3); … };`).
 2. **A slot with no `out` fill anywhere is an error.** A hole nothing fills is a dead declaration, not an <!-- xfail: slot_never_filled -->
    opportunity to elide a drop.
 3. **The fill sits on the same unconditional path as the declaration** — a statement of the declaring
-   block, or of a nested block that always runs. Not inside an `if`, a `match` arm or a loop the
+   block, or of a nested block that always runs (a plain block, `borrow`, `scope`). Not inside an `if`, a `match` arm or a loop the
    declaration is outside of. Measured *relative* to the declaration, so a slot declared **and** filled
    inside one branch is fine. The reason is that a conditionally-filled slot cannot be tested before use:
    slot validity is a compile-time fact, never a runtime check.
@@ -4128,10 +4128,14 @@ Rule 3 is about the slot's own declaration, not about the callee: an **`out` par
 filled on *every* path, so the callee may fill it through an `if`/`else`, a `match`, or an early return —
 that join analysis is where conditional filling legitimately lives.
 
-Two consequences worth stating plainly. A **class-typed** slot is valid-but-empty from the declaration on,
-so reading a non-owning field of one or handing it to a callee is fine; an **`Owned`/`Shared`** slot is not
-— its zero value is a null pointer, so reading through it is rejected, as is reading a primitive slot, <!-- xfail: slot_read_before_assign -->
-which has no field-default fill behind it.
+**Every read waits for the fill, whatever the slot's type.** A class-typed slot's storage holds the
+declaration's fill — field defaults, each field's `default` ctor — so that the drop at an exit the fill never
+reached does nothing, and for no other reason: no read sees it. The whole value, a field at any depth, an
+element, a borrow of a field (`ref p.y`), an interpolation hole, a `const` initializer, a `bitcast` operand and
+a method call on it are each refused until the `out` fill has run, and so is handing it to a callee as <!-- xfail: slot_field_read, slot_read_const_init, slot_read_interpolated, slot_read_in_scope, slot_method_before_fill -->
+anything but `out`. A primitive slot, which has no fill at all, and an `Owned`/`Shared` one, whose zero is a
+null pointer, are refused the same way. Until `0.9.479` a class slot's non-owning field read freely, and <!-- xfail: slot_read_before_assign, def_assign_bare_owning_read -->
+`slot Pt p; int32 y = p.y;` returned the field's default — a value no constructor made. <!-- test: slot_reads_after_fill -->
 
 This is **not** `Optional<T>`: a slot has no runtime tag and no drop, and it disappears entirely at
 compile time. Use `Optional<T>` when emptiness is a value you carry, `slot` when it is a fact the compiler

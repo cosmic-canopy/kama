@@ -8053,10 +8053,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) rhs = h->value;   // judge on the value
             rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
         }
-        // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`, which is how a factory
-        // builds a value) — FILLS the hole: it is a live value from here on, so its destructor comes back
-        // and ordinary move tracking takes over. Done once here rather than in each of the assignment
-        // sub-paths below, and BEFORE any of them emit, because emitting the target reads its move state.
+        // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`) — makes it a live value
+        // from here on, so its destructor comes back and ordinary move tracking takes over. Safe code never
+        // gets here with a hole (checkDefiniteAssignment's rule 1: only an `out` argument fills a slot); the
+        // bookkeeping stays so the emitter's move state never disagrees with what it just stored. Done once
+        // here rather than in each of the assignment sub-paths below, and BEFORE any of them emit, because
+        // emitting the target reads its move state.
         if (!_slotLocals.empty()) {
             std::string sn;
             SharedExpression lhs = as->unaryExpression;
@@ -23085,11 +23087,11 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     std::set<std::string> slotOutFilled;                      // slots an `out` argument has filled
     int condDepth = 0;                                        // +1 inside a branch/loop body a path may skip
     auto slotFillRule = [&](const char* what, int line) { unsupported(what, line); };
-    // Class-typed slots. Their storage is VALID-but-empty from the declaration on: the M8d.1 fill loop
-    // applies field defaults, calls each field's `default` ctor, and sets the vptr. So handing one to a
-    // callee (`collectKeys(dest: acc)` — a `ref` borrow the analysis can't see, since the `ref` marker is
-    // optional) or reading a non-owning field of it (`result.alloc`) is safe. A PRIMITIVE slot has no such
-    // fill and stays strictly read-before-assign.
+    // Class-typed slots. Their storage holds the declaration's fill (field defaults, each field's `default`
+    // ctor, the vptr) so that the drop at an exit the fill never reached is a no-op — and for nothing else.
+    // No read sees it: a field of an unfilled slot, at any depth, is refused like the whole value, because
+    // those bytes are a value no ctor made (KR-106). The set is kept only to word the two shapes that TRY to
+    // fill one — a method call on it, and handing it to a callee — as the rule-1 error they are.
     std::set<std::string> slotClassDecls;
     const bool inUnsafe = _inUnsafe;   // the ENCLOSING FUNCTION is `unsafe` (set by the caller)
 
@@ -23226,6 +23228,31 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                           "value's liveness is decided at compile time").c_str(), line);
     };
 
+    // Rule 1 for an assignment — as a statement or nested in an expression (`z = (p.y = 3)`): not a fill.
+    auto slotAssignFill = [&](AssignmentNode* as) {
+        std::string an;                                    // the slot this assignment targets
+        if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get())) {
+            if (id->value && (!id->qualifier || id->qualifier->empty())) an = *id->value;
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(as->unaryExpression.get())) {
+            if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                if (bid->value && (!bid->qualifier || bid->qualifier->empty())) an = *bid->value;
+        }
+        if (!an.empty())
+            slotBadFill(an, "assigns it",
+                        "give the declaration a value instead — a `match` or a ternary builds one "
+                        "for a branch", as->line);
+    };
+    // The unfilled slot a member access or element access reads through, at any depth (`p.inner.z`,
+    // `p.arr[1]`), or "". A read of any part of a slot is a read of the slot.
+    std::function<std::string(ExpressionNode*)> unfilledSlotBase = [&](ExpressionNode* e) -> std::string {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(e)) return unfilledSlotBase(ma->expression.get());
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(e)) return unfilledSlotBase(ea->expression.get());
+        if (auto* id = dynamic_cast<IdentifierNode*>(e))
+            if (id->value && (!id->qualifier || id->qualifier->empty())
+                && slotDecls.count(*id->value) && unassigned.count(*id->value)) return *id->value;
+        return "";
+    };
+
     std::function<void(SharedExpression)> scan;
     std::function<void(SharedStatement, bool)> walk;
 
@@ -23246,7 +23273,11 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         if (!e) return;
         ASTNode* n = e.get();
         std::string fk = fieldKey(e);
-        if (!fk.empty()) { if (unassigned.count(fk)) flag(fk, e->line); return; }   // don't recurse into base
+        if (!fk.empty()) {                                                           // don't recurse into base
+            std::string sb = unfilledSlotBase(e.get());        // a slot's field reads the SLOT: word it so
+            if (!sb.empty()) flag(sb, e->line); else if (unassigned.count(fk)) flag(fk, e->line);
+            return;
+        }
         if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
             if (id->value && (!id->qualifier || id->qualifier->empty())
                 && bareOwning.count(*id->value) && unassigned.count(*id->value))
@@ -23264,6 +23295,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
             if (writeTargetKey(as->unaryExpression).empty()) rec(as->unaryExpression);
             rec(as->expression);
+            slotAssignFill(as);
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
             std::string ax = addrOfLocal(inv);
             if (!ax.empty()) {                               // addr(of: x) — manual control; x is now managed
@@ -23272,17 +23304,16 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                             "move-out", inv->line);
                 markAssigned(ax); return;
             }
-            // `slot FixedArray<T,A> r; r.allocBuffer(size: size); return give r;` — calling a method ON a
-            // slot FILLS it. The receiver is passed by pointer and the method's whole job here is to build
-            // the value, so this is a write, not a read; the builder shape is how much of the stdlib
-            // constructs. (The declaration's field-default fill already put the storage in a valid state,
-            // so the receiver is never garbage.) Marks the slot live without recursing into the receiver.
+            // A method call on an unfilled class slot — `r.allocBuffer(size: n)` meant to build it, or
+            // `p.sum()` meant to read it. Neither is possible (rule 1: only an `out` argument fills), and the
+            // message says so for both. Once the slot IS filled this is an ordinary call on a live value.
             if (auto* rma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
                 if (auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get()))
                     if (rid->value && (!rid->qualifier || rid->qualifier->empty())
                         && slotClassDecls.count(*rid->value)) {   // valid-empty only — NOT an Owned/Shared hole
-                        slotBadFill(*rid->value, "fills it with a method call",
-                                    "give it a value instead — `T x = T.empty();`", inv->line);
+                        slotBadFill(*rid->value, "calls a method on it before it has a value, which "
+                                    "neither reads one nor fills it",
+                                    "give it a value instead — `T x = T.empty();` — or fill it first", inv->line);
                         untrack(*rid->value);
                         if (inv->args) for (auto& a : *inv->args) if (a) {
                             std::string ot = outArgTarget(a.get());
@@ -23312,13 +23343,17 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             rec(ea->expression);
             if (ea->expressionlist) for (auto& x : *ea->expressionlist) rec(x);
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
-            // A non-owning field of a class slot (`result.alloc`) is fine — the fill loop initialized it.
-            // An OWNING field was already caught by the `fieldKey` check at the top of scan, which is what
-            // keeps `def_assign_field_read` rejected: an `Owned`/`Shared` field really is null here.
-            if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                if (bid->value && (!bid->qualifier || bid->qualifier->empty())
-                    && slotClassDecls.count(*bid->value)) return;
+            // A field of an unfilled slot, at any depth (`p.y`, `p.inner.z`, `ref p.y`, `p.y++`): its bytes
+            // are the declaration's fill, a value no ctor made. Until KR-106 a class slot's non-owning
+            // field read freely here, and `slot Pt p; int32 y = p.y;` returned the field's default.
+            std::string sb = unfilledSlotBase(e.get());
+            if (!sb.empty()) { flag(sb, e->line); return; }
             rec(ma->expression);
+        } else if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) {   // `"${x}"` reads each hole
+            for (auto& h : is->holes) rec(h);
+        } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) { rec(bc->unaryExpression);
+        } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) { rec(ad->operand);
+        } else if (auto* io = dynamic_cast<IsolateNode*>(n)) { rec(io->call);    // `isolate f(x: p)`
         } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) { rec(pe->expression);
         } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { rec(po->expression);
         } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { rec(su->expression);
@@ -23387,10 +23422,9 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                         slotDecls.insert(nm);
                         slotDeclLine[nm] = n->line;
                         slotDeclDepth[nm] = condDepth;
-                        // `owned.empty()` is load-bearing: an `Owned`/`Shared` slot is NOT valid-but-empty.
-                        // Its zero value is a NULL pointer, so calling through it derefs null — the very
-                        // thing this check exists to catch. Only a plain class, whose field-default fill
-                        // leaves a usable value, gets the relaxed treatment.
+                        // `owned.empty()` is load-bearing: an `Owned`/`Shared` slot's zero value is a NULL
+                        // pointer, and its method calls must stay ordinary reads (flagged below) rather than
+                        // take the class-slot rule-1 wording, which `untrack`s the name afterwards.
                         if (owned.empty() && lv->type && lv->type->value && isClass(cType(lv->type)))
                             slotClassDecls.insert(nm);
                     }
@@ -23409,19 +23443,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             // Rule 1 — an assignment is not a slot fill. `T x = …;` states the same thing with the value
             // in hand, and a branch-initialized one has a stronger spelling still (`match`/ternary build
             // a resource), so nothing is lost by removing the hole.
-            {
-                std::string an;                                    // the slot this assignment targets
-                if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get())) {
-                    if (id->value && (!id->qualifier || id->qualifier->empty())) an = *id->value;
-                } else if (auto* ma = dynamic_cast<MemberAccessNode*>(as->unaryExpression.get())) {
-                    if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                        if (bid->value && (!bid->qualifier || bid->qualifier->empty())) an = *bid->value;
-                }
-                if (!an.empty())
-                    slotBadFill(an, "assigns it",
-                                "give the declaration a value instead — a `match` or a ternary builds one "
-                                "for a branch", n->line);
-            }
+            slotAssignFill(as);
             if (topLevel) {
                 if (!wk.empty()) unassigned.erase(wk);
                 else if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))  // `h = …` reassigns whole
@@ -23470,6 +23492,14 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             scan(fe->expression); walkSkippable(fe->body);
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
             scan(pf->expression); walkSkippable(pf->body);
+        } else if (auto* cl = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+            // `const T x = …;` and `comptime T N = …;` read their initializers like any declaration.
+            if (cl->variables) for (auto& v : *cl->variables) if (v) scan(v->initializer);
+        } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
+            // A `scope { … }` block always runs to its end (it joins its isolates there), so it is on the
+            // unconditional path — an `out` fill inside it counts, exactly as for a `borrow` block.
+            walk(sc->body, topLevel);
+        } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) { scan(av->value);   // a match arm's value
         } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
             // `walk`, not `walkSkippable`: a `borrow` block is UNCONDITIONAL, so an `out` fill inside it
             // is a definite assignment (SPEC's slot rule 3 — "a nested block that always runs"). Pass

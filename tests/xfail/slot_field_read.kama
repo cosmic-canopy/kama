@@ -1,0 +1,22 @@
+// KR-106: a field of an unfilled `slot` is a read of the slot, at any depth. Until 0.9.479 a class slot's
+// non-owning field read freely — `slot Pt p; int32 y = p.y;` returned the field's default, a value no ctor
+// made. Each line below is one shape; DIAGNOSTIC_LINES pins every one of them.
+type value Inner { public int32 z; public ctor make(int32 z) { this.z = z; } public const fn int32 get() { return this.z; } }
+type value Pt {
+    public int32 x; public int32 y = 7; public Inner inner; public InlineArray<int32>#(3) arr;
+    public ctor make(int32 x) { this.x = x; this.inner = Inner.make(z: 9); this.arr = [0; 3]; }
+}
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn int32 takeRef(ref int32 v) { return v; }
+fn int32 main() {
+    slot Pt p;
+    int32 a = p.y;                              // a field
+    int32 b = p.inner.z;                        // a field of a field
+    int32 c = p.arr[1];                         // an element of a field
+    int32 d = p.inner.get();                    // a method on a field
+    int32 e = takeRef(v: ref p.y);              // a borrow of a field
+    p.y++;                                      // a read-modify-write
+    foreach (int32 v in p.arr) { a += v; }      // iterating a field
+    fill(dst: out p);
+    return a + b + c + d + e;
+}

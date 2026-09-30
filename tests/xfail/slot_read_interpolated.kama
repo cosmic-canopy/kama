@@ -1,0 +1,14 @@
+// KR-106: an interpolation hole reads its expression. The check never looked inside `"${…}"`, so a primitive
+// slot reached C unassigned and clang, not kama, refused it (`-Wuninitialized`).
+type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { this.x = x; } }
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn void fillI(out int32 dst) { dst = 5; }
+fn int32 main() {
+    slot Pt p;
+    slot int32 x;
+    string s = "${p.y}";
+    string t = "${x}";
+    fill(dst: out p);
+    fillI(dst: out x);
+    return cast<int32>(s.length() + t.length());
+}

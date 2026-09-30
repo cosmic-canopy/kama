@@ -1,0 +1,17 @@
+// KR-106: a `scope { … }` body and a `bitcast` operand are reads like any other. The check skipped both —
+// a `scope` block was not walked at all, which also refused an `out` fill inside one as "never filled".
+type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { this.x = x; } }
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn void fillI(out int32 dst) { dst = 5; }
+fn void work(int32 v) { }
+fn int32 main() {
+    slot Pt p;
+    slot int32 x;
+    int32 y = 0;
+    scope { y = p.y; }
+    scope { spawn work(v: x); }
+    uint32 u = bitcast<uint32>(x);
+    fill(dst: out p);
+    fillI(dst: out x);
+    return y + cast<int32>(u);
+}

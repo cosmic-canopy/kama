@@ -1070,15 +1070,21 @@ sizeof_const_generic_unfoldable	sizeof_const_generic_unfoldable.kama:13
 sizeof_label	sizeof_label.kama:2
 sizeof_ptr_not_pointer	sizeof_ptr_not_pointer.kama:4
 sizeof_usize_not_foldable	sizeof_usize_not_foldable.kama:9
+slot_assign_nested	slot_assign_nested.kama:6
 slot_assignment_fill	slot_assignment_fill.kama:8
 slot_conditional_fill	slot_conditional_fill.kama:10
+slot_field_read	slot_field_read.kama:13 slot_field_read.kama:14 slot_field_read.kama:15 slot_field_read.kama:16 slot_field_read.kama:17 slot_field_read.kama:18 slot_field_read.kama:19
 slot_given_on_some_paths	slot_given_on_some_paths.kama:18
 slot_match_diverging_only	slot_match_diverging_only.kama:6
 slot_match_partial	slot_match_partial.kama:6
 slot_match_read_in_arm	slot_match_read_in_arm.kama:8
+slot_method_before_fill	slot_method_before_fill.kama:7
 slot_never_filled	slot_never_filled.kama:5
 slot_one_arm	slot_one_arm.kama:5
 slot_read_before_assign	slot_read_before_assign.kama:7
+slot_read_const_init	slot_read_const_init.kama:7 slot_read_const_init.kama:8
+slot_read_in_scope	slot_read_in_scope.kama:11 slot_read_in_scope.kama:12 slot_read_in_scope.kama:13
+slot_read_interpolated	slot_read_interpolated.kama:10 slot_read_interpolated.kama:9
 slot_with_initializer	slot_with_initializer.kama:5
 source_bom_column	source_bom_column.kama:1
 source_utf16	source_utf16.kama:1

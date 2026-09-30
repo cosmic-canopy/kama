@@ -1,0 +1,9 @@
+// KR-106: rule 1 holds for an assignment nested in an expression too — only an `out` argument fills a slot.
+type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { this.x = x; } }
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn int32 main() {
+    slot Pt p;
+    int32 z = (p.y = 3);
+    fill(dst: out p);
+    return z;
+}

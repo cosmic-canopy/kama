@@ -1,0 +1,26 @@
+// KR-106: every shape the unfilled-slot check refuses (tests/xfail/slot_field_read and its siblings) is an
+// ordinary read once the `out` fill has run — and an `out` fill inside a `scope { … }` block counts, since
+// that block always runs to its end. The value it built drops exactly once.
+static int32 drops = 0;
+type value Inner { public int32 z; public ctor make(int32 z) { this.z = z; } public const fn int32 get() { return this.z; } }
+type value Pt {
+    public int32 x; public int32 y = 7; public Inner inner; public InlineArray<int32>#(3) arr;
+    public ctor make(int32 x) { this.x = x; this.inner = Inner.make(z: 9); this.arr = [1, 2, 3]; }
+    public const fn int32 sum() { return this.x + this.y; }
+}
+type resource Probe { int32 id = -1; public ctor make(int32 id) { this.id = id; } unsafe ~Probe() { if (this.id >= 0) { drops = drops + 1; } } public const fn int32 get() { return this.id; } }
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn void fillProbe(out Probe dst) { dst = Probe.make(id: 4); }
+fn int32 takeRef(ref int32 v) { return v; }
+fn int32 inScope() { slot Probe q; scope { fillProbe(dst: out q); } return q.get(); }
+fn int32 main() {
+    slot Pt p;
+    fill(dst: out p);
+    int32 a = p.y + p.inner.z + p.arr[1] + p.inner.get() + takeRef(v: ref p.y) + p.sum();   // 7+9+2+9+7+8 = 42
+    p.y++;
+    foreach (int32 v in p.arr) { a += v; }       // +6 = 48
+    const int32 c = p.y;                         // 8
+    string s = "${p.y}";                         // "8"
+    int32 k = inScope();                         // 4, and one drop
+    return a + c + cast<int32>(s.length()) + k * 10 + drops;   // 48 + 8 + 1 + 40 + 1 = 98
+}

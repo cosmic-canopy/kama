@@ -1,0 +1,10 @@
+// KR-106: a method call on an unfilled slot neither reads a value nor fills it, whether the method means to
+// build it (`r.allocBuffer(…)`) or read it (`p.sum()`). The message used to say it FILLS the slot.
+type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { this.x = x; } public const fn int32 sum() { return this.x + this.y; } }
+fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
+fn int32 main() {
+    slot Pt p;
+    int32 s = p.sum();
+    fill(dst: out p);
+    return s;
+}
