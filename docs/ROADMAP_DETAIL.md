@@ -216,6 +216,31 @@ Everything else here is library or toolchain work that does **not** gate the tag
      `HostUnreachable` rather than an empty list). *(UDP and ephemeral-port `getsockname` ship —
      `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2 — and DNS is the first
      concrete reason to want that row: the resolver already sees the AAAA records it has to drop.)*
+<a id="s1-net-postgres"></a>
+
+### `std::net` reach the first database client needs (KR-104, KR-105)
+
+Filed 2026-09-30 from `@kama/postgres`'s KAMA_GAPS (KPG-4, KPG-6), scheduled by the maintainer ("we need all of
+them") for their own session. Both are stdlib surface over the OS seam (`include/kama_os.h`), no language change.
+
+- **KR-104 — Unix-domain sockets.** `std::net` offers TCP and UDP only: no `AF_UNIX` anywhere in `include/`, `lib/`
+  or `src/`. libpq's default when `host` is unset is the socket in `/var/run/postgresql`, `peer` authentication works
+  only over one, containerised deployments share the socket directory instead of a port, and the same gap blocks
+  every local daemon API. Shape: `UnixStream.connect(path:)`, `UnixListener.bind(path:)` + `accept()`, implementing
+  `ReliableStream`/`Reader`/`Writer`/`Sendable` like `TcpStream`; the SIGPIPE rule (`MSG_NOSIGNAL`/`SO_NOSIGPIPE`,
+  `0.9.471`) applies to it unchanged. Windows has `AF_UNIX` since 10 1803 (`afunix.h`). To decide in the design
+  pass, each with a written verdict: what `bind` does with a path that already exists (refuse, as Go and Rust do),
+  whether Linux's abstract namespace is surfaced, and peer credentials (`SO_PEERCRED`/`getpeereid`) — which the
+  server side of `peer` auth needs and a client does not. The peer's workaround adopts a C-made descriptor with
+  `TcpStream.make(fd:)`, which works because `read`/`write`/`setNonBlocking` are descriptor-generic.
+- **KR-105 — TCP socket options.** `kama_os.h` sets only `SO_REUSEADDR`, `SO_BROADCAST`, `TCP_NODELAY`,
+  `IPV6_V6ONLY` and the unicast TTL. Missing: keepalive with its three knobs (Linux `TCP_KEEPIDLE`/`INTVL`/`CNT`,
+  macOS `TCP_KEEPALIVE`/`INTVL`/`CNT`, Windows `TCP_KEEPIDLE`… or `SIO_KEEPALIVE_VALS`), a user timeout (Linux
+  `TCP_USER_TIMEOUT`, macOS `TCP_RXT_CONNDROPTIME`, Windows `TCP_MAXRT`), and a half-close `shutdown(how:)`. Read
+  and write deadlines stay with `Poller`, which the peer agrees. Add `TcpListener.localAddr()` in the same pass:
+  there is no way to learn an ephemeral port, so every net fixture pins a fixed port — the cause of the recorded
+  `net_resolve` twin race.
+
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
    later tool rides on; the residuals are in §10.
