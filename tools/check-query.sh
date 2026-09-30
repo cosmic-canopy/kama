@@ -1266,5 +1266,17 @@ expect --refs 7:6  -- "fnptr_calls.kama:11:14"
 expect --refs 4:26 -- "fnptr_calls.kama:13:16"
 expect --refs 14:27 -- "fnptr_calls.kama:15:14"
 
+# KB-35 — an argument naming nothing is one diagnostic, and an indexed one names the name. Counted for KR-103's reason.
+echo "check-query: KB-35 an unresolved argument is one diagnostic"
+ua=$("$KAMA" query "$ROOT/tests/xfail/unresolved_argument_one_diagnostic.kama" --diagnostics 2>&1 || true)
+if [ "$(printf '%s\n' "$ua" | grep -c ': error: ')" = 2 ] \
+   && printf '%s\n' "$ua" | grep -qF 'cannot resolve `nosuch`' \
+   && printf '%s\n' "$ua" | grep -qF 'cannot resolve `missing`'; then
+    echo "  ok: two unresolved names are two diagnostics, and neither draws a follow-on"
+else
+    echo "  FAIL: expected exactly the two cannot-resolve diagnostics, got:" >&2
+    printf '%s\n' "$ua" | sed 's/^/      /' >&2; fail=1
+fi
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

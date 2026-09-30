@@ -1111,17 +1111,8 @@
       ]
     },
     "handoff_default": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "give"
-        },
-        {
-          "type": "STRING",
-          "value": "copy"
-        }
-      ]
+      "type": "SYMBOL",
+      "name": "identifier"
     },
     "when_clause": {
       "type": "SEQ",
@@ -2325,14 +2316,6 @@
         {
           "type": "SYMBOL",
           "name": "_file_name"
-        },
-        {
-          "type": "STRING",
-          "value": "copy"
-        },
-        {
-          "type": "STRING",
-          "value": "give"
         }
       ]
     },
@@ -2857,18 +2840,6 @@
         {
           "type": "SYMBOL",
           "name": "_file_name"
-        },
-        {
-          "type": "STRING",
-          "value": "copy"
-        },
-        {
-          "type": "STRING",
-          "value": "give"
-        },
-        {
-          "type": "STRING",
-          "value": "truncate"
         },
         {
           "type": "STRING",
@@ -4042,7 +4013,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_binding_name"
           }
         },
         {
@@ -4641,7 +4612,7 @@
           "name": "field",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_binding_name"
           }
         },
         {
@@ -4653,7 +4624,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_binding_name"
           }
         }
       ]
@@ -5044,6 +5015,14 @@
         {
           "type": "SYMBOL",
           "name": "identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_slot_name"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_file_name"
         },
         {
           "type": "SYMBOL",
@@ -5641,7 +5620,12 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_truncate_keyword"
+          },
+          "named": false,
           "value": "truncate"
         },
         {
@@ -6402,11 +6386,21 @@
               "type": "CHOICE",
               "members": [
                 {
-                  "type": "STRING",
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_give_keyword"
+                  },
+                  "named": false,
                   "value": "give"
                 },
                 {
-                  "type": "STRING",
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_copy_keyword"
+                  },
+                  "named": false,
                   "value": "copy"
                 }
               ]
@@ -6707,7 +6701,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "identifier"
+              "name": "_binding_name"
             },
             {
               "type": "SYMBOL",
@@ -6729,7 +6723,7 @@
                   },
                   {
                     "type": "SYMBOL",
-                    "name": "identifier"
+                    "name": "_binding_name"
                   }
                 ]
               },
@@ -6745,7 +6739,7 @@
                     "members": [
                       {
                         "type": "SYMBOL",
-                        "name": "identifier"
+                        "name": "_binding_name"
                       },
                       {
                         "type": "SYMBOL",
@@ -6972,6 +6966,24 @@
         }
       ]
     },
+    "_binding_name": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_name"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "type"
+          },
+          "named": true,
+          "value": "identifier"
+        }
+      ]
+    },
     "line_comment": {
       "type": "TOKEN",
       "content": {
@@ -7058,7 +7070,20 @@
     ]
   ],
   "precedences": [],
-  "externals": [],
+  "externals": [
+    {
+      "type": "SYMBOL",
+      "name": "_give_keyword"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_copy_keyword"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_truncate_keyword"
+    }
+  ],
   "inline": [],
   "supertypes": [],
   "reserved": {}

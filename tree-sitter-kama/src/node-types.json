@@ -4342,7 +4342,17 @@
   {
     "type": "handoff_default",
     "named": true,
-    "fields": {}
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "handoff_expression",
@@ -5503,7 +5513,7 @@
     "fields": {},
     "children": {
       "multiple": false,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "identifier",

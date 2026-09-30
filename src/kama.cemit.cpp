@@ -470,6 +470,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     // interpreter reports what is wrong with compile-time code. Ahead of the dedup below, so a real diagnostic
     // of the same text is never swallowed as a repeat of one nobody saw.
     if (_indexWalk) return;
+    ++_diagAttempts;
     std::string display = demangleForDisplay(rawWhat);
     std::string dfile = reportPath(diagFile());
     attributeToInstSite(dfile, srcLine, display);
@@ -2761,6 +2762,19 @@ bool CEmitter::isComptimeParamHere(const std::string& nm) const
     return false;
 }
 
+// A name spelled like a contextual keyword, which a reader may have meant AS the keyword: the word is the keyword only at
+// its anchor (KB-35), so `give(s)`, `give -n` and `truncate(n)` read it as a name — and a name nothing declares.
+static std::string contextualNameHint(const std::string& nm)
+{
+    if (nm == "give" || nm == "copy")
+        return " (if this is the hand-off, it is written `" + nm + " s` — `" + nm + "` is the keyword only before a "
+               "name, and anywhere else it is a name)";
+    if (nm == "truncate")
+        return " (if this is the conversion, it is written `truncate<uint8>(n)` — without its `<T>`, `truncate` is "
+               "a name)";
+    return "";
+}
+
 void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
 {
     const int line = v->line;
@@ -2843,7 +2857,7 @@ void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
                                 "this reference", line))
         return;
     unsupported(("cannot resolve `" + nm + "` — no local, parameter, field, function, module `static`/`comptime` "
-                 "or type of that name is in reach here").c_str(), line, nm);
+                 "or type of that name is in reach here" + contextualNameHint(nm)).c_str(), line, nm);
 }
 
 // A type node the emitter invents. Lazily creates the shared synth context on first use (several call
@@ -5526,7 +5540,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                          ? emitExpression((*ea->expressionlist)[0]) : "0";
         if (!_inUnsafe) {
-            unsupported("raw pointer access requires an `unsafe fn`", ea->line);
+            // A receiver that resolves to nothing is not a raw pointer: `nosuch[0]` — and `copy[0]` with no `copy` in
+            // reach (KB-35) — said "raw pointer access requires an `unsafe fn`". Emitting it names what is wrong.
+            const long said = _diagAttempts;
+            if (typeOfExpr(recv).empty()) emitExpression(recv);
+            if (_diagAttempts == said) unsupported("raw pointer access requires an `unsafe fn`", ea->line);
             return "0";
         }
         if (_typeSubst.empty() && rawElemIsCChar(expr)) { rejectBareCChar(synthId("cchar", IDENTIFIER_CCHAR_VAL), "an element read through the pointer", ea->line); return "0"; }
@@ -21058,6 +21076,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         // the marker (give=move / copy=retain) only matters for a smart pointer passed
         // BY VALUE (ownership transfer) — it's meaningless on a borrow.
         SharedExpression argExpr = f->second->expression;
+        const long argSaid = _diagAttempts;   // what this argument's own emission reports — see the ownership rule
         // `out` is a REQUIRED call-site marker, not decoration. `out` and `ref` lower to the same `T*`,
         // so without the marker a reader (and the caller's definite-assignment analysis) cannot tell a
         // borrow from a fill — which is exactly what made `out` a silent alias for `ref` before. The
@@ -21537,10 +21556,13 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // register their string args with `className == ""`, so this is skipped for them and they
                 // keep the borrow-hoist above (Phase-3 ergonomics unchanged). A fresh rvalue / literal arg
                 // (not isNamedValue) moves in bare via the `else` below.
-                if (handoff == 0)
-                    unsupported("passing a collection/`string` by value transfers ownership — say `give` "
-                                "(move) or `copy` (deep), or pass by `ref` to borrow", srcLine);
-                else if (handoff == 2) {                              // copy = deep
+                // Not when the argument was already refused — `take(s: nosuch)` is an unresolved name, and a
+                // hand-off rule about a value that does not exist is a second message for one mistake.
+                if (handoff == 0) {
+                    if (_diagAttempts == argSaid)
+                        unsupported("passing a collection/`string` by value transfers ownership — say `give` "
+                                    "(move) or `copy` (deep), or pass by `ref` to borrow", srcLine);
+                } else if (handoff == 2) {                            // copy = deep
                     auto ci = _collections.find(p.className);
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                         unsupported(("`copy` of a `" + p.className + "` needs copyable elements — its elements "
@@ -26551,7 +26573,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                                              return _funcs.count(k) > 0 || _comptimeFns.count(k) > 0; },
                                          "this call", call->line))
                 unsupported(("call to unknown function `" + name + "` — no function of that name is declared or "
-                             "imported").c_str(), call->line, name);
+                             "imported" + contextualNameHint(name)).c_str(), call->line, name);
         } else
             unsupported("call to unknown function (args kept in source order)", call->line, name);
         std::string s = cFunctionName(name) + "(";

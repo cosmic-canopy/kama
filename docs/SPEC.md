@@ -3024,8 +3024,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   (`fn Optional<int8> narrow(int32 n) { return try cast<int8>(n); }`) — and nowhere else
   ([tests/try_cast_value_position.kama](../tests/try_cast_value_position.kama),
   [tests/xfail/trycast_no_destination.kama](../tests/xfail/trycast_no_destination.kama)).
-  `truncate` is a **contextual** keyword: a keyword only where a conversion can start, so
-  `string`'s `truncate(maxBytes:)` — and any method of that name — still reads as a member.
+  `truncate` is a **contextual** keyword: a keyword only before `<T>(`, so `string`'s `truncate(maxBytes:)`, any
+  member of that name and a binding named `truncate` all read as names.
 - **An `enum` is not a `cast` target — `try cast<E>(x)` is the one door in.** The table above is about
   numbers, whose valid values are a **range fixed by width**; an enum's are a **set of names the author
   chose**, so an integer arriving from outside has no reason to name one. That makes the infallible verb
@@ -6153,9 +6153,15 @@ parallel_for parallel_spawn private protected public ref return scope sizeof slo
 string this true truncate try type uint16 uint32 uint64 uint8 unsafe usize virtual void when while
 ```
 
-**Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any
-binding (a field, a local, a parameter, an argument label, a member) and lead a declaration only where a
-declaration can begin. Each was made contextual for the same reason: the word is one a program genuinely
+**Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any <!-- test: contextual_names -->
+binding — a local, a parameter, a field, a member, an argument label, a `match` label or binding, a `foreach`
+binding, a name in an interpolation hole — and no type, free function or enum member. <!-- xfail: contextual_word_type_name -->
+Each is a keyword only at its anchor in the table below: `type`, `slot` and `file` where a declaration can begin,
+`give`/`copy` directly before a name (the hand-off, `give s`), `truncate` before `<T>(` (the conversion). Anywhere
+else the word is a name — `give + 1`, `copy(x: 1)` through a `fnptr`, `truncate < n` — so `give(s)` is a call of
+something named `give`, and its diagnostic says so. <!-- xfail: give_positional_call --> Until `0.9.470` the
+parser took `copy`, `give` and `truncate` only as a method's name, and none of the six as a pattern, `foreach` or
+hole binding (KB-35). Each was made contextual for the same reason: the word is one a program genuinely
 wants as a name, and admitting it cost **no bison conflicts** at any name position. `type` is what lets an
 FFI binding emit a C field literally called `type` without inventing a name
 (`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table
@@ -6173,8 +6179,8 @@ not a reason by itself. The six contextual words pass:
 |---|---|---|
 | `type` | `type resource Foo {` | `type` + a kind word |
 | `file` | `file @compileFor(X);` (line 1) | `file @` |
-| `truncate` | `truncate<int8>(x)` | `truncate<` (a method is `.truncate(`) |
-| `give` / `copy` / `slot` | `give x`, `copy x`, `slot T x;` | the word + a name other than `in` — a binding so named is followed by an operator or punctuation, never a name, except `in` in a `foreach` header |
+| `truncate` | `truncate<int8>(x)` | `truncate<T>(` — `<`, a name, `>`; a binding so named reads `truncate < n` |
+| `give` / `copy` / `slot` | `give x`, `copy x`, `slot T x;` | the word + a name other than `in` — a binding so named is followed by an operator or punctuation, never a name, except `in` in a `foreach` header. For `give`/`copy` this anchor IS the lexer's rule, so the grep and the compiler cannot disagree |
 
 By the same rule `out` stays reserved (no anchor: `out T x` and `q: out quotient`), and so do the call-site
 intrinsics. `this` and the primitive type names are keywords like any other: they cannot be redeclared. The

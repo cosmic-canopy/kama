@@ -236,19 +236,22 @@ type resource Buffer implements Copyable(bare: give)
         (type_name
           (identifier))
         (identifier)
-        (handoff_default)))
+        (handoff_default
+          (identifier))))
     (class_body
       (method_declaration
         (type_name
           (identifier))
-        (method_name)
+        (method_name
+          (identifier))
         (parameter_list)
         (block
           (return_statement
             (this_expression))))
       (method_declaration
         (void_type)
-        (method_name)
+        (method_name
+          (identifier))
         (parameter_list)
         (block)))))
 
@@ -885,5 +888,6 @@ type value Vec
       (friend_declaration
         (type_name
           (identifier))
+        (identifier)
         (overloadable_operator)
         (identifier)))))

@@ -1,0 +1,10 @@
+// An argument that names nothing is ONE mistake: "cannot resolve `nosuch`". Passed where a `string` or a collection is
+// taken by value, it also drew the ownership rule's "passing … by value transfers ownership — say `give`", about a
+// value that does not exist — and an indexed one said "raw pointer access requires an `unsafe fn`" instead of naming
+// the name. Counted by tools/check-query.sh, since a `.msg` can only say a line is present.
+fn void take(string s) { }
+fn int32 main() {
+    take(s: nosuch);
+    int32 x = missing[0];
+    return x;
+}

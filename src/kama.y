@@ -273,6 +273,11 @@ struct LexerInstanceData {
       times. One error per spelling per file is what a reader needs; the position of the first is enough
       to find the name. */
    std::set<std::string> reservedReported;
+
+   /* KB-35: the last `copy`/`give`/`truncate` the lexer read as a NAME directly before `(` — `give(s)` — and its line.
+      A reader who meant the keyword gets a parse error about the call's labels; the reporter adds the hint. */
+   std::string parenWord;
+   int parenWordLine = 0;
 };
 
 struct kamayystype {
@@ -376,6 +381,12 @@ struct kamayystype {
    which names an implementation detail, and reservedWordNote — which matches yysymbol_name against the
    lexer's keyword table, case-folded — would never recognise the word and would drop its note. */
 %token <string> FILE_KW "file"
+/* KB-35 — `copy`, `give` and `truncate` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
+   keyword tokens COPY/GIVE/TRUNCATE mean only the hand-off and the conversion and never begin a name. Admitted exactly
+   where SLOT is. Aliased for FILE_KW's reason: a diagnostic names the word, and reservedWordNote recognises it. */
+%token <string> COPY_NAME "copy"
+%token <string> GIVE_NAME "give"
+%token <string> TRUNCATE_NAME "truncate"
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
@@ -518,7 +529,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt hardware_opt unsafe_opt method_name kind_name friend_member_name
+%type <string> const_opt hardware_opt unsafe_opt method_name kind_name friend_member_name name_word binding_word
 
 %start compilation_unit
 
@@ -722,6 +733,22 @@ interp_index
   : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
   | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner)); }
   ;
+/* KB-35 — the three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
+   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
+   words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
+   payload declared `V(int32 slot)`. */
+name_word
+  : COPY_NAME       { $$ = $1; }
+  | GIVE_NAME       { $$ = $1; }
+  | TRUNCATE_NAME   { $$ = $1; }
+  ;
+binding_word
+  : IDENTIFIER   { $$ = $1; }
+  | TYPE         { $$ = $1; }
+  | SLOT         { $$ = $1; }
+  | FILE_KW      { $$ = $1; }
+  | name_word    { $$ = $1; }
+  ;
 boolean_literal
   : TRUE   { $$ = std::make_shared<BooleanNode>(SCANNER_CODEGENCONTEXT, true); }
   | FALSE   { $$ = std::make_shared<BooleanNode>(SCANNER_CODEGENCONTEXT, false); }
@@ -794,6 +821,7 @@ qualified_identifier_no_generic
   | TYPE  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | SLOT  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `slot`, contextual for the same reason */
   | FILE_KW  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `file` — `File file = …` is the spelling a user reaches for first */
+  | name_word  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `copy`/`give`/`truncate` (KB-35) */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
@@ -1048,9 +1076,7 @@ friend_member_list
    (`op_mul__Vec4`) is something the grant's spelling cannot say. */
 friend_member_name
   : IDENTIFIER   { $$ = $1; }
-  | COPY         { $$ = $1; }   /* the `copy` ctor — a `Copyable` implementer's, grantable like any member */
-  | GIVE         { $$ = $1; }
-  | TRUNCATE     { $$ = $1; }
+  | name_word    { $$ = $1; }   /* `copy` — the `Copyable` ctor, grantable like any member — `give`, `truncate` */
   | TYPE         { $$ = $1; }
   | SLOT         { $$ = $1; }
   | FILE_KW      { $$ = $1; }
@@ -1285,6 +1311,7 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
+  | const_opt hardware_opt parameter_modifier_opt type name_word   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* ...and `copy`/`give`/`truncate` (KB-35) */
   /* contextual `file` — a parameter may be named `file` */
   | const_opt hardware_opt parameter_modifier_opt type FILE_KW   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
@@ -1326,10 +1353,12 @@ variable_declarator
   : TYPE   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
   | SLOT   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
+  | name_word   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   /* contextual `file` — `File file = fs::open(…)` is the spelling this exists for */
   | FILE_KW   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | TYPE EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | SLOT EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
+  | name_word EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | FILE_KW EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
@@ -1617,15 +1646,15 @@ match_bindings
   | match_bindings COMMA match_binding   { $1->push_back($3); $$ = $1; }
   ;
 match_binding
-  : IDENTIFIER COLON IDENTIFIER
+  : binding_word COLON binding_word
     { auto b = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(b, @3);
       $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT,
                std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), b);
       STAMP_LOC($$->name, @1); }
   ;
 foreach_statement
-  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { requireBraced($8, &@8, scanner, "foreach", "foreach (T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
-  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { requireBraced($9, &@9, scanner, "foreach", "foreach (ref T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
+  : FOREACH LPAREN type binding_word IN expression RPAREN embedded_statement   { requireBraced($8, &@8, scanner, "foreach", "foreach (T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
+  | FOREACH LPAREN REF type binding_word IN expression RPAREN embedded_statement   { requireBraced($9, &@9, scanner, "foreach", "foreach (ref T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement
@@ -1751,8 +1780,8 @@ member_access
        named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
        contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
        only where a conversion can start, an ordinary member name after a DOT. */
-  | primary_expression DOT TRUNCATE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
-  | qualified_identifier_no_generic DOT TRUNCATE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | primary_expression DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }   /* `s.truncate(…)`, `p.give()` (KB-35) */
+  | qualified_identifier_no_generic DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
@@ -1872,13 +1901,16 @@ argument
   : TYPE COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   /* a `slot:` argument label */
   | SLOT COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+  | name_word COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   /* a `file:` argument label */
   | FILE_KW COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | TYPE COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | SLOT COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | name_word COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | FILE_KW COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | TYPE COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | SLOT COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | name_word COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | FILE_KW COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
@@ -2166,8 +2198,8 @@ when_cond_list
         STAMP_LOC($1->whenBounds->back(), @5); $$ = $1; }
   ;
 handoff_default
-  : GIVE   { $$ = GIVE; }
-  | COPY   { $$ = COPY; }
+  : GIVE_NAME   { $$ = GIVE; }   /* `(bare: give)` — the word is followed by `)`, so it lexes as the name (KB-35) */
+  | COPY_NAME   { $$ = COPY; }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
@@ -2252,9 +2284,7 @@ method_when_opt
    opt into the `Copyable` contract with a method literally named `copy`. */
 method_name
   : IDENTIFIER   { $$ = $1; }
-  | COPY         { $$ = $1; }
-  | GIVE         { $$ = $1; }
-  | TRUNCATE     { $$ = $1; }   /* the wrapping-conversion keyword; contextual, so a type may still declare one */
+  | name_word    { $$ = $1; }   /* `ctor copy(…)`, and a `truncate` or `give` member (KB-35) */
   | TYPE         { $$ = $1; }   /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT        { $$ = $1; }   /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   | FILE_KW     { $$ = $1; }   /* the file-gate word; contextual, so a type may declare a `file()` member */
@@ -2881,14 +2911,36 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
     if (tok != YYSYMBOL_YYEMPTY) {
         msg += ", unexpected ";
         msg += yysymbol_name(tok);
-        if (n >= 1 && n <= 4) {             /* the display limit `detailed` had — see above */
+        /* Where a NAME is expected, the six contextual words are names too, so they are shown as the name they are:
+           `expecting IDENTIFIER`, and the reserved-word note below says which words also qualify. Listed one by one
+           they were seven candidates at every binding site (KB-35) — past the display limit, which deleted the
+           `expecting` clause from every such message. Display only: the gate above reads the full set. */
+        auto contextualName = [](yysymbol_kind_t k) {
+            return k == YYSYMBOL_FILE_KW || k == YYSYMBOL_SLOT || k == YYSYMBOL_TYPE
+                || k == YYSYMBOL_COPY_NAME || k == YYSYMBOL_GIVE_NAME || k == YYSYMBOL_TRUNCATE_NAME;
+        };
+        bool nameExpected = false;
+        for (int i = 0; i < n; ++i) if (expected[i] == YYSYMBOL_IDENTIFIER) nameExpected = true;
+        std::vector<yysymbol_kind_t> shown;
+        for (int i = 0; i < n; ++i)
+            if (!(nameExpected && contextualName(expected[i]))) shown.push_back(expected[i]);
+        if (!shown.empty() && shown.size() <= 4) {   /* the display limit `detailed` had — see above */
             msg += ", expecting ";
-            for (int i = 0; i < n; ++i) {
+            for (size_t i = 0; i < shown.size(); ++i) {
                 if (i) msg += " or ";
-                msg += yysymbol_name(expected[i]);
+                msg += yysymbol_name(shown[i]);
             }
         }
         msg += reservedWordNote(tok, wantedIdentifier);
+        /* `give(s)` meant as the hand-off, `truncate(n)` as the conversion: each is a CALL of a name now, and the
+           error is about its labels. Say which reading the parser took (KB-35). */
+        const LexerInstanceData* data = yyget_extra(scanner);
+        const YYLTYPE* at = yypcontext_location(ctx);
+        if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)
+            msg += data->parenWord == "truncate"
+                ? " (`truncate(` calls something named `truncate` — the conversion is written `truncate<uint8>(n)`)"
+                : " (`" + data->parenWord + "(` calls something named `" + data->parenWord + "` — the hand-off is "
+                  "written `" + data->parenWord + " s`, the keyword before a name)";
     }
     return yyerror(yypcontext_location(ctx), scanner, msg.c_str());
 }

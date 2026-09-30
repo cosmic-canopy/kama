@@ -1365,6 +1365,7 @@ private:
     std::string   _sourcePath;       // absolute path, used in #line directives
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
+    long          _diagAttempts = 0; // every `unsupported` call, a deduplicated repeat included — "did this say anything?"
 
     std::map<std::string, FuncSig> _funcs;   // kama function name -> signature
     std::map<std::string, SigInfo> _sigs;    // function-pointer signature types

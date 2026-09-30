@@ -1,6 +1,7 @@
 %{
 #include <string>
 #include <memory>
+#include <cctype>
 #include "kama.parser.hpp"
 
 /* Each macro records the token's END position (one past its last column) after advancing, alongside the
@@ -96,6 +97,7 @@
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 
 static int getToken(const char *);
+static int contextualWord(int t, char hold, const char* after, struct LexerInstanceData* data);
 bool cIsReservedWord(const char *);
 static bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading underscores */
 {
@@ -342,7 +344,11 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the hole and resumes string lexing (the next ISTR_CHUNK follows). Whitespace inside the hole is ignored. */
 <IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
 <IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
-<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
+  /* A hole holds names only — no declaration begins in one, no hand-off, no conversion — so every CONTEXTUAL word is
+     a name here: `${slot}`, `${p.type}` (KB-35: the hole refused all six). */
+<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext);
+                                                  if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE) t = IDENTIFIER;
+                                                  if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
 <IN_INTERP_HOLE>{leading_zero_no_suffix}        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); error("a leading 0 does not mean octal in kama — write 0o… for octal, or drop the 0", yyscanner); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
@@ -384,7 +390,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
 {identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME) RECORD_IDENT(yytext, leng); return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -625,6 +631,55 @@ unsigned decodeUTF8Codepoint(const char* bytes, int len)
   unsigned cp = b[0] & (0x7Fu >> len);
   for (int i = 1; i < len; ++i) cp = (cp << 6) | (unsigned)(b[i] & 0x3F);
   return cp;
+}
+
+/* KB-35. `copy`, `give` and `truncate` name a binding, as `type`, `slot` and `file` do, and are keywords only where
+   their grep anchor stands (SPEC § kama's keywords): `give`/`copy` directly before a NAME — a hand-off's operand is a
+   named value — other than `in` (a `foreach` binding so named), or before a literal, which the checker then refuses
+   as no named value; `truncate` before `<`, a name and `>`. Anywhere else the word is its NAME token, which the
+   grammar admits exactly where it admits `slot` — so the three name no type, free function or enum member either.
+
+   The decision needs the text after the word, and the whole source is one flex buffer: `hold` is the character flex
+   swapped a NUL over at the match's end, and `after` points at that NUL, so the text continues at after[1]. Blanks
+   and comments are skipped, as the parser skips them. */
+static int contextualWord(int t, char hold, const char* after, struct LexerInstanceData* data)
+{
+  if (t != GIVE && t != COPY && t != TRUNCATE) return t;
+  const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : TRUNCATE_NAME;
+  const char* word = t == GIVE ? "give" : t == COPY ? "copy" : "truncate";
+  size_t i = 0;
+  auto at = [&](size_t k) -> char { return k == 0 ? hold : after[k]; };
+  auto identStart = [](char c) { return std::isalpha((unsigned char)c) || c == '_'; };
+  auto identChar = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+  auto blank = [&]() {
+    for (;;) {
+      const char c = at(i);
+      if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { ++i; continue; }
+      if (c == '/' && at(i + 1) == '/') { while (at(i) && at(i) != '\n') ++i; continue; }
+      if (c == '/' && at(i + 1) == '*') {
+        i += 2;
+        while (at(i) && !(at(i) == '*' && at(i + 1) == '/')) ++i;
+        if (at(i)) i += 2;
+        continue;
+      }
+      return;
+    }
+  };
+  blank();
+  if (at(i) == '(' && data) { data->parenWord = word; data->parenWordLine = data->codeGenContext->line; }   /* see yyreport_syntax_error */
+  if (t == TRUNCATE) {
+    if (at(i) != '<') return name;
+    ++i; blank();
+    if (!identStart(at(i))) return name;
+    while (identChar(at(i))) ++i;
+    blank();
+    return at(i) == '>' ? t : name;
+  }
+  const char c = at(i);
+  if (c == '"' || std::isdigit((unsigned char)c)) return t;
+  if (!identStart(c)) return name;
+  if (c == 'i' && at(i + 1) == 'n' && !identChar(at(i + 2))) return name;
+  return t;
 }
 
 static int getToken(const char *lexeme)

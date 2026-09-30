@@ -119,6 +119,13 @@ module.exports = grammar({
     [$.scoped_identifier, $.type_name],
   ],
 
+  // KB-35 — `give`, `copy` and `truncate` are keywords only at their grep anchor, and name a binding everywhere else,
+  // exactly as `kama.l` decides it (contextualWord): `give`/`copy` directly before a name (other than `in`) or a
+  // literal, `truncate` before `<`, a name and `>`. The decision needs the text AFTER the word, which a grammar
+  // cannot see, so src/scanner.c makes it — the same lookahead, blanks and comments skipped. No string literal
+  // `'give'`/`'copy'`/`'truncate'` appears in this grammar, so everywhere else the word lexes as an identifier.
+  externals: ($) => [$._give_keyword, $._copy_keyword, $._truncate_keyword],
+
   rules: {
     // ── Compilation unit ────────────────────────────────────────────────────────────────────────────
     // kama.y:14 — the header order is FIXED and not interleavable. An `import` after a `fn`, a top-level
@@ -310,7 +317,9 @@ module.exports = grammar({
         optional($.when_clause),
       ),
 
-    handoff_default: ($) => choice('give', 'copy'),
+    // `(bare: give)` — followed by `)`, so the word is an identifier here (see `externals`); the compiler checks it
+    // is one of the two.
+    handoff_default: ($) => $.identifier,
 
     // kama.y:917 — SQUARE brackets, mandatory. `default` is a legal structural bound.
     when_clause: ($) => seq('when', '[', commaSep1($.when_condition), ']'),
@@ -513,7 +522,7 @@ module.exports = grammar({
     // kama.y:980 — `copy`/`give` are hand-off markers only in EXPRESSION position, so they may also name a
     // member. This is what lets a `resource` opt into `Copyable` with a method literally named `copy`.
     // A named node, so a query colours it as a function rather than a keyword without pattern ordering.
-    method_name: ($) => choice($.identifier, $._slot_name, $._file_name, 'copy', 'give'),
+    method_name: ($) => choice($.identifier, $._slot_name, $._file_name),   // `copy`/`give`/`truncate` are identifiers here
 
     operator_declaration: ($) =>
       seq(
@@ -604,9 +613,6 @@ module.exports = grammar({
         $.identifier,
         $._slot_name,
         $._file_name,
-        'copy',
-        'give',
-        'truncate',
         'type',
         seq('operator', $.overloadable_operator),
         seq('operator', '[', ']'),
@@ -820,7 +826,7 @@ module.exports = grammar({
         '(',
         optional('ref'),
         field('type', $._type),
-        field('name', $.identifier),
+        field('name', $._binding_name),
         'in',
         field('collection', $._expression),
         ')',
@@ -937,7 +943,7 @@ module.exports = grammar({
       ),
 
     match_binding: ($) =>
-      seq(field('field', $.identifier), ':', field('name', $.identifier)),
+      seq(field('field', $._binding_name), ':', field('name', $._binding_name)),
 
     // ── Expressions ─────────────────────────────────────────────────────────────────────────────────
     _expression: ($) =>
@@ -1016,6 +1022,8 @@ module.exports = grammar({
     _callable: ($) =>
       choice(
         $.identifier,
+        $._slot_name,          // a `fnptr` binding may be named with a contextual word (KB-35)
+        $._file_name,
         $.intrinsic_callee,
         $.scoped_identifier,
         $.field_expression,
@@ -1139,7 +1147,7 @@ module.exports = grammar({
       seq('bitcast', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
 
     truncate_expression: ($) =>
-      seq('truncate', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
+      seq(alias($._truncate_keyword, 'truncate'), '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
 
     // These take a TYPE, not an expression — or, as `sizeof(ptr: p)`, the object a pointer really points at
     // (a derived behind a base pointer), a runtime value. The label is a name, like any argument; the compiler
@@ -1240,7 +1248,7 @@ module.exports = grammar({
       prec.right(
         PREC.handoff,
         seq(
-          field('operator', choice('give', 'copy')),
+          field('operator', choice(alias($._give_keyword, 'give'), alias($._copy_keyword, 'copy'))),
           field('value', $._expression),
         ),
       ),
@@ -1350,11 +1358,11 @@ module.exports = grammar({
     // and src/kama.y's `interp_hole` takes it; see tests/interp_this.kama.
     interpolation_expression: ($) =>
       seq(
-        choice($.identifier, $.this_expression),
+        choice($._binding_name, $.this_expression),
         repeat(
           choice(
-            seq('.', $.identifier),
-            seq('[', choice($.identifier, $.integer_literal), ']'),
+            seq('.', $._binding_name),
+            seq('[', choice($._binding_name, $.integer_literal), ']'),
           ),
         ),
       ),
@@ -1415,8 +1423,8 @@ module.exports = grammar({
     // `word: $.identifier` promotes every literal string to a keyword token, so without this the word could
     // only ever be the keyword and `isize slot = 1;` was an ERROR node here while the compiler accepted it.
     // ALIASED to `identifier` on purpose: every node type, query and highlight stays exactly as it was, so
-    // this is invisible to anything downstream (`copy`/`give` use plain literals in `method_name` and are
-    // therefore coloured as keywords there — a pre-existing wart, not one to copy).
+    // this is invisible to anything downstream. (`copy`/`give`/`truncate` need no alias: the grammar holds no
+    // literal for them, so they lex as identifiers wherever src/scanner.c does not claim the keyword — KB-35.)
     _slot_name: ($) => alias('slot', $.identifier),
     // `file` is contextual for the same reason and by the same mechanism — it leads the file gate above
     // and names an ordinary binding everywhere else. `File file = fs::open(…)` is the spelling it is
@@ -1424,6 +1432,9 @@ module.exports = grammar({
     // entirely for user code.
     _file_name: ($) => alias('file', $.identifier),
     _name: ($) => choice($.identifier, $._slot_name, $._file_name),
+    // A `match` label, a `match` binding and a `foreach` binding take every contextual word, as a declarator does
+    // (KB-35) — `copy`/`give`/`truncate` arrive as identifiers already (see `externals`).
+    _binding_name: ($) => choice($._name, alias('type', $.identifier)),
 
     line_comment: ($) => token(seq('//', /[^\n]*/)),
 

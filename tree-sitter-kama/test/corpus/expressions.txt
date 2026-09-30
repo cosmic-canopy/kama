@@ -565,3 +565,76 @@ fn void main()
                     (identifier)
                     (identifier))
                   (argument_list))))))))))
+
+===============================================================================
+Contextual words name bindings; `give x` and `truncate<T>(…)` stay keywords
+===============================================================================
+
+fn int32 main()
+{
+    int32 give = 3;
+    give = give + 1;
+    int32 r = copy(x: give);
+    bool b = truncate < 20;
+    string t = give s;
+    uint8 low = truncate<uint8>(n);
+    foreach (int32 slot in type) { }
+    return 0;
+}
+
+-------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (expression_statement
+        (assignment_expression
+          (identifier)
+          (binary_expression
+            (identifier)
+            (integer_literal))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (identifier))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (identifier)
+            (integer_literal))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (handoff_expression
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (truncate_expression
+            (primitive_type)
+            (identifier))))
+      (foreach_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block))
+      (return_statement
+        (integer_literal)))))

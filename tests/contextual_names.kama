@@ -1,0 +1,54 @@
+// All six CONTEXTUAL keywords — `copy`, `give`, `truncate`, `type`, `slot`, `file` — name any binding (KB-35), and each
+// still does its keyword's job in the same function. SPEC and the parser's own diagnostic said so for years; the parser
+// took `copy`, `give` and `truncate` only as a method's name, and took none of the six as a `match` binding, a `match`
+// label, a `foreach` binding or in an interpolation hole — so a payload declared `V(int32 slot)` could not be matched.
+//
+// The keyword is where its grep anchor stands, and nowhere else: `give`/`copy` directly before a name is the hand-off
+// (`give s`), `truncate<T>(…)` the conversion. Followed by anything else the word is a name — `give + 1`, `give(x: 1)`,
+// `copy[0]`, `truncate < n`.
+import { core::println };
+
+fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+
+type enum Pick { V(int32 slot, int32 give), W }
+
+type value Reg {
+    public int32 copy;
+    public int32 truncate;
+    public ctor make(int32 copy, int32 truncate) { this.copy = copy; this.truncate = truncate; }
+    public fn int32 give() { return this.copy + this.truncate; }       // a METHOD named `give`
+}
+
+fn int32 twice(int32 give) { return give * 2; }                       // a parameter
+
+fn int32 main() {
+    int32 give = 3;                        // a local
+    give = give + 1;                       // read and written: 4
+    give += 1;                             // 5
+    int32 truncate = 10;
+    bool under = truncate < 20;            // a comparison, not a conversion
+    Op copy = dbl;                         // a `fnptr` local...
+    int32 viaCall = copy(x: give);         // ...called: 10
+    InlineArray<int32>#(3) type = [1, 2, 3];
+    int32 first = type[0];                 // an index: 1
+    Reg r = Reg.make(copy: 7, truncate: 8);        // argument labels
+    int32 member = r.copy + r.truncate + r.give();  // member reads and a method: 7 + 8 + 15 = 30
+    int32 sum = 0;
+    foreach (int32 slot in type) { sum = sum + slot; }             // a `foreach` binding: 6
+    Pick p = Pick::V(slot: 2, give: 9);
+    int32 matched = match (p) {
+        case V(slot: file, give: copy2): file * 10 + copy2;        // a `match` label AND binding: 29
+        case W: 0;
+    };
+    string file = "f";
+    string shown = "${give} ${r.copy} ${file}";   // interpolation holes: "5 7 f"
+    // ...and each keyword, doing its job beside them.
+    string moved = give file;              // the hand-off: `give` + a name
+    string dup = copy moved;               // `copy` + a name
+    uint8 low = truncate<uint8>(truncate * 30);   // the conversion: 300 -> 44
+    println(s: give shown);
+    int32 total = give + (under ? 1 : 0) + viaCall + first + member + twice(give: 1) + sum + matched
+                + cast<int32>(low) + cast<int32>(dup.length()) + cast<int32>(moved.length());
+    return total;   // 5 + 1 + 10 + 1 + 30 + 2 + 6 + 29 + 44 + 1 + 1 = 130
+}

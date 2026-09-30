@@ -185,6 +185,22 @@ interp_index
   : IDENTIFIER
   | DEC_LITERAL_NO_SUFFIX
   ;
+/* KB-35 — the three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
+   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
+   words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
+   payload declared `V(int32 slot)`. */
+name_word
+  : COPY_NAME
+  | GIVE_NAME
+  | TRUNCATE_NAME
+  ;
+binding_word
+  : IDENTIFIER
+  | TYPE
+  | SLOT
+  | FILE_KW
+  | name_word
+  ;
 boolean_literal
   : TRUE
   | FALSE
@@ -237,6 +253,7 @@ qualified_identifier_no_generic
   | TYPE
   | SLOT     /* ...and `slot`, contextual for the same reason */
   | FILE_KW     /* ...and `file` — `File file = …` is the spelling a user reaches for first */
+  | name_word     /* ...and `copy`/`give`/`truncate` (KB-35) */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
@@ -469,9 +486,7 @@ friend_member_list
    (`op_mul__Vec4`) is something the grant's spelling cannot say. */
 friend_member_name
   : IDENTIFIER
-  | COPY            /* the `copy` ctor — a `Copyable` implementer's, grantable like any member */
-  | GIVE
-  | TRUNCATE
+  | name_word       /* `copy` — the `Copyable` ctor, grantable like any member — `give`, `truncate` */
   | TYPE
   | SLOT
   | FILE_KW
@@ -630,6 +645,7 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE      /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT      /* contextual `type` */
+  | const_opt hardware_opt parameter_modifier_opt type name_word      /* ...and `copy`/`give`/`truncate` (KB-35) */
   /* contextual `file` — a parameter may be named `file` */
   | const_opt hardware_opt parameter_modifier_opt type FILE_KW
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
@@ -671,10 +687,12 @@ variable_declarator
   : TYPE
   /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
   | SLOT
+  | name_word
   /* contextual `file` — `File file = fs::open(…)` is the spelling this exists for */
   | FILE_KW
   | TYPE EQ variable_initializer
   | SLOT EQ variable_initializer
+  | name_word EQ variable_initializer
   | FILE_KW EQ variable_initializer
   | IDENTIFIER
   | IDENTIFIER EQ variable_initializer
@@ -939,12 +957,12 @@ match_bindings
   | match_bindings COMMA match_binding
   ;
 match_binding
-  : IDENTIFIER COLON IDENTIFIER
+  : binding_word COLON binding_word
 
   ;
 foreach_statement
-  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement
-  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement      /* `foreach (ref T e in …)` — mutate elements in place */
+  : FOREACH LPAREN type binding_word IN expression RPAREN embedded_statement
+  | FOREACH LPAREN REF type binding_word IN expression RPAREN embedded_statement      /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement
@@ -1070,8 +1088,8 @@ member_access
        named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
        contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
        only where a conversion can start, an ordinary member name after a DOT. */
-  | primary_expression DOT TRUNCATE
-  | qualified_identifier_no_generic DOT TRUNCATE
+  | primary_expression DOT name_word      /* `s.truncate(…)`, `p.give()` (KB-35) */
+  | qualified_identifier_no_generic DOT name_word
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
@@ -1147,13 +1165,16 @@ argument
   : TYPE COLON expression
   /* a `slot:` argument label */
   | SLOT COLON expression
+  | name_word COLON expression
   /* a `file:` argument label */
   | FILE_KW COLON expression
   | TYPE COLON REF variable_reference
   | SLOT COLON REF variable_reference
+  | name_word COLON REF variable_reference
   | FILE_KW COLON REF variable_reference
   | TYPE COLON OUT variable_reference
   | SLOT COLON OUT variable_reference
+  | name_word COLON OUT variable_reference
   | FILE_KW COLON OUT variable_reference
   | IDENTIFIER COLON expression
   | IDENTIFIER COLON REF variable_reference
@@ -1413,8 +1434,8 @@ when_cond_list
 
   ;
 handoff_default
-  : GIVE
-  | COPY
+  : GIVE_NAME      /* `(bare: give)` — the word is followed by `)`, so it lexes as the name (KB-35) */
+  | COPY_NAME
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
@@ -1499,9 +1520,7 @@ method_when_opt
    opt into the `Copyable` contract with a method literally named `copy`. */
 method_name
   : IDENTIFIER
-  | COPY
-  | GIVE
-  | TRUNCATE        /* the wrapping-conversion keyword; contextual, so a type may still declare one */
+  | name_word       /* `ctor copy(…)`, and a `truncate` or `give` member (KB-35) */
   | TYPE            /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT           /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   | FILE_KW        /* the file-gate word; contextual, so a type may declare a `file()` member */
