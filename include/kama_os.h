@@ -1704,6 +1704,80 @@ static inline int32_t kama_getsockname_addr(ptrdiff_t fd, int32_t* outFamily, ui
     kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
     return 0;
 }
+// The peer's address — the inverse of connect, as getsockname is of bind. An accepted stream is the one
+// way a server learns who called; `TcpStream.peerAddr()` is its only reader.
+static inline int32_t kama_getpeername_addr(ptrdiff_t fd, int32_t* outFamily, uint8_t* outIp, uint16_t* outPort, uint32_t* outScope) {
+    struct sockaddr_storage ss; memset(&ss, 0, sizeof ss);
+    socklen_t len = (socklen_t)sizeof ss;
+    if (getpeername((kama__sock)fd, (struct sockaddr*)&ss, &len) != 0) return kama__sock_fail();
+    kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
+    return 0;
+}
+
+// ---- TCP keepalive, user timeout, half-close (KR-105) -------------------------------------------------
+// How a client notices a peer that vanished without a FIN — a NAT that forgot the flow, a failed-over
+// primary. Each knob is ONE option on every stack, and the three keepalive knobs take whole seconds on all
+// of them (Linux `TCP_KEEPIDLE`; macOS spells the idle time `TCP_KEEPALIVE`; Windows 10 1709+ has all three
+// under the Linux names, and `TCP_KEEPIDLE` IS its `TCP_KEEPALIVE`). The caller has already refused a
+// non-positive value; a stack that lacks a knob says ENOPROTOOPT rather than silently doing nothing.
+static inline int32_t kama__sockopt_int(ptrdiff_t fd, int level, int opt, int v) {
+    if (setsockopt((kama__sock)fd, level, opt, (const char*)&v, (socklen_t)sizeof v) != 0) return kama__sock_fail();
+    return 0;
+}
+static inline int32_t kama__no_sockopt(void) { errno = ENOPROTOOPT; return -1; }
+static inline int32_t kama_set_keepalive(ptrdiff_t fd, int32_t on) {
+    return kama__sockopt_int(fd, SOL_SOCKET, SO_KEEPALIVE, on ? 1 : 0);
+}
+static inline int32_t kama_set_keepalive_idle(ptrdiff_t fd, int32_t secs) {
+#if defined(TCP_KEEPIDLE)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_KEEPIDLE, secs);
+#elif defined(TCP_KEEPALIVE)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_KEEPALIVE, secs);
+#else
+    (void)fd; (void)secs; return kama__no_sockopt();
+#endif
+}
+static inline int32_t kama_set_keepalive_interval(ptrdiff_t fd, int32_t secs) {
+#if defined(TCP_KEEPINTVL)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_KEEPINTVL, secs);
+#else
+    (void)fd; (void)secs; return kama__no_sockopt();
+#endif
+}
+static inline int32_t kama_set_keepalive_count(ptrdiff_t fd, int32_t count) {
+#if defined(TCP_KEEPCNT)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_KEEPCNT, count);
+#else
+    (void)fd; (void)count; return kama__no_sockopt();
+#endif
+}
+// How long written data may go unacknowledged before the connection is dropped. Linux measures it in
+// milliseconds (`TCP_USER_TIMEOUT`); macOS (`TCP_RXT_CONNDROPTIME`) and Windows (`TCP_MAXRT`) in seconds,
+// so the millisecond count is rounded UP there — a timeout never fires earlier than asked. The three stacks
+// differ at the edge (Linux also bounds the keepalive probes by it), which SPEC states.
+static inline int32_t kama_set_user_timeout(ptrdiff_t fd, int32_t millis) {
+#if defined(TCP_USER_TIMEOUT)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, millis);
+#elif defined(TCP_RXT_CONNDROPTIME)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_RXT_CONNDROPTIME, (int)((millis + 999) / 1000));
+#elif defined(TCP_MAXRT)
+    return kama__sockopt_int(fd, IPPROTO_TCP, TCP_MAXRT, (int)((millis + 999) / 1000));
+#else
+    (void)fd; (void)millis; return kama__no_sockopt();
+#endif
+}
+// A half-close: 0 stops reading, 1 sends a FIN (the peer reads EOF; a later write here is BrokenPipe),
+// 2 both. Winsock spells the three SD_*, which are the same three numbers.
+static inline int32_t kama_shutdown(ptrdiff_t fd, int32_t how) {
+#if defined(_WIN32)
+    int h = how == 0 ? SD_RECEIVE : how == 1 ? SD_SEND : SD_BOTH;
+#else
+    int h = how == 0 ? SHUT_RD : how == 1 ? SHUT_WR : SHUT_RDWR;
+#endif
+    if (shutdown((kama__sock)fd, h) != 0) return kama__sock_fail();
+    return 0;
+}
+
 // The family a socket was created with — the per-family options below have a V4 and a V6 spelling, and the
 // socket is the only thing that knows which applies. 0 when it cannot say.
 static inline int32_t kama__sock_family(ptrdiff_t fd) {

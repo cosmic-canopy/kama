@@ -1,11 +1,21 @@
 // std::net error path — connecting to a port with nothing listening yields Err(ConnectionRefused).
-import { std::net::TcpStream, std::io::IoError };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError };
 
 fn int32 isRefused(IoError e) { return match (e) { case ConnectionRefused: 1; case _: 0; }; }
 
+// The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
+fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+// A port nothing is bound to any more: bind port 0, read which one the OS picked, and let the listener close.
+fn uint16 freePort() {
+    return match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
+        case Ok(value: l): portOf(l: l);
+        case Err(error: e): 0ui16;
+    };
+}
+
 fn int32 main() {
     string host = "127.0.0.1";
-    uint16 port = cast<uint16>(47655);              // nothing bound here
+    uint16 port = freePort();                       // nothing bound here any more
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) { case Ok(value: s): 10; case Err(error: e): ((isRefused(e: e) == 1) ? 0 : 20); };
 }

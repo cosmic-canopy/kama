@@ -112,7 +112,7 @@ type value SocketAddr implements Formattable, Sendable {
     friend TcpStream[host];
     friend TcpListener[host];
     friend UdpSocket[host, raw];
-    friend resolve[raw];
+    friend resolve[raw]; friend socketAddrOf[raw];
 
     public ctor of(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; this.scopeId = 0ui32; }
     public ctor scoped(IpAddr ip, uint16 port, uint32 scopeId) { this.ip = ip; this.port = port; this.scopeId = scopeId; }

@@ -30,10 +30,14 @@ fn int32 readOne(ref TcpStream c) {
     return match (c.read(into: buf.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 90; case Err(error: e): 91; };
 }
 
+// The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
+fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
 fn int32 main() {
     string host = "127.0.0.1";
-    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 47812);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = portOf(l: l);
     Channel<TcpStream> ch = Channel.bounded(capacity: 4);
     Receiver<TcpStream> rx = ch.receiver();
     int32 total = 0;
@@ -43,7 +47,7 @@ fn int32 main() {
             Sender<TcpStream> tx = ch.sender();
             int32 i = 0;
             while (i < 3) {
-                Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: 47812);
+                Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
                 TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
                 Result<TcpStream, IoError> ra = l.accept();
                 TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };

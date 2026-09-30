@@ -1940,6 +1940,21 @@ OS (Windows defaults it on), so one socket serves both families and an IPv4 peer
 `setTtl` sets the unicast hop limit of either family. A send to an address of the other family is an error <!-- test: net_ipv6 -->
 from the socket, not a silent drop.
 
+**TCP options and the two ends (`std::net`).** A `TcpStream` takes the options a long-lived client needs, one
+setter per option, each returning `Result<Unit, IoError>`: `setNoDelay(on:)`; keepalive — `setKeepAlive(on:)`
+and its three knobs `setKeepAliveIdle(idle:)`, `setKeepAliveInterval(interval:)`, `setKeepAliveCount(count:)` —
+so a peer that vanished without a FIN (a NAT that forgot the flow, a failed-over server) is noticed; and <!-- test: net_tcp_options -->
+`setUserTimeout(timeout:)`, how long written data may go unacknowledged before the connection is dropped. A
+duration is **positive** and rounds **up** to what the stack takes — whole seconds for the keepalive knobs,
+milliseconds for the user timeout on Linux (`TCP_USER_TIMEOUT`, which also bounds the keepalive probes there)
+and whole seconds on macOS (`TCP_RXT_CONNDROPTIME`) and Windows (`TCP_MAXRT`) — so a timer never fires earlier
+than asked; zero, a negative duration or a zero count is `Err(InvalidInput)`, and an option to leave at the
+OS's default is simply not set. `shutdown(how:)` closes one half: `Shutdown::Write` sends a FIN, so the peer
+reads end-of-file while this side still reads its reply, and a later write here is `BrokenPipe`.
+`localAddr()` on a `TcpListener` is how a program learns the port the OS picked for `bind(port: 0)` — every
+socket fixture binds that way, so no two can collide (`tools/check-fixture-ports.sh`) — and a `TcpStream` has
+`localAddr()` and `peerAddr()`, the peer being how a server learns who an accepted stream belongs to.
+
 **Multicast (`std::net`).** A `UdpSocket` joins a group **per interface**, and the families name an interface
 differently, so each has its own call, as in the C API: `joinMulticastV4(group:, interface:)` takes an address
 the interface holds (`0.0.0.0` = the OS's choice), `joinMulticastV6(group:, interfaceIndex:)` its index (0 = the

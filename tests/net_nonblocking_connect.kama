@@ -68,13 +68,23 @@ fn int32 connectDead(uint16 port) {
     return rc;
 }
 
+// The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
+fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+// A port nothing is bound to any more: bind port 0, read which one the OS picked, and let the listener close.
+fn uint16 freePort() {
+    return match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
+        case Ok(value: l): portOf(l: l);
+        case Err(error: e): 0ui16;
+    };
+}
+
 fn int32 main() {
     string host = "127.0.0.1";
-    uint16 live = cast<uint16>(47662);
-    uint16 dead = cast<uint16>(47669);                 // nothing bound here
-    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: live);
+    uint16 dead = freePort();                          // nothing bound here any more
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     return match (rl) {
         case Ok(value: l): {
+            uint16 live = portOf(l: l);
             int32 a = connectListening(port: live);
             int32 b = connectDead(port: dead);
             := ((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b);

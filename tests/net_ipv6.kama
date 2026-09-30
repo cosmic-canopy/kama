@@ -132,11 +132,11 @@ fn bool tcpRoundTrip(ref TcpListener l, const ref string host, uint16 port) {
     };
 }
 
-fn int32 tcp(const ref string bindHost, const ref string dialHost, uint16 port, int32 flag) {
-    Result<TcpListener, IoError> rl = TcpListener.bind(host: bindHost, port: port);
+fn int32 tcp(const ref string bindHost, const ref string dialHost, int32 flag) {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: bindHost, port: 0ui16);
     return match (give rl) {
         case Err(error: e): 0;
-        case Ok(value: l): tcpRoundTrip(l: l, host: dialHost, port: port) ? flag : 0;
+        case Ok(value: l): { uint16 port = portOf(l: l); := tcpRoundTrip(l: l, host: dialHost, port: port) ? flag : 0; }
     };
 }
 
@@ -152,10 +152,13 @@ fn int32 udpHops() {
     };
 }
 
+// The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
+fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
 fn int32 main() {
     int32 r = udpLoopback() + udpDualStack() + udpWrongFamily() + udpHops()
-            + tcp(bindHost: "::1", dialHost: "::1", port: 47671ui16, flag: 8)
-            + tcp(bindHost: "::", dialHost: "127.0.0.1", port: 47672ui16, flag: 16)   // dual-stack TCP
-            + tcp(bindHost: "::", dialHost: "::1", port: 47673ui16, flag: 32);
+            + tcp(bindHost: "::1", dialHost: "::1", flag: 8)
+            + tcp(bindHost: "::", dialHost: "127.0.0.1", flag: 16)   // dual-stack TCP
+            + tcp(bindHost: "::", dialHost: "::1", flag: 32);
     return r;   // 127
 }

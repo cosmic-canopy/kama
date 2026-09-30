@@ -29,6 +29,9 @@ fn bool invalidInput(const ref string host) {
     return match (rs) { case Ok(value: s): false; case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; };
 }
 
+// The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
+fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
 fn int32 main() {
     int32 r = 0;
 
@@ -85,15 +88,13 @@ fn int32 main() {
     // may put `::1` first — the localhost trap `connectHost` exists for — and one on ::1 alone is reached too,
     // WHEN the name resolves to `::1` at all. Where it does not (Debian/Ubuntu, above) there is no V6 address to
     // try, so the flag is owed only by a host that has one: requiring it there tested the hosts file, not kama.
-    uint16 port = cast<uint16>(47666);            // unique across tests/ — see tools/check-fixture-ports.sh
-    match (TcpListener.bind(host: "127.0.0.1", port: port)) {
+    match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
         case Err(error: e): { }
-        case Ok(value: listener): { if (dialName(port: port)) { r = r + 64; } }
+        case Ok(value: listener): { uint16 port = portOf(l: listener); if (dialName(port: port)) { r = r + 64; } }
     };
-    uint16 port6 = cast<uint16>(47667);           // ditto
-    match (TcpListener.bind(host: "::1", port: port6)) {
+    match (TcpListener.bind(host: "::1", port: 0ui16)) {
         case Err(error: e): { }
-        case Ok(value: listener): { if (!localhostV6 || dialName(port: port6)) { r = r + 128; } }
+        case Ok(value: listener): { uint16 port6 = portOf(l: listener); if (!localhostV6 || dialName(port: port6)) { r = r + 128; } }
     };
 
     // `connect` takes numeric text only: a name is refused, not looked up behind the caller's back...

@@ -1,7 +1,7 @@
 
 import { std::io::IoError, std::io::Reader, std::io::Writer, std::collections::View };
 
-export { ReliableStream };
+export { ReliableStream, Shutdown };
 
 // A reliable, ordered byte stream: a `Reader` + `Writer` you can also toggle between blocking and
 // non-blocking. Native TCP (`TcpStream`) satisfies it today; a WebSocket message channel (and a later
@@ -14,3 +14,9 @@ export { ReliableStream };
 type contract ReliableStream for resource implements Reader, Writer {
     fn Result<Unit, IoError> setNonBlocking(bool on);
 }
+
+// Which half of a connected socket `shutdown(how:)` closes. `Write` sends a FIN — the peer reads end-of-file
+// while this side can still read its reply (the half-close a request/response protocol ends a request
+// with); a later write here is `BrokenPipe`. `Read` discards what arrives, and `Both` is the two at once,
+// short of dropping the socket. Not on `ReliableStream`: a WebSocket closes whole or not at all.
+type enum Shutdown { Read, Write, Both }

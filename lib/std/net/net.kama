@@ -6,7 +6,9 @@ import {
     std::io::Writer,
     std::collections::View, std::collections::ConstView,
     ReliableStream,
+    Shutdown,
     SocketAddr,
+    std::time::Duration,
     resolve,
     std::collections::DynamicArray,
 };
@@ -31,10 +33,42 @@ extern fn int32 kama_close_socket(isize fd);
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_set_nodelay(isize fd, int32 on);
 extern fn int32 kama_socket_error(isize fd);
+extern fn int32 kama_set_keepalive(isize fd, int32 on);
+extern fn int32 kama_set_keepalive_idle(isize fd, int32 secs);
+extern fn int32 kama_set_keepalive_interval(isize fd, int32 secs);
+extern fn int32 kama_set_keepalive_count(isize fd, int32 count);
+extern fn int32 kama_set_user_timeout(isize fd, int32 millis);
+extern fn int32 kama_shutdown(isize fd, int32 how);
+extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
+extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 extern fn int32 kama_EINPROGRESS();
 extern fn int32 kama_EAGAIN();
+
+// A duration as a socket option takes it: a POSITIVE whole count of `unit` nanoseconds, rounded UP so a
+// timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
+// `InvalidInput` — an option to leave at the OS default is simply not set.
+fn Result<int32, IoError> unitsUp(Duration d, int64 unit) {
+    if (d.nanos <= 0i64) { return Result::Err(error: IoError::InvalidInput); }
+    int64 n = d.nanos / unit;
+    if (d.nanos % unit != 0i64) { n = n + 1i64; }
+    if (n > 2147483647i64) { return Result::Err(error: IoError::InvalidInput); }
+    return Result::Ok(value: cast<int32>(n));
+}
+
+// A local or peer address, read back from the socket (`getsockname`/`getpeername` share the seam form).
+unsafe fn Result<SocketAddr, IoError> socketAddrOf(isize fd, bool peer) {
+    int32 family = 4;
+    InlineArray<uint8>#(16) ip = [0; 16];
+    uint16 port = 0ui16;
+    uint32 zone = 0ui32;
+    int32 rc = peer
+        ? kama_getpeername_addr(fd: fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port), outScope: addr(of: zone))
+        : kama_getsockname_addr(fd: fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port), outScope: addr(of: zone));
+    if (rc != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone));
+}
 
 // A connected TCP stream. Closes its socket on drop (RAII). Move-only. Implements the `ReliableStream`
 // contract (a `Reader` + `Writer` + `setNonBlocking`; shared with the WebSocket backend). Blocking by
@@ -128,6 +162,54 @@ type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
         if (kama_set_nodelay(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
+
+    // TCP keepalive (SO_KEEPALIVE): probe an idle connection, so a peer that vanished without a FIN — a NAT
+    // that forgot the flow, a failed-over server — is noticed instead of a read waiting forever. Off by
+    // default. The three knobs below tune it one at a time (libpq's four settings map one-to-one), each a
+    // positive value in whole seconds (a count for the last); one left unset keeps the OS's.
+    public unsafe fn Result<Unit, IoError> setKeepAlive(bool on) {
+        if (kama_set_keepalive(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // How long the connection sits idle before the first probe.
+    public unsafe fn Result<Unit, IoError> setKeepAliveIdle(Duration idle) {
+        int32 secs = 0;
+        match (unitsUp(d: idle, unit: 1000000000i64)) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: v): { secs = v; } };
+        if (kama_set_keepalive_idle(fd: this.fd, secs: secs) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // The gap between unanswered probes.
+    public unsafe fn Result<Unit, IoError> setKeepAliveInterval(Duration interval) {
+        int32 secs = 0;
+        match (unitsUp(d: interval, unit: 1000000000i64)) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: v): { secs = v; } };
+        if (kama_set_keepalive_interval(fd: this.fd, secs: secs) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // How many unanswered probes drop the connection.
+    public unsafe fn Result<Unit, IoError> setKeepAliveCount(uint32 count) {
+        if (count == 0ui32 || count > 2147483647ui32) { return Result::Err(error: IoError::InvalidInput); }
+        if (kama_set_keepalive_count(fd: this.fd, count: cast<int32>(count)) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // How long written data may go unacknowledged before the connection is dropped — the bound on a write
+    // to a peer that stopped answering (Linux `TCP_USER_TIMEOUT`, macOS `TCP_RXT_CONNDROPTIME`, Windows
+    // `TCP_MAXRT`). Milliseconds on Linux, whole seconds (rounded up) elsewhere. Positive; unset keeps the OS's.
+    public unsafe fn Result<Unit, IoError> setUserTimeout(Duration timeout) {
+        int32 ms = 0;
+        match (unitsUp(d: timeout, unit: 1000000i64)) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: v): { ms = v; } };
+        if (kama_set_user_timeout(fd: this.fd, millis: ms) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Close one half of the connection (see `Shutdown`); dropping the stream closes both and the socket.
+    public unsafe fn Result<Unit, IoError> shutdown(Shutdown how) {
+        int32 h = match (how) { case Read: 0; case Write: 1; case Both: 2; };
+        if (kama_shutdown(fd: this.fd, how: h) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    // This end's address (the ephemeral port a connect was given), and the peer's — how a server learns
+    // who an accepted stream belongs to.
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
+    public unsafe fn Result<SocketAddr, IoError> peerAddr() { return socketAddrOf(fd: this.fd, peer: true); }
 
     // `Writer` primitive: single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the
     // socket buffer is full). EINTR-retried. Callers wanting every byte sent use the free `std::io::writeAll`.
@@ -251,6 +333,9 @@ type resource TcpListener implements Sendable {
         if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
+
+    // The address it listens on — the one way to learn the port the OS picked for `bind(host:, port: 0)`.
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
 
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public const fn isize rawHandle() { return this.fd; }

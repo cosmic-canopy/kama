@@ -1,29 +1,97 @@
-// std::net TCP options + non-blocking read — a client connects (loopback backlog), sets TCP_NODELAY and
-// non-blocking, then a read with no data pending returns Err(WouldBlock) instead of stalling. Returns 55.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::collections::FixedArray };
+// std::net TCP options (KR-105). A listener on port 0 reports the port the OS picked (`localAddr`), a client
+// connects to it, and the options a database client needs all take: TCP_NODELAY, keepalive and its three
+// knobs, the user timeout. A non-positive duration or count is `InvalidInput`, not a silent no-op. A
+// non-blocking read with nothing pending returns `WouldBlock`. Last, the half-close: the client's
+// `shutdown(how: Shutdown::Write)` reaches the server as end-of-file while the client can still read the
+// server's reply, and a write after it is `BrokenPipe`. Returns 55.
+import {
+    std::net::TcpListener, std::net::TcpStream, std::net::Shutdown, std::net::SocketAddr,
+    std::io::IoError, std::io::writeAll, std::collections::FixedArray, std::time::Duration,
+};
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
-fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
+fn bool isInvalid(Result<Unit, IoError> r) {
+    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: u): false; };
+}
 
-fn int32 checkClient(ref TcpStream c) {
-    if (!isOk(r: c.setNoDelay(on: true)))     { return 71; }
-    if (!isOk(r: c.setNonBlocking(on: true))) { return 72; }
+fn int32 options(ref TcpStream c) {
+    if (!isOk(r: c.setNoDelay(on: true)))                                      { return 71; }
+    if (!isOk(r: c.setKeepAlive(on: true)))                                    { return 72; }
+    if (!isOk(r: c.setKeepAliveIdle(idle: Duration.fromSecs(s: 60i64))))      { return 73; }
+    if (!isOk(r: c.setKeepAliveInterval(interval: Duration.fromMillis(ms: 1500i64)))) { return 74; }   // rounds up to 2 s
+    if (!isOk(r: c.setKeepAliveCount(count: 4ui32)))                           { return 75; }
+    if (!isOk(r: c.setUserTimeout(timeout: Duration.fromSecs(s: 30i64))))     { return 76; }
+    if (!isInvalid(r: c.setKeepAliveIdle(idle: Duration.zero())))              { return 77; }
+    if (!isInvalid(r: c.setKeepAliveCount(count: 0ui32)))                      { return 78; }
+    if (!isInvalid(r: c.setUserTimeout(timeout: Duration.fromSecs(s: -1i64)))) { return 79; }
+    // Non-blocking: nothing is pending yet, so a read says WouldBlock instead of stalling.
+    if (!isOk(r: c.setNonBlocking(on: true))) { return 60; }
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    Result<isize, IoError> rr = c.read(into: buf.viewMut());
-    bool wb = match (rr) { case Ok(value: n): false; case Err(error: e): isWouldBlock(e: e); };
-    if (!wb) { return 73; }
-    return 55;
+    bool wb = match (c.read(into: buf.viewMut())) {
+        case Ok(value: n): false;
+        case Err(error: e): match (e) { case WouldBlock: true; case _: false; };
+    };
+    if (!wb) { return 61; }
+    if (!isOk(r: c.setNonBlocking(on: false))) { return 62; }
+    return 0;
+}
+
+// The server reads the request to EOF (the client's half-close), then answers on the still-open other half.
+fn int32 serve(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    int32 total = 0;
+    bool eof = false;
+    while (!eof) {
+        int32 got = match (s.read(into: buf.viewMut())) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
+        if (got < 0) { return 81; }
+        if (got == 0) { eof = true; } else { total = total + got; }
+    }
+    if (total != 3) { return 82; }
+    FixedArray<uint8> reply = FixedArray.filled(size: 2, value: 7ui8);
+    return match (writeAll(w: s, bytes: reply.view())) { case Ok(value: u): 0; case Err(error: e): 83; };
+}
+
+fn int32 halfClose(ref TcpListener l, ref TcpStream c) {
+    FixedArray<uint8> req = FixedArray.filled(size: 3, value: 1ui8);
+    if (match (writeAll(w: c, bytes: req.view())) { case Ok(value: u): false; case Err(error: e): true; }) { return 84; }
+    if (!isOk(r: c.shutdown(how: Shutdown::Write))) { return 85; }
+    int32 served = match (l.accept()) { case Ok(value: s): serve(s: s); case Err(error: e): 86; };
+    if (served != 0) { return served; }
+    FixedArray<uint8> back = FixedArray.make(size: 8);
+    int32 got = match (c.read(into: back.viewMut())) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
+    if (got != 2 || back[1] != 7ui8) { return 87; }
+    bool broken = match (c.write(bytes: req.view())) {
+        case Ok(value: n): false;
+        case Err(error: e): match (e) { case BrokenPipe: true; case _: false; };
+    };
+    if (!broken) { return 88; }
+    return 0;
+}
+
+fn int32 addresses(ref TcpListener l, ref TcpStream c, uint16 port) {
+    uint16 local = match (c.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    uint16 peer = match (c.peerAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    if (peer != port) { return 91; }                 // the client's peer is the listener's port…
+    if (local == 0ui16 || local == port) { return 92; }   // …and its own is the ephemeral one it was given
+    return 0;
+}
+
+fn int32 run(ref TcpListener l) {
+    uint16 port = match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    if (port == 0ui16) { return 69; }                // port 0 asked the OS to pick one; localAddr says which
+    string host = "127.0.0.1";
+    return match (TcpStream.connect(host: host, port: port)) {
+        case Ok(value: c): {
+            int32 r = options(c: c);
+            if (r == 0) { r = addresses(l: l, c: c, port: port); }
+            if (r == 0) { r = halfClose(l: l, c: c); }
+            := r == 0 ? 55 : r;
+        }
+        case Err(error: e): 70;
+    };
 }
 
 fn int32 main() {
     string host = "127.0.0.1";
-    uint16 port = cast<uint16>(47660);
-    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
-    return match (rl) {
-        case Ok(value: l): {
-            Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
-            := match (rc) { case Ok(value: c): checkClient(c: c); case Err(error: e): 70; };
-        }
-        case Err(error: e): 69;
-    };
+    return match (TcpListener.bind(host: host, port: 0ui16)) { case Ok(value: l): run(l: l); case Err(error: e): 68; };
 }
