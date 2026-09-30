@@ -22,6 +22,7 @@ import {
     std::io::IoError, std::io::lastError, std::io::Reader, std::io::Writer,
     std::collections::View, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+    std::io::Descriptor, std::collections::DynamicArray, std::collections::FixedArray,
     ReliableStream, Shutdown, PeerCredentials,
 };
 
@@ -47,6 +48,50 @@ extern fn int32 kama_shutdown(isize fd, int32 how);
 extern fn int32 kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
+extern fn isize kama_desc_dup(isize h, int32 kind);
+extern fn isize kama_send_fds(isize sock, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<isize> hs, UnsafeConstPtr<int32> kinds, usize count);
+extern fn isize kama_recv_fds(isize sock, UnsafePtr<uint8> buf, usize n, UnsafePtr<isize> hs, UnsafePtr<int32> kinds, usize cap,
+                              UnsafePtr<usize> count);
+
+// ---- passing descriptors ----------------------------------------------------------------------------------------
+// Send `bytes` with `descriptors` over a connected socket: POSIX's SCM_RIGHTS, and on Windows each handle put into
+// the peer process with a frame ahead of the bytes (both ends kama there — see std::io::Descriptor). The
+// descriptors are CONSUMED: each is closed once the peer holds its own, when `descriptors` drops at return.
+unsafe fn Result<usize, IoError> sendWith(isize fd, ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+    isize count = descriptors.length();
+    if (bytes.length() == 0 || count == 0 || count > 253) { return Result::Err(error: IoError::InvalidInput); }
+    FixedArray<isize> hs = FixedArray.make(size: count);
+    FixedArray<int32> kinds = FixedArray.make(size: count);
+    isize i = 0;
+    while (i < count) { hs[i] = descriptors[i].rawHandle(); kinds[i] = descriptors[i].isSocket() ? 1 : 0; i = i + 1; }
+    while (true) {
+        isize n = kama_send_fds(sock: fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), hs: hs.dataPtr(),
+                                kinds: kinds.dataPtr(), count: cast<usize>(count));
+        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+    }
+}
+// Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`, each owned.
+unsafe fn Result<usize, IoError> recvWith(isize fd, View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+    if (into.length() == 0) { return Result::Err(error: IoError::InvalidInput); }
+    FixedArray<isize> hs = FixedArray.make(size: 253);
+    FixedArray<int32> kinds = FixedArray.make(size: 253);
+    usize got = cast<usize>(0);
+    while (true) {
+        isize n = kama_recv_fds(sock: fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), hs: hs.dataPtrMut(),
+                                kinds: kinds.dataPtrMut(), cap: cast<usize>(253), count: addr(of: got));
+        if (n >= 0) {
+            isize i = 0;
+            while (i < cast<isize>(got)) {
+                Descriptor d = kinds[i] == 1 ? Descriptor.fromRawSocket(socket: hs[i]) : Descriptor.fromRaw(handle: hs[i]);
+                descriptors.add(item: give d);
+                i = i + 1;
+            }
+            return Result::Ok(value: cast<usize>(n));
+        }
+        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+    }
+}
 
 // ---- addresses ----------------------------------------------------------------------------------------------
 // Everything that reads or writes an address's bytes lives in these helpers, so the two `UnixAddr` twins share
@@ -183,8 +228,10 @@ unsafe fn string createdPath(const ref UnixAddr a) {
 // so a connection accepted on one isolate is served on another.
 type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
     isize fd = -1;   // the -1 empty niche, as `TcpStream`'s — descriptor 0 stays ownable
-    // Adopt an already-connected socket descriptor (what `UnixListener.accept` does).
-    public ctor make(isize fd) { this.fd = fd; }
+    // Wrap a connected socket kama itself just made (`connectTo`, `UnixListener.accept`). Private: a descriptor
+    // from anywhere else arrives as a `std::io::Descriptor` and enters through `adopt`.
+    ctor make(isize fd) { this.fd = fd; }
+    friend UnixListener::accept[make];
 
     // Connect to the socket at `path`.
     public unsafe ctor Result<UnixStream, IoError> connect(const ref string path) {
@@ -244,6 +291,36 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
     // own `PeerCredentials`. What a server needs for postgres-style `peer` authentication.
     public unsafe fn Result<PeerCredentials, IoError> peerCredentials() { return PeerCredentials.of(fd: this.fd); }
     // The raw socket handle — the bridge to a `std::net::Poller`.
+    // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
+    // number by `Descriptor.fromRawSocket`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    public unsafe ctor Result<UnixStream, IoError> adopt(Descriptor descriptor) {
+        return match (descriptor.release(asSocket: true)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: h): Result::Ok(value: UnixStream.make(fd: h));
+        };
+    }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
+    public unsafe fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.fromRawSocket(socket: h); }
+    // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
+    // you keep this one.
+    public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
+        isize d = kama_desc_dup(h: this.fd, kind: 1);
+        if (d < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Descriptor.fromRawSocket(socket: d));
+    }
+    // Send `bytes` (at least one) with `descriptors` — open files, sockets, streams — which the peer receives with
+    // `recvDescriptors`. CONSUMES them: each is closed here once the peer holds its own, so send
+    // `x.duplicateDescriptor()` to keep `x`. At most 253 per message. On Windows the peer must be kama too.
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        return sendWith(fd: this.fd, bytes: bytes, descriptors: give descriptors);
+    }
+    // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`: each is
+    // owned — adopt it into what it is (`File.adopt`, `UnixStream.adopt`, …) or it closes when dropped. Received
+    // descriptors are close-on-exec. More than 253 in one message, or more than the kernel kept, is
+    // `MessageTooLong`, and every one that did arrive is closed.
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        return recvWith(fd: this.fd, into: into, descriptors: ref descriptors);
+    }
     public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~UnixStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
@@ -253,7 +330,7 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
 type resource UnixListener implements Sendable {
     isize fd = -1;
     string created;   // the path this listener made and so removes at drop; "" for nothing to remove
-    ctor adopt(isize fd, string created) { this.fd = fd; this.created = give created; }
+    ctor own(isize fd, string created) { this.fd = fd; this.created = give created; }
 
     public unsafe ctor Result<UnixListener, IoError> bind(const ref string path) {
         return match (UnixAddr.fromPath(path: path)) {
@@ -282,7 +359,7 @@ type resource UnixListener implements Sendable {
             if (made.length() > 0) { int32 ru = kama_unlink(path: made.cstr()); }
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UnixListener.adopt(fd: fd, created: give made));
+        return Result::Ok(value: UnixListener.own(fd: fd, created: give made));
     }
 
     // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried.
@@ -298,6 +375,23 @@ type resource UnixListener implements Sendable {
         return Result::Ok(value: Unit::Unit);
     }
     public unsafe fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
+    // number by `Descriptor.fromRawSocket`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    public unsafe ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
+        return match (descriptor.release(asSocket: true)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: h): Result::Ok(value: UnixListener.own(fd: h, created: ""));
+        };
+    }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and the socket FILE stays: whoever holds the descriptor now serves it).
+    public unsafe fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; this.created = ""; return Descriptor.fromRawSocket(socket: h); }
+    // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
+    // you keep this one.
+    public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
+        isize d = kama_desc_dup(h: this.fd, kind: 1);
+        if (d < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Descriptor.fromRawSocket(socket: d));
+    }
     public const fn isize rawHandle() { return this.fd; }
 
     // Close, then remove the file this listener made — closing first, so nothing can connect to a name that
@@ -327,7 +421,7 @@ type value UnixRecvFrom implements Sendable {
 type resource UnixDatagram implements Sendable {
     isize fd = -1;
     string created;   // the path this socket bound and so removes at drop; "" for none
-    ctor adopt(isize fd, string created) { this.fd = fd; this.created = give created; }
+    ctor own(isize fd, string created) { this.fd = fd; this.created = give created; }
 
     // A socket with no name — enough to send (`sd_notify` sends from one), and to receive replies only on a
     // connected pair.
@@ -336,7 +430,7 @@ type resource UnixDatagram implements Sendable {
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 1);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: UnixDatagram.adopt(fd: fd, created: ""));
+        return Result::Ok(value: UnixDatagram.own(fd: fd, created: ""));
     }
     public unsafe ctor Result<UnixDatagram, IoError> bind(const ref string path) {
         return match (UnixAddr.fromPath(path: path)) {
@@ -356,7 +450,7 @@ type resource UnixDatagram implements Sendable {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UnixDatagram.adopt(fd: fd, created: createdPath(a: address)));
+        return Result::Ok(value: UnixDatagram.own(fd: fd, created: createdPath(a: address)));
     }
 
     // A default peer: `send`/`recv` then need no address, and only its datagrams are received.
@@ -411,6 +505,36 @@ type resource UnixDatagram implements Sendable {
     }
     public unsafe fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
     public unsafe fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
+    // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
+    // number by `Descriptor.fromRawSocket`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    public unsafe ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
+        return match (descriptor.release(asSocket: true)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: h): Result::Ok(value: UnixDatagram.own(fd: h, created: ""));
+        };
+    }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and a bound FILE stays).
+    public unsafe fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; this.created = ""; return Descriptor.fromRawSocket(socket: h); }
+    // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
+    // you keep this one.
+    public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
+        isize d = kama_desc_dup(h: this.fd, kind: 1);
+        if (d < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Descriptor.fromRawSocket(socket: d));
+    }
+    // Send `bytes` (at least one) with `descriptors` — open files, sockets, streams — which the peer receives with
+    // `recvDescriptors`. CONSUMES them: each is closed here once the peer holds its own, so send
+    // `x.duplicateDescriptor()` to keep `x`. At most 253 per message. On Windows the peer must be kama too.
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        return sendWith(fd: this.fd, bytes: bytes, descriptors: give descriptors);
+    }
+    // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`: each is
+    // owned — adopt it into what it is (`File.adopt`, `UnixStream.adopt`, …) or it closes when dropped. Received
+    // descriptors are close-on-exec. More than 253 in one message, or more than the kernel kept, is
+    // `MessageTooLong`, and every one that did arrive is closed.
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        return recvWith(fd: this.fd, into: into, descriptors: ref descriptors);
+    }
     public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~UnixDatagram() {

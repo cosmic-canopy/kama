@@ -1,0 +1,94 @@
+// Passing open descriptors between processes over a Unix socket (KR-104): an open file and one end of another
+// connection travel with two bytes, and the receiver makes them what they are again (`File.adopt`,
+// `UnixStream.adopt`) and uses them — the file reads back its contents, and a byte written through the passed
+// stream end arrives at its partner. A `std::io::Descriptor` is OWNED, so the sender's list is consumed (it keeps
+// the file by sending a duplicate, and gives the stream end up with `takeDescriptor`, which leaves that stream
+// empty), and a raw number becomes one only through `unsafe` `Descriptor.fromRaw`. Sending nothing, or no bytes
+// to carry them, is `InvalidInput`. POSIX passes them as SCM_RIGHTS; Windows puts each handle into the peer
+// process first. Both ends here are this one process, which is enough for the kernel either way. Returns 55.
+import {
+    std::net::UnixListener, std::net::UnixStream,
+    std::fs::File, std::fs::OpenMode, std::fs::writeText,
+    std::io::IoError, std::io::Descriptor, std::io::readAll,
+    std::collections::DynamicArray, std::collections::FixedArray,
+};
+
+fn bool isInvalid(Result<usize, IoError> r) {
+    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: n): false; };
+}
+
+// Windows closes a file's descriptor and a socket's with different calls, so a `Descriptor` remembers which it
+// is and adopting a socket's as a `File` is `InvalidInput` there; on POSIX a descriptor is a descriptor.
+@compileFor(OS_WINDOWS)
+fn bool kindRule(Descriptor socketCopy) {
+    return match (File.adopt(descriptor: give socketCopy)) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: f): false; };
+}
+@compileFor(!OS_WINDOWS)
+fn bool kindRule(Descriptor socketCopy) {
+    return match (File.adopt(descriptor: give socketCopy)) { case Ok(value: f): true; case Err(error: e): false; };
+}
+
+fn int32 main() {
+    if (match (writeText(path: "payload.txt", text: "kama fd passing")) { case Ok(value: n): false; case Err(error: e): true; }) { return 2; }
+    Result<File, IoError> rf = File.open(path: "payload.txt", mode: OpenMode::Read);
+    File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+
+    Result<UnixListener, IoError> rl = UnixListener.bind(path: "fds.sock");
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    Result<UnixStream, IoError> rc = UnixStream.connect(path: "fds.sock");
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    Result<UnixStream, IoError> ra = l.accept();
+    UnixStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    // A second connection, one end of which is passed.
+    Result<UnixListener, IoError> rl2 = UnixListener.bind(path: "side.sock");
+    UnixListener l2 = match (give rl2) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+    Result<UnixStream, IoError> rc2 = UnixStream.connect(path: "side.sock");
+    UnixStream c2 = match (give rc2) { case Ok(value: x): give x; case Err(error: e): { return 8; } };
+    Result<UnixStream, IoError> ra2 = l2.accept();
+    UnixStream s2 = match (give ra2) { case Ok(value: x): give x; case Err(error: e): { return 9; } };
+
+    FixedArray<uint8> hi = FixedArray.filled(size: 2, value: 104ui8);
+    DynamicArray<Descriptor> none = DynamicArray.empty();
+    if (!isInvalid(r: c.sendDescriptors(bytes: hi.view(), descriptors: give none))) { return 11; }   // nothing to send
+
+    // Keep the file (send a duplicate); give the stream end up (take it).
+    Result<Descriptor, IoError> rd = f.duplicateDescriptor();
+    Descriptor fileCopy = match (give rd) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
+    DynamicArray<Descriptor> outgoing = DynamicArray.empty();
+    outgoing.add(item: give fileCopy);
+    outgoing.add(item: c2.takeDescriptor());
+    if (c2.rawHandle() != -1) { return 13; }                  // taken: the stream is empty now
+    usize sent = match (c.sendDescriptors(bytes: hi.view(), descriptors: give outgoing)) { case Ok(value: n): n; case Err(error: e): 0; };
+    if (sent != 2) { return 14; }
+
+    FixedArray<uint8> buf = FixedArray.make(size: 8);
+    DynamicArray<Descriptor> got = DynamicArray.empty();
+    usize n = match (s.recvDescriptors(into: buf.viewMut(), descriptors: ref got)) { case Ok(value: k): k; case Err(error: e): 0; };
+    if (n != 2 || buf[1] != 104ui8 || got.length() != 2) { return 15; }
+
+    // The receiver says what each one is by adopting it.
+    Result<File, IoError> rpf = File.adopt(descriptor: got.remove(index: 0));
+    File passed = match (give rpf) { case Ok(value: x): give x; case Err(error: e): { return 16; } };
+    bool sameFile = match (readAll(r: passed)) { case Ok(value: t): t == "kama fd passing"; case Err(error: e): false; };
+    if (!sameFile) { return 17; }
+    if (f.rawFd() < 0) { return 18; }                         // the sender still has its own
+    Result<UnixStream, IoError> rps = UnixStream.adopt(descriptor: got.remove(index: 0));
+    UnixStream end = match (give rps) { case Ok(value: x): give x; case Err(error: e): { return 19; } };
+    FixedArray<uint8> seven = FixedArray.filled(size: 1, value: 7ui8);
+    if (match (end.write(bytes: seven.view())) { case Ok(value: k): k != 1; case Err(error: e): true; }) { return 20; }
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    bool arrived = match (s2.read(into: one.viewMut())) { case Ok(value: k): k == 1 && one[0] == 7ui8; case Err(error: e): false; };
+    if (!arrived) { return 21; }
+
+    Result<Descriptor, IoError> rsd = s2.duplicateDescriptor();
+    Descriptor sockCopy = match (give rsd) { case Ok(value: x): give x; case Err(error: e): { return 24; } };
+    if (!kindRule(socketCopy: give sockCopy)) { return 25; }
+
+    // A raw number from outside kama enters only through the marked door.
+    Result<Descriptor, IoError> rd2 = f.duplicateDescriptor();
+    Descriptor again = match (give rd2) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
+    isize raw = match (again.release(asSocket: false)) { case Ok(value: h): h; case Err(error: e): -1; };
+    Descriptor adopted = Descriptor.fromRaw(handle: raw);
+    if (adopted.rawHandle() != raw || raw < 0) { return 23; }
+    return 55;
+}

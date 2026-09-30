@@ -1,0 +1,8 @@
+// KR-104: a raw number becomes an owned descriptor only through `unsafe` `Descriptor.fromRaw` — adopting any
+// integer in safe code could close someone else's descriptor twice. `File.make(fd:)`, `TcpStream.make(fd:)` and
+// `UnixStream.make(fd:)` were public doors that did exactly that; they are private now, each type's own.
+import { std::fs::File };
+fn int32 main() {
+    File f = File.make(fd: 1);
+    return 0;
+}

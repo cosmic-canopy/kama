@@ -1968,6 +1968,22 @@ a NUL, or longer than `sun_path` less its terminator (103 bytes on macOS, 107 on
 never removed behind the caller — and **a listener removes the socket file it made when it drops**, so a clean
 restart just works (a crash still leaves the file). SIGPIPE is handled as for TCP (above).
 
+**Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
+and streams to the process on the other end, with at least one byte to carry them, and
+`recvDescriptors(into:, descriptors:)` receives them (`UnixDatagram` has the pair too). What travels is a <!-- test: net_unix_fds -->
+**`std::io::Descriptor`**, an OWNED descriptor that closes when it drops, so none can leak — one received and
+never adopted is closed like any value, and a message carrying more than 253, or more than the kernel kept, is
+`MessageTooLong` with every one that did arrive closed. Every handle type converts both ways: `X.adopt(descriptor:)`
+(the receiver says what a descriptor IS by the type it adopts it into), `x.takeDescriptor()` (leaving `x` empty)
+and `x.duplicateDescriptor()`. Sending CONSUMES the list — each is closed once the peer holds its own — so a
+sender keeps a file by sending a duplicate. A raw number from outside kama becomes a `Descriptor` only through
+`unsafe` `Descriptor.fromRaw(handle:)` / `fromRawSocket(socket:)`: the per-type `make(fd:)` doors that took any <!-- xfail: descriptor_raw_make -->
+integer in safe code, and could close someone else's descriptor twice, are private since `0.9.485`. Received
+descriptors are close-on-exec. POSIX passes them as SCM_RIGHTS, which reaches any program; Windows has no such
+message, so each handle is put into the peer process (`DuplicateHandle`, `WSADuplicateSocketW`) and a frame ahead
+of the bytes tells the peer where — a convention between two kama programs there, where POSIX's is the kernel's.
+A Windows file descriptor and socket close differently, so adopting one as the other is `InvalidInput` there.
+
 Each OS keeps what is its own. **`UnixDatagram`** (Linux, macOS) sends whole messages between local processes —
 systemd's notify socket, syslog's `/dev/log`: `unbound()`, `bind(path:)`/`bindTo(address:)`, `sendTo(bytes:, to:)`, <!-- test: net_unix_datagram -->
 `recvFrom(into:)` → `UnixRecvFrom { count, from }`, `connect`/`send`/`recv`, and it removes a file it bound when it
@@ -5761,7 +5777,7 @@ reaches a bundle. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
 `UnixStream`, `UnixListener`, `UnixDatagram`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
-`StringWriter`, `SliceReader`, `PeerCredentials`, and the values `SocketAddr`, `UnixAddr`, `UnixRecvFrom`,
+`StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`, `UnixRecvFrom`,
 `IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is

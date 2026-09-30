@@ -16,7 +16,7 @@ export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
 // ⚠️ They do NOT own their descriptor and their destructors do nothing. Standard input, output and error
 // belong to the process — closing one out from under the rest of the program (or under `print`) would be
 // the opposite of what a handle-shaped API should do — so `stdout()` may be called any number of times
-// and each handle is just a name for fd 1. `std::fs::File.make(fd: 1)` would be the wrong tool: a `File`
+// and each handle is just a name for fd 1. A `File` adopting descriptor 1 would be the wrong tool: a `File`
 // closes its fd on drop, which is exactly right for a file and exactly wrong here.
 //
 // Three types rather than one, following Rust's split: reading from standard OUTPUT is not a thing, and a

@@ -261,6 +261,11 @@ Worth knowing before debugging, because each of these produced a confident wrong
   already linked) — at the time of the call, not at connect as Linux's `SO_PEERCRED` does, and a more privileged
   peer's token may be refused. `sun_path` is a narrow `char[108]`; how Windows reads a non-ASCII path there is
   unmeasured. `<afunix.h>` was diffed as the note below asks: it adds five macros, none lowercase.
+  PASSING a descriptor (`sendDescriptors`) has no SCM_RIGHTS here: each handle is put INTO the peer process
+  (`WSADuplicateSocketW` for a socket, `DuplicateHandle` into `OpenProcess(PROCESS_DUP_HANDLE)` for a file's
+  C-runtime descriptor) and a `KFD1` frame ahead of the bytes tells the peer where; it re-imports them with
+  `WSASocketW(FROM_PROTOCOL_INFO…)` / `_open_osfhandle`. Both ends must be kama. Since each handle already
+  exists in the peer when the send returns, the sender closes its copies at once.
   ⚠️ All of it unverified on a Windows machine when written (2026-09-30) — the cross build compiles; CI runs it.
 - **`<iphlpapi.h>` defines `interface`, `hyper` and 19 more lowercase macros**, despite `WIN32_LEAN_AND_MEAN`:
   its chain reaches `<rpc.h>`/`<rpcndr.h>` (`#define interface struct`). A kama name spelled that way then breaks

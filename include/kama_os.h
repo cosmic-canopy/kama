@@ -763,6 +763,124 @@ static inline ptrdiff_t kama_token_open(int32_t pid) {
 }
 static inline void kama_token_close(ptrdiff_t tok) { CloseHandle((HANDLE)tok); }
 static inline int32_t kama_getpid(void) { return (int32_t)GetCurrentProcessId(); }
+
+// ---- descriptors (std::io::Descriptor) and passing them to another process ------------------------------------
+// A `Descriptor` here is either a C-runtime descriptor (kind 0 — what a `File` holds) or a SOCKET (kind 1), and
+// the two are closed, duplicated and passed by different calls.
+static inline int32_t kama_desc_close(ptrdiff_t h, int32_t kind) {
+    return kind == 1 ? (int32_t)closesocket((SOCKET)h) : (int32_t)_close((int)h);
+}
+static inline int32_t kama_desc_is_socket(ptrdiff_t h, int32_t kind) { (void)h; return kind == 1; }
+static inline int32_t kama_desc_kind_fits(int32_t kind, int32_t socket) { return (kind == 1) == (socket != 0); }
+static inline ptrdiff_t kama_desc_dup(ptrdiff_t h, int32_t kind) {
+    if (kind == 1) {
+        WSAPROTOCOL_INFOW info;
+        if (WSADuplicateSocketW((SOCKET)h, GetCurrentProcessId(), &info) != 0) { kama__capture_wsa(); return -1; }
+        SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+        if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
+        return (ptrdiff_t)s;
+    }
+    return (ptrdiff_t)_dup((int)h);   // errno set by the CRT on failure
+}
+// Windows has no SCM_RIGHTS. The equivalent is to put each handle INTO the peer process — the socket's
+// `WSADuplicateSocketW`, a file's `DuplicateHandle` — using the peer's pid (SIO_AF_UNIX_GETPEERPID), then send
+// the peer what it needs to find them, ahead of the bytes: a frame of "KFD1", a count, and per descriptor its
+// kind, a size, and either the WSAPROTOCOL_INFOW or the handle value as the peer sees it. Both ends are kama —
+// this is a convention between them, where POSIX's is the kernel's and reaches any program. Since each handle
+// already exists in the peer when this returns, the sender may close its own at once.
+#define KAMA__FD_MAX 253          // Linux's SCM_MAX_FD — the most one message carries on any OS here
+#define KAMA__FD_MAGIC 0x3144464Bu   // "KFD1" little-endian
+static inline int32_t kama__sock_send_all(SOCKET s, const uint8_t* p, size_t n) {
+    while (n > 0) {
+        int r = send(s, (const char*)p, (int)n, 0);
+        if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+        p += r; n -= (size_t)r;
+    }
+    return 0;
+}
+static inline int32_t kama__sock_recv_all(SOCKET s, uint8_t* p, size_t n) {
+    while (n > 0) {
+        int r = recv(s, (char*)p, (int)n, 0);
+        if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+        if (r == 0) { errno = ECONNRESET; return -1; }   // the frame was cut short
+        p += r; n -= (size_t)r;
+    }
+    return 0;
+}
+static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count) {
+    if (count == 0 || count > KAMA__FD_MAX || n == 0) { errno = EINVAL; return -1; }
+    int32_t pid = 0;
+    if (kama_unix_peer_pid(sock, &pid) != 0) return -1;
+    const size_t rec = 8 + sizeof(WSAPROTOCOL_INFOW), cap = 8 + count * rec;
+    uint8_t* f = (uint8_t*)kama_alloc(cap, sizeof(void*));
+    if (!f) { errno = ENOMEM; return -1; }
+    uint32_t hdr[2] = { KAMA__FD_MAGIC, (uint32_t)count };
+    memcpy(f, hdr, 8);
+    size_t at = 8;
+    HANDLE target = NULL;
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t kind = kinds[i] == 1 ? 1u : 0u, size;
+        if (kind == 1) {
+            WSAPROTOCOL_INFOW info;
+            if (WSADuplicateSocketW((SOCKET)hs[i], (DWORD)pid, &info) != 0) { kama__capture_wsa(); goto fail; }
+            size = (uint32_t)sizeof info;
+            memcpy(f + at + 8, &info, sizeof info);
+        } else {
+            if (!target && !(target = OpenProcess(PROCESS_DUP_HANDLE, FALSE, (DWORD)pid))) { errno = EACCES; goto fail; }
+            HANDLE mine = (HANDLE)_get_osfhandle((int)hs[i]), theirs = NULL;
+            if (mine == INVALID_HANDLE_VALUE) { errno = EBADF; goto fail; }
+            if (!DuplicateHandle(GetCurrentProcess(), mine, target, &theirs, 0, FALSE, DUPLICATE_SAME_ACCESS)) { errno = EACCES; goto fail; }
+            uint64_t v = (uint64_t)(uintptr_t)theirs;
+            size = 8;
+            memcpy(f + at + 8, &v, 8);
+        }
+        memcpy(f + at, &kind, 4);
+        memcpy(f + at + 4, &size, 4);
+        at += 8 + size;
+    }
+    if (target) CloseHandle(target);
+    int32_t ok = kama__sock_send_all((SOCKET)sock, f, at) == 0 && kama__sock_send_all((SOCKET)sock, buf, n) == 0;
+    kama_free(f, cap, sizeof(void*));
+    return ok ? (ptrdiff_t)n : -1;
+fail:
+    if (target) CloseHandle(target);
+    kama_free(f, cap, sizeof(void*));
+    return -1;
+}
+static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count) {
+    *count = 0;
+    uint32_t hdr[2];
+    int first = recv((SOCKET)sock, (char*)hdr, 8, MSG_PEEK);
+    if (first == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+    if (first == 0) return 0;                                     // end of stream: nothing was sent
+    if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)hdr, 8) != 0) return -1;
+    if (hdr[0] != KAMA__FD_MAGIC || hdr[1] == 0 || hdr[1] > KAMA__FD_MAX) { errno = EINVAL; return -1; }
+    size_t got = 0; int bad = 0;
+    for (uint32_t i = 0; i < hdr[1]; ++i) {
+        uint32_t ks[2];
+        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)ks, 8) != 0) { bad = 1; break; }
+        if (ks[1] > sizeof(WSAPROTOCOL_INFOW)) { errno = EINVAL; bad = 1; break; }
+        union { WSAPROTOCOL_INFOW info; uint64_t v; } p;
+        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)&p, ks[1]) != 0) { bad = 1; break; }
+        ptrdiff_t h = -1;
+        if (ks[0] == 1) {
+            SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &p.info, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+            if (s == INVALID_SOCKET) { kama__capture_wsa(); bad = 1; break; }
+            h = (ptrdiff_t)s;
+        } else {
+            int fd = _open_osfhandle((intptr_t)p.v, 0);
+            if (fd < 0) { CloseHandle((HANDLE)(uintptr_t)p.v); errno = EBADF; bad = 1; break; }
+            h = (ptrdiff_t)fd;
+        }
+        if (got < cap) { hs[got] = h; kinds[got] = (int32_t)ks[0]; ++got; }
+        else { kama_desc_close(h, (int32_t)ks[0]); bad = 1; errno = EMSGSIZE; }
+    }
+    if (bad) { for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]); return -1; }
+    int r = recv((SOCKET)sock, (char*)buf, (int)n, 0);
+    if (r == SOCKET_ERROR) { kama__capture_wsa(); for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]); return -1; }
+    *count = got;
+    return (ptrdiff_t)r;
+}
 // A SID of a token — `which` 0 its user, 1 its primary group, 2+i its i-th group — copied into out[cap].
 // Returns the SID's length (at most SECURITY_MAX_SID_SIZE, 68), 0 past the last group, or -1.
 static inline int32_t kama_token_sid(ptrdiff_t tok, int32_t which, uint8_t* out, size_t cap) {
@@ -1677,6 +1795,70 @@ static inline ptrdiff_t kama_unix_peer_groups(ptrdiff_t fd, uint32_t* out, size_
 }
 static inline uint32_t kama_getuid(void) { return (uint32_t)getuid(); }
 static inline int32_t  kama_getpid(void) { return (int32_t)getpid(); }
+
+// ---- descriptors (std::io::Descriptor) and passing them to another process (SCM_RIGHTS) -----------------------
+// A POSIX descriptor is one small integer whatever it names, so `kind` only matters on Windows.
+static inline int32_t kama_desc_close(ptrdiff_t h, int32_t kind) { (void)kind; return (int32_t)close((int)h); }
+static inline int32_t kama_desc_is_socket(ptrdiff_t h, int32_t kind) {
+    (void)kind; struct stat st;
+    return fstat((int)h, &st) == 0 && S_ISSOCK(st.st_mode);
+}
+static inline int32_t kama_desc_kind_fits(int32_t kind, int32_t socket) { (void)kind; (void)socket; return 1; }
+static inline ptrdiff_t kama_desc_dup(ptrdiff_t h, int32_t kind) {   // close-on-exec, like every descriptor kama makes
+    (void)kind;
+    return (ptrdiff_t)fcntl((int)h, F_DUPFD_CLOEXEC, 0);
+}
+#define KAMA__FD_MAX 253   // Linux's SCM_MAX_FD — the most one message carries
+// Descriptors ride with at least one byte of data (a stream carries ancillary data only alongside some).
+static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count) {
+    (void)kinds;
+    if (count == 0 || count > KAMA__FD_MAX || n == 0) { errno = EINVAL; return -1; }
+    struct iovec iov; iov.iov_base = (void*)(uintptr_t)buf; iov.iov_len = n;
+    union { struct cmsghdr align; char b[CMSG_SPACE(sizeof(int) * KAMA__FD_MAX)]; } cb;
+    memset(&cb, 0, sizeof cb);
+    struct msghdr m; memset(&m, 0, sizeof m);
+    m.msg_iov = &iov; m.msg_iovlen = 1;
+    m.msg_control = cb.b; m.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(int) * count);
+    struct cmsghdr* c = CMSG_FIRSTHDR(&m);
+    c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS; c->cmsg_len = (socklen_t)CMSG_LEN(sizeof(int) * count);
+    for (size_t i = 0; i < count; ++i) { int fd = (int)hs[i]; memcpy(CMSG_DATA(c) + i * sizeof(int), &fd, sizeof fd); }
+    return (ptrdiff_t)sendmsg((int)sock, &m, KAMA__SEND_FLAGS);
+}
+// Up to n bytes and up to `cap` descriptors. Every received descriptor is close-on-exec (atomically where
+// MSG_CMSG_CLOEXEC exists — Linux; set at once otherwise — macOS, where a fork in that instant could inherit
+// one). A truncated control message (more descriptors than room, or than the kernel kept) closes every one
+// that did arrive and fails with EMSGSIZE: nothing half-received is handed on, and nothing leaks.
+static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count) {
+    *count = 0;
+    struct iovec iov; iov.iov_base = buf; iov.iov_len = n;
+    union { struct cmsghdr align; char b[CMSG_SPACE(sizeof(int) * KAMA__FD_MAX)]; } cb;
+    struct msghdr m; memset(&m, 0, sizeof m);
+    m.msg_iov = &iov; m.msg_iovlen = 1; m.msg_control = cb.b; m.msg_controllen = (socklen_t)sizeof cb.b;
+    int flags = 0;
+#if defined(MSG_CMSG_CLOEXEC)
+    flags |= MSG_CMSG_CLOEXEC;
+#endif
+    ptrdiff_t r = (ptrdiff_t)recvmsg((int)sock, &m, flags);
+    if (r < 0) return -1;
+    size_t got = 0; int over = 0;
+    for (struct cmsghdr* c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
+        size_t k = ((size_t)c->cmsg_len - (size_t)CMSG_LEN(0)) / sizeof(int);
+        for (size_t i = 0; i < k; ++i) {
+            int fd; memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof fd);
+#if !defined(MSG_CMSG_CLOEXEC)
+            (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+#endif
+            if (got < cap) { hs[got] = fd; kinds[got] = 0; ++got; } else { (void)close(fd); over = 1; }
+        }
+    }
+    if ((m.msg_flags & MSG_CTRUNC) || over) {
+        for (size_t i = 0; i < got; ++i) (void)close((int)hs[i]);
+        errno = EMSGSIZE; return -1;
+    }
+    *count = got;
+    return r;
+}
 static inline uint32_t kama_getgid(void) { return (uint32_t)getgid(); }
 // The account name of a uid (`group` 0) or gid (`group` 1): its length, with up to `cap` bytes of it copied
 // into out (the caller asks again with room when it is longer), or -1 with ENOENT when no account has that id.

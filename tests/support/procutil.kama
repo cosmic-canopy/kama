@@ -12,7 +12,8 @@
 //   printenv <k>     if env k is set: print its value + newline, exit 0; else exit 1
 //   spew <n>         emit n lines of 19 'A'+newline to stdout AND 19 'B'+newline to stderr (20 bytes each)
 //   hasfile <name>   exit 0 if a file <name> can be opened (relative to cwd), else 1   (proves cwd())
-import { core::env, core::args, core::eprintln, core::println, std::fs::File, std::fs::OpenMode, std::io::IoError, std::collections::DynamicArray };
+import { core::env, core::args, core::eprintln, core::println, std::fs::File, std::fs::OpenMode, std::io::IoError, std::io::pump, std::io::stdin, std::io::stdout,
+         std::collections::DynamicArray };
 
 extern "kama_os.h";
 extern fn void kama_sleep_ms(int32 ms);
@@ -62,16 +63,9 @@ unsafe fn int32 run() {
         return parseIntArg(s: argAt(i: 1));
     }
     if (cmd == "cat") {
-        File input = File.make(fd: 0);
-        File outp  = File.make(fd: 1);
-        Result<DynamicArray<uint8>, IoError> rd = input.readAll();
-        return match (give rd) {
-            case Ok(value: got): {
-                Result<isize, IoError> wr = outp.writeAll(bytes: got);
-                := match (wr) { case Ok(value: nb): 0; case Err(error: e): 1; };
-            }
-            case Err(error: e): { := 1; }
-        };
+        // The standard streams, not a `File` claiming descriptors 0 and 1 — which it would then close at drop.
+        Result<isize, IoError> cp = pump(from: stdin(), to: stdout());
+        return match (cp) { case Ok(value: n): 0; case Err(error: e): 1; };
     }
     if (cmd == "sleep") {
         kama_sleep_ms(ms: parseIntArg(s: argAt(i: 1)));

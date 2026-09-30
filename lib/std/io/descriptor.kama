@@ -1,0 +1,61 @@
+// An OWNED operating-system descriptor — the one type a descriptor has when it is not yet (or no longer) a
+// `File`, a socket or a stream: what arrives over a Unix socket (`UnixStream.recvDescriptors`), what one is
+// sent as (`sendDescriptors`), and the ONE door for a raw number from outside kama (`fromRaw`). Rust's `OwnedFd`
+// model, decided by the maintainer 2026-09-30 (KR-104):
+//
+// - It closes on drop, so a descriptor can never leak: one received and never adopted is closed like any value.
+// - Every handle type converts both ways — `X.adopt(descriptor: give d)`, `x.takeDescriptor()` (leaving `x`
+//   empty) — and `x.duplicateDescriptor()` makes a second one for the same open file or socket, which is what
+//   you send when you keep your own. The receiver says what a descriptor IS by the type it adopts it into.
+// - A raw number becomes one only through `unsafe` `fromRaw` / `fromRawSocket`: a wrong or shared number is
+//   closed twice, so the act is marked where it happens. The per-type `make(fd:)` doors that used to take any
+//   integer in safe code are gone.
+//
+// One type on every OS; what differs is in `kama_os.h`. A POSIX descriptor is a small integer whatever it names.
+// On Windows a file's is a C-runtime descriptor and a socket's a SOCKET, closed by different calls, so a
+// `Descriptor` remembers which it is (`fromRaw` vs `fromRawSocket`), and adopting one into the other kind of
+// handle is `InvalidInput` there.
+import { IoError, lastError };
+
+export { Descriptor };
+
+extern "kama_os.h";
+extern fn int32 kama_desc_close(isize h, int32 kind);
+extern fn isize kama_desc_dup(isize h, int32 kind);
+extern fn int32 kama_desc_is_socket(isize h, int32 kind);
+extern fn int32 kama_desc_kind_fits(int32 kind, int32 socket);
+
+type resource Descriptor implements Sendable {
+    isize handle = -1;   // the -1 empty niche: a taken or released descriptor drops as nothing
+    int32 kind = 0;      // 0 a file's descriptor (Windows: a C-runtime one), 1 a socket's (Windows: a SOCKET)
+    ctor own(isize handle, int32 kind) { this.handle = handle; this.kind = kind; }
+
+    // Take ownership of a raw descriptor from outside kama — from C, or inherited. It is closed when this drops.
+    public unsafe ctor fromRaw(isize handle) { this.handle = handle; this.kind = 0; }
+    // The same for a socket's. On POSIX a socket is a descriptor like any other and this is `fromRaw`; on
+    // Windows a SOCKET is closed by `closesocket`, so saying which it is matters.
+    public unsafe ctor fromRawSocket(isize socket) { this.handle = socket; this.kind = 1; }
+
+    // The number, borrowed — this still owns it.
+    public const fn isize rawHandle() { return this.handle; }
+    // Whether it names a socket (POSIX asks the OS; Windows knows how it was made).
+    public unsafe const fn bool isSocket() { return kama_desc_is_socket(h: this.handle, kind: this.kind) != 0; }
+    // A second descriptor for the same open file or socket, closed independently. Close-on-exec, as every
+    // descriptor kama makes is.
+    public unsafe fn Result<Descriptor, IoError> duplicate() {
+        isize d = kama_desc_dup(h: this.handle, kind: this.kind);
+        if (d < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Descriptor.own(handle: d, kind: this.kind));
+    }
+    // Give the number up to whatever adopts it, leaving this empty: the adopting type closes it from here. On
+    // Windows a file's descriptor cannot become a socket or the reverse — `InvalidInput`, and it is closed.
+    // The bridge every `adopt` crosses; a program adopts rather than calling this.
+    public unsafe fn Result<isize, IoError> release(bool asSocket) {
+        if (kama_desc_kind_fits(kind: this.kind, socket: asSocket ? 1 : 0) == 0) { return Result::Err(error: IoError::InvalidInput); }
+        isize h = this.handle;
+        this.handle = -1;
+        return Result::Ok(value: h);
+    }
+
+    unsafe ~Descriptor() { if (this.handle >= 0) { int32 rc = kama_desc_close(h: this.handle, kind: this.kind); } }
+}
