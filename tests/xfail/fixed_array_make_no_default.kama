@@ -1,0 +1,9 @@
+// KR-106: `FixedArray.make(size:)` builds each element from `T`'s default, so a type with none cannot be
+// built this way. `Probe` has no constructor at all — nothing is constructible by default — and `make` used
+// to be the back door that built three of them anyway, from zero bytes.
+import { std::collections::FixedArray };
+type resource Probe { int32 id; unsafe ~Probe() { } }
+fn int32 main() {
+    FixedArray<Probe> a = FixedArray.make(size: 3);
+    return 0;
+}

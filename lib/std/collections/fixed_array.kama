@@ -1,9 +1,6 @@
 import { View, ConstView };
 export { FixedArray, FixedArrayIter, FixedArrayIterMut };
 
-extern "<string.h>";
-extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
-
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T: Copyable<T>> implements Iterator<T> {
     UnsafePtr<T> data; isize pos; isize len;
@@ -24,37 +21,60 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 }
 
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
-// `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
-// separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
+// `size` elements is live from construction to drop — unlike `DynamicArray`, which tracks a separate `len`.
+// So each element is BUILT when the array is: `make(size:)` gives each one `T`'s default, which exists only
+// where `when [T: default]` holds (a number, `string`, a type that elected one — KR-106), and
+// `filled(size:, value:)` gives each a copy of one value. A type with neither is built in a `DynamicArray`.
+// Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
-    // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray.make(size:)` path (gated
-    // `when [A: default]`) — and the arena path goes through `withAllocator`, which sets the handle FIRST.
-    public ctor make(isize size) when [A: default] { this.allocBuffer(size: size); }
+    // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `make`/`filled` (gated
+    // `when [A: default]`) — and the arena twins set the handle FIRST.
+    public ctor make(isize size) when [A: default, T: default] { this.allocBuffer(size: size); this.fillDefault(); }
+    public ctor filled(isize size, const ref T value) when [A: default, T: Copyable<T>] {
+        this.allocBuffer(size: size);
+        this.fillCopies(value: value);
+    }
 
-    // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
-    // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
-    // leaves a null buffer so the dtor's guard skips a deallocate.
+    // The same two, drawn from a caller-owned allocator (e.g. an `Arena`) — the eager-ctor analogue of
+    // DynamicArray.withCapacityAndAllocator (kama has no overloading, so the allocator twin has its own name).
+    public ctor withAllocator(A allocator, isize size) when [T: default] {
+        this.alloc = allocator;
+        this.allocBuffer(size: size);
+        this.fillDefault();
+    }
+    public ctor filledWithAllocator(A allocator, isize size, const ref T value) when [T: Copyable<T>] {
+        this.alloc = allocator;
+        this.allocBuffer(size: size);
+        this.fillCopies(value: value);
+    }
+
+    // An UNINITIALIZED buffer from `this.alloc`: `allocate` returns raw bytes (a bump allocator hands back
+    // dirty reused memory), and nothing here pretends they are a value. Every ctor fills each slot next by
+    // RELOCATING a built value into it — `this.data[i] = give v;` on the pointer is a raw move that drops
+    // nothing, which is what an empty slot needs (DynamicArray.add's idiom). A plain `= <expr>` would drop
+    // the slot's garbage first. `size <= 0` leaves a null buffer so the dtor's guard skips a deallocate.
     unsafe fn void allocBuffer(isize size) {
         if (size > 0) {
             this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T), align: alignof(T))));
-            memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
         } else {
             this.data = cast<UnsafePtr<T>>(cast<usize>(0));
         }
         this.size = size;
     }
-
-    // Build an `size`-element array drawn from a caller-owned allocator (e.g. an `Arena`). Sets the handle
-    // on a bare (zero-init) local FIRST, then allocates through it — the eager-ctor analogue of
-    // DynamicArray.withCapacityAndAllocator (no nameless-primary detour).
-    public ctor withAllocator(A allocator, isize size) {
-        this.alloc = allocator;
-        this.allocBuffer(size: size);
+    // Each slot gets `T`'s default: a zero store where zero IS the value (C lowers the loop to `memset`), the
+    // elected ctor where the type chose one — the same fill the compiler gives an unassigned field.
+    unsafe fn void fillDefault() when [T: default] {
+        isize i = 0;
+        while (i < this.size) { T v = T.default(); this.data[i] = give v; i = i + 1; }
+    }
+    unsafe fn void fillCopies(const ref T value) when [T: Copyable<T>] {
+        isize i = 0;
+        while (i < this.size) { T v = copy value; this.data[i] = give v; i = i + 1; }
     }
 
     public const fn isize length() { return this.size; }
@@ -107,12 +127,16 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         return 0 - 1;
     }
 
-    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
+    // Present ONLY for a Copyable element — a deep copy (fresh buffer from the same arena, each element
+    // copied into its empty slot). It asks nothing of `T: default`: no slot is ever filled twice.
     public ctor copy(ref FixedArray<T, A> source) {
-        FixedArray<T, A> result = FixedArray.withAllocator(allocator: source.alloc, size: source.size);  // same arena
+        this.alloc = source.alloc;
+        this.allocBuffer(size: source.size);
+        this.copyFrom(source: source);
+    }
+    unsafe fn void copyFrom(ref FixedArray<T, A> source) when [T: Copyable<T>] {
         isize i = 0;
-        while (i < source.size) { result[i] = copy source[i]; i = i + 1; }
-        return result;
+        while (i < this.size) { T v = copy source.data[i]; this.data[i] = give v; i = i + 1; }
     }
 
     // Serializable as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserializable is a

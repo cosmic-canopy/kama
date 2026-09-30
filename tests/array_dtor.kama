@@ -10,6 +10,7 @@ unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, conta
 type resource Probe
 {
     int32 id;
+    public default ctor blank() { this.id = 0; }   // `make(size:)` builds each element from it (KR-106)
     unsafe ~Probe() { kama_trace(code: 5); }
 }
 

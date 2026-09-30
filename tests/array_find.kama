@@ -10,7 +10,7 @@ type value Tag implements Equatable<This> {
 }
 
 fn int32 main() {
-    FixedArray<Tag> a = FixedArray.make(size: 3);
+    FixedArray<Tag> a = FixedArray.filled(size: 3, value: Tag.make(id: 0));   // Tag elects no default
     Tag t0 = Tag.make(id: 10); Tag t1 = Tag.make(id: 20); Tag t2 = Tag.make(id: 30);
     a[0] = t0; a[1] = t1; a[2] = t2;
     isize r = 0;

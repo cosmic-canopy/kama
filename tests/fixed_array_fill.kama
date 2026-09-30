@@ -1,0 +1,55 @@
+// KR-106: `FixedArray` builds each element — it no longer zero-fills whatever `T` is. `make(size:)` gives each
+// element `T`'s default (by nature for a number or a `string`, by election for everything a program
+// declares) and `filled(size:, value:)` gives each a copy of one value; both have allocator twins. Before, a
+// `FixedArray<File>` of 3 closed descriptor 0 three times when it dropped (`File` spells empty `fd = -1`),
+// and a declared field default (`scale = 1.5`) read `0`.
+import { std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator };
+
+static int32 closes = 0;
+// A raw-handle resource: its empty value is `fd = -1`, which the zero bytes are not.
+type resource Handle {
+    int32 fd = -1;
+    public default ctor closed() { }
+    public ctor open(int32 fd) { this.fd = fd; }
+    public const fn int32 raw() { return this.fd; }
+    unsafe ~Handle() { if (this.fd >= 0) { closes = closes + 1; } }
+}
+type value Scaled { public int32 n; public float32 scale = 1.5f32; public default ctor unit() { this.n = 3; } }
+type value Tag implements Equatable<This> {
+    public int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn bool equals(const ref Tag other) { return this.id == other.id; }
+}
+
+fn int32 handles() {
+    FixedArray<Handle> hs = FixedArray.make(size: 3);
+    int32 r = 0;
+    if (hs[0].raw() == -1 && hs[2].raw() == -1) { r = 1; }
+    hs[1] = Handle.open(fd: 9);          // one live handle among three empty ones
+    return r;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    FixedArray<int32> zs = FixedArray.make(size: 4);
+    if (zs[0] == 0 && zs[3] == 0) { r = r + 1; }                                  // 1
+    FixedArray<string> ss = FixedArray.make(size: 2);
+    if (ss[1].length() == 0) { r = r + 2; }                                       // 3
+    FixedArray<Scaled> sc = FixedArray.make(size: 2);
+    if (sc[1].n == 3 && sc[1].scale == 1.5f32) { r = r + 4; }                     // 7
+    r = r + handles() * 8;                                                        // 15
+    if (closes == 1) { r = r + 16; }                                              // 31: only the live one closed
+    FixedArray<Tag> tags = FixedArray.filled(size: 3, value: Tag.make(id: 7));
+    if (tags[2].id == 7 && tags.indexOf(item: Tag.make(id: 7)) == 0) { r = r + 32; }   // 63
+    FixedArray<string> words = FixedArray.filled(size: 2, value: "ab");
+    words[0] = "xyz";
+    if (words[0].length() == 3 && words[1].length() == 2) { r = r + 64; }       // 127: each a copy
+    FixedArray<Tag> tcopy = copy tags;                                            // copy needs no default
+    tcopy[0] = Tag.make(id: 1);
+    if (tags[0].id == 7 && tcopy[0].id == 1 && tcopy[1].id == 7) { r = r + 128; }   // 255
+    Arena arena = Arena.make(capacity: 4096);
+    FixedArray<Scaled, BumpAllocator> ar = FixedArray.withAllocator(allocator: arena.handle(), size: 3);
+    FixedArray<Tag, BumpAllocator> at = FixedArray.filledWithAllocator(allocator: arena.handle(), size: 2, value: Tag.make(id: 5));
+    if (ar[2].scale == 1.5f32 && at[1].id == 5) { r = r + 256; }                  // 511
+    return r - 400;                                                                // 111 (an exit code is one byte)
+}

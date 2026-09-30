@@ -1,0 +1,1 @@
+`Scaled` has no `default`

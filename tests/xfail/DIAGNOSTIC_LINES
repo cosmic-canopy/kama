@@ -398,6 +398,10 @@ file_gate_impossible	file_gate_impossible.kama:4
 file_gate_module_all_gated	main.kama:8
 file_gate_operand	file_gate_operand.kama:12
 file_gate_still_parsed	file_gate_still_parsed.kama:13
+fixed_array_filled_not_copyable	fixed_array_filled_not_copyable.kama:6
+fixed_array_make_enum	fixed_array_make_enum.kama:6
+fixed_array_make_field_defaults	fixed_array_make_field_defaults.kama:7
+fixed_array_make_no_default	fixed_array_make_no_default.kama:7
 fixed_backing_int64	fixed_backing_int64.kama:12
 fixed_bad_pairing	fixed_bad_pairing.kama:13
 float32_literal_out_of_range	float32_literal_out_of_range.kama:5 float32_literal_out_of_range.kama:7

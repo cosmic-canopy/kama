@@ -1,0 +1,9 @@
+// KR-106: declared field defaults are not an election. `make` used to zero these, so `scale` read `0.0`, not
+// `1.0`; filling them with field defaults instead would still build a value no ctor made. Elect a `default`
+// ctor, or use `FixedArray.filled(size:, value:)`.
+import { std::collections::FixedArray };
+type value Scaled { public int32 n = 0; public float32 scale = 1.0f32; public ctor make(int32 n) { this.n = n; } }
+fn int32 main() {
+    FixedArray<Scaled> a = FixedArray.make(size: 3);
+    return 0;
+}

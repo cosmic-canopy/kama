@@ -279,7 +279,7 @@ import { std::collections::FixedArray, std::collections::DynamicArray };
 @generate(of) type value Point { public int32 x; public int32 y; }
 
 fn int32 main() {
-    FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, zero-initialized
+    FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, each element int32's default (0)
     a[0] = 10;  a[1] = 20;                          // bounds-checked []
     int32 first = a[0];
     foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
@@ -293,6 +293,13 @@ fn int32 main() {
     return 0;
 }
 ```
+
+A `FixedArray`'s every element is live from construction, so construction **builds** each one:
+`FixedArray.make(size:)` gives each element `T`'s default, and exists only where `when [T: default]` holds <!-- test: fixed_array_fill -->
+(see *Collections — the four-ctor matrix*); `FixedArray.filled(size:, value:)` gives each a copy of one value, <!-- xfail: fixed_array_make_no_default, fixed_array_make_field_defaults, fixed_array_make_enum -->
+and exists only for a copyable element. A move-only element with no default is built in a `DynamicArray`. <!-- xfail: fixed_array_filled_not_copyable -->
+Until `0.9.481` `make` zeroed the buffer for every `T`: a `FixedArray<File>` of 3 closed descriptor 0 three times
+when it dropped, a declared field default read `0`, and a type with no constructor at all was built.
 
 All collections own their storage and free it via RAII (with element-destructor chaining). Only the
 `(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use). A **method
@@ -579,8 +586,8 @@ allocator is opt-in. Every container that manages its own heap buffer carries it
 `Set`, `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain `BitSet` is now
 the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
 threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named **`ctor`**:
-`withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the eager
-`FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
+`withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` and
+`filledWithAllocator(allocator:, size:, value:)` for the eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
 too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
 every node box, the root included, draw from `A` (via the placement `new(allocator:) BTreeNode` below), so
 `arena.reset()` reclaims the whole tree.
@@ -3869,7 +3876,8 @@ parameter `self` to spell an explicit receiver.
 Every growable collection (`DynamicArray`, `Deque`, `Map`, `Set`, `SlotMap`, `BitSet`) offers `empty()` /
 `withCapacity(n)` using the default `GlobalAllocator`, and `withAllocator(a)` / `withCapacityAndAllocator(a, n)`
 for a caller-owned allocator. `PriorityQueue` carries capacity on its backing array; the B-tree
-`SortedMap`/`SortedSet` and the always-sized `FixedArray` keep their own shapes. The canonical zero-arg build
+`SortedMap`/`SortedSet` keep their own shapes, and the always-sized `FixedArray` has its two builds (`make(size:)`
+from `T`'s default, `filled(size:, value:)` from a copy) each with an allocator twin. The canonical zero-arg build
 is marked **`default`**, which is what makes such a field default-fillable elsewhere.
 
 The default-allocator conveniences are gated **`when [A: default]`** — a *structural* bound (the argument

@@ -1,0 +1,8 @@
+// KR-106: an enum elects its default like any type a program declares. `FixedArray<Code>.make` used to hold
+// three zero bytes, none of which is a `Code`, and a `match` on one aborted.
+import { std::collections::FixedArray };
+type enum Code : uint8 { Ok = 3, Bad = 200 }
+fn int32 main() {
+    FixedArray<Code> a = FixedArray.make(size: 3);
+    return 0;
+}

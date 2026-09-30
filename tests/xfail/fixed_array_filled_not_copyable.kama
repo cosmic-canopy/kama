@@ -1,0 +1,8 @@
+// KR-106: `filled` copies one value into every element, so it exists only for a copyable element. A
+// move-only resource with no default is built in a `DynamicArray` instead.
+import { std::collections::FixedArray };
+type resource Conn { int32 fd; public ctor open(int32 fd) { this.fd = fd; } unsafe ~Conn() { } }
+fn int32 main() {
+    FixedArray<Conn> a = FixedArray.filled(size: 2, value: Conn.open(fd: 3));
+    return 0;
+}
