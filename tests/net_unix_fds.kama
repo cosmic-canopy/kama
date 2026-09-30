@@ -3,7 +3,7 @@
 // `UnixStream.adopt`) and uses them — the file reads back its contents, and a byte written through the passed
 // stream end arrives at its partner. A `std::io::Descriptor` is OWNED, so the sender's list is consumed (it keeps
 // the file by sending a duplicate, and gives the stream end up with `takeDescriptor`, which leaves that stream
-// empty), and a raw number becomes one only through `unsafe` `Descriptor.fromRaw`. Sending nothing, or no bytes
+// empty), and a raw number becomes one only through `Descriptor.adopt(raw:)`. Sending nothing, or no bytes
 // to carry them, is `InvalidInput`. POSIX passes them as SCM_RIGHTS; Windows puts each handle into the peer
 // process first. Both ends here are this one process, which is enough for the kernel either way. Returns 55.
 import {
@@ -84,11 +84,11 @@ fn int32 main() {
     Descriptor sockCopy = match (give rsd) { case Ok(value: x): give x; case Err(error: e): { return 24; } };
     if (!kindRule(socketCopy: give sockCopy)) { return 25; }
 
-    // A raw number from outside kama enters only through the marked door.
+    // A raw number from outside kama enters through the one named door.
     Result<Descriptor, IoError> rd2 = f.duplicateDescriptor();
     Descriptor again = match (give rd2) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
     isize raw = match (again.release(asSocket: false)) { case Ok(value: h): h; case Err(error: e): -1; };
-    Descriptor adopted = Descriptor.fromRaw(handle: raw);
+    Descriptor adopted = Descriptor.adopt(raw: raw);
     if (adopted.rawHandle() != raw || raw < 0) { return 23; }
     return 55;
 }

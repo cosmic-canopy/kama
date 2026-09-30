@@ -33,7 +33,7 @@ extern fn int32 kama_getpid();
 unsafe fn int32 currentProcessId() { return kama_getpid(); }
 
 // Account text off the OS is outside input: it is UTF-8 on every system kama targets, and checked as such.
-unsafe fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
+fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
     Result<string, Utf8Error> r = decode(bytes: bytes);
     return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError::InvalidInput); };
 }
@@ -58,7 +58,7 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     uint32 uid;
     public ctor of(uint32 raw) { this.uid = raw; }            // a uid is a number, and any number may be asked about
     public const fn uint32 raw() { return this.uid; }
-    public unsafe fn Result<string, IoError> name() { return idName(group: 0, id: this.uid); }
+    public fn Result<string, IoError> name() { return idName(group: 0, id: this.uid); }
     public const fn bool equals(const ref UserId other) { return this.uid == other.uid; }
     public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this.uid)); }
 }
@@ -68,7 +68,7 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
     uint32 gid;
     public ctor of(uint32 raw) { this.gid = raw; }
     public const fn uint32 raw() { return this.gid; }
-    public unsafe fn Result<string, IoError> name() { return idName(group: 1, id: this.gid); }
+    public fn Result<string, IoError> name() { return idName(group: 1, id: this.gid); }
     public const fn bool equals(const ref GroupId other) { return this.gid == other.gid; }
     public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this.gid)); }
 }
@@ -136,7 +136,7 @@ unsafe fn Result<string, IoError> sidAccount(const ref InlineArray<uint8>#(68) b
 type value UserId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
-    public unsafe ctor Result<UserId, IoError> fromSid(ConstView<uint8> bytes) {
+    public ctor Result<UserId, IoError> fromSid(ConstView<uint8> bytes) {
         if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
@@ -145,8 +145,8 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     }
     ctor raw(const ref InlineArray<uint8>#(68) bytes, int32 len) { this.sidBytes = bytes; this.sidLen = len; }
     public const fn string sid() { return "${this}"; }
-    public unsafe fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
-    public unsafe fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
+    public fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
+    public fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
     public const fn bool equals(const ref UserId other) { return sidEqual(a: this.sidBytes, alen: this.sidLen, b: other.sidBytes, blen: other.sidLen); }
     public const fn void format(ref Formatter f) { sidText(b: this.sidBytes, f: ref f); }
 }
@@ -155,7 +155,7 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
 type value GroupId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
-    public unsafe ctor Result<GroupId, IoError> fromSid(ConstView<uint8> bytes) {
+    public ctor Result<GroupId, IoError> fromSid(ConstView<uint8> bytes) {
         if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
@@ -164,8 +164,8 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
     }
     ctor raw(const ref InlineArray<uint8>#(68) bytes, int32 len) { this.sidBytes = bytes; this.sidLen = len; }
     public const fn string sid() { return "${this}"; }
-    public unsafe fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
-    public unsafe fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
+    public fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
+    public fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
     public const fn bool equals(const ref GroupId other) { return sidEqual(a: this.sidBytes, alen: this.sidLen, b: other.sidBytes, blen: other.sidLen); }
     public const fn void format(ref Formatter f) { sidText(b: this.sidBytes, f: ref f); }
 }
@@ -177,7 +177,7 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
 type resource AccessToken implements Sendable {
     isize handle = -1;
     ctor adopt(isize handle) { this.handle = handle; }
-    public unsafe ctor Result<AccessToken, IoError> current() { return AccessToken.ofProcess(id: 0); }
+    public ctor Result<AccessToken, IoError> current() { return AccessToken.ofProcess(id: 0); }
     public unsafe ctor Result<AccessToken, IoError> ofProcess(int32 id) {
         isize h = kama_token_open(pid: id);
         if (h < 0) { return Result::Err(error: lastError()); }
@@ -189,21 +189,21 @@ type resource AccessToken implements Sendable {
         if (n < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: n);
     }
-    public unsafe fn Result<UserId, IoError> user() {
+    public fn Result<UserId, IoError> user() {
         InlineArray<uint8>#(68) b = [0; 68];
         return match (this.sidAt(which: 0, b: ref b)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: n): UserId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(n)));
         };
     }
-    public unsafe fn Result<GroupId, IoError> primaryGroup() {
+    public fn Result<GroupId, IoError> primaryGroup() {
         InlineArray<uint8>#(68) b = [0; 68];
         return match (this.sidAt(which: 1, b: ref b)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: n): GroupId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(n)));
         };
     }
-    public unsafe fn Result<DynamicArray<GroupId>, IoError> groups() {
+    public fn Result<DynamicArray<GroupId>, IoError> groups() {
         DynamicArray<GroupId> all = DynamicArray.empty();
         int32 i = 0;
         bool more = true;
@@ -227,10 +227,10 @@ type resource AccessToken implements Sendable {
 }
 
 @compileFor(OS_WINDOWS)
-unsafe fn Result<UserId, IoError> currentUser() {
+fn Result<UserId, IoError> currentUser() {
     return match (AccessToken.current()) { case Ok(value: t): t.user(); case Err(error: e): Result::Err(error: e); };
 }
 @compileFor(OS_WINDOWS)
-unsafe fn Result<GroupId, IoError> currentGroup() {
+fn Result<GroupId, IoError> currentGroup() {
     return match (AccessToken.current()) { case Ok(value: t): t.primaryGroup(); case Err(error: e): Result::Err(error: e); };
 }

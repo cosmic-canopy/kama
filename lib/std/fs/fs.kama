@@ -143,21 +143,21 @@ type resource File implements Reader, Writer, Sendable {
     friend std::process::Command::start[make];
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
-    // number by `Descriptor.fromRaw`. On Windows it must be a file's (`InvalidInput` for a socket's, which is closed).
-    public unsafe ctor Result<File, IoError> adopt(Descriptor descriptor) {
+    // number by `Descriptor.adopt(raw:)`. On Windows it must be a file's (`InvalidInput` for a socket's, which is closed).
+    public ctor Result<File, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: false)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: File.make(fd: cast<int32>(h)));
         };
     }
     // Give the descriptor up as a `Descriptor`, leaving this File empty (its drop closes nothing).
-    public unsafe fn Descriptor takeDescriptor() { int32 f = this.fd; this.fd = -1; return Descriptor.fromRaw(handle: cast<isize>(f)); }
+    public fn Descriptor takeDescriptor() { int32 f = this.fd; this.fd = -1; return Descriptor.adopt(raw: cast<isize>(f)); }
     // A second descriptor for this same open file, closed independently — what `sendDescriptors` consumes when
     // you keep this File.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
         isize d = kama_desc_dup(h: cast<isize>(this.fd), kind: 0);
         if (d < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: Descriptor.fromRaw(handle: d));
+        return Result::Ok(value: Descriptor.adopt(raw: d));
     }
 
     // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the

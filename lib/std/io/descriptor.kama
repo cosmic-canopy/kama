@@ -1,19 +1,21 @@
 // An OWNED operating-system descriptor — the one type a descriptor has when it is not yet (or no longer) a
 // `File`, a socket or a stream: what arrives over a Unix socket (`UnixStream.recvDescriptors`), what one is
-// sent as (`sendDescriptors`), and the ONE door for a raw number from outside kama (`fromRaw`). Rust's `OwnedFd`
+// sent as (`sendDescriptors`), and the ONE door for a raw number from outside kama (`adopt(raw:)`). Rust's `OwnedFd`
 // model, decided by the maintainer 2026-09-30 (KR-104):
 //
 // - It closes on drop, so a descriptor can never leak: one received and never adopted is closed like any value.
 // - Every handle type converts both ways — `X.adopt(descriptor: give d)`, `x.takeDescriptor()` (leaving `x`
 //   empty) — and `x.duplicateDescriptor()` makes a second one for the same open file or socket, which is what
 //   you send when you keep your own. The receiver says what a descriptor IS by the type it adopts it into.
-// - A raw number becomes one only through `unsafe` `fromRaw` / `fromRawSocket`: a wrong or shared number is
-//   closed twice, so the act is marked where it happens. The per-type `make(fd:)` doors that used to take any
-//   integer in safe code are gone.
+// - A raw number becomes one only through `Descriptor.adopt(raw:)` / `adoptSocket(raw:)` — `adopt`, as every
+//   ownership transfer in std is spelled — so `grep adopt(raw:` finds every place a program claims a number it
+//   did not get from kama. That is ALL it is: kama's `unsafe` marks a dangerous BODY, never a caller, and this
+//   body is two field stores, so nothing checks the claim. Adopting a number something else owns (`0`, stdin)
+//   closes it twice, exactly as the per-type `make(fd:)` doors this replaced would have.
 //
 // One type on every OS; what differs is in `kama_os.h`. A POSIX descriptor is a small integer whatever it names.
 // On Windows a file's is a C-runtime descriptor and a socket's a SOCKET, closed by different calls, so a
-// `Descriptor` remembers which it is (`fromRaw` vs `fromRawSocket`), and adopting one into the other kind of
+// `Descriptor` remembers which it is (`adopt` vs `adoptSocket`), and adopting one into the other kind of
 // handle is `InvalidInput` there.
 import { IoError, lastError };
 
@@ -31,10 +33,10 @@ type resource Descriptor implements Sendable {
     ctor own(isize handle, int32 kind) { this.handle = handle; this.kind = kind; }
 
     // Take ownership of a raw descriptor from outside kama — from C, or inherited. It is closed when this drops.
-    public unsafe ctor fromRaw(isize handle) { this.handle = handle; this.kind = 0; }
-    // The same for a socket's. On POSIX a socket is a descriptor like any other and this is `fromRaw`; on
-    // Windows a SOCKET is closed by `closesocket`, so saying which it is matters.
-    public unsafe ctor fromRawSocket(isize socket) { this.handle = socket; this.kind = 1; }
+    public ctor adopt(isize raw) { this.handle = raw; this.kind = 0; }
+    // The same for a socket's. On POSIX a socket is a descriptor like any other and this is `adopt`; on Windows a
+    // SOCKET is closed by `closesocket`, so saying which it is matters.
+    public ctor adoptSocket(isize raw) { this.handle = raw; this.kind = 1; }
 
     // The number, borrowed — this still owns it.
     public const fn isize rawHandle() { return this.handle; }

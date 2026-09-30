@@ -1976,9 +1976,11 @@ never adopted is closed like any value, and a message carrying more than 253, or
 `MessageTooLong` with every one that did arrive closed. Every handle type converts both ways: `X.adopt(descriptor:)`
 (the receiver says what a descriptor IS by the type it adopts it into), `x.takeDescriptor()` (leaving `x` empty)
 and `x.duplicateDescriptor()`. Sending CONSUMES the list — each is closed once the peer holds its own — so a
-sender keeps a file by sending a duplicate. A raw number from outside kama becomes a `Descriptor` only through
-`unsafe` `Descriptor.fromRaw(handle:)` / `fromRawSocket(socket:)`: the per-type `make(fd:)` doors that took any <!-- xfail: descriptor_raw_make -->
-integer in safe code, and could close someone else's descriptor twice, are private since `0.9.485`. Received
+sender keeps a file by sending a duplicate. A raw number from outside kama becomes a `Descriptor` through ONE named
+door, `Descriptor.adopt(raw:)` / `adoptSocket(raw:)` — `adopt`, as every ownership transfer in std is spelled — and
+the per-type public `make(fd:)` doors are private since `0.9.485`, so `grep` finds every place a program claims a <!-- xfail: descriptor_raw_make -->
+number it did not get from kama. It is not checked: adopting a number something else owns (`0`, stdin) still closes
+it twice, and kama's `unsafe` marks a dangerous body, never a caller, so it is no marker here. Received
 descriptors are close-on-exec. POSIX passes them as SCM_RIGHTS, which reaches any program; Windows has no such
 message, so each handle is put into the peer process (`DuplicateHandle`, `WSADuplicateSocketW`) and a frame ahead
 of the bytes tells the peer where — a convention between two kama programs there, where POSIX's is the kernel's.

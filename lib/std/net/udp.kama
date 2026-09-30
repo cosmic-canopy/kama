@@ -252,21 +252,21 @@ type resource UdpSocket implements DatagramSocket, Sendable {
 
     // The raw socket handle — the intended bridge for handing this socket to a std::net::Poller.
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
-    // number by `Descriptor.fromRawSocket`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public unsafe ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
+    // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    public ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: UdpSocket.make(fd: h));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public unsafe fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.fromRawSocket(socket: h); }
+    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.adoptSocket(raw: h); }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
         isize d = kama_desc_dup(h: this.fd, kind: 1);
         if (d < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: Descriptor.fromRawSocket(socket: d));
+        return Result::Ok(value: Descriptor.adoptSocket(raw: d));
     }
     public const fn isize rawHandle() { return this.fd; }
 

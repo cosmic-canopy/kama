@@ -1,6 +1,7 @@
-// KR-104: a raw number becomes an owned descriptor only through `unsafe` `Descriptor.fromRaw` — adopting any
-// integer in safe code could close someone else's descriptor twice. `File.make(fd:)`, `TcpStream.make(fd:)` and
-// `UnixStream.make(fd:)` were public doors that did exactly that; they are private now, each type's own.
+// KR-104: a raw number becomes an owned descriptor through ONE named door, `Descriptor.adopt(raw:)`, then
+// `File.adopt(descriptor:)` and its siblings — `adopt`, as every ownership transfer in std is spelled. The
+// per-type public doors `File.make(fd:)`, `TcpStream.make(fd:)` and `UnixStream.make(fd:)` are private now, each
+// type's own. (One door, not a checked one: adopting a number something else owns still closes it twice.)
 import { std::fs::File };
 fn int32 main() {
     File f = File.make(fd: 1);
