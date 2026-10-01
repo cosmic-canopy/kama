@@ -1,0 +1,8 @@
+// Peer KTLS-3: `string.bytes()` exists only when the program has `std::collections::ConstView` — the view it
+// returns is a stdlib type (SPEC § Strings). Without it the call read "`kama_string` has no method `bytes`":
+// the type under its C name, and no word about the cause. The message names `string` and the import.
+fn int32 main() {
+    string s = "abc";
+    uint8 b = s.bytes()[1];
+    return cast<int32>(b);
+}

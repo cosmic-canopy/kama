@@ -93,7 +93,8 @@ Two ways to traverse it, kept distinct by type so bytes and characters never blu
   `File.write(bytes:)`). It is a second-class borrow like any other view: fine as an argument, and a
   *local* needs the window `borrow s.bytes() as v { … }`, which `BytesViewable<ConstView<uint8>>` grants.
   There is no writable twin — `string` is immutable. Needs `std::collections` in the program (the view is
-  a stdlib type); without it `.bytes()` is an ordinary "no such method". <!-- test: string_bytes -->
+  a stdlib type); <!-- test: string_bytes -->
+  without it `.bytes()` is refused with the import it needs. <!-- xfail: string_bytes_no_constview -->
   `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced. <!-- xfail: foreach_char_over_string -->
   That is one case of a general rule: a `foreach` binding must have the type the collection actually
   yields, and a mismatch is rejected rather than left to C's implicit conversions <!-- xfail: foreach_elem_type_mismatch -->
@@ -391,7 +392,10 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   (a mutate-through place), `swap`/`reverse`, and `iterator()`/`iterMut()`; `ConstView<T>` has `slice`
   (read-only), `length()`, `isEmpty()`, a **`const ref T operator[]`** — the read-only place, which indexes
   any element, copyable or not, without copying it, so there is no `get(index:)` — `iterator()`, and
-  `dataPtr()` (the `UnsafeConstPtr<T>` for C).
+  `dataPtr()` (the `UnsafeConstPtr<T>` for C). `InlineArray` is built in, so its `view()`/`viewMut()` exist
+  only in a program that has the view types; without them the call is refused with the import it needs. <!-- xfail: inline_array_view_no_constview -->
+  A view a call returns indexes directly — `s.bytes()[1]`, `d.viewMut()[0] = 7` — as does any value: an
+  array returned by value, or a member of one. <!-- test: index_rvalue_receiver -->
 - A view **flows down the call stack** as a by-value parameter. A callee that only reads takes a
   **`ConstView<T>`**, and a `View<T>` argument **narrows to it implicitly** at every sink — an argument, an
   initializer, an assignment, a `return` — the direction kama already takes for `const ref` parameters

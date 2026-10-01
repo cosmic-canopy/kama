@@ -2417,6 +2417,11 @@ private:
     SharedIdentifier findMethodReturn(ClassInfo& ci, const std::string& member);   // one method's return type
     const std::string& viewTemplateKey();       // the stdlib `type view View<T>` template key (cached)
     const std::string& constViewTemplateKey();  // ...and its read-only twin, `ConstView<T>`
+    // Why an intrinsic's view accessor is missing, when it is: "" unless `method` on `cls` is one that
+    // registerIntrinsicViews would have added, had the program a `std::collections` view type.
+    std::string missingViewCause(const std::string& cls, const std::string& method);
+    bool contractInstOf(const std::string& key, GenericTypeInst& out) const;   // `kama__Comparable_string` -> Comparable<string>
+    std::map<std::string, GenericTypeInst> _contractInstSpelling;   // a conformance's instance, as resolveInterfaceNames minted it
     const std::string& viewTemplateKeyFor(const std::string& tail);   // identified by bare tail + `type view` shape
     std::map<std::string, std::string> _viewTmplKeys;   // tail -> key; present-and-"" once looked up and absent
     // True iff a (post-substitution) type arg still carries an UNBOUND type-parameter — a bare name resolving

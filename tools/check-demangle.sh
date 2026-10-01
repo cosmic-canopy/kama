@@ -57,7 +57,8 @@ fn int32 main() {
     names.add(item: "ab");
     Optional<string> first = Optional::Some(value: "cd");
     int32 n = match (first) { case Some(value: s): cast<int32>(s.length()); case None: 0; };
-    return b.k_x + p.sum() + cast<int32>(names.length()) + n;
+    InlineArray<int32>#(4) quad = [1, 2, 3, 4];
+    return b.k_x + p.sum() + cast<int32>(names.length()) + n + quad[0];
 }
 KAMA
 
@@ -96,6 +97,11 @@ want std__collections__DynamicArray_string_kama__GlobalAllocator__dtor  'std::co
 # lookup used to destroy the key this needs — `Optional_string` instead of `Optional<string>`.
 want kama__Optional_string  'Optional<string>'
 want kama_main              main
+
+# --- the language's own types under their C names (peer KTLS-3) -----------------------------------
+want kama_string            string
+want kama_string__length    string::length
+want InlineArray_int32_4    'InlineArray<int32>#(4)'
 
 # --- a name is rewritten IN PLACE, so a whole line of C survives its surroundings -----------------
 line=$(printf 'int32_t k_Fdm__Pair_int32__sum(k_Fdm__Pair_int32* self)' | "$KAMA" demangle "$tmp/dm.kama")

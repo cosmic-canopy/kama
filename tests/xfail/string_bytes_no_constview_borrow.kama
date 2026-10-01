@@ -1,0 +1,7 @@
+// The KTLS-3 cause at the `borrow` gate: `borrow s.bytes() as v` blamed the string for not being a container
+// ("has no nullary `.bytes()`, so it cannot open a window"). A string is one; the program lacks the view type.
+fn int32 main() {
+    string s = "abc";
+    borrow s.bytes() as v { return cast<int32>(v[0]); }
+    return 0;
+}

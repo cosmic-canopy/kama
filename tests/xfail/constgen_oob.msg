@@ -1,1 +1,1 @@
-out of bounds
+out of bounds for `InlineArray<int32>#(4)`

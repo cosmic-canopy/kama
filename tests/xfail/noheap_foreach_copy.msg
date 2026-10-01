@@ -1,1 +1,1 @@
-a deep `copy` of `kama_string` allocates a new buffer
+a deep `copy` of `string` allocates a new buffer

@@ -184,6 +184,29 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
         if (tok == "kama__global_allocate")   { out += "GlobalHeap::allocate"; continue; }
         if (tok == "kama__global_deallocate") { out += "GlobalHeap::deallocate"; continue; }
 
+        // The language's own types under their C names, which no source spells: `string` is the runtime
+        // header's `kama_string` (and its members `kama_string__<m>`), so a string's missing method read
+        // "`kama_string` has no method `bytes`" (peer KTLS-3); an intrinsic array is keyed by its typedef,
+        // so an index check read "out of bounds for `InlineArray_int32_4`".
+        if (tok == "kama_string") { out += "string"; continue; }
+        if (depth < 4 && tok.compare(0, 13, "kama_string__") == 0 && tok.size() > 13) {
+            out += "string::" + demangleForDisplay(tok.substr(13), depth + 1);
+            continue;
+        }
+        {
+            auto ic = _collections.find(tok);
+            if (depth < 4 && ic != _collections.end() && ic->second.constValue > 0) {
+                const CollKind k = ic->second.kind;
+                const char* head = k == CollKind::Fixed ? "InlineArray" : k == CollKind::Simd ? "Simd"
+                                 : k == CollKind::Mask  ? "Mask" : nullptr;
+                if (head) {
+                    out += std::string(head) + "<" + demangleForDisplay(ic->second.elemMangle, depth + 1) + ">#("
+                         + std::to_string(ic->second.constValue) + ")";
+                    continue;
+                }
+            }
+        }
+
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
         //
@@ -236,6 +259,10 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
 
         auto gi = _genericTypeInsts.find(tok);
         if (depth < 4 && gi != _genericTypeInsts.end()) { out += renderInstance(gi->second); continue; }
+        // ...and a generic CONTRACT instance, which that table does not hold: `kama__Comparable_string` is
+        // `Comparable<string>`, and a message naming it read "comes from the contract `Comparable_string`".
+        GenericTypeInst gc;
+        if (depth < 4 && contractInstOf(tok, gc)) { out += renderInstance(gc); continue; }
 
         // A MEMBER of a generic instance — `<instance>__<method>`, which is what every method, ctor and
         // dtor symbol is. The lookup above is keyed by the instance mangle ALONE (see where
@@ -6166,11 +6193,11 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // emitted call direct.
             MethodInfo* vmi = findMethod(&_classes[hostCls], mint, nullptr);
             if (!vmi || !vmi->params.empty()) {
-                // Same fixable cause as at the method-dispatch site: an intrinsic collection's `view()`
-                // exists only when the program has a `std::collections::View` to mint.
-                if ((mint == "view" || mint == "viewMut") && viewTemplateKey().empty() && _classes[hostCls].isIntrinsicColl)
-                    unsupported(("`" + hostCls + "` can open a window, but this program has no `View<T>` "
-                                 "to mint — add `import { std::collections::View };`").c_str(), bn->line);
+                // Same fixable cause as at the method-dispatch site: an intrinsic's mint exists only when
+                // the program has a `std::collections` view type for it to return.
+                const std::string why = missingViewCause(hostCls, mint);
+                if (!why.empty())
+                    unsupported(why.c_str(), bn->line);
                 else
                     unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
                                  "window — a `borrow` host must be a container that can hand out a view")
@@ -11913,6 +11940,45 @@ const std::string& CEmitter::viewTemplateKeyFor(const std::string& tail)
 const std::string& CEmitter::viewTemplateKey()      { return viewTemplateKeyFor("View"); }
 const std::string& CEmitter::constViewTemplateKey() { return viewTemplateKeyFor("ConstView"); }
 
+// A generic contract INSTANCE's template and arguments, for spelling it as source does (`Comparable<string>`
+// for `kama__Comparable_string`): a registered one is an interface, one named only by a conformance is
+// recorded where resolveInterfaceNames mints it. False for anything else.
+bool CEmitter::contractInstOf(const std::string& key, GenericTypeInst& out) const
+{
+    auto it = _interfaces.find(key);
+    if (it != _interfaces.end() && it->second.isGenericInst) {
+        out = GenericTypeInst{ it->second.templateKey, key, it->second.typeArgs };
+        return true;
+    }
+    auto sp = _contractInstSpelling.find(key);
+    if (sp == _contractInstSpelling.end()) return false;
+    out = sp->second;
+    return true;
+}
+
+// An intrinsic's view accessor — `view()`/`viewMut()` on an `InlineArray`, `bytes()` on a `string` — is
+// registered only when the program contains `std::collections`' view types (registerIntrinsicViews), because
+// those are stdlib types and a program that never imports one does not have one. So its absence has a fixable
+// CAUSE, not a typo, and every site that would say "no such method" says this instead: the dispatch site, the
+// `borrow` gate, and a call made ON the missing result (`s.bytes().length()`), whose receiver has no type.
+// `s.bytes()` read "`kama_string` has no method `bytes`" (peer KTLS-3), and `borrow s.bytes() as v` blamed
+// the string for not being a container.
+std::string CEmitter::missingViewCause(const std::string& cls, const std::string& method)
+{
+    if ((!viewTemplateKey().empty() && !constViewTemplateKey().empty()) || !_classes.count(cls)) return "";
+    const ClassInfo& ci = _classes[cls];
+    std::string elem, owner;
+    if (method == "bytes" && ci.collKind == CollKind::String) { elem = "uint8"; owner = "`string.bytes()`"; }
+    else if ((method == "view" || method == "viewMut") && ci.isIntrinsicColl && ci.collKind == CollKind::Fixed
+             && _collections.count(cls)) {
+        elem = _collections[cls].elemMangle;
+        owner = "`" + method + "()` on an `" + cls + "`";
+    } else return "";
+    const std::string view = method == "viewMut" ? "View" : "ConstView";
+    return owner + " returns a `" + view + "<" + elem + ">`, and this program has no `std::collections::" + view
+         + "` — add `import { std::collections::" + view + " };`";
+}
+
 bool CEmitter::allTypeParamsDefaulted(const std::string& tmpl) const
 {
     auto p = _genericTypeParams.find(tmpl);
@@ -17521,8 +17587,17 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
         // reported a second time as "unknown contract in implements", naming no name.
         // `nodes` is the AST's own list and stays whole; only the resolved names drop the entry.
         if (itfNode && !_interfaces.count(base) && !_genericContracts.count(base)) continue;
-        if (itfNode && itfNode->genericArg && _genericContracts.count(base))
-            base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
+        if (itfNode && itfNode->genericArg && _genericContracts.count(base)) {
+            const std::string inst = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
+            // Kept for diagnostics (contractInstOf): an instance named here is not registered as an interface
+            // until something binds it, so nothing else could spell `kama__Comparable_string` back.
+            if (!_contractInstSpelling.count(inst)) {
+                GenericTypeInst gi{ base, inst, {} };
+                for (auto& a : *itfNode->genericArgs) gi.typeArgs.push_back(deepSubstType(a));
+                _contractInstSpelling[inst] = gi;
+            }
+            base = inst;
+        }
         kept.push_back(base);
     }
     names = std::move(kept);
@@ -33308,15 +33383,12 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             }
         }
         if (rejectUnprovenBound(clsName, method, srcLine)) return "0";   // the BOUND, not the type
-        // `view()` on an intrinsic collection is the one method whose absence has a fixable CAUSE rather
-        // than being a typo: it is registered only when the program contains `std::collections::View`,
-        // and unlike `FixedArray` — which drags View in through its own module — a prelude builtin drags
-        // in nothing. Without this the user is told the method does not exist, which is true and useless.
-        if ((method == "view" || method == "viewMut") && viewTemplateKey().empty()
-            && _classes.count(clsName) && _classes[clsName].isIntrinsicColl) {
-            unsupported(("`" + clsName + "` can hand out a view, but this program has no `View<T>` to hand "
-                         "out — add `import { std::collections::View };`").c_str(), srcLine);
-            return "0";
+        // An intrinsic's view accessor is the one method whose absence has a fixable CAUSE rather than
+        // being a typo: unlike `FixedArray` — which drags View in through its own module — a prelude builtin
+        // drags in nothing. Without this the user is told the method does not exist, which is true and useless.
+        {
+            const std::string why = missingViewCause(clsName, method);
+            if (!why.empty()) { unsupported(why.c_str(), srcLine); return "0"; }
         }
         // A FIELD of signature type, invoked: `reg.handler(x: 1)`. The other half of the stored-`fnptr`
         // hole — a handler could be installed in a field but never called through one, so a callback
@@ -34987,10 +35059,19 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // written (`globalHeap::<Pool>().liveCount()`), so it is the diagnostic an author actually sees; the
         // emitInvocation arm still answers for the bare-call form. `_globalAllocator` is empty either way,
         // so no second diagnostic can follow this one.
+        // A call made ON a view accessor the program does not have (`s.bytes().length()`): the receiver has
+        // no type because the inner method is missing, and that — not this call — is what to report.
+        std::string viewWhy;
+        if (auto* rinv = dynamic_cast<InvocationNode*>(receiver.get()))
+            if (auto* rma = dynamic_cast<MemberAccessNode*>(rinv->expression.get()))
+                if (rma->expression && rma->identifier && rma->identifier->value)
+                    viewWhy = missingViewCause(exprClass(rma->expression), *rma->identifier->value);
         if (isGlobalHeapCall(receiver.get()) && _globalAllocator.empty())
             unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names nothing — "
                         "declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
                         "(SPEC *Global allocator*)", call->line);
+        else if (!viewWhy.empty())
+            unsupported(viewWhy.c_str(), call->line);
         else if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "
@@ -35102,10 +35183,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             // is generic dispatch and stays legal. A null node means "cannot tell" — permissive.
             SharedIdentifier tn = receiverTypeNode(receiver);
             bool viaTypeParam = !tn || (tn->value && _typeSubst.count(*tn->value) != 0);
+            // The bound is spelled from the contract's TEMPLATE: `T: Comparable<T>`, not its instance for
+            // this receiver (`Comparable<string><T>`); a contract with no parameters is `T: Weighable`.
+            GenericTypeInst fc;
+            const std::string boundTy = contractInstOf(gmi->fromContract, fc) ? fc.templateKey + "<T>"
+                                                                              : gmi->fromContract;
             if (!viaTypeParam)
                 unsupported(("`" + method + "` is not `" + cls + "`'s own method — it comes from the "
                              "contract `" + gmi->fromContract + "`, so reach it through one: a bound "
-                             "(`fn f<T: " + gmi->fromContract + "<T>>(T x)`) or a contract value").c_str(),
+                             "(`fn f<T: " + boundTy + ">(T x)`) or a contract value").c_str(),
                             call->line);
         }
     }

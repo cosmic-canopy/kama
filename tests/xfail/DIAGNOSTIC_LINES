@@ -576,6 +576,7 @@ init_kind_string_from_ternary	init_kind_string_from_ternary.kama:5
 inline_array_size_local	inline_array_size_local.kama:5
 inline_array_size_runtime_static	inline_array_size_runtime_static.kama:7
 inline_array_size_unknown	inline_array_size_unknown.kama:5
+inline_array_view_no_constview	inline_array_view_no_constview.kama:6
 int32_from_usize	int32_from_usize.kama:1
 int_literal_overflow	int_literal_overflow.kama:11
 int_literal_suffix_boundary_unclaimed	int_literal_suffix_boundary_unclaimed.kama:6
@@ -1126,6 +1127,9 @@ static_on_operator	static_on_operator.kama:7
 static_shadows_inherited	static_shadows_inherited.kama:11
 static_this	static_this.kama:5
 static_virtual	static_virtual.kama:5
+string_bytes_no_constview	string_bytes_no_constview.kama:6
+string_bytes_no_constview_borrow	string_bytes_no_constview_borrow.kama:5
+string_bytes_no_constview_chained	string_bytes_no_constview_chained.kama:5
 string_plus_number	string_plus_number.kama:6
 struct_cycle_mutual	struct_cycle_mutual.kama:1
 tag_unknown	tag_unknown.kama:4

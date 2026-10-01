@@ -1,0 +1,7 @@
+// `view()` on an `InlineArray` has the same cause as KTLS-3's `bytes()`: the view it returns is a stdlib type.
+// The message used to name the array by its C typedef (`InlineArray_int32_3`) and the wrong view type (`View<T>`
+// for the read-only `view()`, which returns a `ConstView<T>`).
+fn int32 main() {
+    InlineArray<int32>#(3) a = [1, 2, 3];
+    return cast<int32>(a.view().length());
+}

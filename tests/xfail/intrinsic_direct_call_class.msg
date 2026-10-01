@@ -1,1 +1,1 @@
-is not `kama_string`'s own method
+is not `string`'s own method — it comes from the contract `Comparable<string>`, so reach it through one: a bound (`fn f<T: Comparable<T>>(T x)`)

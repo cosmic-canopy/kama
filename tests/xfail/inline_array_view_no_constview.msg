@@ -1,0 +1,1 @@
+`view()` on an `InlineArray<int32>#(3)` returns a `ConstView<int32>`, and this program has no `std::collections::ConstView`
