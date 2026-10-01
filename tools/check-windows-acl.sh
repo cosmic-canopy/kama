@@ -93,7 +93,7 @@ unsafe fn int32 run() {
     };
     match (readText(path: "deny.txt")) {
         case Ok(value: t): { return 7; }
-        case Err(error: e): { match (e) { case PermissionDenied: { } case _: { return 8; } }; }
+        case Err(error: e): { match (e.kind()) { case PermissionDenied: { } case _: { return 8; } }; }
     };
     return 0;
 }
