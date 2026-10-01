@@ -2503,8 +2503,9 @@ std::string CEmitter::wrapperHint(const std::string& dstCType, const std::string
 // "a `Step`" / "an `Optional<Step>`": the article for a name a message quotes.
 std::string CEmitter::aOrAn(const std::string& name)
 {
-    const char c = name.empty() ? 'x' : (char)std::tolower((unsigned char)name[0]);
-    return std::string(std::strchr("aeiou", c) ? "an `" : "a `") + name + "`";
+    const char c = name.empty() ? 'x' : (char)(name[0] | 0x20);   // ASCII fold: names start with a letter or `_`
+    const bool vowel = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+    return std::string(vowel ? "an `" : "a `") + name + "`";
 }
 
 void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedExpression value,
