@@ -2006,7 +2006,10 @@ restart just works (a crash still leaves the file). SIGPIPE is handled as for TC
 `connectNonBlocking(path:)` / `connectToNonBlocking(address:)` never wait, for a caller holding a deadline: a
 local connect completes at once, and a listener whose queue is full answers at once too — `WouldBlock` on Linux,
 which started nothing (connect again), `ConnectionRefused` on macOS. Where an OS reports a connect in flight, the <!-- test: net_unix_nonblocking_connect -->
-stream is returned and `checkConnected()` resolves it once it polls writable, as for TCP.
+stream is returned and `checkConnected()` resolves it once it polls writable, as for TCP. Windows reports every
+connect in flight, and its queue does not fill (all 400 connects to a listener nobody accepts from are made). A
+path with nothing at it is `NotFound` on every OS: Windows answers it as it answers a path with no listener,
+`ConnectionRefused`, so kama looks.
 
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
 and streams to the process on the other end, with at least one byte to carry them, and

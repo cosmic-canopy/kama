@@ -1026,10 +1026,33 @@ static inline ptrdiff_t kama_sid_home(const uint8_t* sid, uint8_t* out, size_t c
     return (ptrdiff_t)len;
 }
 
-// The two pieces the shared address calls (below the platform split) need from each platform: the native
-// handle type, and turning a failed call's error into errno.
+// The three pieces the shared address calls (below the platform split) need from each platform: the native
+// handle type, turning a failed call's error into errno, and the same for a failed connect.
 typedef SOCKET kama__sock;
 static inline int32_t kama__sock_fail(void) { kama__capture_wsa(); return -1; }
+// A connect's error differs from any other call's twice here. Winsock reports a non-blocking connect IN FLIGHT as
+// WSAEWOULDBLOCK, where POSIX says EINPROGRESS — the one spelling every caller tests — so a connect's becomes
+// EINPROGRESS (a recv's or an accept's WSAEWOULDBLOCK stays EAGAIN). And for a Unix path (`path` non-NULL),
+// WSAECONNREFUSED is also Windows' answer when NOTHING is at the path, where POSIX says ENOENT: kama tells the two
+// apart by looking, so a missing socket file is NotFound on every OS. Both measured on Windows 11 26200: a connect
+// with room in the queue answers WSAEWOULDBLOCK, then polls writable with SO_ERROR 0; a path with no file answers
+// WSAECONNREFUSED, blocking or not. A path is at most 107 bytes (kama_unix_path_max), so it fits w[] whole.
+static inline int32_t kama__connect_fail(const uint8_t* path, size_t n) {
+    const int e = WSAGetLastError();
+    if (e == WSAECONNREFUSED && path && n > 0 && n < 128) {
+        wchar_t w[128];
+        const int k = MultiByteToWideChar(CP_UTF8, 0, (const char*)path, (int)n, w, 127);
+        if (k > 0) {
+            w[k] = 0;
+            if (GetFileAttributesW(w) == INVALID_FILE_ATTRIBUTES) {
+                const DWORD g = GetLastError();
+                if (g == ERROR_FILE_NOT_FOUND || g == ERROR_PATH_NOT_FOUND) { kama__os_fail(g, ENOENT); return -1; }
+            }
+        }
+    }
+    kama__os_fail((unsigned long)e, e == WSAEWOULDBLOCK ? EINPROGRESS : kama__wsa_errno(e));
+    return -1;
+}
 
 // ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
@@ -2086,9 +2109,11 @@ static inline void kama_poller_free(void* ph) {
 // ---- UDP datagrams ---------------------------------------------------------
 static inline ptrdiff_t kama_socket_udp(int32_t family) { return (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, 0); }
 
-// See the Winsock twin: the native handle, and errno on failure (already set here).
+// See the Winsock twin: the native handle, and errno on failure (already set here — a connect's included: POSIX
+// itself says EINPROGRESS for one in flight and ENOENT for a Unix path with nothing at it).
 typedef int kama__sock;
 static inline int32_t kama__sock_fail(void) { return -1; }
+static inline int32_t kama__connect_fail(const uint8_t* path, size_t n) { (void)path; (void)n; return -1; }
 
 // ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
@@ -2167,7 +2192,7 @@ static inline int32_t kama_bind_addr(ptrdiff_t fd, int32_t family, const uint8_t
 static inline int32_t kama_connect_addr(ptrdiff_t fd, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
     struct sockaddr_storage ss;
     socklen_t len = kama__sa_fill(&ss, family, ip, port, scope);
-    if (connect((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__sock_fail();
+    if (connect((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__connect_fail(NULL, 0);
     return 0;
 }
 static inline ptrdiff_t kama_sendto_addr(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
@@ -2226,7 +2251,7 @@ static inline int32_t kama_bind_unix(ptrdiff_t fd, const uint8_t* p, size_t n, i
 }
 static inline int32_t kama_connect_unix(ptrdiff_t fd, const uint8_t* p, size_t n, int32_t kind) {
     struct sockaddr_un a; socklen_t len = kama__sun_fill(&a, p, n, kind);
-    if (connect((kama__sock)fd, (struct sockaddr*)&a, len) != 0) return kama__sock_fail();
+    if (connect((kama__sock)fd, (struct sockaddr*)&a, len) != 0) return kama__connect_fail(kind == 1 ? p : NULL, n);
     return 0;
 }
 // The inverse, for what getsockname/getpeername/recvfrom hand back: *kind is 0 for an unnamed socket, 1 for a

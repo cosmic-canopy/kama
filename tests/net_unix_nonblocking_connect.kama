@@ -2,8 +2,15 @@
 // A local connect completes at once; the wait a BLOCKING connect can get stuck in is a listener whose queue is
 // full. Linux answers that with EAGAIN and starts nothing — `Err(WouldBlock)`, connect again — and macOS refuses
 // it outright (`ConnectionRefused`). Either way the answer comes back at once, which is what this proves by
-// filling a queue nobody accepts from. Returns 0.
+// filling a queue nobody accepts from. Windows reports every connect in flight — the stream comes back — and its
+// queue does not fill: measured, all 400 connects to a 128-deep queue nobody accepts are made. Returns 0.
 import { std::net::UnixListener, std::net::UnixStream, std::io::IoError, std::collections::DynamicArray };
+
+// Whether a listener's full queue refuses a connect: Linux and macOS, yes; Windows' AF_UNIX, no (above).
+@compileFor(!OS_WINDOWS)
+fn bool fullQueueRefuses() { return true; }
+@compileFor(OS_WINDOWS)
+fn bool fullQueueRefuses() { return false; }
 
 fn int32 kind(const ref IoError e) {
     return match (e.kind()) { case WouldBlock: 1; case ConnectionRefused: 2; case NotFound: 3; case InvalidInput: 4; case _: 9; };
@@ -44,7 +51,9 @@ unsafe fn int32 run() {
         };
         tries = tries + 1;
     }
-    if (refused != 1 && refused != 2) { return 10 + refused; }   // WouldBlock (Linux) or ConnectionRefused (macOS)
+    if (fullQueueRefuses()) {
+        if (refused != 1 && refused != 2) { return 10 + refused; }   // WouldBlock (Linux) or ConnectionRefused (macOS)
+    } else if (refused != 0) { return 30 + refused; }                // Windows: every connect is made
     if (held.length() == 0) { return 20; }
 
     // ...and once there is room again, the next connect is made

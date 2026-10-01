@@ -46,7 +46,6 @@ extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, Unsa
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 extern fn int32 kama_EINPROGRESS();
-extern fn int32 kama_EAGAIN();
 
 // A duration as a socket option takes it: a POSITIVE whole count of `unit` nanoseconds, rounded UP so a
 // timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
@@ -254,8 +253,10 @@ type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
         }
         if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             int32 e = kama_last_error();
-            // EINPROGRESS (POSIX) / EAGAIN (Winsock WSAEWOULDBLOCK) = handshake in flight — NOT an error.
-            if (e != kama_EINPROGRESS() && e != kama_EAGAIN()) {
+            // EINPROGRESS = handshake in flight — NOT an error. Winsock's WSAEWOULDBLOCK arrives as EINPROGRESS too
+            // (the seam's connect hands it over that way), so one test serves every OS — and a Linux EAGAIN, which
+            // for TCP means the routing cache is exhausted, stays the error it is.
+            if (e != kama_EINPROGRESS()) {
                 IoError err = lastError();
                 int32 rc = kama_close_socket(fd: fd);
                 return Result::Err(error: err);

@@ -255,6 +255,9 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
     //     and `send` is ENOTCONN, so TCP's "poll writable, then checkConnected" would report a connection that
     //     does not exist. It is `Err(WouldBlock)`: connect again (a new call) until the deadline.
     //   - macOS refuses a full queue outright: `Err(ConnectionRefused)`, as for no listener at all.
+    //   - Windows reports EVERY connect in flight (Winsock's WSAEWOULDBLOCK, which the seam hands over as
+    //     EINPROGRESS) and has no full queue to answer: measured, 400 connects to a 128-deep queue nobody accepts
+    //     are all made.
     // Where an OS does report a connect in flight (EINPROGRESS), the stream comes back and `checkConnected()`
     // resolves it once it polls writable, exactly as `TcpStream`'s does.
     public ctor Result<UnixStream, IoError> connectNonBlocking(const ref string path) {
