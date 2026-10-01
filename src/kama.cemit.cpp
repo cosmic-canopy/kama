@@ -5472,8 +5472,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
-        std::string op = (v->token == ANDAND) ? "&&" : "||";
-        return "(" + emitExpression(v->LHS) + " " + op + " " + emitExpression(v->RHS) + ")";
+        const bool isAnd = v->token == ANDAND;
+        std::string l = emitExpression(v->LHS);
+        const size_t h0 = _hoisted.size(), l0 = scopeLocalCount();
+        std::string r = emitExpression(v->RHS);
+        if (_hoisted.size() == h0) return "(" + l + (isAnd ? " && " : " || ") + r + ")";
+        // The right side hoisted a statement — a receiver held in a temporary, a `match` lowered to a block —
+        // and a hoisted statement runs BEFORE the whole statement, so it ran even when the left side decided
+        // the answer: `names.length() > 0 && names[0].toUpper().length() > 0` indexed an empty array and
+        // panicked. The left side is evaluated first, into a flag, and the right side's statements run only
+        // when the operator needs it (guardHoisted).
+        std::vector<std::string> rh(_hoisted.begin() + h0, _hoisted.end());
+        _hoisted.resize(h0);
+        const std::string sc = "kama_sc" + std::to_string(_tempCounter++);
+        _hoisted.push_back("bool " + sc + " = " + l + ";");
+        guardHoisted(rh, l0, scopeLocalCount(), isAnd ? sc : "!" + sc);
+        return "(" + sc + (isAnd ? " && " : " || ") + r + ")";
     }
 
     if (auto* v = dynamic_cast<TernaryExpressionNode*>(n)) {
@@ -5483,8 +5497,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (lLit != rLit)
             claimFloatLiterals(lLit ? v->LHS : v->RHS, typeOfExpr(lLit ? v->RHS : v->LHS), "a branch of `?:`", false,
                                v->line);
-        return "(" + emitExpression(v->condition) + " ? " + emitExpression(v->LHS)
-                   + " : " + emitExpression(v->RHS) + ")";
+        std::string c = emitExpression(v->condition);
+        const size_t h0 = _hoisted.size(), l0 = scopeLocalCount();
+        std::string a = emitExpression(v->LHS);
+        const size_t h1 = _hoisted.size(), l1 = scopeLocalCount();
+        std::string b = emitExpression(v->RHS);
+        if (_hoisted.size() == h0) return "(" + c + " ? " + a + " : " + b + ")";
+        // An arm that hoisted a statement ran it whichever arm was chosen — the same defect as `&&`'s right
+        // side, and it costs the same: `i < n ? a[i].toUpper() : ""` indexed past the end. Each arm's
+        // statements run only when that arm is taken.
+        std::vector<std::string> ha(_hoisted.begin() + h0, _hoisted.begin() + h1), hb(_hoisted.begin() + h1, _hoisted.end());
+        _hoisted.resize(h0);
+        const std::string sc = "kama_sc" + std::to_string(_tempCounter++);
+        _hoisted.push_back("bool " + sc + " = " + c + ";");
+        guardHoisted(ha, l0, l1, sc);
+        guardHoisted(hb, l1, scopeLocalCount(), "!" + sc);
+        return "(" + sc + " ? " + a + " : " + b + ")";
     }
 
     if (auto* v = dynamic_cast<InvocationNode*>(n)) {
@@ -5912,6 +5940,7 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         auto ci = _classes.find(it->className);
         if (ci != _classes.end() && !ci->second.destructible) continue;
         indent(depth);
+        if (!it->guard.empty()) *_out << "if (" << it->guard << ") ";   // built only on some paths (guardHoisted)
         *_out << it->className << "__dtor(&" << (it->userName ? kName(it->cVar) : it->cVar) << ");\n";
     }
     // A `@onPanic` region DISARMS on every exit path: this helper is on all of them (fall-through, and
@@ -5984,7 +6013,9 @@ void CEmitter::dropCondTemps(size_t preLoc, int depth)
         if (ms != _moveState.end() && ms->second != MoveState::NotMoved) continue;   // moved / maybe-moved: no drop
         auto ci = _classes.find(locs[i].className);
         if (ci != _classes.end() && !ci->second.destructible) continue;              // owns nothing
-        indent(depth); *_out << locs[i].className << "__dtor(&" << (locs[i].userName ? kName(locs[i].cVar) : locs[i].cVar) << ");\n";
+        indent(depth);
+        if (!locs[i].guard.empty()) *_out << "if (" << locs[i].guard << ") ";   // see guardHoisted
+        *_out << locs[i].className << "__dtor(&" << (locs[i].userName ? kName(locs[i].cVar) : locs[i].cVar) << ");\n";
     }
     if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
 }
@@ -6724,6 +6755,40 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 }
 
 // write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
+size_t CEmitter::scopeLocalCount() const { return _scopes.empty() ? 0 : _scopes.back().locals.size(); }
+
+// Hoisted statements of an operand that runs only SOMETIMES — `&&`/`||`'s right side, a `?:` arm — made to run
+// only when `runIf` holds. They stay where every hoisted statement goes, ahead of the statement and in its
+// block, and a forward `goto` skips them: a temporary keeps the lifetime it always had, to the end of the
+// scope, which an arm's VALUE may rely on (an interpolated string, a view of a held receiver). Moving them
+// into an `if` block would end that lifetime at the arm instead. C allows a jump past a declaration (not a
+// variable-length array's), and the temporaries recorded since `l0` are dropped under a flag, set once they
+// exist — a skipped one was never built, so its drop must not run.
+//
+// An inner guarded operand has already given its temporaries flags; those flags are declared ahead of THIS
+// jump too, or a skip over the declaration would leave the flag itself uninitialized at the drop.
+void CEmitter::guardHoisted(const std::vector<std::string>& stmts, size_t l0, size_t l1, const std::string& runIf)
+{
+    if (stmts.empty()) return;
+    std::set<std::string> innerDecls;
+    std::vector<std::string> flags;
+    if (!_scopes.empty())
+        for (size_t i = l0; i < l1 && i < _scopes.back().locals.size(); ++i) {
+            LiveLocal& lv = _scopes.back().locals[i];
+            if (!lv.guard.empty()) { innerDecls.insert("bool " + lv.guard + " = 0;"); continue; }
+            lv.guard = "kama_df" + std::to_string(_tempCounter++);
+            flags.push_back(lv.guard);
+        }
+    std::vector<std::string> body;
+    for (const std::string& st : stmts) (innerDecls.count(st) ? _hoisted : body).push_back(st);
+    for (const std::string& f : flags) _hoisted.push_back("bool " + f + " = 0;");
+    const std::string skip = "kama_skip" + std::to_string(_tempCounter++);
+    _hoisted.push_back("if (!(" + runIf + ")) goto " + skip + ";");
+    _hoisted.insert(_hoisted.end(), body.begin(), body.end());
+    for (const std::string& f : flags) _hoisted.push_back(f + " = 1;");
+    _hoisted.push_back(skip + ": ;");
+}
+
 // A leaf statement sets _hoistOK, builds its expression string (which may push here), then calls
 // this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
 void CEmitter::flushHoisted(int depth)

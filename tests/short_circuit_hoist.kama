@@ -1,0 +1,72 @@
+// A statement a sub-expression needs — a receiver held in a temporary, a `match` lowered to a block — is
+// hoisted ahead of the whole statement. Out of `&&`/`||`'s right side or a `?:` arm, that made it run even
+// when the operator never evaluated that operand: the guard idiom `n > 0 && a[0].toUpper()…` indexed an
+// empty array and panicked, and a call with a side effect ran on the path that skipped it. The operand's
+// statements now run only when it does, and a temporary built on one path is dropped only on that path.
+import { std::collections::DynamicArray };
+
+static int32 made = 0;
+static int32 drops = 0;
+
+type resource Tracker {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; made = made + 1; }
+    ~Tracker() { drops = drops + 1; }
+    public fn int32 value() { return this.n; }
+}
+
+fn Tracker track(int32 n) { return Tracker.make(n: n); }
+
+fn int32 run() {
+    int32 r = 0;
+    DynamicArray<string> names = DynamicArray.empty();
+    bool no = false;
+    bool yes = true;
+
+    // The guard idiom: the right side must not index an empty array.
+    if (names.length() > 0 && names[0].toUpper().length() > 0) { return 1; }
+    if (names.length() == 0 || names[0].toUpper().length() == 0) { r = r + 1; }
+
+    // A skipped temporary is never built, and never dropped.
+    bool a = no && track(n: 5).value() == 5;
+    bool b = yes || track(n: 6).value() == 6;
+    if (made != 0 || drops != 0 || a || !b) { return 2; }
+
+    // A taken one is built once and dropped once.
+    bool c = yes && track(n: 7).value() == 7;
+    if (!c) { return 3; }
+
+    // `?:`: only the chosen arm runs.
+    int32 i = 0;
+    int32 len = i < cast<int32>(names.length()) ? cast<int32>(names[i].toUpper().length()) : 40;
+    int32 pick = no ? track(n: 8).value() : track(n: 9).value();
+    if (len != 40 || pick != 9) { return 4; }
+
+    // An arm's VALUE built from a temporary outlives the arm: the string is read after the statement.
+    names.add(item: "ab");
+    {
+        Tracker t10 = track(n: 10);
+        string shown = yes ? "${made}-${names[0]}" : "none";
+        if (shown != "3-ab" || t10.value() != 10) { return 5; }
+    }
+
+    // Nested: the inner operand's flag is declared ahead of the outer jump.
+    bool d = no && (yes || track(n: 11).value() == 11);
+    bool e = yes && (no || track(n: 12).value() == 12);
+    if (d || !e) { return 6; }
+
+    // A loop condition re-runs its guarded statements each pass.
+    names.add(item: "");
+    int32 k = 0;
+    while (k < cast<int32>(names.length()) && names[k].toUpper().length() > 0) { k = k + 1; }
+    if (k != 1) { return 7; }
+
+    return r;
+}
+
+fn int32 main() {
+    int32 r = run();
+    // Built: 7, 9, 10, 12 — four Trackers, every one dropped exactly once by the time `run` has returned
+    // (a hoisted temporary lives to the end of its scope, as it always has).
+    return r + made * 10 + drops;   // 1 + 40 + 4 = 45
+}

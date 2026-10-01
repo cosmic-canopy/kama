@@ -3630,6 +3630,8 @@ the one case this rule cannot close, and it is a bug to report rather than a haz
 (`+ - * / %`, bitwise, shifts, comparisons, `&& || !`, ternary `?:`), assignment ops (`= += …`), `++`/`--`,
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
 is done with `if` / `else if`. There is no `switch` statement: `match` on an enum, `if`/`else if` on an integer — one construct per concept (GOALS 4).
+`&&`, `||` and `?:` evaluate an operand only when the result needs it, so `n > 0 && a[0].isEmpty()` never
+indexes an empty `a`, and the arm `?:` does not choose never runs — its calls, its temporaries, its drops. <!-- test: short_circuit_hoist -->
 
 **Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
 `{ … }` block — never a bare statement, and never an empty `;`:

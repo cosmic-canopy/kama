@@ -2046,7 +2046,8 @@ private:
     // diagnostic, so it must stay what the author wrote. `userName` says whether the C write
     // needs the KR-67 `k_` prefix — true for a user local/binding/parameter, false for an
     // emitter temp (`__strtmp0`, `__msubj1`, …), which is already in the emitter's own namespace.
-    struct LiveLocal { std::string cVar; std::string className; bool userName = false; };
+    struct LiveLocal { std::string cVar; std::string className; bool userName = false;
+                       std::string guard; };   // a C flag: built only on some paths, dropped only if it was (guardHoisted)
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
@@ -2119,6 +2120,8 @@ private:
     std::vector<std::string> _hoisted;
     bool                     _hoistOK = false;
     void flushHoisted(int depth);
+    void guardHoisted(const std::vector<std::string>& stmts, size_t l0, size_t l1, const std::string& runIf);
+    size_t scopeLocalCount() const;
     // Emit an if/while/for condition with value-producing constructs allowed (they hoist a temp);
     // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
     std::string emitCondition(SharedExpression cond);
