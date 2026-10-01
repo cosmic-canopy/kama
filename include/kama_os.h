@@ -397,30 +397,74 @@ static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* m
 // a directory (Explorer sets it there to mark a customized folder), so it clears nothing there. A list this
 // process may not read — another user's private file — falls back to what the CRT reports (read/write from
 // the attribute, execute from the extension): an approximation, and documented as one.
-static inline uint32_t kama__path_mode(const wchar_t* w, unsigned short crtMode)
+static inline uint32_t kama__path_mode(HANDLE h, const wchar_t* w, unsigned short crtMode)
 {
     const int dir = (crtMode & _S_IFDIR) != 0, readOnly = !dir && !(crtMode & _S_IWRITE);
     uint32_t mode = 0; int same = 0;
     const int e = errno;
-    if (kama__sd_read_mode(NULL, w, &mode, &same) != 0)
+    if (kama__sd_read_mode(h, w, &mode, &same) != 0)
         mode = ((crtMode & _S_IREAD) ? 0444u : 0u) | (readOnly ? 0u : 0222u) | ((crtMode & _S_IEXEC) ? 0111u : 0u);
     errno = e;   // the stat succeeded; an unreadable list is not its error
     if (readOnly) mode &= ~0222u;
     return mode;
 }
 
+// The kind of file a CRT `st_mode` describes, in std::fs::FileKind's order: 0 file, 1 directory, 2 symlink, 3 FIFO
+// (a pipe), 4 character device (`NUL`, a console), 5 block device, 6 socket, 7 anything else. The CRT reports no
+// symlink, block device or socket: a link is seen by asking for the link (kama_path_meta, follow 0).
+static inline int32_t kama__file_kind(unsigned short m) {
+    if (m & _S_IFDIR) return 1;
+    if ((m & _S_IFMT) == _S_IFREG) return 0;
+    if ((m & _S_IFMT) == _S_IFCHR) return 4;
+    if ((m & _S_IFMT) == _S_IFIFO) return 3;
+    return 7;
+}
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
 // mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::Timestamp` with no conversion at the
 // kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here. `outMode` is the
 // nine permission bits the file's access list grants (kama__path_mode), not an access check for this process.
-KAMA_NOINLINE static int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
+// `follow` 0 asks about a symbolic link (or a junction) ITSELF — its kind is Symlink, its time its own — where 1
+// asks about what it points at, as `_wstat64` does.
+KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
                                             int64_t* outMtimeNs, uint32_t* outMode) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    if (!follow) {
+        WIN32_FIND_DATAW fd;
+        HANDLE f = FindFirstFileW(w, &fd);
+        if (f == INVALID_HANDLE_VALUE) {
+            const DWORD e = GetLastError();
+            kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
+            return -1;
+        }
+        FindClose(f);
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            && (fd.dwReserved0 == IO_REPARSE_TAG_SYMLINK || fd.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT)) {
+            ULARGE_INTEGER t; t.LowPart = fd.ftLastWriteTime.dwLowDateTime; t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+            *outSize = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+            *outKind = 2;
+            *outMtimeNs = ((int64_t)t.QuadPart - 116444736000000000ll) * 100ll;   // 100 ns ticks since 1601
+            *outMode = 0777u;   // a link's own bits, as POSIX shows them: access is decided at its target
+            return 0;
+        }
+    }
     struct _stat64 st; int r = _wstat64(w, &st);
     if (r != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = (st.st_mode & _S_IFDIR) ? 1 : 0;
+    *outSize = (uint64_t)st.st_size; *outKind = kama__file_kind((unsigned short)st.st_mode);
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
-    *outMode = kama__path_mode(w, (unsigned short)st.st_mode);
+    *outMode = kama__path_mode(NULL, w, (unsigned short)st.st_mode);
+    return 0;
+}
+// The same facts for an OPEN file, through its descriptor — so a check and the read that follows it are about
+// one file, with no time between them in which the path can be pointed elsewhere.
+static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
+                                   uint32_t* outMode) {
+    struct _stat64 st;
+    if (_fstat64(fd, &st) != 0) return -1;
+    *outSize = (uint64_t)st.st_size; *outKind = kama__file_kind((unsigned short)st.st_mode);
+    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
+    const intptr_t h = _get_osfhandle(fd);
+    *outMode = (*outKind == 0 || *outKind == 1) && h != -1 ? kama__path_mode((HANDLE)h, NULL, (unsigned short)st.st_mode)
+                                                           : ((st.st_mode & _S_IREAD) ? 0444u : 0u) | ((st.st_mode & _S_IWRITE) ? 0222u : 0u);
     return 0;
 }
 
@@ -1464,14 +1508,41 @@ static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(p
 #else
 #  define KAMA_ST_MTIME_NSEC(st) ((int64_t)0)
 #endif
+// The kind of file an `st_mode` describes, in std::fs::FileKind's order: 0 file, 1 directory, 2 symlink, 3 FIFO,
+// 4 character device, 5 block device, 6 socket, 7 anything else.
+static inline int32_t kama__file_kind(mode_t m) {
+    if (S_ISREG(m)) return 0;
+    if (S_ISDIR(m)) return 1;
+    if (S_ISLNK(m)) return 2;
+    if (S_ISFIFO(m)) return 3;
+    if (S_ISCHR(m)) return 4;
+    if (S_ISBLK(m)) return 5;
+#if defined(S_ISSOCK)
+    if (S_ISSOCK(m)) return 6;
+#endif
+    return 7;
+}
+static inline void kama__stat_facts(const struct stat* st, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
+                                    uint32_t* outMode) {
+    *outSize = (uint64_t)st->st_size; *outKind = kama__file_kind(st->st_mode);
+    *outMtimeNs = (int64_t)st->st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(*st);
+    *outMode = (uint32_t)st->st_mode & 0777u;
+}
 // `outMode` is the nine PERMISSION bits the file records, not an access check for this process (root ignores
 // them, and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
-static inline int32_t kama_path_meta(const char* path, uint64_t* outSize, int32_t* outIsDir,
+// `follow` 0 is `lstat`: a symbolic link's own facts, its kind Symlink; 1 is `stat`, what it points at.
+static inline int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
                                      int64_t* outMtimeNs, uint32_t* outMode) {
-    struct stat st; if (stat(path, &st) != 0) return -1;
-    *outSize = (uint64_t)st.st_size; *outIsDir = S_ISDIR(st.st_mode) ? 1 : 0;
-    *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(st);
-    *outMode = (uint32_t)st.st_mode & 0777u;
+    struct stat st; if ((follow ? stat(path, &st) : lstat(path, &st)) != 0) return -1;
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode);
+    return 0;
+}
+// The same facts for an OPEN file (`fstat`) — so a check and the read that follows it are about one file, with no
+// time between them in which the path can be pointed elsewhere.
+static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
+                                   uint32_t* outMode) {
+    struct stat st; if (fstat(fd, &st) != 0) return -1;
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode);
     return 0;
 }
 // Directory creation, rename and existence. 0777 is the POSIX default — the process umask narrows it,

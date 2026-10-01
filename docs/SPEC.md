@@ -1840,8 +1840,12 @@ A native, single-binary I/O foundation — **library over FFI, no new language s
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
 `Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
-`isDir`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
-on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP),
+`kind`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
+on Windows) and `permissions` (the nine bits the file records, not an access check — below). `kind` is a `FileKind`
+— `File`, `Dir`, `Symlink`, `Fifo`, `CharDevice`, `BlockDevice`, `Socket`, `Other` — with `isFile()`, `isDir()` and
+`isSymlink()` for the common questions; `stat(path:)` follows a symbolic link and `symlinkStat(path:)` describes the
+link itself, and `File.metadata()` asks an OPEN file, so a check and the read after it are about one file. <!-- test: fs_file_kind -->
+`std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP),
 `UnixListener`/`UnixStream` (Unix-domain) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
 **An `IoError` is a kind and, when the OS reported it, the OS's code** — the two facts every mainstream library keeps

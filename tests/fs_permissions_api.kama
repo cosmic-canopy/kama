@@ -65,7 +65,7 @@ unsafe fn int32 recorded() {
     string d = "_fs_permissions_api_dir";
     match (createDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 8192; } };
     match (stat(path: d)) {
-        case Ok(value: m): { if (!m.isDir || !m.permissions.has(p: Permissions::OwnerExecute)) { bad = bad + 16384; } }
+        case Ok(value: m): { if (!m.isDir() || !m.permissions.has(p: Permissions::OwnerExecute)) { bad = bad + 16384; } }
         case Err(error: e): { bad = bad + 16384; }
     };
     match (removeDir(path: d)) { case Ok(value: u): { } case Err(error: e): { bad = bad + 4096; } };

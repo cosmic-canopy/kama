@@ -59,7 +59,7 @@ fn int32 main() {
             // file is not read-only. A one-second stat resolution makes an exact compare wrong.
             Duration age = m.modified.durationSince(earlier: now);
             int64 skew = age.asSecs();
-            if (!m.isDir && m.size == cast<usize>(5) && skew < 3600i64 && skew > -3600i64
+            if (!m.isDir() && m.size == cast<usize>(5) && skew < 3600i64 && skew > -3600i64
                 && m.permissions.has(p: Permissions::OwnerWrite)) {
                 r = r + 16;
             }
@@ -69,7 +69,7 @@ fn int32 main() {
     // A directory's own metadata says so.
     match (stat(path: sibling)) {
         case Err(error: e): { }
-        case Ok(value: m): { if (m.isDir) { r = r + 32; } }
+        case Ok(value: m): { if (m.isDir()) { r = r + 32; } }
     };
 
     // Append: two 4-byte writes onto a 5-byte file, without truncating it.

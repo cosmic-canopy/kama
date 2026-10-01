@@ -1,0 +1,70 @@
+// Peer KPG-18: what a path names, and the same question asked of an OPEN file. `Metadata.kind` is a `FileKind`
+// (`isDir()`/`isFile()`/`isSymlink()` ask the common questions), `File.metadata()` reads the descriptor — so a
+// check and the read after it are about one file — and `symlinkStat` describes a link without following it.
+// libpq's `.pgpass` rule is the shape: open it, then refuse anything that is not a plain file (`/dev/null` turns it
+// off; a FIFO would block). Returns 0.
+import {
+    std::fs::File, std::fs::OpenMode, std::fs::FileKind, std::fs::Metadata, std::fs::stat, std::fs::symlinkStat,
+    std::fs::writeText, std::fs::createDir, std::fs::removeDir, std::fs::remove,
+    std::io::IoError, std::process::Command, std::process::Output,
+};
+
+fn int32 kindOf(Result<Metadata, IoError> r) {   // 0 File, 1 Dir, 2 Symlink, 3 Fifo, 4 CharDevice, 9 error/other
+    return match (r) {
+        case Ok(value: m): match (m.kind) { case File: 0; case Dir: 1; case Symlink: 2; case Fifo: 3; case CharDevice: 4; case _: 8; };
+        case Err(error: e): 9;
+    };
+}
+
+unsafe fn bool exec(string program, string a, string b, string c) {
+    Command cmd = Command.make(program: give program);
+    cmd.arg(a: give a);
+    if (b.length() > 0) { cmd.arg(a: copy b); }
+    if (c.length() > 0) { cmd.arg(a: copy c); }
+    Result<Output, IoError> r = cmd.run();
+    return match (r) { case Ok(value: o): o.status().success(); case Err(error: e): false; };
+}
+
+// What only POSIX has: a character device every system ships, a FIFO, and a symlink — each described without
+// opening (a FIFO would block the open) and the link without being followed.
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 posixKinds() {
+    if (kindOf(r: stat(path: "/dev/null")) != 4) { return 20; }
+    Result<File, IoError> dn = File.open(path: "/dev/null", mode: OpenMode::Read);
+    File devnull = match (give dn) { case Ok(value: f): give f; case Err(error: e): { return 21; } };
+    if (kindOf(r: devnull.metadata()) != 4) { return 22; }
+    if (!exec(program: "mkfifo", a: "kind.fifo", b: "", c: "")) { return 23; }
+    if (kindOf(r: stat(path: "kind.fifo")) != 3) { return 24; }
+    if (!exec(program: "ln", a: "-s", b: "kind.txt", c: "kind.link")) { return 25; }
+    if (kindOf(r: symlinkStat(path: "kind.link")) != 2) { return 26; }   // the link itself
+    if (kindOf(r: stat(path: "kind.link")) != 0) { return 27; }          // ...and what it points at
+    Result<Unit, IoError> r1 = remove(path: "kind.link");
+    Result<Unit, IoError> r2 = remove(path: "kind.fifo");
+    return 0;
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 posixKinds() { return 0; }
+
+unsafe fn int32 run() {
+    Result<isize, IoError> w = writeText(path: "kind.txt", text: "hello");
+    Result<Unit, IoError> d = createDir(path: "kind.dir");
+    Result<Metadata, IoError> fm = stat(path: "kind.txt");
+    if (kindOf(r: fm) != 0) { return 1; }
+    Result<Metadata, IoError> dm = stat(path: "kind.dir");
+    bool dirOk = match (dm) { case Ok(value: m): m.isDir() && !m.isFile() && !m.isSymlink(); case Err(error: e): false; };
+    if (!dirOk) { return 2; }
+    // the open file answers about itself
+    Result<File, IoError> o = File.open(path: "kind.txt", mode: OpenMode::Read);
+    File f = match (give o) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<Metadata, IoError> om = f.metadata();
+    bool openOk = match (om) { case Ok(value: m): m.isFile() && m.size == cast<usize>(5); case Err(error: e): false; };
+    if (!openOk) { return 4; }
+    // a plain path that is no link answers to symlinkStat as to stat
+    if (kindOf(r: symlinkStat(path: "kind.txt")) != 0) { return 5; }
+    if (kindOf(r: stat(path: "no-such-kind")) != 9) { return 6; }
+    int32 p = posixKinds();
+    Result<Unit, IoError> r1 = removeDir(path: "kind.dir");
+    return p;
+}
+
+fn int32 main() { return run(); }

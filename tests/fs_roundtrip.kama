@@ -41,7 +41,7 @@ fn int32 main() {
     if (written != cast<isize>(n)) { return 50; }
 
     int32 stCode = match (stat(path: p)) {
-        case Ok(value: m): (m.isDir ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));
+        case Ok(value: m): (m.isDir() ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));
         case Err(error: e): 53;
     };
     if (stCode != 0) { return stCode; }

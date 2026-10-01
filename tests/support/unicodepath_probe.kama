@@ -64,7 +64,7 @@ fn int32 main() {
     if (!exists(path: dir)) { return 3; }
 
     int32 stDir = match (stat(path: dir)) {
-        case Ok(value: m): (m.isDir ? 0 : 4);
+        case Ok(value: m): (m.isDir() ? 0 : 4);
         case Err(error: e): 5;
     };
     if (stDir != 0) { return stDir; }

@@ -54,7 +54,7 @@ fn int32 main() {
 
     // ---- stat the deep directory -------------------------------------------------------------
     int32 stDir = match (stat(path: deep)) {
-        case Ok(value: m): (m.isDir ? 0 : 4);
+        case Ok(value: m): (m.isDir() ? 0 : 4);
         case Err(error: e): 5;
     };
     if (stDir != 0) { return stDir; }
@@ -92,7 +92,7 @@ fn int32 main() {
 
     // ---- stat the deep FILE (size, not a directory) ------------------------------------------
     int32 stFile = match (stat(path: f)) {
-        case Ok(value: m): (m.isDir ? 9 : ((m.size == cast<usize>(18)) ? 0 : 10));   // 14 written + 4 appended
+        case Ok(value: m): (m.isDir() ? 9 : ((m.size == cast<usize>(18)) ? 0 : 10));   // 14 written + 4 appended
         case Err(error: e): 11;
     };
     if (stFile != 0) { return stFile; }

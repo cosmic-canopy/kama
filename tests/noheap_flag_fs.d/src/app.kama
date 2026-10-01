@@ -54,7 +54,7 @@ fn int32 main() {
     };
 
     int32 sz = match (stat(path: "nh/a")) {
-        case Ok(value: m): (m.isDir ? 6 : ((m.size == cast<usize>(8)) ? 0 : 7));
+        case Ok(value: m): (m.isDir() ? 6 : ((m.size == cast<usize>(8)) ? 0 : 7));
         case Err(error: e): 8;
     };
     if (sz != 0) { return sz; }

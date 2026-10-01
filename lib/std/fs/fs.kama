@@ -15,8 +15,8 @@ import {
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
 };
 
-export { File, OpenMode, Metadata, Permissions, readFile, writeFile, readText, writeText, stat, readDir, remove,
-         createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions };
+export { File, OpenMode, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
+         readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
@@ -30,8 +30,10 @@ extern fn int32  kama_set_permissions(UnsafeConstPtr<cchar> path, uint32 mode);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize  kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
-extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir,
+extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, int32 follow, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind,
                                 UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode);
+extern fn int32  kama_fd_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind, UnsafePtr<int64> outMtimeNs,
+                              UnsafePtr<uint32> outMode);
 extern fn int32  kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn isize  kama_desc_dup(isize h, int32 kind);
 extern fn int32  kama_mkdir(UnsafeConstPtr<cchar> path);
@@ -68,7 +70,7 @@ type value Permissions implements Formattable, Sendable {
     uint32 bits;
 
     ctor fromBits(uint32 bits) { this.bits = bits; }
-    friend stat[fromBits];
+    friend metadataOf[fromBits];
 
     public comptime Permissions OwnerRead    = Permissions.fromBits(bits: 0o400);
     public comptime Permissions OwnerWrite   = Permissions.fromBits(bits: 0o200);
@@ -123,9 +125,38 @@ type value Permissions implements Formattable, Sendable {
 @generate(of)
 type value Metadata implements Sendable {
     public usize size;
-    public bool isDir;
+    public FileKind kind;
     public Timestamp modified;
     public Permissions permissions;
+
+    public const fn bool isDir() { return match (this.kind) { case Dir: true; case _: false; }; }
+    public const fn bool isFile() { return match (this.kind) { case File: true; case _: false; }; }
+    public const fn bool isSymlink() { return match (this.kind) { case Symlink: true; case _: false; }; }
+}
+
+// What a path names: a regular file, a directory, or one of the other things a filesystem holds (peer KPG-18:
+// libpq refuses a `.pgpass` that is not a plain file — `PGPASSFILE=/dev/null` turns it off, and a FIFO would block
+// the connect — and `Metadata` used to say only whether it was a directory). `Symlink` is seen only by
+// `symlinkStat`, which does not follow the link. Windows reports a file, a directory, a character device (`NUL`, a
+// console), a pipe as `Fifo`, and a symbolic link or junction; a block device and a socket are what POSIX adds.
+type enum FileKind implements Sendable { File, Dir, Symlink, Fifo, CharDevice, BlockDevice, Socket, Other }
+
+// The seam's kind code (kama_os.h, kama__file_kind) as a FileKind.
+fn FileKind fileKind(int32 code) {
+    if (code == 0) { return FileKind::File; }
+    if (code == 1) { return FileKind::Dir; }
+    if (code == 2) { return FileKind::Symlink; }
+    if (code == 3) { return FileKind::Fifo; }
+    if (code == 4) { return FileKind::CharDevice; }
+    if (code == 5) { return FileKind::BlockDevice; }
+    if (code == 6) { return FileKind::Socket; }
+    return FileKind::Other;
+}
+
+unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode) {
+    if (rc != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), kind: fileKind(code: kind), modified: Timestamp.fromUnixNanos(n: mtime),
+                                         permissions: Permissions.fromBits(bits: mode & 0o777ui32)));
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
@@ -228,6 +259,19 @@ type resource File implements Reader, Writer, Sendable {
 
     // The `Writer` flush: our fs layer is unbuffered (the OS buffers), so there is nothing to drain.
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+
+    // What the filesystem records about this OPEN file (`fstat`) — so a check and the read after it are about one
+    // file, where checking the path first leaves a moment for it to be pointed elsewhere. libpq checks `.pgpass`
+    // this way: open, then refuse it unless it is a plain file that only its owner can read (KPG-18).
+    public unsafe fn Result<Metadata, IoError> metadata() {
+        uint64 sz = 0ui64;
+        int32 kind = 0;
+        int64 mtime = 0i64;
+        uint32 mode = 0ui32;
+        int32 rc = kama_fd_meta(fd: this.fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
+                                outMode: addr(of: mode));
+        return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode);
+    }
 
     // Read the whole file to EOF into an owning byte buffer.
     public unsafe fn Result<DynamicArray<uint8>, IoError> readAll() {
@@ -336,18 +380,22 @@ unsafe fn Result<isize, IoError> writeText(const ref string path, const ref stri
     };
 }
 
-// Everything the filesystem records about a path, in one call.
-unsafe fn Result<Metadata, IoError> stat(const ref string path) {
+// Everything the filesystem records about a path, in one call. A symbolic link is followed: this describes what
+// it points at.
+unsafe fn Result<Metadata, IoError> stat(const ref string path) { return pathMetadata(path: path, follow: 1); }
+
+// `stat` for the link itself: a path that is a symbolic link (or a Windows junction) is `FileKind::Symlink`, with its
+// own size and time, and is not followed. Any other path answers as `stat` does. Rust's `symlink_metadata`.
+unsafe fn Result<Metadata, IoError> symlinkStat(const ref string path) { return pathMetadata(path: path, follow: 0); }
+
+unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 follow) {
     uint64 sz = 0ui64;
-    int32 isdir = 0;
+    int32 kind = 0;
     int64 mtime = 0i64;
     uint32 mode = 0ui32;
-    int32 rc = kama_path_meta(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir),
+    int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
                               outMtimeNs: addr(of: mtime), outMode: addr(of: mode));
-    if (rc != 0) { return Result::Err(error: lastError()); }
-    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), isDir: isdir != 0,
-                                         modified: Timestamp.fromUnixNanos(n: mtime),
-                                         permissions: Permissions.fromBits(bits: mode & 0o777ui32)));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode);
 }
 
 // Does the path exist? A plain `bool`, not a `Result`: "no" and "the lookup failed" are the same answer
@@ -445,7 +493,7 @@ unsafe fn Result<Unit, IoError> removeDirAll(const ref string path) {
                 bool isDir = false;
                 match (stat(path: child)) {
                     case Err(error: e2): { return Result::Err(error: e2); }
-                    case Ok(value: m): { isDir = m.isDir; }
+                    case Ok(value: m): { isDir = m.isDir(); }
                 };
                 if (isDir) {
                     match (removeDirAll(path: child)) {
