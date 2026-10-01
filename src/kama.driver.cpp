@@ -8521,7 +8521,7 @@ void seedUsage()
         "  kama seed [<dir>] [--kind executable|library|monorepo] [--name <n>] [--version <v>]\n"
         "            [--members <a,b,c>]        the members of a monorepo (required for that kind)\n"
         "            [--agents|--no-agents] [--claude] [--tool <name>]... [--all-tools] [--skill]\n"
-        "            [--license mit]            write a LICENSE and record it in kama.json\n"
+        "            [--license mit|apache-2.0|mit-or-apache]  write the license file(s), record it in kama.json\n"
         "            [--yes|-y] [--force]\n"
         "\n"
         "  Interactive when stdin is a terminal; a pipe or a script behaves as --yes.\n");
@@ -8745,11 +8745,10 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     return m + "\n}\n";
 }
 
-// The MIT body — the text this repo's own LICENSE carries, with the two blanks filled. Generated here
-// like seedManifest rather than embedded from `seed/`: the embedding is four named roles wired through
-// tools/embed_seed.sh, the Makefile and kama.seed.h, and a fifth for twenty fixed lines is not worth
-// the wiring. `--license` accepts `mit` alone today; a second body is a second function beside this
-// one, and the refusal at the flag names the list.
+// The MIT body — the text this repo's own LICENSE-MIT carries, with the two blanks filled. Generated here
+// like seedManifest rather than embedded from `seed/`: twenty fixed lines with two blanks are not worth an
+// embedding role. The Apache License 2.0 body has no blanks and ~200 lines, so it IS a role
+// (KAMA_SEED_LICENSE_APACHE, seed/LICENSE-APACHE — byte-identical to this repo's own, check-seed.sh).
 static std::string seedLicense(const std::string& holder, const std::string& year)
 {
     return "MIT License\n"
@@ -8885,19 +8884,23 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     if (ask && !o.agentsGiven) agents = seedAskYesNo("write AGENTS.md so AI agents know this project?", false);
 
     // `--license`: a flag, not a question — a license is a decision the author brings, and a default
-    // would be kama choosing one for somebody else's code. `mit` is the one body seed can write, so any
-    // other value is refused BY NAME with the way through, rather than recording an SPDX id the tree does
-    // not back. Case-insensitive on the way in; the SPDX spelling ("MIT") on the way out.
+    // would be kama choosing one for somebody else's code. Seed writes the bodies it carries: `mit`,
+    // `apache-2.0`, and `mit-or-apache` — both, at the user's option, which is kama's own license and the
+    // Rust ecosystem's convention (LICENSE-MIT + LICENSE-APACHE). Any other value is refused BY NAME with
+    // the way through, rather than recording an SPDX id the tree does not back. Case-insensitive on the way
+    // in; the SPDX expression on the way out.
     std::string license;
     if (o.licenseGiven) {
         std::string l = o.license;
         for (char& c : l) c = (char)tolower((unsigned char)c);
-        if (l != "mit") {
-            fprintf(stderr, "kama seed: --license can write `mit` only; for '%s' add the LICENSE file "
-                            "yourself and set \"license\" in kama.json\n", o.license.c_str());
+        if (l == "mit") license = "MIT";
+        else if (l == "apache-2.0") license = "Apache-2.0";
+        else if (l == "mit-or-apache") license = "MIT OR Apache-2.0";
+        else {
+            fprintf(stderr, "kama seed: --license can write `mit`, `apache-2.0` or `mit-or-apache`; for '%s' add "
+                            "the license file yourself and set \"license\" in kama.json\n", o.license.c_str());
             return 2;
         }
-        license = "MIT";
     }
 
     // (4) THE WHOLE FILE LIST, built up front and pre-flighted for collisions, so a seed lands entirely
@@ -8933,7 +8936,14 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
         const time_t now = time(nullptr);
         char year[8] = "";
         if (const struct tm* t = localtime(&now)) strftime(year, sizeof year, "%Y", t);
-        files.push_back({ "LICENSE", seedLicense(holder, year) });
+        // One license is `LICENSE`; the dual license is the two files under their own names, each
+        // complete, which is how a reader (and GitHub) tells the two apart.
+        if (license == "MIT")             files.push_back({ "LICENSE", seedLicense(holder, year) });
+        else if (license == "Apache-2.0") files.push_back({ "LICENSE", embeddedBody(KAMA_SEED_LICENSE_APACHE) });
+        else {
+            files.push_back({ "LICENSE-MIT", seedLicense(holder, year) });
+            files.push_back({ "LICENSE-APACHE", embeddedBody(KAMA_SEED_LICENSE_APACHE) });
+        }
     }
 
     if (!o.force) {
@@ -9054,7 +9064,7 @@ void usage(FILE* out = stderr)
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
         "  kama seed      [<dir>] [--kind executable|library|monorepo]   turn a directory into a kama project\n"
         "                  ([--name N] [--version V] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
-        "                   [--license mit] [--yes] [--force]; interactive when stdin is a terminal, else it\n"
+        "                   [--license mit|apache-2.0|mit-or-apache] [--yes] [--force]; interactive on a terminal, else it\n"
         "                   takes the defaults)\n"
         "  kama agents install <kama.json>     write AGENTS.md so an AI agent knows this project + `kama query`\n"
         "                  ([--claude] [--tool <name>]... [--all-tools] [--skill] [--force];\n"

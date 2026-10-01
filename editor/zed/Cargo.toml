@@ -3,7 +3,7 @@ name = "zed_kama"
 version = "0.1.0"
 edition = "2021"
 publish = false
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [lib]
 # Zed loads the extension as a WebAssembly component. It runs the cargo build itself

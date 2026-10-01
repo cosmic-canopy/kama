@@ -1,7 +1,7 @@
 ---
 name: kama
 description: Ask the kama compiler for verified facts about a kama codebase — find a symbol by name, read a real signature, check what a name resolves to, and verify a change actually compiles. Use when working on .kama files, when you need a function's exact signature or parameter names, when a kama build fails, or when you are about to guess at kama syntax.
-license: MIT
+license: MIT OR Apache-2.0
 ---
 
 # Working with kama, using the compiler as the source of truth

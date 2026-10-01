@@ -23,5 +23,6 @@ extern const char* KAMA_SEED_APP;         // seed/app.kama    — the executable
 extern const char* KAMA_SEED_LIB;         // seed/lib.kama    — the library surface
 extern const char* KAMA_SEED_GITIGNORE;   // seed/gitignore   — dotless in the repo, .gitignore on disk
 extern const char* KAMA_SEED_README;      // seed/README.md   — the README stub
+extern const char* KAMA_SEED_LICENSE_APACHE;   // seed/LICENSE-APACHE — the Apache License 2.0, verbatim (`--license`)
 
 #endif // KAMA_SEED_H

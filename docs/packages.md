@@ -22,10 +22,12 @@ manifest, a starter source file, a `.gitignore`, and a README stub. Prompting ha
 terminal to prompt on; a pipe, a script or a CI runner behaves as `--yes`, so `kama seed` never hangs a
 build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), `--agents` adds
 the [AI-agent guidance](agents.md) — and for `--kind library` the package half of it, `AGENTS.package.md`
-(publishing, vendoring, `tests/` as one program) — and `--license mit` writes a `LICENSE` and records `"license": "MIT"`
-in the manifest — the bundle a package publishes with. A license is a flag and never a prompt, because it
-is a decision the author brings, and `mit` is the one body `seed` can write: any other value is refused by
-name. It refuses to touch a directory that already has a `kama.json`, and if any other file it would
+(publishing, vendoring, `tests/` as one program) — and `--license` writes the license and records it in the
+manifest — the bundle a package publishes with: `mit` writes `LICENSE` and `"license": "MIT"`, `apache-2.0`
+writes `LICENSE` and `"license": "Apache-2.0"`, and `mit-or-apache` — kama's own license, and the usual
+choice for a kama package — writes `LICENSE-MIT` + `LICENSE-APACHE` and `"license": "MIT OR Apache-2.0"`. A
+license is a flag and never a prompt, because it is a decision the author brings, and those three are the
+bodies `seed` can write: any other value is refused by name. It refuses to touch a directory that already has a `kama.json`, and if any other file it would
 write already exists it writes **nothing** rather than half a project.
 
 What `--kind executable` produces:
@@ -898,7 +900,7 @@ the key.)
 
 | Command | What it does |
 |---|---|
-| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit` (a `LICENSE` plus the manifest's `license`), `--force`. |
+| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--force`. |
 | `kama run <kama.json> [-- <args>]` | Build the project and run it; native-only. A workspace errors and names its members. |
 | `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
 | `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |

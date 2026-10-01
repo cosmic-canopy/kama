@@ -2,19 +2,21 @@
 # Embed the `kama seed` project templates into a generated C++ translation unit, so seeding works from
 # any install — including `--no-std`, which ships only bin/kama (see install.sh, kama.seed.h).
 #
-#   usage: embed_seed.sh OUT APP LIB GITIGNORE README
+#   usage: embed_seed.sh OUT APP LIB GITIGNORE README LICENSE_APACHE
 #
-# Positional and fixed, not a wildcard over seed/*: the four templates are four ROLES kama.seed.h names
-# one by one, not an extensible set like agents/stubs/. A fifth template is a C++ change anyway, and four
-# named externs make a missing one a link error rather than a silent gap.
+# Positional and fixed, not a wildcard over seed/*: the templates are ROLES kama.seed.h names one by
+# one, not an extensible set like agents/stubs/. A new template is a C++ change anyway, and named externs
+# make a missing one a link error rather than a silent gap. The fifth is the Apache License 2.0 text
+# `--license apache-2.0` / `mit-or-apache` writes — ~200 fixed lines, the same bytes as this repo's own
+# LICENSE-APACHE (check-seed.sh holds them equal), where the twenty-line MIT body is inline in the driver.
 #
 # Delimiter KAMASEED: kama source and a .gitignore never contain `)KAMASEED"`, but markdown legally can,
 # so every input is checked — exactly as embed_agents.sh checks its own.
 set -eu
 
-out=$1 app=$2 lib=$3 gitignore=$4 readme=$5
+out=$1 app=$2 lib=$3 gitignore=$4 readme=$5 apache=$6
 
-for f in "$app" "$lib" "$gitignore" "$readme"; do
+for f in "$app" "$lib" "$gitignore" "$readme" "$apache"; do
     if grep -q ')KAMASEED"' "$f"; then
         echo "embed_seed: $f contains the raw-string delimiter )KAMASEED\" — rename it" >&2
         exit 1
@@ -36,4 +38,5 @@ emit() {
     emit KAMA_SEED_LIB       "$lib"
     emit KAMA_SEED_GITIGNORE "$gitignore"
     emit KAMA_SEED_README    "$readme"
+    emit KAMA_SEED_LICENSE_APACHE "$apache"
 } > "$out"

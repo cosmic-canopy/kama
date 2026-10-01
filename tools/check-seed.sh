@@ -284,10 +284,39 @@ licw="$tmp/licw"
 [ -f "$licw/LICENSE" ] && grep -q '"license": "MIT"' "$licw/a/kama.json" && grep -q '"license": "MIT"' "$licw/b/kama.json" \
     && ok "a monorepo gets one LICENSE at the root and the id in every member" \
     || bad "monorepo --license: root LICENSE or a member's key is missing"
-# Only `mit` has a body; anything else is refused by name, writing nothing, and says the way through.
+# The dual license — kama's own, and the Rust convention: two files under their own names, each complete,
+# and the SPDX expression in the manifest. Its Apache text is the SAME BYTES as this repo's LICENSE-APACHE,
+# and its MIT body the same as this repo's LICENSE-MIT but for the copyright line: one text each, and these
+# three comparisons are what keep seed's copy, the embedded seed/LICENSE-APACHE and the repo's from drifting.
+licd="$tmp/licd"
+"$KAMA" seed "$licd" --yes --kind library --name duallib --license mit-or-apache >/dev/null 2>&1 \
+    || bad "seed --license mit-or-apache failed"
+[ -f "$licd/LICENSE-MIT" ] && [ -f "$licd/LICENSE-APACHE" ] && [ ! -f "$licd/LICENSE" ] \
+    && ok "--license mit-or-apache writes LICENSE-MIT and LICENSE-APACHE" \
+    || bad "--license mit-or-apache did not write exactly LICENSE-MIT + LICENSE-APACHE"
+grep -q '"license": "MIT OR Apache-2.0"' "$licd/kama.json" && ok "and records \`MIT OR Apache-2.0\`" \
+                                                          || bad "the dual license's SPDX expression is not recorded"
+cmp -s "$ROOT/seed/LICENSE-APACHE" "$ROOT/LICENSE-APACHE" && ok "seed/LICENSE-APACHE is kama's own LICENSE-APACHE" \
+                                                        || bad "seed/LICENSE-APACHE has drifted from the repo's LICENSE-APACHE"
+cmp -s "$licd/LICENSE-APACHE" "$ROOT/LICENSE-APACHE" && ok "the seeded Apache text is byte-identical to kama's" \
+                                                     || bad "the seeded LICENSE-APACHE differs from the repo's"
+if [ "$(sed 3d "$licd/LICENSE-MIT")" = "$(sed 3d "$ROOT/LICENSE-MIT")" ]; then ok "the seeded MIT body is kama's own"
+else bad "the seeded MIT body (seedLicense) has drifted from the repo's LICENSE-MIT"; fi
+lica="$tmp/lica"
+"$KAMA" seed "$lica" --yes --license apache-2.0 >/dev/null 2>&1 && cmp -s "$lica/LICENSE" "$ROOT/LICENSE-APACHE" \
+    && grep -q '"license": "Apache-2.0"' "$lica/kama.json" \
+    && ok "--license apache-2.0 writes the Apache text as LICENSE and records Apache-2.0" \
+    || bad "--license apache-2.0 did not write the Apache LICENSE and id"
+licwd="$tmp/licwd"
+"$KAMA" seed "$licwd" --yes --kind monorepo --members a,b --license mit-or-apache >/dev/null 2>&1 \
+    && [ -f "$licwd/LICENSE-MIT" ] && [ -f "$licwd/LICENSE-APACHE" ] \
+    && grep -q '"license": "MIT OR Apache-2.0"' "$licwd/b/kama.json" \
+    && ok "a dual-licensed monorepo gets both files at the root and the expression in every member" \
+    || bad "monorepo --license mit-or-apache: root files or a member's key is missing"
+# Anything else is refused by name, writing nothing, and says the way through.
 reject "a license seed cannot write" --license gpl-3.0
-grep -q 'can write `mit` only' "$tmp/rej$n.out" && ok "the refusal says what it can write" \
-                                                || bad "the license refusal does not name \`mit\`"
+grep -q 'can write `mit`, `apache-2.0` or `mit-or-apache`' "$tmp/rej$n.out" && ok "the refusal says what it can write" \
+                                                || bad "the license refusal does not name what seed can write"
 # And it is opt-in: a plain seed writes no LICENSE and no key.
 [ -f "$h/LICENSE" ] && bad "a plain seed wrote a LICENSE" || ok "a plain seed writes no LICENSE"
 grep -q '"license"' "$h/kama.json" && bad "a plain seed recorded a license" || ok "a plain seed records no license"

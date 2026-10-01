@@ -88,7 +88,7 @@ jobs:
           # Module `core` (the runtime capabilities) is embedded too, for the same reason; its source is
           # what `builtinSourcePath` opens for `<prelude>/core/core.kama`.
           cp -R lib/core payload/lib/kama/core
-          cp LICENSE payload/ 2>/dev/null || true
+          cp LICENSE-MIT LICENSE-APACHE RUNTIME-EXCEPTION payload/   # no `|| true`: a release must never ship without its license
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
 
       - name: Package (slim)
@@ -176,7 +176,7 @@ jobs:
           # Module `core` (the runtime capabilities) is embedded too, for the same reason; its source is
           # what `builtinSourcePath` opens for `<prelude>/core/core.kama`.
           cp -R lib/core payload/lib/kama/core
-          cp LICENSE payload/ 2>/dev/null || true
+          cp LICENSE-MIT LICENSE-APACHE RUNTIME-EXCEPTION payload/   # no `|| true`: a release must never ship without its license
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
       - name: Package (slim)
         run: |

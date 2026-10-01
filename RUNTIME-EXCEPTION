@@ -1,0 +1,19 @@
+kama Runtime Library Exception
+
+kama is licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT
+license (LICENSE-MIT), at your option. This exception is an additional permission to whichever of
+the two you choose.
+
+As an exception, if, as a result of compiling your source code with kama, portions of kama -- its
+runtime headers (`include/`), its prelude (`prelude/`), its standard library (`lib/`), or code the
+compiler itself generates -- are embedded into the compiler's output (object code, a library, an
+executable, or the C source kama writes on the way to one), you may redistribute those embedded
+portions as part of that output without providing the notices or attribution the license would
+otherwise require: under the Apache License, Version 2.0, without complying with the conditions of
+Sections 4(a), 4(b) and 4(d); under the MIT license, without including the copyright notice and
+permission notice.
+
+This exception covers kama only as it appears inside the output of compiling your own source code.
+It does not apply to kama itself -- the compiler, its tools, or its source -- distributed on its own.
+
+This exception follows the pattern of the LLVM Exception and the Swift Runtime Library Exception.

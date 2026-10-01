@@ -213,4 +213,19 @@ Sublime Text, Helix, Kate and Zed need a few lines of config — see **[editor s
 - `llms.txt`, `docs/GOALS.md` — LLM-discovery entry point and design philosophy
 - `docs/agents.md`, `agents/` — the AI-agent surface (`kama query`) and the `AGENTS.md` kama ships
 
-MIT licensed — see [LICENSE](LICENSE).
+## License
+
+kama is licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option, with a **runtime library exception** ([RUNTIME-EXCEPTION](RUNTIME-EXCEPTION)): the parts
+of kama the compiler puts into your program — its runtime, prelude and standard library — ship inside that
+program with no kama notice or attribution required, as with LLVM and Swift.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in kama by
+you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or
+conditions.

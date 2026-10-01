@@ -161,9 +161,10 @@ SEED_APP       = seed/app.kama
 SEED_LIB       = seed/lib.kama
 SEED_GITIGNORE = seed/gitignore
 SEED_README    = seed/README.md
+SEED_APACHE    = seed/LICENSE-APACHE
 
-$(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) tools/embed_seed.sh | $(BUILD)
-	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README)
+$(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) tools/embed_seed.sh | $(BUILD)
+	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into out/<platform>/.
