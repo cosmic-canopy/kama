@@ -118,6 +118,14 @@ struct FuncSig {
 };
 // The C symbol a call, a decay to a function pointer or a definition emits for a free function.
 inline const std::string& symbolOf(const FuncSig& s) { return s.linkName.empty() ? s.cName : s.linkName; }
+// A signed 64-bit value as C text, for every place kama writes a value it folded. INT64_MIN has no C literal:
+// `-9223372036854775808` is unary minus on a magnitude past LLONG_MAX, which C types as unsigned (clang warns
+// `-Wimplicitly-unsigned-literal`), so it is spelled as <stdint.h> spells INT64_MIN. Any other value is a
+// decimal literal, which C gives the first of `int`/`long`/`long long` that holds it.
+inline std::string cSignedLiteral(int64_t v)
+{
+    return v == INT64_MIN ? "(-9223372036854775807LL - 1)" : std::to_string((long long)v);
+}
 
 // A function-pointer signature type: a bodiless `fn ret Name(params);`.
 // Lowers to `typedef ret (*cName)(paramtypes);`. FunctionPtr<Name> spells `cName`.

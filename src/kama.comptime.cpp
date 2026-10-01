@@ -312,7 +312,7 @@ std::string CEmitter::ctRender(const CTValue& v) const
     // Int: emit unsigned values as unsigned decimal so a uint64 top-bit value is not a negative literal.
     std::ostringstream os;
     if (!v.isSigned) os << (uint64_t)v.i << "u";
-    else             os << v.i;
+    else             os << cSignedLiteral(v.i);
     return os.str();
 }
 

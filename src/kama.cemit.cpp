@@ -5197,7 +5197,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     // idiomatic spelling — what <stdint.h> itself uses for INT64_MIN — is one less, minus one. Reachable
     // since 5b-C gave INT64_MIN a suffixed spelling (`-9223372036854775808i64`).
     if (auto* v = dynamic_cast<Int64Node*>(n)) {
-        if ((int64_t)v->value == INT64_MIN) return "(-9223372036854775807LL - 1)";
+        if ((int64_t)v->value == INT64_MIN) return cSignedLiteral(INT64_MIN);
         return std::to_string((long long)v->value) + "LL";
     }
     if (auto* v = dynamic_cast<UInt8Node*>(n))  return std::to_string((unsigned)v->value) + "U";
@@ -9858,7 +9858,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
         for (auto& m : ei.members) {
             indent(1);
             *_out << ei.name << "_" << m.name;
-            if (m.value && m.hasFolded) *_out << " = " << m.folded;   // the FOLDED value — see EnumMember
+            if (m.value && m.hasFolded) *_out << " = " << cSignedLiteral(m.folded);   // the FOLDED value — see EnumMember
             *_out << ",\n";
         }
         *_out << "};\n\n";
@@ -9868,7 +9868,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
     for (auto& m : ei.members) {
         indent(1);
         *_out << ei.name << "_" << m.name;
-        if (m.value && m.hasFolded) *_out << " = " << m.folded;
+        if (m.value && m.hasFolded) *_out << " = " << cSignedLiteral(m.folded);
         *_out << ",\n";
     }
     *_out << "} " << ei.name << ";\n\n";
@@ -11658,8 +11658,9 @@ std::string CEmitter::constParamCValue(const std::string& name)
     if (it == _comptimeSubst.end()) return "";
     const ConstBinding& b = it->second;
     std::string lit = std::to_string(b.value);
-    // The literal has to be REPRESENTABLE before the cast can apply, so the 64-bit kinds keep a suffix.
-    if (b.kind == IDENTIFIER_INT64_VAL)  lit += "LL";
+    // The literal has to be REPRESENTABLE before the cast can apply, so the 64-bit kinds keep a suffix —
+    // and INT64_MIN, which no literal reaches, its <stdint.h> spelling (cSignedLiteral).
+    if (b.kind == IDENTIFIER_INT64_VAL)  lit = b.value == INT64_MIN ? cSignedLiteral(INT64_MIN) : lit + "LL";
     if (b.kind == IDENTIFIER_UINT64_VAL) lit = std::to_string((uint64_t)b.value) + "ULL";
     return "((" + cType(primTypeNode(b.kind)) + ")" + lit + ")";
 }
@@ -36586,7 +36587,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             *_out << "static const " << cType(tc.type) << " " << tc.cName << " = ";
             auto cv = _comptimeConstVals.find(kv.first);
             if (cv != _comptimeConstVals.end()) *_out << ctRender(cv->second);
-            else if (tc.hasValue) *_out << tc.value;
+            else if (tc.hasValue) *_out << cSignedLiteral(tc.value);
             else {
                 // The interpreter pass evaluated every one it could not fold, and says why when it fails;
                 // reaching here without an error means no initializer at all.
@@ -36823,7 +36824,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                     *_out << " = {0}";   // 6b-3: interpreter eval already reported a precise error — no duplicate
                                          // (asked before re-folding: a re-fold would report its reason again)
                 else if (constValue(d->initializer, cv))
-                    *_out << " = " << cv;   // baked literal: folds cross-const refs (`B = A + 1`) and sidesteps
+                    *_out << " = " << cSignedLiteral(cv);   // baked literal: folds cross-const refs (`B = A + 1`) and sidesteps
                                             // C's "initializer element is not constant" for a const-referencing-const
                 // (No C-expression fallback: every initializer the integer fold misses went to the interpreter,
                 // which either baked it or refused it. Handing C the text is how a type constant held a value

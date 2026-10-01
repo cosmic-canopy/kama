@@ -1,0 +1,48 @@
+// Peer KPG-14: int64's minimum has no C literal. `-9223372036854775808` is unary minus on a magnitude past
+// LLONG_MAX, which C types as unsigned (clang: -Wimplicitly-unsigned-literal), and every place kama writes a
+// value it FOLDED spelled it that way; only an expression literal had the <stdint.h> spelling. Each position
+// below wrote it: a module constant, a `comptime fn` result, a table element, a struct field, a type constant,
+// a local constant, an `: int64` enum member, and a compile-time argument to a function and to a type.
+comptime int64 LOWEST = -9223372036854775807i64 - 1i64;
+comptime int64 COPY = LOWEST;
+comptime fn int64 lowest() { return -9223372036854775807i64 - 1i64; }
+comptime int64 FROM_FN = lowest();
+comptime InlineArray<int64>#(2) TABLE = [-9223372036854775807i64 - 1i64, 1i64];
+
+type value P { public int64 a = 0i64; public ctor make() {} }
+comptime fn P mkP() { P p = P.make(); p.a = -9223372036854775807i64 - 1i64; return p; }
+comptime P BAKED = mkP();
+
+type value T {
+    int32 z = 0;
+    public ctor make() {}
+    public comptime int64 L = -9223372036854775807i64 - 1i64;
+}
+
+type enum E : int64 { A = -9223372036854775807i64 - 1i64, B = 0i64 }
+
+fn int64 echo() comptime(int64 N) { return N; }
+
+type value Buf comptime(int64 N) {
+    int32 z = 0;
+    public ctor make() {}
+    public fn int64 n() { return N; }
+}
+
+fn int32 main() {
+    comptime int64 LOCAL = -9223372036854775807i64 - 1i64;
+    Buf#(-9223372036854775807i64 - 1i64) b = Buf#(-9223372036854775807i64 - 1i64).make();
+    E e = E::A;
+    int32 ok = 0;
+    if (LOWEST < 0i64 && LOWEST + 1i64 == -9223372036854775807i64) { ok = ok + 1; }
+    if (COPY == LOWEST) { ok = ok + 1; }
+    if (FROM_FN == LOWEST) { ok = ok + 1; }
+    if (TABLE[0] == LOWEST) { ok = ok + 1; }
+    if (BAKED.a == LOWEST) { ok = ok + 1; }
+    if (T::L == LOWEST) { ok = ok + 1; }
+    if (LOCAL == LOWEST) { ok = ok + 1; }
+    if (cast<int64>(e) == LOWEST) { ok = ok + 1; }
+    if (echo()#(-9223372036854775807i64 - 1i64) == LOWEST) { ok = ok + 1; }
+    if (b.n() == LOWEST) { ok = ok + 1; }
+    return ok;   // 10
+}
