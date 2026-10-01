@@ -11,7 +11,7 @@ import {
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isInvalid(Result<Unit, IoError> r) {
-    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: u): false; };
+    return match (r) { case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; case Ok(value: u): false; };
 }
 
 fn int32 options(ref TcpStream c) {
@@ -29,7 +29,7 @@ fn int32 options(ref TcpStream c) {
     FixedArray<uint8> buf = FixedArray.make(size: 64);
     bool wb = match (c.read(into: buf.viewMut())) {
         case Ok(value: n): false;
-        case Err(error: e): match (e) { case WouldBlock: true; case _: false; };
+        case Err(error: e): match (e.kind()) { case WouldBlock: true; case _: false; };
     };
     if (!wb) { return 61; }
     if (!isOk(r: c.setNonBlocking(on: false))) { return 62; }
@@ -62,7 +62,7 @@ fn int32 halfClose(ref TcpListener l, ref TcpStream c) {
     if (got != 2 || back[1] != 7ui8) { return 87; }
     bool broken = match (c.write(bytes: req.view())) {
         case Ok(value: n): false;
-        case Err(error: e): match (e) { case BrokenPipe: true; case _: false; };
+        case Err(error: e): match (e.kind()) { case BrokenPipe: true; case _: false; };
     };
     if (!broken) { return 88; }
     return 0;

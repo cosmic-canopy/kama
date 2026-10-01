@@ -14,14 +14,14 @@ import {
 };
 
 fn bool isInvalid(Result<usize, IoError> r) {
-    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: n): false; };
+    return match (r) { case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; case Ok(value: n): false; };
 }
 
 // Windows closes a file's descriptor and a socket's with different calls, so a `Descriptor` remembers which it
 // is and adopting a socket's as a `File` is `InvalidInput` there; on POSIX a descriptor is a descriptor.
 @compileFor(OS_WINDOWS)
 fn bool kindRule(Descriptor socketCopy) {
-    return match (File.adopt(descriptor: give socketCopy)) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: f): false; };
+    return match (File.adopt(descriptor: give socketCopy)) { case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; case Ok(value: f): false; };
 }
 @compileFor(!OS_WINDOWS)
 fn bool kindRule(Descriptor socketCopy) {

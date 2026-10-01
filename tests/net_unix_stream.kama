@@ -13,10 +13,10 @@ import {
 };
 
 fn bool isAddrInUse(Result<UnixListener, IoError> r) {
-    return match (r) { case Err(error: e): match (e) { case AddrInUse: true; case _: false; }; case Ok(value: l): false; };
+    return match (r) { case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; }; case Ok(value: l): false; };
 }
 fn bool isInvalid(Result<UnixListener, IoError> r) {
-    return match (r) { case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; case Ok(value: l): false; };
+    return match (r) { case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; case Ok(value: l): false; };
 }
 
 fn int32 serve(ref UnixStream s) {

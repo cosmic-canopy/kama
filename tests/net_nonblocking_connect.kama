@@ -19,7 +19,7 @@ import {
 };
 
 fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
-fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }
+fn bool isRefused(IoError e) { return match (e.kind()) { case ConnectionRefused: true; case _: false; }; }
 
 // Block until a non-blocking connect RESOLVES (the socket reports ready), then read its outcome. Polls in
 // short slices up to a generous overall deadline; stops as soon as the poller reports readiness (writable on

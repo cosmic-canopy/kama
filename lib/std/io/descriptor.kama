@@ -17,7 +17,7 @@
 // On Windows a file's is a C-runtime descriptor and a socket's a SOCKET, closed by different calls, so a
 // `Descriptor` remembers which it is (`adopt` vs `adoptSocket`), and adopting one into the other kind of
 // handle is `InvalidInput` there.
-import { IoError, lastError };
+import { IoError, IoErrorKind, lastError };
 
 export { Descriptor };
 
@@ -53,7 +53,7 @@ type resource Descriptor implements Sendable {
     // Windows a file's descriptor cannot become a socket or the reverse — `InvalidInput`, and it is closed.
     // The bridge every `adopt` crosses; a program adopts rather than calling this.
     public unsafe fn Result<isize, IoError> release(bool asSocket) {
-        if (kama_desc_kind_fits(kind: this.kind, socket: asSocket ? 1 : 0) == 0) { return Result::Err(error: IoError::InvalidInput); }
+        if (kama_desc_kind_fits(kind: this.kind, socket: asSocket ? 1 : 0) == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         isize h = this.handle;
         this.handle = -1;
         return Result::Ok(value: h);

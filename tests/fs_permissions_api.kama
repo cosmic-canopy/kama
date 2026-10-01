@@ -28,7 +28,7 @@ fn int32 api() {
     match (Permissions.fromMode(mode: 0o4755)) {
         case Ok(value: p): { bad = bad + 128; }
         case Err(error: e): {
-            match (e) { case InvalidInput: { } case _: { bad = bad + 128; } };
+            match (e.kind()) { case InvalidInput: { } case _: { bad = bad + 128; } };
         }
     };
     match (Permissions.fromMode(mode: 0o100644)) {

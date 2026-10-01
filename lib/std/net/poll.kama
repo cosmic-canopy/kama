@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError, std::ptr::nonNull };
+import { std::io::IoError, std::io::lastError, std::ptr::nonNull, std::time::monotonicNow, std::time::Instant };
 
 export { Poller, Interest, Ready };
 
@@ -48,11 +48,25 @@ type resource Poller implements Sendable {
     public unsafe fn void remove(isize fd) { kama_poller_remove(p: this.state, fd: fd); }
 
     // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready. Returns the count
-    // ready (0 = timed out). EINTR surfaces as Err(Other) — the caller may retry.
+    // ready (0 = timed out). A signal that interrupts the wait (EINTR — SIGCHLD from a child, a profiler's
+    // SIGPROF, whatever `SA_RESTART` says) is not an I/O event, so the wait resumes with the time that is LEFT,
+    // measured on the monotonic clock: the caller's deadline holds either way (KPG-17). It used to surface as
+    // `Other(4)`, which a caller could tell from a real failure only by a platform's magic number.
     public unsafe fn Result<int32, IoError> wait(int32 timeoutMs) {
-        int32 n = kama_poller_wait(p: this.state, timeoutMs: timeoutMs);
-        if (n < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: n);
+        Instant start = monotonicNow();
+        int32 left = timeoutMs;
+        while (true) {
+            int32 n = kama_poller_wait(p: this.state, timeoutMs: left);
+            if (n >= 0) { return Result::Ok(value: n); }
+            IoError e = lastError();
+            bool interrupted = match (e.kind()) { case Interrupted: true; case _: false; };
+            if (!interrupted) { return Result::Err(error: e); }
+            if (timeoutMs >= 0) {
+                int64 spent = start.elapsed().asMillis();
+                if (spent >= cast<int64>(timeoutMs)) { return Result::Ok(value: 0); }
+                left = timeoutMs - cast<int32>(spent);
+            }
+        }
     }
 
     // The readiness of `fd` as reported by the last wait().

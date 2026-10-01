@@ -1,6 +1,6 @@
 
 import {
-    std::io::IoError,
+    std::io::IoError, std::io::IoErrorKind,
     std::io::lastError,
     std::io::Reader,
     std::io::Writer,
@@ -52,10 +52,10 @@ extern fn int32 kama_EAGAIN();
 // timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
 // `InvalidInput` — an option to leave at the OS default is simply not set.
 fn Result<int32, IoError> unitsUp(Duration d, int64 unit) {
-    if (d.nanos <= 0i64) { return Result::Err(error: IoError::InvalidInput); }
+    if (d.nanos <= 0i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     int64 n = d.nanos / unit;
     if (d.nanos % unit != 0i64) { n = n + 1i64; }
-    if (n > 2147483647i64) { return Result::Err(error: IoError::InvalidInput); }
+    if (n > 2147483647i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     return Result::Ok(value: cast<int32>(n));
 }
 
@@ -130,7 +130,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: list): { addrs = give list; }
         };
-        IoError last = IoError::HostUnreachable;   // `resolve` never succeeds empty, so an attempt replaces it
+        IoError last = IoError.of(kind: IoErrorKind::HostUnreachable);   // `resolve` never succeeds empty, so an attempt replaces it
         isize i = 0;
         while (i < addrs.length()) {
             Result<TcpStream, IoError> attempt = TcpStream.connectTo(address: addrs[i]);
@@ -191,7 +191,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
     }
     // How many unanswered probes drop the connection.
     public unsafe fn Result<Unit, IoError> setKeepAliveCount(uint32 count) {
-        if (count == 0ui32 || count > 2147483647ui32) { return Result::Err(error: IoError::InvalidInput); }
+        if (count == 0ui32 || count > 2147483647ui32) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         if (kama_set_keepalive_count(fd: this.fd, count: cast<int32>(count)) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }

@@ -26,7 +26,7 @@ fn bool dialName(uint16 port) {
 
 fn bool invalidInput(const ref string host) {
     Result<TcpStream, IoError> rs = TcpStream.connect(host: host, port: 9ui16);
-    return match (rs) { case Ok(value: s): false; case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; };
+    return match (rs) { case Ok(value: s): false; case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; };
 }
 
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).

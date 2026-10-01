@@ -75,7 +75,7 @@ unsafe fn int32 run() {
     // 5. `Read` creates nothing, so it takes no permissions.
     match (File.openWith(path: f, mode: OpenMode::Read, permissions: priv)) {
         case Ok(value: fh): { return 21; }
-        case Err(error: e): { match (e) { case InvalidInput: { } case _: { return 22; } }; }
+        case Err(error: e): { match (e.kind()) { case InvalidInput: { } case _: { return 22; } }; }
     };
 
     // 6. `setPermissions` round trips — down to nothing and back, since an owner can always change its own file.

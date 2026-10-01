@@ -26393,14 +26393,18 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             std::string argCls = handoffSourceClass(argExpr, handoff);
             rejectUnresolvedHandoff(argCls, fcls, argExpr, handoff, ("payload field `" + f.name + "`").c_str(), srcLine);
             std::string field;
-            // Model C (P2): an enum value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
-            // `Result::Err(error: IoError::NotFound)`) is BOXED + upcast — heap-copy the enum, attach its
-            // `<Enum>__as_Error` vtbl. Checked FIRST (before the move-only branches): if the field is a
-            // poly-dispatch-contract handle and the arg is an implementing enum, boxing is always right.
-            // `exprClass` is "" for a variant literal, so recover the source enum via variantExprEnumCType.
+            // Model C (P2): a value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
+            // `Result::Err(error: e)`) is BOXED + upcast — heap-copy it, attach its `<Type>__as_Error` vtbl.
+            // Checked FIRST (before the move-only branches): if the field is a poly-dispatch-contract handle and
+            // the arg's type implements the contract, boxing is always right. `exprClass` is "" for a variant
+            // literal, so recover the source enum via variantExprEnumCType. Any user type that implements it —
+            // an enum, a `value`, a `resource` — not only an enum: `std::io::IoError` became a `value` (KPG-22) and
+            // `return Result::Err(error: e)` into an `Owned<Error>` reached clang unboxed ("initializing 'void *'
+            // with an expression of incompatible type"), while an enum in the same position boxed.
             auto enumClass = [&](const std::string& c) {
                 auto it = _classes.find(c);
-                return it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum());
+                return it != _classes.end() && !it->second.isIntrinsicColl && !isSmartPtrClass(c)
+                    && !isInterface(c) && !it->second.isExternStruct;
             };
             std::string boxEnum = enumClass(argCls) ? argCls : variantExprEnumCType(argExpr);
             if (boxEnum.empty() && enumClass(typeOfExpr(argExpr))) boxEnum = typeOfExpr(argExpr);   // `E::A` of an integer enum

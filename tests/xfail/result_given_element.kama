@@ -1,8 +1,8 @@
 // KPG-20's `Result` half: a value of either argument type is not a `Result`; the arm is named. Each says which.
-import { std::io::IoError };
+import { std::io::IoError, std::io::IoErrorKind };
 fn Result<int32, IoError> ok() { return 5; }
-fn Result<int32, IoError> bad() { return IoError::NotFound; }
+fn Result<int32, IoError> bad() { return IoError.of(kind: IoErrorKind::NotFound); }
 fn int32 main() {
-    Result<int32, IoError> r = IoError::NotFound;
+    Result<int32, IoError> r = IoError.of(kind: IoErrorKind::NotFound);
     return 0;
 }

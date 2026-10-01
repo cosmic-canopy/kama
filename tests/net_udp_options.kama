@@ -10,7 +10,7 @@ import {
 };
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
-fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
+fn bool isWouldBlock(IoError e) { return match (e.kind()) { case WouldBlock: true; case _: false; }; }
 
 fn int32 check(ref UdpSocket s) {
     if (!isOk(r: s.setTtl(ttl: cast<uint32>(64)))) { return 71; }

@@ -1,0 +1,47 @@
+// `std::io::IoError` in the two parts an I/O error has (peer KPG-22, the model Rust, Go and .NET share): its KIND,
+// which a caller branches on — `match (e.kind())` — and, when the OS reported it, the OS's own CODE, whose text the
+// message quotes. A kama-raised error has a kind and no code. Platform-neutral: what each OS SAYS differs, so this
+// checks that it is said, not the words. Returns 0.
+import {
+    std::io::IoError, std::io::IoErrorKind,
+    std::fs::File, std::fs::OpenMode, std::fs::createDir, std::fs::removeDir,
+};
+
+fn bool startsWith(const ref string s, const ref string p) {
+    if (s.length() < p.length()) { return false; }
+    isize i = 0;
+    while (i < p.length()) { if (s[i] != p[i]) { return false; } i = i + 1; }
+    return true;
+}
+fn bool hasCode(const ref IoError e) { return match (e.rawOsError()) { case Some(value: c): c != 0; case None: false; }; }
+
+fn int32 main() {
+    // An OS failure: the kind, its code, and the OS's words after the code.
+    Result<File, IoError> r = File.open(path: "io-error-model/missing.txt", mode: OpenMode::Read);
+    IoError nf = match (give r) { case Ok(value: f): { return 1; } case Err(error: e): e; };
+    if (match (nf.kind()) { case NotFound: false; case _: true; }) { return 2; }
+    if (!hasCode(e: nf)) { return 3; }
+    string m = nf.message();
+    if (!startsWith(s: m, p: "not found (os error ")) { return 4; }
+    if (!m.contains(substring: ": ")) { return 5; }                     // the OS's own text follows the code
+
+    // An unclassified one is `Other`, and still says what the OS said: a directory that already exists.
+    Result<Unit, IoError> made = createDir(path: "io-error-model-dir");
+    Result<Unit, IoError> again = createDir(path: "io-error-model-dir");
+    IoError ex = match (again) { case Ok(value: u): { return 6; } case Err(error: e): e; };
+    Result<Unit, IoError> gone = removeDir(path: "io-error-model-dir");
+    if (match (ex.kind()) { case Other: false; case _: true; }) { return 7; }
+    if (!hasCode(e: ex)) { return 8; }
+    if (!startsWith(s: ex.message(), p: "i/o error (os error ")) { return 9; }
+
+    // A kama-raised error: a kind, no code, the kind's words.
+    IoError eof = IoError.of(kind: IoErrorKind::UnexpectedEof);
+    if (hasCode(e: eof) || eof.message() != "unexpected end of file") { return 10; }
+    if (IoError.of(kind: IoErrorKind::Interrupted).message() != "interrupted") { return 11; }
+
+    // Boxed into the uniform error channel, the message travels with it.
+    Result<int32, Owned<Error>> boxed = Result::Err(error: nf);
+    string bm = match (give boxed) { case Ok(value: n): ""; case Err(error: e): e.message(); };
+    if (!startsWith(s: bm, p: "not found (os error ")) { return 12; }
+    return 0;
+}

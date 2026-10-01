@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError,
+import { std::io::IoError, std::io::IoErrorKind, std::io::lastError,
          std::collections::DynamicArray, std::collections::FixedArray };
 
 export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne, interfaceIndexOf };
@@ -138,7 +138,7 @@ type value SocketAddr implements Formattable, Sendable {
         }
         return match (parseIp(text: text)) {
             case Some(value: ip): Result::Ok(value: SocketAddr.of(ip: ip, port: port));
-            case None: Result::Err(error: IoError::InvalidInput);
+            case None: Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
         };
     }
 

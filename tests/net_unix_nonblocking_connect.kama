@@ -6,7 +6,7 @@
 import { std::net::UnixListener, std::net::UnixStream, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 kind(const ref IoError e) {
-    return match (e) { case WouldBlock: 1; case ConnectionRefused: 2; case NotFound: 3; case InvalidInput: 4; case _: 9; };
+    return match (e.kind()) { case WouldBlock: 1; case ConnectionRefused: 2; case NotFound: 3; case InvalidInput: 4; case _: 9; };
 }
 fn int32 connectKind(const ref string path) {   // 0 connected, else the error's kind
     Result<UnixStream, IoError> r = UnixStream.connectNonBlocking(path: path);

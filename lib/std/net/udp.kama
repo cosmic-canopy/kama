@@ -1,5 +1,5 @@
 
-import { std::io::IoError, std::io::lastError, std::io::Descriptor, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom, IpAddr };
+import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Descriptor, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom, IpAddr };
 
 export { UdpSocket, DatagramSocket };
 
@@ -207,7 +207,7 @@ type resource UdpSocket implements DatagramSocket, Sendable {
     // routing table picks, so a loopback-bound V4 socket's send goes for a real interface and fails, and a
     // multi-homed host sends on whichever it likes.
     public unsafe fn Result<Unit, IoError> setMulticastInterfaceV4(const ref IpAddr interface) {
-        if (interface.family() != 4) { return Result::Err(error: IoError::InvalidInput); }
+        if (interface.family() != 4) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) i = interface.bytes();
         if (kama_multicast_if_v4(fd: this.fd, iface: addr(of: i[0])) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
@@ -232,7 +232,7 @@ type resource UdpSocket implements DatagramSocket, Sendable {
     }
 
     unsafe fn Result<Unit, IoError> membershipV4(const ref IpAddr group, const ref IpAddr interface, int32 join) {
-        if (group.family() != 4 || interface.family() != 4) { return Result::Err(error: IoError::InvalidInput); }
+        if (group.family() != 4 || interface.family() != 4) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) g = group.bytes();
         InlineArray<uint8>#(16) i = interface.bytes();
         if (kama_multicast_v4(fd: this.fd, group: addr(of: g[0]), iface: addr(of: i[0]), join: join) != 0) {
@@ -242,7 +242,7 @@ type resource UdpSocket implements DatagramSocket, Sendable {
     }
 
     unsafe fn Result<Unit, IoError> membershipV6(const ref IpAddr group, uint32 interfaceIndex, int32 join) {
-        if (group.family() != 6) { return Result::Err(error: IoError::InvalidInput); }
+        if (group.family() != 6) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) g = group.bytes();
         if (kama_multicast_v6(fd: this.fd, group: addr(of: g[0]), index: interfaceIndex, join: join) != 0) {
             return Result::Err(error: lastError());

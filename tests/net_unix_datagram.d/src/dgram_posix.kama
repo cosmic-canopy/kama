@@ -35,7 +35,7 @@ fn int32 datagrams() {
         };
         if (!fromClient) { return 21; }
         bool inUse = match (UnixDatagram.bind(path: "server.sock")) {
-            case Err(error: e): match (e) { case AddrInUse: true; case _: false; };
+            case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; };
             case Ok(value: x): false;
         };
         if (!inUse) { return 22; }

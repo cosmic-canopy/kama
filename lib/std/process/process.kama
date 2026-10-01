@@ -12,7 +12,7 @@
 // (0.9.217), and `tests/proc_*` run there; its one residual is the ≤260 cwd/executable limit noted on
 // `cwd()` below. wasm has no fork/exec.
 
-import { std::io::IoError, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
+import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
 export { Command, Process, ExitStatus, Output, Stdio };
 
@@ -335,7 +335,7 @@ type resource Process implements Sendable {
 
     // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op).
     public unsafe fn Result<ExitStatus, IoError> wait() {
-        if (this.reaped) { return Result::Err(error: IoError::Other(code: 0)); }
+        if (this.reaped) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
         int32 st = 0;
         while (true) {
             int32 r = kama_proc_wait(handle: this.handle, outStatus: addr(of: st), flags: 0);

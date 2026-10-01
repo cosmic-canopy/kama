@@ -1,13 +1,18 @@
-export { IoError, lastError };
+import { std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 
-// Bindings for the platform's last-error accessor + errno constants (see kama_os.h). The constant
+export { IoError, IoErrorKind, lastError };
+
+// Bindings for the platform's last-error accessors + errno constants (see kama_os.h). The constant
 // accessors let us classify without hardcoding per-OS errno numbers; they are module-internal.
 extern "kama_os.h";
 extern fn int32 kama_last_error();
+extern fn int32 kama_last_os_error();
+extern fn isize kama_os_error_text(int32 code, UnsafePtr<uint8> into, usize cap);
 extern fn int32 kama_ENOENT();
 extern fn int32 kama_EACCES();
 extern fn int32 kama_EPERM();
 extern fn int32 kama_EAGAIN();
+extern fn int32 kama_EINTR();
 extern fn int32 kama_ECONNREFUSED();
 extern fn int32 kama_ECONNRESET();
 extern fn int32 kama_EADDRINUSE();
@@ -19,16 +24,16 @@ extern fn int32 kama_EMSGSIZE();
 extern fn int32 kama_EPIPE();
 extern fn int32 kama_EINVAL();
 
-// A classified I/O error. The named kinds cover the common cases callers branch on; `Other` carries the
-// raw platform error code for everything else, keeping the set small but complete. `UnexpectedEof` is a
-// logical error (a read returned 0 where more was required) — it has no errno, so callers raise it directly.
-// The datagram/non-blocking kinds (`InProgress`/`TimedOut`/`HostUnreachable`/`MessageTooLong`/`BrokenPipe`)
-// serve std::net: a non-blocking connect in flight, a datagram over MTU, a send to a dropped peer.
-// `InvalidInput` is an argument the call cannot use at all — host text that is not a numeric address, a
-// multicast group of the wrong family — whether kama or the OS (EINVAL) is the one that refuses it.
-// `IoError` is a first-class `Error`: a fallible ctor/fn may return it directly as
-// `Result<T, IoError>` (matchable), or box it into `Owned<Error>` for a polymorphic error channel.
-type enum IoError implements Error {
+// What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
+// the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
+// `UnexpectedEof` is logical (a read returned 0 where more was required), so no OS reports it and callers raise it
+// directly. The datagram/non-blocking kinds (`InProgress`/`TimedOut`/`HostUnreachable`/`MessageTooLong`/
+// `BrokenPipe`) serve std::net: a non-blocking connect in flight, a datagram over MTU, a send to a dropped peer.
+// `InvalidInput` is an argument the call cannot use at all — host text that is not a numeric address, a multicast
+// group of the wrong family — whether kama or the OS (EINVAL) is the one that refuses it. `Interrupted` is a
+// signal arriving during a blocking call (EINTR): the call did nothing, and trying it again is the answer —
+// `Poller.wait` does that itself, with the time that is left.
+type enum IoErrorKind implements Sendable {
     NotFound,
     PermissionDenied,
     WouldBlock,
@@ -42,7 +47,8 @@ type enum IoError implements Error {
     MessageTooLong,
     BrokenPipe,
     InvalidInput,
-    Other(int32 code);
+    Interrupted,
+    Other;
 
     public const fn string message() {
         return match (this) {
@@ -59,28 +65,83 @@ type enum IoError implements Error {
             case MessageTooLong:    "message too long";
             case BrokenPipe:        "broken pipe";
             case InvalidInput:      "invalid input";
-            case Other(code: c):          "i/o error";
+            case Interrupted:       "interrupted";
+            case Other:             "i/o error";
         };
     }
 }
 
-// Read the platform's last-error ONCE (call this immediately after a failed syscall) and classify it.
+// An I/O error in the two parts it really has (peer KPG-22; the model Rust, Go, Python and .NET share): its KIND,
+// which a caller branches on, and — when the operating system reported it — the OS's own CODE, whose text the
+// message quotes. They are different facts: `chmod` of another user's file and of a file this user may not touch
+// are both PermissionDenied to a caller, and "Operation not permitted" (EPERM) and "Permission denied" (EACCES)
+// to whoever reads the log. An enum of kinds alone had to throw the code away for every named kind, so
+// `message()` could only ever say "permission denied", and every unclassified failure was "i/o error".
+//
+// `rawOsError()` is the POSIX errno, or on Windows the Winsock or Win32 code (kama_os.h keeps it). A kama-raised
+// error — `IoError.of(kind: IoErrorKind::InvalidInput)` — has none. A plain value: an enum and a number, so it
+// costs what the enum did and crosses an isolate the same way.
+type value IoError implements Error, Sendable {
+    IoErrorKind k = IoErrorKind::Other;
+    int32 os = 0;   // 0: no OS code — no OS reports a failure as 0
+
+    // An error kama raises itself, which no OS code backs.
+    public ctor of(IoErrorKind kind) { this.k = kind; }
+    // One the OS reported — lastError() is the only place that knows the code.
+    ctor reported(IoErrorKind kind, int32 code) { this.k = kind; this.os = code; }
+    friend lastError[reported];
+
+    public const fn IoErrorKind kind() { return this.k; }
+    public const fn Optional<int32> rawOsError() {
+        if (this.os == 0) { return Optional::None; }
+        return Optional::Some(value: this.os);
+    }
+    // The kind, and when the OS reported it, its code and its own words:
+    // "connection refused (os error 111: Connection refused)".
+    public const fn string message() {
+        string kindText = this.k.message();
+        if (this.os == 0) { return kindText; }
+        int32 code = this.os;
+        Optional<string> text = osText(code: code);
+        return match (give text) {
+            case Some(value: t): "${kindText} (os error ${code}: ${t})";
+            case None:           "${kindText} (os error ${code})";
+        };
+    }
+}
+
+// The OS's text for its own code, or None when it has none (or not as UTF-8).
+unsafe fn Optional<string> osText(int32 code) {
+    InlineArray<uint8>#(256) buf = [0ui8; 256];
+    isize n = kama_os_error_text(code: code, into: addr(of: buf[0]), cap: 256ui64);
+    if (n <= 0) { return Optional::None; }
+    Result<string, Utf8Error> r = decode(bytes: buf.view().slice(from: 0, count: n));
+    return match (give r) { case Ok(value: s): Optional::Some(value: give s); case Err(error: e): Optional::None; };
+}
+
+// Read the platform's last error ONCE (call this immediately after a failed syscall): its kind, by the uniform
+// errno set, and the OS's own code for it.
 unsafe fn IoError lastError() {
     int32 e = kama_last_error();
-    if (e == kama_ENOENT())       { return IoError::NotFound; }
+    return IoError.reported(kind: kindOf(e: e), code: kama_last_os_error());
+}
+
+unsafe fn IoErrorKind kindOf(int32 e) {
+    if (e == kama_ENOENT())       { return IoErrorKind::NotFound; }
     // EPERM too: "not permitted" is what `chmod` of another user's file answers (KR-92), and Rust and Go
-    // both classify it as permission-denied.
-    if (e == kama_EACCES() || e == kama_EPERM()) { return IoError::PermissionDenied; }
-    if (e == kama_EAGAIN())       { return IoError::WouldBlock; }
-    if (e == kama_ECONNREFUSED()) { return IoError::ConnectionRefused; }
-    if (e == kama_ECONNRESET())   { return IoError::ConnectionReset; }
-    if (e == kama_EADDRINUSE())   { return IoError::AddrInUse; }
-    if (e == kama_EINPROGRESS())  { return IoError::InProgress; }
-    if (e == kama_ETIMEDOUT())    { return IoError::TimedOut; }
-    if (e == kama_EHOSTUNREACH()) { return IoError::HostUnreachable; }
-    if (e == kama_ENETUNREACH())  { return IoError::HostUnreachable; }
-    if (e == kama_EMSGSIZE())     { return IoError::MessageTooLong; }
-    if (e == kama_EPIPE())        { return IoError::BrokenPipe; }
-    if (e == kama_EINVAL())       { return IoError::InvalidInput; }
-    return IoError::Other(code: e);
+    // both classify it as permission-denied. The code keeps the difference (rawOsError, message).
+    if (e == kama_EACCES() || e == kama_EPERM()) { return IoErrorKind::PermissionDenied; }
+    if (e == kama_EAGAIN())       { return IoErrorKind::WouldBlock; }
+    if (e == kama_EINTR())        { return IoErrorKind::Interrupted; }
+    if (e == kama_ECONNREFUSED()) { return IoErrorKind::ConnectionRefused; }
+    if (e == kama_ECONNRESET())   { return IoErrorKind::ConnectionReset; }
+    if (e == kama_EADDRINUSE())   { return IoErrorKind::AddrInUse; }
+    if (e == kama_EINPROGRESS())  { return IoErrorKind::InProgress; }
+    if (e == kama_ETIMEDOUT())    { return IoErrorKind::TimedOut; }
+    if (e == kama_EHOSTUNREACH()) { return IoErrorKind::HostUnreachable; }
+    if (e == kama_ENETUNREACH())  { return IoErrorKind::HostUnreachable; }
+    if (e == kama_EMSGSIZE())     { return IoErrorKind::MessageTooLong; }
+    if (e == kama_EPIPE())        { return IoErrorKind::BrokenPipe; }
+    if (e == kama_EINVAL())       { return IoErrorKind::InvalidInput; }
+    return IoErrorKind::Other;
 }

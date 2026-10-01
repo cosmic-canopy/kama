@@ -128,12 +128,12 @@ fn int32 v6() {
 fn int32 unknownInterface() {
     return match (interfaceIndexOf(name: "kama-no-such-if")) {
         case Ok(value: i): 0;
-        case Err(error: e): match (e) { case NotFound: 4; case _: 0; };
+        case Err(error: e): match (e.kind()) { case NotFound: 4; case _: 0; };
     };
 }
 
 fn bool invalid(const ref Result<Unit, IoError> r) {
-    return match (r) { case Ok(value: u): false; case Err(error: e): match (e) { case InvalidInput: true; case _: false; }; };
+    return match (r) { case Ok(value: u): false; case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; }; };
 }
 
 // A group or interface of the other family is refused before the OS sees it.

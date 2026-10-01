@@ -10,7 +10,7 @@
 // The twins are whole types gated by `@compileFor` — a member cannot be gated, by design, so each OS's body
 // lives in that OS's type rather than behind a conditional inside one.
 import {
-    std::io::IoError, std::io::lastError,
+    std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
 };
@@ -35,7 +35,7 @@ unsafe fn int32 currentProcessId() { return kama_getpid(); }
 // Account text off the OS is outside input: it is UTF-8 on every system kama targets, and checked as such.
 fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
     Result<string, Utf8Error> r = decode(bytes: bytes);
-    return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError::InvalidInput); };
+    return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); };
 }
 
 // ---- Linux, macOS (and the wasm build, whose libc answers as a single user) ---------------------------------
@@ -137,7 +137,7 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
     public ctor Result<UserId, IoError> fromSid(ConstView<uint8> bytes) {
-        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
         while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }
@@ -156,7 +156,7 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
     public ctor Result<GroupId, IoError> fromSid(ConstView<uint8> bytes) {
-        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError::InvalidInput); }
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
         while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }

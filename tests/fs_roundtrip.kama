@@ -58,7 +58,7 @@ fn int32 main() {
     // Deleting again must now fail with NotFound (proves the unlink happened).
     int32 gone = match (remove(path: p)) {
         case Ok(value: u): 71;
-        case Err(error: e): match (e) { case NotFound: 0; case _: 72; };
+        case Err(error: e): match (e.kind()) { case NotFound: 0; case _: 72; };
     };
     if (gone != 0) { return gone; }
 

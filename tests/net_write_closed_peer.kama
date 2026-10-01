@@ -1,12 +1,15 @@
-// A write to a peer that has closed returns `Err(IoError::BrokenPipe)` — it used to raise SIGPIPE, whose default
+// A write to a peer that has closed returns `Err(IoError.of(kind: IoErrorKind::BrokenPipe))` — it used to raise SIGPIPE, whose default
 // action ended the whole process (exit 141) on the second write (KPG-1, from @kama/postgres). A database client, a
 // TLS stream and a web server all write through `TcpStream`, and each died when the other end hung up first.
 // The first writes may succeed — the kernel buffers them until the peer's reset arrives — so it writes until one
 // fails.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::collections::FixedArray };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::collections::FixedArray };
 
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+// The OS's own code for an unclassified failure (0 when there is none).
+fn int32 otherCode(const ref IoError e) { return match (e.rawOsError()) { case Some(value: c): c; case None: 0; }; }
 
 fn int32 main() {
     string host = "127.0.0.1";
@@ -26,7 +29,7 @@ fn int32 main() {
             case Ok(value: n): 0;
             // An unmapped OS code exits 100 + its last two digits (Windows' WSAECONNABORTED, 10053, would be 153), so a
             // failure on a leg nobody can run locally names the code. The Windows leg's plain `5` at 0.9.477 did not.
-            case Err(error: e): match (e) { case BrokenPipe: 1; case ConnectionReset: 1; case Other(code: code): 100 + code % 100; case _: 5; };
+            case Err(error: e): match (e.kind()) { case BrokenPipe: 1; case ConnectionReset: 1; case Other: 100 + otherCode(e: e) % 100; case _: 5; };
         };
         if (got == 1) { return 42; }
         if (got >= 5) { return got; }

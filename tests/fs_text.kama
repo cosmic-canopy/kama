@@ -57,7 +57,7 @@ unsafe fn int32 run() {
     };
     match (readText(path: path)) {
         case Ok(value: s):  { return 14; }                               // must NOT hand back a string
-        case Err(error: e): { match (e) { case InvalidInput: { } case _: { return 15; } }; }
+        case Err(error: e): { match (e.kind()) { case InvalidInput: { } case _: { return 15; } }; }
     };
 
     // 16: and the same through the READER path, which is where the hole actually was — `readAll` on the
@@ -67,7 +67,7 @@ unsafe fn int32 run() {
         case Ok(value: f): {
             match (readAll(r: f)) {
                 case Ok(value: s):  { return 17; }
-                case Err(error: e): { match (e) { case InvalidInput: { } case _: { return 18; } }; }
+                case Err(error: e): { match (e.kind()) { case InvalidInput: { } case _: { return 18; } }; }
             };
         }
     };

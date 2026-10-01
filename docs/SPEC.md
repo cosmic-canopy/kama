@@ -1844,8 +1844,18 @@ gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed
 on Windows) and `permissions` (the nine bits the file records, not an access check — below); `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP),
 `UnixListener`/`UnixStream` (Unix-domain) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
+**An `IoError` is a kind and, when the OS reported it, the OS's code** — the two facts every mainstream library keeps
+apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,
+`Interrupted`, `Other`), which a caller branches on with `match (e.kind())`. `e.rawOsError()` is the POSIX errno or,
+on Windows, the Winsock or Win32 code, and `e.message()` quotes the system's own words for it: <!-- test: io_error_model -->
+`"not found (os error 2: No such file or directory)"`. So two failures of one kind stay distinguishable to whoever
+reads the log — `EPERM` and `EACCES` are both `PermissionDenied`, and say "Operation not permitted" and "Permission
+denied" — and an unclassified one is `Other` with its code and text rather than a bare "i/o error". An error kama
+raises itself, `IoError.of(kind: IoErrorKind::InvalidInput)`, has a kind and no code. `Interrupted` is a signal
+arriving during a blocking call; `Poller.wait(timeoutMs:)` absorbs it and waits out the time that is left.
+
 **A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
-closed, or to the stdin of a child that exited, returns `IoError::BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
+closed, or to the stdin of a child that exited, returns an error of kind `BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
 kernel reports it) — POSIX raises SIGPIPE there instead, whose default ends the process. A program ignores that
 signal from the start of `main`, as Go, Rust, Python and Node do, and every socket is also made not to raise it
 (`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple) — TCP and Unix-domain alike — so a `--shared` kama library is covered without touching its
@@ -1867,7 +1877,7 @@ Windows), and nothing drops them silently. `Metadata.permissions` replaced the l
 read back from the file's access list — the owner's entries, the group's, and Everyone's (with Authenticated
 Users and Users, the every-user groups) — and the DOS read-only attribute clears the write bits; a list this
 process may not read falls back to what the C runtime reports. An `EPERM` ("not permitted", what changing
-another user's file answers) is `IoError::PermissionDenied`, as `EACCES` is.
+another user's file answers) is of kind `PermissionDenied`, as `EACCES` is, and its code and message still say which.
 
 **Setting permissions.** `File.openWith(path:, mode:, permissions:)` opens for writing with EXACTLY the
 permissions given — `Write` creates or truncates, `Append` creates or appends, and `Read`, which creates <!-- test: fs_permissions -->
@@ -5298,7 +5308,7 @@ An enum is a type kind like any other, so it **declares its contracts inline** a
 satisfy them — the variants come first, then a `;`, then ordinary members:
 
 ```kama
-type enum IoError : uint8 implements Error {
+type enum FetchError : uint8 implements Error {
     NotFound, Denied(int32 code);
 
     public const fn string message() {

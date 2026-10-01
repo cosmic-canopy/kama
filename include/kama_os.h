@@ -107,6 +107,25 @@ unsigned long __stdcall if_nametoindex(const char* name);
 // below translate the WSA code into the matching UCRT `errno` value, so kama_last_error() (== errno) is the
 // single uniform source on BOTH platforms and the kama_EXXX() accessors (UCRT <errno.h>) compare correctly.
 static inline int32_t kama_last_error(void)   { return (int32_t)errno; }
+// A failure the seam reports, in both halves: `posix` in errno, which is what kama CLASSIFIES (the kama_EXXX()
+// accessors below), and `native` — the Winsock or Win32 code, 0 when the failure is the seam's own (no memory, an
+// argument it refuses) — in `_doserrno`, which is where the CRT puts the Win32 code of its own failures. So after
+// ANY failure, the CRT's or the seam's, `_doserrno` holds that failure's native code and never an older one's,
+// and kama_last_os_error reads it back for `IoError.rawOsError()` and its text (KPG-22).
+static inline void kama__os_fail(unsigned long native, int posix) { _set_doserrno(native); errno = posix; }
+static inline int32_t kama_last_os_error(void) { unsigned long d = 0; _get_doserrno(&d); return (int32_t)d; }
+// The system's text for a native code, as UTF-8 in into[0..cap): its length, or 0 when the system has none. The
+// trailing period and line break FormatMessage ends with are dropped — the text is quoted inside a sentence.
+static inline ptrdiff_t kama_os_error_text(int32_t code, uint8_t* into, size_t cap) {
+    if (!into || cap < 2 || code == 0) return 0;
+    wchar_t w[256];
+    DWORD n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)code, 0,
+                             w, (DWORD)(sizeof w / sizeof w[0]), NULL);
+    while (n > 0 && (w[n - 1] == L'\r' || w[n - 1] == L'\n' || w[n - 1] == L' ' || w[n - 1] == L'.')) --n;
+    if (n == 0) return 0;
+    const int m = WideCharToMultiByte(CP_UTF8, 0, w, (int)n, (char*)into, (int)(cap - 1), NULL, NULL);
+    return m > 0 ? (ptrdiff_t)m : 0;
+}
 static inline int32_t kama_ENOENT(void)       { return (int32_t)ENOENT; }
 static inline int32_t kama_EACCES(void)       { return (int32_t)EACCES; }
 static inline int32_t kama_EPERM(void)        { return (int32_t)EPERM; }
@@ -123,32 +142,33 @@ static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 
-static inline void kama__capture_wsa(void) {
-    int e = WSAGetLastError();
+// Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
+static inline int kama__wsa_errno(int e) {
     switch (e) {
-        case WSAEWOULDBLOCK:  errno = EAGAIN;        break;
-        case WSAECONNREFUSED: errno = ECONNREFUSED;  break;
-        case WSAECONNRESET:   errno = ECONNRESET;    break;
+        case WSAEWOULDBLOCK:  return EAGAIN;
+        case WSAECONNREFUSED: return ECONNREFUSED;
+        case WSAECONNRESET:   return ECONNRESET;
         // Winsock reports a send after the peer's reset as WSAECONNRESET or WSAECONNABORTED ("aborted by the
         // software in your host machine": the local stack tore the connection down on the RST), where POSIX says
         // EPIPE or ECONNRESET — the same event, so the same IoError. A send after our own shutdown(SD_SEND) is
         // POSIX's EPIPE. Unmapped, both arrived as IoError::Other: the likeliest reading of the Windows leg's
         // failure of tests/net_write_closed_peer at 0.9.477, which that fixture now names by code if it recurs.
-        case WSAECONNABORTED: errno = ECONNRESET;    break;
-        case WSAESHUTDOWN:    errno = EPIPE;         break;
-        case WSAEADDRINUSE:   errno = EADDRINUSE;    break;
-        case WSAEINTR:        errno = EINTR;         break;
-        case WSAEACCES:       errno = EACCES;        break;
-        case WSAEINPROGRESS:  errno = EINPROGRESS;   break;
-        case WSAEALREADY:     errno = EINPROGRESS;   break;   // non-blocking connect already in flight
-        case WSAETIMEDOUT:    errno = ETIMEDOUT;     break;
-        case WSAEHOSTUNREACH: errno = EHOSTUNREACH;  break;
-        case WSAENETUNREACH:  errno = ENETUNREACH;   break;
-        case WSAEMSGSIZE:     errno = EMSGSIZE;      break;
-        case WSAEINVAL:       errno = EINVAL;        break;
-        default:              errno = e;             break;   // carried through as IoError::Other(code)
+        case WSAECONNABORTED: return ECONNRESET;
+        case WSAESHUTDOWN:    return EPIPE;
+        case WSAEADDRINUSE:   return EADDRINUSE;
+        case WSAEINTR:        return EINTR;
+        case WSAEACCES:       return EACCES;
+        case WSAEINPROGRESS:  return EINPROGRESS;
+        case WSAEALREADY:     return EINPROGRESS;   // non-blocking connect already in flight
+        case WSAETIMEDOUT:    return ETIMEDOUT;
+        case WSAEHOSTUNREACH: return EHOSTUNREACH;
+        case WSAENETUNREACH:  return ENETUNREACH;
+        case WSAEMSGSIZE:     return EMSGSIZE;
+        case WSAEINVAL:       return EINVAL;
+        default:              return e;              // carried through as IoErrorKind::Other, with its code
     }
 }
+static inline void kama__capture_wsa(void) { const int e = WSAGetLastError(); kama__os_fail((unsigned long)e, kama__wsa_errno(e)); }
 
 // ---- UTF-8 <-> UTF-16, at the edge --------------------------------------------
 // A kama string is UTF-8 by definition (lib/std/path/path.kama), and Windows' native string is UTF-16. This
@@ -162,9 +182,9 @@ static inline void kama__capture_wsa(void) {
 // caller bug, and a name that quietly became `?` would be the ANSI defect wearing a new coat.
 static inline wchar_t* kama__wide(const char* s, int len) {   // len -1: NUL-terminated (count INCLUDES the NUL)
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, NULL, 0);
-    if (n <= 0) { errno = EINVAL; return NULL; }
+    if (n <= 0) { kama__os_fail(GetLastError(), EINVAL); return NULL; }
     wchar_t* w = (wchar_t*)kama__sized_alloc((size_t)n * sizeof(wchar_t));   // released by kama__wfree
-    if (!w) { errno = ENOMEM; return NULL; }
+    if (!w) { kama__os_fail(0, ENOMEM); return NULL; }
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, len, w, n);
     return w;
 }
@@ -173,9 +193,9 @@ static inline wchar_t* kama__wide(const char* s, int len) {   // len -1: NUL-ter
 // U+FFFD and cannot be re-opened — the same limit Rust's `to_str()` has, and not worth an OsString.
 static inline char* kama__utf8(const wchar_t* w, size_t* outLen) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);   // includes the NUL
-    if (n <= 0) { errno = EINVAL; return NULL; }
+    if (n <= 0) { kama__os_fail(GetLastError(), EINVAL); return NULL; }
     char* s = (char*)kama_alloc((size_t)n, 1);
-    if (!s) { errno = ENOMEM; return NULL; }
+    if (!s) { kama__os_fail(0, ENOMEM); return NULL; }
     WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
     if (outLen) *outLen = (size_t)n - 1;
     return s;
@@ -215,7 +235,7 @@ typedef struct kama__wpathbuf { wchar_t w[KAMA__WPATH_CAP]; } kama__wpathbuf;   
 KAMA_NOINLINE static wchar_t* kama__wpath_long(kama__wpathbuf* b) {
     kama__wpathbuf t;
     DWORD got = GetFullPathNameW(b->w, KAMA__WPATH_CAP - 8, t.w + 8, NULL);  // excludes the NUL on success
-    if (got == 0 || got >= KAMA__WPATH_CAP - 8) { errno = ENOENT; return NULL; }
+    if (got == 0 || got >= KAMA__WPATH_CAP - 8) { kama__os_fail(0, ENOENT); return NULL; }
     wchar_t* start; size_t len;
     if (t.w[8] == L'\\' && t.w[9] == L'\\') {          // \\srv\share\x -> \\?\UNC\srv\share\x
         memcpy(t.w + 2, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));   // lands just before the path past its `\\`
@@ -233,7 +253,7 @@ KAMA_NOINLINE static wchar_t* kama__wpath_long(kama__wpathbuf* b) {
 // anyway. Both surface through IoError::Other(code), which is what POSIX already does for ENAMETOOLONG.
 static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, b->w, KAMA__WPATH_CAP);
-    if (n <= 0) { errno = GetLastError() == ERROR_INSUFFICIENT_BUFFER ? ENAMETOOLONG : EINVAL; return NULL; }
+    if (n <= 0) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_INSUFFICIENT_BUFFER ? ENAMETOOLONG : EINVAL); } return NULL; }
     if ((size_t)(n - 1) < 248 || (b->w[0] == L'\\' && b->w[1] == L'\\' && b->w[2] == L'?' && b->w[3] == L'\\'))
         return b->w;                                   // the common case: no second pass, no branch taken
     return kama__wpath_long(b);
@@ -358,7 +378,7 @@ KAMA_NOINLINE static int32_t kama__sd_mode_big(HANDLE h, const wchar_t* w, uint3
     kama__sdbig big; DWORD need = 0;
     BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, big.b, sizeof big.b, &need)
                 : GetFileSecurityW(w, KAMA__SD_INFO, big.b, sizeof big.b, &need);
-    if (!ok) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1; }
+    if (!ok) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EINVAL); } return -1; }
     *mode = kama__sd_mode(big.b, groupIsOwner);
     return 0;
 }
@@ -368,7 +388,7 @@ static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* m
     BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, sd, sizeof sd, &need)
                 : GetFileSecurityW(w, KAMA__SD_INFO, sd, sizeof sd, &need);
     if (!ok && GetLastError() == ERROR_INSUFFICIENT_BUFFER) return kama__sd_mode_big(h, w, mode, groupIsOwner);
-    if (!ok) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1; }
+    if (!ok) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EINVAL); } return -1; }
     *mode = kama__sd_mode(sd, groupIsOwner);
     return 0;
 }
@@ -454,28 +474,28 @@ static inline int32_t kama__apply_mode(HANDLE h, uint32_t mode, int isDir)
 {
     BYTE cur[512]; DWORD need = 0;
     if (!GetKernelObjectSecurity(h, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION, cur, sizeof cur, &need)) {
-        errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EINVAL; return -1;
+        { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EINVAL); } return -1;
     }
     PSID owner = NULL, group = NULL; BOOL def;
     GetSecurityDescriptorOwner(cur, &owner, &def);
     GetSecurityDescriptorGroup(cur, &group, &def);
-    if (!owner) { errno = EPERM; return -1; }   // a volume with no owners keeps no lists either
-    kama__wk k; if (kama__wk_init(&k) != 0) { errno = EINVAL; return -1; }
+    if (!owner) { kama__os_fail(0, EPERM); return -1; }   // a volume with no owners keeps no lists either
+    kama__wk k; if (kama__wk_init(&k) != 0) { kama__os_fail(0, EINVAL); return -1; }
     BYTE aclbuf[KAMA__ACL_CAP];
-    if (kama__acl_build((PACL)aclbuf, mode, isDir, owner, group, &k) != 0) { errno = EINVAL; return -1; }
+    if (kama__acl_build((PACL)aclbuf, mode, isDir, owner, group, &k) != 0) { kama__os_fail(0, EINVAL); return -1; }
     SECURITY_DESCRIPTOR sd;
     if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
         || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
-        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
     // The control bit is what protects the list. SetKernelObjectSecurity accepts PROTECTED_DACL_SECURITY_INFORMATION
     // and IGNORES it — measured (KR-99, Windows 11): on a file that had inherited BA/SY/BU/AU, the flag alone
     // returned TRUE and left the list unprotected, and the bit alone protected it. So no flag is passed.
     if (!SetKernelObjectSecurity(h, DACL_SECURITY_INFORMATION, &sd)) {
-        errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : EPERM; return -1;
+        { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EPERM); } return -1;
     }
     const int is = kama__mode_is(h, NULL, mode);
     if (is < 0) return -1;
-    if (!is) { errno = EPERM; return -1; }
+    if (!is) { kama__os_fail(0, EPERM); return -1; }
     return 0;
 }
 // The process's own user and primary group, for a NEW file's owner and group entries — named in the
@@ -512,7 +532,7 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
         || !InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
         || !SetSecurityDescriptorOwner(&sd, user, FALSE) || !SetSecurityDescriptorGroup(&sd, group, FALSE)
         || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
-        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
     SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
     int made = 1, relist = 1;
     HANDLE h = CreateFileW(w, access, share, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -526,20 +546,20 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
     }
     if (h == INVALID_HANDLE_VALUE) {
         DWORD e = GetLastError();
-        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
-              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES : EINVAL;
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES : EINVAL);
         return -1;
     }
     int bad = 0;
     if (made || !relist) {   // a new file: check what the volume actually kept; a shared one: that it already holds `mode`
         const int is = kama__mode_is(h, NULL, mode);
-        if (is <= 0) { if (is == 0) errno = made ? EPERM : EACCES; bad = -1; }
+        if (is <= 0) { if (is == 0) kama__os_fail(0, made ? EPERM : EACCES); bad = -1; }
     } else {
         bad = kama__apply_mode(h, mode, 0);
     }
     if (!bad && !made && !append) {
         LARGE_INTEGER zero; zero.QuadPart = 0;
-        if (!SetFilePointerEx(h, zero, NULL, FILE_BEGIN) || !SetEndOfFile(h)) { errno = EACCES; bad = -1; }
+        if (!SetFilePointerEx(h, zero, NULL, FILE_BEGIN) || !SetEndOfFile(h)) { kama__os_fail(GetLastError(), EACCES); bad = -1; }
     }
     if (bad) {
         int e = errno;
@@ -562,12 +582,12 @@ KAMA_NOINLINE static int32_t kama_mkdir_mode(const char* path, uint32_t mode)
         || !InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION)
         || !SetSecurityDescriptorOwner(&sd, user, FALSE) || !SetSecurityDescriptorGroup(&sd, group, FALSE)
         || !SetSecurityDescriptorDacl(&sd, TRUE, (PACL)aclbuf, FALSE)
-        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { errno = EINVAL; return -1; }
+        || !SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
     SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
     if (!CreateDirectoryW(w, &sa)) {
         DWORD e = GetLastError();
-        errno = e == ERROR_ALREADY_EXISTS ? EEXIST : e == ERROR_PATH_NOT_FOUND ? ENOENT
-              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL;
+        kama__os_fail(e, e == ERROR_ALREADY_EXISTS ? EEXIST : e == ERROR_PATH_NOT_FOUND ? ENOENT
+              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL);
         return -1;
     }
     const int is = kama__mode_is(NULL, w, mode);
@@ -591,12 +611,12 @@ KAMA_NOINLINE static int32_t kama_set_permissions(const char* path, uint32_t mod
                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         DWORD e = GetLastError();
-        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
-              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL;
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+              : e == ERROR_ACCESS_DENIED ? EACCES : EINVAL);
         return -1;
     }
     BY_HANDLE_FILE_INFORMATION fi;
-    if (!GetFileInformationByHandle(h, &fi)) { CloseHandle(h); errno = EACCES; return -1; }
+    if (!GetFileInformationByHandle(h, &fi)) { const DWORD kama_w_ = GetLastError(); CloseHandle(h); kama__os_fail(kama_w_, EACCES); return -1; }
     const DWORD attrs = fi.dwFileAttributes;
     const int isDir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
     const int32_t rc = kama__apply_mode(h, mode, isDir);
@@ -604,7 +624,7 @@ KAMA_NOINLINE static int32_t kama_set_permissions(const char* path, uint32_t mod
     CloseHandle(h);
     if (rc != 0) { errno = e; return -1; }
     if (!isDir && (mode & 0222u) && (attrs & FILE_ATTRIBUTE_READONLY)
-        && !SetFileAttributesW(w, attrs & ~(DWORD)FILE_ATTRIBUTE_READONLY)) { errno = EACCES; return -1; }
+        && !SetFileAttributesW(w, attrs & ~(DWORD)FILE_ATTRIBUTE_READONLY)) { kama__os_fail(GetLastError(), EACCES); return -1; }
     return 0;
 }
 
@@ -638,7 +658,7 @@ KAMA_NOINLINE static int32_t kama_rename(const char* from, const char* to) {
     wchar_t* wt = kama__wpath(to,   &bt); if (!wt) return -1;
     if (!MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
         DWORD e = GetLastError();
-        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
         return -1;
     }
     return 0;
@@ -663,12 +683,12 @@ typedef struct kama__dir { HANDLE h; WIN32_FIND_DATAW kama_data; int pending; } 
 KAMA_NOINLINE static void* kama_diropen(const char* path) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return NULL;
     size_t n = wcslen(w);
-    if (n + 3 > KAMA__WPATH_CAP) { errno = ENAMETOOLONG; return NULL; }
+    if (n + 3 > KAMA__WPATH_CAP) { kama__os_fail(0, ENAMETOOLONG); return NULL; }
     w[n] = L'\\'; w[n + 1] = L'*'; w[n + 2] = L'\0';
     kama__dir* d = (kama__dir*)kama_alloc(sizeof *d, _Alignof(kama__dir));
-    if (!d) { errno = ENOMEM; return NULL; }
+    if (!d) { kama__os_fail(0, ENOMEM); return NULL; }
     d->h = FindFirstFileW(w, &d->kama_data);
-    if (d->h == INVALID_HANDLE_VALUE) { kama_free(d, sizeof *d, _Alignof(kama__dir)); errno = ENOENT; return NULL; }
+    if (d->h == INVALID_HANDLE_VALUE) { const DWORD kama_w_ = GetLastError(); kama_free(d, sizeof *d, _Alignof(kama__dir)); kama__os_fail(kama_w_, ENOENT); return NULL; }
     d->pending = 1;
     return d;
 }
@@ -754,11 +774,12 @@ static inline int32_t kama_unix_peer_pid(ptrdiff_t fd, int32_t* pid) {
 // may not be read (a more privileged process's), ESRCH when there is no such process.
 static inline ptrdiff_t kama_token_open(int32_t pid) {
     HANDLE proc = pid == 0 ? GetCurrentProcess() : OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
-    if (!proc) { errno = GetLastError() == ERROR_ACCESS_DENIED ? EACCES : ESRCH; return -1; }
+    if (!proc) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : ESRCH); } return -1; }
     HANDLE tok = NULL;
     BOOL ok = OpenProcessToken(proc, TOKEN_QUERY, &tok);
+    const DWORD okErr = ok ? 0 : GetLastError();   // before CloseHandle may overwrite it
     if (pid != 0) CloseHandle(proc);
-    if (!ok) { errno = EACCES; return -1; }
+    if (!ok) { kama__os_fail(okErr, EACCES); return -1; }
     return (ptrdiff_t)tok;
 }
 static inline void kama_token_close(ptrdiff_t tok) { CloseHandle((HANDLE)tok); }
@@ -802,18 +823,18 @@ static inline int32_t kama__sock_recv_all(SOCKET s, uint8_t* p, size_t n) {
     while (n > 0) {
         int r = recv(s, (char*)p, (int)n, 0);
         if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
-        if (r == 0) { errno = ECONNRESET; return -1; }   // the frame was cut short
+        if (r == 0) { kama__os_fail(0, ECONNRESET); return -1; }   // the frame was cut short
         p += r; n -= (size_t)r;
     }
     return 0;
 }
 static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count) {
-    if (count == 0 || count > KAMA__FD_MAX || n == 0) { errno = EINVAL; return -1; }
+    if (count == 0 || count > KAMA__FD_MAX || n == 0) { kama__os_fail(0, EINVAL); return -1; }
     int32_t pid = 0;
     if (kama_unix_peer_pid(sock, &pid) != 0) return -1;
     const size_t rec = 8 + sizeof(WSAPROTOCOL_INFOW), cap = 8 + count * rec;
     uint8_t* f = (uint8_t*)kama_alloc(cap, sizeof(void*));
-    if (!f) { errno = ENOMEM; return -1; }
+    if (!f) { kama__os_fail(0, ENOMEM); return -1; }
     uint32_t hdr[2] = { KAMA__FD_MAGIC, (uint32_t)count };
     memcpy(f, hdr, 8);
     size_t at = 8;
@@ -826,10 +847,10 @@ static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t
             size = (uint32_t)sizeof info;
             memcpy(f + at + 8, &info, sizeof info);
         } else {
-            if (!target && !(target = OpenProcess(PROCESS_DUP_HANDLE, FALSE, (DWORD)pid))) { errno = EACCES; goto fail; }
+            if (!target && !(target = OpenProcess(PROCESS_DUP_HANDLE, FALSE, (DWORD)pid))) { kama__os_fail(GetLastError(), EACCES); goto fail; }
             HANDLE mine = (HANDLE)_get_osfhandle((int)hs[i]), theirs = NULL;
-            if (mine == INVALID_HANDLE_VALUE) { errno = EBADF; goto fail; }
-            if (!DuplicateHandle(GetCurrentProcess(), mine, target, &theirs, 0, FALSE, DUPLICATE_SAME_ACCESS)) { errno = EACCES; goto fail; }
+            if (mine == INVALID_HANDLE_VALUE) { kama__os_fail(0, EBADF); goto fail; }
+            if (!DuplicateHandle(GetCurrentProcess(), mine, target, &theirs, 0, FALSE, DUPLICATE_SAME_ACCESS)) { kama__os_fail(GetLastError(), EACCES); goto fail; }
             uint64_t v = (uint64_t)(uintptr_t)theirs;
             size = 8;
             memcpy(f + at + 8, &v, 8);
@@ -854,12 +875,12 @@ static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, pt
     if (first == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     if (first == 0) return 0;                                     // end of stream: nothing was sent
     if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)hdr, 8) != 0) return -1;
-    if (hdr[0] != KAMA__FD_MAGIC || hdr[1] == 0 || hdr[1] > KAMA__FD_MAX) { errno = EINVAL; return -1; }
+    if (hdr[0] != KAMA__FD_MAGIC || hdr[1] == 0 || hdr[1] > KAMA__FD_MAX) { kama__os_fail(0, EINVAL); return -1; }
     size_t got = 0; int bad = 0;
     for (uint32_t i = 0; i < hdr[1]; ++i) {
         uint32_t ks[2];
         if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)ks, 8) != 0) { bad = 1; break; }
-        if (ks[1] > sizeof(WSAPROTOCOL_INFOW)) { errno = EINVAL; bad = 1; break; }
+        if (ks[1] > sizeof(WSAPROTOCOL_INFOW)) { kama__os_fail(0, EINVAL); bad = 1; break; }
         union { WSAPROTOCOL_INFOW info; uint64_t v; } p;
         if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)&p, ks[1]) != 0) { bad = 1; break; }
         ptrdiff_t h = -1;
@@ -869,11 +890,11 @@ static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, pt
             h = (ptrdiff_t)s;
         } else {
             int fd = _open_osfhandle((intptr_t)p.v, 0);
-            if (fd < 0) { CloseHandle((HANDLE)(uintptr_t)p.v); errno = EBADF; bad = 1; break; }
+            if (fd < 0) { CloseHandle((HANDLE)(uintptr_t)p.v); kama__os_fail(0, EBADF); bad = 1; break; }
             h = (ptrdiff_t)fd;
         }
         if (got < cap) { hs[got] = h; kinds[got] = (int32_t)ks[0]; ++got; }
-        else { kama_desc_close(h, (int32_t)ks[0]); bad = 1; errno = EMSGSIZE; }
+        else { kama_desc_close(h, (int32_t)ks[0]); bad = 1; kama__os_fail(0, EMSGSIZE); }
     }
     if (bad) { for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]); return -1; }
     int r = recv((SOCKET)sock, (char*)buf, (int)n, 0);
@@ -887,13 +908,13 @@ static inline int32_t kama_token_sid(ptrdiff_t tok, int32_t which, uint8_t* out,
     TOKEN_INFORMATION_CLASS cls = which == 0 ? TokenUser : which == 1 ? TokenPrimaryGroup : TokenGroups;
     DWORD n = 0;
     (void)GetTokenInformation((HANDLE)tok, cls, NULL, 0, &n);
-    if (n == 0) { errno = EACCES; return -1; }
+    if (n == 0) { kama__os_fail(GetLastError(), EACCES); return -1; }
     // Through the allocation funnel (check-alloc-funnel.sh), with the size it was asked for: `n` is rewritten
     // by the second call, so the release names `sz`. Aligned for the pointers the TOKEN_* structs hold.
     const size_t sz = (size_t)n, al = sizeof(void*);
     BYTE* buf = (BYTE*)kama_alloc(sz, al);
-    if (!buf) { errno = ENOMEM; return -1; }
-    if (!GetTokenInformation((HANDLE)tok, cls, buf, n, &n)) { kama_free(buf, sz, al); errno = EACCES; return -1; }
+    if (!buf) { kama__os_fail(0, ENOMEM); return -1; }
+    if (!GetTokenInformation((HANDLE)tok, cls, buf, n, &n)) { const DWORD kama_w_ = GetLastError(); kama_free(buf, sz, al); kama__os_fail(kama_w_, EACCES); return -1; }
     PSID sid;
     if (which == 0)      sid = ((TOKEN_USER*)(void*)buf)->User.Sid;
     else if (which == 1) sid = ((TOKEN_PRIMARY_GROUP*)(void*)buf)->PrimaryGroup;
@@ -914,7 +935,7 @@ static inline int32_t kama_sid_name(const uint8_t* sid, uint8_t* name, size_t nc
                                     uint8_t* dom, size_t dcap, int32_t* dlen) {
     WCHAR wn[257], wd[257]; DWORD cn = 257, cd = 257; SID_NAME_USE use;
     if (!LookupAccountSidW(NULL, (PSID)sid, wn, &cn, wd, &cd, &use)) {
-        errno = GetLastError() == ERROR_NONE_MAPPED ? ENOENT : EACCES; return -1;
+        { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_NONE_MAPPED ? ENOENT : EACCES); } return -1;
     }
     *nlen = cn ? WideCharToMultiByte(CP_UTF8, 0, wn, (int)cn, (char*)name, (int)ncap, NULL, NULL) : 0;
     *dlen = cd ? WideCharToMultiByte(CP_UTF8, 0, wd, (int)cd, (char*)dom, (int)dcap, NULL, NULL) : 0;
@@ -947,17 +968,7 @@ static inline int32_t kama_set_nodelay(ptrdiff_t fd, int32_t on) {
 static inline int32_t kama_socket_error(ptrdiff_t fd) {
     int soerr = 0; int l = (int)sizeof soerr;
     if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_ERROR, (char*)&soerr, &l) != 0) { kama__capture_wsa(); return -1; }
-    if (soerr != 0) {
-        switch (soerr) {
-            case WSAECONNREFUSED: errno = ECONNREFUSED;  break;
-            case WSAECONNRESET:   errno = ECONNRESET;    break;
-            case WSAETIMEDOUT:    errno = ETIMEDOUT;     break;
-            case WSAEHOSTUNREACH: errno = EHOSTUNREACH;  break;
-            case WSAENETUNREACH:  errno = ENETUNREACH;   break;
-            default:              errno = soerr;         break;
-        }
-        return -1;
-    }
+    if (soerr != 0) { kama__os_fail((unsigned long)soerr, kama__wsa_errno(soerr)); return -1; }
     return 0;
 }
 
@@ -973,7 +984,7 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 typedef struct kama__poller { WSAPOLLFD* fds; int kama_len; int kama_cap; } kama__poller;
 static inline void* kama_poller_create(void) {
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
-    if (!p) { errno = ENOMEM; return NULL; }
+    if (!p) { kama__os_fail(0, ENOMEM); return NULL; }
     p->fds = NULL; p->kama_len = 0; p->kama_cap = 0; return p;
 }
 static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
@@ -1145,7 +1156,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     // or without the `\\?\` prefix (probed: docs/platforms/windows.md), so prefixing would only change the
     // error. CreateProcessW writes into the command line, hence the heap copy.
     char* cmdline = kama__win_cmdline((char**)argv);
-    if (!cmdline) { errno = ENOMEM; return -1; }
+    if (!cmdline) { kama__os_fail(0, ENOMEM); return -1; }
     size_t envlen = 0;
     char* envblock = envp ? kama__win_envblock((char**)envp, &envlen) : NULL;
     wchar_t* wcmd = kama__wide(cmdline, -1);
@@ -1180,7 +1191,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd);
     if (!ok) {
         DWORD e = GetLastError();
-        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -1194,9 +1205,9 @@ static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32
     HANDLE h = (HANDLE)handle;
     DWORD r = WaitForSingleObject(h, (flags & 1) ? 0 : INFINITE);
     if (r == WAIT_TIMEOUT) return 0;                       // still running
-    if (r != WAIT_OBJECT_0) { errno = EINVAL; return -1; }
+    if (r != WAIT_OBJECT_0) { kama__os_fail(r == WAIT_FAILED ? GetLastError() : 0, EINVAL); return -1; }
     DWORD code = 0;
-    if (!GetExitCodeProcess(h, &code)) { errno = EINVAL; return -1; }
+    if (!GetExitCodeProcess(h, &code)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
     CloseHandle(h);                                        // reaped: release the handle (Windows auto-cleans)
     *outStatus = (int32_t)code;
     return 1;
@@ -1209,7 +1220,7 @@ static inline int32_t kama_proc_term_signal(int32_t st) { (void)st; return 0; }
 // No POSIX signals: any signal maps to TerminateProcess (documented in process.kama). Exit code 1.
 static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) {
     (void)sig;
-    if (!TerminateProcess((HANDLE)handle, 1)) { errno = EINVAL; return -1; }
+    if (!TerminateProcess((HANDLE)handle, 1)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
     return 0;
 }
 // Non-blocking release on drop: reap-if-exited (harmless) then CloseHandle (detach — the child keeps running,
@@ -1254,14 +1265,14 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
     kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.kama_len = 0; co.kama_cap = 0; co.err = 0;
     kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.kama_len = 0; ce.kama_cap = 0; ce.err = 0;
     HANDLE th = CreateThread(NULL, 0, kama__cap_thread, &ce, 0, NULL);
-    if (!th) { errno = EAGAIN; return -1; }   // nothing drained yet: co.buf is still NULL
+    if (!th) { kama__os_fail(GetLastError(), EAGAIN); return -1; }   // nothing drained yet: co.buf is still NULL
     kama__cap_thread(&co);                                 // drain stdout on this thread
     WaitForSingleObject(th, INFINITE);
     CloseHandle(th);
     if (co.err || ce.err) {
         if (co.buf) kama_free(co.buf, co.kama_cap, 1);
         if (ce.buf) kama_free(ce.buf, ce.kama_cap, 1);
-        errno = EIO; return -1;
+        kama__os_fail(0, EIO); return -1;
     }
     *outBuf = co.buf; *outLen = co.kama_len; *outCap = co.kama_cap;
     *errBuf = ce.buf; *errLen = ce.kama_len; *errCap = ce.kama_cap;
@@ -1326,6 +1337,28 @@ extern char** environ;
 // A stable accessor + constant accessors, so kama never hardcodes per-OS errno numbers. (The Windows
 // branch will map WSAGetLastError() codes onto these same POSIX values.)
 static inline int32_t kama_last_error(void)   { return (int32_t)errno; }
+// The Windows branch's pair, over errno: here the OS's own code IS errno, so a seam refusal sets it and that
+// is all (`native` exists for the Windows half, and is ignored).
+static inline void kama__os_fail(unsigned long native, int posix) { (void)native; errno = posix; }
+static inline int32_t kama_last_os_error(void) { return (int32_t)errno; }
+// The OS's text for an errno value, into[0..cap): its length, or 0 when there is none. strerror_r, not strerror —
+// an isolate is a thread. glibc's GNU strerror_r (under _GNU_SOURCE) RETURNS its text, maybe not in `into`;
+// every other libc's (macOS, musl, glibc's XSI one) fills `into` and returns 0.
+static inline ptrdiff_t kama_os_error_text(int32_t code, uint8_t* into, size_t cap) {
+    if (!into || cap < 2 || code == 0) return 0;
+    char* buf = (char*)into;
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    const char* t = strerror_r(code, buf, cap);
+    if (!t) return 0;
+    size_t n = strlen(t);
+    if (n >= cap) n = cap - 1;
+    if (t != buf) memcpy(buf, t, n);
+    return (ptrdiff_t)n;
+#else
+    if (strerror_r(code, buf, cap) != 0) return 0;
+    return (ptrdiff_t)strlen(buf);
+#endif
+}
 static inline int32_t kama_ENOENT(void)       { return (int32_t)ENOENT; }
 static inline int32_t kama_EACCES(void)       { return (int32_t)EACCES; }
 static inline int32_t kama_EPERM(void)        { return (int32_t)EPERM; }
@@ -2281,7 +2314,7 @@ static inline int32_t kama_multicast_opt(ptrdiff_t fd, int32_t hops, uint32_t va
 // friendly "Ethernet"). 0 with errno ENOENT when there is no such interface — 0 is never a real index.
 static inline uint32_t kama_interface_index(const char* name) {
     unsigned int i = (name && *name) ? if_nametoindex(name) : 0u;
-    if (i == 0) errno = ENOENT;
+    if (i == 0) kama__os_fail(0, ENOENT);
     return (uint32_t)i;
 }
 
@@ -2323,7 +2356,7 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
     struct addrinfo* it;
     int32_t n = 0;
     int rc;
-    if (!host || !*host || !outFamily || !outIps || !outScope || max <= 0) { errno = ENOENT; return -1; }
+    if (!host || !*host || !outFamily || !outIps || !outScope || max <= 0) { kama__os_fail(0, ENOENT); return -1; }
     // ⚠️ `getaddrinfo` is a WINSOCK call, so it needs WSAStartup like every socket here does — and this
     // is the one entry point that reaches it without creating a socket first. Without this, a resolve
     // performed before the program's first `bind`/`connect` failed with WSANOTINITIALISED (carried out

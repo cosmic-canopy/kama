@@ -6,7 +6,7 @@
 // agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
 // Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
 
-import { IoError, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView,
+import { IoError, IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView,
          std::encoding::utf8::validate };
 
 export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines, writeAll, pump, readAll };
@@ -42,7 +42,7 @@ fn Result<Unit, IoError> writeAll(Writer w, ConstView<uint8> bytes) {
         match (r) {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: n): {
-                if (n == 0) { return Result::Err(error: IoError::WouldBlock); }
+                if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
                 off = off + cast<isize>(n);
             }
         };
@@ -83,7 +83,7 @@ fn Result<string, IoError> readAll(Reader r) {
     Result<isize, IoError> pr = pump(from: r, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     borrow sw.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError::InvalidInput); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     }
     return Result::Ok(value: sw.finish());
 }
@@ -214,7 +214,7 @@ type resource BufWriter<W: Writer> implements Writer {
                     // `Writer.write` answers `Result<isize, IoError>`, so `m` is already an `isize` —
                     // both casts here were residue from when it answered `usize`, and the `==` compared
                     // across the two. Nothing caught it because the payload binding had no type.
-                    if (m == 0) { return Result::Err(error: IoError::WouldBlock); }
+                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
                     off = off + m;
                 }
             };
@@ -315,7 +315,7 @@ type resource BufReader<R: Reader> implements Reader {
                 line.add(item: c);
             }
         }
-        return Result::Err(error: IoError::Other(code: 0));   // unreachable: the loop only exits by return
+        return Result::Err(error: IoError.of(kind: IoErrorKind::Other));   // unreachable: the loop only exits by return
     }
 }
 
@@ -333,7 +333,7 @@ type resource BufReader<R: Reader> implements Reader {
 unsafe fn Result<string, IoError> bytesToString(const ref DynamicArray<uint8> bytes) {
     if (bytes.length() == 0) { return Result::Ok(value: ""); }
     borrow bytes.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError::InvalidInput); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     }
     return Result::Ok(value: kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length()));
 }

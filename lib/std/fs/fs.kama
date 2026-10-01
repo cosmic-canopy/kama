@@ -1,6 +1,6 @@
 
 import {
-    std::io::IoError,
+    std::io::IoError, std::io::IoErrorKind,
     std::io::Descriptor,
     std::io::lastError,
     std::io::Reader,
@@ -84,7 +84,7 @@ type value Permissions implements Formattable, Sendable {
     // else: setuid (0o4000), setgid (0o2000), sticky (0o1000), or the file-type bits a raw `st_mode` holds.
     // Mask it yourself (`mode & 0o777`) when dropping those is what you mean; nothing drops them for you.
     public ctor Result<Permissions, IoError> fromMode(uint32 mode) {
-        if ((mode & ~0o777ui32) != 0ui32) { return Result::Err(error: IoError::InvalidInput); }
+        if ((mode & ~0o777ui32) != 0ui32) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         return Result::Ok(value: Permissions.fromBits(bits: mode));
     }
 
@@ -196,7 +196,7 @@ type resource File implements Reader, Writer, Sendable {
     // On Windows the bits become an access list — the owner and SYSTEM always, the group and Everyone only
     // for the bits they are given, inheriting nothing wider — see `Permissions` and kama_os.h.
     public unsafe ctor Result<File, IoError> openWith(const ref string path, OpenMode mode, Permissions permissions) {
-        if (mode == OpenMode::Read) { return Result::Err(error: IoError::InvalidInput); }
+        if (mode == OpenMode::Read) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(),
                                          append: mode == OpenMode::Append ? 1 : 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
@@ -321,7 +321,7 @@ unsafe fn Result<string, IoError> textOf(const ref DynamicArray<uint8> bytes) {
         Result<string, Utf8Error> d = decode(bytes: v);
         return match (give d) {
             case Ok(value: s):  Result::Ok(value: give s);
-            case Err(error: u): Result::Err(error: IoError::InvalidInput);
+            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
         };
     }
 }

@@ -4,7 +4,7 @@
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError,
          std::time::Duration, std::time::sleep };
 
-fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
+fn bool isWouldBlock(IoError e) { return match (e.kind()) { case WouldBlock: true; case _: false; }; }
 
 // The queued connection appears once the handshake lands, so the WouldBlock window has to be tolerated.
 // ⚠️ WAIT on a WALL-CLOCK deadline, never on an iteration count. This used to spin 2,000,000 times with

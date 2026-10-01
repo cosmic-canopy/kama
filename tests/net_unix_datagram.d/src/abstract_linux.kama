@@ -21,7 +21,7 @@ fn int32 abstractNames() {
     string shown = "${name}";
     if (shown != "@kama-unix-dgram-fixture") { return 35; }
     bool held = match (UnixListener.bindTo(address: name)) {
-        case Err(error: e): match (e) { case AddrInUse: true; case _: false; };
+        case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; };
         case Ok(value: x): false;
     };
     if (!held) { return 36; }
