@@ -12,10 +12,10 @@
 import {
     std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
-    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env,
 };
 
-export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId };
+export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory };
 
 extern "kama_os.h";
 extern fn int32 kama_getpid();
@@ -27,6 +27,7 @@ extern fn int32 kama_getpid();
 @compileFor(OS_WINDOWS)  extern fn int32  kama_token_sid(isize tok, int32 which, UnsafePtr<uint8> into, usize cap);
 @compileFor(OS_WINDOWS)  extern fn int32  kama_sid_name(UnsafeConstPtr<uint8> sid, UnsafePtr<uint8> name, usize ncap, UnsafePtr<int32> nlen,
                                                         UnsafePtr<uint8> dom, usize dcap, UnsafePtr<int32> dlen);
+@compileFor(OS_WINDOWS)  extern fn isize  kama_sid_home(UnsafeConstPtr<uint8> sid, UnsafePtr<uint8> into, usize cap);
 
 // This process's id — what `Process.id()` reports for a child, and `PeerCredentials.processId()` for the
 // process on the other end of a Unix socket.
@@ -40,7 +41,8 @@ fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
 
 // ---- Linux, macOS (and the wasm build, whose libc answers as a single user) ---------------------------------
 
-// The account name of a uid (`group` 0) or gid (1): `NotFound` when no account has that id.
+// The account name of a uid (`group` 0) or gid (1), or a uid's home directory (2): `NotFound` when no account has
+// that id, or records no home directory.
 @compileFor(!OS_WINDOWS)
 unsafe fn Result<string, IoError> idName(int32 group, uint32 id) {
     isize cap = 256;
@@ -59,6 +61,8 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     public ctor of(uint32 raw) { this.uid = raw; }            // a uid is a number, and any number may be asked about
     public const fn uint32 raw() { return this.uid; }
     public fn Result<string, IoError> name() { return idName(group: 0, id: this.uid); }
+    // The home directory the account database records for this user (its passwd entry's `pw_dir`).
+    public fn Result<string, IoError> homeDirectory() { return idName(group: 2, id: this.uid); }
     public const fn bool equals(const ref UserId other) { return this.uid == other.uid; }
     public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this.uid)); }
 }
@@ -120,6 +124,19 @@ fn bool sidEqual(const ref InlineArray<uint8>#(68) a, int32 alen, const ref Inli
 }
 
 // The account a SID names: `domain` false for its name, true for its domain (`MACHINE` or `DOMAIN`).
+// The profile directory of the account a SID names, asking again with room when the first buffer is short.
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> sidHome(const ref InlineArray<uint8>#(68) b) {
+    isize cap = 512;
+    while (true) {
+        FixedArray<uint8> buf = FixedArray.make(size: cap);
+        isize n = kama_sid_home(sid: addr(of: b[0]), into: buf.dataPtrMut(), cap: cast<usize>(cap));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        if (n <= cap) { return textOf(bytes: buf.slice(from: 0, count: n)); }
+        cap = n;
+    }
+}
+
 @compileFor(OS_WINDOWS)
 unsafe fn Result<string, IoError> sidAccount(const ref InlineArray<uint8>#(68) b, bool domain) {
     FixedArray<uint8> name = FixedArray.make(size: 1024);
@@ -147,6 +164,8 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     public const fn string sid() { return "${this}"; }
     public fn Result<string, IoError> name() { return sidAccount(b: this.sidBytes, domain: false); }
     public fn Result<string, IoError> domain() { return sidAccount(b: this.sidBytes, domain: true); }
+    // The profile directory Windows records for this account (`ProfileList`), `NotFound` when it has none here.
+    public fn Result<string, IoError> homeDirectory() { return sidHome(b: this.sidBytes); }
     public const fn bool equals(const ref UserId other) { return sidEqual(a: this.sidBytes, alen: this.sidLen, b: other.sidBytes, blen: other.sidLen); }
     public const fn void format(ref Formatter f) { sidText(b: this.sidBytes, f: ref f); }
 }
@@ -233,4 +252,26 @@ fn Result<UserId, IoError> currentUser() {
 @compileFor(OS_WINDOWS)
 fn Result<GroupId, IoError> currentGroup() {
     return match (AccessToken.current()) { case Ok(value: t): t.primaryGroup(); case Err(error: e): Result::Err(error: e); };
+}
+
+// ---- the current user's home directory --------------------------------------------------------------------------
+
+// Where the current user's own files live: the variable every program on the platform honors — `$HOME` on Linux and
+// macOS, `%USERPROFILE%` on Windows — when it is set and not empty, else what the account database records for the
+// user (`UserId.homeDirectory()`). The variable comes first because a service manager, a container or a test may set
+// it apart from the account, and the program is meant to follow it; the account is what is left when nothing set it.
+// Rust's `std::env::home_dir`, and how libpq finds `~/.pgpass` (peer KPG-16).
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<string, IoError> homeDirectory() { return homeFrom(variable: "HOME"); }
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> homeDirectory() { return homeFrom(variable: "USERPROFILE"); }
+
+unsafe fn Result<string, IoError> homeFrom(string variable) {
+    Optional<string> set = env(name: give variable);
+    match (give set) {
+        case Some(value: h): { if (h.length() > 0) { return Result::Ok(value: give h); } }
+        case None: {}
+    };
+    Result<UserId, IoError> me = currentUser();
+    return match (me) { case Ok(value: u): u.homeDirectory(); case Err(error: e): Result::Err(error: e); };
 }

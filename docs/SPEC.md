@@ -2075,6 +2075,9 @@ no account has the id) and render with `${…}`; on Linux and macOS they are the
 is given, and `domain()` names the account's domain). Windows adds `AccessToken`, its own process identity:
 `current()`, `ofProcess(id:)`, and its `user()`, `primaryGroup()` and every one of its `groups()`. Each twin is
 a whole type gated by `@compileFor`, since a member cannot be (*Conditional compilation*).
+`UserId.homeDirectory()` is the home the account database records — the passwd entry on Linux and macOS, the
+profile Windows records for the SID — and `homeDirectory()` is the current user's: `$HOME` (`%USERPROFILE%` on <!-- test: process_home -->
+Windows) when it is set and not empty, else the account's, as Rust's `home_dir` and libpq read it.
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<isize, IoError>` +

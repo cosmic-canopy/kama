@@ -1,0 +1,24 @@
+// Peer KPG-16: the current user's home directory, as libpq finds `~/.pgpass`. `homeDirectory()` reads `$HOME`
+// (`%USERPROFILE%` on Windows) when it is set and not empty, else the account's own record —
+// `UserId.homeDirectory()`: the passwd entry's `pw_dir`, or the profile Windows records for the SID. Returns 0.
+import { std::process::homeDirectory, std::process::currentUser, std::process::UserId, std::io::IoError };
+
+fn bool nonEmpty(Result<string, IoError> r) { return match (r) { case Ok(value: s): s.length() > 0; case Err(error: e): false; }; }
+
+// An id no account has: NotFound, not a crash and not an empty path.
+@compileFor(!OS_WINDOWS)
+fn bool unknownIsNotFound() {
+    Result<string, IoError> r = UserId.of(raw: 3999999999ui32).homeDirectory();
+    return match (r) { case Ok(value: s): false; case Err(error: e): match (e.kind()) { case NotFound: true; case _: false; }; };
+}
+@compileFor(OS_WINDOWS)
+fn bool unknownIsNotFound() { return true; }   // a SID is not made from a number there
+
+fn int32 main() {
+    if (!nonEmpty(r: homeDirectory())) { return 1; }
+    Result<UserId, IoError> me = currentUser();
+    Result<string, IoError> own = match (me) { case Ok(value: u): u.homeDirectory(); case Err(error: e): Result::Err(error: e); };
+    if (!nonEmpty(r: own)) { return 2; }
+    if (!unknownIsNotFound()) { return 3; }
+    return 0;
+}

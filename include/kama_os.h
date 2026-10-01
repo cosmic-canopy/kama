@@ -942,6 +942,46 @@ static inline int32_t kama_sid_name(const uint8_t* sid, uint8_t* name, size_t nc
     return 0;
 }
 
+// The profile directory Windows records for the account a SID names — `ProfileList\<SID>\ProfileImagePath`,
+// its `%SystemDrive%`-style variables expanded — as UTF-8: its length, with up to `cap` bytes of it copied into out
+// (the caller asks again with room when it is longer), or -1 with ENOENT when that account has no profile here.
+// The SID's text is written out (`S-1-5-21-…`, what ConvertSidToStringSid prints) rather than pulling in <sddl.h>,
+// as the kama side does for `UserId.sid()`.
+static inline size_t kama__dec(wchar_t* at, unsigned long long v) {
+    wchar_t digits[24]; size_t n = 0;
+    do { digits[n++] = (wchar_t)(L'0' + (int)(v % 10)); v /= 10; } while (v);
+    for (size_t i = 0; i < n; ++i) at[i] = digits[n - 1 - i];
+    return n;
+}
+static inline ptrdiff_t kama_sid_home(const uint8_t* sid, uint8_t* out, size_t cap) {
+    static const wchar_t base[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\";
+    wchar_t key[sizeof base / sizeof base[0] + 16 * 12];
+    size_t k = 0;
+    for (; base[k]; ++k) key[k] = base[k];
+    unsigned long long auth = 0;
+    for (int i = 2; i < 8; ++i) auth = auth * 256u + sid[i];
+    key[k++] = L'S'; key[k++] = L'-'; k += kama__dec(key + k, sid[0]); key[k++] = L'-'; k += kama__dec(key + k, auth);
+    for (int i = 0; i < sid[1] && i < 15; ++i) {
+        const uint8_t* p = sid + 8 + 4 * i;
+        key[k++] = L'-';
+        k += kama__dec(key + k, (unsigned long long)p[0] | (unsigned long long)p[1] << 8
+                                | (unsigned long long)p[2] << 16 | (unsigned long long)p[3] << 24);
+    }
+    key[k] = 0;
+    wchar_t path[1024]; DWORD bytes = (DWORD)sizeof path;
+    const LSTATUS st = RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ProfileImagePath", RRF_RT_REG_SZ, NULL, path, &bytes);
+    if (st != ERROR_SUCCESS) {
+        kama__os_fail((unsigned long)st, st == ERROR_FILE_NOT_FOUND ? ENOENT : st == ERROR_ACCESS_DENIED ? EACCES : EINVAL);
+        return -1;
+    }
+    size_t len = 0;
+    char* u = kama__utf8(path, &len);
+    if (!u) return -1;
+    memcpy(out, u, len < cap ? len : cap);
+    kama_free(u, len + 1, 1);
+    return (ptrdiff_t)len;
+}
+
 // The two pieces the shared address calls (below the platform split) need from each platform: the native
 // handle type, and turning a failed call's error into errno.
 typedef SOCKET kama__sock;
@@ -1902,14 +1942,16 @@ static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, pt
     return r;
 }
 static inline uint32_t kama_getgid(void) { return (uint32_t)getgid(); }
-// The account name of a uid (`group` 0) or gid (`group` 1): its length, with up to `cap` bytes of it copied
-// into out (the caller asks again with room when it is longer), or -1 with ENOENT when no account has that id.
+// The account name of a uid (`group` 0) or gid (`group` 1), or a uid's home directory (`group` 2): its length,
+// with up to `cap` bytes of it copied into out (the caller asks again with room when it is longer), or -1 with
+// ENOENT when no account has that id (or, for a home directory, records none).
 static inline ptrdiff_t kama_id_name(int32_t group, uint32_t id, uint8_t* out, size_t cap) {
     for (size_t sz = 4096; ; sz *= 4) {                     // through the allocation funnel, like every heap block
         char* buf = (char*)kama_alloc(sz, sizeof(void*));
         if (!buf) { errno = ENOMEM; return -1; }
         const char* name = NULL; int e;
-        if (!group) { struct passwd pw, *r = NULL; e = getpwuid_r((uid_t)id, &pw, buf, sz, &r); if (!e && r) name = pw.pw_name; }
+        if (group != 1) { struct passwd pw, *r = NULL; e = getpwuid_r((uid_t)id, &pw, buf, sz, &r);
+                          if (!e && r) name = group == 2 ? (pw.pw_dir && *pw.pw_dir ? pw.pw_dir : NULL) : pw.pw_name; }
         else        { struct group  gr, *r = NULL; e = getgrgid_r((gid_t)id, &gr, buf, sz, &r); if (!e && r) name = gr.gr_name; }
         if (e == ERANGE && sz < ((size_t)1 << 22)) { kama_free(buf, sz, sizeof(void*)); continue; }
         if (!name) { kama_free(buf, sz, sizeof(void*)); errno = e ? e : ENOENT; return -1; }
