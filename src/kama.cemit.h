@@ -2425,6 +2425,7 @@ private:
     // (`std::memory::Owned<Counter>` used in another file) carry its concrete args through the
     // template's ctx without the arg's home mangle being stripped. Primitives/`UnsafePtr`/`This` pass through.
     SharedIdentifier absolutizeType(SharedIdentifier t);
+    SharedIdentifier genericCallReturnNode(InvocationNode* iv, const std::string& k);   // a generic call's return type
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);

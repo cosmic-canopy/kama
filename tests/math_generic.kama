@@ -39,11 +39,8 @@ fn int32 main() {
     float64 s = sin(x: 0.0);
     float64 c = cos(x: 0.0);
     if (abs(x: s) < 0.000001 && abs(x: c - 1.0) < 0.000001) { t = t + 1; }
-    // a NESTED GENERIC call cannot infer — the callee's return type is the very `T` being resolved — so
-    // the inner result takes a name, which is kama's "bind it to a local" rule.
-    float64 e1 = exp(x: 1.0);
-    float64 lg = log(x: e1);
-    if (abs(x: lg - 1.0) < 0.000001) { t = t + 1; }
+    // a NESTED generic call infers: the inner call is solved first, so `exp(x: 1.0)` is a `float64` (KPG-12)
+    if (abs(x: log(x: exp(x: 1.0)) - 1.0) < 0.000001) { t = t + 1; }
     // atan2 keeps C's (y, x) order, but the argument is NAMED, so the classic mix-up cannot happen quietly
     float64 q = atan2(y: 1.0, x: 1.0);
     if (abs(x: q - 0.785398) < 0.0001) { t = t + 1; }

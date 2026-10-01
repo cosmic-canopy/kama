@@ -63,7 +63,7 @@ fn int32 main() {
     borrow a.view() as v {
         DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 1);   // scanStmtForCollections
         inner.add(item: 1);
-        viaLocal = sum(xs: v) + firstOr::<int32>(xs: v, dflt: 0) + inner.length();   // scanStmtForGenerics
+        viaLocal = sum(xs: v) + firstOr::<int32>(xs: v, dflt: 0) + cast<int32>(inner.length());   // scanStmtForGenerics
         five(v: out filled);                    // unconditional block -> a DEFINITE fill (slot rule 3)
     }                                           // 7 + 3 + 1 = 11
 

@@ -1,0 +1,11 @@
+{
+  "name": "gni",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "modules": {
+    ".": { "visibility": "internal" },
+    "geo": { "visibility": "internal" }
+  }
+}

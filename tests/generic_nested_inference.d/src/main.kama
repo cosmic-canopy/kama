@@ -1,0 +1,9 @@
+// The multi-module half of tests/generic_nested_inference.kama: `wrap` returns a `Box<T>` this file never
+// imports, so the type is named only by the call's result — absolute, and registered when the call is solved.
+import { gni::geo::wrap, gni::geo::unwrapBox };
+fn T id<T>(T x) { return x; }
+fn int32 main() {
+    int32 a = unwrapBox(b: wrap(v: 20));
+    int32 b = unwrapBox(b: id(x: wrap(v: 2)));
+    return a + b;   // 22
+}

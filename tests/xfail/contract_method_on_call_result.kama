@@ -1,0 +1,10 @@
+// A contract's method is reached through the contract, never as the value's own — `s.abs()` on a `float64`
+// local is refused. The same method on a CALL result (`sin(x: t).abs()`) used to have no receiver type at all,
+// and once it had one, the scope rule read the untyped receiver as "cannot tell" and let it build. It answers
+// the same as the local now.
+import { std::math::sin };
+fn int32 main() {
+    float64 t = 1.0;
+    float64 r = sin(x: t).abs();
+    return 0;
+}

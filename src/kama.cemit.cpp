@@ -14147,9 +14147,37 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     // value MUST carry one — so without this arm an owning argument to a by-value generic parameter was
     // uninferable (`ident(x: copy m)`: "not a literal or a locally-typed value") while the turbofish worked.
     if (auto* h  = dynamic_cast<HandoffNode*>(n)) return exprTypeNode(h->value, localTys);
+    // `c ? a : b` is either arm's type — the same answer the binary arm above gives for its operands.
+    if (auto* t  = dynamic_cast<TernaryExpressionNode*>(n)) {
+        SharedIdentifier l = exprTypeNode(t->LHS, localTys);
+        return l ? l : exprTypeNode(t->RHS, localTys);
+    }
+    // A FIELD (`abs(x: v.f)`) and an ELEMENT (`abs(x: a[0])`): the receiver is typed the same way, then the
+    // member's declared type is read with the receiver's own type arguments bound. Both were "not a literal or
+    // a locally-typed value" while a local holding the same value inferred.
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        SharedIdentifier rt = ma->identifier && ma->identifier->value ? exprTypeNode(ma->expression, localTys) : nullptr;
+        const std::string rc = rt ? cType(rt) : std::string();
+        if (rc.empty() || !_classes.count(rc)) return nullptr;
+        if (ClassInfo* owner = findFieldOwner(&_classes[rc], *ma->identifier->value))
+            for (auto& f : owner->fields)
+                if (f.name == *ma->identifier->value && f.type) return absolutizeType(deepSubstInInstance(rc, f.type));
+        return nullptr;
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        SharedExpression recv = ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        SharedIdentifier rt = exprTypeNode(recv, localTys);
+        const std::string rc = rt ? cType(rt) : std::string();
+        if (rc.empty() || !_classes.count(rc)) return nullptr;
+        if (rc == "kama_string") return primTypeNode(IDENTIFIER_UINT8_VAL);            // `s[i]` is a byte
+        if (_classes[rc].isIntrinsicColl)                                             // `InlineArray<T>#(N)`
+            return rt->genericArgs && !rt->genericArgs->empty() ? (*rt->genericArgs)[0] : nullptr;
+        if (MethodInfo* op = userIndexOp(rc))                                         // `ref T operator[]`
+            return op->returnType ? absolutizeType(deepSubstInInstance(rc, op->returnType)) : nullptr;
+        return nullptr;
+    }
     // A call's type is its callee's declared return type, which makes a NESTED call inferable
-    // (`log(x: exp(x: 1.0))`). Only for a non-generic callee: a generic one returns its own `T`, which is
-    // exactly the thing not yet known here, so it is left to the "bind it to a local" rule.
+    // (`log(x: exp(x: 1.0))`) — a generic callee's too: see genericCallReturnNode.
     if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
         // A DOT-ON-TYPE ctor call (`StringWriter.make()`) types as the type it constructs — or as the
         // ctor's declared `Result<…>` when it is fallible. Checked before the method-call arm because the
@@ -14179,11 +14207,58 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
                 auto fit = _funcs.find(k);
                 if (fit != _funcs.end() && fit->second.node && fit->second.node->returnType)
                     return fit->second.node->returnType;
+            } else {
+                return genericCallReturnNode(iv, k);
             }
         }
         return nullptr;
     }
     return nullptr;
+}
+
+// A GENERIC call's return type, as the instance this call routes to declares it: `sin(x: t)` is `sin<float64>`,
+// so it returns a `float64`. This was refused as "the very `T` being resolved" (SPEC said so too) — but the T
+// in question is the inner call's own, and that call is solved first: discovery scans a call's arguments
+// before the call (scanExprForGenerics), so the inner instance is already recorded for this node. So
+// `abs(x: sin(x: t))` reported "cannot infer generic type parameter 'T'", and so did the fully explicit
+// `abs(x: sin::<float64>(x: t))` (peer KPG-12). Null when this call resolved nothing — its own failure is
+// reported where it is, and the caller then reports the inference it could not make.
+//
+// Substituted under the TEMPLATE's context and then absolutized, so a returned `Box<T>` names the template's
+// `Box` wherever the outer call is — not whatever `Box` the caller's file can see.
+SharedIdentifier CEmitter::genericCallReturnNode(InvocationNode* iv, const std::string& k)
+{
+    auto ti = _generics.find(k);
+    if (ti == _generics.end() || !ti->second || !ti->second->returnType) return nullptr;
+    FunctionDeclarationNode* tmpl = ti->second;
+    const auto savedSubst = _typeSubst;
+    const auto savedComptime = _comptimeSubst;
+    const NsCtx savedCtx = _nsCtx;
+    auto cit = _genericCtx.find(k);
+    if (cit != _genericCtx.end()) _nsCtx = cit->second;
+    const std::string m = callInstOf(iv);
+    auto gi = _genericInsts.find(m);
+    SharedIdentifier r;
+    if (!m.empty() && gi != _genericInsts.end()) {
+        const GenericInst inst = gi->second;   // COPY — registering the return below may rehash the map
+        bindInstParams(tmpl->typeParams, tmpl->constTypes, inst.typeArgs);
+        r = absolutizeType(deepSubstType(tmpl->returnType));
+        // A generic TYPE returned (`fn Box<T> wrap<T>(…)`) is concrete only once its instance exists, and the
+        // outer call may be inferred before anything else names `Box<int32>` — so it is registered here.
+        if (r && r->genericArg && r->value && _genericTypes.count(*r->value)) registerGenericTypeInst(*r->value, r->genericArgs);
+    } else {
+        // Not solved YET: an argument is still open — a template's own walk, where `sin(x: x)` waits on the
+        // enclosing `T` and is solved when the body is re-walked per instantiation. Its declared return type
+        // with its own parameters unbound says exactly that: a return that names them reads as open and the
+        // outer call defers too (bindGenericArg), and one that does not (`fn int32 count<T>(…)`) binds. An
+        // inner call that FAILED reads the same way, and that is right as well: it has said why, and the
+        // outer call deferring on it adds no second error about the same mistake.
+        _typeSubst.clear();
+        _comptimeSubst.clear();
+        r = deepSubstType(tmpl->returnType);
+    }
+    _typeSubst = savedSubst; _comptimeSubst = savedComptime; _nsCtx = savedCtx;
+    return r;
 }
 
 // One intrinsic instance's method return type, or null. Split out only so mintReturnTypeNode's intrinsic
@@ -14541,7 +14616,20 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         const bool viewPair = ((*pt->value == "ConstView" && *at->value == "View")
                             || (*pt->value == "View" && *at->value == "ConstView"))
                           && !constViewTemplateKey().empty() && !viewTemplateKey().empty();
-        if ((*pt->value != *at->value && !viewPair) || !pt->genericArgs || !at->genericArgs
+        // The same template, spelled two ways: an argument typed by a generic call's return is ABSOLUTE
+        // (genericCallReturnNode — `wrap(v: 3)` is a `k_Fm__Box<int32>`), so it is compared with the
+        // parameter's head as the callee's own file resolves it.
+        auto sameHead = [&]() -> bool {
+            if (*pt->value == *at->value) return true;
+            if (at->qualifier && !at->qualifier->empty()) return false;
+            const NsCtx saved = _nsCtx;
+            auto gc = _genericCtx.find(key);
+            if (gc != _genericCtx.end()) _nsCtx = gc->second;
+            const bool same = resolveUserName(*pt->value, pt->qualifier) == *at->value;
+            _nsCtx = saved;
+            return same;
+        };
+        if ((!sameHead() && !viewPair) || !pt->genericArgs || !at->genericArgs
             || pt->genericArgs->size() != at->genericArgs->size()) return true;   // shapes differ — bind nothing
         for (size_t i = 0; i < pt->genericArgs->size(); ++i)
             if (!unify((*pt->genericArgs)[i], (*at->genericArgs)[i])) return false;
@@ -32975,7 +33063,12 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // refusals, and typing the call "" as well would bury them under a second, vaguer diagnostic.
     if (isGlobalHeapCall(inv) && !_globalAllocator.empty()) return _globalAllocator;
     if (inv->identifier && inv->identifier->value) {
-        auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+        const std::string fk = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
+        // A GENERIC callee returns what the instance this call routes to declares — the template's own
+        // `retCType` still spells `T`, so `id(x: p).gx()` had no receiver type (KPG-12's emit-side half).
+        if (_generics.count(fk))
+            if (SharedIdentifier r = genericCallReturnNode(inv, fk)) return cType(r);
+        auto f = _funcs.find(fk);
         if (f == _funcs.end() && (!inv->identifier->qualifier || inv->identifier->qualifier->empty()))
             f = _funcs.find(unimportedFuncKey(*inv->identifier->value));   // typing recovery only — see there
         if (f != _funcs.end()) return f->second.retCType;
@@ -34916,6 +35009,13 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
         std::string et = indexElemTypeRaw(e);
         return isClass(et) ? std::string() : et;   // a class element is exprClass's job, not this one
     }
+    // ...and a CALL's result: `plain(x: 4).toString()`, `sin(x: t).abs()`. A scalar receiver is passed by value,
+    // so an rvalue serves, but with no arm here the call was "cannot resolve the receiver — its type is not
+    // known here", generic callee or not (found with KPG-12, whose generic half callReturnTypeRaw now types).
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        const std::string rt = callReturnTypeRaw(inv);
+        return isClass(rt) ? std::string() : rt;
+    }
     return "";
 }
 
@@ -34940,6 +35040,16 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner) for (auto& f : owner->fields)
                 if (f.name == *ma->identifier->value) return f.type;
+        }
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        // A free function's declared return type — a generic one's as the instance this call routes to declares
+        // it. Without it the contract-scope gate read a call result as "cannot tell" and let it through:
+        // `sin(x: t).abs()` built while `s.abs()` on a `float64` local was refused.
+        if (inv->identifier && inv->identifier->value && !inv->expression && !callsThroughLocal(inv)) {
+            const std::string k = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
+            if (_generics.count(k)) return genericCallReturnNode(inv, k);
+            auto f = _funcs.find(k);
+            if (f != _funcs.end() && f->second.node) return f->second.node->returnType;
         }
     }
     return SharedIdentifier();

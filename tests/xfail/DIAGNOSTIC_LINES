@@ -226,6 +226,7 @@ contract_kind_gate_view	contract_kind_gate_view.kama:4 contract_kind_gate_view.k
 contract_label_mismatch	contract_label_mismatch.kama:12
 contract_local_nonconforming	contract_local_nonconforming.kama:13
 contract_member_hierarchy_word	contract_member_hierarchy_word.kama:3
+contract_method_on_call_result	contract_method_on_call_result.kama:8
 contract_no_for	contract_no_for.kama:1
 contract_operator_mismatch	contract_operator_mismatch.kama:9
 contract_operator_unsafe	contract_operator_unsafe.kama:3

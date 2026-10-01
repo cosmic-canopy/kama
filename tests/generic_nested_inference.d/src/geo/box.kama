@@ -1,0 +1,5 @@
+// Exported generics whose results name a type the importer never sees.
+export { Box, wrap, unwrapBox };
+type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }
+fn Box<T> wrap<T>(T v) { return Box::<T>.of(v: v); }
+fn T unwrapBox<T>(Box<T> b) { return b.v; }

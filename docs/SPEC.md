@@ -1391,9 +1391,10 @@ a kama function cannot share a name with the **extern** it calls, so the binding
 the API (the same rename is now spelled in kama as `@linkName("sqrt") extern fn … cSqrt(…)`; the header
 predates it).
 
-Two limits worth knowing. A **nested generic call cannot infer** — `log(x: exp(x: 1.0))` fails because
-the inner call's return type is the very `T` being resolved; bind it to a local (kama's usual "bind it to
-a local" rule). And a `ref` parameter may not name a smart pointer, so a contract instantiated at <!-- xfail: ref_handle -->
+A generic call infers from any argument whose type is known, including another generic call's result:
+`abs(x: sin(x: t))` is `abs<float64>`, because the inner call is solved first. A field, an element and a
+`?:` infer the same way. <!-- test: generic_nested_inference -->
+One limit worth knowing: a `ref` parameter may not name a smart pointer, so a contract instantiated at <!-- xfail: ref_handle -->
 `Owned<T>` — e.g. `Order<Owned<T>>` — is not expressible; sort or compare the resources themselves.
 Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
