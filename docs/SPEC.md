@@ -5396,6 +5396,11 @@ It is also the only construct that *reads* an enum, which is why the only way to
 integer — `try cast<E>(x)`, above — hands back an `Optional<E>`: a value that names no variant arrives as
 a `None` **arm** of the same construct, never as a trap.
 
+**A subject that names storage is borrowed where it lives**: a local, a field, an element, or a call that
+returns a place (`fn ref T`, `const fn const ref T`), so its payload bindings alias storage the owner keeps. <!-- test: match_place_subject -->
+Only a fresh value, such as a constructor or a by-value call result, is held in a temporary, and the `match` drops
+that temporary when it ends.
+
 **A pattern NAMES the fields it binds** — `field: local` — exactly as a call names its arguments; there is
 no positional form, and kama no more exempts a one-field variant here than it exempts a one-argument call
 from a label. The label is the variant's field; the identifier after it is the local it introduces, and it

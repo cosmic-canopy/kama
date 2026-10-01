@@ -1,0 +1,55 @@
+// A `match` on a call that returns a PLACE (`fn ref T`, `const fn const ref T`) borrows that place: the payload
+// bindings alias storage the receiver still owns, and the switch never copies or destroys it. KPG-29: the
+// subject was materialized as an "owning temp" — a bitwise copy the switch then destroyed — so the receiver's
+// own string was freed under it, and a `Shared` handle lost a share it never took. Each method runs three
+// times: the second run reads freed memory and the drop at the end frees it again, unless the place is borrowed.
+import { core::println, std::collections::DynamicArray };
+
+type enum Cell { Empty, Text(string text) }
+
+type resource Holder {
+    DynamicArray<Cell> cells;
+    Shared<Cell> shared;
+    public ctor make() {
+        this.cells = DynamicArray.empty();
+        string built = "hel".concat(other: "lo");
+        this.cells.add(item: Cell::Text(text: give built));
+        string other = "wor".concat(other: "ld");
+        Shared<Cell> sh = new Cell::Text(text: give other);
+        this.shared = give sh;
+    }
+    const fn const ref Cell slot() { return this.cells[0]; }
+    fn ref Cell slotMut() { return this.cells[0]; }
+    const fn const ref Shared<Cell> handle() { return this.shared; }
+
+    public fn string viaConstRef() { return match (this.slot()) { case Text(text: t): copy t; case _: ""; }; }
+    public fn string viaRef() { return match (this.slotMut()) { case Text(text: t): copy t; case _: ""; }; }
+    public fn string viaHandle() { return match (this.handle()) { case Text(text: t): copy t; case _: ""; }; }
+    public fn int32 viaStatement() {
+        int32 n = 0;
+        match (this.slot()) {
+            case Text(text: t): { n = cast<int32>(t.length()); }
+            case _: { }
+        };
+        return n;
+    }
+}
+
+fn const ref Cell first(const ref DynamicArray<Cell> cells) { return cells[0]; }
+
+fn int32 main() {
+    Holder h = Holder.make();
+    int32 total = 0;
+    for (int32 i = 0; i < 3; i++) {
+        println(s: h.viaConstRef().concat(other: " ").concat(other: h.viaRef()).concat(other: " ").concat(other: h.viaHandle()));
+        total = total + h.viaStatement();
+    }
+    DynamicArray<Cell> cells = DynamicArray.empty();
+    string s = "kama".concat(other: "!");
+    cells.add(item: Cell::Text(text: give s));
+    for (int32 i = 0; i < 3; i++) {
+        int32 n = match (first(cells: cells)) { case Text(text: t): cast<int32>(t.length()); case _: 0; };
+        total = total + n;
+    }
+    return total == 15 + 15 ? 0 : 1;
+}

@@ -25516,10 +25516,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // `match (give x)` CONSUMES the subject: it materializes an owning temp (the non-lvalue path below), and
     // an owning payload binding MOVES out of it (destructure-move) rather than borrowing.
     bool subjConsumed = dynamic_cast<HandoffNode*>(m->subject.get()) != nullptr;
+    // A place-returning call (`fn ref T`, `const fn const ref T`) is an lvalue too: it emits as `(*call)` and
+    // names storage its receiver owns. Materializing it as an "owning temp" was a bitwise copy the switch then
+    // DESTROYED — the receiver's own payload freed under it, or a handle's share released that was never
+    // taken (KPG-29). `subjPlaceCall` also drives the cast below: a `const ref` place is `T const*` in C.
+    const bool subjPlaceCall = invocationReturnsPlace(dynamic_cast<InvocationNode*>(m->subject.get()));
     bool subjLvalue = dynamic_cast<IdentifierNode*>(m->subject.get())
                    || dynamic_cast<MemberAccessNode*>(m->subject.get())
                    || dynamic_cast<ThisAccessNode*>(m->subject.get())
-                   || dynamic_cast<ElementAccessNode*>(m->subject.get());
+                   || dynamic_cast<ElementAccessNode*>(m->subject.get())
+                   || subjPlaceCall;
     std::string subjOwner;
     size_t subjLocMark = 0;      // where the subject temp sits in the enclosing scope; see the drop below
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
@@ -25548,8 +25554,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             recordDestructibleLocal(subjOwner, handleCls);   // see the drop below
             place = subjOwner;
         }
+        const std::string handlePtr = subjPlaceCall ? "(" + handleCls + "*)&(" + place + ")" : "&(" + place + ")";
         indent(depth); *_out << subjCls << "* " << sp << " = (" << subjCls << "*)"
-                             << (lib ? derefFnName(handleCls, true) + "(&(" + place + "))"
+                             << (lib ? derefFnName(handleCls, true) + "(" + handlePtr + ")"
                                      : "(" + place + ").ptr") << ";\n";
     } else if (subjConsumed) {
         // `match (give x)`: the subject is a hand-off. Emit the moved-from source, materialize an owning temp
@@ -25599,6 +25606,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         // it (`&self` would point at the parameter slot). Reachable only for `match (this)` in a method on
         // an enum (the only way `this` is a variant subject). (Model C: `type enum … implements Error`.)
         indent(depth); *_out << subjCls << "* " << sp << " = " << subjExpr << ";\n";
+    } else if (subjPlaceCall) {
+        indent(depth); *_out << subjCls << "* " << sp << " = (" << subjCls << "*)&(" << subjExpr << ");\n";
     } else if (subjLvalue) {
         indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
     } else {
