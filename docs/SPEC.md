@@ -3913,7 +3913,11 @@ delegated `Ok` is complete as written.
 Two escape hatches, both **explicit and at the declaration** rather than hidden in codegen:
 
 - a **field initializer** — `UnsafePtr<T> data = null;`, `int32 len = 0;` — states that field's default once, and
-  it runs in every ctor (and for a bare local);
+  it runs in every ctor (and for a bare local). Because it is stated once, it is read in the scope the TYPE was
+  written in, wherever the value is made — even inside another type's body, such as std's `DynamicArray<T>`, <!-- test: field_default_in_generic -->
+  and it reads nothing of the place it runs: not a constructor's parameter, <!-- xfail: field_default_reads_ctor_param -->
+  not another field, <!-- xfail: field_default_reads_field -->
+  and not `this`; set such a field in the constructor. <!-- xfail: field_default_reads_this -->
 - **`@generate(zero)`** blesses a whole data bag's zero state (a transparent all-public `value`).
 
 What is exempt is not a carve-out but a guarantee the compiler supplies: a field whose type has a

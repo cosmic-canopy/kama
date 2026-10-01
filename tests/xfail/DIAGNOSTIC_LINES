@@ -385,6 +385,9 @@ extern_undeclared	main.kama:3 main.kama:4
 extern_value_layout	-
 extern_value_nameless	extern_value_nameless.kama:6
 extern_value_plain_enum_field	extern_value_plain_enum_field.kama:6
+field_default_reads_ctor_param	field_default_reads_ctor_param.kama:5
+field_default_reads_field	field_default_reads_field.kama:6
+field_default_reads_this	field_default_reads_this.kama:5
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_method_same_name	field_method_same_name.kama:4
 field_no_default	field_no_default.kama:14

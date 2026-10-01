@@ -1,0 +1,8 @@
+// `this` in a field default passed `kama check` and failed clang ("use of undeclared identifier 'self'"): the
+// value is still being made when its defaults run.
+type value V {
+    public int32 a = 1;
+    public int32 b = this.a + 1;
+    public ctor make() { }
+}
+fn int32 main() { V v = V.make(); return v.b; }

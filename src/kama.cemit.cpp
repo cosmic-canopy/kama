@@ -2848,6 +2848,17 @@ void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
                     line, head);
         return;
     }
+    // Bare, in a field default: the name exists, but not where a default is stated (see emitAggregateFill).
+    if (!_fieldDefaultOf.empty()) {
+        const bool field = _classes.count(_fieldDefaultOf) && findFieldOwner(&_classes[_fieldDefaultOf], nm);
+        if (field || _fieldDefaultHidden.count(nm)) {
+            unsupported(("a field default is stated once, for every way a `" + _fieldDefaultOf + "` is made, so it "
+                         "cannot read `" + nm + "` — " + (field ? "another field, which may not be set yet"
+                                                               : "a name of the constructor or body it is filled in")
+                         + "; set the field in the constructor instead").c_str(), line, nm);
+            return;
+        }
+    }
     // Bare. A TYPE where a value is expected says which kind of type, and what a value of it looks like.
     const std::string t = resolveUserName(nm, nullptr);
     auto ei = _enums.find(t);
@@ -6999,11 +7010,34 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
             // `Kind kind = Kind::First;` was resolved against dynamic_array.kama's names and refused — "`Kind`
             // is not a type or module in reach here", pointing into std, for a type declared ten lines up
             // (peer KPG-19). A diagnostic then names the field's own line, in the type's own file.
+            //
+            // ...and with nothing of the BODY in reach. The default is stated "once" (SPEC § Construction), so a
+            // constructor's parameter, the enclosing body's local, or a field of the enclosing class must not
+            // answer for one of its names: `int32 n = k;` read `make(int32 k)`'s `k` and failed in every ctor
+            // without one, and inside another type's body a bare name could reach THAT type's field.
             const std::string fct = fieldCType(ty, f);
             ScopedClassHome home(*this, ty);
             const int at = home.entered && f.initializer->line > 0 ? f.initializer->line : lineNo;
-            emitOwnedValueInto(nm + "." + kMember(_classes[ty], f.name), fct, f.initializer, at, depth, "a field initializer",
-                               /*kindChecked=*/true);
+            std::map<std::string, std::string> hiddenLocals;  hiddenLocals.swap(_localTypes);
+            std::set<std::string>              hiddenParams;  hiddenParams.swap(_paramNames);
+            std::set<std::string>              hiddenRefs;    hiddenRefs.swap(_refParams);
+            ClassInfo* const enclosing = _currentClass;
+            _currentClass = nullptr;
+            std::set<std::string> hidden(hiddenParams.begin(), hiddenParams.end());   // named by rejectUnresolvedName
+            hidden.insert(hiddenRefs.begin(), hiddenRefs.end());
+            for (auto& kv : hiddenLocals) hidden.insert(kv.first);
+            ScopedStr _fdo(_fieldDefaultOf, ty);
+            _fieldDefaultHidden.swap(hidden);
+            const std::string target = nm + "." + kMember(_classes[ty], f.name);
+            if (exprMentionsThis(f.initializer))   // ...nor the value being made: it does not exist yet
+                unsupported(("a field default is stated once, for every way a `" + ty + "` is made, so it cannot "
+                             "read `this` — the value is still being made; set the field in the constructor "
+                             "instead").c_str(), at);
+            else
+                emitOwnedValueInto(target, fct, f.initializer, at, depth, "a field initializer", /*kindChecked=*/true);
+            _fieldDefaultHidden.swap(hidden);
+            _currentClass = enclosing;
+            _localTypes.swap(hiddenLocals); _paramNames.swap(hiddenParams); _refParams.swap(hiddenRefs);
             continue;
         }
         // The BAKED type — this class may be declared in another module, and resolving its field types
@@ -33158,6 +33192,10 @@ bool CEmitter::exprMentionsThis(SharedExpression e)
     if (auto* ca = dynamic_cast<CastNode*>(e.get()))          return exprMentionsThis(ca->unaryExpression);
     if (auto* bn = dynamic_cast<BinaryExpressionNode*>(e.get()))
         return exprMentionsThis(bn->LHS) || exprMentionsThis(bn->RHS);
+    if (auto* lg = dynamic_cast<LogicalAndOrNode*>(e.get()))
+        return exprMentionsThis(lg->LHS) || exprMentionsThis(lg->RHS);
+    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(e.get()))
+        return exprMentionsThis(tx->condition) || exprMentionsThis(tx->LHS) || exprMentionsThis(tx->RHS);
     if (auto* iv = dynamic_cast<InvocationNode*>(e.get())) {
         if (exprMentionsThis(iv->expression)) return true;
         if (iv->args)

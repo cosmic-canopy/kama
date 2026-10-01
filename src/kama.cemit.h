@@ -1383,6 +1383,8 @@ private:
                                              // when the name is not a local/param/field/func.
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
+    std::string           _fieldDefaultOf;      // the class whose field default is being emitted (emitAggregateFill)
+    std::set<std::string> _fieldDefaultHidden;  // ...and the body's names it may not read
     std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
                                              // declaration shadowing one is a compile error (see emitDeclarator)
     std::map<std::string, std::string> _paramDeclKeys;   // LSP (M3.4), analysis mode: param name -> index key

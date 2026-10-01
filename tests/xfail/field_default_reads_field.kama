@@ -1,0 +1,9 @@
+// A field default may not read another field: it is not stated per instance, and the fill that runs it may
+// reach this field before that one (C# draws the same line). Inside another type's body a bare name was worse
+// than order-dependent — it could reach a field of the ENCLOSING type.
+type value V {
+    public int32 a = 1;
+    public int32 b = a;
+    public ctor make() { }
+}
+fn int32 main() { V v = V.make(); return v.b; }

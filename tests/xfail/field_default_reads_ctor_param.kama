@@ -1,0 +1,8 @@
+// A field default is stated ONCE, for every way the type is made (SPEC § Construction). `int32 n = k;` used to
+// read `make(int32 k)`'s parameter, because the fill runs at that constructor's entry with its parameters in
+// reach — and the same default failed to resolve in any constructor without a `k`.
+type value V {
+    public int32 n = k;
+    public ctor make(int32 k) { }
+}
+fn int32 main() { V v = V.make(k: 5); return v.n; }
