@@ -1,0 +1,17 @@
+import { std::collections::DynamicArray, std::collections::FixedArray, fdg::shapes::Item };
+
+type resource Shelf<T> {
+    DynamicArray<T> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public fn void put(T item) { this.items.add(item: give item); }
+    public fn T fresh() when [T: default] { T t = T.default(); return t; }
+}
+
+fn int32 main()
+{
+    Shelf<Item> s = Shelf::<Item>.make();
+    Item made = s.fresh();                                    // a field fill inside Shelf<Item>'s body
+    FixedArray<Item> row = FixedArray::<Item>.make(size: 2);  // ...and inside std's FixedArray<Item>
+    s.put(item: Item.make(w: 7));
+    return made.score() + row[1].score() - 84 + 3;            // 42 + 42 - 84 + 3 = 3
+}

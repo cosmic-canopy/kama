@@ -6993,7 +6993,16 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
             // value and a `match` arm take — so a destination-typed construction (`DynamicArray<T> items =
             // DynamicArray.empty();`) resolves as it does in a local initializer, instead of refusing with
             // "give the type arguments" when they are already on the field (KR-21 b).
-            emitOwnedValueInto(nm + "." + kMember(_classes[ty], f.name), fieldCType(ty, f), f.initializer, lineNo, depth, "a field initializer",
+            //
+            // In the scope the TYPE was written in. The fill runs wherever a value of the type comes into being,
+            // and that may be inside another type's body: `DynamicArray<Item>` declaring a local `T`, where
+            // `Kind kind = Kind::First;` was resolved against dynamic_array.kama's names and refused — "`Kind`
+            // is not a type or module in reach here", pointing into std, for a type declared ten lines up
+            // (peer KPG-19). A diagnostic then names the field's own line, in the type's own file.
+            const std::string fct = fieldCType(ty, f);
+            ScopedClassHome home(*this, ty);
+            const int at = home.entered && f.initializer->line > 0 ? f.initializer->line : lineNo;
+            emitOwnedValueInto(nm + "." + kMember(_classes[ty], f.name), fct, f.initializer, at, depth, "a field initializer",
                                /*kindChecked=*/true);
             continue;
         }
@@ -16314,33 +16323,45 @@ bool CEmitter::indexesUserOp(ElementAccessNode* ea)
 // (tests/ctor_result_foreign_err.d). Scope-less infos (prelude, intrinsic collections) keep the plain path.
 std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode)
 {
-    if (!_genericTypeInsts.count(inCls)) {
-        auto ci = _classes.find(inCls);
-        if (ci == _classes.end() || ci->second.isIntrinsicColl) return cType(typeNode);
-        // The declaring file's WHOLE context — names, unit path, private scope, export list — exactly as
-        // its own bodies were judged. `enterClassCtx` rebuilds only the name half and leaves `unitPath`
-        // empty, and the visibility check then judged every reference as coming from nowhere: a generic
-        // `json::deserializeJsonBuffer::<Point>` reached a test file's own unexported `Point` and was
-        // refused under `kama check`. No such file (the prelude, a synthesized type) keeps the plain path.
-        const NsCtx* home = nullptr;
-        for (auto& kv : _unitCtx) if (kv.second.unitPath == ci->second.declFile) { home = &kv.second; break; }
-        if (!home || ci->second.declFile.empty()) return cType(typeNode);
-        NsCtx savedCtx = _nsCtx;
-        _nsCtx = *home;
-        ScopedStr _cu(_collectingUnitPath, ci->second.declFile);
-        std::string r = cType(typeNode);
-        _nsCtx = savedCtx;
-        return r;
+    ScopedClassHome home(*this, inCls);
+    return cType(typeNode);
+}
+
+// Enter the scope a class's members were written in, and restore the caller's on destruction. A generic
+// instance: its context with its type parameters bound to its arguments. A non-generic class: its declaring
+// file's WHOLE context — names, unit path, private scope, export list — exactly as its own bodies were judged,
+// with no type parameter bound (an enclosing instance's `T` is not this class's). `enterClassCtx` rebuilds
+// only the name half and leaves `unitPath` empty, and the visibility check then judged every reference as
+// coming from nowhere: a generic `json::deserializeJsonBuffer::<Point>` reached a test file's own unexported
+// `Point` and was refused under `kama check`. No such file (the prelude, a synthesized type, an intrinsic
+// collection) leaves the caller's scope as it is.
+CEmitter::ScopedClassHome::ScopedClassHome(CEmitter& em, const std::string& cls) : e(em)
+{
+    auto git = e._genericTypeInsts.find(cls);
+    const NsCtx* home = nullptr;
+    if (git == e._genericTypeInsts.end()) {
+        auto ci = e._classes.find(cls);
+        if (ci == e._classes.end() || ci->second.isIntrinsicColl || ci->second.declFile.empty()) return;
+        for (auto& kv : e._unitCtx) if (kv.second.unitPath == ci->second.declFile) { home = &kv.second; break; }
+        if (!home) return;
     }
-    auto savedSubst = _typeSubst; NsCtx savedCtx = _nsCtx;
-    const GenericTypeInst& gi = _genericTypeInsts[inCls];
-    _nsCtx = _genericTypeInstCtx.count(inCls) ? _genericTypeInstCtx[inCls] : _genericTypeCtx[gi.templateKey];
-    _typeSubst.clear();
-    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-    std::string r = cType(typeNode);
-    _typeSubst = savedSubst; _nsCtx = savedCtx;
-    return r;
+    savedCtx = e._nsCtx; savedSubst = e._typeSubst; savedUnit = e._collectingUnitPath; entered = true;
+    e._typeSubst.clear();
+    if (home) {
+        e._nsCtx = *home;
+        e._collectingUnitPath = home->unitPath;
+        return;
+    }
+    const GenericTypeInst& gi = git->second;
+    e._nsCtx = e._genericTypeInstCtx.count(cls) ? e._genericTypeInstCtx[cls] : e._genericTypeCtx[gi.templateKey];
+    const std::vector<std::string>& ps = e._genericTypeParams[gi.templateKey];
+    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) e._typeSubst[ps[i]] = gi.typeArgs[i];
+}
+
+CEmitter::ScopedClassHome::~ScopedClassHome()
+{
+    if (!entered) return;
+    e._nsCtx = savedCtx; e._typeSubst = savedSubst; e._collectingUnitPath = savedUnit;
 }
 
 // `deepSubstType(typeNode)` in the type-substitution context of a generic-instance class `inCls` — the
@@ -16355,15 +16376,8 @@ std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier
 SharedIdentifier CEmitter::deepSubstInInstance(const std::string& inCls, SharedIdentifier typeNode)
 {
     if (!_genericTypeInsts.count(inCls)) return deepSubstType(typeNode);   // non-generic: plain
-    auto savedSubst = _typeSubst; NsCtx savedCtx = _nsCtx;
-    const GenericTypeInst& gi = _genericTypeInsts[inCls];
-    _nsCtx = _genericTypeInstCtx.count(inCls) ? _genericTypeInstCtx[inCls] : _genericTypeCtx[gi.templateKey];
-    _typeSubst.clear();
-    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-    SharedIdentifier r = deepSubstType(typeNode);
-    _typeSubst = savedSubst; _nsCtx = savedCtx;
-    return r;
+    ScopedClassHome home(*this, inCls);
+    return deepSubstType(typeNode);
 }
 
 // `foreach` over a user type via the ITERATOR PROTOCOL (structural, zero-cost — direct monomorphized

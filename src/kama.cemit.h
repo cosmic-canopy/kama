@@ -2399,6 +2399,13 @@ private:
     // cType(typeNode) resolved in the type-substitution context of generic instance `inCls` (binds its
     // type args, like computeDestructible); plain cType for a non-generic class.
     std::string cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode);
+    // The scope a class's members were written in, entered for the lifetime of the object (cTypeInInstance).
+    struct ScopedClassHome {
+        CEmitter& e; NsCtx savedCtx; std::map<std::string, SharedIdentifier> savedSubst; std::string savedUnit;
+        bool entered = false;
+        ScopedClassHome(CEmitter& em, const std::string& cls);
+        ~ScopedClassHome();
+    };
     // The node-returning twin: deepSubstType(typeNode) under `inCls`'s type args, so a caller can scope
     // the binding to one resolution rather than hold it open across a construct.
     SharedIdentifier deepSubstInInstance(const std::string& inCls, SharedIdentifier typeNode);

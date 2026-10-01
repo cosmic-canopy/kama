@@ -1,0 +1,20 @@
+// Every name these defaults use is this FILE's: an enum it declares, a constant it keeps private, a type it
+// imports. The values are built inside other types' bodies — std's `DynamicArray<Item>` and main.kama's
+// `Shelf<Item>` — whose files can name none of them.
+import { std::collections::DynamicArray };
+export { Kind, Item };
+
+type enum Kind { First, Second }
+
+comptime int32 START = 40;
+
+type resource Item {
+    Kind kind = Kind::Second;
+    int32 weight = START + 2;
+    DynamicArray<int32> tags = DynamicArray.empty();
+    public default ctor blank() { }
+    public ctor make(int32 w) { this.weight = w; }
+    public fn int32 score() {
+        return match (this.kind) { case First: 0; case Second: this.weight + cast<int32>(this.tags.length()); };
+    }
+}
