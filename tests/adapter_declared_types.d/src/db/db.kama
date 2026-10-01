@@ -1,0 +1,19 @@
+import { core::println, std::collections::DynamicArray, adapted::model::User, adapted::model::Color, adapted::model::Conn };
+export { DbParam, codeOf, viaValue };
+
+// The db layer declares the contract and adapts the model's types to it.
+type contract DbParam for value, resource, enum, intrinsic { const fn int32 code(); }
+
+type adapter <User> implements DbParam { public const fn int32 code() { return this.id * 10; } }
+type adapter <Color> implements DbParam {
+    public const fn int32 code() { return match (this) { case Red: 1; case Green: 2; case Blue: 3; }; }
+}
+type adapter <Conn> implements DbParam { public const fn int32 code() { return this.handle() + 100; } }
+type adapter <int32> implements DbParam { public const fn int32 code() { return this; } }
+type adapter <DynamicArray<uint8>> implements DbParam { public const fn int32 code() { return cast<int32>(this.length()); } }
+type adapter <Optional> implements DbParam when [T: DbParam] {
+    public const fn int32 code() { return match (this) { case Some(value: v): v.code(); case None: -1; }; }
+}
+
+fn int32 codeOf<T: DbParam>(const ref T v) { return v.code(); }
+fn int32 viaValue(DbParam p) { return p.code(); }

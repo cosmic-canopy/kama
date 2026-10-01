@@ -1,0 +1,5 @@
+// A generic adapter's `when` names the generic type's OWN parameters — `Optional`'s is `T`. A name that is
+// not one would gate on nothing, so it is refused rather than read as a fresh parameter.
+type contract Tagged for value, enum, intrinsic { const fn int32 tag(); }
+type adapter <Optional> implements Tagged when [X: Tagged] { public const fn int32 tag() { return 0; } }
+fn int32 main() { return 0; }

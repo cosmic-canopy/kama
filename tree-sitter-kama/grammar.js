@@ -187,7 +187,7 @@ module.exports = grammar({
         $.extern_const_declaration,
         $.fnptr_declaration,
         $.type_declaration,
-        $.intrinsic_declaration,
+        $.adapter_declaration,
         $.enum_declaration,
         $.module_variable_declaration,
         $.comptime_assert_statement,
@@ -212,34 +212,33 @@ module.exports = grammar({
         optional(';'),
       ),
 
-    // `value` / `resource` / `view` / `contract` / `intrinsic` — contextual, never reserved.
+    // `value` / `resource` / `view` / `contract` / `adapter` — contextual, never reserved.
     type_kind: ($) => $.identifier,
 
-    // `type intrinsic <int8, int16, …> implements C { … <int8> { … } }` — contract conformance for a
-    // PRIMITIVE. It diverges from `type_declaration` one token after the kind word: `<` rather than a
-    // NAME. The target list is primitives only, which is why it uses `primitive_type` and not `type_name`
-    // — the same reason kama.y uses `simple_type` there.
-    intrinsic_declaration: ($) =>
+    // `type adapter <int8, Uuid, Optional> implements C { … <int8> { … } }` — a type's conformance to C,
+    // written outside its declaration (kama.y `marked_intrinsic_declaration`). It diverges from
+    // `type_declaration` one token after the kind word: `<` rather than a NAME. The targets are TYPES.
+    adapter_declaration: ($) =>
       seq(
         optional($.attribute_list),
         'type',
         repeat($.modifier),
         field('kind', $.type_kind),
-        field('targets', $.intrinsic_targets),
+        field('targets', $.adapter_targets),
         optional($.class_base),
-        field('body', $.intrinsic_body),
+        field('body', $.adapter_body),
         optional(';'),
       ),
 
-    intrinsic_targets: ($) => seq('<', commaSep1($.primitive_type), '>'),
+    adapter_targets: ($) => seq('<', commaSep1($._type), '>'),
 
     // A member is either shared by every target, or inside a `<…> { … }` SECTION overriding it for the
     // targets it names. A section can only begin with `<`, which no class member can.
-    intrinsic_body: ($) =>
-      seq('{', repeat(choice($._class_member, $.intrinsic_section)), '}'),
+    adapter_body: ($) =>
+      seq('{', repeat(choice($._class_member, $.adapter_section)), '}'),
 
-    intrinsic_section: ($) =>
-      seq(field('targets', $.intrinsic_targets), '{', repeat($._class_member), '}'),
+    adapter_section: ($) =>
+      seq(field('targets', $.adapter_targets), '{', repeat($._class_member), '}'),
 
     // kama.y:735 — `for value, view` on a contract: a COMMA LIST, no `|` alternative. Kind words again,
     // contextual.

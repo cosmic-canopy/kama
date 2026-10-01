@@ -4573,17 +4573,55 @@ fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square.make(s: s); return g
 
 A `DynamicArray<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
-### `type adapter` — a primitive gains its conformances ✅
+### `type adapter` — a contract for a type you don't declare ✅
 
-A **primitive** (the kind `intrinsic`) has no declaration of its own, so it gains a conformance through an
-adapter: `type adapter <targets> implements C { … }`. The `<…>` is a **set**, because one body usually serves many widths — the
-prelude's per-primitive impls collapse from 64 blocks to roughly 8. Inside the block `This` is the target
-being decorated, resolved per member of the set.
+A type you declare lists its contracts in its own declaration (`implements C`). A type you don't declare — a
+built-in, a std type, another package's type — gains one through an **adapter**, written in the module that
+declares the contract: `type adapter <targets> implements C { … }`.
+
+```kama fragment
+// the module that declares DbParam
+type contract DbParam for value, resource, enum, intrinsic { const fn int32 code(); }
+
+type adapter <User> implements DbParam { public const fn int32 code() { return this.id * 10; } }   // a declared type
+type adapter <int8, int16, int32> implements DbParam { public const fn int32 code() { return this; } }  // built-ins
+type adapter <DynamicArray<uint8>> implements DbParam { … }                                  // one instance
+type adapter <Optional> implements DbParam when [T: DbParam] {                               // every instance
+    public const fn int32 code() { return match (this) { case Some(value: v): v.code(); case None: -1; }; }
+}
+```
+
+**Targets.** A target is a built-in (a number, `bool`, `char`, `string`), a declared type of any kind the
+contract's `for` list admits, one instance of a generic type, or a generic type written BARE, which in a target
+list means every instance (the one place a bare generic is not its all-defaulted instance). A `when [T: C]`
+narrows that to the instances whose arguments meet it, and names the generic type's OWN parameters. It is
+refused beside a concrete target, which has no parameter for it to condition. A name that is not one of the <!-- xfail: when_on_adapter -->
+type's parameters is refused rather than read as a fresh one, and so is a target that names no type. <!-- xfail: adapter_when_unknown_param, adapter_unknown_target -->
+The contract's `for` list judges each target by the target's own kind. <!-- xfail: contract_kind_gate_intrinsic, adapter_kind_gate_declared -->
+
+**Where.** An adapter lives in the module that declares its contract, and never over a type that module <!-- xfail: adapter_outside_contract_home -->
+declares: there the declaration's own `implements` list is the one way. So a type's conformance to a contract <!-- xfail: adapter_own_type -->
+is written in one of two places, the type's declaration or the contract's module. Across the modules of one
+package this is how a dependency points the right way: `app::db` adapts `app::model::User` to its own <!-- test: adapter_declared_types -->
+contract, and the model never imports the database layer. It also means at most one adapter for a (type,
+contract) pair can exist in any program. Two packages cannot each supply one and leave an application that
+owns neither unable to build, and a library that adds an adapter later can never collide with one a
+consumer wrote. A program that wants a contract it doesn't own on a type it doesn't own wraps the type in
+one of its own.
+
+**Members.** Methods only, for exactly one contract, covering all of it. A field, a destructor or an <!-- xfail: adapter_multi_contract, adapter_incomplete -->
+`extends` is refused: an adapter adds a contract's methods to types that already exist, never storage. <!-- xfail: adapter_field, adapter_dtor, adapter_declared_field, adapter_extends -->
+Inside the block `This` is the target being adapted, resolved per member of the set, and over a generic
+target the type's own parameters (`T`) are bound per instance.
+
+The `<…>` is a **set** because one body usually serves many targets — the prelude's per-primitive impls
+collapse from 64 blocks to roughly 8 — and a `<…> { … }` SECTION inside the body overrides it for the
+targets it names:
 
 ```kama fragment
 type contract Hashable for value, resource, enum, intrinsic { const fn uint64 hash(); }
 
-type adapter <string> implements Hashable {        // a primitive gains a contract, in pure kama
+type adapter <string> implements Hashable {        // a built-in gains a contract, in pure kama
     public const fn uint64 hash() {
         uint64 h = 2166136261ui64;                   // FNV-1a
         isize i = 0;
@@ -4603,15 +4641,16 @@ which stay raw C operators for all-primitive operands. It is not a substitute fo
 type list cannot serve `sqrt`, which needs a different C function per width (`sqrtf` vs `sqrt`), and kama
 has no in-body type branching by design: `@compileFor` is a declaration-level gate (SPEC § *Conditional compilation*), and a body that branched on a type would be a second, hidden one.
 
-A primitive gets **no `_classes` entry** — every "is this a user type?" test keys on that — so the
+A built-in gets **no `_classes` entry** — every "is this a user type?" test keys on that — so its
 conformance hangs on a separate registry, and a **scalar** target's `this` is the value itself: the method
 takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `Map<int32, V>` /
-`Set<int32>` get their keys.
+`Set<int32>` get their keys. A declared target's methods hang on its own ClassInfo, and it gets the
+ordinary `T__as_C` vtable beside its other contracts, so it binds to a contract value like any implementer.
 
-**A contract is a SCOPE.** A conformance decorates a primitive *within the scope of that contract*, so a
-contract-supplied method is **not part of the primitive's own API** — it is reached through the contract,
-never off the bare value. Without this, any package declaring `type adapter <int32> implements
-Weighable` would put `.weight()` on every `int32` in the program, including code that never heard of it.
+**A contract is a SCOPE.** An adapter decorates a type *within the scope of that contract*, so a <!-- xfail: adapter_direct_call, adapter_declared_direct_call -->
+contract-supplied method is **not part of the type's own API** — it is reached through the contract,
+never off the bare value. Without this, an adapter giving `int32` the contract `Weighable` would put
+`.weight()` on every `int32` in the program, including code that never heard of it.
 
 ```kama fragment
 int32 l = 3; int32 r = 7;
@@ -4624,8 +4663,8 @@ Comparable<int32> c = l;
 c.compareTo(other: r);                       // a CONTRACT VALUE — one indirect call
 ```
 
-Those two are the only spellings, and both are real. The rule covers every type an impl block decorates;
-a type that declares `implements C` in its **own body** is untouched — its methods are its own. String
+Those two are the only spellings, and both are real. The rule covers every type an adapter decorates; a
+type that declares `implements C` in its **own body** is untouched — its methods are its own. String
 interpolation is exempt: `"${x}"` is the compiler's own lowering to `Formattable`, not something an author
 wrote.
 
@@ -4644,16 +4683,15 @@ The machinery is pay-for-what-you-use: the vtable and its deref thunks (an intri
 by value; a vtbl slot passes `void*`) are emitted only for the pairs a program actually widens. A bare named
 `string` into an owning box is a compile error, as any owning hand-off without a marker is. <!-- xfail: owned_contract_string_bare -->
 
-**Why a kind rather than a mechanism.** Before this, a primitive had no kama spelling at all, so the only
-way to give it a contract was `implements C for T` — a *retroactive* block reaching into a type from
-outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing
-it, and the block itself is now **gone from the language**. See *The contract model* for the full argument.
+**History.** Before primitives had a spelling, the only way to give one a contract was `implements C for T`,
+a block that reached into a type from anywhere in the program. M6 deleted it once primitives and enums got
+spellings of their own. The adapter is its successor with a home: written only where the contract is
+declared, and only for a type declared elsewhere. Its first form, `type intrinsic`, covered built-ins only,
+and was renamed `type adapter` at `0.9.510`. <!-- xfail: intrinsic_block_renamed -->
 
-**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind <!-- xfail: impl_conflict, adapter_dup -->
-declares them — a class's or enum's own `implements` list, or a `type adapter` block. When the two
-claims come from different packages the message names **both** — kama's whole-program view makes the
-conflict directly visible, so no orphan rule is needed to forbid legal-but-unusual cases in order to
-prevent one the compiler can simply see.
+**Coherence.** Two declarations of the same (contract, type) pair are a compile error: a declaration's own <!-- xfail: impl_conflict, adapter_dup -->
+`implements` and an adapter, two adapters, or an adapter over every instance and another over one of them. <!-- xfail: adapter_overlap_instance -->
+There is no specialization, and with the home rule above no such pair can span two packages.
 
 ## Static methods & operator overloading ✅
 

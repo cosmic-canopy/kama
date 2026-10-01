@@ -3,8 +3,8 @@
 Every type declaration is introduced by a `type` marker, followed by one of **five** kind words
 (`type value` / `type resource` / `type view` / `type enum` / `type contract`); the sixth kind,
 `intrinsic`, is the built-ins, which are declared by the language and named in a contract's `for` list. A
-**`type adapter`** block gives a built-in a contract. The vocabulary + access-control rules below are
-enforced by the compiler. This doc is the durable rationale
+**`type adapter`** block gives a type a contract outside the type's declaration, from the contract's own
+module. The vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
 — see also [GOALS.md §3c](GOALS.md).
 
 ## The `type` marker
@@ -25,7 +25,7 @@ type resource Name  { … }            // owns / has identity — moves, RAII-dr
 type view Name      { … }            // borrows a range it doesn't own — a stack-only slice/span
 type contract Name for value { … }   // a public-only guarantee (an interface)
 type enum Name      { … }            // one of a closed set of variants — a sum type
-type adapter <int32> implements C { … }   // gives a built-in type a contract's methods
+type adapter <int32> implements C { … }   // gives a type you don't declare a contract's methods
 ```
 
 ## Why reframe
@@ -206,6 +206,23 @@ type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, u
 - `this` is the primitive value; `This` is each target in turn.
 - It is how `int32` is `Hashable`, `Comparable<This>`, `Sendable` and `Formattable` — in
   `prelude/global.kama`, where go-to-definition lands.
+
+### `type adapter` — a contract for a type you don't declare
+
+The same block serves every type its author does not declare: a std type, another package's type, one
+instance of a generic (`DynamicArray<uint8>`), or a generic's every instance (`Optional`, narrowed by
+`when [T: C]`). It is written in ONE place, the module that declares the contract, and never over a type
+that module declares (that type says `implements C` itself). So a type's conformance lives in its own
+declaration or in its contract's module, never in a third place:
+
+```kama fragment
+// app::db declares DbParam, and adapts the model's types to it; app::model never imports the db layer.
+type adapter <User> implements DbParam { public const fn int32 code() { return this.id; } }
+type adapter <Optional> implements DbParam when [T: DbParam] { … }
+```
+
+Its methods are reached only through the contract, never off the type, so an adapter adds no API to the
+type it decorates. See [SPEC.md](SPEC.md) § *`type adapter`* for the rules and why they are what they are.
 
 ## Polymorphism: substitutability, not reuse
 

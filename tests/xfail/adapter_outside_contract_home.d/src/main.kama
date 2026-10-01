@@ -1,0 +1,6 @@
+// An adapter lives in the module that declares its contract. Here `main` owns neither `DbParam` (declared in
+// `outhome::db`) nor `Optional` (the prelude's), so it may not say how one satisfies the other: two packages
+// could each say it, and an application owning neither could not build. Wrap the type in one of your own.
+import { outhome::db::DbParam };
+type adapter <Optional> implements DbParam { public const fn int32 code() { return 0; } }
+fn int32 main() { return 0; }

@@ -254,6 +254,10 @@ struct MethodInfo {
     // and the one that says "supplied by a `type adapter` block", so the impl passes emit it rather than
     // the per-class proto/body loops.
     std::string                  fromContract;
+    // Supplied by a `type adapter` block over a DECLARED type (a class, an enum, a generic instance): its body
+    // resolves names under the adapter's module, so it is emitted there (implEmitsOf), never by the target's
+    // own per-class prototype/body loops, which run under the target's module.
+    bool                         fromAdapter = false;
     // Compiler-synthesized by-value serialization (a `@generate` tree struct with no hand impl). `node` is
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
     bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
@@ -893,7 +897,6 @@ public:
     // Maps a unit's source path to the manifest of the package that owns it ("" when nothing does, and
     // for the synthetic prelude units). Supplied by the driver — resolving it is filesystem work, and it
     // is consulted only when a diagnostic has to say which package a conformance came from.
-    void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
     // Maps a unit's source path to the MODULE that owns it — `std::collections`, or a bare project name
     // for a file in the project root module, and "" for a loose file with no `kama.json` above it. This is
     // where a file's identity comes from (SPEC.md § Modules): the path plus the project's
@@ -1505,17 +1508,11 @@ private:
                      { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
     ClassInfo&       primConformanceFor(const std::string& key) { return _primConformances[key]; }   // creates
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
-    // Who first claimed a (type, contract) pair, as the declaring file's path. Read only when a SECOND
-    // claim arrives: a duplicate that crosses a package boundary is the one kind neither the user nor
-    // either author can fix from one side, so that message has to name both packages. Two packages that
-    // have never heard of each other can each conform `int32` to a contract one of them owns.
-    std::map<std::pair<std::string, std::string>, std::string> _conformanceOrigin;
     std::string _collectingUnitPath;    // the unit whose declarations are being collected right now
     // The view type the CURRENT method body is allowed to mint (its C name), or empty. Set on entry to
     // every method body when the owner implements a `@viewable` contract declaring a member of that name
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
-    std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
     std::function<std::string(const std::string&)> _moduleResolver;
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
@@ -2211,16 +2208,44 @@ private:
     std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
     // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
     // genuinely come from different packages.
-    std::string duplicateOriginNote(const std::string& tkey, const std::string& contract);
     // One (target, members) pair per thing an impl block contributes — a `type adapter` set gives one
     // per target. The three emission passes (prototypes, prelude bodies,
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
-    struct ImplEmit { ClassInfo* target; SharedClassMemberDeclarationList members; };
+    // One target's share of an adapter block: the ClassInfo its methods hang on, the members it gets, and —
+    // for an instance of a generic TEMPLATE target (`type adapter <Optional> …`) — the substitution that binds
+    // the template's parameters to that instance's arguments while its bodies are emitted.
+    struct ImplEmit {
+        ClassInfo* target;
+        SharedClassMemberDeclarationList members;
+        std::map<std::string, SharedIdentifier> subst;
+    };
+    // A `type adapter` over a generic type, applied to each instance as it is registered: `exactArgs` set for
+    // one instance (`DynamicArray<uint8>`), empty for every instance (`Optional`, narrowed by `when`).
+    struct TemplateAdapter {
+        IntrinsicImplNode* node = nullptr;
+        SharedIdentifier   target;
+        std::string        templateKey;
+        std::string        exactInstance;   // the mangled instance an exact target names, "" for a template
+        std::string        unitPath;
+        NsCtx              ctx;
+    };
+    std::map<std::string, std::vector<TemplateAdapter>> _templateAdapters;   // template key -> adapters over it
+    std::map<std::string, std::vector<ImplEmit>>        _adapterInstEmits;   // adapter unit -> instance shares
+    void applyTemplateAdapter(const TemplateAdapter& ta, const std::string& inst);
+    void applyTemplateAdapters(const std::string& inst);
+    std::string homeOfFile(const std::string& file);
+    std::string homeDisplay(const std::string& home) const;
+    bool adapterHomeOk(const std::string& contract, SharedIdentifier contractNode, int line);
+    bool adapterTargetHomeOk(SharedIdentifier tgt, const std::string& targetFile, int line);
+    void injectAdapterMethods(ClassInfo& tci, IntrinsicImplNode* n, SharedIdentifier tgt,
+                              const std::string& contract, const std::string& shown);
     std::vector<ImplEmit> implEmitsOf(SharedCompilationUnit u);
     bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serializable/Deserializable
     void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
-                           const std::string& contract, const std::string& tkey, bool isPrimitive);
+                           const std::string& contract, const std::string& tkey, bool isPrimitive,
+                           bool adapted = false);
+    void applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt);
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
     // Generic enums (KR-44): a template's members + `implements` are filled in collectEnumConformances; an
     // instance cut before that is refreshed, one cut after takes them at registration.

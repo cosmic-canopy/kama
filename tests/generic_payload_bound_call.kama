@@ -1,0 +1,16 @@
+// A `match` payload in generic code keeps its type parameter: `v` below is a `U`, bound by `Coded`, so a
+// contract method reached through that bound is legal on it. The binding recorded its CONCRETE type
+// (`int32`), and the contract-scope rule refused `v.code()` as a direct call on a built-in. `U`, not `T`:
+// the payload is `Optional`'s own `T`, mapped through the subject as written (`Optional<U>`).
+type contract Coded for value, intrinsic { const fn int32 code(); }
+type adapter <int32> implements Coded { public const fn int32 code() { return this + 1; } }
+
+fn int32 first<U: Coded>(const ref Optional<U> o) {
+    return match (o) { case Some(value: v): v.code(); case None: 0; };
+}
+
+fn int32 main() {
+    Optional<int32> o = Optional::Some(value: 4);
+    Optional<int32> n = Optional::None;
+    return first(o: o) == 5 && first(o: n) == 0 ? 0 : 1;
+}

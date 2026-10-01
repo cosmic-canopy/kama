@@ -1,0 +1,28 @@
+// A `type adapter` over types declared elsewhere: `adapted::db` declares the contract `DbParam` and adapts the
+// model's types to it, so the model never imports the database layer. Every target kind: a `value`, an enum, a
+// `resource`, a built-in, one generic instance (`DynamicArray<uint8>`), and a generic type's every instance
+// (`Optional`, gated `when [T: DbParam]`, which reaches the payload's own adapter). Each is reached through a
+// bound and through a contract value — a declared target gets the ordinary `T__as_C` vtable.
+import { core::println, std::collections::DynamicArray, adapted::model::User, adapted::model::Color, adapted::model::Conn,
+         adapted::db::codeOf, adapted::db::viaValue };
+fn int32 main() {
+    User u = User.make(id: 4);
+    Color c = Color::Blue;
+    Conn k = Conn.open(fd: 7);
+    int32 n = 9;
+    DynamicArray<uint8> bytes = DynamicArray.empty();
+    bytes.add(item: 1ui8); bytes.add(item: 2ui8);
+    Optional<int32> some = Optional::Some(value: 5);
+    Optional<int32> none = Optional::None;
+    Optional<User> ou = Optional::Some(value: User.make(id: 2));
+    int32 bad = 0;
+    if (codeOf(v: u) != 40) { bad = bad + 1; }
+    if (codeOf(v: c) != 3) { bad = bad + 2; }
+    if (codeOf(v: k) != 107) { bad = bad + 4; }
+    if (codeOf(v: n) != 9) { bad = bad + 8; }
+    if (codeOf(v: bytes) != 2) { bad = bad + 16; }
+    if (codeOf(v: some) != 5 || codeOf(v: none) != -1 || codeOf(v: ou) != 20) { bad = bad + 32; }
+    if (viaValue(p: u) != 40 || viaValue(p: c) != 3 || viaValue(p: bytes) != 2 || viaValue(p: some) != 5) { bad = bad + 64; }
+    println(s: "bad=${bad}");
+    return bad;
+}

@@ -409,6 +409,13 @@ struct ScopedContractNs {
 struct ScopedNoHeap { bool& b; bool prev;
     ScopedNoHeap(bool& b_, bool on) : b(b_), prev(b_) { if (on) b = true; }
     ~ScopedNoHeap() { b = prev; } }; }
+// Installs a whole substitution for the life of a scope — an adapter's body for one instance of a generic target
+// (`type adapter <Optional> …` over `Optional<int32>`) binds the template's parameters to that instance's
+// arguments. An empty map leaves the current substitution alone.
+struct ScopedSubst { std::map<std::string, SharedIdentifier>& m; std::map<std::string, SharedIdentifier> prev; bool on;
+    ScopedSubst(std::map<std::string, SharedIdentifier>& m_, const std::map<std::string, SharedIdentifier>& v)
+        : m(m_), on(!v.empty()) { if (on) { prev = m; m = v; } }
+    ~ScopedSubst() { if (on) m = prev; } };
 
 // Where a compiler-owned unit's source lives, keyed BOTH ways: by unit pointer for the query layer's
 // DefSites, and by the unit's synthetic name for reportPath, which is what a diagnostic carries.
@@ -13394,6 +13401,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         ci.interfaces = instanceInterfaces(ci, mangled, params, concrete);
     _classes[mangled] = ci;
     if (ci.enumNode && _filledEnumTemplates.count(tmpl)) checkEnumInstanceConformances(_classes[mangled], tmpl);
+    applyTemplateAdapters(mangled);     // a `type adapter` over this generic — under its own module's context
 
     // Transitive close: register any collection / generic type the substituted members use.
     for (auto& f : ci.fields) scanTypeForCollections(f.type);
@@ -19969,7 +19977,7 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
 
 void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                                  const std::string& contract, const std::string& tkey,
-                                 bool isPrimitive)
+                                 bool isPrimitive, bool adapted)
 {
     if (members)
         for (auto& m : *members) {
@@ -19978,11 +19986,13 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             if (md->isComptime) continue;   // compile-time only — registered for the interpreter, never a method
             std::string mname = *md->name->value;
             if (tci.methods.count(mname)) {
-                unsupported(("`" + tkey + "` implements `" + contract + "`: method `" + mname
-                             + "` conflicts with an existing method on the type").c_str(), md->line);
+                unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract)
+                             + "`: method `" + mname + "` conflicts with an existing method on the type").c_str(),
+                            md->line);
                 continue;
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
+            mi.fromAdapter = adapted;
             // An enum ELECTS its default exactly as a value does (KR-106): one zero-argument `default ctor`.
             // Only its own members can — a contract's members belong to the contract, not to the type.
             if (contract.empty() && modHas(md->modifiers, "default")) {
@@ -20009,11 +20019,11 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
     // `type enum E implements C { A, B; …methods… }` path, where the members belong to E's API and the
     // conformance is recorded separately, once per declared contract. Nothing to record here.
     if (contract.empty()) return;
-    // First claim wins the record; a second one is a duplicate, and this is what lets its message name the
-    // package the first came from. `emplace` so a re-claim never overwrites the original claimant.
-    _conformanceOrigin.emplace(std::make_pair(tkey, contract), _collectingUnitPath);
     tci.interfaces.push_back(contract);
-    tci.staticOnlyInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
+    // A built-in dispatches statically, and widens into a contract value through an on-demand vtable
+    // (intrinsicContractVtbl). A declared type adapted to a contract gets the ordinary `T__as_C` vtable with
+    // its other contracts, so it binds to a contract value like any implementer.
+    if (!adapted) tci.staticOnlyInterfaces.push_back(contract);
 }
 
 // `type enum E : U implements C, D { A, B; …members… }` — an enum declares conformance inline, like every
@@ -20302,9 +20312,195 @@ SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode
     return out;
 }
 
-// Validate a `type adapter` block and inject its methods — once per target in the set. A primitive gets
-// NO `_classes` entry (every "is this a user type?" test keys on that map), so the conformance is hung on
-// the separate primitive registry, with `this` passed by value.
+// A BUILT-IN target (`int32`, `string`): the conformance lands in the primitive registry (or on `string`'s
+// own ClassInfo), and a method takes `this` by value. Static dispatch: widening a built-in into a contract
+// value builds its vtable on demand (intrinsicContractVtbl).
+void CEmitter::applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt)
+{
+    SharedIdentifierList ifaces = n->baseTypes->interfaces;
+    // TWO keys, deliberately: `_classes` is C-named (`string` -> kama_string), the conformance registry
+    // is kama-named (so `char` and `uint32` don't share `uint32_t`). A prim ClassInfo's `name` stays the
+    // C type — it is what `This` resolves to and what the receiver parameter is spelled as.
+    std::string ctKey = cType(tgt);
+    std::string tkey  = primKey(tgt);
+    // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
+    // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
+    // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
+    ScopedStr  _ts(_thisType, ctKey);
+    ScopedThis _tt(_typeSubst, tgt);   // the real kama node: `int32`, not the C spelling `int32_t`
+    // The contract resolves PER TARGET, not once for the block: a PINNED contract names a different
+    // instance for each type in the set (`Weighable<This>` over `<int8, int16>` is `Weighable_int8`
+    // and `Weighable_int16`, two contracts with two vtbls). An unpinned one resolves the same every
+    // time, so this costs nothing there.
+    std::vector<std::string> names(1, *(*ifaces)[0]->value);
+    resolveInterfaceNames(names, ifaces);
+    const std::string& contract = names[0];
+    if (!adapterHomeOk(contract, (*ifaces)[0], n->line)) return;
+    // Kind gate, the `intrinsic` arm. This is the ONLY site that can apply it: a primitive's
+    // conformance lands in _primConformances, which the `_classes` sweep never sees, and `string`'s
+    // lands on the kama_string ClassInfo, which that sweep deliberately skips (a collection has no
+    // `kind`) so it is not mistaken for a `value`. Here the ORIGIN is known — it is a `type
+    // intrinsic` block — and `n->line` is the only usable line number for one.
+    // Inside the per-target loop, so `<int8, int16, …>` names each target, and before
+    // injectImplMethods, so the reason arrives ahead of the completeness noise it would cause.
+    unsigned allowed = implKindsOf(contract, *(*ifaces)[0]->value);
+    if (allowed && !(allowed & IK_Intrinsic))
+        unsupported(("`" + *tgt->value + "` is an `intrinsic`, but contract `" + contract
+                     + "` is declared `for " + kamaImplKindListText(allowed)
+                     + "` — an intrinsic can't implement it").c_str(), n->line);
+    ClassInfo* tcip = nullptr;
+    auto ti = _classes.find(ctKey);
+    if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
+    else {
+        ClassInfo& pci = primConformanceFor(tkey);
+        pci.name = ctKey;
+        pci.kind = TypeKind::Value;
+        pci.isScalarRecv = true;                      // `this` is the scalar itself, not a pointer
+        tcip = &pci;
+    }
+    ClassInfo& tci = *tcip;
+    for (auto& ex : tci.interfaces)
+        if (ex == contract) {
+            unsupported(("`" + *tgt->value + "` already implements `" + contract + "`").c_str(), n->line);
+            break;
+        }
+    SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);   // fields/dtors: refused per block
+    // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
+    // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
+    // eligible as `int32`; keying off `_classes` instead would make `type adapter <string>
+    // implements Serializable` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
+    injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
+    checkImplCompleteness(tci, contract, *tgt->value, n->line);
+}
+
+static unsigned implementerKind(const ClassInfo& ci);   // the kind a conformance gate judges (below)
+
+// The module a declaration belongs to, as the adapter rules mean it: its module path, or — for a file in no
+// module — the file itself. The prelude's is "", the language's own. Keyed on the unit's NAME, which is what
+// `declFile` and `_collectingUnitPath` both hold, so both sides of every comparison come through here.
+std::string CEmitter::homeOfFile(const std::string& file)
+{
+    for (auto& kv : _unitCtx)
+        if (kv.first && kv.first->name && *kv.first->name == file)
+            return !kv.second.module.empty() ? "module " + kv.second.module
+                 : kv.second.unitPath.empty() ? std::string() : "file " + file;
+    return file.empty() ? std::string() : "file " + file;
+}
+
+std::string CEmitter::homeDisplay(const std::string& home) const
+{
+    if (home.empty()) return "the prelude";
+    if (home.compare(0, 7, "module ") == 0) return "module `" + home.substr(7) + "`";
+    return "`" + home.substr(5) + "`";
+}
+
+// An adapter lives in the module that declares its contract (the user's ruling, 2026-10-01). Only the
+// contract's owner may say how a type it does not declare satisfies it, so there is at most one such adapter
+// per (type, contract) in any program — two packages cannot each supply one and leave an application that owns
+// neither unable to build — and a library that adds one later can never collide with a consumer's. A type you
+// do declare says `implements C` in its own declaration instead; anyone else wraps the type in one of theirs.
+bool CEmitter::adapterHomeOk(const std::string& contract, SharedIdentifier contractNode, int line)
+{
+    auto it = _interfaces.find(contract);
+    if (it == _interfaces.end()) return true;   // unknown — resolveInterfaceNames has already said so
+    const std::string want = homeOfFile(it->second.declFile);
+    const std::string here = homeOfFile(_collectingUnitPath);
+    if (want == here) return true;
+    const std::string shown = contractNode && contractNode->value ? *contractNode->value : demangleForDisplay(contract);
+    unsupported(("a `type adapter` for `" + shown + "` belongs in " + homeDisplay(want) + ", which declares `"
+                 + shown + "` — only a contract's own module may adapt a type it does not declare; a type you "
+                 "declare says `implements " + shown + "` itself, and one you don't can be wrapped in a type "
+                 "of your own").c_str(), line);
+    return false;
+}
+
+// ...and never over a type its own module declares: there the declaration's `implements` list is the one way.
+bool CEmitter::adapterTargetHomeOk(SharedIdentifier tgt, const std::string& targetFile, int line)
+{
+    if (homeOfFile(targetFile) != homeOfFile(_collectingUnitPath)) return true;
+    const std::string shown = tgt && tgt->value ? *tgt->value : std::string("?");
+    unsupported(("`" + shown + "` is declared in this module, so it says which contracts it implements in its "
+                 "own declaration (`implements …`) — a `type adapter` is for a type declared elsewhere").c_str(), line);
+    return false;
+}
+
+// One declared target's share of an adapter: the conformance, its methods (contract-scoped — reached only
+// through the contract, never off the type), and its completeness. The vtable is the target's own, emitted
+// with its other contracts; only the method BODIES move, to the adapter's module (fromAdapter).
+void CEmitter::injectAdapterMethods(ClassInfo& tci, IntrinsicImplNode* n, SharedIdentifier tgt,
+                                    const std::string& contract, const std::string& shown)
+{
+    for (auto& ex : tci.interfaces)
+        if (ex == contract) {
+            unsupported(("`" + shown + "` already implements `" + demangleForDisplay(contract) + "`").c_str(), n->line);
+            return;
+        }
+    SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);   // fields/dtors: refused per block
+    injectImplMethods(tci, members, contract, tci.name, /*isPrimitive=*/false, /*adapted=*/true);
+    checkImplCompleteness(tci, contract, shown, n->line);
+}
+
+// A generic adapter over ONE instance as it is registered: the exact instance it names, or — for a template
+// target — every instance whose arguments meet its `when`. Its signatures and bodies are the adapter's, so
+// they resolve under the adapter's module with the instance's arguments bound to the template's parameters.
+void CEmitter::applyTemplateAdapter(const TemplateAdapter& ta, const std::string& inst)
+{
+    if (!ta.exactInstance.empty() && ta.exactInstance != inst) return;
+    auto gi = _genericTypeInsts.find(inst);
+    auto ci = _classes.find(inst);
+    if (gi == _genericTypeInsts.end() || ci == _classes.end()) return;
+    SharedIdentifier cnode = intrinsicContract(ta.node);
+    if (!cnode || !cnode->value) return;
+    const std::vector<std::string>& params = _genericTypeParams[ta.templateKey];
+    NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    _nsCtx = ta.ctx;
+    ScopedStr _cu(_collectingUnitPath, ta.unitPath);
+    _typeSubst.clear();
+    for (size_t i = 0; i < params.size() && i < gi->second.typeArgs.size(); ++i) _typeSubst[params[i]] = gi->second.typeArgs[i];
+    bool holds = true;
+    if (ta.exactInstance.empty() && cnode->whenParams && !cnode->whenParams->empty()) {
+        std::vector<std::string> wp, wb;
+        std::vector<SharedIdentifier> wn;
+        for (size_t c = 0; c < cnode->whenParams->size(); ++c) {
+            auto& p = (*cnode->whenParams)[c];
+            auto& b = cnode->whenBounds ? (*cnode->whenBounds)[c] : p;
+            wp.push_back(p && p->value ? *p->value : "");
+            wb.push_back(resolveWhenBound(b));
+            wn.push_back(b);
+        }
+        holds = whenConditionsHold(wp, wb, wn, params, gi->second.typeArgs);
+    }
+    if (holds) {
+        ScopedStr  _ts(_thisType, inst);
+        ScopedThis _tt(_typeSubst, synthId(inst));
+        std::vector<std::string> names(1, *cnode->value);
+        resolveInterfaceNames(names, ta.node->baseTypes->interfaces);
+        const std::string shown = demangleForDisplay(inst);
+        injectAdapterMethods(ci->second, ta.node, ta.target, names[0], shown);
+        ImplEmit e{&ci->second, intrinsicMembersFor(ta.node, ta.target), _typeSubst};
+        e.subst.erase("This");
+        _adapterInstEmits[ta.unitPath].push_back(e);
+    }
+    _typeSubst = savedSubst;
+    _nsCtx = savedCtx;
+}
+
+void CEmitter::applyTemplateAdapters(const std::string& inst)
+{
+    auto it = _genericTypeInsts.find(inst);
+    if (it == _genericTypeInsts.end()) return;
+    auto ta = _templateAdapters.find(it->second.templateKey);
+    if (ta == _templateAdapters.end()) return;
+    const std::vector<TemplateAdapter> adapters = ta->second;   // applying one can register more instances
+    for (auto& a : adapters) applyTemplateAdapter(a, inst);
+}
+
+// Validate a `type adapter` block and apply it to each target in its set. A target is one of four things:
+// a BUILT-IN (`int32`, `string` — the primitive registry, `this` by value), a DECLARED type (`Uuid`, an enum —
+// its own ClassInfo), ONE INSTANCE of a generic type (`DynamicArray<uint8>`), or a generic TEMPLATE named bare
+// (`Optional`), which adapts every instance its `when` admits. The last two are applied per instance, as each
+// is registered (applyTemplateAdapters), because instances are discovered throughout collection.
 void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
 {
     if (n->kindWord && *n->kindWord == "intrinsic") {   // the block's name until 0.9.510
@@ -20317,94 +20513,153 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         return;
     }
     if (n->baseTypes && n->baseTypes->base)
-        unsupported("`type adapter` cannot `extends` — a primitive has no base type", n->line);
+        unsupported("a `type adapter` cannot `extends` — it adds one contract's methods to types that already exist",
+                    n->line);
     SharedIdentifierList ifaces = n->baseTypes ? n->baseTypes->interfaces : SharedIdentifierList();
     if (!ifaces || ifaces->empty()) {
-        unsupported("`type adapter <…>` must declare a contract — a block with no `implements` gives the "
-                    "primitives in it nothing", n->line);
+        unsupported("a `type adapter <…>` must declare a contract — a block with no `implements` gives its "
+                    "targets nothing", n->line);
         return;
     }
+    if (ifaces->size() > 1) {
+        unsupported("a `type adapter <…>` declares ONE contract per block — a method's contract has to be "
+                    "unambiguous; write a second block for the other one", n->line);
+        return;
+    }
+    if (!n->targets) return;
+    // An adapter adds one contract's methods to types that already exist: no storage, nothing to destroy.
+    // Judged once for the block — its members are the same for every target and every instance.
+    {
+        bool bad = false;
+        auto judge = [&](const SharedClassMemberDeclarationList& ms) {
+            if (ms) for (auto& m : *ms) {
+                if (dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
+                    unsupported("a `type adapter` cannot declare a field — it adds a contract's methods to its "
+                                "targets, never storage", m->line);
+                    bad = true;
+                } else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
+                    unsupported("a `type adapter` cannot declare a destructor — each target drops as its own "
+                                "declaration says", m->line);
+                    bad = true;
+                }
+            }
+        };
+        judge(n->members);
+        if (n->sections) for (auto& sec : *n->sections) if (sec) judge(sec->members);
+        if (bad) return;
+    }
+
+    // What each target names. `bareTemplate` is a generic type written with no arguments: in a target list
+    // that means EVERY instance, the one place a bare generic is not its all-defaulted instance.
+    struct Tgt { SharedIdentifier node; std::string key; bool builtin = false, bareTemplate = false, instance = false; };
+    std::vector<Tgt> tgts;
+    bool anyConcrete = false;
+    for (auto& tgt : *n->targets) {
+        if (!tgt) continue;
+        Tgt t; t.node = tgt;
+        if (tgt->builtInVal != 0 && !tgt->genericArg) { t.builtin = true; anyConcrete = true; tgts.push_back(t); continue; }
+        if (!tgt->value) continue;
+        const std::string base = resolveUserName(*tgt->value, tgt->qualifier);
+        if (_genericTypes.count(base)) {
+            t.key = base;
+            if (tgt->genericArg) { t.instance = true; anyConcrete = true; } else t.bareTemplate = true;
+        } else if (_classes.count(base) || _enums.count(base)) {
+            t.key = base; anyConcrete = true;
+        } else {
+            unsupported(("unknown type `" + *tgt->value + "` in a `type adapter`'s targets").c_str(), n->line);
+            continue;
+        }
+        tgts.push_back(t);
+    }
+    // `when` conditions an adapter over a generic type's EVERY instance, against the template's own parameter
+    // names. A concrete target has no parameter for it to condition, so a gate beside one is a mistake.
     {
         bool gated = false;
         for (auto& i : *ifaces) if (i && i->whenParams && !i->whenParams->empty()) gated = true;
         if (auto members = n->members)
             for (auto& m : *members)
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
-                    if (md->whenParams && !md->whenParams->empty()) gated = true;
-        if (gated)
-            unsupported("`type adapter <…>` names concrete primitives, so there is no type parameter for "
-                        "`when` to condition on — remove the gate", n->line);
-    }
-    if (ifaces->size() > 1) {
-        unsupported("`type adapter <…>` declares ONE contract per block — a method's contract has to be "
-                    "unambiguous; write a second block for the other one", n->line);
-        return;
-    }
-    if (!n->targets) return;
-
-    for (auto& tgt : *n->targets) {
-        // TWO keys, deliberately: `_classes` is C-named (`string` -> kama_string), the conformance registry
-        // is kama-named (so `char` and `uint32` don't share `uint32_t`). A prim ClassInfo's `name` stays the
-        // C type — it is what `This` resolves to and what the receiver parameter is spelled as.
-        std::string ctKey = cType(tgt);
-        std::string tkey  = primKey(tgt);
-        // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
-        // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
-        // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
-        ScopedStr  _ts(_thisType, ctKey);
-        ScopedThis _tt(_typeSubst, tgt);   // the real kama node: `int32`, not the C spelling `int32_t`
-        // The contract resolves PER TARGET, not once for the block: a PINNED contract names a different
-        // instance for each type in the set (`Weighable<This>` over `<int8, int16>` is `Weighable_int8`
-        // and `Weighable_int16`, two contracts with two vtbls). An unpinned one resolves the same every
-        // time, so this costs nothing there.
-        std::vector<std::string> names(1, *(*ifaces)[0]->value);
-        resolveInterfaceNames(names, ifaces);
-        const std::string& contract = names[0];
-        // Kind gate, the `intrinsic` arm. This is the ONLY site that can apply it: a primitive's
-        // conformance lands in _primConformances, which the `_classes` sweep never sees, and `string`'s
-        // lands on the kama_string ClassInfo, which that sweep deliberately skips (a collection has no
-        // `kind`) so it is not mistaken for a `value`. Here the ORIGIN is known — it is a `type
-        // intrinsic` block — and `n->line` is the only usable line number for one.
-        // Inside the per-target loop, so `<int8, int16, …>` names each target, and before
-        // injectImplMethods, so the reason arrives ahead of the completeness noise it would cause.
-        unsigned allowed = implKindsOf(contract, *(*ifaces)[0]->value);
-        if (allowed && !(allowed & IK_Intrinsic))
-            unsupported(("`" + *tgt->value + "` is an `intrinsic`, but contract `" + contract
-                         + "` is declared `for " + kamaImplKindListText(allowed)
-                         + "` — an intrinsic can't implement it").c_str(), n->line);
-        ClassInfo* tcip = nullptr;
-        auto ti = _classes.find(ctKey);
-        if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
-        else {
-            ClassInfo& pci = primConformanceFor(tkey);
-            pci.name = ctKey;
-            pci.kind = TypeKind::Value;
-            pci.isScalarRecv = true;                      // `this` is the scalar itself, not a pointer
-            tcip = &pci;
-        }
-        ClassInfo& tci = *tcip;
-        for (auto& ex : tci.interfaces)
-            if (ex == contract) {
-                unsupported(("`" + *tgt->value + "` already implements `" + contract + "`"
-                             + duplicateOriginNote(tkey, contract)).c_str(), n->line);
-                break;
+                    if (md->whenParams && !md->whenParams->empty())
+                        unsupported("a method of a `type adapter` takes no `when` — the block's `implements … when "
+                                    "[…]` is its one gate", md->line);
+        if (gated && anyConcrete)
+            unsupported("a `type adapter`'s `when` conditions a generic type's every instance (`type adapter "
+                        "<Optional> implements C when [T: C]`) — these targets are concrete, so there is no "
+                        "type parameter for it to condition; remove the gate", n->line);
+        if (gated && !anyConcrete)
+            for (auto& t : tgts) {
+                const std::vector<std::string>& params = _genericTypeParams[t.key];
+                for (auto& p : *(*ifaces)[0]->whenParams)
+                    if (p && p->value && std::find(params.begin(), params.end(), *p->value) == params.end()) {
+                        std::string list;
+                        for (auto& q : params) list += (list.empty() ? "`" : ", `") + q + "`";
+                        unsupported(("`" + *t.node->value + "` has no type parameter `" + *p->value
+                                     + "` — a `type adapter`'s `when` names the generic type's own: " + list).c_str(),
+                                    n->line);
+                    }
             }
-        SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);
-        // A primitive has no storage of its own to add to, and nothing to destroy.
-        for (auto& m : *members) {
-            if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
-                unsupported("`type adapter` cannot declare a field — a primitive is its own storage",
-                            m->line);
-            else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
-                unsupported("`type adapter` cannot declare a destructor — a primitive owns nothing",
-                            m->line);
+    }
+
+    for (auto& t : tgts) {
+        SharedIdentifier tgt = t.node;
+        if (t.builtin) { applyBuiltinAdapterTarget(n, tgt); continue; }
+        // The home rules, judged on the contract as written (a pinned contract resolves per target, but every
+        // instance of it is declared where its template is).
+        std::vector<std::string> names(1, *(*ifaces)[0]->value);
+        if (!t.bareTemplate && !t.instance) {
+            ScopedStr _ts(_thisType, t.key);
+            ScopedThis _tt(_typeSubst, synthId(t.key));
+            resolveInterfaceNames(names, ifaces);
+        } else {
+            resolveInterfaceNames(names, ifaces);
         }
-        // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
-        // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
-        // eligible as `int32`; keying off `_classes` instead would make `type adapter <string>
-        // implements Serializable` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
-        injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
-        checkImplCompleteness(tci, contract, *tgt->value, n->line);
+        if (!adapterHomeOk(names[0], (*ifaces)[0], n->line)) continue;
+        std::string declFile;
+        if (t.bareTemplate || t.instance) declFile = _genericTypes[t.key].declFile;
+        else if (_classes.count(t.key)) declFile = _classes[t.key].declFile;
+        else declFile = _enums[t.key].declFile;
+        if (!adapterTargetHomeOk(tgt, declFile, n->line)) continue;
+
+        if (t.bareTemplate || t.instance) {
+            TemplateAdapter ta;
+            ta.node = n; ta.target = tgt; ta.templateKey = t.key;
+            ta.unitPath = _collectingUnitPath; ta.ctx = _nsCtx;
+            if (t.instance) ta.exactInstance = cType(tgt);   // registers the instance if nothing has yet
+            _templateAdapters[t.key].push_back(ta);
+            std::vector<std::string> existing;
+            for (auto& kv : _genericTypeInsts) if (kv.second.templateKey == t.key) existing.push_back(kv.first);
+            for (auto& inst : existing) applyTemplateAdapter(ta, inst);
+            continue;
+        }
+
+        // A declared type. A payload-less enum with nothing of its own is a bare C integer with no ClassInfo;
+        // give it the scalar-receiver one any enum with members gets, for the adapter's methods to hang on.
+        auto ci = _classes.find(t.key);
+        if (ci == _classes.end()) {
+            auto ed = _enumDeclNodes.find(t.key);
+            if (ed == _enumDeclNodes.end()) continue;
+            ClassInfo sci = buildVariantClassInfo(ed->second, t.key);
+            sci.isVariant = false;
+            sci.tagCType.clear();
+            sci.kind = TypeKind::Value;
+            sci.isScalarRecv = true;
+            sci.declFile = declFile;
+            _classes[t.key] = sci;
+            ci = _classes.find(t.key);
+        }
+        ClassInfo& tci = ci->second;
+        const std::string shown = *tgt->value;
+        const unsigned kindBit = implementerKind(tci);
+        unsigned allowed = implKindsOf(names[0], *(*ifaces)[0]->value);
+        if (allowed && kindBit && !(allowed & kindBit)) {
+            const std::string kindA = aOrAn(kamaImplKindListText(kindBit));   // "a `resource`"
+            unsupported(("`" + shown + "` is " + kindA + ", but contract `" + *(*ifaces)[0]->value + "` is declared `for "
+                         + kamaImplKindListText(allowed) + "` — " + kindA + " can't implement it").c_str(), n->line);
+            continue;
+        }
+        ScopedStr  _ts(_thisType, t.key);
+        ScopedThis _tt(_typeSubst, synthId(t.key));
+        injectAdapterMethods(tci, n, tgt, names[0], shown);
     }
 }
 
@@ -20419,33 +20674,30 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
         if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
             SharedIdentifier c = intrinsicContract(ii);
             if (!c || !ii->targets || serdeGatedOff(c)) continue;
-            for (auto& tgt : *ii->targets)
-                if (ClassInfo* t = implTargetInfo(primKey(tgt)))
-                    out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt)});
+            for (auto& tgt : *ii->targets) {
+                if (!tgt) continue;
+                if (ClassInfo* t = implTargetInfo(primKey(tgt))) { out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt), {}}); continue; }
+                // A declared, non-generic target: its adapter methods are on its own ClassInfo, marked.
+                if (tgt->builtInVal != 0 || !tgt->value) continue;
+                const std::string key = resolveUserName(*tgt->value, tgt->qualifier);
+                auto ci = _classes.find(key);
+                if (ci == _classes.end() || _genericTypes.count(key)) continue;
+                SharedClassMemberDeclarationList ms = intrinsicMembersFor(ii, tgt);
+                bool ours = false;   // the block applied (it may have been refused by a rule above)
+                for (auto& m : *ms)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                        if (md->name && md->name->value) {
+                            auto mi = ci->second.methods.find(*md->name->value);
+                            if (mi != ci->second.methods.end() && mi->second.fromAdapter && mi->second.node == md) ours = true;
+                        }
+                if (ours) out.push_back(ImplEmit{&ci->second, ms, {}});
+            }
         }
     }
+    // Instances of a generic target, applied as each was registered — with the subst their bodies need.
+    auto ai = _adapterInstEmits.find(u->name ? *u->name : std::string());
+    if (ai != _adapterInstEmits.end()) for (auto& e : ai->second) out.push_back(e);
     return out;
-}
-
-// The clause a duplicate-conformance message gains when the two claims come from DIFFERENT packages —
-// the case neither the user nor either author can fix from one side, and the only one worth the extra
-// words. Empty when both claims are in one package, or when either side has no manifest above it (a
-// scratch file, the prelude), so the message reads exactly as it always did.
-//
-// Recorded lazily and resolved here rather than per unit up front: this runs at most once per error.
-std::string CEmitter::duplicateOriginNote(const std::string& tkey, const std::string& contract)
-{
-    if (!_packageResolver) return std::string();
-    auto it = _conformanceOrigin.find(std::make_pair(tkey, contract));
-    if (it == _conformanceOrigin.end()) return std::string();
-    std::string first = _packageResolver(it->second);
-    std::string second = _packageResolver(_collectingUnitPath);
-    if (first.empty() || second.empty() || first == second) return std::string();
-    // Deliberately order-neutral. Which claim the collection pass happens to reach first says nothing
-    // about which one is wrong, and phrasing it as "A already declares it, B claims it too" reads as an
-    // accusation that lands on whichever package sorted second.
-    return " — claimed by package `" + first + "` and by package `" + second +
-           "`; only one package may own a (type, contract) pair, so one of them has to drop it";
 }
 
 // The C symbol of an impl-injected method. `injectImplMethods` already minted it, so the three emission
@@ -25918,7 +26170,29 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // stores its payload in the TEMPLATE's `T`, so `Optional<int64>` has `pf.type == T` and the
                 // raw node would classify as nothing, so it is resolved in the SUBJECT's instance — a
                 // binding scoped to this one resolution, never held open over the arm body.
-                _localTypeNodes[bn] = deepSubstInInstance(subjCls, pf.type);
+                SharedIdentifier bnode = deepSubstInInstance(subjCls, pf.type);
+                // ...except where the subject was written with THIS body's own type parameter: `Optional<U>` in
+                // `f<U: C>`, or `this` in a generic type's (or a generic adapter's) own body, where the payload's
+                // `T` is the parameter itself. The binding's type is then that parameter, bound and all, as a
+                // field typed `T` is — and a contract method reached through the bound (`v.code()` with
+                // `U: Coded`) is legal on it, which the concrete node made the contract-scope rule refuse.
+                if (pf.type && pf.type->value && !pf.type->genericArg) {
+                    SharedExpression subjE = m->subject;
+                    if (auto* h = dynamic_cast<HandoffNode*>(subjE.get())) subjE = h->value;
+                    auto gi = _genericTypeInsts.find(subjCls);
+                    if (gi != _genericTypeInsts.end()) {
+                        const std::vector<std::string>& tps = _genericTypeParams[gi->second.templateKey];
+                        SharedIdentifier written;
+                        if (dynamic_cast<ThisAccessNode*>(subjE.get())) written = pf.type;
+                        else if (SharedIdentifier sn = receiverTypeNode(subjE))
+                            for (size_t ti = 0; ti < tps.size(); ++ti)
+                                if (tps[ti] == *pf.type->value && sn->genericArgs && ti < sn->genericArgs->size())
+                                    written = (*sn->genericArgs)[ti];
+                        if (written && written->value && !written->genericArg && _typeSubst.count(*written->value))
+                            bnode = written;
+                    }
+                }
+                _localTypeNodes[bn] = bnode;
             }
         }
 
@@ -29579,6 +29853,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
+        if (mi.fromAdapter) continue;  // an adapter's: declared and defined in the adapter's module (implEmitsOf)
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << selfC << ", kama__Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(kama__Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
@@ -30002,6 +30277,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
+        if (mi.fromAdapter) continue;  // an adapter's: its body resolves under the adapter's module (implEmitsOf)
         // Every `@generate` body, through the one fork that knows a variant from a class — which is how a
         // GENERIC ENUM instance gets its per-tag bodies, since its instance comes through here like any
         // other (emitGenericTypeInst phase 2).
@@ -36379,8 +36655,18 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     // arguments asks for; the bare template stays for a bound written bare.
                     std::string exact = exactBoundName(contract, c, {});
                     for (auto& tgt : *ii->targets) {
-                        _intrinsicConformances[primKey(tgt)].insert(contract);
-                        _intrinsicConformances[primKey(tgt)].insert(exact);
+                        if (!tgt) continue;
+                        // A built-in under its registry key; a declared, non-generic type under its own. An
+                        // adapter over a generic type is judged per instance, as each is registered.
+                        std::string key;
+                        if (tgt->builtInVal != 0 && !tgt->genericArg) key = primKey(tgt);
+                        else if (tgt->value) {
+                            const std::string base = resolveUserName(*tgt->value, tgt->qualifier);
+                            if (!_genericTypes.count(base) && (_classes.count(base) || _enums.count(base))) key = base;
+                        }
+                        if (key.empty()) continue;
+                        _intrinsicConformances[key].insert(contract);
+                        _intrinsicConformances[key].insert(exact);
                     }
                 }
             }
@@ -36406,8 +36692,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
-        // Which file is claiming these conformances — resolved to a package only if one turns out to be a
-        // duplicate (see duplicateOriginNote).
+        // Which file is claiming these conformances: an adapter's home rules are judged against it.
         ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         for (auto& decl : *u->codeDeclarationList)
             if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) applyIntrinsicImpl(ii);
@@ -36880,6 +37165,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             _nsCtx = _unitCtx[u.get()];
             for (auto& e : implEmitsOf(u)) {
                 ScopedStr _ts(_thisType, e.target->name);
+                ScopedSubst _es(_typeSubst, e.subst);
                 for (auto& m : *e.members) {
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
@@ -37125,6 +37411,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = true;
         for (auto& e : implEmitsOf(_preludeUnit)) {
             ScopedStr _ts(_thisType, e.target->name);
+                ScopedSubst _es(_typeSubst, e.subst);
             for (auto& m : *e.members) {
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                 if (!md || !md->name || !md->name->value) continue;
@@ -37362,6 +37649,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // is in the shared header). A user-type target already emitted through emitClassDefinitions above.
     for (auto& e : implEmitsOf(unit)) {
         ScopedStr _ts(_thisType, e.target->name);
+                ScopedSubst _es(_typeSubst, e.subst);
         for (auto& m : *e.members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;

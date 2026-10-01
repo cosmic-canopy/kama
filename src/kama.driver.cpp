@@ -500,10 +500,10 @@ static bool fileMatchesEmbedded(const std::string& path, const char* embedded)
 // because the text it compiled is right here: compare, and hand back nothing on a mismatch. Degrade,
 // never lie — every caller already treats "" as "no file on disk (a --no-std install)".
 //
-// ⚠️ The synthetic name is NOT replaced by this, and must not be. The leading `<` is a sentinel four
+// ⚠️ The synthetic name is NOT replaced by this, and must not be. The leading `<` is a sentinel three
 // passes read: `checkReach` exempts compiler-owned declarations from the export/import rungs on it,
-// `CEmitter::line` suppresses a `#line` into a file that may not exist, `setPackageResolver` skips the
-// filesystem walk for such a unit, and `moduleOfUnit` returns "" for `<prelude>` specifically — a real
+// `CEmitter::line` suppresses a `#line` into a file that may not exist, and `moduleOfUnit` returns "" for
+// `<prelude>` specifically — a real
 // path there would derive a module name and re-mangle every prelude symbol. So the path travels
 // ALONGSIDE the name, for the query layer only, and go-to-definition is the one thing that reads it.
 //
@@ -2750,22 +2750,11 @@ static void configureEmitter(CEmitter& e)
         std::sort(hs.begin(), hs.end());   // a verdict must not depend on the filesystem's order
         e.setRuntimeHeaders(std::move(hs));
     }
-    // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
-    // packages claim the same conformance, so it is a callback rather than a precomputed per-unit table:
-    // the walk is filesystem work the emitter has no business doing, and it runs at most once per error.
-    // A synthetic unit (`<prelude>`, `<prelude>/std/…`) has no path — `dirName` would hand back "." and
-    // the walk would climb into whatever project happens to be the working directory, attributing the
-    // prelude's conformances to the user.
-    e.setPackageResolver([](const std::string& unitPath) -> std::string {
-        if (unitPath.empty() || unitPath[0] == '<') return std::string();
-        std::string dir = owningPackageDir(dirName(unitPath));
-        return dir.empty() ? std::string() : dir + "/kama.json";
-    });
     // Which MODULE owns a given source file — the file's identity, and what the emitter mangles its
     // declarations with (SPEC.md § Modules). Same callback shape and the same reason: walking to
     // the owning manifest and reading its module tree is filesystem work, cached driver-side.
     //
-    // ⚠️ The synthetic arm is not a "return nothing" guard the way setPackageResolver's is. The
+    // ⚠️ The synthetic arm is not a "return nothing" guard. The
     // smart-pointer triad reaches the emitter as `<prelude>/std/memory/*.kama` — units with no path at all,
     // which no path→module derivation can reach — and it DOES go through ctxOf. Its module is therefore
     // stated rather than derived, in KamaPreludeModule::module (src/kama.prelude.h).

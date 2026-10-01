@@ -1,0 +1,6 @@
+// Two adapters over the same instance — every `Optional`, and `Optional<int32>` by name — are two claims of one
+// (type, contract) pair. There is no specialization: the second is a duplicate.
+type contract Tagged for value, enum, intrinsic { const fn int32 tag(); }
+type adapter <Optional> implements Tagged { public const fn int32 tag() { return 1; } }
+type adapter <Optional<int32>> implements Tagged { public const fn int32 tag() { return 2; } }
+fn int32 main() { Optional<int32> o = Optional::None; return 0; }

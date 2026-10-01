@@ -1,0 +1,6 @@
+// An adapter is for a type declared ELSEWHERE. Over a type its own module declares, the declaration's
+// `implements` list is the one way to give it a contract.
+type contract Tagged for value { const fn int32 tag(); }
+type value Badge { public int32 n; }
+type adapter <Badge> implements Tagged { public const fn int32 tag() { return this.n; } }
+fn int32 main() { return 0; }

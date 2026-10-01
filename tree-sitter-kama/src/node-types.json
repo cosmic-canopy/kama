@@ -1,5 +1,179 @@
 [
   {
+    "type": "adapter_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "adapter_section",
+          "named": true
+        },
+        {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
+        {
+          "type": "constant_declaration",
+          "named": true
+        },
+        {
+          "type": "constructor_declaration",
+          "named": true
+        },
+        {
+          "type": "destructor_declaration",
+          "named": true
+        },
+        {
+          "type": "field_declaration",
+          "named": true
+        },
+        {
+          "type": "friend_declaration",
+          "named": true
+        },
+        {
+          "type": "method_declaration",
+          "named": true
+        },
+        {
+          "type": "operator_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "adapter_declaration",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "adapter_body",
+            "named": true
+          }
+        ]
+      },
+      "kind": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_kind",
+            "named": true
+          }
+        ]
+      },
+      "targets": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "adapter_targets",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        },
+        {
+          "type": "class_base",
+          "named": true
+        },
+        {
+          "type": "modifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "adapter_section",
+    "named": true,
+    "fields": {
+      "targets": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "adapter_targets",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
+        {
+          "type": "constant_declaration",
+          "named": true
+        },
+        {
+          "type": "constructor_declaration",
+          "named": true
+        },
+        {
+          "type": "destructor_declaration",
+          "named": true
+        },
+        {
+          "type": "field_declaration",
+          "named": true
+        },
+        {
+          "type": "friend_declaration",
+          "named": true
+        },
+        {
+          "type": "method_declaration",
+          "named": true
+        },
+        {
+          "type": "operator_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "adapter_targets",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "primitive_type",
+          "named": true
+        },
+        {
+          "type": "type_name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "argument",
     "named": true,
     "fields": {
@@ -4794,53 +4968,6 @@
     }
   },
   {
-    "type": "intrinsic_body",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "comptime_assert_statement",
-          "named": true
-        },
-        {
-          "type": "constant_declaration",
-          "named": true
-        },
-        {
-          "type": "constructor_declaration",
-          "named": true
-        },
-        {
-          "type": "destructor_declaration",
-          "named": true
-        },
-        {
-          "type": "field_declaration",
-          "named": true
-        },
-        {
-          "type": "friend_declaration",
-          "named": true
-        },
-        {
-          "type": "intrinsic_section",
-          "named": true
-        },
-        {
-          "type": "method_declaration",
-          "named": true
-        },
-        {
-          "type": "operator_declaration",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "intrinsic_callee",
     "named": true,
     "fields": {
@@ -4881,132 +5008,9 @@
     }
   },
   {
-    "type": "intrinsic_declaration",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "intrinsic_body",
-            "named": true
-          }
-        ]
-      },
-      "kind": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "type_kind",
-            "named": true
-          }
-        ]
-      },
-      "targets": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "intrinsic_targets",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "attribute_list",
-          "named": true
-        },
-        {
-          "type": "class_base",
-          "named": true
-        },
-        {
-          "type": "modifier",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "intrinsic_name",
     "named": true,
     "fields": {}
-  },
-  {
-    "type": "intrinsic_section",
-    "named": true,
-    "fields": {
-      "targets": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "intrinsic_targets",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "comptime_assert_statement",
-          "named": true
-        },
-        {
-          "type": "constant_declaration",
-          "named": true
-        },
-        {
-          "type": "constructor_declaration",
-          "named": true
-        },
-        {
-          "type": "destructor_declaration",
-          "named": true
-        },
-        {
-          "type": "field_declaration",
-          "named": true
-        },
-        {
-          "type": "friend_declaration",
-          "named": true
-        },
-        {
-          "type": "method_declaration",
-          "named": true
-        },
-        {
-          "type": "operator_declaration",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "intrinsic_targets",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "primitive_type",
-          "named": true
-        }
-      ]
-    }
   },
   {
     "type": "kind_name",
@@ -6767,6 +6771,10 @@
       "required": false,
       "types": [
         {
+          "type": "adapter_declaration",
+          "named": true
+        },
+        {
           "type": "comptime_assert_statement",
           "named": true
         },
@@ -6800,10 +6808,6 @@
         },
         {
           "type": "import_declaration",
-          "named": true
-        },
-        {
-          "type": "intrinsic_declaration",
           "named": true
         },
         {

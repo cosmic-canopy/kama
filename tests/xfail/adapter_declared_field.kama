@@ -1,0 +1,7 @@
+// An adapter adds a contract's methods, never storage — over a declared type as over a built-in.
+type contract Tagged for value, enum, intrinsic { const fn int32 tag(); }
+type adapter <Optional> implements Tagged {
+    int32 extra;
+    public const fn int32 tag() { return 1; }
+}
+fn int32 main() { Optional<int32> o = Optional::None; return 0; }

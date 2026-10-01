@@ -1,0 +1,2 @@
+export { DbParam };
+type contract DbParam for value, enum, intrinsic { const fn int32 code(); }

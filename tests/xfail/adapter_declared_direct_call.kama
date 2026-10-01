@@ -1,0 +1,5 @@
+// An adapter's methods are its contract's, never the type's own API — on a declared type exactly as on a
+// built-in. `o.tag()` on a concrete `Optional<int32>` is refused; a bound or a contract value reaches it.
+type contract Tagged for value, enum, intrinsic { const fn int32 tag(); }
+type adapter <Optional> implements Tagged { public const fn int32 tag() { return 1; } }
+fn int32 main() { Optional<int32> o = Optional::None; return o.tag(); }

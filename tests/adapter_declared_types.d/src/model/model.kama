@@ -1,0 +1,12 @@
+export { User, Color, Conn };
+// The domain types. This module knows nothing about the database.
+type value User {
+    public int32 id;
+    public ctor make(int32 id) { this.id = id; }
+}
+type enum Color { Red, Green, Blue }
+type resource Conn {
+    int32 fd;
+    public ctor open(int32 fd) { this.fd = fd; }
+    public const fn int32 handle() { return this.fd; }
+}

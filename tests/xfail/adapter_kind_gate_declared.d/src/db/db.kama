@@ -1,0 +1,6 @@
+import { kindgate::model::Conn };
+export { DbParam };
+// The contract's `for` list gates an adapter's target by the target's own kind, as it gates a declaration's
+// `implements`: `DbParam` admits values only, and `Conn` is a resource.
+type contract DbParam for value { const fn int32 code(); }
+type adapter <Conn> implements DbParam { public const fn int32 code() { return 0; } }

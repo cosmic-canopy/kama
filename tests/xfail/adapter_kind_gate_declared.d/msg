@@ -1,0 +1,1 @@
+`Conn` is a `resource`, but contract `DbParam` is declared `for value`

@@ -1188,18 +1188,18 @@ for member in "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"; do
         echo "check-packages: FAIL — $member free-rides on an ancestor manifest:" >&2; sed 's/^/  /' "$tmp/acc.out" >&2; exit 1; fi
 done
 
-# 37. two packages claiming the SAME (type, contract) conformance. A conformance is program-wide, so a
-#     duplicate is visible under the whole-program view and already rejected — but the message named only
-#     the type and the contract, which is useless here: neither package's author can see the other, and
-#     the user cannot fix either from one side. It must name BOTH packages. (This is the reason kama needs
-#     no orphan rule: the hazard an orphan rule prevents is detectable directly.)
+# 37. two packages claiming the SAME (type, contract) conformance can no longer be written. A conformance is
+#     program-wide, so a duplicate was visible under the whole-program view — but visible is not fixable: an
+#     application owning neither package could not build at all. Since 0.9.511 an adapter lives only in its
+#     contract's own module (the user's ruling, 2026-10-01), so the app's claim below is refused where it is
+#     written, and the error says which module may adapt `int32` to `Marker`.
 dc="$tmp/dupconf"; mkdir -p "$dc/lib/src" "$dc/app/src"
 cat > "$dc/lib/kama.json" <<'JSON'
 { "name": "marklib", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dc/lib/src/marklib.kama" <<'EOF'
 export { Marker, viaMarker };
-type contract Marker for value { fn int32 mark(); }
+type contract Marker for value, intrinsic { fn int32 mark(); }
 type adapter <int32> implements Marker { public fn int32 mark() { return 1; } }
 fn int32 viaMarker<T: Marker>(ref T v) { return v.mark(); }
 EOF
@@ -1214,16 +1214,13 @@ fn int32 main() { int32 x = 5; return viaMarker(v: ref x); }
 EOF
 "$KAMA" pkg install "$dc/app/kama.json" >/dev/null 2>&1
 if "$KAMA" run "$dc/app/kama.json" >"$tmp/dup.out" 2>&1; then
-    echo "check-packages: FAIL — two packages claimed one conformance and it still built:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; fi
-grep -q "already implements" "$tmp/dup.out" \
-    || { echo "check-packages: FAIL — no duplicate-conformance error:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
-grep -q "$dc/lib/kama.json" "$tmp/dup.out" \
-    || { echo "check-packages: FAIL — duplicate-conformance error did not name the FIRST package:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
-grep -q "$dc/app/kama.json" "$tmp/dup.out" \
-    || { echo "check-packages: FAIL — duplicate-conformance error did not name the SECOND package:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
+    echo "check-packages: FAIL — a package adapted a type it does not own to a contract it does not own, and it built:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; fi
+grep -q "belongs in module \`marklib\`" "$tmp/dup.out" \
+    || { echo "check-packages: FAIL — a foreign adapter was not refused with the contract's home:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
+if grep -q "already implements" "$tmp/dup.out"; then
+    echo "check-packages: FAIL — the refused adapter still registered (a second, duplicate-conformance error):" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; fi
 
-# 37b. the same duplicate WITHIN one package keeps the plain message — there is no second package to name,
-#      and the author can see both declarations.
+# 37b. a duplicate WITHIN the contract's own module is still a duplicate.
 cat > "$dc/app/src/main.kama" <<'EOF'
 type contract Solo for value { fn int32 solo(); }
 type adapter <int32> implements Solo { public fn int32 solo() { return 1; } }
@@ -1234,8 +1231,6 @@ if "$KAMA" run "$dc/app/kama.json" >"$tmp/dup2.out" 2>&1; then
     echo "check-packages: FAIL — a duplicate conformance in one package still built:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
 grep -q "already implements" "$tmp/dup2.out" \
     || { echo "check-packages: FAIL — no duplicate-conformance error within one package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; }
-if grep -q "and by package" "$tmp/dup2.out"; then
-    echo "check-packages: FAIL — named two packages for a duplicate inside ONE package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
 
 # 38. BUILD FROM OUTSIDE THE PROJECT. Manifest discovery used to check the input file's own directory and
 #     then the CWD, with no walk up — while owningPackageDir, twenty lines below it, had walked all along.
@@ -1477,4 +1472,4 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships (KPG-2); $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships (KPG-2); $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"

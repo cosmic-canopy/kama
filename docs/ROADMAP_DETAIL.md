@@ -492,17 +492,20 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   selected by fully-concrete type arguments, so any two are identical or disjoint). Scoping it against
   the tree killed it, on three counts:
   - **It re-opens the hole M6 closed, in a worse form.** Retro-impl (`implements C for T`) was deleted
-    because it let a module reach into a type it does not own. A specialization lets a module reach into
+    because it let ANY module reach into a type it does not own. (`type adapter`, `0.9.511`, brings that
+    reach back for one module only — the one that declares the contract — and only as a conformance: named
+    methods, reached solely through that contract. A specialization would still be a silent body swap.) A specialization lets a module reach into
     a *function* it does not own and change what that function does for a given type — program-wide,
     invisible at every call site, from any package that can see the generic. Retro-impl at least added a
     *named method* you could see on the type; a specialization silently replaces a body. Whole-program
     coherence catches a *duplicate* specialization and does nothing about a single one, which is the
     dangerous case.
   - **What is left over is contract design, which is the language's answer already.** `type contract`
-    plus `type adapter` covers primitives, `string`, and every type you own — that is exactly what
+    plus `type adapter` covers primitives, `string`, every type you own, and — from a contract's own module
+    — every type you don't. That is exactly what
     `std::math`'s `Real` is, and [scalar.kama](../lib/std/math/scalar.kama) says so in prose. The
-    genuine remainder is a per-type body for a user type you do **not** own, and unlocking that is the
-    thing we do not want.
+    genuine remainder is a second BODY for a generic function you do **not** own, chosen by its type
+    arguments, and unlocking that is the thing we do not want.
   - **Nothing depends on it.** Comptime parameters' three blockers are all comptime-parameters-on-types issues;
     the view-escape check is independent; no site in `lib/`, `prelude/`, `tests/`, `examples/` or
     `bench/` needs it.
@@ -511,6 +514,20 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   came out of scoping it and have shipped: a duplicate function declaration was silent (for a generic
   template the last body simply won), a function type parameter's `= Default` was parsed and dropped,
   and a type parameter shadowing a visible type said nothing. All three are pinned by `tests/xfail/`.
+
+- **A `type adapter` outside its contract's module — deliberately NOT built (user ruling, 2026-10-01).** An
+  adapter lives only in the module that declares its contract (SPEC § *`type adapter`*). kama would not need
+  the rule for SOUNDNESS — the whole-program view sees two claims of one (type, contract) pair and refuses
+  them — but seeing a conflict is not being able to fix it: two libraries that each adapt `Timestamp` to a
+  driver's contract leave an application that owns neither unable to build, and a library that adds an
+  adapter in a new release would break every consumer that had written its own. Swift is the measured
+  precedent: it allowed retroactive conformance anywhere and, in Swift 5.10 (SE-0364), began warning on a
+  conformance of a type you don't own to a protocol you don't own unless marked `@retroactive`. Starting
+  strict is the reversible choice — loosening breaks no one, tightening breaks everyone. **The relaxation
+  path, if the rule ever chafes:** let the build's ROOT package (an application, which nothing depends on)
+  adapt a foreign type to a foreign contract, while a library still may not. No diamond can form through an
+  app, and its owner can delete their adapter the day a library ships one. Until a real program needs that,
+  the answer is the one Rust gives: wrap the type in one of your own.
 
 - **The safety/unsafe boundary — SWEPT, and the seam has since been MOVED (findings 1, 2, 9 closed).**
   The intended guarantee is that danger is isolated behind `unsafe`: nothing in safe kama should be able

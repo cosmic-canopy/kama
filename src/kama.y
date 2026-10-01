@@ -520,7 +520,7 @@ struct kamayystype {
 %type <enummemberdecllist> enum_member_declarations_opt enum_member_declarations
 %type <enumbody> enum_class_body
 %type <intrinsicbody> intrinsic_body intrinsic_members
-%type <intrinsictargets> intrinsic_target_list
+%type <intrinsictargets> intrinsic_target_list adapter_targets
 %type <statement> marked_intrinsic_declaration
 %type <classbasedecl> class_base_opt class_base
 %type <classmemberdecl> class_member_declaration plain_class_member constant_declaration field_declaration method_declaration friend_declaration comptime_assert_statement
@@ -913,29 +913,31 @@ marked_type_declaration
            $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $5, $6, $7, $8, $9); }
   ;
 
-/* `type adapter <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
-   PRIMITIVE. The kind word stays a positional bare IDENTIFIER (the emitter checks it is `intrinsic`), so
-   `intrinsic` is never reserved and `int32 intrinsic = 1;` keeps working.
+/* `type adapter <int8, Uuid, …> implements C { …methods… <int8> { …methods… } }` — a type's conformance to C,
+   written OUTSIDE the type's declaration, in C's own module (the emitter enforces where). The kind word
+   stays a positional bare IDENTIFIER (the emitter checks it is `adapter`), so it is never reserved and
+   `int32 adapter = 1;` keeps working.
 
    NO CONFLICT with `marked_type_declaration`, even though both begin `TYPE modifiers_opt IDENTIFIER`: its
    `type_decl_head` continues with the NAME, an IDENTIFIER, while this one continues with `<`. One token of
-   lookahead separates them, and `type adapter <…>` was a parse error before, which is what left the slot
-   free. The target list is `simple_type` — every one of its first tokens (INT8…UINT64, FLOAT32, FLOAT64,
-   BOOL, CHAR, STRING) is RESERVED, so it cannot collide with an IDENTIFIER either. That is also why the
-   legal target set is exactly the primitives: it falls out of the grammar rather than being checked.
-
-   No `genericDepth` mid-rule action after the `<`: the list holds only primitives, so it can never nest,
-   so `>` can never lex as `>>`. (A duplicated mid-rule action becomes its own empty nonterminal and
-   reduce/reduce-conflicts — see the note on parameter_modifier_opt.) */
+   lookahead separates them. Inside the body a section also begins with `<`, which no class member can. */
 marked_intrinsic_declaration
-  : TYPE modifiers_opt IDENTIFIER LT intrinsic_target_list GT class_base_opt intrinsic_body semicolon_opt
-    { auto n = std::make_shared<IntrinsicImplNode>(SCANNER_CODEGENCONTEXT, $2, $5, $7, $8);
+  : TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt intrinsic_body semicolon_opt
+    { auto n = std::make_shared<IntrinsicImplNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6);
       n->kindWord = $3;
       $$ = n; }
   ;
+/* `<int32, Uuid, DynamicArray<uint8>, Optional>` — the targets are TYPES. One nonterminal owns the
+   `genericDepth` mid-rules for both places a target list appears (the head and a section), so a nested
+   close `>>` lexes as two `>`; spelling the mid-rules twice would make two empty nonterminals that
+   reduce/reduce-conflict (see the note on parameter_modifier_opt). */
+adapter_targets
+  : LT { yyget_extra(scanner)->genericDepth++; } intrinsic_target_list GT { yyget_extra(scanner)->genericDepth--; }
+    { $$ = $3; }
+  ;
 intrinsic_target_list
-  : simple_type   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | intrinsic_target_list COMMA simple_type   { $1->push_back($3); $$ = $1; }
+  : type   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | intrinsic_target_list COMMA type   { $1->push_back($3); $$ = $1; }
   ;
 /* A member is either shared by every target, or inside a `<…> { … }` SECTION that overrides it for the
    targets it names. A section can only begin with `<`, which no class member can, so the two are
@@ -952,15 +954,15 @@ intrinsic_members
       $$->members  = std::make_shared<ClassMemberDeclarationList>();
       $$->sections = std::make_shared<IntrinsicSectionList>();
       $$->members->push_back($1); }
-  | LT intrinsic_target_list GT LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
+  | adapter_targets LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
     { $$ = std::make_shared<IntrinsicBody>();
       $$->members  = std::make_shared<ClassMemberDeclarationList>();
       $$->sections = std::make_shared<IntrinsicSectionList>();
-      auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $2; sec->members = $5;
+      auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $1; sec->members = $3;
       $$->sections->push_back(sec); }
   | intrinsic_members class_member_declaration   { $1->members->push_back($2); $$ = $1; }
-  | intrinsic_members LT intrinsic_target_list GT LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
-    { auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $3; sec->members = $6;
+  | intrinsic_members adapter_targets LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
+    { auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $2; sec->members = $4;
       $1->sections->push_back(sec); $$ = $1; }
   ;
 

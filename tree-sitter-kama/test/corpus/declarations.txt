@@ -601,10 +601,10 @@ type enum IoError : uint8 implements Error
               (string_content))))))))
 
 ================================================================================
-A `type intrinsic` set, with a shared body and a per-target section
+A `type adapter` set, with a shared body and a per-target section
 ================================================================================
 
-type intrinsic <int8, int16> implements Tagged
+type adapter <int8, int16> implements Tagged
 {
     public fn int32 scale() { return 2; }
 
@@ -614,17 +614,17 @@ type intrinsic <int8, int16> implements Tagged
 --------------------------------------------------------------------------------
 
 (source_file
-  (intrinsic_declaration
+  (adapter_declaration
     (type_kind
       (identifier))
-    (intrinsic_targets
+    (adapter_targets
       (primitive_type)
       (primitive_type))
     (class_base
       (implements_entry
         (type_name
           (identifier))))
-    (intrinsic_body
+    (adapter_body
       (method_declaration
         (modifier)
         (primitive_type)
@@ -634,8 +634,8 @@ type intrinsic <int8, int16> implements Tagged
         (block
           (return_statement
             (integer_literal))))
-      (intrinsic_section
-        (intrinsic_targets
+      (adapter_section
+        (adapter_targets
           (primitive_type))
         (method_declaration
           (modifier)
@@ -646,6 +646,53 @@ type intrinsic <int8, int16> implements Tagged
           (block
             (return_statement
               (integer_literal))))))))
+
+================================================================================
+A `type adapter` over declared types, an instance and a generic type, gated by `when`
+================================================================================
+
+type adapter <Uuid, DynamicArray<uint8>, Optional> implements SqlParam when [T: SqlParam]
+{
+    public const fn SqlValue toSql() { return SqlValue::Null; }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (adapter_declaration
+    (type_kind
+      (identifier))
+    (adapter_targets
+      (type_name
+        (identifier))
+      (type_name
+        (identifier)
+        (type_arguments
+          (primitive_type)))
+      (type_name
+        (identifier)))
+    (class_base
+      (implements_entry
+        (type_name
+          (identifier))
+        (when_clause
+          (when_condition
+            (identifier)
+            (type_name
+              (identifier))))))
+    (adapter_body
+      (method_declaration
+        (modifier)
+        (type_name
+          (identifier))
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (scoped_identifier
+              (identifier)
+              (identifier))))))))
 
 ================================================================================
 The file gate is a unit's first line, ahead of the import block

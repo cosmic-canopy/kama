@@ -1,0 +1,4 @@
+// An adapter's target must name a type.
+type contract Tagged for value { const fn int32 tag(); }
+type adapter <Nope> implements Tagged { public const fn int32 tag() { return 0; } }
+fn int32 main() { return 0; }
