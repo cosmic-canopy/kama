@@ -1,0 +1,7 @@
+{
+  "name": "glib",
+  "version": "0.1.0",
+  "kind": "library",
+  "source": "src",
+  "modules": { ".": { "visibility": "public" } }
+}

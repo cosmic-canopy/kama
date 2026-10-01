@@ -1,0 +1,14 @@
+// The multi-file twin of tests/generic_comptime_private.kama: the private constants and the generic code
+// that reads them live HERE, the instantiations in main.kama — another translation unit and another module.
+export { Grid, cells };
+
+comptime int32 SIDE = 3;
+comptime InlineArray<int32>#(3) WEIGHTS = [1, 10, 100];
+
+type value Grid<T> {
+    T fill;
+    public ctor make(T fill) { this.fill = fill; }
+    public fn int32 area() { return SIDE * SIDE; }
+}
+
+fn int32 cells<T>(T x) { return WEIGHTS[2] + SIDE; }

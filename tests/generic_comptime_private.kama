@@ -1,0 +1,35 @@
+// Peer KTLS-1: a file-private module `comptime` read from a GENERIC body. Every generic instance is emitted
+// `static inline` in the header region, ahead of the unit, and a private constant was defined only in its
+// unit — so `Holder<int64>.sum()` passed `kama check` and failed clang with "use of undeclared identifier",
+// even in this one-file program. Each shape a constant takes is read here: a scalar, a `comptime fn` table,
+// one name of a two-name declaration, a constant folded from another, and a type's own constant.
+// The multi-file and cross-package twin is tests/generic_comptime_private.d.
+
+comptime fn InlineArray<uint8>#(4) squares() {
+    InlineArray<uint8>#(4) t = [0; 4];
+    for (int32 i = 0; i < 4; i = i + 1) { t[i] = cast<uint8>(i * i); }
+    return t;
+}
+comptime InlineArray<uint8>#(4) SQ = squares();
+comptime int32 A = 1, B = 2;      // only A is read generically; B, its neighbour, still reaches onlyB
+comptime int32 C = A + 10;
+comptime int32 D = 4;             // read by no generic body: stays in its unit
+
+type value Cfg {
+    public comptime int32 SHOWN = 6;
+}
+
+type resource Holder<T> {
+    T v;
+    public ctor make(T v) { this.v = give v; }
+    public fn int32 sum() { return cast<int32>(SQ[3]) + A + C + Cfg::SHOWN; }   // 9 + 1 + 11 + 6
+}
+
+fn int32 tripled<T>(T x) { return C * 3; }                                     // 33
+
+fn int32 onlyB() { return B + D; }                                             // 6
+
+fn int32 main() {
+    Holder<int64> h = Holder::<int64>.make(v: 1i64);
+    return h.sum() + tripled::<bool>(x: true) + onlyB();                       // 27 + 33 + 6
+}

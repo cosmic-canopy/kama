@@ -1,0 +1,12 @@
+{
+  "name": "gcp",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "glib": { "path": "./vendor/glib" } },
+  "modules": {
+    ".": { "visibility": "internal" },
+    "geo": { "visibility": "internal" }
+  }
+}

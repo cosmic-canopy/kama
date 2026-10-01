@@ -1,0 +1,8 @@
+import { glib::Box, gcp::geo::Grid, gcp::geo::cells };
+
+fn int32 main()
+{
+    Box<int32> b = Box::<int32>.make(v: 1);
+    Grid<int64> g = Grid::<int64>.make(fill: 0i64);
+    return b.limit() + g.area() + cells::<bool>(x: true);   // 7 + 9 + 103
+}

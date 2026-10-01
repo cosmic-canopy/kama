@@ -1917,7 +1917,12 @@ private:
     std::set<std::string>                           _intrinsicVtblsHeader;
     std::string                                     _intrinsicVtblsHeaderText;
     std::set<std::string>                           _intrinsicVtblsModule;
-    std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
+    // A file-private module `comptime` read by a body the HEADER holds (a generic instance) — defined in the
+    // header, ahead of its body region, instead of in its unit. Demanded by resolveModuleVar; the unit pass
+    // skips a declaration listed here. See noteHeaderConst.
+    std::set<ModuleVariableDeclaration*>            _headerConstDecls;
+    std::string                                     _headerConstsText;
+    std::string                                     _derefContract;        // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
     std::string                                     _movableContract;       // resolved name of the prelude `Movable` marker (implicit on every resource; `!Movable` subtracts it)
@@ -2031,6 +2036,8 @@ private:
     std::string resolveUserNameImpl(const std::string& value, SharedStringList qualifier);  // the search itself
     std::string resolveFuncImpl(const std::string& name, SharedStringList qualifier);       // the search itself
     std::string resolveModuleVar(const std::string& name, SharedStringList qualifier);      // module `static`/`comptime`
+    std::string resolveModuleVarImpl(const std::string& name, SharedStringList qualifier);
+    void noteHeaderConst(const std::string& key);            // a private `comptime` a header body reads
     bool moduleVarExported(ModuleVariableDeclaration* mv);   // does it publish any name? (header vs unit)
     bool isNamespace(const std::string& name) const;             // a known public namespace (or alias)
 

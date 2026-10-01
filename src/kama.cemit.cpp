@@ -3810,6 +3810,62 @@ bool CEmitter::moduleVarExported(ModuleVariableDeclaration* mv)
 // the *importing* file's scope, emitted an unqualified name, and failed in the C compiler.
 std::string CEmitter::resolveModuleVar(const std::string& name, SharedStringList qualifier)
 {
+    std::string key = resolveModuleVarImpl(name, qualifier);
+    if (_inHeaderPass && !key.empty() && _constStatics.count(key)) noteHeaderConst(key);
+    return key;
+}
+
+// A file-private `comptime` read from a body the shared HEADER holds. Every generic instance — a generic
+// type's methods, a generic fn — is emitted `static inline` in the header, ahead of every unit, while a
+// constant its file keeps private was defined only in that unit, AFTER its `#include` of the header. So
+// `public fn int32 limit() { return LIMIT; }` in a `type resource Box<T>` passed `kama check` and failed
+// clang with "use of undeclared identifier" (peer KTLS-1) — in a one-file program as much as across
+// packages, since `kama build` of one file writes the header region first too. Only a size position was
+// safe, because it folds to a literal; a read in an expression names the C object.
+//
+// The declaration moves into the header ON DEMAND: rendered the first time a header body resolves one of
+// its names, written ahead of the header's body region (emitHeaderContent), and skipped by its unit. That
+// keeps the rule emitHeaderContent states for a private constant — a 256-byte `comptime fn` table is not
+// copied into every translation unit of an MCU build — for every constant no generic body reads. A
+// `static const` copy per TU is right for an immutable value (see emitHeaderContent), and the C name is
+// file-mangled, so no other file can name it in C any more than in kama: the file rung still decides.
+void CEmitter::noteHeaderConst(const std::string& key)
+{
+    auto d = _moduleVarDecl.find(key);
+    auto f = _moduleVarFile.find(key);
+    if (d == _moduleVarDecl.end() || f == _moduleVarFile.end()) return;
+    auto* mv = dynamic_cast<ModuleVariableDeclaration*>(d->second.node);
+    if (!mv || _headerConstDecls.count(mv)) return;
+    const NsCtx* ctx = nullptr;
+    for (auto& kv : _unitCtx)
+        if (kv.second.unitPath == f->second) { ctx = &kv.second; break; }
+    if (!ctx) return;   // the prelude declares no module constants
+    // Listed before rendering, since an initializer naming a sibling constant re-enters here. An exported
+    // declaration is listed too and rendered by nobody: the header defines it already, and its unit skips it.
+    _headerConstDecls.insert(mv);
+    // Rendered as its own unit would: that file's scope (the C name is `qualify`'d), its diagnostics and
+    // `#line`, and no instantiation's type parameters — a `T` in the constant's type is the module's `T`.
+    NsCtx savedCtx = _nsCtx;
+    _nsCtx = *ctx;
+    auto savedSubst = std::move(_typeSubst);
+    _typeSubst.clear();
+    int savedLine = _curLine;
+    std::ostringstream text;
+    std::ostream* savedOut = _out;
+    _out = &text;
+    {
+        ScopedStr _edf(_emitDeclFile, f->second);
+        if (!moduleVarExported(mv)) emitModuleStaticDecl(mv);
+    }
+    _out = savedOut;
+    _curLine = savedLine;
+    _typeSubst = std::move(savedSubst);
+    _nsCtx = savedCtx;
+    _headerConstsText += text.str();
+}
+
+std::string CEmitter::resolveModuleVarImpl(const std::string& name, SharedStringList qualifier)
+{
     if (!qualifier || qualifier->empty()) {
         auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{CAP}` (or `as`)
         if (sa != _nsCtx.symbolAliases.end() && _moduleStatics.count(sa->second)) return sa->second;
@@ -36234,10 +36290,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // export list. The declaration is what a GENERIC type's bodies need: they are emitted `static inline`
     // in this header, before every unit, so a generic dtor counting into a module static was a clang
     // "use of undeclared identifier" while its non-generic twin built — see emitModuleStaticDecl.
-    // Only an EXPORTED constant comes here. A constant its own file keeps private is reachable from
+    // Only an EXPORTED constant comes here unasked. A constant its own file keeps private is reachable from
     // nowhere else (the file rung sees to that), so it stays in its unit — which matters for a
     // `comptime fn` table: a 256-byte `.rodata` aggregate has no business being copied into every
-    // translation unit of an MCU build to serve one file.
+    // translation unit of an MCU build to serve one file. The exception is one a GENERIC body reads: that
+    // body is in this header, so the constant is too, on demand — see noteHeaderConst.
     bool anyConst = false;
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList || u == _preludeUnit) continue;
@@ -36434,6 +36491,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     _out = headerOut;
     *_out << _intrinsicVtblsHeaderText;
+    *_out << _headerConstsText;   // the private constants a header body read — see noteHeaderConst
     *_out << headerBodies.str();
 }
 
@@ -36475,8 +36533,8 @@ static bool isConstInitExpr(ExpressionNode* e)
 // OTHER unit could not reach a file-private symbol at all. Nothing is copied — one definition, in the
 // declaring unit — so the rule against per-TU copies of mutable state (see emitHeaderContent) holds; the
 // C name is already file-mangled (`_Fgds__drops`), so two files' private `drops` cannot collide. A
-// `comptime` constant stays `static const` in its unit: an unexported one is folded to a literal
-// wherever it is read, and an exported one is defined in the header (emitHeaderContent).
+// `comptime` constant is `static const`, defined once per TU that reads it: an exported one, and a private
+// one a generic body reads, in the header (emitHeaderContent, noteHeaderConst); any other in its unit.
 //
 // The gates run in both passes; only the definition pass REPORTS, so a refused static is diagnosed once.
 void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly)
@@ -36612,9 +36670,11 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         std::ostream* svd = _out; _out = &moduleStatics;
         for (auto& decl : *unit->codeDeclarationList)
             if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get()))
-                if (!mv->isComptime || !moduleVarExported(mv)) emitModuleStaticDecl(mv);
+                if (!mv->isComptime || (!moduleVarExported(mv) && !_headerConstDecls.count(mv)))
+                    emitModuleStaticDecl(mv);
                     // an EXPORTED `comptime` is defined in the shared header instead, so that other
-                    // translation units can see it at all — see emitHeaderContent
+                    // translation units can see it at all — see emitHeaderContent — and so is a private one
+                    // a generic body reads, since that body is in the header (noteHeaderConst)
         _out = svd;
     }
     // vtable instances + interface vtables first (referenced by ctor bodies).
