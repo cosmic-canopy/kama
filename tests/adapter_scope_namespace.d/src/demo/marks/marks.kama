@@ -5,7 +5,7 @@ export { Marker, viaMarks };
 // by a conformance to the other.
 type contract Marker for value, intrinsic { fn int32 mark(); }
 
-type intrinsic <int32, int64> implements Marker {
+type adapter <int32, int64> implements Marker {
     public fn int32 mark() { return 11; }
 }
 

@@ -1200,7 +1200,7 @@ JSON
 cat > "$dc/lib/src/marklib.kama" <<'EOF'
 export { Marker, viaMarker };
 type contract Marker for value { fn int32 mark(); }
-type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } }
+type adapter <int32> implements Marker { public fn int32 mark() { return 1; } }
 fn int32 viaMarker<T: Marker>(ref T v) { return v.mark(); }
 EOF
 cat > "$dc/app/kama.json" <<JSON
@@ -1209,7 +1209,7 @@ cat > "$dc/app/kama.json" <<JSON
 JSON
 cat > "$dc/app/src/main.kama" <<'EOF'
 import { marklib::Marker, marklib::viaMarker };
-type intrinsic <int32> implements Marker { public fn int32 mark() { return 2; } }
+type adapter <int32> implements Marker { public fn int32 mark() { return 2; } }
 fn int32 main() { int32 x = 5; return viaMarker(v: ref x); }
 EOF
 "$KAMA" pkg install "$dc/app/kama.json" >/dev/null 2>&1
@@ -1226,8 +1226,8 @@ grep -q "$dc/app/kama.json" "$tmp/dup.out" \
 #      and the author can see both declarations.
 cat > "$dc/app/src/main.kama" <<'EOF'
 type contract Solo for value { fn int32 solo(); }
-type intrinsic <int32> implements Solo { public fn int32 solo() { return 1; } }
-type intrinsic <int32> implements Solo { public fn int32 solo() { return 2; } }
+type adapter <int32> implements Solo { public fn int32 solo() { return 1; } }
+type adapter <int32> implements Solo { public fn int32 solo() { return 2; } }
 fn int32 main() { return 0; }
 EOF
 if "$KAMA" run "$dc/app/kama.json" >"$tmp/dup2.out" 2>&1; then

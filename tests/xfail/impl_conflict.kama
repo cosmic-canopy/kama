@@ -1,7 +1,7 @@
 // Coherence: a type may not claim the SAME contract twice. Under the whole-program view the duplicate is
 // directly visible, so kama needs no orphan rule to forbid it in advance — the claim is simply rejected
-// where it is written. The same check guards the enum and `type intrinsic` spellings
-// (tests/xfail/intrinsic_dup.kama); this is the class arm.
+// where it is written. The same check guards the enum and `type adapter` spellings
+// (tests/xfail/adapter_dup.kama); this is the class arm.
 type contract Weighable for value { fn int32 weight(); }
 
 type value Widget implements Weighable, Weighable {

@@ -320,7 +320,7 @@ struct kamayystype {
   SharedExpressionList expressionlist;
   SharedEnumMemberDeclarationList enummemberdecllist;
   SharedEnumBody enumbody;   // an enum body's two lists (variants + post-`;` class members)
-  SharedIntrinsicBody intrinsicbody;   // a `type intrinsic` body (shared members + per-target sections)
+  SharedIntrinsicBody intrinsicbody;   // a `type adapter` body (shared members + per-target sections)
   SharedIdentifierList intrinsictargets;   // the primitive set in `<int8, int16, …>`
   SharedFunctionDeclarationList functiondecllist;
   SharedClassMemberDeclarationList classmemberdecllist;
@@ -404,7 +404,7 @@ struct kamayystype {
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 /* The two PLATFORM-VARYING integral types (`ptrdiff_t`/`size_t`). Reserved words like every other
-   primitive, which is what lets them appear in a `type intrinsic <…>` conformance list — see the note on
+   primitive, which is what lets them appear in a `type adapter <…>` conformance list — see the note on
    `marked_intrinsic_declaration`, whose legal target set falls out of every target's first token being
    reserved. They were plain IDENTIFIERs until 0.9.136, and every `switch` over a builtin type missed them. */
 %token <string> ISIZE USIZE
@@ -913,13 +913,13 @@ marked_type_declaration
            $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $5, $6, $7, $8, $9); }
   ;
 
-/* `type intrinsic <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
+/* `type adapter <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
    PRIMITIVE. The kind word stays a positional bare IDENTIFIER (the emitter checks it is `intrinsic`), so
    `intrinsic` is never reserved and `int32 intrinsic = 1;` keeps working.
 
    NO CONFLICT with `marked_type_declaration`, even though both begin `TYPE modifiers_opt IDENTIFIER`: its
    `type_decl_head` continues with the NAME, an IDENTIFIER, while this one continues with `<`. One token of
-   lookahead separates them, and `type intrinsic <…>` was a parse error before, which is what left the slot
+   lookahead separates them, and `type adapter <…>` was a parse error before, which is what left the slot
    free. The target list is `simple_type` — every one of its first tokens (INT8…UINT64, FLOAT32, FLOAT64,
    BOOL, CHAR, STRING) is RESERVED, so it cannot collide with an IDENTIFIER either. That is also why the
    legal target set is exactly the primitives: it falls out of the grammar rather than being checked.

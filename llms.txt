@@ -16,8 +16,8 @@ examples read the test fixtures.
   six type kinds (`value`/`resource`/`view`/`enum`/`contract`/`intrinsic`), generics, sum types + `match`, operators,
   smart pointers, collections, concurrency, FFI, build/debug. Start here for semantics.
 - [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
-  `resource` moves, `view` borrows, `enum` is a sum type, `contract` is the guarantee, `intrinsic`
-  gives a built-in a contract; the `type` marker + access-control rules.
+  `resource` moves, `view` borrows, `enum` is a sum type, `contract` is the guarantee, `intrinsic` is
+  the built-ins' kind, and `type adapter` gives a built-in a contract; the `type` marker + access-control rules.
 - [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `src/kama.y` by
   `tools/gen-grammar`.
 - [Keyword reference](docs/KEYWORDS.md): every reserved word and what it does.
@@ -60,8 +60,8 @@ examples read the test fixtures.
 ## Status
 The **language feature set is complete** (see `VERSION`; on the road to 1.0). Implemented:
 functions, primitives, control flow, named-parameter calls, `ref`/`out`; the **ownership type
-model** (every type declares one of six kinds: `type value` / `resource` / `view` / `enum` /
-`contract` / `intrinsic`); **RAII**
+model** (every type declares one of five kinds: `type value` / `resource` / `view` / `enum` /
+`contract`; the built-ins are the sixth, `intrinsic`, and gain contracts through `type adapter`); **RAII**
 destruction (no GC); single inheritance + **virtual dispatch**; **contracts** (interfaces via
 fat-pointer vtables); **enums and tagged unions** with value-producing, exhaustive **`match`**
 (there is no `switch`); **`Optional<T>`/`Result<T,E>`** as the no-exceptions, no-`null` error

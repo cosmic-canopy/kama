@@ -1,5 +1,5 @@
 // A contract decorates a primitive WITHIN THE SCOPE OF THAT CONTRACT — the method is not part of the
-// primitive's own API. Without this rule, any package declaring `type intrinsic <int32> implements
+// primitive's own API. Without this rule, any package declaring `type adapter <int32> implements
 // Weighable { … }` would put `.weight()` on every `int32` in the program, including in code that has
 // never heard of that package.
 //

@@ -6,7 +6,7 @@ export { Marker, viaSigns };
 // that the CONTRACTS are distinct, not that their methods are namespaced.
 type contract Marker for value, intrinsic { fn int32 sign(); }
 
-type intrinsic <int32> implements Marker {
+type adapter <int32> implements Marker {
     public fn int32 sign() { return 29; }
 }
 

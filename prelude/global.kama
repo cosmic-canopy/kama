@@ -156,7 +156,7 @@ type contract Error for value, resource, enum { const fn string message(); }
 // distributed accumulator — a string has no meaningful un-mixed scalar; the Map's finalizer re-mixes it
 // harmlessly, splitmix being a bijection); its `Equatable` comes free from the built-in `equals`.
 //
-// A primitive declares conformance the same way every other kind does: `type intrinsic <targets>
+// A primitive declares conformance the same way every other kind does: `type adapter <targets>
 // implements C`. The set form is what makes these ONE declaration each — `ref This other` is the target
 // being decorated, so a body that is genuinely identical across widths is written once.
 // `string`'s `equals` is NATIVE — the compiler supplies it — so the conformance is a declaration and
@@ -164,8 +164,8 @@ type contract Error for value, resource, enum { const fn string message(); }
 // type's method map, which already holds `equals`. Until this line existed the compiler had to assert this
 // conformance on `string`'s behalf inside `registerCollection`, because an intrinsic had no way to say
 // `implements`. That was the last conformance in the language a type did not declare for itself.
-type intrinsic <string> implements Equatable<This> { }
-type intrinsic <string> implements Hashable {
+type adapter <string> implements Equatable<This> { }
+type adapter <string> implements Hashable {
     public const fn uint64 hash() {
         uint64 h = 2166136261ui64;
         isize i = 0;
@@ -188,29 +188,29 @@ type intrinsic <string> implements Hashable {
 // The `Map`'s `Hasher::finish` supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to
 // consecutive slots, which open addressing handles fine, and `FastHasher` can be selected to skip
 // splitmix entirely for such keys.
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }
 }
 // Every scalar and `string` may cross an isolate boundary: a scalar has no interior to share, and a
 // `string` is an owned buffer that moves whole. Declared, like every other conformance a primitive has,
 // so `Channel<int32>` satisfies `T: Sendable` through the same table as `Map<string, V>` satisfies
 // `K: Hashable` — nothing is sendable by compiler fiat.
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, bool, char, float32, float64>
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, bool, char, float32, float64>
     implements Sendable { }
-type intrinsic <string> implements Sendable { }
+type adapter <string> implements Sendable { }
 // Floats join the `Equatable` set (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
 // `DynamicArray<float*>.contains` work — but they are NOT `Hashable`: float hash keys are a footgun
 // (NaN != NaN, ±0.0), and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add
 // on demand if ever needed via a bit-cast helper. `string` is absent for the opposite reason — its
 // `Equatable` comes free from the built-in `equals`.
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64>
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64>
     implements Equatable<This> {
     public const fn bool equals(const ref This other) { return this == other; }
 }
 // `Comparable` (pure-kama, NO compiler blessing) — every int/float is totally ordered via a three-way
 // `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes (unsigned
 // `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Comparable<This> {
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Comparable<This> {
     public const fn Ordering compareTo(const ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
@@ -225,7 +225,7 @@ type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize,
 // meet: a float is deliberately NOT `Hashable`, so the sorted containers (compareTo) and the hashed ones
 // (hash + equals) never see the same key type. Raw `a < b` on two floats is untouched — an all-primitive
 // comparison keeps the built-in C operator and never routes through `compareTo`.
-type intrinsic <float32, float64> implements Comparable<This> {
+type adapter <float32, float64> implements Comparable<This> {
     public const fn Ordering compareTo(const ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
@@ -234,7 +234,7 @@ type intrinsic <float32, float64> implements Comparable<This> {
         return Ordering::Equal;
     }
 }
-type intrinsic <string> implements Comparable<This> {
+type adapter <string> implements Comparable<This> {
     public const fn Ordering compareTo(const ref This other) {
         isize n = this.length();
         isize m = other.length();
@@ -460,34 +460,34 @@ type contract Deserializable<T is This> for value, resource, enum, intrinsic {
 // meant. There is no attribute for this and no need of one: the absence of a conformance IS the gate, and
 // `@generate` now reports it as a kama error naming the field — before 0.9.136 it silently emitted a call
 // to an `isize__serialize` that does not exist and left the failure to the C compiler.
-type intrinsic <int8>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <int16>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <int32>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <int64>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <uint8>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <uint16>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <uint32>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <uint64>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <float32> implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <float64> implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <bool>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <char>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeChar(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-type intrinsic <string>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <int8>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <int16>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <int32>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <int64>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <uint8>   implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <uint16>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <uint32>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <uint64>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <float32> implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <float64> implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <bool>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <char>    implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeChar(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type adapter <string>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
 // `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
-type intrinsic <int8>    implements Deserializable<This>  { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <int16>   implements Deserializable<This>  { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <int32>   implements Deserializable<This>  { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <int64>   implements Deserializable<This>  { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <uint8>   implements Deserializable<This>  { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <uint16>  implements Deserializable<This>  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <uint32>  implements Deserializable<This>  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <uint64>  implements Deserializable<This>  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <float32> implements Deserializable<This>  { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <float64> implements Deserializable<This>  { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <bool>    implements Deserializable<This>  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <char>    implements Deserializable<This>  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type intrinsic <string>  implements Deserializable<This>  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
+type adapter <int8>    implements Deserializable<This>  { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <int16>   implements Deserializable<This>  { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <int32>   implements Deserializable<This>  { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <int64>   implements Deserializable<This>  { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <uint8>   implements Deserializable<This>  { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <uint16>  implements Deserializable<This>  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <uint32>  implements Deserializable<This>  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <uint64>  implements Deserializable<This>  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <float32> implements Deserializable<This>  { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <float64> implements Deserializable<This>  { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <bool>    implements Deserializable<This>  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <char>    implements Deserializable<This>  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type adapter <string>  implements Deserializable<This>  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
@@ -668,17 +668,17 @@ type resource Formatter {
 // Every other target names a different writer, so it is its own block; see the Serializable note below.
 // `char` renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an
 // interpolation hole, so the two agree whether the value arrives directly or through a `<T: Formattable>` bound.
-type intrinsic <int8, int16, int32, int64, isize> implements Formattable {
+type adapter <int8, int16, int32, int64, isize> implements Formattable {
     public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); }
 }
-type intrinsic <uint8, uint16, uint32, uint64, usize> implements Formattable {
+type adapter <uint8, uint16, uint32, uint64, usize> implements Formattable {
     public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); }
 }
-type intrinsic <float32> implements Formattable { public const fn void format(ref Formatter f) { f.writeF32(v: this); } }
-type intrinsic <float64> implements Formattable { public const fn void format(ref Formatter f) { f.writeF64(v: this); } }
-type intrinsic <bool>    implements Formattable { public const fn void format(ref Formatter f) { f.writeBool(v: this); } }
-type intrinsic <char>    implements Formattable { public const fn void format(ref Formatter f) { f.writeChar(c: this); } }
-type intrinsic <string>  implements Formattable { public const fn void format(ref Formatter f) { f.writeStr(s: this); } }
+type adapter <float32> implements Formattable { public const fn void format(ref Formatter f) { f.writeF32(v: this); } }
+type adapter <float64> implements Formattable { public const fn void format(ref Formatter f) { f.writeF64(v: this); } }
+type adapter <bool>    implements Formattable { public const fn void format(ref Formatter f) { f.writeBool(v: this); } }
+type adapter <char>    implements Formattable { public const fn void format(ref Formatter f) { f.writeChar(c: this); } }
+type adapter <string>  implements Formattable { public const fn void format(ref Formatter f) { f.writeStr(s: this); } }
 
 // A tagged string `html"…${x}…"` hands its trusted literal PARTS and its rendered HOLE values to a tag
 // function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts

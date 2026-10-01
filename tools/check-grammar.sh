@@ -5,7 +5,7 @@
 # grammar.bnf's own banner says it is generated from src/kama.y and must be regenerated after any
 # grammar change. Nothing enforced that, and it drifted: the committed file still documented
 # `implements C for T` (retroactive contract conformance, DELETED in contract-model campaign 1) and had
-# never heard of `type intrinsic <…> implements C`, which replaced it. So the file the spec calls
+# never heard of `type adapter <…> implements C`, which replaced it. So the file the spec calls
 # authoritative described a construct the compiler rejects, and omitted the one it accepts.
 #
 # That is the worst failure mode a generated file has: it stays plausible. Nobody re-reads a BNF they

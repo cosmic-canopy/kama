@@ -84,7 +84,7 @@ it is the first thing you write:
 | `type view` | Borrows someone else's data | Stack-only, cannot be stored | <!-- xfail: view_field -->
 | `type contract` | A guarantee other types implement | — |
 | `type enum` | One of a closed set of variants, each able to carry fields | Copies, or moves if a variant holds a resource |
-| `type intrinsic` | Gives a built-in type (`int32`, `string`, …) a contract's methods | — |
+| `type adapter` | Gives a built-in type (`int32`, `string`, …) a contract's methods | — |
 
 The first three hold data, `contract` states a guarantee, `enum` is a sum type (see [Enums and
 `match`](#enums-and-match)), and `intrinsic` is how the primitives join the same system (see
@@ -288,12 +288,12 @@ fn int64 measure(Shape sh) { return sh.area(); }   // dynamic dispatch through a
 
 Every kind declares conformance the same way, including the two that are easy to forget are kinds. An
 `enum` takes the clause inline (`BufferErr` above), and a primitive declares its own through
-`type intrinsic` — one block can serve a whole set of widths, which is how the prelude gives `int32` and
+`type adapter` — one block can serve a whole set of widths, which is how the prelude gives `int32` and
 `string` their behavioral contracts in kama rather than hard-coding them in the compiler. This is the
 prelude's own `Hashable` for the integers:
 
 ```kama fragment
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }     // ONE body for ten widths
 }
 ```

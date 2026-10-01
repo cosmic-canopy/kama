@@ -151,7 +151,7 @@ struct EnumBody {
 };
 typedef std::shared_ptr<EnumBody> SharedEnumBody;
 
-// One `<int8, int16> { … }` SPECIALIZATION SECTION inside a `type intrinsic` block: the members it
+// One `<int8, int16> { … }` SPECIALIZATION SECTION inside a `type adapter` block: the members it
 // carries replace the block's shared bodies, for those targets only. What it serves is a contract whose
 // body genuinely cannot be shared across the set — `sqrt` needs `sqrtf` for float32 and `sqrt` for
 // float64, and kama has no in-body type branching by design.
@@ -163,7 +163,7 @@ typedef std::shared_ptr<IntrinsicSection> SharedIntrinsicSection;
 typedef std::vector<SharedIntrinsicSection> IntrinsicSectionList;
 typedef std::shared_ptr<IntrinsicSectionList> SharedIntrinsicSectionList;
 
-// A `type intrinsic` body: bodies shared by every target in the set, plus any per-target sections.
+// A `type adapter` body: bodies shared by every target in the set, plus any per-target sections.
 struct IntrinsicBody {
     SharedClassMemberDeclarationList members;
     SharedIntrinsicSectionList      sections;

@@ -746,7 +746,7 @@ void CEmitter::buildDefSites()
 // `speak`, the name genuinely has to move in all three places at once.
 //
 // Derived from the tables rather than from the conformance loops in collectProgram, so the emission path
-// is untouched and both a type's own `implements` clause and a `type intrinsic` block's conformance are
+// is untouched and both a type's own `implements` clause and a `type adapter` block's conformance are
 // covered at once (an injected conformance pushes onto `ci.interfaces` too).
 void CEmitter::buildRenameGroups()
 {
@@ -1687,7 +1687,7 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
             takeBounds(cd->typeParams, cd->typeBounds);
             members = cd->members.get();
         } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(d.get())) {
-            // `type intrinsic <T1, T2> implements C { … <T1> { … } … }`. The enclosing type has no
+            // `type adapter <T1, T2> implements C { … <T1> { … } … }`. The enclosing type has no
             // ClassDeclarationNode here at all, and the block has N targets but only ONE source span, so
             // the key is the FIRST target by definition — there is no cursor position that could pick
             // between them. (Every scalar target keys to "".)
@@ -2332,7 +2332,7 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
         out.push_back(CompletionItem{ nm, CompletionKind::Constant, spellTypeIn(key, kv.second.type), key });
     }
     // Static methods and named constructors. A primitive or intrinsic-collection head carries its statics
-    // through a `type intrinsic` conformance, which lives in a different table.
+    // through a `type adapter` conformance, which lives in a different table.
     if (_classes.count(key)) addMembers(key, /*wantStatic*/ true, qc, out);
     else if (ClassInfo* rt = implTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
 }

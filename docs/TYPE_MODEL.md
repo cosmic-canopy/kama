@@ -1,15 +1,18 @@
 # kama type model — `value` / `resource` / `view` / `enum` / `contract` / `intrinsic`
 
-Every type declaration is introduced by a `type` marker, followed by one of **six** kind words
-(`type value` / `type resource` / `type view` / `type enum` / `type contract` / `type intrinsic`); the
-vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
+Every type declaration is introduced by a `type` marker, followed by one of **five** kind words
+(`type value` / `type resource` / `type view` / `type enum` / `type contract`); the sixth kind,
+`intrinsic`, is the built-ins, which are declared by the language and named in a contract's `for` list. A
+**`type adapter`** block gives a built-in a contract. The vocabulary + access-control rules below are
+enforced by the compiler. This doc is the durable rationale
 — see also [GOALS.md §3c](GOALS.md).
 
 ## The `type` marker
 
 Every type declaration begins with **`type`**, followed by a *kind* — exactly parallel to `fn` on every
 function. This makes declarations greppable and self-describing (`grep -n '^type '`). The kind words
-`value` / `resource` / `view` / `contract` / `intrinsic` appear *only* right after `type`, so they are
+`value` / `resource` / `view` / `contract` / `adapter` appear *only* right after `type` (and `intrinsic` only
+in a contract's `for` list), so they are
 **contextual, not reserved** — they stay ordinary identifiers everywhere else (`int32 value = 5;`, a field
 or method named `resource`, etc.). `type` itself is contextual too: it leads a declaration only where one
 can begin, and may name a field or a local (C headers name fields `type`). The exceptions are `enum`,
@@ -22,7 +25,7 @@ type resource Name  { … }            // owns / has identity — moves, RAII-dr
 type view Name      { … }            // borrows a range it doesn't own — a stack-only slice/span
 type contract Name for value { … }   // a public-only guarantee (an interface)
 type enum Name      { … }            // one of a closed set of variants — a sum type
-type intrinsic <int32> implements C { … }   // gives a built-in type a contract's methods
+type adapter <int32> implements C { … }   // gives a built-in type a contract's methods
 ```
 
 ## Why reframe
@@ -42,17 +45,17 @@ kama makes ownership the **declared nature** of a type, so the designer picks th
 | **`view`** | nothing — *borrows* a range | **copy** (a borrow; stack-only, can't escape) | contracts only |
 | **`contract`** | — (a public-only guarantee, no state) | — | *is* the polymorphism / substitutability lever |
 | **`enum`** | nothing, beyond its variant payloads | **copy** (or move, if a payload owns) | contracts, via a tag-dispatched vtable |
-| **`intrinsic`** | — (declares no new type) | — (the primitive's own) | how a **built-in** satisfies a contract |
+| **`intrinsic`** | — (the built-ins: numbers, `bool`, `char`, `string`) | — (the primitive's own) | contracts, through a `type adapter` |
 
 These are the *nature* nouns. `virtual` / `abstract` / `final` are **qualifiers** (below), not kinds.
 
-`intrinsic` is the odd one and belongs here anyway: it is the kind a **primitive** is. It declares
-nothing new — it decorates existing built-in types with a contract's methods, one block covering a whole
-set of widths (`type intrinsic <int8, int16, int32, int64> implements Hashable { … }`). You write one
-only to give a built-in a conformance; you *name* it constantly, because every contract's mandatory
-`for` clause lists the kinds allowed to implement it, and primitives are spelled `intrinsic` there:
+`intrinsic` is the odd one and belongs here anyway: it is the kind a **primitive** is, and nobody
+declares one. A built-in gains a contract's methods through a `type adapter` block, one block covering a
+whole set of widths (`type adapter <int8, int16, int32, int64> implements Hashable { … }`). You *name*
+the kind constantly, because every contract's mandatory `for` clause lists the kinds allowed to implement
+it, and primitives are spelled `intrinsic` there:
 `type contract Hashable for value, resource, enum, intrinsic`. See [SPEC.md](SPEC.md)
-§ *`type intrinsic`*.
+§ *`type adapter`*.
 
 ### `value` — owns nothing, copied
 
@@ -190,12 +193,12 @@ type enum Shape implements Error {
 
 ### `intrinsic` — how a built-in joins the model
 
-`int32`, `float64`, `bool`, `char` and `string` are built in; `intrinsic` is the kind that lets kama code
-give them contracts, so no conformance is hard-coded in the compiler. It declares no type and no state —
-only methods — and one block covers a whole set of targets:
+`int32`, `float64`, `bool`, `char` and `string` are built in, and `intrinsic` is their kind. A `type
+adapter` block is how kama code gives them contracts, so no conformance is hard-coded in the compiler. It
+declares no type and no state — only methods — and one block covers a whole set of targets:
 
 ```kama fragment
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }     // the prelude's own
 }
 ```

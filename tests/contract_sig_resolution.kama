@@ -2,7 +2,7 @@
 // type — so every spelling that means the same type must compare EQUAL. Each pair here is a correct
 // conformance that a naive comparison would reject:
 //
-//   * a namespaced `type intrinsic` block, whose target is a primitive with no namespace context of its
+//   * a namespaced `type adapter` block, whose target is a primitive with no namespace context of its
 //     own (this one WAS rejected during development — the contract's `M::Wrapped` was compared against
 //     the implementation's bare `Wrapped`);
 //   * a generic contract implemented at a concrete argument (`Boxed<int32>` supplying `int32`, where the
@@ -16,7 +16,7 @@
 type value Wrapped { public int32 v; public ctor of(int32 v) { this.v = v; } }
 
 type contract Boxer for intrinsic { fn Wrapped boxed(); }
-type intrinsic <int32> implements Boxer { public fn Wrapped boxed() { return Wrapped.of(v: this); } }
+type adapter <int32> implements Boxer { public fn Wrapped boxed() { return Wrapped.of(v: this); } }
 
 type contract Get<T> for value { const fn T get(); }
 type value Cell implements Get<int32> {

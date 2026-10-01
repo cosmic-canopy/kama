@@ -9,7 +9,7 @@
 // kama has no overloading, so the usual answers are unavailable: C suffixes every float32 entry point
 // (`sqrtf`), Go and Java ship one width and make you convert, C# adds a whole second class (`MathF`).
 // kama's own mechanism for "this fixed set of types, each with its own body" is a CONTRACT with a
-// `type intrinsic` conformance per type — the same way `Comparable` reaches every primitive. So each
+// `type adapter` conformance per type — the same way `Comparable` reaches every primitive. So each
 // operation is one generic free function over `Real`, and the per-width libm call lives in the blocks
 // below. They stay ONE TARGET EACH: `sqrt` needs `kama_sqrtf` for float32 and `kama_sqrt` for float64, and
 // a shared body cannot call a different function per target — which is exactly the un-shareable case.
@@ -70,7 +70,7 @@ type contract Real<T is This> for value, intrinsic {
     const fn T pow(T y);  const fn T fmod(T y);  const fn T atan2(T x);  const fn T hypot(T y);
 }
 
-type intrinsic <float64> implements Real<This> {
+type adapter <float64> implements Real<This> {
     public unsafe const fn float64 sqrt()  { return kama_sqrt(x: this); }
     public unsafe const fn float64 cbrt()  { return kama_cbrt(x: this); }
     public unsafe const fn float64 sin()   { return kama_sin(x: this); }
@@ -94,7 +94,7 @@ type intrinsic <float64> implements Real<This> {
     public unsafe const fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
 }
 
-type intrinsic <float32> implements Real<This> {
+type adapter <float32> implements Real<This> {
     public unsafe const fn float32 sqrt()  { return kama_sqrtf(x: this); }
     public unsafe const fn float32 cbrt()  { return kama_cbrtf(x: this); }
     public unsafe const fn float32 sin()   { return kama_sinf(x: this); }

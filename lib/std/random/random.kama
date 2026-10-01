@@ -168,70 +168,70 @@ fn float32 betweenF32(ref Rng rng, float32 lo, float32 hi) {
 
 // ---------------------------------------------------------------------------------------------------
 // `range` — one generic spelling over every numeric width, the `parse::<T>` mechanism: a marker
-// contract with a pinned self type, and one `type intrinsic` conformance per width supplying the
+// contract with a pinned self type, and one `type adapter` conformance per width supplying the
 // constructor `range` calls. Each block casts through the 64-bit funnel above; the cast back can never
 // trap because the draw lies inside `[lo, hi)`, which fits the width by construction.
 // ---------------------------------------------------------------------------------------------------
 
 type contract Ranged<T is This> for intrinsic { ctor T between(ref Rng rng, T lo, T hi); }
 
-type intrinsic <int8> implements Ranged<This> {
+type adapter <int8> implements Ranged<This> {
     public ctor int8 between(ref Rng rng, int8 lo, int8 hi) {
         return cast<int8>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
     }
 }
-type intrinsic <int16> implements Ranged<This> {
+type adapter <int16> implements Ranged<This> {
     public ctor int16 between(ref Rng rng, int16 lo, int16 hi) {
         return cast<int16>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
     }
 }
-type intrinsic <int32> implements Ranged<This> {
+type adapter <int32> implements Ranged<This> {
     public ctor int32 between(ref Rng rng, int32 lo, int32 hi) {
         return cast<int32>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
     }
 }
-type intrinsic <int64> implements Ranged<This> {
+type adapter <int64> implements Ranged<This> {
     public ctor int64 between(ref Rng rng, int64 lo, int64 hi) {
         return betweenI64(rng: rng, lo: lo, hi: hi);
     }
 }
 // `isize`/`usize` vary in width per target, so their bodies compute at 64 bits and narrow last.
-type intrinsic <isize> implements Ranged<This> {
+type adapter <isize> implements Ranged<This> {
     public ctor isize between(ref Rng rng, isize lo, isize hi) {
         return cast<isize>(betweenI64(rng: rng, lo: cast<int64>(lo), hi: cast<int64>(hi)));
     }
 }
-type intrinsic <uint8> implements Ranged<This> {
+type adapter <uint8> implements Ranged<This> {
     public ctor uint8 between(ref Rng rng, uint8 lo, uint8 hi) {
         return cast<uint8>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
     }
 }
-type intrinsic <uint16> implements Ranged<This> {
+type adapter <uint16> implements Ranged<This> {
     public ctor uint16 between(ref Rng rng, uint16 lo, uint16 hi) {
         return cast<uint16>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
     }
 }
-type intrinsic <uint32> implements Ranged<This> {
+type adapter <uint32> implements Ranged<This> {
     public ctor uint32 between(ref Rng rng, uint32 lo, uint32 hi) {
         return cast<uint32>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
     }
 }
-type intrinsic <uint64> implements Ranged<This> {
+type adapter <uint64> implements Ranged<This> {
     public ctor uint64 between(ref Rng rng, uint64 lo, uint64 hi) {
         return betweenU64(rng: rng, lo: lo, hi: hi);
     }
 }
-type intrinsic <usize> implements Ranged<This> {
+type adapter <usize> implements Ranged<This> {
     public ctor usize between(ref Rng rng, usize lo, usize hi) {
         return cast<usize>(betweenU64(rng: rng, lo: cast<uint64>(lo), hi: cast<uint64>(hi)));
     }
 }
-type intrinsic <float64> implements Ranged<This> {
+type adapter <float64> implements Ranged<This> {
     public ctor float64 between(ref Rng rng, float64 lo, float64 hi) {
         return betweenF64(rng: rng, lo: lo, hi: hi);
     }
 }
-type intrinsic <float32> implements Ranged<This> {
+type adapter <float32> implements Ranged<This> {
     public ctor float32 between(ref Rng rng, float32 lo, float32 hi) {
         return betweenF32(rng: rng, lo: lo, hi: hi);
     }

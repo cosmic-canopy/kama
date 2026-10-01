@@ -57,7 +57,7 @@ the browser as WebAssembly.
   explicit, greppable `unsafe fn` at the C/FFI seam.
 - **Ownership is the type axis.** Every type declares its kind: `type value` (owns nothing,
   copies), `type resource` (owns or has identity, moves), `type view` (borrows, stack-only),
-  `type enum` (a sum type), `type contract` (an interface), or `type intrinsic` (gives a built-in
+  `type enum` (a sum type), `type contract` (an interface), or `type adapter` (gives a built-in
   a contract). One greppable `type` marker, parallel to `fn`.
 - **Opt-in, compile-time serialization.** `@generate(Serializable, Deserializable)` and a mark on
   every field — JSON and three binary formats, object graphs included, no runtime reflection.

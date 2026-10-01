@@ -343,13 +343,13 @@ marked_type_declaration
 
   ;
 
-/* `type intrinsic <int8, int16, …> implements C ` — conformance for a
+/* `type adapter <int8, int16, …> implements C ` — conformance for a
    PRIMITIVE. The kind word stays a positional bare IDENTIFIER (the emitter checks it is `intrinsic`), so
    `intrinsic` is never reserved and `int32 intrinsic = 1;` keeps working.
 
    NO CONFLICT with `marked_type_declaration`, even though both begin `TYPE modifiers_opt IDENTIFIER`: its
    `type_decl_head` continues with the NAME, an IDENTIFIER, while this one continues with `<`. One token of
-   lookahead separates them, and `type intrinsic <…>` was a parse error before, which is what left the slot
+   lookahead separates them, and `type adapter <…>` was a parse error before, which is what left the slot
    free. The target list is `simple_type` — every one of its first tokens (INT8…UINT64, FLOAT32, FLOAT64,
    BOOL, CHAR, STRING) is RESERVED, so it cannot collide with an IDENTIFIER either. That is also why the
    legal target set is exactly the primitives: it falls out of the grammar rather than being checked.

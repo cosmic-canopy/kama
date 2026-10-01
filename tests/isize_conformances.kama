@@ -1,7 +1,7 @@
 // `isize`/`usize` carry the four VALUE contracts — `Formattable`, `Hashable`, `Equatable`, `Comparable`.
 //
 // They carried none of them before 0.9.136, and not by choice: they were primitives spelled as plain
-// names, carrying no `builtInVal`, so they could not be named in a `type intrinsic <…>` target list at
+// names, carrying no `builtInVal`, so they could not be named in a `type adapter <…>` target list at
 // all. That made the size type — what every `length()`, `count()` and index is — the one type that could
 // not be interpolated, be a `Map` key, be `contains`-searched or be sorted. Reported as "cannot be
 // string-interpolated", which was the smallest of the symptoms.

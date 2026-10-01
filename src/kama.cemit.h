@@ -213,7 +213,7 @@ struct VariantCase {
 // marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their own
 // machinery (isIntrinsicColl/isSmartPtr/isVariant + destructibility), not the kind.
 //
-// NOTE `Neutral` is unrelated to the `type intrinsic <…> implements C` SURFACE syntax, which confers
+// NOTE `Neutral` is unrelated to the `type adapter <…> implements C` SURFACE syntax, which confers
 // a contract on a primitive and creates no ClassInfo in `_classes` at all. It was spelled `Intrinsic`
 // until that syntax existed; the two never named the same concept.
 enum class TypeKind { Value, Resource, Contract, Neutral };
@@ -251,7 +251,7 @@ struct MethodInfo {
     // The contract this method came from, empty for a method declared in the type's OWN body. It is what
     // separates an injected method from a native one sharing a ClassInfo — `string` carries an injected
     // `compareTo` beside its built-in `equals` — which is the discriminator the contract-scope rule needs,
-    // and the one that says "supplied by a `type intrinsic` block", so the impl passes emit it rather than
+    // and the one that says "supplied by a `type adapter` block", so the impl passes emit it rather than
     // the per-class proto/body loops.
     std::string                  fromContract;
     // Compiler-synthesized by-value serialization (a `@generate` tree struct with no hand impl). `node` is
@@ -521,7 +521,7 @@ struct ClassInfo {
 
     // Contracts
     std::vector<std::string>          interfaces;            // implemented contract names
-    // Contracts supplied by a `type intrinsic <…> implements C { … }` block (a subset of `interfaces`).
+    // Contracts supplied by a `type adapter <…> implements C { … }` block (a subset of `interfaces`).
     // These dispatch statically/monomorphized through the injected methods, so they get NO fat-pointer
     // interface vtable (a primitive target can't be boxed as one) — skipped in vtable emission.
     std::vector<std::string>          staticOnlyInterfaces;
@@ -539,7 +539,7 @@ struct ClassInfo {
     // at every consumer's use site. Never emitted: the probe erases it before anything can read it as a
     // real type (see probeSandboxEnd).
     bool                              isOpaqueParam = false;
-    // A synthetic ClassInfo for a PRIMITIVE target of `type intrinsic <int32> implements C` — it carries
+    // A synthetic ClassInfo for a PRIMITIVE target of `type adapter <int32> implements C` — it carries
     // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
     // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
     bool                              isScalarRecv = false;
@@ -1490,7 +1490,7 @@ private:
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
     std::set<std::pair<std::string,std::string>> _overriddenSlots;  // (vtableRoot, slot) overridden somewhere -> keep dynamic
 
-    // Contract conformances of a PRIMITIVE (`type intrinsic <int32> implements Hashable`). Kept OUT of
+    // Contract conformances of a PRIMITIVE (`type adapter <int32> implements Hashable`). Kept OUT of
     // `_classes` (an entry there would make every "user type?" test treat the primitive as a struct).
     // Keyed by `primKey` — the KAMA type name (`int32`, `char`), NOT the cType: `cType` is not injective,
     // and `char` and `uint32` both emit `uint32_t`. The ClassInfo's `name` is still the C type, because it
@@ -1518,7 +1518,7 @@ private:
     std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
     std::function<std::string(const std::string&)> _moduleResolver;
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
-    // Pre-scanned conformances: target `primKey` -> the contracts a `type intrinsic` block grants it.
+    // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
     // themselves are injected later in applyIntrinsicImpl, which also validates completeness/coherence.
@@ -2192,7 +2192,7 @@ private:
     void collectClasses(SharedCompilationUnit unit);
 
     // Contract-conformance plumbing, shared by every path that grants a type a contract —
-    // `type enum X implements C` and `type intrinsic <…> implements C`. That sharing is the whole reason
+    // `type enum X implements C` and `type adapter <…> implements C`. That sharing is the whole reason
     // they are functions rather than an inline loop in `collectProgram`.
     //
     // A recorded conformance dispatches STATICALLY (it lands in `staticOnlyInterfaces`, so no fat-pointer
@@ -2202,7 +2202,7 @@ private:
     // linkContracts() (needs contractMethods) and buildVtables().
     void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
 
-    // `type intrinsic <…> implements C { … }` — contract conformance for a PRIMITIVE.
+    // `type adapter <…> implements C { … }` — contract conformance for a PRIMITIVE.
     SharedIdentifier intrinsicContract(IntrinsicImplNode* n) const;   // the one declared contract, or null
     // The members that serve ONE target: the block's shared bodies, with any `<…> { … }` section that
     // names this target overriding them method-for-method.
@@ -2212,7 +2212,7 @@ private:
     // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
     // genuinely come from different packages.
     std::string duplicateOriginNote(const std::string& tkey, const std::string& contract);
-    // One (target, members) pair per thing an impl block contributes — a `type intrinsic` set gives one
+    // One (target, members) pair per thing an impl block contributes — a `type adapter` set gives one
     // per target. The three emission passes (prototypes, prelude bodies,
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
     struct ImplEmit { ClassInfo* target; SharedClassMemberDeclarationList members; };

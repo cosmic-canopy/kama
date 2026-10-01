@@ -96,10 +96,10 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
    everywhere else. **`type enum`** is the fifth kind — a plain variant set or a tagged union — and takes
    the same `implements` clause as the rest; `enum` is the one kind word that is a reserved keyword,
-   because it predates the marker. **`type intrinsic`** is the sixth — the kind a *primitive* is, which
-   exists so `int32` and `string` can declare their own conformances (`type intrinsic <int8, …, int64>
-   implements Comparable<This>`, one body for a whole set of widths) instead of having them reached in
-   from outside. Two hidden kinds had no spelling, and giving them one deleted the mechanism that had been
+   because it predates the marker. **`intrinsic`** is the sixth — the kind a *primitive* is (`int32`,
+   `string`), named in a contract's `for` list. A built-in gains a contract through a **`type adapter`**
+   block (`type adapter <int8, …, int64> implements Comparable<This>`, one body for a whole set of widths),
+   so no conformance is hard-coded in the compiler. Two hidden kinds had no spelling, and giving them one deleted the mechanism that had been
    papering over the gap rather than fencing it. *(Full model in `docs/TYPE_MODEL.md`.)*
 
 3d. **No exceptions — fallibility is a value.** There is no `throw`/`catch` and no stack unwinding (`try`

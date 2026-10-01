@@ -14,7 +14,7 @@ export { ParseError, Parseable, parse, ParseableRadix, parseRadix };
 // Reached generically — `parse::<int32>(s: t)` — so there is no `parseI32`/`parseI64`/… ladder of
 // suffixed spellings. The mechanism is the one the serde path already uses (`json::decode<T: Deserializable>`
 // calling `T.deserialize(...)`): a MARKER contract plus a per-type conformance supplying a fallible ctor.
-// One `type intrinsic` block per target — each body carries that width's own range limits, so there is no
+// One `type adapter` block per target — each body carries that width's own range limits, so there is no
 // shared body for a set to hold.
 // The contract stays method-less on purpose — a contract signature naming `This` in return position
 // cannot be resolved outside a type (see the note on `Deserializable` in the prelude).
@@ -98,48 +98,48 @@ fn Result<uint64, ParseError> parseUnsigned(const ref string s, uint64 posLimit,
 // signature — the same shape `Comparable<T is This>` uses.
 type contract Parseable<T is This> for intrinsic { ctor Result<T, ParseError> fromStr(const ref string s); }
 
-type intrinsic <int8> implements Parseable<This> {
+type adapter <int8> implements Parseable<This> {
     public ctor Result<int8, ParseError> fromStr(const ref string s) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 128ui64, posLimit: 127ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int8>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int16> implements Parseable<This> {
+type adapter <int16> implements Parseable<This> {
     public ctor Result<int16, ParseError> fromStr(const ref string s) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 32768ui64, posLimit: 32767ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int16>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int32> implements Parseable<This> {
+type adapter <int32> implements Parseable<This> {
     public ctor Result<int32, ParseError> fromStr(const ref string s) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 2147483648ui64, posLimit: 2147483647ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int32>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int64> implements Parseable<This> {
+type adapter <int64> implements Parseable<This> {
     public ctor Result<int64, ParseError> fromStr(const ref string s) {
         return parseSigned(s: s, negLimit: 9223372036854775808ui64, posLimit: 9223372036854775807ui64, radix: 10ui64);
     }
 }
-type intrinsic <uint8> implements Parseable<This> {
+type adapter <uint8> implements Parseable<This> {
     public ctor Result<uint8, ParseError> fromStr(const ref string s) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 255ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint8>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint16> implements Parseable<This> {
+type adapter <uint16> implements Parseable<This> {
     public ctor Result<uint16, ParseError> fromStr(const ref string s) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 65535ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint16>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint32> implements Parseable<This> {
+type adapter <uint32> implements Parseable<This> {
     public ctor Result<uint32, ParseError> fromStr(const ref string s) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 4294967295ui64, radix: 10ui64);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint32>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint64> implements Parseable<This> {
+type adapter <uint64> implements Parseable<This> {
     public ctor Result<uint64, ParseError> fromStr(const ref string s) {
         return parseUnsigned(s: s, posLimit: 18446744073709551615ui64, radix: 10ui64);
     }
@@ -173,15 +173,15 @@ unsafe fn Result<float32, ParseError> parseF32(const ref string s) {
     return Result::Ok(value: v);
 }
 
-type intrinsic <float64> implements Parseable<This> {
+type adapter <float64> implements Parseable<This> {
     public ctor Result<float64, ParseError> fromStr(const ref string s) { return parseF64(s: s); }
 }
-type intrinsic <float32> implements Parseable<This> {
+type adapter <float32> implements Parseable<This> {
     public ctor Result<float32, ParseError> fromStr(const ref string s) { return parseF32(s: s); }
 }
 
 // Exactly `"true"`/`"false"`, as in Rust — a parser is not the place to invent truthiness.
-type intrinsic <bool> implements Parseable<This> {
+type adapter <bool> implements Parseable<This> {
     public ctor Result<bool, ParseError> fromStr(const ref string s) {
         if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
         if (s.equals(other: "true"))  { return Result::Ok(value: true); }
@@ -204,48 +204,48 @@ type contract ParseableRadix<T is This> for intrinsic {
     ctor Result<T, ParseError> fromStrRadix(const ref string s, uint64 radix);
 }
 
-type intrinsic <int8> implements ParseableRadix<This> {
+type adapter <int8> implements ParseableRadix<This> {
     public ctor Result<int8, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 128ui64, posLimit: 127ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int8>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int16> implements ParseableRadix<This> {
+type adapter <int16> implements ParseableRadix<This> {
     public ctor Result<int16, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 32768ui64, posLimit: 32767ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int16>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int32> implements ParseableRadix<This> {
+type adapter <int32> implements ParseableRadix<This> {
     public ctor Result<int32, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<int64, ParseError> r = parseSigned(s: s, negLimit: 2147483648ui64, posLimit: 2147483647ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<int32>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <int64> implements ParseableRadix<This> {
+type adapter <int64> implements ParseableRadix<This> {
     public ctor Result<int64, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         return parseSigned(s: s, negLimit: 9223372036854775808ui64, posLimit: 9223372036854775807ui64, radix: radix);
     }
 }
-type intrinsic <uint8> implements ParseableRadix<This> {
+type adapter <uint8> implements ParseableRadix<This> {
     public ctor Result<uint8, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 255ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint8>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint16> implements ParseableRadix<This> {
+type adapter <uint16> implements ParseableRadix<This> {
     public ctor Result<uint16, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 65535ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint16>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint32> implements ParseableRadix<This> {
+type adapter <uint32> implements ParseableRadix<This> {
     public ctor Result<uint32, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 4294967295ui64, radix: radix);
         return match (r) { case Ok(value: v): Result::Ok(value: cast<uint32>(v)); case Err(error: e): Result::Err(error: e); };
     }
 }
-type intrinsic <uint64> implements ParseableRadix<This> {
+type adapter <uint64> implements ParseableRadix<This> {
     public ctor Result<uint64, ParseError> fromStrRadix(const ref string s, uint64 radix) {
         return parseUnsigned(s: s, posLimit: 18446744073709551615ui64, radix: radix);
     }

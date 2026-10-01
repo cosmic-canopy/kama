@@ -3804,9 +3804,9 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     }
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
-                tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
+                tp.clear(); cp.clear();   // a `type adapter` block declares no type params of its own
                 checkContracts(ii->baseTypes, nullptr);
-                if (ii->targets) for (auto& tgt : *ii->targets) if (tgt) rejectBareCChar(tgt, "a `type intrinsic` target", tgt->line);
+                if (ii->targets) for (auto& tgt : *ii->targets) if (tgt) rejectBareCChar(tgt, "a `type adapter` target", tgt->line);
                 if (ii->members) for (auto& m : *ii->members)
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
@@ -5116,7 +5116,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
         // answer: no class, so the check above did not apply, and the synthesized `format` call fell all
         // the way through method dispatch to an unresolved-receiver error naming neither the value nor
         // the interpolation. `isize`/`usize` were the ones that hit it — they were absent from every
-        // `type intrinsic <…> implements …` list in the prelude until 0.9.136, and they are exactly the
+        // `type adapter <…> implements …` list in the prelude until 0.9.136, and they are exactly the
         // types a `length()` or an index has, so the recommended type for every length was the one that
         // could not be logged. They implement `Formattable` now; this check stays because it is not about
         // them — any primitive reaching a hole without a conformance takes the same road.
@@ -12352,7 +12352,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
                                                // `when T: Copyable` methods (copy / by-value foreach).
     // `string`'s `Equatable` used to be recorded HERE, nominally, because an intrinsic had no way to say
     // `implements` — the one conformance in the language that the compiler asserted on a type's behalf.
-    // It is now declared like every other, by `type intrinsic <string> implements Equatable { }` in the
+    // It is now declared like every other, by `type adapter <string> implements Equatable { }` in the
     // prelude; the empty body is not a stub, it is the point — the completeness check reads the type's
     // method map, and `string`'s NATIVE `equals` (registered just below) is already in it.
     auto addMethod =[&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
@@ -16423,7 +16423,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     // address of a by-value `__get` rvalue. This is what makes chained/field-write indexing valid C.
     // A receiver that is a VALUE (`mkArr()[1]`, `s.bytes()[0]`) is held in a temporary first.
     recvExpr = indexReceiverPlace(recv, cls, ea->line);
-    // `this` inside a `type intrinsic <collection>` impl body is `self` — ALREADY a pointer, not a
+    // `this` inside a `type adapter <collection>` impl body is `self` — ALREADY a pointer, not a
     // by-value lvalue. Every caller takes `&(recvExpr)`, so hand back the place `(*self)` → `&(*self)` == self
     // (without this, `this[i]` emits `__get(&self, i)`, indexing the pointer's own address — a string-key
     // `hash`/`equals` would read struct bytes, not content, and Map lookups would miss).
@@ -17476,7 +17476,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (x.empty()) x = me->ownedPointeeClass(t);
         if (!x.empty() && satisfiesBound(x, "Deserializable")) return true;
     }
-    // A `type intrinsic <t> implements <bound>` block also satisfies it — including a PRIMITIVE target
+    // A `type adapter <t> implements <bound>` block also satisfies it — including a PRIMITIVE target
     // (`int32`), whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a
     // `when [T: Equatable]` gate on `List<int32>` sees int32's `Equatable` (matched on the raw source name).
     auto rc = _intrinsicConformances.find(t);
@@ -18079,7 +18079,7 @@ void CEmitter::linkBases()
         ScopedStr  _ts(_thisType, ci.name);
         ScopedThis _tt(_typeSubst, synthId(ci.name));
         resolveInterfaceNames(ci.interfaces, ifaceNodes);
-        // Coherence, the class arm: one claim per (type, contract). The enum and `type intrinsic` paths
+        // Coherence, the class arm: one claim per (type, contract). The enum and `type adapter` paths
         // have always checked this; a class's `implements` list never did, so `implements C, C` was
         // accepted and recorded twice. Checked HERE rather than at collect time because the duplicate can
         // be spelled two ways (`C` and `ns::C`), and only the resolved names can tell.
@@ -18894,7 +18894,7 @@ bool CEmitter::contractRequiresSendable(const std::string& name) const
 // `Channel<T: Sendable>` element — requires the declaration. The `immutable` model: you write it, the
 // compiler double-checks it, and a type nobody annotated does not cross. What answers WITHOUT a
 // declaration is exactly what cannot carry one:
-//   - a primitive and `string`: conformances the prelude declares (`type intrinsic <…> implements Sendable`)
+//   - a primitive and `string`: conformances the prelude declares (`type adapter <…> implements Sendable`)
 //   - a payload-less `enum`, a bare `fnptr` value: scalars with no interior
 //   - `UnsafePtr<T>` and an extern struct: the C seam, stated here rather than hidden
 //   - `InlineArray<T>`/`Simd<T>`: iff `T` is (a comptime-sized value with no declaration site of its own)
@@ -19463,7 +19463,7 @@ CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMeth
 // Two spellings produced at two different times are exactly the thing a comparison must not rest on.
 //
 // A COMPILER-BUILT entry (a primitive's synthetic conformance ClassInfo, a collection) records no scope
-// of its own, and reseating from it would resolve every bare name in an empty namespace: `type intrinsic
+// of its own, and reseating from it would resolve every bare name in an empty namespace: `type adapter
 // <int32> implements Boxer { … Wrapped … }` inside `namespace M` rendered the contract's `M::Wrapped`
 // against the implementation's unqualified `Wrapped` and called them different (probed, and it was a
 // false positive on a correct conformance). Those arrive here from checkImplCompleteness, mid-collection,
@@ -19660,7 +19660,7 @@ void CEmitter::checkConformanceSignatures()
         ClassInfo& ci = kv.second;
         // A compiler-built entry — a collection, a smart pointer — carries no namespace context to
         // resolve its own signatures in, and this pass is far too late to recover one. Its conformances
-        // are declared by `type intrinsic` blocks and reach the same comparator through
+        // are declared by `type adapter` blocks and reach the same comparator through
         // checkImplCompleteness, while the declaring unit's context is still live. See implSigOf.
         if (ci.scope.empty()) continue;
         // A whole-program check has no unit context of its own, so borrow the declaring file's —
@@ -19898,7 +19898,7 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // A recorded conformance is STATIC-dispatch-only (it lands in `staticOnlyInterfaces`, so no fat-pointer
 // vtable is emitted for it). `isPrimitive` gates the serde-return scan: a primitive's
 // `Result<scalar, Owned<Error>>` monomorph only matters when the program actually uses serde.
-// The MethodInfo for a method declared in a `type enum`'s own body or a `type intrinsic` block — both
+// The MethodInfo for a method declared in a `type enum`'s own body or a `type adapter` block — both
 // always public, and neither has a `ClassDeclarationNode` to come through collectClasses. A `when [...]`
 // gate is recorded for a GENERIC enum's template, where each instance judges it.
 MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey,
@@ -19922,7 +19922,7 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
     // The rule collectClasses holds a type's ctors to: an infallible ctor writes no return type, a fallible
     // one writes `Result<…, E>` and never `Optional` — a failure carries WHY. An enum's ctor went unchecked,
     // so `ctor Optional<E> parse(…)` was accepted here and refused on a `type value`. ENUMS only: this also
-    // serves `type intrinsic` blocks, whose ctor spells the primitive it returns (`ctor int8 fromWide`).
+    // serves `type adapter` blocks, whose ctor spells the primitive it returns (`ctor int8 fromWide`).
     const bool isEnumOwner = _enumDeclNodes.count(tkey) != 0;
     if (isEnumOwner && md->isCtor && md->returnType) {
         const std::string rt = md->returnType->value ? *md->returnType->value : "";
@@ -19948,7 +19948,7 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
         }
     }
     mi.fromContract = contract;             // an injected method, not part of the type's own API
-    // A `type intrinsic` block's methods belong to its contract, so they are public. An enum's OWN members
+    // A `type adapter` block's methods belong to its contract, so they are public. An enum's OWN members
     // follow the member rule every other kind follows — private unless written `public` — which they did
     // not: this was `Public` for both, so an enum method with no modifier was callable from any module.
     mi.visibility   = contract.empty() ? visibilityOf(md->modifiers, Visibility::Private, md->line)
@@ -20023,7 +20023,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
 //
 // A payload-less enum stays its C integer whatever it declares (KR-59). Its members, contracts and derives
 // live on a ClassInfo that is a SCALAR receiver — `isScalarEnum`: `this` is the value, as a primitive's is
-// under `type intrinsic`, and each contract slot reaches a method through a thunk.
+// under `type adapter`, and each contract slot reaches a method through a thunk.
 void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>& units)
 {
     for (auto& u : units) {
@@ -20199,7 +20199,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             if (_preludeEnums.count(name)) eci.preludeStatic = true;
 
             // The members are the enum's OWN API (empty `contract` — they are declared in its own body),
-            // unlike a `type intrinsic` block's, which belong to the contract that carried them in.
+            // unlike a `type adapter` block's, which belong to the contract that carried them in.
             injectImplMethods(eci, ed->members, /*contract=*/"", name, /*isPrimitive=*/false);
             for (auto& c : ifaces) {
                 bool dup = false;
@@ -20270,7 +20270,7 @@ bool CEmitter::serdeGatedOff(SharedIdentifier contract) const
            (*contract->value == "Serializable" || *contract->value == "Deserializable");
 }
 
-// The effective member list for ONE target of a `type intrinsic` set: the block's shared bodies, with any
+// The effective member list for ONE target of a `type adapter` set: the block's shared bodies, with any
 // `<…>` section naming this target overriding them method-for-method. Order is deterministic (shared
 // first, in declaration order), which matters because the prototype pass and the body pass must agree.
 SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target)
@@ -20302,21 +20302,25 @@ SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode
     return out;
 }
 
-// Validate a `type intrinsic` block and inject its methods — once per target in the set. A primitive gets
+// Validate a `type adapter` block and inject its methods — once per target in the set. A primitive gets
 // NO `_classes` entry (every "is this a user type?" test keys on that map), so the conformance is hung on
 // the separate primitive registry, with `this` passed by value.
 void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
 {
-    if (!n->kindWord || *n->kindWord != "intrinsic") {
-        unsupported(("`type " + (n->kindWord ? *n->kindWord : std::string("?")) + " <…>` — only "
-                     "`type intrinsic` may name primitive types").c_str(), n->line);
+    if (n->kindWord && *n->kindWord == "intrinsic") {   // the block's name until 0.9.510
+        unsupported("`type intrinsic <…>` is now `type adapter <…>` — the same block, renamed", n->line);
+        return;
+    }
+    if (!n->kindWord || *n->kindWord != "adapter") {
+        unsupported(("`type " + (n->kindWord ? *n->kindWord : std::string("?")) + " <…>` — a conformance "
+                     "block over a target list is `type adapter <…> implements C`").c_str(), n->line);
         return;
     }
     if (n->baseTypes && n->baseTypes->base)
-        unsupported("`type intrinsic` cannot `extends` — a primitive has no base type", n->line);
+        unsupported("`type adapter` cannot `extends` — a primitive has no base type", n->line);
     SharedIdentifierList ifaces = n->baseTypes ? n->baseTypes->interfaces : SharedIdentifierList();
     if (!ifaces || ifaces->empty()) {
-        unsupported("`type intrinsic <…>` must declare a contract — a block with no `implements` gives the "
+        unsupported("`type adapter <…>` must declare a contract — a block with no `implements` gives the "
                     "primitives in it nothing", n->line);
         return;
     }
@@ -20328,11 +20332,11 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
                     if (md->whenParams && !md->whenParams->empty()) gated = true;
         if (gated)
-            unsupported("`type intrinsic <…>` names concrete primitives, so there is no type parameter for "
+            unsupported("`type adapter <…>` names concrete primitives, so there is no type parameter for "
                         "`when` to condition on — remove the gate", n->line);
     }
     if (ifaces->size() > 1) {
-        unsupported("`type intrinsic <…>` declares ONE contract per block — a method's contract has to be "
+        unsupported("`type adapter <…>` declares ONE contract per block — a method's contract has to be "
                     "unambiguous; write a second block for the other one", n->line);
         return;
     }
@@ -20389,22 +20393,22 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         // A primitive has no storage of its own to add to, and nothing to destroy.
         for (auto& m : *members) {
             if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
-                unsupported("`type intrinsic` cannot declare a field — a primitive is its own storage",
+                unsupported("`type adapter` cannot declare a field — a primitive is its own storage",
                             m->line);
             else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
-                unsupported("`type intrinsic` cannot declare a destructor — a primitive owns nothing",
+                unsupported("`type adapter` cannot declare a destructor — a primitive owns nothing",
                             m->line);
         }
         // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
         // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
-        // eligible as `int32`; keying off `_classes` instead would make `type intrinsic <string>
+        // eligible as `int32`; keying off `_classes` instead would make `type adapter <string>
         // implements Serializable` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
         injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
         checkImplCompleteness(tci, contract, *tgt->value, n->line);
     }
 }
 
-// Every (target ClassInfo, member list) this unit's `type intrinsic` blocks contribute — one per target in
+// Every (target ClassInfo, member list) this unit's `type adapter` blocks contribute — one per target in
 // the set. The prototype pass and both body passes walk exactly this, so the three agree by construction
 // rather than by three copies staying in step.
 std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
@@ -20490,7 +20494,7 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
                                "`const fn` too").c_str(), line);
         }
     // The rest of the promise — return type, parameter types, arity. This is the ONLY path that reaches
-    // an enum's or a `type intrinsic` block's conformance: a scalar's lands in `_primConformances` and
+    // an enum's or a `type adapter` block's conformance: a scalar's lands in `_primConformances` and
     // `string`'s on a collection ClassInfo, neither of which the `_classes` sweep looks at.
     checkConformanceSignature(tci, contract, tkey, line);
 }
@@ -27275,7 +27279,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 if (_classes.count(concrete) || primConformance(concrete)) typeName = concrete;
             }
         }
-        // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a `type intrinsic`
+        // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a `type adapter`
         // conformance) resolves via `implTargetInfo` (`_primConformances`).
         ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : implTargetInfo(typeName);
         if (stci) {
@@ -27438,7 +27442,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
 {
     std::string s;
     bool first = true;
-    // A conformed PRIMITIVE (`type intrinsic <int32> implements Hashable`) takes `this` (= `self`) as the
+    // A conformed PRIMITIVE (`type adapter <int32> implements Hashable`) takes `this` (= `self`) as the
     // SCALAR by value — `int32_t self`, not `int32_t* self`. The caller reads that off the target's
     // `isScalarRecv`; `selfType` is a C type and can no longer answer the question by itself.
     if (selfType) { s += std::string(selfType) + (selfByValue ? " self" : "* self"); first = false; }
@@ -34865,7 +34869,7 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
                 if (s != _typeSubst.end()) {
                     std::string ct = primKey(s->second);   // the conformance key, not the C type
                     // A PRIMITIVE is a legitimate receiver here: conformance puts real `ctor`s on
-                    // int32/float64/… (`type intrinsic <int32> implements Deserializable { public ctor … }`),
+                    // int32/float64/… (`type adapter <int32> implements Deserializable { public ctor … }`),
                     // and they live in `_primConformances`, not `_classes`. The `::` resolver consulted both;
                     // this one only ever needed `_classes` because no other path reached a primitive ctor.
                     if (_classes.count(ct) || primConformance(ct)) { outType = ct; return true; }
@@ -34914,7 +34918,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
     std::string tn = dotOnTypeInstance(recv, typeName, call);
     // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block
-    // (`type intrinsic <int32> implements Deserializable`) resolves through `implTargetInfo` — the same two tables the
+    // (`type adapter <int32> implements Deserializable`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : implTargetInfo(tn);
     // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
@@ -35482,7 +35486,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line, "",
                                      recv->identifier.get());
-    // A PRIMITIVE receiver with a conformance (`type intrinsic <int32> implements Hashable`): the method's
+    // A PRIMITIVE receiver with a conformance (`type adapter <int32> implements Hashable`): the method's
     // `this` is the SCALAR itself, passed BY VALUE. `exprClass` is "" for a primitive, so recover the
     // receiver's type separately. Resolve on `_primConformances`; the call is a plain free function
     // `int32__hash(k)` (no pointer, no vtable).
@@ -35506,7 +35510,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         }
         if (ClassInfo* pci = primConformance(primTy)) {
             // A contract decorates a primitive WITHIN THE SCOPE OF THAT CONTRACT — the method is not part
-            // of the primitive's own API. Otherwise any package declaring `type intrinsic <int32>
+            // of the primitive's own API. Otherwise any package declaring `type adapter <int32>
             // implements Weighable` would put `.weight()` on every `int32` in the program.
             if (!viaTypeParam && !_inSynthDispatch)
                 unsupported(("`" + method + "` is not `" + primTy + "`'s own method — it comes from a "
@@ -35533,7 +35537,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // ⚠️ TWO different failures reach this line, and saying the wrong one is worse than saying
         // nothing. The receiver may be an unknown NAME, or a perfectly good value of a primitive type
         // that simply has no conformance carrying this method — which is what an `isize` hits, since
-        // `isize`/`usize` are absent from every `type intrinsic <…> implements …` list in the prelude.
+        // `isize`/`usize` are absent from every `type adapter <…> implements …` list in the prelude.
         // Telling someone that `n` is "not in reach" when `n` is the local on the line above sends them
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
@@ -35669,7 +35673,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // The contract-scope gate, class path. `string` has a real `_classes` entry, so its INJECTED
     // `compareTo`/`hash` never reach the primitive branch above — and they sit on the same ClassInfo as its
     // NATIVE `equals`/`length`. `fromContract` is exactly what tells them apart: it is non-empty only for a
-    // method supplied from outside the type's own body (a `type intrinsic` block), which is
+    // method supplied from outside the type's own body (a `type adapter` block), which is
     // the property the rule wants. A type that declares `implements C` in its own body is untouched.
     {
         ClassInfo* gowner = nullptr;
@@ -36089,7 +36093,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
 // The kind a `_classes` entry implements AS, as a `for`-clause bit. 0 means "no `type <kind>` word
 // produced this" — an intrinsic collection (INCLUDING `kama_string`, whose ClassInfo comes from the
 // collection registrar and never gets a `kind`), a smart pointer. Those are not user-declared kinds and
-// have nothing to gate; a primitive's conformances come from `type intrinsic` and are judged there,
+// have nothing to gate; a primitive's conformances come from `type adapter` and are judged there,
 // which is the only site that knows their origin and the only one with a line number for them.
 static unsigned implementerKind(const ClassInfo& ci)
 {
@@ -36353,7 +36357,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
-    // Pre-scan `type intrinsic` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE
+    // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE
     // collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING collection,
     // which is earlier than the methods are injected; without this the check would falsely reject
     // `string: Hashable`. The real methods + coherence are still handled below.
@@ -36395,7 +36399,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
-    // `type intrinsic <…> implements C { … }` — inject each block's methods into every target's conformance
+    // `type adapter <…> implements C { … }` — inject each block's methods into every target's conformance
     // registry. Runs AFTER collectCollections so a collection target (`string` → `kama_string`) already has
     // its ClassInfo. Coherence lives in applyIntrinsicImpl: one claim per (type, contract), and no method
     // clobbering one the type already has.
@@ -36861,7 +36865,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // may live in any unit and both are called from it, so they must be visible everywhere the twin is.
     emitNullSerializer();
     emitGraphEdgeHelpers();
-    // `type intrinsic` impl methods for a COLLECTION/primitive target (`string` → `kama_string`):
+    // `type adapter` impl methods for a COLLECTION/primitive target (`string` → `kama_string`):
     // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE
     // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling
     // `k.hash()` monomorphized for `string`). The body lands once in the impl's module `.c`
@@ -37111,7 +37115,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = false;
     }
 
-    // Prelude impl BODIES (e.g. `type intrinsic <int32> implements Hashable`): the prelude is collect-only,
+    // Prelude impl BODIES (e.g. `type adapter <int32> implements Hashable`): the prelude is collect-only,
     // so — like the prelude types above — emit their method bodies `static inline` in the header (prototype
     // already emitted above). This makes the primitive conformances UNIVERSAL: a `<T: Equatable>` bound,
     // `List<int32>.contains`, or an int-keyed `Map` resolves without importing `std::collections`.
@@ -37407,7 +37411,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // FFI #include — emitted in the header by emitIncludes; an `extern const` emits nothing (the header
             // defines it; its size/kind check is emitExternLayoutChecks')
         } else if (dynamic_cast<IntrinsicImplNode*>(decl.get())) {
-            // `type intrinsic <…> implements C { … }` — its methods were injected into each target's
+            // `type adapter <…> implements C { … }` — its methods were injected into each target's
             // conformance registry and their bodies emitted just above; nothing at this top-level site.
         } else if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             // MCU step 1: module-level `static` — already emitted into `moduleStatics` (flushed before bodies).

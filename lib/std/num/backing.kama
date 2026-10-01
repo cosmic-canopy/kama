@@ -6,7 +6,7 @@
 //
 // This is the mechanism that replaces "the width is in the name". `clampToI32` used to live privately in
 // fixed.kama, hard-wired to one width; `std::num::ops` still spells `clampI32`/`clampI64` per width. A
-// contract with a `type intrinsic` conformance per width is kama's answer to that shape (the same one
+// contract with a `type adapter` conformance per width is kama's answer to that shape (the same one
 // `Real` uses in std::math::scalar, and `Parseable` in std::fmt::parse) — one block per target, because each
 // body carries its own range limits and there is no shared body for a set form to hold.
 //
@@ -38,7 +38,7 @@ type contract FixedBacking<B is This> for value, intrinsic {
 // std::fmt::parse makes for its per-width range limits) — a conformance body that reached for a helper
 // would just move the width back into a name.
 
-type intrinsic <int8> implements FixedBacking<This> {
+type adapter <int8> implements FixedBacking<This> {
     public const fn int64 wide() { return cast<int64>(this); }
     public ctor int8 fromWide(int64 v) { return cast<int8>(v); }
     public ctor int8 clampWide(int64 v) {
@@ -48,7 +48,7 @@ type intrinsic <int8> implements FixedBacking<This> {
     }
 }
 
-type intrinsic <int16> implements FixedBacking<This> {
+type adapter <int16> implements FixedBacking<This> {
     public const fn int64 wide() { return cast<int64>(this); }
     public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
     public ctor int16 clampWide(int64 v) {
@@ -58,7 +58,7 @@ type intrinsic <int16> implements FixedBacking<This> {
     }
 }
 
-type intrinsic <int32> implements FixedBacking<This> {
+type adapter <int32> implements FixedBacking<This> {
     public const fn int64 wide() { return cast<int64>(this); }
     public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
     public ctor int32 clampWide(int64 v) {

@@ -186,7 +186,7 @@ fi
 
 # --- 8. a nameless decl with a program-wide effect survives -----------------------------------------
 # Two kinds, both unreachable by any reference and so both unprunable:
-#   `type intrinsic <int32> implements Parseable` — registers a conformance for a PRIMITIVE, under no name.
+#   `type adapter <int32> implements Parseable` — registers a conformance for a PRIMITIVE, under no name.
 #   `extern "kama_isolate.h";`                  — the seam `spawn`/`parallel_for` require while naming
 #                                                 nothing in the file that provides it.
 cat >"$tmp/nameless.kama" <<'EOF'
@@ -202,7 +202,7 @@ if "$KAMA" build "$tmp/nameless.kama" -o "$tmp/nameless" >"$tmp/nameless.log" 2>
     [ "$rc" = 7 ] && ok "intrinsic conformance survives pruning (parse::<int32>)" \
                   || bad "intrinsic fixture returned $rc, expected 7"
 else
-    bad "a 'type intrinsic' conformance was pruned away"
+    bad "a 'type adapter' conformance was pruned away"
     tail -6 "$tmp/nameless.log" >&2
 fi
 

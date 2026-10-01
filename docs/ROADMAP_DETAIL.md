@@ -499,7 +499,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     coherence catches a *duplicate* specialization and does nothing about a single one, which is the
     dangerous case.
   - **What is left over is contract design, which is the language's answer already.** `type contract`
-    plus `type intrinsic` covers primitives, `string`, and every type you own — that is exactly what
+    plus `type adapter` covers primitives, `string`, and every type you own — that is exactly what
     `std::math`'s `Real` is, and [scalar.kama](../lib/std/math/scalar.kama) says so in prose. The
     genuine remainder is a per-type body for a user type you do **not** own, and unlocking that is the
     thing we do not want.
@@ -2487,7 +2487,7 @@ rather than here, so there is one number to keep current. Forward work:
      not have: `view.kama` declares `type view View<T>`, so the type-kind word is a bare identifier rather
      than a closed `value|resource|contract` set. A regex would have missed it.
   4. ~~"a nameless declaration is inert"~~ — two kinds are not, and both are invisible to any closure.
-     `type intrinsic <int32> implements Parseable` registers a conformance for a *primitive* under no name.
+     `type adapter <int32> implements Parseable` registers a conformance for a *primitive* under no name.
      Worse, `spawn` and `parallel_for` require `extern "kama_isolate.h";` from
      `lib/std/concurrent/concurrent.kama` while naming nothing in it — and the demand is program-wide, so
      the `spawn` need not even be in the file that did the import. Both providers are marked unprunable.
@@ -2748,7 +2748,7 @@ rather than here, so there is one number to keep current. Forward work:
   gate any of this.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
-  without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.
+  without vendoring — the point at which cross-package conformance coherence (SPEC § *`type adapter`*) becomes load-bearing.
   User docs (including the registry protocol a host must serve): [packages.md](packages.md). What remains is
   hosted-services and ops work:
   - **Official vs community packages — DECIDED and SHIPPED (2026-09-06).** The `@kama` scope is the mark

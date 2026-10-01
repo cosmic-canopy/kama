@@ -484,7 +484,7 @@ type contract Equatable<T is This> for value, resource, enum, intrinsic { const 
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
 construction) finds the stored entry. `string` and every **integer width** satisfy both out of the box, via
-**pure-kama** `type intrinsic` blocks that ship in the **prelude** (universal — no `std::collections`
+**pure-kama** `type adapter` blocks that ship in the **prelude** (universal — no `std::collections`
 import; *no* compiler blessing). **`hash()` returns a cheap CONTENT hash**
 — identity (`cast<uint64>(this)`) for an integer, FNV-1a over the UTF-8 bytes for a `string` — and the
 **avalanche/mixer is a separate, pluggable step** the `Map`/`Set` apply via their `H: Hasher` type
@@ -496,7 +496,7 @@ integer's is scalar (a conformance on a **primitive** — `this` is the scalar i
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
 `type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
-`type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable<This>`
+`type adapter` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable<This>`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
 is not enough), the same rule as `foreach`.
 
@@ -1390,7 +1390,7 @@ full scalar surface over libm. `import { std::math::Vec3, std::math::Mat4, std::
 literal in kama is a **float64**, so a float32-only module made `sin(x: 1.0)` a type error for the most
 obvious thing a reader would write. kama has no overloading, so the usual answers were unavailable (C
 suffixes every float32 entry point, Go and Java ship one width and make you convert, C# adds a second
-class `MathF`); the mechanism used instead is kama's own — a **contract with a `type intrinsic` impl per
+class `MathF`); the mechanism used instead is kama's own — a **contract with a `type adapter` impl per
 width**, exactly how `Comparable` reaches every primitive. Each operation is one generic free function over
 `Real`, and the per-width libm call lives in the impls: `sqrt cbrt sin cos tan asin acos atan exp log
 log2 log10 floor ceil round trunc abs` (one argument) and `pow fmod atan2 hypot` (two).
@@ -1526,7 +1526,7 @@ number" and "too big for this type" want different messages. Rust, Zig and Go al
 only the boolean and optional shapes discard it.
 
 **One generic spelling, no `parseI32`/`parseI64` ladder.** The mechanism is the serde one — a marker
-contract (`Parseable`) plus a per-type `type intrinsic` impl supplying a fallible `ctor`, reached as
+contract (`Parseable`) plus a per-type `type adapter` impl supplying a fallible `ctor`, reached as
 `T.fromStr(...)`.
 The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
 `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
@@ -1660,7 +1660,7 @@ fold, `bitcast` is refused (no width until the target is known), and there is no
 third type beside `int8` and `uint8`, and a libc prototype spelled `const char*` warns on either. So `cchar`
 exists only as what a raw pointer points at — `UnsafeConstPtr<cchar>` is `const char*` (what `string.cstr()` <!-- test: cchar_extern -->
 returns), `UnsafePtr<cchar>` is `char*`, nested and in a `type extern value` field alike — and every bare use
-is a compile error: a local, a field, a parameter or return outside a pointer, a generic argument, a `cast` <!-- xfail: cchar_bare_local, cchar_field, cchar_generic_arg, cchar_intrinsic_target, cchar_elem_read -->
+is a compile error: a local, a field, a parameter or return outside a pointer, a generic argument, a `cast` <!-- xfail: cchar_bare_local, cchar_field, cchar_generic_arg, cchar_adapter_target, cchar_elem_read -->
 target, `sizeof`, and reading `p[i]` through one; the bytes are a `cast<UnsafePtr<uint8>>` away. A raw
 pointer's `char` meaning C `char` was the alternative, and is a non-goal: `DynamicArray<char>.dataPtr()`
 would declare a 1-byte stride over a 4-byte buffer.
@@ -3757,9 +3757,9 @@ every function, so declarations are greppable and self-describing:
   The **`for` clause is mandatory** and names which kinds may implement the contract — see below.
 - **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
   takes the same `implements` clause as every other kind.
-- **`type intrinsic <targets> implements C { … }`** — the kind a **primitive** is. It declares nothing new;
+- **`type adapter <targets> implements C { … }`** — the kind a **primitive** is. It declares nothing new;
   it decorates existing built-in types with a contract's methods, one block for a whole **set** of widths.
-  See *`type intrinsic`* below.
+  See *`type adapter`* below.
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
 `view` / `contract` / `intrinsic` are **contextual, not reserved** — because they appear only right after `type`, they
@@ -3846,7 +3846,7 @@ Matching is on the **resolved** type, so an alias, an import spelling, or a gene
 substituted parameter (`Iterator<T>` implemented at `T = int32`) compares equal — what differs is what
 the two would lower to.
 
-This applies to every kind that can conform, including an `enum`'s conformance and a `type intrinsic`
+This applies to every kind that can conform, including an `enum`'s conformance and a `type adapter`
 block's, to a contract-declared **operator** (`int32 operator+(int32 rhs)` — the generic-math bound
 shape), and to a conformance that dispatches only statically. A **`@viewable`** contract is the one
 exception: it emits no vtable and no fat-pointer type, so its members are nominal markers rather than
@@ -4573,17 +4573,17 @@ fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square.make(s: s); return g
 
 A `DynamicArray<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
-### `type intrinsic` — a primitive declares its conformances ✅
+### `type adapter` — a primitive gains its conformances ✅
 
-A **primitive** is a type kind like any other, and it declares conformance the same way: `type intrinsic
-<targets> implements C { … }`. The `<…>` is a **set**, because one body usually serves many widths — the
+A **primitive** (the kind `intrinsic`) has no declaration of its own, so it gains a conformance through an
+adapter: `type adapter <targets> implements C { … }`. The `<…>` is a **set**, because one body usually serves many widths — the
 prelude's per-primitive impls collapse from 64 blocks to roughly 8. Inside the block `This` is the target
 being decorated, resolved per member of the set.
 
 ```kama fragment
 type contract Hashable for value, resource, enum, intrinsic { const fn uint64 hash(); }
 
-type intrinsic <string> implements Hashable {        // a primitive gains a contract, in pure kama
+type adapter <string> implements Hashable {        // a primitive gains a contract, in pure kama
     public const fn uint64 hash() {
         uint64 h = 2166136261ui64;                   // FNV-1a
         isize i = 0;
@@ -4592,7 +4592,7 @@ type intrinsic <string> implements Hashable {        // a primitive gains a cont
     }
 }
 
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64>
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64>
     implements Comparable<This> { … }                // ONE body for eight widths
 
 fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }   // `string` now satisfies the bound
@@ -4610,7 +4610,7 @@ takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `M
 
 **A contract is a SCOPE.** A conformance decorates a primitive *within the scope of that contract*, so a
 contract-supplied method is **not part of the primitive's own API** — it is reached through the contract,
-never off the bare value. Without this, any package declaring `type intrinsic <int32> implements
+never off the bare value. Without this, any package declaring `type adapter <int32> implements
 Weighable` would put `.weight()` on every `int32` in the program, including code that never heard of it.
 
 ```kama fragment
@@ -4649,8 +4649,8 @@ way to give it a contract was `implements C for T` — a *retroactive* block rea
 outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing
 it, and the block itself is now **gone from the language**. See *The contract model* for the full argument.
 
-**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind <!-- xfail: impl_conflict, intrinsic_dup -->
-declares them — a class's or enum's own `implements` list, or a `type intrinsic` block. When the two
+**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind <!-- xfail: impl_conflict, adapter_dup -->
+declares them — a class's or enum's own `implements` list, or a `type adapter` block. When the two
 claims come from different packages the message names **both** — kama's whole-program view makes the
 conflict directly visible, so no orphan rule is needed to forbid legal-but-unusual cases in order to
 prevent one the compiler can simply see.
@@ -5091,8 +5091,8 @@ fn int32 main() {
   `Source<string>`; an argument may be another parameter (`when [P: Source<T>]`). <!-- test: when_generic_contract_bound -->
   <!-- xfail: bound_generic_contract_arg_mismatch --> <!-- xfail: when_generic_contract_arg_mismatch -->
   A `when` gate conditions on the declaring type's **own** parameters: naming one it does not have is an
-  error, and so is a `when` on a concrete type, a `contract` member or a `type intrinsic` block, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
-  is no parameter to condition on. <!-- xfail: when_on_contract_member, when_on_intrinsic -->
+  error, and so is a `when` on a concrete type, a `contract` member or a `type adapter` block, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
+  is no parameter to condition on. <!-- xfail: when_on_contract_member, when_on_adapter -->
   Calling a member an instance's gate removed names the gate and the argument that fails it (`` `Wrap<Plain>` <!-- xfail: when_method_unmet -->
   has no method `tag` — it is declared `when [P: Tag]`, and `Plain` (for `P`) does not satisfy `Tag` ``).
 
@@ -5241,7 +5241,7 @@ fn int32 main() {
   rule under Inheritance.
 - **Specialization is a non-goal.** There is no way to give one generic function a second body for a
   particular concrete type argument, and there will not be — the mechanism for a per-type body is a
-  `contract` (plus `type intrinsic` for a primitive), which is what `std::math`'s `Real` is. Reasoning in
+  `contract` (plus `type adapter` for a primitive), which is what `std::math`'s `Real` is. Reasoning in
   [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) § *Deferred language bits*.
 
 ## Access control ✅
@@ -5366,7 +5366,7 @@ which are checked like a type's (all three parsed and did nothing before `0.9.44
 but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its
 variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator --> Members never change
 what an enum IS in C: a payload-less enum stays its integer (`typedef int32_t Color`), and its methods take it
-by value (`bool Color__isWarm(Color self)`), the way a `type intrinsic` method takes a primitive; a contract
+by value (`bool Color__isWarm(Color self)`), the way a `type adapter` method takes a primitive; a contract
 reaches them through the ordinary vtable. An enum with payloads is a tag plus a union either way.
 
 A **generic** enum declares members and contracts the same way, and — like a generic `value` — each
@@ -5634,7 +5634,7 @@ Anything the resolver does not fully understand loads the **whole** module, so t
 unchanged: a bare `import a::b;` (nothing pins a file — and a type reached only through inference is never
 spelled, so the importing file's own text cannot be used to seed one), a symbol the directory does not
 declare, and a file whose declarations are
-nameless but program-wide — a `type intrinsic` conformance on a primitive, or the `extern` seam that
+nameless but program-wide — a `type adapter` conformance on a primitive, or the `extern` seam that
 `spawn`/`parallel_for` require.
 
 Two consequences, both deliberate and both pre-1.0: a defect the compiler would report in a sibling file
@@ -5664,7 +5664,7 @@ error: it is rejected by `kama check`, in kama's vocabulary, before any C compil
 (`tests/xfail/unresolved_name.kama`). A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and for a
-`ctor` added to a primitive by a `type intrinsic` block. Every spelling is pinned by
+`ctor` added to a primitive by a `type adapter` block. Every spelling is pinned by
 `tests/ctor_spelling_edges.kama`.
 
 On a **generic type** both forms take a turbofish, and the same `.`-vs-`::` split applies:

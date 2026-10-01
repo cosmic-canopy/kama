@@ -9,7 +9,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
 // (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `DynamicArray<int32>.contains`
-// resolves without importing `std::collections`. They stay pure-kama `type intrinsic` blocks (no compiler blessing).
+// resolves without importing `std::collections`. They stay pure-kama `type adapter` blocks (no compiler blessing).
 
 // A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),

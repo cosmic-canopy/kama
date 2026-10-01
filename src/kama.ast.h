@@ -1257,7 +1257,7 @@ public:
         , body(body) { }
 };
 
-// `type intrinsic <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
+// `type adapter <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
 // PRIMITIVE, the kind that had no kama spelling at all (it existed only as a compiler-internal notion, so
 // the prelude had to retro-implement onto it 68 times).
 //
@@ -1381,7 +1381,7 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
         } else if (auto* x = dynamic_cast<ExternConstNode*>(d)) {           // extern const T NAME;
             if (x->name && x->name->value) unit->topLevelNames.insert(*x->name->value);
         } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
-            // `type intrinsic <int32> implements Parseable { … }` registers a conformance for a PRIMITIVE,
+            // `type adapter <int32> implements Parseable { … }` registers a conformance for a PRIMITIVE,
             // program-wide, under no name of its own. Two files in lib/ have one.
             unit->unprunable = true;
         } else if (auto* inc = dynamic_cast<IncludeNode*>(d)) {

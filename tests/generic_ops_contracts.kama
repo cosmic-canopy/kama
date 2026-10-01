@@ -3,7 +3,7 @@
 // Every half of that shipped, but the combination had no fixture and no stdlib user: generic types
 // with operators were `operator[]` only (tests/opindex_generic.kama), operators-plus-contracts was
 // non-generic only (tests/generic_arith.kama), and `Equatable<This>`/`Comparable<This>` appeared on
-// non-generic types and `type intrinsic` blocks alone.
+// non-generic types and `type adapter` blocks alone.
 //
 // It did not work. An operator's `This` PARAMETER (`This operator+(This rhs)`) is re-derived per
 // instance in registerGenericTypeInst, and that loop ran before the block that binds `_thisType`,
@@ -17,11 +17,11 @@ type contract Widen<T is This> for value, intrinsic {
     ctor T fromWide(int64 v);
 }
 
-type intrinsic <int16> implements Widen<This> {
+type adapter <int16> implements Widen<This> {
     public fn int64 wide() { return cast<int64>(this); }
     public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
 }
-type intrinsic <int32> implements Widen<This> {
+type adapter <int32> implements Widen<This> {
     public fn int64 wide() { return cast<int64>(this); }
     public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
 }

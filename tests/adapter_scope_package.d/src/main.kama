@@ -6,7 +6,7 @@ import { weights::heaviness };
 
 type contract Tagged for value, intrinsic { fn int32 tag(); }
 
-type intrinsic <int32> implements Tagged { public fn int32 tag() { return 30; } }
+type adapter <int32> implements Tagged { public fn int32 tag() { return 30; } }
 
 fn int32 tagOf<T: Tagged>(ref T v) { return v.tag(); }
 

@@ -14,7 +14,7 @@ type value Pts implements Source<Pt> {                      // a USER type as th
     public ctor of() { }
     public fn Pt pull() { return Pt.of(x: 7); }
 }
-type intrinsic <int32> implements Source<int64> { public fn int64 pull() { return cast<int64>(this) * 2; } }
+type adapter <int32> implements Source<int64> { public fn int64 pull() { return cast<int64>(this) * 2; } }
 
 type value Wrap<P> {
     P inner;

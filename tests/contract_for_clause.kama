@@ -29,7 +29,7 @@ type enum Shade implements Sized {
     public fn int32 size() { return 2; }
 }
 // A primitive declares its own conformance — the kind `int32` IS. Gated at the block, not at the sweep.
-type intrinsic <int8, int16> implements Sized { public fn int32 size() { return 4; } }
+type adapter <int8, int16> implements Sized { public fn int32 size() { return 4; } }
 
 // A contract-supplied method on a primitive is reached the only way it can be — through a generic bound.
 fn int32 sizeOf<T: Sized>(T x) { return x.size(); }

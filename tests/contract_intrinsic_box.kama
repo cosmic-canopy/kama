@@ -6,8 +6,8 @@ import { std::serialization::text::json::serializeJsonBuffer, std::memory::Share
 // `kama_string__as_Serializable` (a field, a `bool` literal, every `string`). The vtbl is now demanded where
 // it is named. The owning boxes hold a heap `string`, so the san leg sees a leak or a double free.
 type contract Show for intrinsic { fn int32 width(); }
-type intrinsic <string> implements Show { public fn int32 width() { return cast<int32>(this.length()); } }
-type intrinsic <int32> implements Show { public fn int32 width() { return this; } }
+type adapter <string> implements Show { public fn int32 width() { return cast<int32>(this.length()); } }
+type adapter <int32> implements Show { public fn int32 width() { return this; } }
 
 fn int32 seven() { return 7; }
 fn string hi() { return "hi"; }

@@ -11,7 +11,7 @@ type contract Tagged for value, intrinsic {
     fn int32 scale();
 }
 
-type intrinsic <int8, int16, int32, int64> implements Tagged {
+type adapter <int8, int16, int32, int64> implements Tagged {
     // Shared by every target in the set.
     public fn int32 scale() { return 2; }
 
@@ -24,7 +24,7 @@ type intrinsic <int8, int16, int32, int64> implements Tagged {
 }
 
 // A section may name SEVERAL targets at once when they share a body but the set does not.
-type intrinsic <float32, float64> implements Tagged {
+type adapter <float32, float64> implements Tagged {
     <float32, float64> { public fn int32 tag() { return 9; } }
     public fn int32 scale() { return 10; }
 }

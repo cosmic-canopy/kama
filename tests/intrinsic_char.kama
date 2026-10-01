@@ -20,10 +20,10 @@ import { std::serialization::binary::kbin::serializeKbinNamedBuffer, std::collec
 // visibly different results, dispatched through a bound.
 type contract Widthy for value, intrinsic { fn int32 width(); }
 
-type intrinsic <char> implements Widthy {
+type adapter <char> implements Widthy {
     public fn int32 width() { return 100; }
 }
-type intrinsic <uint32> implements Widthy {
+type adapter <uint32> implements Widthy {
     public fn int32 width() { return 7; }
 }
 
