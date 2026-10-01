@@ -1347,7 +1347,16 @@ static inline int32_t kama_last_os_error(void) { return (int32_t)errno; }
 static inline ptrdiff_t kama_os_error_text(int32_t code, uint8_t* into, size_t cap) {
     if (!into || cap < 2 || code == 0) return 0;
     char* buf = (char*)into;
-#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+#if defined(__EMSCRIPTEN__)
+    // The wasm build compiles strict C11, under which musl's <string.h> does not declare strerror_r — and musl's
+    // strerror answers from a constant table with no shared buffer, so it is the thread-safe call there anyway.
+    const char* t = strerror(code);
+    if (!t) return 0;
+    size_t n = strlen(t);
+    if (n >= cap) n = cap - 1;
+    memcpy(buf, t, n);
+    return (ptrdiff_t)n;
+#elif defined(__GLIBC__) && defined(_GNU_SOURCE)
     const char* t = strerror_r(code, buf, cap);
     if (!t) return 0;
     size_t n = strlen(t);
