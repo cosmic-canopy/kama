@@ -48,6 +48,8 @@ extern fn int32 kama_shutdown(isize fd, int32 how);
 extern fn int32 kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
+extern fn int32 kama_EINPROGRESS();
+extern fn int32 kama_socket_error(isize fd);
 extern fn isize kama_desc_dup(isize h, int32 kind);
 extern fn isize kama_send_fds(isize sock, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<isize> hs, UnsafeConstPtr<int32> kinds, usize count);
 extern fn isize kama_recv_fds(isize sock, UnsafePtr<uint8> buf, usize n, UnsafePtr<isize> hs, UnsafePtr<int32> kinds, usize cap,
@@ -241,13 +243,49 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
         };
     }
     // Connect to an address value — on Linux, the one spelling that reaches an abstract name.
-    public unsafe ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
+    public ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
+        return UnixStream.open(address: address, nonBlocking: false);
+    }
+
+    // A connect that never blocks, for a caller holding a deadline (peer KPG-21: libpq bounds the connect with
+    // `connect_timeout`). A local connect completes at once, so the usual answer is a connected stream — left
+    // non-blocking, ready for a `Poller`. A listener whose queue is FULL is the one wait a blocking connect can
+    // get stuck in, and the OSes answer it differently:
+    //   - Linux returns EAGAIN and starts NOTHING. Measured: the socket then polls writable, reads SO_ERROR 0,
+    //     and `send` is ENOTCONN, so TCP's "poll writable, then checkConnected" would report a connection that
+    //     does not exist. It is `Err(WouldBlock)`: connect again (a new call) until the deadline.
+    //   - macOS refuses a full queue outright: `Err(ConnectionRefused)`, as for no listener at all.
+    // Where an OS does report a connect in flight (EINPROGRESS), the stream comes back and `checkConnected()`
+    // resolves it once it polls writable, exactly as `TcpStream`'s does.
+    public ctor Result<UnixStream, IoError> connectNonBlocking(const ref string path) {
+        return match (UnixAddr.fromPath(path: path)) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: a): UnixStream.connectToNonBlocking(address: a);
+        };
+    }
+    public ctor Result<UnixStream, IoError> connectToNonBlocking(const ref UnixAddr address) {
+        return UnixStream.open(address: address, nonBlocking: true);
+    }
+    // Resolve a connect that was in flight, once the stream polls writable: Ok if connected, else the cause.
+    // Reads SO_ERROR — meaningful only after writability, and only for a connect that reported EINPROGRESS.
+    public unsafe fn Result<Unit, IoError> checkConnected() {
+        if (kama_socket_error(fd: this.fd) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Both connects: a socket — non-blocking before the connect, for the second — connected to `address`.
+    unsafe ctor Result<UnixStream, IoError> open(const ref UnixAddr address, bool nonBlocking) {
         if (!addrNamed(a: address)) { return Result::Err(error: IoError::InvalidInput); }   // nothing to connect to
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        if (addrConnect(fd: fd, a: address) != 0) {
+        if (nonBlocking && kama_set_nonblocking(fd: fd, on: 1) != 0) {
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        if (addrConnect(fd: fd, a: address) != 0 && !(nonBlocking && kama_last_error() == kama_EINPROGRESS())) {
             IoError e = lastError();                          // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);

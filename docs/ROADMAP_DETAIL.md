@@ -219,9 +219,10 @@ Everything else here is library or toolchain work that does **not** gate the tag
    - **`std::net` local sockets and TCP options — the verdicts (shipped `0.9.482`–`0.9.485`).** The
      record is SPEC's net section; what stays here is what was decided NOT to ship, each with its reason:
      `UnixStream.pair()` (socketpair) is genuinely optional until `std::process` can hand a descriptor to a child —
-     between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; a
-     non-blocking Unix `connect` is genuinely optional — a local connect completes or fails at once (Linux's
-     full-backlog `EAGAIN` aside, which a caller retries like any `WouldBlock`); getters for the keepalive and
+     between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; (a
+     non-blocking Unix `connect` was filed here as optional, and that was WRONG — a blocking connect to a full
+     queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it shipped for KPG-21);
+     getters for the keepalive and
      user-timeout knobs are genuinely optional — no std option has one, and a program sets what it wants;
      `UnixDatagram` does not implement `DatagramSocket` YET — that contract's addresses are `SocketAddr`s — and that
      is SCHEDULED, not optional: a syslog client sends to `/dev/log` or to UDP 514 through one code path, which is

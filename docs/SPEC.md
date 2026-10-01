@@ -1975,6 +1975,10 @@ a NUL, or longer than `sun_path` less its terminator (103 bytes on macOS, 107 on
 `InvalidInput`. **`bind` over an existing path is `AddrInUse`** — a live listener's or a stale file, which is
 never removed behind the caller — and **a listener removes the socket file it made when it drops**, so a clean
 restart just works (a crash still leaves the file). SIGPIPE is handled as for TCP (above).
+`connectNonBlocking(path:)` / `connectToNonBlocking(address:)` never wait, for a caller holding a deadline: a
+local connect completes at once, and a listener whose queue is full answers at once too — `WouldBlock` on Linux,
+which started nothing (connect again), `ConnectionRefused` on macOS. Where an OS reports a connect in flight, the <!-- test: net_unix_nonblocking_connect -->
+stream is returned and `checkConnected()` resolves it once it polls writable, as for TCP.
 
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
 and streams to the process on the other end, with at least one byte to carry them, and

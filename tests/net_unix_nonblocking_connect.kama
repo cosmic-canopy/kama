@@ -1,0 +1,61 @@
+// Peer KPG-21: a Unix connect that never blocks, for a caller holding a deadline (libpq's `connect_timeout`).
+// A local connect completes at once; the wait a BLOCKING connect can get stuck in is a listener whose queue is
+// full. Linux answers that with EAGAIN and starts nothing — `Err(WouldBlock)`, connect again — and macOS refuses
+// it outright (`ConnectionRefused`). Either way the answer comes back at once, which is what this proves by
+// filling a queue nobody accepts from. Returns 0.
+import { std::net::UnixListener, std::net::UnixStream, std::io::IoError, std::collections::DynamicArray };
+
+fn int32 kind(const ref IoError e) {
+    return match (e) { case WouldBlock: 1; case ConnectionRefused: 2; case NotFound: 3; case InvalidInput: 4; case _: 9; };
+}
+fn int32 connectKind(const ref string path) {   // 0 connected, else the error's kind
+    Result<UnixStream, IoError> r = UnixStream.connectNonBlocking(path: path);
+    return match (r) { case Ok(value: s): 0; case Err(error: e): kind(e: e); };
+}
+
+unsafe fn int32 run() {
+    // connected at once, and usable: a byte each way
+    Result<UnixListener, IoError> rl = UnixListener.bind(path: "nbc.sock");
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    Result<UnixStream, IoError> rc = UnixStream.connectNonBlocking(path: "nbc.sock");
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<UnixStream, IoError> ra = l.accept();
+    UnixStream server = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    InlineArray<uint8>#(1) sent = [42ui8];
+    InlineArray<uint8>#(1) back = [0ui8];
+    Result<isize, IoError> w = c.write(bytes: sent.view());
+    if (match (w) { case Ok(value: n): n != 1; case Err(error: e): true; }) { return 4; }
+    Result<isize, IoError> rd = server.read(into: back.viewMut());
+    if (match (rd) { case Ok(value: n): n != 1 || back[0] != 42ui8; case Err(error: e): true; }) { return 5; }
+    Result<Unit, IoError> cc = c.checkConnected();
+    if (match (cc) { case Ok(value: u): false; case Err(error: e): true; }) { return 6; }
+
+    // a full queue answers at once — never a wait
+    Result<UnixListener, IoError> rf = UnixListener.bind(path: "full.sock");
+    UnixListener full = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+    DynamicArray<UnixStream> held = DynamicArray.empty();
+    int32 refused = 0;
+    int32 tries = 0;
+    while (refused == 0 && tries < 400) {
+        Result<UnixStream, IoError> r = UnixStream.connectNonBlocking(path: "full.sock");
+        match (give r) {
+            case Ok(value: s): { held.add(item: give s); }
+            case Err(error: e): { refused = kind(e: e); }
+        };
+        tries = tries + 1;
+    }
+    if (refused != 1 && refused != 2) { return 10 + refused; }   // WouldBlock (Linux) or ConnectionRefused (macOS)
+    if (held.length() == 0) { return 20; }
+
+    // ...and once there is room again, the next connect is made
+    Result<UnixStream, IoError> one = full.accept();
+    if (match (one) { case Ok(value: s): false; case Err(error: e): true; }) { return 21; }
+    if (connectKind(path: "full.sock") != 0) { return 22; }
+
+    // what was always an error still is
+    if (connectKind(path: "no-such.sock") != 3) { return 23; }
+    if (connectKind(path: "") != 4) { return 24; }
+    return 0;
+}
+
+fn int32 main() { return run(); }
