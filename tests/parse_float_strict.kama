@@ -1,0 +1,46 @@
+// Peer KPG-13 and what it led to. `parse::<float64>` refused a subnormal it had read exactly — strtod raises
+// ERANGE in BOTH directions, and both were reported as OutOfRange. Only overflow is out of range now; an
+// underflow rounds to zero or a subnormal, as in Rust and Go and as the kama literal `1e-400` does (ruling).
+// The spelling is Rust's and is checked before strtod sees it, so what strtod alone would take is refused:
+// leading whitespace (SPEC: `" 7"` fails), a hex float, a NaN payload. `parse::<float32>` reads with strtof,
+// rounding ONCE — it went through a double and rounded twice, and overflowed to `Ok(inf)`.
+import { std::fmt::parse, std::fmt::ParseError };
+
+fn int32 f64(const ref string s) {   // 1 ok, 2 malformed, 3 out of range, 4 empty
+    Result<float64, ParseError> r = parse::<float64>(s: s);
+    return match (r) { case Ok(value: v): 1;
+                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; }; };
+}
+fn int32 f32(const ref string s) {
+    Result<float32, ParseError> r = parse::<float32>(s: s);
+    return match (r) { case Ok(value: v): 1;
+                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; }; };
+}
+
+fn int32 main() {
+    int32 bad = 0;
+    // range: overflow only
+    if (f64(s: "5e-324") != 1) { bad = bad + 1; }                     // the smallest subnormal
+    if (f64(s: "2.2250738585072009e-308") != 1) { bad = bad + 1; }    // the largest
+    if (f64(s: "-5e-324") != 1) { bad = bad + 1; }
+    if (f64(s: "1e-400") != 1) { bad = bad + 1; }                     // rounds to zero
+    if (f64(s: "1e400") != 3) { bad = bad + 1; }
+    if (f64(s: "-1e400") != 3) { bad = bad + 1; }
+    Result<float64, ParseError> z = parse::<float64>(s: "1e-400");
+    if (match (z) { case Ok(value: v): v != 0.0; case Err(error: e): true; }) { bad = bad + 1; }
+    // spelling: Rust's
+    if (f64(s: " 1.5") != 2 || f64(s: "1.5 ") != 2) { bad = bad + 1; }
+    if (f64(s: "0x1p3") != 2) { bad = bad + 1; }
+    if (f64(s: "nan(12)") != 2) { bad = bad + 1; }
+    if (f64(s: "1e") != 2 || f64(s: ".") != 2 || f64(s: "e3") != 2 || f64(s: "+") != 2) { bad = bad + 1; }
+    if (f64(s: "1.") != 1 || f64(s: ".5") != 1 || f64(s: "+1E+3") != 1) { bad = bad + 1; }
+    if (f64(s: "inf") != 1 || f64(s: "-Infinity") != 1 || f64(s: "NaN") != 1) { bad = bad + 1; }
+    if (f64(s: "") != 4) { bad = bad + 1; }
+    // float32: one rounding, and its own range
+    Result<float32, ParseError> h = parse::<float32>(s: "1.00000005960464483");
+    if (match (h) { case Ok(value: v): v <= 1.0f32; case Err(error: e): true; }) { bad = bad + 1; }
+    if (f32(s: "1e39") != 3) { bad = bad + 1; }
+    if (f32(s: "1e-50") != 1 || f32(s: "1e-45") != 1) { bad = bad + 1; }
+    if (f32(s: "0x10") != 2) { bad = bad + 1; }
+    return bad;
+}

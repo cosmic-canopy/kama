@@ -212,10 +212,11 @@ fn Result<string, Owned<Error>> serializeJsonBuffer(Serializable v) {
     return Result::Ok(value: w.innerRefMut().finish());   // materialize the concrete StringWriter's bytes
 }
 
-// Borrows the token string (`ref` → `kama_string*`): C reads `.data` via strtod and never owns/frees it,
-// so the caller keeps ownership and drops the token. (Passing an owned string BY VALUE to an extern would
-// "transfer ownership" to C, which never frees it — a leak.)
-extern fn float64 kama_parse_f64(const ref string s);
+// The checked float parse `std::fmt::parse` uses (kama_fmt.h): it borrows the token string (`ref` →
+// `kama_string*`), so the caller keeps ownership and drops it. (Passing an owned string BY VALUE to an extern
+// would "transfer ownership" to C, which never frees it — a leak.)
+extern fn int32 kama_parse_f64_ck(const ref string s, out float64 v);
+extern fn int32 kama_parse_f32_ck(const ref string s, out float32 v);
 
 // A JSON reader: a recursive-descent parser over an owned source string, implementing Deserializer. It uses
 // a STICKY error flag — a malformed token sets `err` and returns a default, and the caller checks `failed()`
@@ -375,8 +376,26 @@ type resource JsonDeserializer implements Deserializer {
         this.failWith(e: DeError::TypeMismatch); return 0ui32;
     }
     public fn uint64 readU64() { return this.readUint(); }
-    public unsafe fn float64 readF64() { string t = this.numToken(); return kama_parse_f64(s: ref t); }
-    public unsafe fn float32 readF32() { string t = this.numToken(); return cast<float32>(kama_parse_f64(s: ref t)); }
+    // A float is held to the integers' rule above: past the destination's range the DOCUMENT is bad, and a
+    // malformed token is one too. Both used to read as a number — `1e400` came back `inf`, `1.2.3` came back 1.2
+    // (strtod stopped where it liked), and a float32 field rounded twice and overflowed to `inf` — through a
+    // lenient parse that reported nothing. An underflow is a number: it rounds to zero or a subnormal.
+    public unsafe fn float64 readF64() {
+        string t = this.numToken();
+        slot float64 v;
+        int32 st = kama_parse_f64_ck(s: t, v: out v);
+        if (st == 3) { this.failWith(e: DeError::TypeMismatch); return 0.0; }
+        if (st != 0) { this.err = true; return 0.0; }
+        return v;
+    }
+    public unsafe fn float32 readF32() {
+        string t = this.numToken();
+        slot float32 v;
+        int32 st = kama_parse_f32_ck(s: t, v: out v);
+        if (st == 3) { this.failWith(e: DeError::TypeMismatch); return 0.0f32; }
+        if (st != 0) { this.err = true; return 0.0f32; }
+        return v;
+    }
     public fn bool readBool() {
         this.skipWs();
         uint8 c = this.peek();

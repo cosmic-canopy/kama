@@ -1,0 +1,25 @@
+// A float in a JSON document is held to the integers' rule: a number past the destination's range is a bad
+// DOCUMENT, and so is a malformed one. Both used to decode — `1e400` as `inf`, `1.2.3` as 1.2 — through a
+// lenient parse that reported nothing, and a `float32` field rounded twice and overflowed to `inf`. An
+// underflow still decodes: it rounds to zero or a subnormal (KPG-13).
+import { std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
+
+fn int32 f64s(string src) {   // 1 decoded, 0 refused
+    Result<DynamicArray<float64>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float64>>(src: give src);
+    return match (r) { case Ok(value: xs): 1; case Err(error: e): 0; };
+}
+fn int32 f32s(string src) {
+    Result<DynamicArray<float32>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float32>>(src: give src);
+    return match (r) { case Ok(value: xs): 1; case Err(error: e): 0; };
+}
+
+fn int32 main() {
+    int32 bad = 0;
+    if (f64s(src: "[1.5,5e-324,1e-400]") != 1) { bad = bad + 1; }
+    if (f64s(src: "[1e400]") != 0) { bad = bad + 1; }
+    if (f64s(src: "[1.2.3]") != 0) { bad = bad + 1; }
+    if (f64s(src: "[1e]") != 0) { bad = bad + 1; }
+    if (f32s(src: "[1.5,1e-50]") != 1) { bad = bad + 1; }
+    if (f32s(src: "[1e39]") != 0) { bad = bad + 1; }
+    return bad;
+}

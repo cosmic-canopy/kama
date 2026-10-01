@@ -145,18 +145,31 @@ type intrinsic <uint64> implements Parseable<This> {
     }
 }
 
-// Floats go through `strtod` — reimplementing correctly-rounded decimal-to-binary conversion would be a
-// large, subtle job for no gain, and libc is already linked. The seam reports WHICH failure so the two
-// stay distinguishable, unlike the lenient reader the JSON path uses.
+// Floats go through `strtod`/`strtof` — reimplementing correctly-rounded decimal-to-binary conversion would be
+// a large, subtle job for no gain, and libc is already linked. The seam checks the spelling first (Rust's
+// grammar, strict as integers are) and reports WHICH failure, unlike the lenient reader the JSON path uses.
+// Only overflow is out of range: an underflow rounds to zero or a subnormal (see kama_fmt.h).
 extern "kama_fmt.h";
 extern fn int32 kama_parse_f64_ck(const ref string s, out float64 v);
+extern fn int32 kama_parse_f32_ck(const ref string s, out float32 v);
+
+fn ParseError floatError(int32 st) {
+    if (st == 1) { return ParseError::Empty; }
+    if (st == 3) { return ParseError::OutOfRange; }
+    return ParseError::InvalidDigit;
+}
 
 unsafe fn Result<float64, ParseError> parseF64(const ref string s) {
     slot float64 v;
     int32 st = kama_parse_f64_ck(s: s, v: out v);
-    if (st == 1) { return Result::Err(error: ParseError::Empty); }
-    if (st == 2) { return Result::Err(error: ParseError::InvalidDigit); }
-    if (st == 3) { return Result::Err(error: ParseError::OutOfRange); }
+    if (st != 0) { return Result::Err(error: floatError(st: st)); }
+    return Result::Ok(value: v);
+}
+
+unsafe fn Result<float32, ParseError> parseF32(const ref string s) {
+    slot float32 v;
+    int32 st = kama_parse_f32_ck(s: s, v: out v);
+    if (st != 0) { return Result::Err(error: floatError(st: st)); }
     return Result::Ok(value: v);
 }
 
@@ -164,10 +177,7 @@ type intrinsic <float64> implements Parseable<This> {
     public ctor Result<float64, ParseError> fromStr(const ref string s) { return parseF64(s: s); }
 }
 type intrinsic <float32> implements Parseable<This> {
-    public ctor Result<float32, ParseError> fromStr(const ref string s) {
-        Result<float64, ParseError> r = parseF64(s: s);
-        return match (r) { case Ok(value: v): Result::Ok(value: cast<float32>(v)); case Err(error: e): Result::Err(error: e); };
-    }
+    public ctor Result<float32, ParseError> fromStr(const ref string s) { return parseF32(s: s); }
 }
 
 // Exactly `"true"`/`"false"`, as in Rust — a parser is not the place to invent truthiness.

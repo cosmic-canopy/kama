@@ -1517,8 +1517,11 @@ The turbofish is required because nothing in the arguments mentions `T`. Covers 
 `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
 2..36 for the integer widths, case-insensitive, with **no** `0x`/`0b` prefix — the base is already an
 argument. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
-`" 7"` and `"7x"` both fail. Floats go through `strtod` behind `kama_fmt.h`, whose checked entry point
-reports `ERANGE` as `OutOfRange` rather than folding it to an infinity.
+`" 7"` and `"7x"` both fail. A float is read in Rust's spelling — a sign, then digits with an optional
+fraction and exponent, or `inf`/`infinity`/`nan` in any case — so a hex float and a NaN payload fail too, <!-- test: parse_float_strict -->
+and it is converted once, by `strtod` or `strtof`. Only overflow is `OutOfRange`; a value too small for the
+type rounds to zero or a subnormal, as a literal does. A JSON number into a float field follows the same
+rules, and one out of range or malformed fails the document. <!-- test: json_float_document -->
 
 ### ASCII (`std::ascii`) ✅
 
