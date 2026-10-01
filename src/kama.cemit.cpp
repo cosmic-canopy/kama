@@ -15737,6 +15737,12 @@ void CEmitter::registerInstGenerics()
             if (!tmpl->block || !tmpl->typeParams) continue;
             auto cit = _genericCtx.find(gi.templateKey);
             _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
+            // A diagnostic in this body belongs to the TEMPLATE's file — or, for a std template, to the line
+            // that instantiated it — exactly as when the body is emitted (emitGenericInst).
+            auto dfIt = _genericDeclFile.find(gi.templateKey);
+            const std::string tmplFile = dfIt == _genericDeclFile.end() ? std::string() : dfIt->second;
+            ScopedStr _cu(_collectingUnitPath, tmplFile);
+            ScopedAttrSite _as(*this, mangled, tmplFile);
             // A const param binds a VALUE, not a type — but it still has to bind, or a generic call in
             // this body that passes one (`ident(x: F)`) cannot infer the callee's type parameter from it.
             bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
@@ -15761,6 +15767,8 @@ void CEmitter::registerInstGenerics()
             if (sit == _classes.end()) continue;
             auto cit = _genericTypeCtx.find(gi.templateKey);
             _nsCtx = (cit != _genericTypeCtx.end()) ? cit->second : savedCtx;
+            ScopedStr _cu(_collectingUnitPath, tit->second.declFile);   // as for a generic fn, above
+            ScopedAttrSite _as(*this, mangled, tit->second.declFile);
             // Skip an instance whose own arguments are not concrete. `_genericTypeInsts` can hold a
             // partially-resolved registration whose argument is still a bare type-parameter name
             // (`DynamicArray_K`, seen from inside `SortedMap<K,V>`); binding `T -> K` would substitute one
@@ -26548,6 +26556,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (deferUnknownWhileProbing(DK_Turbofish)) return "0";
         // An argument that failed above is why no instantiation resolved; the callee may well be generic.
         if (badTypeArg) return "0";
+        // ...and so is a call discovery already refused — a wrong type-argument count names a GENERIC
+        // function, so "only valid on a generic function" after it was a second, false error.
+        if (_genericInferFailed.count(call)) return "0";
         // Name the group the reader actually wrote. `genericArgs` now merges both, so a call that only
         // ever carried `#(…)` would otherwise be told about a turbofish it never typed.
         unsupported((call->identifier->nTypeArgs == 0
@@ -35987,8 +35998,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
+    // Each walk names the file it is in: an inference failure is raised HERE, and diagFile() fell through to
+    // `_sourcePath` — the entry file, the file a query asked about, or "" in a multi-unit build (peer KPG-11).
     for (auto& u : units)
-        if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
+        if (u && u->codeDeclarationList) {
+            _nsCtx = _unitCtx[u.get()];
+            ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath);
+            collectGenericInsts(u);
+        }
     registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)

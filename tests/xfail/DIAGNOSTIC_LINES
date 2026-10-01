@@ -471,6 +471,7 @@ generic_enum_sendable_unmet	generic_enum_sendable_unmet.kama:6
 generic_infer_conflict	generic_infer_conflict.kama:6
 generic_infer_in_generic_bound	generic_infer_in_generic_bound.kama:6
 generic_infer_literal_narrow	generic_infer_literal_narrow.kama:6
+generic_infer_std_import	generic_infer_std_import.kama:8
 generic_resource_uam	generic_resource_uam.kama:10
 generic_return_only	generic_return_only.kama:3 generic_return_only.kama:6
 generic_turbofish_arg	generic_turbofish_arg.kama:11

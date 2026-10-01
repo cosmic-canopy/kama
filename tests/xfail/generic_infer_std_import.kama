@@ -1,0 +1,10 @@
+// Peer KPG-11: a generic-inference failure in a program that imports from std was reported with NO file —
+// `:5:0: error: cannot unify…` — because inference runs in the discovery walk, which never named its file,
+// and a build with more than one unit has no "file being compiled" to fall back on. The existing
+// generic_infer_* fixtures import nothing, which is why none of them saw it. The row pins the position.
+import { std::math::sqrt };
+fn T pick<T>(T a, T b) { return a; }
+fn int32 main() {
+    int32 x = pick(a: 3, b: 2.5);
+    return x;
+}

@@ -18,10 +18,10 @@
 # assertion about the FILE NAME in the diagnostic — the xfail harness compares a message substring against
 # stderr and has no shape for either. Same reasoning as check-self-import.sh.
 #
-# Nine assertions, because there are several ways to be wrong and a fix can trade one for another. The
+# Ten assertions, because there are several ways to be wrong and a fix can trade one for another. The
 # first three are about the COLLECT pass, 4 and 5 about the EMIT walk underneath it — where the same
 # defect survived the original fix, because `_collectingUnitPath` is empty by the time a body is walked —
-# and 6 through 9 were each added by the campaign that found them:
+# and 6 through 10 were each added by the campaign that found them:
 #   1. A broken declaration in an IMPORTED module names that module's file, not the consumer's.
 #   2. A broken declaration in the file being checked still names ITS OWN file — the case that always
 #      worked, and the one an over-eager fix would break by letting the collect path win everywhere.
@@ -34,6 +34,7 @@
 #   8. A failed generic bound is the USE SITE's mistake, reported once, in its file (case 1 inverted).
 #   9. A position raised in the header pass — where NO module is current — names the prelude rather than
 #      falling through to the file being compiled, which is the same defect with no declaration to blame.
+#  10. A generic-INFERENCE failure names its own file in `build`, `check` and `query --diagnostics` alike.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -403,10 +404,87 @@ printf '%s\n' "$rows" | LC_ALL=C awk -F'\t' '$2 !~ /^</ { print $2 "\t" $3 }' | 
     [ "$l" -le "$fmax" ] || { echo "check-diag-file: FAIL — a row names $f:$l, and that file has $fmax lines" >&2; exit 1; }
 done
 
+# ---- 10. generic INFERENCE names its file — in every front end -----------------------------------------
+#
+# Inference runs in the discovery walks (collectGenericInsts, registerInstGenerics), which swapped only the
+# name context, so diagFile() fell through to the file being compiled (peer KPG-11). `kama build` printed
+# `:4:0: error:` — no file at all — once the program imported anything from std; `kama check` named the
+# project's root file; `kama query <f> --diagnostics` stamped the error onto whichever file was ASKED about,
+# at a line it may not have. A body and a generic TEMPLATE's body are both walked there, so both are probed.
+mkdir -p "$tmp/p10/src/sub"
+cat > "$tmp/p10/kama.json" <<'JSON'
+{ "name": "p10", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",
+  "modules": { ".": { "visibility": "internal" }, "sub": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/p10/src/main.kama" <<'KAMA'
+import { std::math::sqrt, p10::sub::plain, p10::sub::twice };
+fn int32 main() {
+    return plain() + twice::<int32>(x: 1);
+}
+KAMA
+cat > "$tmp/p10/src/sub/b.kama" <<'KAMA'
+export { plain };
+fn T pick<T>(T a, T b) { return a; }
+
+fn int32 plain() { return pick(a: 3, b: 2.5); }
+KAMA
+cat > "$tmp/p10/src/sub/e.kama" <<'KAMA'
+export { twice };
+fn T same<T>(T a, T b) { return a; }
+
+
+fn T twice<T>(T x) { return same(a: x, b: 2.5); }
+KAMA
+for verb in build check; do
+    if [ "$verb" = build ]; then out10=$(cd "$tmp/p10" && "$KAMA" build kama.json -o "$tmp/p10.bin" 2>&1 || true)
+    else                         out10=$(cd "$tmp/p10" && "$KAMA" check kama.json 2>&1 || true); fi
+    for want in 'sub/b\.kama:4:' 'sub/e\.kama:5:'; do
+        if ! printf '%s\n' "$out10" | grep -q "$want"; then
+            echo "check-diag-file: FAIL — \`kama $verb\`: an inference failure does not name its own file"
+            echo "  (expected $want):"
+            printf '%s\n' "$out10" | sed 's/^/    /' | head -6
+            exit 1
+        fi
+    done
+    if printf '%s\n' "$out10" | grep -qE '(^|[^a-z.])(main\.kama)?:[45]:[0-9]+: error'; then
+        echo "check-diag-file: FAIL — \`kama $verb\`: an inference failure is charged to main.kama, or to no file:"
+        printf '%s\n' "$out10" | sed 's/^/    /' | head -6
+        exit 1
+    fi
+done
+q10=$(cd "$tmp/p10" && "$KAMA" query kama.json src/sub/b.kama --diagnostics 2>&1 || true)
+if ! printf '%s\n' "$q10" | grep -q 'sub/b\.kama:4:'; then
+    echo "check-diag-file: FAIL — \`kama query <b.kama> --diagnostics\` (a relative path) misses the file's own error:"
+    printf '%s\n' "$q10" | sed 's/^/    /' | head -6
+    exit 1
+fi
+q10m=$(cd "$tmp/p10" && "$KAMA" query kama.json src/main.kama --diagnostics 2>&1 || true)
+if printf '%s\n' "$q10m" | grep -q 'error'; then
+    echo "check-diag-file: FAIL — \`kama query <main.kama> --diagnostics\` reports another file's error as main.kama's:"
+    printf '%s\n' "$q10m" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
+# 10b. a wrong turbofish arity is ONE error. Discovery refused the call and said why; the emit-side arm then
+#      added "turbofish type arguments are only valid on a generic function" about the function it had just
+#      called generic. Counted here because an xfail row records a line, and both errors were on one line.
+cat > "$tmp/tf.kama" <<'KAMA'
+import { std::math::sin };
+fn int32 main() { float64 t = 1.0; float64 r = sin::<float64, float64>(x: t); return 0; }
+KAMA
+out10b=$("$KAMA" check "$tmp/tf.kama" 2>&1 || true)
+n10b=$(printf '%s\n' "$out10b" | grep -c 'error:' || true)
+if [ "$n10b" != 1 ]; then
+    echo "check-diag-file: FAIL — a wrong turbofish arity produced $n10b errors (expected 1):"
+    printf '%s\n' "$out10b" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
 echo "                       unresolved module names the rule that refused it, not a directory; a"
 echo "                       same-module import blames the cause that fired, not the export list; and a"
 echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file; and a
-                       position raised in the HEADER PASS names the prelude, not the user's file)"
+                       position raised in the HEADER PASS names the prelude, not the user's file; and
+                       a generic-inference failure names its file in build, check and query alike)"
