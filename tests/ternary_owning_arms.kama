@@ -1,0 +1,96 @@
+// A ternary over a type that owns something chooses between values: it never bit-copies one. Handed off, each arm
+// is its own hand-off (`f ? copy x : copy y`; a fresh arm needs no marker; a `Shared` or a `Copyable(bare: copy)`
+// resource takes its bare default). Borrowed — a receiver, a `const ref` argument, a `match` subject — it is a
+// place, `(*(f ? &x : &y))`, and a fresh arm there lives in a temporary dropped only when that arm ran.
+// `string z = f ? x : y;` built before this and freed the chosen string twice (exit 133). Each loop pass takes
+// the other arm, so a value freed under its owner is read freed on the second.
+import { core::println, std::collections::DynamicArray };
+
+type enum Cell { Empty, Text(string text) }
+
+type resource Tok implements Copyable<This>(bare: copy) {
+    string s;
+    public ctor make(string s) { this.s = give s; }
+    public ctor copy(ref Tok source) { this.s = copy source.s; }
+    public const fn int32 len() { return cast<int32>(this.s.length()); }
+}
+
+type resource Box {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+}
+
+type resource Doc {
+    string a; string b;
+    public ctor make() { this.a = "aa".concat(other: "1"); this.b = "bb".concat(other: "22"); }
+    public fn string pick(bool f) { return f ? copy this.a : copy this.b; }
+    public fn int32 peek(bool f) { return cast<int32>((f ? this.a : this.b).length()); }
+    const fn const ref string ra() { return this.a; }
+    const fn const ref string rb() { return this.b; }
+    public fn int32 viaPlaces(bool f) { return cast<int32>((f ? this.ra() : this.rb()).length()); }
+}
+
+fn int32 takeS(string s) { return cast<int32>(s.length()); }
+fn int32 lenOf(const ref string s) { return cast<int32>(s.length()); }
+fn string mk(int32 n) { return "xxxxxxxxxx".substring(start: 0, end: cast<isize>(n)); }
+
+fn int32 main() {
+    int32 bad = 0;
+    for (int32 i = 0; i < 2; i++) {
+        bool f = i == 0;
+        bool g = i == 1;
+        int32 want = f ? 3 : 5;
+        string x = "ab".concat(other: "c");
+        string y = "de".concat(other: "fgh");
+        string w = "w".concat(other: "w");
+
+        // handed off: each arm says what it does
+        string z = f ? copy x : copy y;
+        if (cast<int32>(z.length()) != want) { bad = bad + 1; }
+        string m = f ? copy x : mk(n: 7);
+        if (cast<int32>(m.length()) != (f ? 3 : 7)) { bad = bad + 2; }
+        if (takeS(s: f ? copy x : copy y) != want) { bad = bad + 4; }
+        DynamicArray<string> xs = DynamicArray.empty();
+        xs.add(item: f ? copy x : copy y);
+        xs.add(item: copy y);
+        Cell c = Cell::Text(text: f ? copy x : copy y);
+        int32 cl = match (c) { case Text(text: t): cast<int32>(t.length()); case _: 0; };
+        if (cl != want) { bad = bad + 8; }
+        string e = f ? copy xs[0] : copy xs[1];
+        if (cast<int32>(e.length()) != want) { bad = bad + 16; }
+        string n3 = f ? copy x : g ? copy y : copy w;
+        if (cast<int32>(n3.length()) != want) { bad = bad + 32; }
+        z = f ? copy y : copy x;
+        if (cast<int32>(z.length()) != (f ? 5 : 3)) { bad = bad + 64; }
+
+        // bare defaults that leave the source alive
+        Tok t1 = Tok.make(s: "one".concat(other: "!"));
+        Tok t2 = Tok.make(s: "three".concat(other: "!"));
+        Tok tc = f ? t1 : t2;
+        if (tc.len() != (f ? 4 : 6) || t1.len() != 4) { bad = bad + 128; }
+        Shared<Box> sa = new Box.make(v: 1);
+        Shared<Box> sb = new Box.make(v: 2);
+        Shared<Box> sc = f ? sa : sb;
+        if (sc.value() != (f ? 1 : 2) || sa.value() != 1) { bad = bad + 256; }
+
+        // borrowed: a place, nothing copied
+        if (cast<int32>((f ? x : y).length()) != want) { bad = bad + 512; }
+        if (cast<int32>((f ? x : mk(n: 9)).length()) != (f ? 3 : 9)) { bad = bad + 1024; }
+        if (lenOf(s: f ? x : y) != want) { bad = bad + 2048; }
+        if (lenOf(s: f ? mk(n: 2) : y) != (f ? 2 : 5)) { bad = bad + 4096; }
+        if (cast<int32>((f ? xs[0] : xs[1]).length()) != want) { bad = bad + 8192; }
+        if (cast<int32>((f ? x : g ? y : w).length()) != want) { bad = bad + 16384; }
+        Cell c1 = Cell::Text(text: copy x);
+        Cell c2 = Cell::Empty;
+        int32 ml = match (f ? c1 : c2) { case Text(text: t): cast<int32>(t.length()); case _: 0; };
+        if (ml != (f ? 3 : 0)) { bad = bad + 32768; }
+        if (((f ? x : y) == "abc") != f) { bad = bad + 65536; }
+        Doc d = Doc.make();
+        if (cast<int32>(d.pick(f: f).length()) != want || d.peek(f: f) != want || d.viaPlaces(f: f) != want) {
+            bad = bad + 131072;
+        }
+        println(s: copy x);
+    }
+    return bad;
+}

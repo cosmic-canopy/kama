@@ -1078,6 +1078,20 @@ Those three are spelled out because "uniformly" above is a claim about the hand-
 the type, and it was true of `string` in only some of the shapes until `0.9.436` — with nothing here able
 to tell, since the fixtures tested the site and tested the type but never the intersection.
 
+**A ternary hands off one arm, so each arm is the hand-off.** `c ? a : b` over a type that owns something <!-- test: ternary_owning_arms -->
+chooses between values; it never bit-copies one. Where it is handed off, a named arm carries the marker the
+same value would carry alone: `string label = useName ? copy name : copy fallback;`. A fresh arm, such as a
+literal, a call or a constructor, needs no marker: `useName ? copy name : "anonymous"`. A bare named arm takes
+its type's bare default when that default leaves the source alive: a `Shared` retains, and a
+`Copyable(bare: copy)` resource copies. Otherwise the arm is refused, and so is a `give` in any arm. <!-- xfail: ternary_handoff_bare_named, ternary_arm_give, ternary_arm_move_resource -->
+A ternary runs one arm, so a move there would leave the value moved on one path and live on the other. That is
+the "moved on some paths" error an `if` gets. A move nested deeper in an arm, such as `f ? wrap(s: give a) : …`
+or the right side of `&&`/`||`, is judged the same way. <!-- xfail: ternary_move_in_arm, shortcircuit_move_rhs -->
+Where the ternary is borrowed instead of handed off, it is a place: a receiver, a `ref`/`const ref` argument,
+a `match` subject, an operand. `(useName ? name : fallback).length()` reads the chosen string where it lives
+and copies nothing. A fresh arm there is held in a temporary, which is dropped only if that arm ran, and a
+marker there is refused as on any other sub-expression. <!-- xfail: ternary_arm_copy_borrow -->
+
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).

@@ -1,0 +1,8 @@
+// Where a ternary is borrowed rather than handed off, it borrows the chosen value in place: a `copy` in an arm
+// there is a marker with no hand-off to mark, refused as it is on any other sub-expression.
+fn int32 main() {
+    bool f = true;
+    string x = "ab".concat(other: "c");
+    string y = "de".concat(other: "f");
+    return cast<int32>((f ? copy x : copy y).length());
+}

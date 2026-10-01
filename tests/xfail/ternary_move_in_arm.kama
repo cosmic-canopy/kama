@@ -1,0 +1,9 @@
+// A move nested inside one arm happens on that arm's path only. It was marked moved outright, so when the
+// other arm ran, `a` was never dropped.
+fn string wrap(string s) { return give s; }
+fn int32 main() {
+    bool f = false;
+    string a = "ab".concat(other: "c");
+    string z = f ? wrap(s: give a) : "none".concat(other: "!");
+    return cast<int32>(z.length());
+}

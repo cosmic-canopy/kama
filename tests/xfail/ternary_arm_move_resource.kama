@@ -1,0 +1,12 @@
+// A bare named arm takes its type's bare default, and a resource with no `copy` moves: on one path only.
+type resource Res {
+    string s;
+    public ctor make(string s) { this.s = give s; }
+}
+fn int32 main() {
+    bool f = true;
+    Res a = Res.make(s: "a".concat(other: "b"));
+    Res b = Res.make(s: "c".concat(other: "d"));
+    Res r = f ? a : b;
+    return 0;
+}

@@ -1,0 +1,9 @@
+// The right side of `&&` runs only when the left is true, so a move in it moves `a` on that path only. It was
+// marked moved outright, so a false left side leaked `a`.
+fn bool take(string s) { return s.length() > 0; }
+fn int32 main() {
+    bool f = false;
+    string a = "ab".concat(other: "c");
+    bool r = f && take(s: give a);
+    return r ? 1 : 0;
+}

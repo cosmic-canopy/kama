@@ -1,0 +1,9 @@
+// A ternary runs one arm, so a `give` in an arm moves `x` on one path and leaves it live on the other — the
+// "moved on some paths" shape kama refuses for an `if`, refused here at the arm.
+fn int32 main() {
+    bool f = true;
+    string x = "ab".concat(other: "c");
+    string y = "de".concat(other: "f");
+    string z = f ? give x : copy y;
+    return cast<int32>(z.length());
+}

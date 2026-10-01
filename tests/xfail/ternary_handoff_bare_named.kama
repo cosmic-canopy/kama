@@ -1,0 +1,9 @@
+// A ternary that hands off an owning value hands off one of its ARMS, so a named arm takes the marker an
+// initializer would. Bare, `z` was a bit-copy of `x` or `y`, and both owners freed it (exit 133).
+fn int32 main() {
+    bool f = true;
+    string x = "ab".concat(other: "c");
+    string y = "de".concat(other: "f");
+    string z = f ? x : copy y;
+    return cast<int32>(z.length());
+}

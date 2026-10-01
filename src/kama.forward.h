@@ -64,6 +64,7 @@ class ClassDestructorDeclarationNode;
 class ClassOperatorDeclaratorNode;
 class ClassOperatorDeclarationNode;
 class BinaryExpressionNode;
+class TernaryExpressionNode;
 class ClassConstructorDeclaratorNode;
 class ClassConstructorInitializerNode;
 

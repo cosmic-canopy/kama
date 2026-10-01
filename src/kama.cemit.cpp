@@ -4621,7 +4621,8 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     // of a call result, which C refuses, so it gets the compound-literal copy an rvalue gets (isCRvalue).
     bool lvalue = dynamic_cast<IdentifierNode*>(n)
                   || (dynamic_cast<MemberAccessNode*>(n) && !isCRvalue(e))
-                  || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
+                  || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n))
+                  || (dynamic_cast<TernaryExpressionNode*>(n) && isNamedValue(n));
     const std::string constTy = constantTempCType(e);
     std::string em = emitExpression(e);
     if (!constTy.empty()) return "(" + constTy + "[]){ " + em + " }";
@@ -5560,7 +5561,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         const bool isAnd = v->token == ANDAND;
         std::string l = emitExpression(v->LHS);
         const size_t h0 = _hoisted.size(), l0 = scopeLocalCount();
+        // The right side runs on one path only, so a move in it (`f && take(s: give a)`) moves `a` on that
+        // path: it joins the left side's state as an `if` without an `else` does, and a binding still live at
+        // scope exit is refused there. Marked Moved outright, `a` was never dropped when `f` was false.
+        const auto beforeRhs = _moveState;
         std::string r = emitExpression(v->RHS);
+        mergeMatchMoveStates(beforeRhs, {beforeRhs, _moveState}, {false, false});
         if (_hoisted.size() == h0) return "(" + l + (isAnd ? " && " : " || ") + r + ")";
         // The right side hoisted a statement — a receiver held in a temporary, a `match` lowered to a block —
         // and a hoisted statement runs BEFORE the whole statement, so it ran even when the left side decided
@@ -5582,12 +5588,31 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (lLit != rLit)
             claimFloatLiterals(lLit ? v->LHS : v->RHS, typeOfExpr(lLit ? v->RHS : v->LHS), "a branch of `?:`", false,
                                v->line);
+        // An owning ternary is a hand-off per arm where a hand-off consumes it, and a place where an arm names a
+        // value and nothing consumes it (`_handoffTernaries`). Otherwise both arms are fresh, and so is it.
+        const std::string tcls = ternaryClass(v);
+        const bool owns = ternaryOwns(tcls);
+        const bool handoff = owns && _handoffTernaries.count(v);
+        const bool place = owns && !handoff && isNamedValue(v);
+        auto arm = [&](const SharedExpression& e) {
+            return handoff ? ternaryArmHandoff(e, tcls, v->line)
+                 : place   ? ternaryArmPlace(e, tcls, v->line)
+                           : emitExpression(e);
+        };
         std::string c = emitExpression(v->condition);
         const size_t h0 = _hoisted.size(), l0 = scopeLocalCount();
-        std::string a = emitExpression(v->LHS);
+        // Each arm runs on its own path, so moves in them join as an `if`/`else`'s branches do.
+        const auto beforeArms = _moveState;
+        std::string a = arm(v->LHS);
+        const auto afterA = _moveState;
+        _moveState = beforeArms;
         const size_t h1 = _hoisted.size(), l1 = scopeLocalCount();
-        std::string b = emitExpression(v->RHS);
-        if (_hoisted.size() == h0) return "(" + c + " ? " + a + " : " + b + ")";
+        std::string b = arm(v->RHS);
+        mergeMatchMoveStates(beforeArms, {afterA, _moveState}, {false, false});
+        auto spell = [&](const std::string& cond) {
+            return place ? "(*(" + cond + " ? " + a + " : " + b + "))" : "(" + cond + " ? " + a + " : " + b + ")";
+        };
+        if (_hoisted.size() == h0) return spell(c);
         // An arm that hoisted a statement ran it whichever arm was chosen — the same defect as `&&`'s right
         // side, and it costs the same: `i < n ? a[i].toUpper() : ""` indexed past the end. Each arm's
         // statements run only when that arm is taken.
@@ -5597,7 +5622,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         _hoisted.push_back("bool " + sc + " = " + c + ";");
         guardHoisted(ha, l0, l1, sc);
         guardHoisted(hb, l1, scopeLocalCount(), "!" + sc);
-        return "(" + sc + " ? " + a + " : " + b + ")";
+        return spell(sc);
     }
 
     if (auto* v = dynamic_cast<InvocationNode*>(n)) {
@@ -7232,6 +7257,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         SharedIdentifier declType = lvd ? lvd->type : (cvd ? cvd->type : SharedIdentifier());
         bool isConstDecl = (cvd != nullptr);
         if (declType) {
+            // An initializer is a hand-off into the new binding, and the declaration's paths emit it in several
+            // places, so it is registered once, before any of them.
+            auto noteInits = [&](auto* decls) {
+                if (decls) for (auto& d : *decls) if (d && d->initializer) {
+                    SharedExpression v = d->initializer;
+                    if (auto* h = dynamic_cast<HandoffNode*>(v.get())) v = h->value;
+                    noteHandoffValue(v);
+                }
+            };
+            if (lvd) noteInits(lvd->variables.get());
+            if (cvd) noteInits(cvd->variables.get());
             // a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
             // is not a usable type — the template is not a concrete class. EXCEPTION: an all-defaulted
             // generic (`BitSet` == `BitSet<GlobalAllocator>`) is a complete type spelled bare.
@@ -7922,6 +7958,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         SharedExpression retExpr = ret->expression;
         if (retExpr)
             if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) retExpr = h->value;
+        noteHandoffValue(retExpr);
         rejectConstPtrWiden(_currentReturnCType, retExpr, "this `return`", n->line);
         // A `ref T operator[]` returns a PLACE: address the lvalue directly (`return &(place)`) — no
         // by-value return-temp (you can't copy a place). The place borrows `self`, which outlives the
@@ -8309,6 +8346,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (as->token == EQ) {
             SharedExpression rhs = as->expression;
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) rhs = h->value;   // judge on the value
+            noteHandoffValue(rhs);   // a store consumes its value
             rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
         }
         // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`) — makes it a live value
@@ -16438,6 +16476,7 @@ bool CEmitter::isCRvalue(SharedExpression e)
     if (!n || dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)
         || dynamic_cast<BaseAccessNode*>(n) || dynamic_cast<ElementAccessNode*>(n)) return false;
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) return !invocationReturnsPlace(inv);
+    if (dynamic_cast<TernaryExpressionNode*>(n) && isNamedValue(n)) return false;   // `(*(c ? &a : &b))`
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         if (!ma->expression) return false;
         if (ma->identifier && ma->identifier->value) {
@@ -16467,7 +16506,9 @@ std::string CEmitter::indexReceiverPlace(SharedExpression recv, const std::strin
     // its root owns, and a ternary or cast may yield a named value — dropping either would free it twice.
     auto* inv = dynamic_cast<InvocationNode*>(n);
     bool fresh = dynamic_cast<BinaryExpressionNode*>(n) || dynamic_cast<HandoffNode*>(n)
-                 || (inv && !invocationReturnsPlace(inv));
+                 || (inv && !invocationReturnsPlace(inv))
+                 || (dynamic_cast<TernaryExpressionNode*>(n) && ternaryOwns(cls));   // a named arm made it a place
+
     bool owned = fresh && _classes.count(cls) && _classes[cls].destructible;
     std::string ct = hoistCtorIfInline(recv);   // an inline ctor already has a hoisted temp of its own
     if (!ct.empty()) {
@@ -16904,6 +16945,123 @@ bool CEmitter::isSmartPtrExpr(SharedExpression e)
     return e && isSmartPtrClass(exprClass(e));
 }
 
+// Does a ternary over `cls` choose between values someone else owns, when an arm names one? Everything that
+// is not a plain bitwise value: a handle, a `string` or owning collection, a move-only `resource` or enum, or
+// any type with a drop.
+bool CEmitter::ternaryOwns(const std::string& cls)
+{
+    if (cls.empty()) return false;
+    if (isSmartPtrClass(cls) || ownsByValue(cls)) return true;
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.destructible;
+}
+
+std::string CEmitter::ternaryClass(TernaryExpressionNode* t)
+{
+    auto armClass = [&](const SharedExpression& a) {
+        auto* h = dynamic_cast<HandoffNode*>(a.get());
+        return exprClass(h ? h->value : a);
+    };
+    std::string c = armClass(t->LHS);
+    return c.empty() ? armClass(t->RHS) : c;
+}
+
+// A by-value hand-off site registers the value it consumes: if that value is a ternary, each arm is the
+// hand-off (ternaryArmHandoff), and so is each arm of a ternary nested in one.
+void CEmitter::noteHandoffValue(const SharedExpression& e)
+{
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(e.get())) {
+        _handoffTernaries.insert(t);
+        noteHandoffValue(t->LHS);
+        noteHandoffValue(t->RHS);
+    }
+}
+
+// One arm of a ternary in a by-value hand-off, spelled as a FRESH value of `cls` the consumer may own: what
+// the same hand-off of that arm alone would do, as an expression. `copy x` deep-copies (a handle: retains);
+// a bare named arm takes the type's bare default where it has one that leaves the source alive (a `Shared`
+// retains, a `Copyable(bare: copy)` resource copies). A move in an arm — `give x`, or the bare default of an
+// `Owned` or a non-copying resource — is refused: it would move `x` on one path and leave it live on the
+// other, which kama never allows a binding to be at scope exit.
+std::string CEmitter::ternaryArmHandoff(const SharedExpression& arm, const std::string& cls, int line)
+{
+    auto* h = dynamic_cast<HandoffNode*>(arm.get());
+    SharedExpression v = h ? h->value : arm;
+    if (dynamic_cast<TernaryExpressionNode*>(v.get())) return emitExpression(v);   // registered: its own arms
+    const std::string shown = demangleForDisplay(cls);
+    const bool named = isNamedValue(v.get());
+    if (h && !named) {
+        unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", line);
+        return emitExpression(v);
+    }
+    if (!named) return emitExpression(v);                                            // fresh: consumed as is
+    const std::string what = unparseExpr(v);
+    auto movedOnOnePath = [&]() {
+        const bool canCopy = isSmartPtrClass(cls) ? smartKind(cls) != CollKind::Owned : isCopyable(cls);
+        unsupported(("cannot move `" + what + "` in one arm of a `?:` — it would be moved on one path and still "
+                     "live on the other; " + (canCopy ? "say `copy " + what + "` in the arm"
+                                                      : "a `" + shown + "` has no `copy`, so move it on every path "
+                                                        "or none, or hold it in an `Optional`")).c_str(), line);
+        return emitExpression(v);
+    };
+    if (h && h->isGive) return movedOnOnePath();
+    const bool wantCopy = h != nullptr;                                                // `copy x`
+    if (isSmartPtrClass(cls)) {
+        const CollKind k = smartKind(cls);
+        if (k == CollKind::Owned) {
+            if (wantCopy) {
+                unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
+                return emitExpression(v);
+            }
+            return movedOnOnePath();
+        }
+        const std::string pl = emitPlace(v);
+        return "((" + pl + ").kama_ctrl->" + (k == CollKind::Weak ? "kama_weak" : "kama_strong") + "++, (" + pl + "))";
+    }
+    auto it = _classes.find(cls);
+    if (it != _classes.end() && it->second.isIntrinsicColl && ownsByValue(cls)) {
+        if (!wantCopy) {
+            unsupported(("a `?:` that hands off a `" + shown + "` names `" + what + "` in an arm — each arm is a "
+                         "hand-off, so say `copy " + what + "` there (a `give` would move it on one path only)").c_str(),
+                        line);
+            return emitExpression(v);
+        }
+        auto ci = _collections.find(cls);
+        if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+            unsupported(("`copy` of a `" + shown + "` needs copyable elements — its elements own resources but "
+                         "aren't `Copyable`").c_str(), line);
+        return copyCall(cls, emitPlace(v));
+    }
+    if (isMoveOnlyValue(cls)) {
+        const bool cpy = isCopyable(cls);
+        if (wantCopy && !cpy) {
+            unsupported(("`" + shown + "` has no `copy` method — add `implements Copyable(bare: …)`, or choose "
+                         "with `if`/`else`").c_str(), line);
+            return emitExpression(v);
+        }
+        if (wantCopy || (cpy && it->second.bareDefault == COPY)) return copyCall(cls, emitPlace(v));
+        return movedOnOnePath();
+    }
+    return emitExpression(v);                                                          // a plain value copies
+}
+
+// One arm of an owning ternary that is a PLACE, as a `cls*`. A named arm is addressed where it lives (cast,
+// since a read-only place is `T const*` in C). A fresh arm is held in a temporary the scope drops — only when
+// that arm ran, which the ternary's guardHoisted arranges for every temp an arm registers.
+std::string CEmitter::ternaryArmPlace(const SharedExpression& arm, const std::string& cls, int line)
+{
+    if (isNamedValue(arm.get())) return "(" + cls + "*)&(" + emitPlace(arm) + ")";
+    if (!_hoistOK) {
+        unsupported(("this `?:` borrows `" + unparseExpr(arm) + "` from a fresh value, which needs a statement to "
+                     "hold it in — bind the `?:` to a local first").c_str(), line);
+        return "(" + cls + "*)0";
+    }
+    const std::string t = "kama_tarm" + std::to_string(_tempCounter++);
+    _hoisted.push_back(cls + " " + t + " = " + emitExpression(arm) + ";");
+    recordDestructibleLocal(t, cls);
+    return "&" + t;
+}
+
 // A "named value" is an existing binding you can hand off (a variable / field /
 // element / base member) — as opposed to a FRESH rvalue (a `new`/constructor, a
 // call result, a literal), which is consumed in place and never needs a marker.
@@ -16911,6 +17069,11 @@ bool CEmitter::isNamedValue(ASTNode* e)
 {
     if (dynamic_cast<MemberAccessNode*>(e) || dynamic_cast<ElementAccessNode*>(e)
         || dynamic_cast<BaseAccessNode*>(e)) return true;
+    // An owning ternary with a named arm is a PLACE (see `_handoffTernaries`), unless it stands in a by-value
+    // hand-off, where its arms are handed off one by one and what it yields is fresh.
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(e))
+        return !_handoffTernaries.count(t) && ternaryOwns(ternaryClass(t))
+            && (isNamedValue(t->LHS.get()) || isNamedValue(t->RHS.get()));
     // A place-returning call (`m.getRef(k)`, `b.at(i: 0)`, `pick(d: d, i: 0)`) NAMES storage the callee
     // still owns — it is an element reached through a method, not a fresh result — so `addr(of:)` may take
     // its address and `give`/`copy` reach the same rules an element does (a `const ref` place refuses the
@@ -21623,6 +21786,10 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        // A by-value OWNING parameter consumes its argument; a `ref`, an `out`, a contract (a borrowed fat
+        // pointer) and the untyped read-only intrinsics borrow it, and there a ternary stays a place.
+        if (!p.byRef && !p.isOut && !p.className.empty() && !isInterface(p.className) && ternaryOwns(p.className))
+            noteHandoffValue(argExpr);
         // A callback crossing to C must state which thread it runs on — see checkForeignCrossing. Here
         // rather than at the extern call sites for the same reason the call EDGE is recorded here: this
         // is the one funnel every resolved call passes through, and a check spread over the sites that
@@ -25358,6 +25525,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     int handoff = 0;   // 0 none, 1 give, 2 copy
     SharedExpression v = value;
     if (v) if (auto* h = dynamic_cast<HandoffNode*>(v.get())) { handoff = h->isGive ? 1 : 2; v = h->value; }
+    noteHandoffValue(v);
     // The kind rule, one site for both hand-offs this function serves: a `return` value and a
     // value-producing `match` arm. Checked on the UNWRAPPED value, so `return give x;` is judged on `x`.
     // `dstCType` is empty for a void return and for a statement-position `match`, which reads as Unknown
@@ -25525,7 +25693,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                    || dynamic_cast<MemberAccessNode*>(m->subject.get())
                    || dynamic_cast<ThisAccessNode*>(m->subject.get())
                    || dynamic_cast<ElementAccessNode*>(m->subject.get())
-                   || subjPlaceCall;
+                   || subjPlaceCall
+                   || (dynamic_cast<TernaryExpressionNode*>(m->subject.get()) && isNamedValue(m->subject.get()));
     std::string subjOwner;
     size_t subjLocMark = 0;      // where the subject temp sits in the enclosing scope; see the drop below
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
@@ -26381,6 +26550,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+            noteHandoffValue(argExpr);
             // The kind rule for a payload. This construction does its own named-argument matching instead
             // of going through `emitReorderedCall`, so it is the fourth hand-off site and needs its own
             // call — the same reason the payload LABEL needed its own `recordNodeRef` two lines up.
@@ -32775,6 +32945,7 @@ std::string CEmitter::hoistStringTemp(SharedExpression e)
     // temp would free a buffer it doesn't own (double-free with the real owner). Leave it to addrOfOperand,
     // which derefs the returned place as an lvalue and never drops it — mirrors the general-receiver guard.
     if (auto* iv = dynamic_cast<InvocationNode*>(n)) if (invocationReturnsPlace(iv)) return "";
+    if (dynamic_cast<TernaryExpressionNode*>(n) && isNamedValue(n)) return "";   // a `?:` with a named arm: a place
     // `a[i]` is the SAME borrow reached through a different node kind, and it was not on this list.
     // Every form it lowers to hands back an element the container still owns: an intrinsic collection's
     // `__get` is a shallow struct copy sharing the buffer, a `ref T operator[]` is `(*Class__op_index(…))`,
@@ -33255,10 +33426,7 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
     // SUBJECT, `match (inner_match) { … }` / `match (c ? A(x) : B())`): resolve to the common class of
     // its result branches, so subject inference finds the tagged union without a bind-to-a-local first.
     // Both branches/arms share a type; the first that resolves is representative.
-    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(n)) {
-        std::string lc = exprClass(tx->LHS);
-        return !lc.empty() ? lc : exprClass(tx->RHS);
-    }
+    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(n)) return ternaryClass(tx);   // an arm may carry `copy`
     if (auto* mx = dynamic_cast<MatchNode*>(n)) {
         if (mx->arms)
             for (auto& a : *mx->arms) {
@@ -35481,8 +35649,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // (previously excluded → leak) and correctly excludes a `fn ref T` free fn (previously included →
         // would double-free). Pure RAII scope-drop; no lifetime analysis.
         InvocationNode* riv = dynamic_cast<InvocationNode*>(receiver.get());
+        // A ternary is fresh unless an arm names a value, which makes it a place (isNamedValue).
         bool byValueRvalue = dynamic_cast<BinaryExpressionNode*>(receiver.get())
-                             || (riv && !invocationReturnsPlace(riv));
+                             || (riv && !invocationReturnsPlace(riv))
+                             || (dynamic_cast<TernaryExpressionNode*>(receiver.get()) && !isNamedValue(receiver.get()));
         if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
             std::string t = "kama_recv" + std::to_string(_tempCounter++);
             std::string ct = hoistCtorIfInline(receiver);                 // inline ctor -> its own temp init

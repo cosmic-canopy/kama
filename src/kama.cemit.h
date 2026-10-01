@@ -2576,6 +2576,18 @@ private:
     // as opposed to a FRESH rvalue (a `new`/constructor/call result/literal). A marker
     // (`give`/`copy`) rides a named value; a fresh rvalue is consumed in place, never marked.
     bool isNamedValue(ASTNode* e);
+    // A ternary over a type that owns something (a `string`, a collection, a handle, a destructible
+    // `resource` or enum) chooses between VALUES OTHERS OWN when an arm names one. Lowered as a C `?:` it was a
+    // bitwise copy of the chosen value, which the copy's consumer then dropped as its own: a double free in
+    // safe code (`string z = f ? x : y;`). So it is one of two things. In a by-value hand-off it is a
+    // hand-off per arm (noteHandoffValue registers it; ternaryArmHandoff spells each arm). Anywhere else it
+    // is a PLACE, `(*(c ? &a : &b))`, borrowed like a name: isNamedValue answers true for it.
+    std::set<const ASTNode*> _handoffTernaries;
+    void noteHandoffValue(const SharedExpression& e);
+    bool ternaryOwns(const std::string& cls);
+    std::string ternaryClass(TernaryExpressionNode* t);
+    std::string ternaryArmHandoff(const SharedExpression& arm, const std::string& cls, int line);
+    std::string ternaryArmPlace(const SharedExpression& arm, const std::string& cls, int line);
     // A contract value BORROWS its object (a fat pointer), so it's second-class —
     // it can't be stored beyond the call that made it (it would dangle). Reject a bare
     // contract in a stored/returned position; own the object instead (`Shared<I>`).

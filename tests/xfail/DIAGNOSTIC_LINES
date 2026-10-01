@@ -1078,6 +1078,7 @@ shadow_module_static_field	shadow_module_static_field.kama:5
 shadow_param	shadow_param.kama:3
 shadow_sibling_imported	b.kama:6
 shadow_type_local	shadow_type_local.kama:4
+shortcircuit_move_rhs	shortcircuit_move_rhs.kama:8
 signflip_local	signflip_local.kama:1
 simd_bad_elem	simd_bad_elem.kama:6 simd_bad_elem.kama:7
 simd_bad_width	simd_bad_width.kama:10 simd_bad_width.kama:9
@@ -1140,6 +1141,11 @@ string_bytes_no_constview_chained	string_bytes_no_constview_chained.kama:5
 string_plus_number	string_plus_number.kama:6
 struct_cycle_mutual	struct_cycle_mutual.kama:1
 tag_unknown	tag_unknown.kama:4
+ternary_arm_copy_borrow	ternary_arm_copy_borrow.kama:7
+ternary_arm_give	ternary_arm_give.kama:7
+ternary_arm_move_resource	ternary_arm_move_resource.kama:10
+ternary_handoff_bare_named	ternary_handoff_bare_named.kama:7
+ternary_move_in_arm	ternary_move_in_arm.kama:8
 this_outside	this_outside.kama:3
 truncate_widening	truncate_widening.kama:6
 try_new_bad_type	try_new_bad_type.kama:5
