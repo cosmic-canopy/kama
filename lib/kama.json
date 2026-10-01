@@ -111,6 +111,9 @@
     "time": {
       "visibility": "public"
     },
+    "unicode": {
+      "visibility": "public"
+    },
     "uuid": {
       "visibility": "public"
     }

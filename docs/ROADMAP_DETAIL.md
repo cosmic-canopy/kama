@@ -680,16 +680,19 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   *(The generic-instance param edge is fixed — an inherited slot's signature is now rebound to its
   parent-resolved absolute spelling in `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
-  **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
-  `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
+  **ASCII** casing/whitespace. `std::unicode` exists since `0.9.506` with NORMALIZATION (peer KPG-15: SCRAM's
+  SASLprep needs NFKC), generated from one pinned UCD and held to its NormalizationTest.txt; what remains for it is
+  Unicode-correct casing + whitespace, and an eager `DynamicArray<string>` collect for `split` (the lazy `Split`
+  iterator ships today). Its tables reach only a program that imports it — a module's C is included by the TUs
+  that call it — so a table in `std` costs an MCU build that does not import it nothing.
   **Grapheme-cluster segmentation belongs here too.** `substring` traps on a split *codepoint* and
   `floorCharBoundary`/`truncate` snap to one (SPEC § *Strings*), which guarantees valid UTF-8 but **not**
   visually intact text — a boundary cut can still split an `e` + combining accent, an emoji ZWJ sequence
   or a flag. Cluster boundaries are defined by UAX #29 and need the `Grapheme_Cluster_Break` property per
   codepoint, i.e. a data table — not a bit trick. A cheap partial version (range-checking the combining
   diacriticals) would be wrong for emoji, flags, Hangul and Indic while *looking* like a guarantee, so it
-  is deliberately not shipped. Same stance as Zig, and utf8everywhere points at ICU for it; baking the
-  tables into `std` would also contradict targeting MCUs under `--no-heap`.
+  is deliberately not shipped. Same stance as Zig, and utf8everywhere points at ICU for it. When it ships, it is
+  `std::unicode`'s, generated from the same pinned UCD and tested against its GraphemeBreakTest.txt.
 - **Stdlib layering — 3 LOW-prio follow-ups.** The prelude-vs-`std::`-vs-primitive split is principled and
   documented in [FLOOR.md](FLOOR.md) § "What is floor, and what is an `import`"; nothing is mis-placed. What
   is left, none of it blocking:

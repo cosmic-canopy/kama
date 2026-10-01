@@ -140,7 +140,8 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   on top of it — at most `maxBytes` bytes, never splitting — for a wire field, a column limit or a log cap.
   Both guarantee **valid UTF-8, not visually intact text**: a cut at a codepoint boundary can still split a
   grapheme cluster (an `e` + combining accent, an emoji ZWJ sequence, a flag). Segmentation is defined by
-  UAX #29, needs Unicode tables, and stays a package concern — see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.
+  UAX #29 and needs Unicode tables; it is not shipped, and its home is `std::unicode` — see
+  [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.
 - **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
   null-safe, no `-1` sentinel); `contains(substring:)`, `startsWith(prefix:)`, `endsWith(suffix:)` return
   `bool`; `isEmpty()`.
@@ -1531,10 +1532,23 @@ rules, and one out of range or malformed fails the document. <!-- test: json_flo
 
 Named `ascii` rather than `char` for two reasons: `char` is a keyword, so `std::char` cannot be a module
 path; and the name states the limit in every import line instead of a footnote. This is the same boundary
-Zig draws with `std.ascii`, and full Unicode character properties belong in a package (see the Unicode
-stance below). Every predicate is **false** for a non-ASCII codepoint rather than guessing, and
+Zig draws with `std.ascii`; text beyond ASCII is `std::unicode` (below). Every predicate is **false** for a non-ASCII codepoint rather than guessing, and
 `toLower`/`toUpper` return one unchanged — so they can never corrupt one. Free functions rather than
 methods because `char` and `uint32` share a C type and the conformance registry cannot hold both.
+
+### Unicode normalization (`std::unicode`) ✅
+
+`import { std::unicode::normalize, std::unicode::NormalizationForm };` — `normalize(s:, form:)` returns `s` in one
+of UAX #15's four forms, and `isNormalized(s:, form:)` asks whether it already is. One text can be spelled several
+ways in code points (`é` precomposed or as `e` + a combining accent; the ligature `ﬁ`; a full-width `Ａ`), and
+normalizing picks one spelling, so two strings that mean the same compare equal byte for byte. `Nfd`/`Nfc` are the
+canonical forms, which keep the text exactly, decomposed or recomposed. `Nfkd`/`Nfkc` also fold compatibility
+variants into plain letters — `normalize(s: "Ａﬁ", form: NormalizationForm::Nfkc)` is `"Afi"` — which is what <!-- test: unicode_normalize -->
+SASLprep applies to a password before SCRAM hashes it, and what an identifier comparison or a search index usually
+wants. A `string` in and a `string` out: UTF-8 both ways. The tables are the Unicode Character Database at one pinned
+version, generated (`tools/gen-unicode`) and held to the UCD's own `NormalizationTest.txt`, every line of it, by
+`tools/check-unicode.sh`. They are read-only data in a program that imports this module and in no other. Unicode
+casing, whitespace and grapheme segmentation are the module's to add (ROADMAP_DETAIL §2).
 
 **Fixed-point — `Fixed<B> comptime(int32 F)`.** A signed binary fixed-point `type value` in the same module, for
 FPU-less targets and for exact fractional arithmetic: `+ - * /` through operator overloading (multiply and

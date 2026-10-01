@@ -1,0 +1,28 @@
+// `std::unicode` normalization (peer KPG-15): the kama surface over the generated tables, which
+// tools/check-unicode.sh holds to the UCD's whole NormalizationTest.txt. These are the cases a program meets: the
+// SASLprep fold SCRAM needs (NFKC turns `Ａ` and `ﬁ` into plain letters), an accent composed and decomposed, a
+// Hangul syllable, and text that is already in form. Returns 0.
+import { std::unicode::normalize, std::unicode::isNormalized, std::unicode::NormalizationForm };
+
+fn int32 main() {
+    // NFKC: the compatibility variants fold — full-width A, the fi ligature, roman numeral nine
+    if (normalize(s: "\u{FF21}\u{FB01}", form: NormalizationForm::Nfkc) != "Afi") { return 1; }
+    if (normalize(s: "\u{2168}", form: NormalizationForm::Nfkc) != "IX") { return 2; }
+    // ...and the canonical forms keep them
+    if (normalize(s: "\u{FB01}", form: NormalizationForm::Nfc) != "\u{FB01}") { return 3; }
+    // an accent: decomposed by NFD, composed by NFC, from either spelling
+    if (normalize(s: "\u{E9}", form: NormalizationForm::Nfd) != "e\u{301}") { return 4; }
+    if (normalize(s: "e\u{301}", form: NormalizationForm::Nfc) != "\u{E9}") { return 5; }
+    // marks reordered by combining class: dot below (220) before acute (230), whatever order they came in
+    if (normalize(s: "q\u{301}\u{323}", form: NormalizationForm::Nfd) != "q\u{323}\u{301}") { return 6; }
+    // Hangul: a syllable is its jamo, and back
+    if (normalize(s: "\u{D55C}", form: NormalizationForm::Nfd) != "\u{1112}\u{1161}\u{11AB}") { return 7; }
+    if (normalize(s: "\u{1112}\u{1161}\u{11AB}", form: NormalizationForm::Nfc) != "\u{D55C}") { return 8; }
+    // ASCII and the empty string are every form's fixed point
+    if (normalize(s: "plain ascii", form: NormalizationForm::Nfkd) != "plain ascii") { return 9; }
+    if (normalize(s: "", form: NormalizationForm::Nfc) != "") { return 10; }
+    // isNormalized
+    if (!isNormalized(s: "\u{E9}", form: NormalizationForm::Nfc) || isNormalized(s: "\u{E9}", form: NormalizationForm::Nfd)) { return 11; }
+    if (isNormalized(s: "\u{FF21}", form: NormalizationForm::Nfkc)) { return 12; }
+    return 0;
+}

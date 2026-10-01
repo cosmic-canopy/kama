@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+# gen-unicode — regenerate include/kama_unicode.h, std::unicode's tables and normalizer, from the Unicode Character
+# Database at ONE pinned version, and refresh the conformance test data beside it.
+#
+#   tools/gen-unicode <dir holding the UCD files>      # or no argument: download them from unicode.org
+#
+# The inputs are checked against the sha256 recorded below, so the tables can only change on purpose: to move to a
+# new Unicode version, change UNICODE_VERSION and the three hashes together, run this, and commit what it writes —
+# the header and tests/support/NormalizationTest.txt.gz. tools/check-unicode.sh then holds the result to every line of
+# the UCD's own NormalizationTest.txt.
+#
+# What the tables are (UAX #15):
+#   - canonical combining class, as ranges;
+#   - each code point's FULL decomposition — applied recursively, so normalizing never recurses — once for the
+#     canonical forms (NFD/NFC) and, where it differs, once for the compatibility forms (NFKD/NFKC);
+#   - the primary composites: two-code-point canonical decompositions that are not Full_Composition_Exclusion.
+# Hangul syllables are algorithmic and in no table.
+import hashlib, os, sys, urllib.request
+
+UNICODE_VERSION = "18.0.0"
+FILES = {
+    "UnicodeData.txt":               "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950",
+    "DerivedNormalizationProps.txt": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
+    "NormalizationTest.txt":         "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3",
+}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def load(src, name):
+    if src:
+        data = open(os.path.join(src, name), "rb").read()
+    else:
+        url = "https://www.unicode.org/Public/%s/ucd/%s" % (UNICODE_VERSION, name)
+        data = urllib.request.urlopen(url, timeout=120).read()
+    got = hashlib.sha256(data).hexdigest()
+    if got != FILES[name]:
+        sys.exit("gen-unicode: %s is not the pinned Unicode %s file (sha256 %s, expected %s)"
+                 % (name, UNICODE_VERSION, got, FILES[name]))
+    return data
+
+def main():
+    src = sys.argv[1] if len(sys.argv) > 1 else None
+    ud = load(src, "UnicodeData.txt").decode("utf-8")
+    dnp = load(src, "DerivedNormalizationProps.txt").decode("utf-8")
+    nt = load(src, "NormalizationTest.txt")
+
+    ccc, decomp, compat = {}, {}, set()
+    pending = None
+    for line in ud.splitlines():
+        f = line.split(";")
+        cp = int(f[0], 16)
+        if f[1].endswith(", First>"):
+            pending = cp
+            continue
+        if f[1].endswith(", Last>"):
+            lo, pending = pending, None
+            if int(f[3]):
+                for c in range(lo, cp + 1): ccc[c] = int(f[3])
+            continue
+        if int(f[3]): ccc[cp] = int(f[3])
+        if f[5]:
+            parts = f[5].split()
+            if parts[0].startswith("<"):
+                compat.add(cp)
+                parts = parts[1:]
+            decomp[cp] = [int(p, 16) for p in parts]
+
+    exclusion = set()
+    for line in dnp.splitlines():
+        line = line.split("#")[0].strip()
+        if not line: continue
+        f = [x.strip() for x in line.split(";")]
+        if f[1] != "Full_Composition_Exclusion": continue
+        if ".." in f[0]:
+            a, b = f[0].split("..")
+            exclusion.update(range(int(a, 16), int(b, 16) + 1))
+        else:
+            exclusion.add(int(f[0], 16))
+
+    def full(cp, k):
+        if cp not in decomp or (cp in compat and not k): return [cp]
+        out = []
+        for c in decomp[cp]: out += full(c, k)
+        return out
+
+    canon = {cp: full(cp, False) for cp in decomp if cp not in compat}
+    kfull = {cp: full(cp, True) for cp in decomp}
+    # One entry per code point that decomposes in either form: its canonical decomposition (itself when it has
+    # none) and its compatibility decomposition, sharing storage when the two are equal.
+    pool, entries = [], []
+    for cp in sorted(set(canon) | set(kfull)):
+        c = canon.get(cp, [cp])
+        k = kfull.get(cp, c)
+        co = len(pool); pool += c
+        if k == c: ko = co
+        else: ko = len(pool); pool += k
+        entries.append((cp, co, len(c), ko, len(k)))
+
+    pairs = []
+    for cp, d in decomp.items():
+        if cp in compat or cp in exclusion or len(d) != 2: continue
+        pairs.append((d[0], d[1], cp))
+    pairs.sort()
+
+    ranges = []
+    for cp in sorted(ccc):
+        if ranges and ranges[-1][1] == cp - 1 and ranges[-1][2] == ccc[cp]: ranges[-1][1] = cp
+        else: ranges.append([cp, cp, ccc[cp]])
+
+    assert max(len(e) for e in [canon[c] for c in canon] + [kfull[c] for c in kfull]) <= 32
+    write_header(ranges, entries, pool, pairs)
+    import gzip
+    with open(os.path.join(ROOT, "tests/support/NormalizationTest.txt.gz"), "wb") as out:
+        out.write(gzip.compress(nt, compresslevel=9, mtime=0))
+    print("gen-unicode: Unicode %s — %d ccc ranges, %d decompositions (%d code points pooled), %d composites"
+          % (UNICODE_VERSION, len(ranges), len(entries), len(pool), len(pairs)))
+
+def rows(items, per, fmt):
+    out = []
+    for i in range(0, len(items), per):
+        out.append("    " + ", ".join(fmt(x) for x in items[i:i + per]) + ",")
+    return "\n".join(out)
+
+def write_header(ranges, entries, pool, pairs):
+    h = HEADER_TOP.replace("@V@", UNICODE_VERSION)
+    h += "static const uint32_t kama__uni_ccc[][3] = {   /* first, last, class */\n"
+    h += rows(ranges, 4, lambda r: "{0x%X, 0x%X, %d}" % tuple(r)) + "\n};\n\n"
+    h += "static const uint32_t kama__uni_pool[] = {\n" + rows(pool, 10, lambda c: "0x%X" % c) + "\n};\n\n"
+    assert len(pool) < 65536 and max(max(e[2], e[4]) for e in entries) < 256
+    # One column per array, each as narrow as it can be: a code point needs 21 bits, a pool offset 16, a length 8.
+    h += "/* code points that decompose, ascending; for each, its canonical and its compatibility decomposition */\n"
+    h += "static const uint32_t kama__uni_dcp[] = {\n" + rows([e[0] for e in entries], 10, lambda c: "0x%X" % c) + "\n};\n"
+    h += "static const uint16_t kama__uni_dco[] = {\n" + rows([e[1] for e in entries], 16, str) + "\n};\n"
+    h += "static const uint8_t kama__uni_dcl[] = {\n" + rows([e[2] for e in entries], 24, str) + "\n};\n"
+    h += "static const uint16_t kama__uni_dko[] = {\n" + rows([e[3] for e in entries], 16, str) + "\n};\n"
+    h += "static const uint8_t kama__uni_dkl[] = {\n" + rows([e[4] for e in entries], 24, str) + "\n};\n\n"
+    h += "static const uint32_t kama__uni_comp[][3] = {   /* first, second, composite */\n"
+    h += rows(pairs, 4, lambda p: "{0x%X, 0x%X, 0x%X}" % p) + "\n};\n\n"
+    h += HEADER_CODE
+    with open(os.path.join(ROOT, "include/kama_unicode.h"), "w") as out:
+        out.write(h)
+
+HEADER_TOP = r"""#ifndef KAMA_UNICODE_H
+#define KAMA_UNICODE_H
+
+/* GENERATED by tools/gen-unicode from the Unicode Character Database @V@ — do not edit; change the generator.
+ *
+ * std::unicode's normalization (UAX #15): NFD, NFC, NFKD, NFKC over UTF-8. Only a program that imports std::unicode
+ * includes this header (its includes are derived from the C it calls), so the tables cost nothing elsewhere.
+ * tools/check-unicode.sh holds it to every line of the UCD's NormalizationTest.txt. */
+
+#include "kama_runtime.h"
+#include <string.h>   /* memcpy */
+
+"""
+
+HEADER_CODE = r"""#define KAMA__UNI_SBASE 0xAC00u
+#define KAMA__UNI_LBASE 0x1100u
+#define KAMA__UNI_VBASE 0x1161u
+#define KAMA__UNI_TBASE 0x11A7u
+#define KAMA__UNI_LCOUNT 19u
+#define KAMA__UNI_VCOUNT 21u
+#define KAMA__UNI_TCOUNT 28u
+#define KAMA__UNI_NCOUNT (KAMA__UNI_VCOUNT * KAMA__UNI_TCOUNT)
+#define KAMA__UNI_SCOUNT (KAMA__UNI_LCOUNT * KAMA__UNI_NCOUNT)
+
+static inline uint32_t kama__uni_class(uint32_t cp) {
+    size_t lo = 0, hi = sizeof kama__uni_ccc / sizeof kama__uni_ccc[0];
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        if (cp < kama__uni_ccc[mid][0]) hi = mid;
+        else if (cp > kama__uni_ccc[mid][1]) lo = mid + 1;
+        else return kama__uni_ccc[mid][2];
+    }
+    return 0;
+}
+
+/* The full decomposition of cp in the form asked for, or NULL (and *n 0) when it has none. */
+static inline const uint32_t* kama__uni_decomposition(uint32_t cp, int compat, size_t* n) {
+    size_t lo = 0, hi = sizeof kama__uni_dcp / sizeof kama__uni_dcp[0];
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        if (cp < kama__uni_dcp[mid]) hi = mid;
+        else if (cp > kama__uni_dcp[mid]) lo = mid + 1;
+        else {
+            const uint32_t off = compat ? kama__uni_dko[mid] : kama__uni_dco[mid];
+            const uint32_t len = compat ? kama__uni_dkl[mid] : kama__uni_dcl[mid];
+            if (len == 1 && kama__uni_pool[off] == cp) break;   /* only the other form decomposes it */
+            *n = len;
+            return kama__uni_pool + off;
+        }
+    }
+    *n = 0;
+    return NULL;
+}
+
+/* The primary composite of a + b, or 0 when there is none. */
+static inline uint32_t kama__uni_compose(uint32_t a, uint32_t b) {
+    if (a >= KAMA__UNI_LBASE && a < KAMA__UNI_LBASE + KAMA__UNI_LCOUNT
+        && b >= KAMA__UNI_VBASE && b < KAMA__UNI_VBASE + KAMA__UNI_VCOUNT)
+        return KAMA__UNI_SBASE + ((a - KAMA__UNI_LBASE) * KAMA__UNI_VCOUNT + (b - KAMA__UNI_VBASE)) * KAMA__UNI_TCOUNT;
+    if (a >= KAMA__UNI_SBASE && a < KAMA__UNI_SBASE + KAMA__UNI_SCOUNT && (a - KAMA__UNI_SBASE) % KAMA__UNI_TCOUNT == 0
+        && b > KAMA__UNI_TBASE && b < KAMA__UNI_TBASE + KAMA__UNI_TCOUNT)
+        return a + (b - KAMA__UNI_TBASE);
+    size_t lo = 0, hi = sizeof kama__uni_comp / sizeof kama__uni_comp[0];
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        const uint32_t* p = kama__uni_comp[mid];
+        if (a < p[0] || (a == p[0] && b < p[1])) hi = mid;
+        else if (a > p[0] || b > p[1]) lo = mid + 1;
+        else return p[2];
+    }
+    return 0;
+}
+
+/* A growable buffer of code points, through the allocation funnel. */
+typedef struct { uint32_t* v; size_t n, cap; int bad; } kama__uni_buf;
+static inline void kama__uni_push(kama__uni_buf* b, uint32_t cp) {
+    if (b->bad) return;
+    if (b->n == b->cap) {
+        const size_t cap = b->cap ? b->cap * 2 : 64;
+        uint32_t* v = (uint32_t*)kama_alloc(cap * sizeof(uint32_t), _Alignof(uint32_t));
+        if (!v) { b->bad = 1; return; }
+        if (b->n) memcpy(v, b->v, b->n * sizeof(uint32_t));
+        if (b->v) kama_free(b->v, b->cap * sizeof(uint32_t), _Alignof(uint32_t));
+        b->v = v; b->cap = cap;
+    }
+    b->v[b->n++] = cp;
+}
+
+/* One code point from valid UTF-8 (a kama string is valid UTF-8 by construction). */
+static inline uint32_t kama__uni_next(const uint8_t* s, size_t n, size_t* i) {
+    const uint8_t c = s[*i];
+    if (c < 0x80) { *i += 1; return c; }
+    if (c < 0xE0 && *i + 1 < n) { const uint32_t r = ((uint32_t)(c & 0x1F) << 6) | (s[*i + 1] & 0x3F); *i += 2; return r; }
+    if (c < 0xF0 && *i + 2 < n) {
+        const uint32_t r = ((uint32_t)(c & 0x0F) << 12) | ((uint32_t)(s[*i + 1] & 0x3F) << 6) | (s[*i + 2] & 0x3F);
+        *i += 3; return r;
+    }
+    if (*i + 3 < n) {
+        const uint32_t r = ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(s[*i + 1] & 0x3F) << 12)
+                         | ((uint32_t)(s[*i + 2] & 0x3F) << 6) | (s[*i + 3] & 0x3F);
+        *i += 4; return r;
+    }
+    *i = n; return 0xFFFD;
+}
+static inline size_t kama__uni_utf8(uint32_t cp, uint8_t* o) {
+    if (cp < 0x80) { o[0] = (uint8_t)cp; return 1; }
+    if (cp < 0x800) { o[0] = (uint8_t)(0xC0 | (cp >> 6)); o[1] = (uint8_t)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000) { o[0] = (uint8_t)(0xE0 | (cp >> 12)); o[1] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); o[2] = (uint8_t)(0x80 | (cp & 0x3F)); return 3; }
+    o[0] = (uint8_t)(0xF0 | (cp >> 18)); o[1] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F));
+    o[2] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); o[3] = (uint8_t)(0x80 | (cp & 0x3F)); return 4;
+}
+
+/* Normalize src[0..n) — form 0 NFC, 1 NFD, 2 NFKC, 3 NFKD — into out[0..cap). Returns the normalized length; when
+ * that is more than cap nothing usable was written and the caller asks again with room. */
+static inline ptrdiff_t kama_unicode_normalize(const uint8_t* src, size_t n, int32_t form, uint8_t* out, size_t cap) {
+    const int compat = form >= 2, compose = form == 0 || form == 2;
+    size_t i = 0;
+    for (; i < n && src[i] < 0x80; ++i) {}
+    if (i == n) {                                         /* ASCII is every form's fixed point */
+        if (n <= cap && n) memcpy(out, src, n);
+        return (ptrdiff_t)n;
+    }
+    kama__uni_buf b = { NULL, 0, 0, 0 };
+    for (i = 0; i < n; ) {                                /* 1. decompose, fully */
+        const uint32_t cp = kama__uni_next(src, n, &i);
+        if (cp >= KAMA__UNI_SBASE && cp < KAMA__UNI_SBASE + KAMA__UNI_SCOUNT) {
+            const uint32_t s = cp - KAMA__UNI_SBASE;
+            kama__uni_push(&b, KAMA__UNI_LBASE + s / KAMA__UNI_NCOUNT);
+            kama__uni_push(&b, KAMA__UNI_VBASE + (s % KAMA__UNI_NCOUNT) / KAMA__UNI_TCOUNT);
+            if (s % KAMA__UNI_TCOUNT) kama__uni_push(&b, KAMA__UNI_TBASE + s % KAMA__UNI_TCOUNT);
+            continue;
+        }
+        size_t dn = 0;
+        const uint32_t* d = kama__uni_decomposition(cp, compat, &dn);
+        if (!d) kama__uni_push(&b, cp);
+        else for (size_t k = 0; k < dn; ++k) kama__uni_push(&b, d[k]);
+    }
+    if (b.bad) kama_panic(kama_string_lit("out of memory", 13));   /* as every kama allocation does */
+    for (size_t k = 1; k < b.n; ++k) {                    /* 2. canonical order: a stable sort of each non-starter run */
+        const uint32_t c = kama__uni_class(b.v[k]);
+        if (!c) continue;
+        size_t j = k;
+        while (j > 0) {
+            const uint32_t p = kama__uni_class(b.v[j - 1]);
+            if (!p || p <= c) break;
+            const uint32_t t = b.v[j]; b.v[j] = b.v[j - 1]; b.v[j - 1] = t;
+            --j;
+        }
+    }
+    size_t m = b.n;
+    if (compose && m) {                                   /* 3. canonical composition */
+        size_t starter = 0, w = 1;
+        int haveStarter = kama__uni_class(b.v[0]) == 0;
+        uint32_t lastClass = haveStarter ? 0 : 256;
+        for (size_t k = 1; k < b.n; ++k) {
+            const uint32_t cp = b.v[k], c = kama__uni_class(cp);
+            const uint32_t comp = haveStarter && (lastClass < c || (lastClass == 0 && w == starter + 1))
+                                ? kama__uni_compose(b.v[starter], cp) : 0;
+            if (comp) { b.v[starter] = comp; continue; }
+            if (c == 0) { starter = w; haveStarter = 1; lastClass = 0; }
+            else lastClass = c;
+            b.v[w++] = cp;
+        }
+        m = w;
+    }
+    size_t len = 0;
+    uint8_t tmp[4];
+    for (size_t k = 0; k < m; ++k) {                      /* 4. back to UTF-8 */
+        const size_t e = kama__uni_utf8(b.v[k], tmp);
+        if (len + e <= cap) memcpy(out + len, tmp, e);
+        len += e;
+    }
+    if (b.v) kama_free(b.v, b.cap * sizeof(uint32_t), _Alignof(uint32_t));
+    return (ptrdiff_t)len;
+}
+
+#endif /* KAMA_UNICODE_H */
+"""
+
+if __name__ == "__main__":
+    main()
