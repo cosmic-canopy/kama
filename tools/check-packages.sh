@@ -656,10 +656,12 @@ kpkg() {   # kpkg <dir> <name> <version>: a one-file library, not yet committed
     printf 'export { v };\nfn int32 v() { return 1; }\n' > "$1/src/$2.kama"
 }
 # kmembers <tgz> <expected, one per line>: the tarball's FILES, wrapper directory peeled, must be exactly these.
+# Bytes, not print(): a native Windows python — mingw's, which UCRT64's PATH puts ahead of msys2's own — writes
+# each "\n" as "\r\n", and the list then differs from the expected one by nothing anyone can see.
 if command -v python3 >/dev/null 2>&1; then KPY=1; KRNOTE="exact member sets via tarfile"; else KPY=; KRNOTE="member sets skipped (no python3)"; fi
 kmembers() {
     [ -n "$KPY" ] || return 0
-    got=$(python3 -c 'import sys,tarfile; print("\n".join(sorted(m.name.split("/",1)[1] for m in tarfile.open(sys.argv[1]) if not m.isdir())))' "$1")
+    got=$(python3 -c 'import sys,tarfile; sys.stdout.buffer.write("\n".join(sorted(m.name.split("/",1)[1] for m in tarfile.open(sys.argv[1]) if not m.isdir())).encode())' "$1")
     [ "$got" = "$2" ] || { printf 'check-packages: FAIL — %s holds the wrong files\n  expected:\n%s\n  got:\n%s\n' "$1" "$2" "$got" >&2; exit 1; }
 }
 
