@@ -2016,31 +2016,40 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
 
     yylex_init_extra(&extra, &scanner);
 
-    FILE* input = fopen(osp(inputFile).c_str(), "r");
+    FILE* input = fopen(osp(inputFile).c_str(), "rb");
     if (!input) {
         fprintf(stderr, "kama: error: cannot open input file '%s'\n", inputFile.c_str());
         yylex_destroy(scanner);
         return nullptr;
     }
-    // The encoding is judged on the file's BYTES — a second, binary read, so a fault's offset is the file's
-    // own even where the text stream below translates CRLF. The lexer still reads that stream.
+    fclose(input);
+    // The encoding is judged on the file's BYTES, so a fault's offset is the file's own.
     const std::string raw = readFileText(inputFile);
     int bom = byteOrderMark(raw.data(), raw.size());
     if (bom < 0 || refuseNonUtf8Source(*extra.codeGenContext, raw.data(), raw.size(), (size_t)bom)) {
         if (bom < 0) extra.codeGenContext->handleError(1, KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE, "Encoding", kUtf16Refusal);
         yylex_destroy(scanner);
-        fclose(input);
         return nullptr;
     }
-    // Past a byte-order mark by READING it, not seeking to 3: this is a text stream (CRLF-translated on
-    // Windows), where only a seek to 0 is guaranteed.
-    char head[3];
-    if (fread(head, 1, sizeof head, input) != sizeof head || bom == 0) fseek(input, 0, SEEK_SET);
-    yy_switch_to_buffer(yy_create_buffer(input, YY_BUF_SIZE, scanner), scanner);
+    // ...and the lexer scans those same bytes from MEMORY, as ONE flex buffer — which its lookahead depends on:
+    // `give`/`copy`/`truncate` are keywords only before a name, and contextualWord reads the text after the word in
+    // the buffer (KB-35). Through a FILE* flex loads the source 16 KB at a time, so that look, at a refill, met the
+    // buffer's end instead of the text: `give s` straddling byte 16384 lexed as two names, and a correct file failed
+    // to parse for its LENGTH ("unexpected IDENTIFIER", found when an edit to std::io moved one there). The editor's
+    // door (parseSource) always scanned from memory. Windows' text stream turned CRLF into LF before the lexer saw
+    // it, and so does this, there — the lexer reads the bytes it always read.
+#if defined(_WIN32)
+    std::string src;
+    src.reserve(raw.size());
+    for (size_t i = (size_t)bom; i < raw.size(); ++i)
+        if (!(raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n')) src += raw[i];
+#else
+    const std::string src = raw.substr((size_t)bom);
+#endif
+    yy_scan_bytes(src.data(), (int)src.size(), scanner);
 
     int rc = yyparse(scanner);
     yylex_destroy(scanner);
-    fclose(input);
 
     if (rc != 0 || extra.codeGenContext->errorCount() > 0)
         return nullptr;   // a FAILED parse is never cached: the file is about to be fixed, and a null
