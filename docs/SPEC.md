@@ -5432,6 +5432,11 @@ int32 idx = match (find(xs: list, target: 7)) {
 `Weak<T>.tryUpgrade()` returns `Optional<Shared<T>>`; a fallible `static fn` factory returns `Result<T, E>`
 (see Fallible construction above).
 
+A value is wrapped by naming its variant — `Optional::Some(value: x)`, `Result::Ok(value: x)`,
+`Result::Err(error: e)`. Nothing converts a `T` into an `Optional<T>` on its own, so handing one where the
+wrapper is expected is refused at every crossing, with the variant to write: <!-- xfail: optional_given_element -->
+an initializer, an assignment, an argument, a return, a field. The same holds for either arm of a `Result`. <!-- xfail: result_given_element -->
+
 ## Modules ✅
 
 A **module is a FOLDER**, and a file's identity is **where it sits** — never anything it declares. A

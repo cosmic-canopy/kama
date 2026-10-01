@@ -845,6 +845,7 @@ operator_dup	operator_dup.kama:7
 operator_eq_missing	operator_eq_missing.kama:10
 operator_missing	operator_missing.kama:10
 opindex_const_write	opindex_const_write.kama:9
+optional_given_element	optional_given_element.kama:12 optional_given_element.kama:17 optional_given_element.kama:18 optional_given_element.kama:19 optional_given_element.kama:21 optional_given_element.kama:22 optional_given_element.kama:23 optional_given_element.kama:24 optional_given_element.kama:25
 out_marker_on_ref_param	out_marker_on_ref_param.kama:6
 out_missing_marker	out_missing_marker.kama:7
 out_read_before_assign	out_read_before_assign.kama:4
@@ -1025,6 +1026,7 @@ refreturn_local	refreturn_local.kama:5
 reserved_binding_name	reserved_binding_name.kama:2
 reserved_type_name	reserved_type_name.kama:3
 reserved_word_as_name	reserved_word_as_name.kama:14 reserved_word_as_name.kama:15
+result_given_element	result_given_element.kama:3 result_given_element.kama:4 result_given_element.kama:6
 scope_borrow_element	scope_borrow_element.kama:20
 scope_borrow_escape	scope_borrow_escape.kama:27
 scope_borrow_nested_prefix	scope_borrow_nested_prefix.kama:26

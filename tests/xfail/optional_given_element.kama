@@ -1,0 +1,27 @@
+// Peer KPG-20: nothing turns a `T` into an `Optional<T>` — the variant is named. `kama check` accepted the
+// element at every crossing (a payload enum, a value type), and clang refused it ("assigning to
+// 'kama__Optional_…' from incompatible type"); a plain enum or a number was refused, but as "a number — a
+// type value was expected". Each crossing below is reported, and says how to wrap; the row pins every line.
+import { std::collections::DynamicArray };
+type enum Step { Go(int32 n), Stop }
+type enum Plain { A, B }
+type value P { public int32 x = 0; public ctor make() { } }
+type value Holder { public Optional<Step> s = Optional::None; public ctor make() { } }
+fn Step mk() { return Step::Stop; }
+fn P mkp() { return P.make(); }
+fn Optional<Step> back() { return mk(); }
+fn void take(Optional<Step> o) { }
+fn int32 main() {
+    DynamicArray<Step> xs = DynamicArray.empty();
+    xs.add(item: Step::Go(n: 7));
+    Optional<Step> first = xs.remove(index: 0);
+    first = mk();
+    take(o: mk());
+    Holder h = Holder.make();
+    h.s = mk();
+    Optional<P> p = mkp();
+    Optional<Plain> e = Plain::A;
+    Optional<int32> n = 5;
+    Optional<Step> stop = Step::Stop;    // a payload-free variant is a NAME — no rule typed it
+    return 0;
+}

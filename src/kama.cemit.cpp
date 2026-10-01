@@ -2482,6 +2482,31 @@ bool CEmitter::plainUserClass(const std::string& ct) const
     return true;
 }
 
+// `Optional<T>` and `Result<T, E>` are built by naming the variant; nothing turns a `T` into one. When a value is
+// handed to one of them whose type is one of its arguments, the fix is a spelling, and this names it: "" for any
+// other pair. `src` is a C type, as `exprClass`/`typeOfExpr` answer.
+std::string CEmitter::wrapperHint(const std::string& dstCType, const std::string& src)
+{
+    auto gi = _genericTypeInsts.find(dstCType);
+    if (src.empty() || gi == _genericTypeInsts.end()) return "";
+    const std::string leaf = preludeLeaf(gi->second.templateKey);
+    const auto& args = gi->second.typeArgs;
+    if (leaf == "Optional" && !args.empty() && args[0] && cType(args[0]) == src)
+        return "wrap it: `Optional::Some(value: …)`";
+    if (leaf == "Result" && args.size() >= 2) {
+        if (args[0] && cType(args[0]) == src) return "wrap it: `Result::Ok(value: …)`";
+        if (args[1] && cType(args[1]) == src) return "wrap it: `Result::Err(error: …)`";
+    }
+    return "";
+}
+
+// "a `Step`" / "an `Optional<Step>`": the article for a name a message quotes.
+std::string CEmitter::aOrAn(const std::string& name)
+{
+    const char c = name.empty() ? 'x' : (char)std::tolower((unsigned char)name[0]);
+    return std::string(std::strchr("aeiou", c) ? "an `" : "a `") + name + "`";
+}
+
 void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedExpression value,
                                            const char* what, int line)
 {
@@ -2521,15 +2546,39 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
             return;
         }
     }
+    // ...and `Optional`/`Result` given a value of an argument type, typed the same way: a variant written
+    // without a payload (`IoError::NotFound`) is a NAME, which `exprClass` does not type, so the general rule
+    // below never sees it — `return IoError::NotFound;` into a `Result<int32, IoError>` reached clang.
+    {
+        const std::string vc = src.empty() ? typeOfExpr(value) : src;
+        const std::string hint = wrapperHint(dstCType, vc);
+        if (!hint.empty()) {
+            unsupported((std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", and "
+                         + aOrAn(primKeyOfCType(vc).empty() ? demangleForDisplay(vc) : primKeyOfCType(vc))
+                         + " is not one — " + hint).c_str(), line);
+            return;
+        }
+    }
     if (!plainUserClass(dstCType)) return;
     if (src.empty() || src == dstCType || !plainUserClass(src)) return;
     if (isBaseOf(dstCType, src)) return;                       // an inheritance UPCAST is the point of one
     if (!_classes[dstCType].collElemClass.empty()
         && _classes[dstCType].collElemClass == src) return;    // a container/handle over exactly this type
-    auto gi = _genericTypeInsts.find(dstCType);                // `Optional<Mat4> o = m;` and its siblings
+    auto gi = _genericTypeInsts.find(dstCType);
     auto si = _genericTypeInsts.find(src);
     if (gi != _genericTypeInsts.end()) {
-        for (const auto& a : gi->second.typeArgs) if (a && cType(a) == src) return;
+        // A wrapper given the very value it would hold — `Optional<Step> first = xs.remove(index: 0);`. This
+        // returned early, as though `Optional<Mat4> o = m;` were a conversion; kama has none, so it reached
+        // clang ("assigning to 'kama__Optional_…' from incompatible type"), which is all the peer saw (KPG-20).
+        for (const auto& a : gi->second.typeArgs)
+            if (a && cType(a) == src) {
+                const std::string hint = wrapperHint(dstCType, src);
+                unsupported((std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", and "
+                             + aOrAn(demangleForDisplay(src)) + " is not one — "
+                             + (hint.empty() ? "it holds one; construct the `" + demangleForDisplay(dstCType)
+                                               + "` explicitly" : hint)).c_str(), line);
+                return;
+            }
         // Two instances of the SAME template. `Shared<Square>` into a `Shared<Shape>` is the smart-pointer
         // upcast, and judging argument variance properly is a separate rule from "these are unrelated
         // types" — so the shared template is where this one stops.
@@ -2572,6 +2621,14 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
     if (dk == TKind::Unknown || dk == vk) return;
+    const std::string vt = exprClass(value).empty() ? typeOfExpr(value) : exprClass(value);
+    const std::string hint = wrapperHint(dstCType, vt);   // `Optional<int32> o = n;`, an enum into `Optional<E>`
+    if (!hint.empty()) {
+        unsupported((std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", and "
+                     + aOrAn(primKeyOfCType(vt).empty() ? demangleForDisplay(vt) : primKeyOfCType(vt))
+                     + " is not one — " + hint).c_str(), line);
+        return;
+    }
     unsupported((std::string(what) + " expects " + kindName(dk) + ", so it cannot be given "
                  + kindName(vk)).c_str(), line);
 }
@@ -2620,6 +2677,22 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // owns no identity can never make it fire, so there is no destination worth lowering for it. That
     // covers most initializers in the program.
     if (init) {
+        // An `Optional`/`Result` given a value of one of its argument types (KPG-20): the variant is named. Ahead
+        // of every rule below, which would each say it less usefully or — for a payload-free variant such as
+        // `IoError::NotFound`, which `exprClass` does not type — not at all. Gated on the declared NAME, so no
+        // other declaration's type is lowered here.
+        if (declType && declType->value && declType->genericArg
+            && (*declType->value == "Optional" || *declType->value == "Result")) {
+            const std::string dt = classifierCType(declType);
+            const std::string it = exprClass(init).empty() ? typeOfExpr(init) : exprClass(init);
+            const std::string hint = wrapperHint(dt, it);
+            if (!hint.empty()) {
+                unsupported((std::string(what) + " is declared `" + demangleForDisplay(dt) + "`, and "
+                             + aOrAn(primKeyOfCType(it).empty() ? demangleForDisplay(it) : primKeyOfCType(it))
+                             + " is not one — " + hint).c_str(), line);
+                return;
+            }
+        }
         const std::string srcT = typeOfExpr(init);
         if (!srcT.empty() && (cNumBits(srcT) || cNumTargetWidth(srcT)))
             rejectNumericConversion(classifierCType(declType), init, what, /*isInit*/true, line);
