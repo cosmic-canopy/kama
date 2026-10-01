@@ -1,0 +1,39 @@
+// Peer KTLS-2: indexing a VALUE — a call result, or a member of one — handed `&(call)` to the accessor, so
+// `s.bytes()[1]` passed `kama check` and failed clang with "cannot take the address of an rvalue". A value
+// receiver is now held in a temporary: a hoisted local the scope drops when it owns something (`mkList()`),
+// a compound literal otherwise (a view, an array, a member copied out of a temporary).
+//
+// `names[0][1]` is the other half: the old string-index hoist copied any receiver that was not a name and
+// dropped the copy, so indexing a string ELEMENT freed the buffer its array still owned (a double free).
+import { std::collections::ConstView, std::collections::View, std::collections::DynamicArray };
+
+@generate(zero)
+type value Plain { public InlineArray<int32>#(3) arr; }
+
+fn Plain mkPlain() { Plain p = Plain.zero(); p.arr = [1, 2, 3]; return p; }
+fn InlineArray<int32>#(3) mkArr() { return [1, 2, 3]; }
+fn DynamicArray<int32> mkList() {
+    DynamicArray<int32> l = DynamicArray.empty();
+    l.add(item: 4);
+    l.add(item: 5);
+    return l;
+}
+fn uint8 second(const ref string s) { return s.bytes()[1]; }                  // the peer's repro
+
+fn int32 main() {
+    string s = "abcd";
+    int32 total = 0;
+    if (second(s: s) == 98) { total = total + 1; }                            // 'b'
+    if (s.bytes().slice(from: 2, count: 2)[0] == 99) { total = total + 2; }    // a view of a view: 'c'
+    DynamicArray<int32> d = mkList();
+    d.viewMut()[0] = 7;                                                        // writes THROUGH the view
+    if (d[0] == 7) { total = total + 4; }
+    if (mkArr()[1] == 2) { total = total + 8; }                                // an array returned by value
+    if (mkList()[1] == 5) { total = total + 16; }                              // a value that owns: dropped
+    if (mkPlain().arr[2] == 3) { total = total + 32; }                         // a member of a temporary
+    if (mkPlain().arr.length() == 3) { total = total + 64; }                   // ...as a method receiver
+    DynamicArray<string> names = DynamicArray.empty();
+    names.add(item: s + " and a tail long enough to live on the heap");
+    if (names[0][1] == 98) { total = total + 128; }                            // an element, not a copy
+    return total;                                                              // 255
+}

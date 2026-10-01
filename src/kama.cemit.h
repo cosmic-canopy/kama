@@ -2375,6 +2375,10 @@ private:
     // `.field` receiver / a nested-index receiver. Anything else (a name, a member access, `this`) is
     // already an lvalue and falls through to emitExpression.
     std::string emitPlace(SharedExpression e);
+    // Does `e` lower to a C rvalue, a value with no address (a by-value call, an operator result, a member
+    // of one)? And the receiver of an index as a place: `e` itself, or the temporary holding its value.
+    bool isCRvalue(SharedExpression e);
+    std::string indexReceiverPlace(SharedExpression recv, const std::string& cls, int line);
     // The user-defined place-returning `operator[]` on `cls` (or a base), else null.
     MethodInfo* userIndexOp(const std::string& cls);
     // `foreach` over a user type via the iterator protocol (structural — direct monomorphized calls):

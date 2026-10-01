@@ -1,0 +1,11 @@
+// Indexing a value that must be dropped (`mkList()[0]`) holds it in a local the statement hoists. A
+// `do … while` condition sits at the bottom of the loop, where a `continue` must reach it, so it has no
+// statement slot to hoist into — and the old lowering took the address of the call there, which clang
+// refused. The message says to bind the value first.
+import { std::collections::DynamicArray };
+fn DynamicArray<int32> mkList() { DynamicArray<int32> l = DynamicArray.empty(); l.add(item: 4); return l; }
+fn int32 main() {
+    int32 n = 0;
+    do { n = n + 1; } while (mkList()[0] > n);
+    return n;
+}

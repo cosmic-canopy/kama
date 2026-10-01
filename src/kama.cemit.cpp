@@ -14,7 +14,6 @@
 // Construction
 // ---------------------------------------------------------------------------
 
-static bool isStableStringRef(ASTNode* n);   // defined below; used by string-index materialization
 static bool isConstInitExpr(ExpressionNode* e);   // defined below; used by the `comptime` local-decl check
 
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
@@ -4506,7 +4505,10 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     // A place-returning call (`fn ref T` — `getRef(k)`, a user `at(i)`) emits as `(*call)`, an lvalue whose
     // address folds back to the returned `T*`. Treating it as a place (not a compound-literal copy) is what
     // lets a chained mutation `m.getRef(k).bump()` / `m.getRef(k) = x` write THROUGH the borrow, like `a[i]`.
-    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
+    // A member is a place only when its root is one: `mkPlain().arr.length()` takes the address of a field
+    // of a call result, which C refuses, so it gets the compound-literal copy an rvalue gets (isCRvalue).
+    bool lvalue = dynamic_cast<IdentifierNode*>(n)
+                  || (dynamic_cast<MemberAccessNode*>(n) && !isCRvalue(e))
                   || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
     const std::string constTy = constantTempCType(e);
     std::string em = emitExpression(e);
@@ -5573,21 +5575,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx)) {
-            // `__get` borrows its receiver by address (`&recv`). A string RVALUE receiver — a literal
-            // (`"abc"[0]`, emitted as a `kama_string_lit(…)` call) or a computed piece (`s.concat(x)[0]`) —
-            // has no address, so materialize it into a temp first (single-eval: reuse the already-emitted
-            // `recvExpr`, don't re-emit). A named var / field / `this` stays a direct borrow. A computed
-            // temp that owns a heap buffer is RAII-dropped at scope end.
-            // The receiver is `ea->expression`, or `ea->identifier` for a bare-name receiver (`s[i]`).
-            ASTNode* recvNode = ea->expression ? ea->expression.get()
-                              : (ea->identifier ? (ASTNode*)ea->identifier.get() : nullptr);
-            bool addressable = isStableStringRef(recvNode) && !dynamic_cast<StringNode*>(recvNode);
-            if (coll == "kama_string" && _hoistOK && !addressable) {
-                std::string t = "kama_stridx" + std::to_string(_tempCounter++);
-                _hoisted.push_back("kama_string " + t + " = " + recvExpr + ";");
-                recordDestructibleLocal(t, "kama_string");
-                return coll + "__get(&" + t + ", " + idx + ")";
-            }
+            // `__get` borrows its receiver by address (`&recv`); a receiver with no address — a string
+            // literal, `s.concat(x)`, `s.bytes()` — is already held in a temporary (indexReceiverPlace).
             return coll + "__get((" + coll + "*)&(" + recvExpr + "), " + idx + ")";
         }
         // A user place-returning `operator[]`: read the value out of the place.
@@ -8188,9 +8177,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // paths are disjoint by their own tests, so the guard was redundant as well as harmful.
         if (as->token == EQ) {
             if (auto* ea = dynamic_cast<ElementAccessNode*>(as->unaryExpression.get())) {
-                std::string dcoll, drecv, didx, et;
-                if (collectionElemAccess(ea, dcoll, drecv, didx) && _collections.count(dcoll))
-                    et = _collections[dcoll].elemClass;            // "" for a primitive element
+                // The element's class, read from the receiver's TYPE: collectionElemAccess would emit the
+                // receiver, and hold a value receiver in a temporary the assignment then holds a second time.
+                SharedExpression erecv = ea->expression ? ea->expression
+                                                        : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+                const std::string rcls = erecv ? exprClass(erecv) : std::string();
+                std::string et;
+                if (!rcls.empty() && _classes.count(rcls) && _classes[rcls].isIntrinsicColl
+                    && _collections.count(_classes[rcls].name))
+                    et = _collections[_classes[rcls].name].elemClass;   // "" for a primitive element
                 else if (indexesUserOp(ea))
                     et = exprClass(as->unaryExpression);            // user `ref T operator[]` element
                 if (!et.empty() && _classes.count(et) && _classes[et].destructible) {
@@ -16043,7 +16038,8 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     // The receiver is emitted as a PLACE (an lvalue): a plain name stays itself, but a nested index
     // (`m[i]` in `m[i][j]`) becomes `(*Outer__at(&m, i))` so `&recvExpr` is a real `T*`, not the
     // address of a by-value `__get` rvalue. This is what makes chained/field-write indexing valid C.
-    recvExpr = emitPlace(recv);
+    // A receiver that is a VALUE (`mkArr()[1]`, `s.bytes()[0]`) is held in a temporary first.
+    recvExpr = indexReceiverPlace(recv, cls, ea->line);
     // `this` inside a `type intrinsic <collection>` impl body is `self` — ALREADY a pointer, not a
     // by-value lvalue. Every caller takes `&(recvExpr)`, so hand back the place `(*self)` → `&(*self)` == self
     // (without this, `this[i]` emits `__get(&self, i)`, indexing the pointer's own address — a string-key
@@ -16068,21 +16064,85 @@ std::string CEmitter::emitPlace(SharedExpression e)
         SharedExpression recv = ea->expression ? ea->expression
                                                : std::static_pointer_cast<ExpressionNode>(ea->identifier);
         if (recv) if (MethodInfo* op = userIndexOp(exprClass(recv))) {
-            std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
-                                   ? emitExpression((*ea->expressionlist)[0]) : "0";
             // `this` is already `self` (a pointer) — pass it directly; any other lvalue's address is `&place`.
             // A receiver that is itself a READ-ONLY place (`o.stdout()[i]`) is a `T const*` in C; the
             // operator takes `T*` (the ABI-neutral rule — every write was already refused), so cast, as
-            // method dispatch does for its receiver.
+            // method dispatch does for its receiver. The receiver goes first: holding a value receiver in
+            // a temporary hoists it, and source order is receiver, then index.
             const std::string ownerCls = exprClass(recv);
             std::string recvAddr = dynamic_cast<ThisAccessNode*>(recv.get())
                                        ? emitExpression(recv)
                                        : ((chainThroughConstPlace(recv) ? "(" + ownerCls + "*)" : std::string())
-                                          + "&(" + emitPlace(recv) + ")");
+                                          + "&(" + indexReceiverPlace(recv, ownerCls, ea->line) + ")");
+            std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
+                                   ? emitExpression((*ea->expressionlist)[0]) : "0";
             return "(*" + op->cName + "(" + recvAddr + ", " + idxE + "))";
         }
     }
     return emitExpression(e);
+}
+
+// Does `e` lower to a C RVALUE — a value with no address, so `&(e)` is not C? A by-value call, an operator
+// result, a literal, a cast, and a member of any of those (`mkPlain().arr` is `(mk()).arr`, no more an lvalue
+// than the call). Not a name, `this`, an element (emitPlace makes one a place, holding its own receiver if it
+// must), a place-returning call, or a field reached through a pointer: an `Owned`/`Shared`/`Deref` hop lands
+// in storage the temporary on the way to it does not own.
+bool CEmitter::isCRvalue(SharedExpression e)
+{
+    ASTNode* n = e.get();
+    if (!n || dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)
+        || dynamic_cast<BaseAccessNode*>(n) || dynamic_cast<ElementAccessNode*>(n)) return false;
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) return !invocationReturnsPlace(inv);
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!ma->expression) return false;
+        if (ma->identifier && ma->identifier->value) {
+            const std::string cls = exprClass(ma->expression);
+            if (!cls.empty() && _classes.count(cls) && !findFieldOwner(&_classes[cls], *ma->identifier->value)
+                && (isSmartPtrClass(cls) || !derefTarget(cls).empty())) return false;
+        }
+        return isCRvalue(ma->expression);
+    }
+    return true;
+}
+
+// The receiver of an index, as a place `&(…)` can be taken of. A receiver that is already one is emitted as
+// such. A VALUE is held in a temporary: `s.bytes()[1]`, `d.viewMut()[0] = 7`, `mkArr()[1]`, `mkPlain().arr[1]`
+// all handed `&(call)` to the accessor, which passed `kama check` and failed clang with "cannot take the
+// address of an rvalue" (peer KTLS-2). A fresh value that owns something (`mkList()[1]`, `(a + b)[0]`) goes
+// into a hoisted local the scope drops — the receiver hoist emitMethodCall does; anything else, a view or an
+// array or a member copied out of a temporary, into a compound literal, which lives to the end of the block.
+//
+// This also retires the string read path's own hoist, which copied any receiver that was not a name and
+// dropped the copy, so `a[0][1]` on a `DynamicArray<string>` freed the element the array still owned.
+std::string CEmitter::indexReceiverPlace(SharedExpression recv, const std::string& cls, int line)
+{
+    if (!isCRvalue(recv)) return emitPlace(recv);
+    ASTNode* n = recv.get();
+    // Only a FRESH result is the temporary's to drop. A member copied out of one is a shallow copy of storage
+    // its root owns, and a ternary or cast may yield a named value — dropping either would free it twice.
+    auto* inv = dynamic_cast<InvocationNode*>(n);
+    bool fresh = dynamic_cast<BinaryExpressionNode*>(n) || dynamic_cast<HandoffNode*>(n)
+                 || (inv && !invocationReturnsPlace(inv));
+    bool owned = fresh && _classes.count(cls) && _classes[cls].destructible;
+    std::string ct = hoistCtorIfInline(recv);   // an inline ctor already has a hoisted temp of its own
+    if (!ct.empty()) {
+        if (owned) recordDestructibleLocal(ct, cls);
+        return ct;
+    }
+    rejectUnhoistableCtor(recv);
+    if (owned) {
+        if (!_hoistOK) {
+            unsupported(("indexing `" + unparseExpr(recv) + "` needs its value held until the element is read, and "
+                         "a `" + demangleForDisplay(cls) + "` must then be dropped — there is no statement slot "
+                         "for that here; bind it to a local first").c_str(), line);
+            return "(*(" + cls + "[]){ " + emitExpression(recv) + " })";
+        }
+        std::string t = "kama_recv" + std::to_string(_tempCounter++);
+        _hoisted.push_back(cls + " " + t + " = " + emitExpression(recv) + ";");
+        recordDestructibleLocal(t, cls);
+        return t;
+    }
+    return "(*(" + cls + "[]){ " + emitExpression(recv) + " })";
 }
 
 // The place-returning `operator[]` on `cls` or an ancestor (else null). `op_index` is registered with
