@@ -37,7 +37,7 @@ case "$task" in
     [ $rc -eq 0 ] || echo "ops: at least one marketplace publish FAILED — check above before re-running" >&2
     exit $rc
     ;;
-  release)        echo "cut a release:  git tag vX.Y.Z && git push --tags   (CI builds binaries + publishes the extension)" ;;
+  release)        echo "cut a release:  git tag -a vX.Y.Z && git push origin vX.Y.Z   (an ANNOTATED tag: its message, minus the first line, is the release page's notes; CI builds the binaries and attaches the extension)" ;;
   exec)           exec "$@" ;;
   -h|--help|help) usage ;;
   *)              echo "unknown task: $task" >&2; usage; exit 2 ;;

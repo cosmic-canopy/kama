@@ -293,10 +293,27 @@ jobs:
     needs: [build, windows, vsix]
     runs-on: ubuntu-latest
     steps:
+      # The release page carries the annotated tag's notes (`git tag -a`, the subject line dropped), above
+      # GitHub's generated changelog link. Through v0.9.486 it carried the link alone: nothing read the
+      # tag, so every release's notes were written and never shown. A pushed tag reaches the checkout as a
+      # LIGHTWEIGHT ref naming the commit, so the annotated object is fetched over it; a tag with no notes
+      # gets an empty body and a warning, never its commit's message.
+      - uses: actions/checkout@v5
+      - name: Release notes (the annotated tag's message)
+        shell: bash
+        run: |
+          git fetch --force --no-tags origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = tag ]; then
+            git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          else
+            echo "::warning title=release notes::$GITHUB_REF_NAME is not an annotated tag, so the release page carries only the generated changelog link"
+            : > "$RUNNER_TEMP/notes.md"
+          fi
       - uses: actions/download-artifact@v7
         with: { path: dist, merge-multiple: true }
       - uses: softprops/action-gh-release@v3
         with:
+          body_path: ${{ runner.temp }}/notes.md
           files: |
             dist/kama-*.tar.gz
             dist/kama-*.tar.gz.sha256
