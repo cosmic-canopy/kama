@@ -642,6 +642,8 @@ module.exports = grammar({
         seq(field('name', $._name), ':', $._expression),
         // `@compileFor(!RELEASE)` — negation is spelled in the attribute, not in the grammar at large.
         seq(optional('!'), $.identifier),
+        // `@field(default)` — `default` is a keyword (`default ctor`), so it needs its own arm, as in kama.y.
+        'default',
         $.string_literal,
         // `@align(16)` — a bare LITERAL, matching kama.y's attr_arg. Not `_expression`: a bare identifier
         // is already the flag form above, so a general expression would make the two the same parse.

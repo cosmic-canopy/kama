@@ -3068,6 +3068,10 @@
           ]
         },
         {
+          "type": "STRING",
+          "value": "default"
+        },
+        {
           "type": "SYMBOL",
           "name": "string_literal"
         },

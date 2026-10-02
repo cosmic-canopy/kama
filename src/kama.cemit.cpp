@@ -7119,7 +7119,8 @@ bool CEmitter::ctorThisAsValue(SharedExpression e, const std::string& dstCType) 
 }
 
 void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
-                                 const std::string& moveKey, SharedExpression baseInit)
+                                 const std::string& moveKey, SharedExpression baseInit,
+                                 const std::set<std::string>* onlyFields)
 {
     // Move-state keys are spelled the way the SOURCE names the value, which is not always the C name:
     // a ctor's storage is `__self` in C but `this` in kama, and `lvalueMoveKey` keys off the source.
@@ -7144,6 +7145,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
     }
 #endif
     for (auto& f : _classes[ty].fields) {
+        if (onlyFields && !onlyFields->count(f.name)) continue;   // a derived `deserialize` fills only some (see there)
         // An inline field initializer (`const int32 kind = 7;`) applies here too, exactly as the
         // instance-ctor path applies it — else a factory-built value loses it (zero instead of 7). #M8d.2
         if (f.initializer) {
@@ -10639,7 +10641,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // an unmarked field is a compile error, so adding a field always forces an explicit
                     // in/out decision.
                     bool serGen = ci.genSerialize || ci.genDeserialize;
-                    bool fMarked = false, fSkip = false, fDeprecated = false; std::string fName;
+                    bool fMarked = false, fSkip = false, fDeprecated = false, fDefault = false; std::string fName;
                     int64_t fId = -1; bool fIdSet = false;
                     if (fd->attributes)
                         for (auto& at : *fd->attributes) {
@@ -10669,8 +10671,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                                 unsupported(("`@field(id: " + std::to_string(n) + ")` — a wire id is a "
                                                              "uint32, so it must be from 0 to 4294967295").c_str(), fd->line);
                                             else { fId = n; fIdSet = true; }
+                                        } else if (a && a->name && a->name->value && !a->expression
+                                                   && *a->name->value == "default") {
+                                            fDefault = true;
                                         } else {
-                                            unsupported("`@field(...)` accepts only `name: \"…\"` and `id: N`", fd->line);
+                                            unsupported("`@field(...)` accepts only `name: \"…\"`, `id: N` and `default`", fd->line);
                                         }
                                     }
                             }
@@ -10682,6 +10687,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (fDeprecated && fSkip)
                         unsupported("`@deprecated` and `@skip` on one field — `@skip` is absent from every "
                                     "backend, while `@deprecated` is still READ. Drop one", fd->line);
+                    // `@field(default)` keeps the field's DECLARED value when the data leaves it out, so there has
+                    // to be one: an initializer, or a type whose default is its value (a number, a `string`, a
+                    // collection, a type that elects a `default` ctor).
+                    if (fDefault && fd->declarators)
+                        for (auto& d : *fd->declarators)
+                            if (d && !d->initializer && !isDefaultFillable(cType(fd->type))) {
+                                unsupported(("`@field(default)` keeps a field's declared value when the data leaves it "
+                                             "out, and `" + (d->name && d->name->value ? *d->name->value : std::string("?"))
+                                             + "` declares none — give it an initializer").c_str(), fd->line);
+                                break;
+                            }
                     // An id names ONE field, so it cannot be shared by a declaration's sibling declarators.
                     // Refused by name rather than left to the duplicate-id diagnostic, which would point at
                     // this same line twice and read as a mystery.
@@ -10738,6 +10754,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.serName     = fName;
                             fi.serId       = fIdSet ? (int)fId : -1;
                             fi.serDeprecated = fDeprecated;
+                            fi.serDefault = fDefault;
                             // A member name is declared once (consumer KB-21). A duplicate FIELD used to
                             // reach clang as `duplicate member` in a generated file; the METHOD twin below
                             // was accepted outright and the last body won.
@@ -31144,6 +31161,80 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// The fields a derived `deserialize` starts from their DECLARED value rather than zero: the ones the data may
+// leave out without it being a `MissingField` — `@field(default)` (that is its meaning), `@deprecated` (written
+// by older versions only) — and `@skip` (never on the wire at all, so its value can only be the declared one).
+// An `Optional` without `@field(default)` is left out: absent, it is `None`.
+std::set<std::string> CEmitter::serDeclaredValueFields(const ClassInfo& ci) const
+{
+    std::set<std::string> out;
+    for (auto& f : ci.fields)
+        if (f.serSkip || f.serDeprecated || f.serDefault) out.insert(f.name);
+    return out;
+}
+
+// Those fields' declared values, emitted exactly as a constructor applies them (emitAggregateFill) — the same
+// field-default rules, the same elected `default` ctors — into `place`, inside a body of its own for the length
+// of the fill: a field initializer is kama, emitted through the ordinary machinery, and any temporary it hoists
+// is dropped right here, before the read loop and its early returns.
+void CEmitter::emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place, const std::string& retC)
+{
+    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    if (filled.empty()) return;
+    auto savedRefParams = _refParams;       auto savedParamNames = _paramNames;
+    auto savedLocalTypes = _localTypes;     auto savedLocalCTypes = _localCTypes;   auto savedLocalTypeNodes = _localTypeNodes;
+    auto savedConstLocals = _constLocals;   auto savedMoveState = _moveState;       auto savedSlotLocals = _slotLocals;
+    auto savedSlotDeclared = _slotDeclared; auto savedSlotGiven = _slotGiven;       auto savedScopes = _scopes;
+    auto savedHoisted = _hoisted;           ClassInfo* savedClass = _currentClass;  std::string savedRetC = _currentReturnCType;
+    _refParams.clear(); _paramNames.clear();
+    _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+    _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
+    _scopes.clear(); _hoisted.clear();
+    _currentClass = &ci;
+    _currentReturnCType = retC;
+    Scope root; root.isFunctionRoot = true;
+    _scopes.push_back(root);
+    bool ph = _hoistOK; _hoistOK = true;
+    emitAggregateFill(place, ci.name, ci.declLine(), 1, place, SharedExpression(), &filled);
+    flushHoisted(1);
+    emitScopeCleanup(_scopes.back(), 1);
+    _hoistOK = ph;
+    _refParams = savedRefParams; _paramNames = savedParamNames;
+    _localTypes = savedLocalTypes; _localCTypes = savedLocalCTypes; _localTypeNodes = savedLocalTypeNodes;
+    _constLocals = savedConstLocals; _moveState = savedMoveState; _slotLocals = savedSlotLocals;
+    _slotDeclared = savedSlotDeclared; _slotGiven = savedSlotGiven; _scopes = savedScopes;
+    _hoisted = savedHoisted; _currentClass = savedClass; _currentReturnCType = savedRetC;
+}
+
+// Before a field is read: whatever its slot already holds — its declared value, or the same key read earlier in
+// this record — is dropped and the slot zeroed, so the read never leaks it and a failing read leaves nothing a
+// second drop would free. Then the key is marked seen.
+void CEmitter::emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,
+                                        const std::set<std::string>& filled, int depth)
+{
+    const std::string fct = fieldCType(ci.name, f);
+    auto fc = _classes.find(fct);
+    if (fc != _classes.end() && fc->second.destructible) {
+        indent(depth);
+        if (!filled.count(f.name)) *_out << "if (kama_seen[" << slot << "]) ";
+        *_out << "{ " << fct << "__dtor(&" << dst << "); " << dst << " = (" << fct << "){0}; }\n";
+    }
+    indent(depth); *_out << "kama_seen[" << slot << "] = 1;\n";
+}
+
+// The fields that must be present: neither `Optional`, `@deprecated` nor `@field(default)`. "" when none must.
+std::string CEmitter::serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
+{
+    std::string t;
+    for (size_t i = 0; i < rf.size(); ++i) {
+        const FieldInfo& f = *rf[i];
+        const bool optional = f.type && f.type->value && *f.type->value == "Optional";
+        if (optional || f.serDeprecated || f.serDefault) continue;
+        t += (t.empty() ? "" : " || ") + std::string("!kama_seen[") + std::to_string(i) + "]";
+    }
+    return t;
+}
+
 void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<This, Owned<Error>> This__deserialize(...)`. Bypass assembly (zero-init +
@@ -31153,9 +31244,12 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(kama__Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
+    // The fields the data may leave out start from their declared value (KPG-26); the rest start from zero.
+    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    emitSerDeclaredValueFill(ci, "result", resC);
     // Zero-init makes an Optional field `Some(zeroed)` (tag 0) — reset every one to None first.
     for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
+        if (f.serSkip || filled.count(f.name)) continue;
         if (f.type && f.type->value && *f.type->value == "Optional") {
             std::string oc = cType(f.type);
             indent(1); *_out << "result." << kMember(ci, f.name) << " = (" << oc << "){ .kama_tag = " << oc << "_None };\n";
@@ -31171,12 +31265,14 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // ⚠️ The count is the WRITE-visible one. It describes what a writer PUT on the wire, so a
     // `@deprecated` field — read when present, never written — must not be counted, or a positional
     // reader expects one field too many and runs off the end of the record.
+    if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // which keys arrived
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
+        emitSerFieldReadPrologue(ci, *rf[i], i, "result." + kMember(ci, rf[i]->name), filled, 4);
         { ScopedStr _sf(_serdeField, rf[i]->name); emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, cleanup); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
@@ -31192,6 +31288,16 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     std::string box = emitStickyErrBox(2);
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
+    // A field the data left out that it had to carry (KPG-26). Asked AFTER the sticky failure, which is the
+    // first thing wrong with a stream that broke off. `Optional`, `@deprecated` and `@field(default)` may be absent.
+    const std::string missing = serMissingFieldTest(ci, rf);
+    if (!missing.empty()) {
+        indent(1); *_out << "if (" << missing << ") {\n";
+        if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
+        std::string mbox = emitStickyErrBox(2, preludeName("DeError"), "kama__DeError_MissingField");
+        indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << mbox << " } };\n";
+        indent(1); *_out << "}\n";
+    }
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = result } };\n";
     *_out << "}\n\n";
 }
@@ -32464,21 +32570,26 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
     if (ci.isVariant || ci.isScalarEnum()) { emitGraphReadIntoVariant(ci); return; }
+    // The fields the data may leave out start from their declared value (KPG-26), as in the by-value reader.
+    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    emitSerDeclaredValueFill(ci, "(*self)", "void");
     // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
     for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
+        if (f.serSkip || filled.count(f.name)) continue;
         if (f.type && f.type->value && *f.type->value == "Optional") {
             std::string oc = cType(f.type);
             indent(1); *_out << "self->" << kMember(ci, f.name) << " = (" << oc << "){ .kama_tag = " << oc << "_None };\n";
         }
     }
     std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
+    if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // which keys arrived
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
+        emitSerFieldReadPrologue(ci, *rf[i], i, "self->" + kMember(ci, rf[i]->name), filled, 4);
         { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
@@ -32488,6 +32599,8 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
+    const std::string missing = serMissingFieldTest(ci, rf);   // a field the data had to carry (KPG-26)
+    if (!missing.empty()) { indent(1); *_out << "if (" << missing << ") kama_de_graph_fail(g, kama__DeError_MissingField);\n"; }
     *_out << "}\n\n";
 }
 

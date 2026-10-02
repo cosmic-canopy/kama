@@ -1,0 +1,10 @@
+// `@field(default)` keeps a field's DECLARED value when the data leaves it out, so the field has to have one:
+// an initializer, or a type whose default is its value. A resource that elects no `default` has neither.
+@generate(Deserializable)
+type resource Handle { @field int32 fd; public ctor open(int32 fd) { this.fd = fd; } }
+@generate(Deserializable)
+type resource Conn {
+    @field(default) Handle h;
+    public ctor make() { this.h = Handle.open(fd: 3); }
+}
+fn int32 main() { return 0; }

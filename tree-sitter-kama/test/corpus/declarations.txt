@@ -938,3 +938,34 @@ type value Vec
         (identifier)
         (overloadable_operator)
         (identifier)))))
+
+================================================================================
+`@field(default)` — a field the data may leave out keeps its declared value
+================================================================================
+
+@generate(Deserializable)
+type value Config { @field(default) int32 port = 5432; }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (identifier))))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (attribute_list
+          (attribute
+            (identifier)
+            (attribute_argument)))
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))

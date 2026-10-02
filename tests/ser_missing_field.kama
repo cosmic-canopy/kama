@@ -1,0 +1,53 @@
+// A derived `deserialize` reports a field the data left out (peer KPG-26). It used to zero-initialize the
+// result and fill whatever arrived, so `{"x": 1}` read as `Ok(x: 1, y: 0)`. Now a missing field is
+// `Err(DeError::MissingField)`, unless the data may leave it out:
+//   * `Optional`           — absent is `None`;
+//   * `@deprecated`        — written by older versions only, so absent keeps its declared value;
+//   * `@field(default)`    — schema evolution's ADD: absent keeps its declared value.
+// `@skip` is never on the wire, so it keeps its declared value too (it used to come back zeroed). A key that
+// arrives twice keeps its last value, and an owning declared value the data replaces is dropped, not leaked.
+// The graph reader (a `Shared` root) follows the same rule.
+import { std::memory::Owned, std::memory::Shared, std::serialization::text::json::deserializeJsonBuffer };
+
+@generate(Deserializable)
+type resource Config {
+    @field string host = "h";
+    @field(default) int32 port = 5432;
+    @field(default) string mode = "fa".concat(other: "st");
+    @field Optional<int32> retries = Optional::None;
+    @field @deprecated int32 legacy = 9;
+    @skip int32 cache = 7;
+    public ctor make() { }
+    public const fn string show() { return "${this.host}|${this.port}|${this.mode}|${this.legacy}|${this.cache}"; }
+    public const fn bool noRetries() { return match (this.retries) { case Some(value: v): false; case None: true; }; }
+}
+
+fn string load(string src) {
+    Result<Config, Owned<Error>> c = deserializeJsonBuffer::<Config>(src: give src);
+    return match (c) {
+        case Ok(value: v): v.noRetries() ? v.show() : "retries?";
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
+    };
+}
+
+@generate(Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+@generate(Deserializable)
+type resource Pair {
+    @field Shared<Leaf> a;
+    public ctor make(Shared<Leaf> a) { this.a = give a; }
+}
+
+fn int32 main() {
+    if (load(src: "{\"host\": \"db\"}") != "db|5432|fast|9|7") { return 1; }
+    if (load(src: "{\"port\": 1}") != "missing field") { return 2; }
+    if (load(src: "{\"host\": \"a\", \"host\": \"b\", \"mode\": \"slow\", \"port\": 2, \"legacy\": 4}") != "b|2|slow|4|7") { return 3; }
+    // Graph mode: the Leaf node carries no `v`.
+    string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{}}]}";
+    Result<Shared<Pair>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Pair>>(src: give j);
+    bool graphMissing = match (g) {
+        case Ok(value: p): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d == DeError::MissingField; case None: false; };
+    };
+    return graphMissing ? 0 : 4;
+}

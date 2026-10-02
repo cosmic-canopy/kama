@@ -1067,6 +1067,7 @@ ser_deprecated_and_skip	ser_deprecated_and_skip.kama:4
 ser_dup_field_id	ser_dup_field_id.kama:4
 ser_dup_field_id_default	ser_dup_field_id_default.kama:4
 ser_dup_field_name	ser_dup_field_name.kama:4
+ser_field_default_no_value	ser_field_default_no_value.kama:7
 ser_field_id_multi_declarator	ser_field_id_multi_declarator.kama:4
 ser_field_id_not_literal	ser_field_id_not_literal.kama:4
 ser_field_name_enum_payload	ser_field_name_enum_payload.kama:5

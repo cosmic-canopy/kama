@@ -197,6 +197,10 @@ struct FieldInfo {
     // `@deprecated` — read when present, never written. Its name and id stay RESERVED (it still takes part
     // in duplicate detection, which is the whole of that guarantee).
     bool             serDeprecated = false;
+    // `@field(default)` — may be ABSENT from the data, and then keeps its declared value (schema evolution's
+    // ADD, the counterpart of `@deprecated`). Every other field that is neither `Optional` nor `@deprecated`
+    // must be present, or the derived `deserialize` returns `Err(MissingField)`.
+    bool             serDefault = false;
 };
 
 // One case of a discriminated-union `enum` (tagged union). `name` is the variant, `payload`
@@ -2251,6 +2255,11 @@ private:
     void applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt);
     std::string receiverObject(const std::string& emitted) const;
     std::string conformanceGateReason(const std::string& inst, const std::string& contract);
+    std::set<std::string> serDeclaredValueFields(const ClassInfo& ci) const;
+    void emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place, const std::string& retC);
+    void emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,
+                                  const std::set<std::string>& filled, int depth);
+    std::string serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf);
     std::string contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
                                  const std::string& what, int line);
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
@@ -3314,7 +3323,8 @@ private:
     // but differs where the C name differs from the source name (a ctor's storage: `__self` / `this`).
     void emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
                            const std::string& moveKey = std::string(),
-                           SharedExpression baseInit = SharedExpression());
+                           SharedExpression baseInit = SharedExpression(),
+                           const std::set<std::string>* onlyFields = nullptr);
     // `this` in a ctor is `self`, a `T*`. True where the destination wants the `T` BY VALUE (a return temp,
     // a variant payload) and the pointer must therefore be dereferenced.
     bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;

@@ -6141,7 +6141,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 **Three layers.**
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
   `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
-  `@field(id: N)` / `@deprecated` / `@skip`, and one
+  `@field(id: N)` / `@field(default)` / `@deprecated` / `@skip`, and one
   entry pair per backend and source, e.g. `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src:)` (table below). A **hand-written `serialize`/`deserialize` wins** — the derive
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
@@ -6297,6 +6297,13 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   so a field marked only `@deprecated` is still unmarked <!-- xfail: ser_deprecated_alone --> and combining
   it with `@skip` is refused, since `@skip` is absent from every backend while `@deprecated` is still read. <!-- xfail: ser_deprecated_and_skip -->
   (Fixture: `tests/ser_field_id`.) <!-- test: ser_field_id -->
+- **A field the data leaves out is `Err(MissingField)`** unless the data may leave it out. An `Optional` <!-- test: ser_missing_field -->
+  absent is `None`; a `@deprecated` field and a `@field(default)` field absent keep their DECLARED value.
+  `@field(default)` is schema evolution's ADD, the counterpart of `@deprecated`: a field added to a type
+  whose data is already stored is marked so that older records still read (`tests/ser_num_evolve`). It needs <!-- test: ser_num_evolve -->
+  a declared value to keep: an initializer, or a type whose default is its value. A `@skip` field, never on <!-- xfail: ser_field_default_no_value -->
+  the wire, keeps its declared value too. A key that arrives twice keeps its last value. A record that
+  needs different handling for old data implements `Deserializable` by hand.
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
   deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`. The **variant selector** has
   its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:

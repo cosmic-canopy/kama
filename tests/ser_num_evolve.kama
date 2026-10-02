@@ -31,11 +31,13 @@ type value Extra { @field public int32 p; @field public int32 q;
 
 @generate(Serializable, Deserializable)
 type resource V2 {                          // a `resource`: it owns a `string`, so its fields are private
-    @field(id: 7) string note;             // unknown to V1, and length-delimited
-    @field(id: 1) int32 b;                 // same id as V1's b, declared FIRST here
-    @field(id: 9) Extra nested;            // unknown to V1, and a whole group
-    @field(id: 0) int32 a;                 // same id as V1's a, declared LAST here
-    @field(id: 5) bool flag;               // unknown to V1, a varint
+    // The fields V2 ADDED are `@field(default)`: a stream an older writer made does not carry them, and that is
+    // the one case the marker exists for (without it, reading a V1 stream as V2 is `MissingField`).
+    @field(id: 7, default) string note = "";                      // unknown to V1, and length-delimited
+    @field(id: 1) int32 b;                                        // same id as V1's b, declared FIRST here
+    @field(id: 9, default) Extra nested = Extra.make(p: 0, q: 0); // unknown to V1, and a whole group
+    @field(id: 0) int32 a;                                        // same id as V1's a, declared LAST here
+    @field(id: 5, default) bool flag;                             // unknown to V1, a varint
     public ctor make(int32 a, int32 b) {
         this.note = "added later"; this.b = b; this.nested = Extra.make(p: 1, q: 2); this.a = a; this.flag = true;
     }
@@ -53,8 +55,8 @@ fn int32 main() {
     int32 ov = match (old) { case Ok(value: q): q.a * 100 + q.b; case Err(error: e): 0 - 1; };
     if (ov != 1122) { return 251; }
 
-    // and the other direction: a V1 stream read as V2. The ids it does carry land; the rest keep whatever
-    // the decode started them at, which is the honest outcome for a field the wire never mentioned.
+    // and the other direction: a V1 stream read as V2. The ids it does carry land; the fields V2 added keep
+    // their declared values, because they are `@field(default)`.
     Result<DynamicArray<uint8>, Owned<Error>> o = serializeKbinNumberedBuffer(v: V1.make(a: 33, b: 44));
     DynamicArray<uint8> ob = match (give o) { case Ok(value: v): give v; case Err(error: e): { return 252; } };
     Result<V2, Owned<Error>> up = deserializeKbinNumberedBuffer::<V2>(src: give ob);

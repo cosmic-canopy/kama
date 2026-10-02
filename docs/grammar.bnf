@@ -1204,6 +1204,10 @@ attr_arg_list
   ;
 attr_arg
   : IDENTIFIER
+    /* `@field(default)` — a field that may be absent from serialized data keeps its declared initializer. `default`
+       is a keyword (`default ctor`, `T.default()`), so it needs its own arm; it means the same thing here, "the
+       value this has when nothing says otherwise", and every attribute that does not know the flag refuses it. */
+  | DEFAULT
   | EXCLAMATION IDENTIFIER            /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression
   | STRING_LITERAL                    /* bare string, e.g. @section(".isr_vector") */

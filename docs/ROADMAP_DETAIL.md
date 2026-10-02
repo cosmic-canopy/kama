@@ -1477,6 +1477,20 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
+<a id="s4-deerror-names"></a>
+
+### `DeError` names the field it reports (KR-109)
+
+Filed 2026-10-01 with peer KPG-26, which made a derived `deserialize` report a missing field (`0.9.516`). The
+error is `DeError::MissingField`, a payload-less variant, so the message reads "missing field" with nothing to
+say which: a config file missing `port` is debugged by elimination. Serde's `missing_field(field)` names it,
+and that is the answer an author expects. The obstacle is the type, not the derive: `DeError` is a prelude
+enum, every backend latches one as its sticky error code (`errorCode()`, `failWith(DeError)`), and a `string`
+payload makes it destructible — so either `MissingField(string field)` (a source break for every
+`case MissingField:` and a change to the sticky-code plumbing), or a separate field-path the derive attaches
+beside the code. Scheduled, not optional: a missing-field error that cannot say which field is a bug report
+waiting to be filed. Wants a maintainer verdict on the shape before any code.
+
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on

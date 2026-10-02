@@ -1940,6 +1940,10 @@ attr_arg_list
   ;
 attr_arg
   : IDENTIFIER                     { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); }
+    /* `@field(default)` — a field that may be absent from serialized data keeps its declared initializer. `default`
+       is a keyword (`default ctor`, `T.default()`), so it needs its own arm; it means the same thing here, "the
+       value this has when nothing says otherwise", and every attribute that does not know the flag refuses it. */
+  | DEFAULT                        { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); STAMP_LOC($$->name, @1); }
   | EXCLAMATION IDENTIFIER         { auto flag = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); STAMP_LOC(flag, @2); $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, flag)); }   /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | STRING_LITERAL                 { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1)); }   /* bare string, e.g. @section(".isr_vector") */
