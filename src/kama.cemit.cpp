@@ -2090,7 +2090,7 @@ std::string CEmitter::moduleStaticCTypeRaw(SharedExpression e)
 {
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
     if (!id || !id->value) return "";
-    auto ms = _moduleStatics.find(qualify(*id->value));
+    auto ms = _moduleStatics.find(resolveModuleVarImpl(*id->value, id->qualifier));   // an IMPORTED one too
     if (ms != _moduleStatics.end()) return classifierCType(ms->second);
     const std::string xk = resolveExternConst(*id->value, id->qualifier);
     return xk.empty() ? "" : classifierCType(_externConsts[xk].type);
@@ -8313,7 +8313,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         bool constRecv = false;
         if (auto* rid = dynamic_cast<IdentifierNode*>(fe->expression.get()))
             if (rid->value) constRecv = _constStatics.count(resolveUserNameImpl(*rid->value, rid->qualifier)) != 0
-                                     || _constStatics.count(qualify(*rid->value)) != 0;
+                                     || _constStatics.count(qualify(*rid->value)) != 0
+                                     || _constStatics.count(resolveModuleVarImpl(*rid->value, rid->qualifier)) != 0;   // imported
         // `foreach (ref T e in K)` would hand out a mutable `T*` into a constant. Reject it here rather
         // than emitting code the C compiler has to catch: the `ref` binding exists to write back, and
         // there is nothing writable to bind to.
@@ -33780,8 +33781,11 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
         if (it != _localTypes.end()) return it->second;
         // A module-level `static` (MCU step 1): resolve its class type (InlineArray / value struct) so
         // element access and method dispatch work — but a local of the same name shadows it (checked first).
+        // Resolved as a READ resolves it — through this file's imports — not as this file's own name: an
+        // imported `comptime InlineArray` table was untyped everywhere but the file that declared it, so it
+        // could not be indexed, iterated or `.view()`ed there (peer KPG-24), while emission found it fine.
         if (!_localTypes.count(*id->value)) {
-            auto ms = _moduleStatics.find(qualify(*id->value));
+            auto ms = _moduleStatics.find(resolveModuleVarImpl(*id->value, id->qualifier));
             if (ms != _moduleStatics.end()) { std::string ct = cType(ms->second); if (isClass(ct)) return ct; }
         }
         if (_currentClass) {

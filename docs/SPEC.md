@@ -4891,6 +4891,8 @@ type value Palette {
 }
 ```
 
+- **A baked table is a table wherever it is imported.** A file that imports `CRC` indexes, iterates and <!-- test: comptime_table_imported -->
+  `.view()`s it exactly as its own file does, in safe code; a generated table can live in a file of its own.
 - **Comptime-only.** A `comptime fn` is a compile-time symbol; it is **never emitted as C**. It may be
   *called* only from a comptime context — a `comptime` constant initializer, a comptime argument, or
   another `comptime fn`. A runtime-position call is a clean error pointing at the `comptime` constant form.

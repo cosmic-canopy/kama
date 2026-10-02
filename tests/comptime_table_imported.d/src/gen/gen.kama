@@ -1,0 +1,3 @@
+export { WEIGHTS };
+// ...and one in another module.
+comptime InlineArray<int32>#(3) WEIGHTS = [5, 7, 11];
