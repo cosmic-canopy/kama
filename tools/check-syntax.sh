@@ -103,6 +103,11 @@ want "$D" "storage.modifier.kind.kama" \
     "the contextual kind word (value/resource/view/contract) has no scope — #declarations is DEAD again. It MUST be included BEFORE #keywords (TextMate breaks a same-position tie in favour of the earlier include)."
 want "$D" "storage.type.kama" \
     "'type' is not scoped storage.type.kama — #declarations is being starved by #keywords again (defect 11)."
+# The adapter kind word. `type adapter <…>` has no NAME after the kind word, so a kind rule that requires
+# one leaves `adapter` unscoped — and VS Code and the site (tools/site/highlight.mjs reads this grammar's
+# kind alternation) showed it uncoloured from 0.9.510 until the name became optional.
+awk '/^>type adapter /{f=1; next} f && /^>/{exit} f && /storage\.modifier\.kind\.kama/{found=1} END{exit !found}' "$D" \
+    || note "'adapter' in 'type adapter <…>' has no kind scope — the #declarations kind rule must list it AND must not require a name after it (an adapter's kind word is followed by '<')."
 # #5 — modifiers between `type` and the kind word (`type immutable value`, `type final resource`).
 want "$D" "keyword.other.modifier.kama" \
     "a modifier between 'type' and the kind word lost its scope (defect 5: type immutable value / type final resource / type extern value are all in-tree)."
@@ -154,4 +159,4 @@ if [ "$fails" -ne 0 ]; then
     echo "FAIL syntax ($fails problem(s))" >&2
     exit 1
 fi
-echo "PASS syntax (TextMate scopes match the committed snapshots; fixtures agree with the compiler; 13 defect invariants hold)"
+echo "PASS syntax (TextMate scopes match the committed snapshots; fixtures agree with the compiler; 14 defect invariants hold)"

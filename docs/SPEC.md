@@ -3778,13 +3778,19 @@ every function, so declarations are greppable and self-describing:
   The **`for` clause is mandatory** and names which kinds may implement the contract — see below.
 - **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
   takes the same `implements` clause as every other kind.
-- **`type adapter <targets> implements C { … }`** — the kind a **primitive** is. It declares nothing new;
-  it decorates existing built-in types with a contract's methods, one block for a whole **set** of widths.
-  See *`type adapter`* below.
+- **`intrinsic`** — the kind a **built-in** is (`int32`, `float64`, `bool`, `char`, `string`). The language
+  declares these, so no program writes `type intrinsic`; the word appears only in a contract's `for` list
+  (`for value, intrinsic`).
+
+**`type adapter <targets> implements C { … }`** is not a kind: it declares no type. It writes contract `C`'s
+conformance for types declared elsewhere — a built-in, a std type, another package's type, one generic
+instance, or a generic's every instance — in the module that declares `C`, one block for a whole **set** of
+targets. See *`type adapter`* below.
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
-`view` / `contract` / `intrinsic` are **contextual, not reserved** — because they appear only right after `type`, they
-remain ordinary identifiers everywhere else (`int32 value = 5;`). `enum` is the one kind word that IS a
+`view` / `contract`, and `adapter`, are **contextual, not reserved** — because they appear only right after
+`type` (and `intrinsic` only in a contract's `for` list), they remain ordinary identifiers everywhere else
+(`int32 value = 5;`). `enum` is the one kind word that IS a
 reserved keyword, for the historical reason that it predates the `type` marker; that costs nothing, since
 nothing else could be spelled there. The qualifiers `virtual` / `abstract` / `final` are reserved words;
 `type` itself is contextual (below).
@@ -4706,7 +4712,7 @@ Owned<Hashable> o = 42;          // an OWNING box — the form that can be a fie
 Owned<Formattable> t = give s;   // a `string` box owns the string: a named one is handed off (`give`/`copy`)
 ```
 
-The machinery is pay-for-what-you-use: the vtable and its deref thunks (an intrinsic's method takes `self`
+The machinery is pay-for-what-you-use: the vtable and its deref thunks (a built-in's adapter method takes `self`
 by value; a vtbl slot passes `void*`) are emitted only for the pairs a program actually widens. A bare named
 `string` into an owning box is a compile error, as any owning hand-off without a marker is. <!-- xfail: owned_contract_string_bare -->
 
@@ -5308,8 +5314,8 @@ fn int32 main() {
   rule under Inheritance.
 - **Specialization is a non-goal.** There is no way to give one generic function a second body for a
   particular concrete type argument, and there will not be — the mechanism for a per-type body is a
-  `contract` (plus `type adapter` for a primitive), which is what `std::math`'s `Real` is. Reasoning in
-  [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) § *Deferred language bits*.
+  `contract` (plus a `type adapter` for a type the contract's author does not declare), which is what
+  `std::math`'s `Real` is. Reasoning in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) § *Deferred language bits*.
 
 ## Access control ✅
 
@@ -6467,8 +6473,9 @@ FFI binding emit a C field literally called `type` without inventing a name
 (`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table
 (`tests/contextual_slot.kama`); `file` leads the file gate below and is otherwise an ordinary name
 (`tests/contextual_file.kama`) — `File file = …` is the spelling a user reaches for first, and measured,
-the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The kind words `value` / `resource` / `view` / `contract` / `intrinsic` are not
-keywords at all — they lex as identifiers.
+the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The
+kind words `value` / `resource` / `view` / `contract` / `intrinsic`, and `adapter`, are not keywords at all —
+they lex as identifiers.
 
 **Which words are reserved — the greppability rule** (maintainer, 2026-09-22). A word is reserved everywhere
 unless every KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword

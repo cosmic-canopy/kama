@@ -50,7 +50,7 @@ class BitcastNode;
 class EnumMemberDeclarationNode;
 class EnumDeclarationNode;
 class ExternConstNode;
-class IntrinsicImplNode;
+class AdapterNode;
 class MatchNode;
 class MatchArmNode;
 class ClassDeclarationNode;
@@ -155,20 +155,20 @@ typedef std::shared_ptr<EnumBody> SharedEnumBody;
 // carries replace the block's shared bodies, for those targets only. What it serves is a contract whose
 // body genuinely cannot be shared across the set — `sqrt` needs `sqrtf` for float32 and `sqrt` for
 // float64, and kama has no in-body type branching by design.
-struct IntrinsicSection {
+struct AdapterSection {
     SharedIdentifierList             targets;
     SharedClassMemberDeclarationList members;
 };
-typedef std::shared_ptr<IntrinsicSection> SharedIntrinsicSection;
-typedef std::vector<SharedIntrinsicSection> IntrinsicSectionList;
-typedef std::shared_ptr<IntrinsicSectionList> SharedIntrinsicSectionList;
+typedef std::shared_ptr<AdapterSection> SharedAdapterSection;
+typedef std::vector<SharedAdapterSection> AdapterSectionList;
+typedef std::shared_ptr<AdapterSectionList> SharedAdapterSectionList;
 
 // A `type adapter` body: bodies shared by every target in the set, plus any per-target sections.
-struct IntrinsicBody {
+struct AdapterBody {
     SharedClassMemberDeclarationList members;
-    SharedIntrinsicSectionList      sections;
+    SharedAdapterSectionList      sections;
 };
-typedef std::shared_ptr<IntrinsicBody> SharedIntrinsicBody;
+typedef std::shared_ptr<AdapterBody> SharedAdapterBody;
 
 typedef std::shared_ptr<CompilationUnit> SharedCompilationUnit;
 typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;

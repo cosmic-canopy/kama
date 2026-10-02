@@ -261,7 +261,8 @@ dtor for owned hierarchies).
 - Owns something / needs identity? → **`resource`**. Else → **`value`**.
 - A fixed set of alternatives, some carrying data? → an **`enum`** (and `match` on it).
 - A borrowed window onto someone else's buffer? → a **`view`**.
-- A built-in type needs a contract? → an **`intrinsic`** block.
+- Your contract for a type you don't declare (a built-in, a std type, another package's)? → a
+  **`type adapter`**, in the contract's module.
 - Reuse an algorithm across types? → a **generic** (zero-cost; bound it with a contract if it needs
   behavior). Don't inherit for reuse.
 - Need to swap implementations? → a **contract** (works on `value` too, and cheaper — *don't* reach
@@ -288,7 +289,7 @@ protected† = only inside a `virtual`/`abstract resource`):
 | final | ⛔ (already sealed) | ✅ (seal an override / a subclass branch) | ⛔ (already sealed) | ⛔ |
 
 An `enum`'s methods and constructors follow the `value` column (a variant's payload fields are its
-data, not members). An `intrinsic` block declares methods only.
+data, not members). A `type adapter` declares methods only.
 
 Eight rules make the grid memorable:
 

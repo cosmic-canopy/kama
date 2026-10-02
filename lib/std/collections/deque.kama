@@ -173,7 +173,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     // Membership + first logical index, by ELEMENT equality — present only when the element is `Equatable`.
     // Like DynamicArray, the element method is called through a nameable `ref T` so a PRIMITIVE element's
-    // scalar intrinsic conformance resolves (a wrapped buffer element isn't a nameable receiver).
+    // scalar adapter conformance resolves (a wrapped buffer element isn't a nameable receiver).
     public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
     public const fn isize indexOf(const ref T item) when [T: Equatable<T>] {
         isize i = 0;

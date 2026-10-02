@@ -216,7 +216,7 @@ module.exports = grammar({
     type_kind: ($) => $.identifier,
 
     // `type adapter <int8, Uuid, Optional> implements C { … <int8> { … } }` — a type's conformance to C,
-    // written outside its declaration (kama.y `marked_intrinsic_declaration`). It diverges from
+    // written outside its declaration (kama.y `marked_adapter_declaration`). It diverges from
     // `type_declaration` one token after the kind word: `<` rather than a NAME. The targets are TYPES.
     adapter_declaration: ($) =>
       seq(

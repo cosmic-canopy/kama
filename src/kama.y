@@ -320,8 +320,8 @@ struct kamayystype {
   SharedExpressionList expressionlist;
   SharedEnumMemberDeclarationList enummemberdecllist;
   SharedEnumBody enumbody;   // an enum body's two lists (variants + post-`;` class members)
-  SharedIntrinsicBody intrinsicbody;   // a `type adapter` body (shared members + per-target sections)
-  SharedIdentifierList intrinsictargets;   // the primitive set in `<int8, int16, …>`
+  SharedAdapterBody adapterbody;   // a `type adapter` body (shared members + per-target sections)
+  SharedIdentifierList adaptertargets;   // the target types in `<int8, Uuid, Optional>`
   SharedFunctionDeclarationList functiondecllist;
   SharedClassMemberDeclarationList classmemberdecllist;
   
@@ -404,9 +404,8 @@ struct kamayystype {
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 /* The two PLATFORM-VARYING integral types (`ptrdiff_t`/`size_t`). Reserved words like every other
-   primitive, which is what lets them appear in a `type adapter <…>` conformance list — see the note on
-   `marked_intrinsic_declaration`, whose legal target set falls out of every target's first token being
-   reserved. They were plain IDENTIFIERs until 0.9.136, and every `switch` over a builtin type missed them. */
+   primitive, so a type position (a `type adapter <…>` target list among them) reads them as primitives.
+   They were plain IDENTIFIERs until 0.9.136, and every `switch` over a builtin type missed them. */
 %token <string> ISIZE USIZE
 /* The C ABI elements (0.9.232): `cchar` is C's `char`, an OPAQUE element legal only inside a raw pointer
    (`primitive_type`, never `integral_type`); `clong`/`culong` are C's `long`/`unsigned long`, value types of
@@ -519,9 +518,9 @@ struct kamayystype {
 %type <enummemberdecl> enum_member_declaration
 %type <enummemberdecllist> enum_member_declarations_opt enum_member_declarations
 %type <enumbody> enum_class_body
-%type <intrinsicbody> intrinsic_body intrinsic_members
-%type <intrinsictargets> intrinsic_target_list adapter_targets
-%type <statement> marked_intrinsic_declaration
+%type <adapterbody> adapter_body adapter_members
+%type <adaptertargets> adapter_target_list adapter_targets
+%type <statement> marked_adapter_declaration
 %type <classbasedecl> class_base_opt class_base
 %type <classmemberdecl> class_member_declaration plain_class_member constant_declaration field_declaration method_declaration friend_declaration comptime_assert_statement
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
@@ -889,7 +888,7 @@ class_type
 type_declaration
   : enum_declaration
   | marked_type_declaration
-  | marked_intrinsic_declaration
+  | marked_adapter_declaration
   ;
 
 /* `type <kind> Name { … }` — the ownership-model declaration. The kind word
@@ -921,9 +920,9 @@ marked_type_declaration
    NO CONFLICT with `marked_type_declaration`, even though both begin `TYPE modifiers_opt IDENTIFIER`: its
    `type_decl_head` continues with the NAME, an IDENTIFIER, while this one continues with `<`. One token of
    lookahead separates them. Inside the body a section also begins with `<`, which no class member can. */
-marked_intrinsic_declaration
-  : TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt intrinsic_body semicolon_opt
-    { auto n = std::make_shared<IntrinsicImplNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6);
+marked_adapter_declaration
+  : TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt adapter_body semicolon_opt
+    { auto n = std::make_shared<AdapterNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6);
       n->kindWord = $3;
       $$ = n; }
   ;
@@ -932,37 +931,37 @@ marked_intrinsic_declaration
    close `>>` lexes as two `>`; spelling the mid-rules twice would make two empty nonterminals that
    reduce/reduce-conflict (see the note on parameter_modifier_opt). */
 adapter_targets
-  : LT { yyget_extra(scanner)->genericDepth++; } intrinsic_target_list GT { yyget_extra(scanner)->genericDepth--; }
+  : LT { yyget_extra(scanner)->genericDepth++; } adapter_target_list GT { yyget_extra(scanner)->genericDepth--; }
     { $$ = $3; }
   ;
-intrinsic_target_list
+adapter_target_list
   : type   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | intrinsic_target_list COMMA type   { $1->push_back($3); $$ = $1; }
+  | adapter_target_list COMMA type   { $1->push_back($3); $$ = $1; }
   ;
 /* A member is either shared by every target, or inside a `<…> { … }` SECTION that overrides it for the
    targets it names. A section can only begin with `<`, which no class member can, so the two are
    distinguishable with no lookahead trickery. */
-intrinsic_body
-  : LEFT_BRACE RIGHT_BRACE   { $$ = std::make_shared<IntrinsicBody>();
+adapter_body
+  : LEFT_BRACE RIGHT_BRACE   { $$ = std::make_shared<AdapterBody>();
                                $$->members  = std::make_shared<ClassMemberDeclarationList>();
-                               $$->sections = std::make_shared<IntrinsicSectionList>(); }
-  | LEFT_BRACE intrinsic_members RIGHT_BRACE   { $$ = $2; }
+                               $$->sections = std::make_shared<AdapterSectionList>(); }
+  | LEFT_BRACE adapter_members RIGHT_BRACE   { $$ = $2; }
   ;
-intrinsic_members
+adapter_members
   : class_member_declaration
-    { $$ = std::make_shared<IntrinsicBody>();
+    { $$ = std::make_shared<AdapterBody>();
       $$->members  = std::make_shared<ClassMemberDeclarationList>();
-      $$->sections = std::make_shared<IntrinsicSectionList>();
+      $$->sections = std::make_shared<AdapterSectionList>();
       $$->members->push_back($1); }
   | adapter_targets LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
-    { $$ = std::make_shared<IntrinsicBody>();
+    { $$ = std::make_shared<AdapterBody>();
       $$->members  = std::make_shared<ClassMemberDeclarationList>();
-      $$->sections = std::make_shared<IntrinsicSectionList>();
-      auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $1; sec->members = $3;
+      $$->sections = std::make_shared<AdapterSectionList>();
+      auto sec = std::make_shared<AdapterSection>(); sec->targets = $1; sec->members = $3;
       $$->sections->push_back(sec); }
-  | intrinsic_members class_member_declaration   { $1->members->push_back($2); $$ = $1; }
-  | intrinsic_members adapter_targets LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
-    { auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $2; sec->members = $4;
+  | adapter_members class_member_declaration   { $1->members->push_back($2); $$ = $1; }
+  | adapter_members adapter_targets LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
+    { auto sec = std::make_shared<AdapterSection>(); sec->targets = $2; sec->members = $4;
       $1->sections->push_back(sec); $$ = $1; }
   ;
 

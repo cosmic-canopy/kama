@@ -139,10 +139,10 @@
       }
     },
     "declarations": {
-      "comment": "⚠️ MUST be included BEFORE #keywords. TextMate breaks a same-position tie in favour of the earlier include, so with #keywords first this rule was DEAD: `type` matched as a bare keyword, scanning resumed past it, and the contextual kind word — which is an ordinary IDENTIFIER in kama.y, so nothing else can colour it — came back with NO scope at all. Verified with the real tokenizer, not reasoned about; tests/syntax/declarations.kama locks it down. `modifiers_opt` sits between `type` and the kind word (kama.y `marked_type_declaration`), and `type immutable value` / `type abstract resource` / `type extern value` / `type final resource` / `type virtual value` are all in-tree.",
+      "comment": "⚠️ MUST be included BEFORE #keywords. TextMate breaks a same-position tie in favour of the earlier include, so with #keywords first this rule was DEAD: `type` matched as a bare keyword, scanning resumed past it, and the contextual kind word — which is an ordinary IDENTIFIER in kama.y, so nothing else can colour it — came back with NO scope at all. Verified with the real tokenizer, not reasoned about; tests/syntax/declarations.kama locks it down. `modifiers_opt` sits between `type` and the kind word (kama.y `marked_type_declaration`), and `type immutable value` / `type abstract resource` / `type extern value` / `type final resource` / `type virtual value` are all in-tree. The NAME is optional because `type adapter <int32, Uuid> implements C` has none: its kind word is followed by `<`.",
       "patterns": [
         {
-          "match": "\\b(type)\\s+((?:(?:abstract|extern|override|private|protected|public|final|static|default|virtual|immutable)\\s+)*)(value|resource|view|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type)\\s+((?:(?:abstract|extern|override|private|protected|public|final|static|default|virtual|immutable)\\s+)*)(value|resource|view|contract|adapter)\\b(?:\\s+([A-Za-z_][A-Za-z0-9_]*))?",
           "captures": {
             "1": { "name": "storage.type.kama" },
             "2": { "name": "keyword.other.modifier.kama" },

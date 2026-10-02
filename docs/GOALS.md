@@ -92,9 +92,9 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    owned hierarchy. Hand-offs follow **"every kind is movable; the default is declared, a marker
    overrides"**: each kind has a natural bare hand-off (move for `Owned`/`resource`, retain for
    `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable<This>(bare: give|copy)`),
-   and `give`/`copy` override it. The kind words `value`/`resource`/`view`/`contract` are
-   **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
-   everywhere else. **`type enum`** is the fifth kind — a plain variant set or a tagged union — and takes
+   and `give`/`copy` override it. The kind words `value`/`resource`/`view`/`contract`, and
+   `adapter`, are **contextual** (they mean something only right after `type`), so they stay
+   ordinary identifiers everywhere else. **`type enum`** is the fifth kind — a plain variant set or a tagged union — and takes
    the same `implements` clause as the rest; `enum` is the one kind word that is a reserved keyword,
    because it predates the marker. **`intrinsic`** is the sixth — the kind a *primitive* is (`int32`,
    `string`), named in a contract's `for` list. A type you do not declare (a built-in, a std type, another

@@ -3809,7 +3809,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                         auto owner = _classes.find(enumKey(ed));
                         checkConstMemberInits(kd, owner != _classes.end() ? &owner->second : nullptr);
                     }
-            } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+            } else if (auto* ii = dynamic_cast<AdapterNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
                 tp.clear(); cp.clear();   // a `type adapter` block declares no type params of its own
                 checkContracts(ii->baseTypes, nullptr);
@@ -13759,8 +13759,8 @@ const std::vector<InterfaceMethod>* CEmitter::contractMethods(const std::string&
 // A resolved contract's `for`-clause mask — the two-table lookup contractMethods() above does, plus the
 // template hint. The hint is not belt-and-braces: resolveInterfaceNames only MANGLES a pinned generic
 // contract (`Real<This>` on `float64` -> `Real_double`); minting the instance into _interfaces happens
-// at the scanTypeForGenericContracts call sites, none of which walk an IntrinsicImplNode. So a bare
-// find("Real_double") from applyIntrinsicImpl misses, and a gate that misses passes silently.
+// at the scanTypeForGenericContracts call sites, none of which walk an AdapterNode. So a bare
+// find("Real_double") from applyAdapter misses, and a gate that misses passes silently.
 unsigned CEmitter::implKindsOf(const std::string& contract, const std::string& tmplHint)
 {
     auto it = _interfaces.find(contract);
@@ -20387,7 +20387,7 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
     }
 }
 
-SharedIdentifier CEmitter::intrinsicContract(IntrinsicImplNode* n) const
+SharedIdentifier CEmitter::intrinsicContract(AdapterNode* n) const
 {
     if (!n || !n->baseTypes || !n->baseTypes->interfaces || n->baseTypes->interfaces->empty())
         return SharedIdentifier();
@@ -20406,7 +20406,7 @@ bool CEmitter::serdeGatedOff(SharedIdentifier contract) const
 // The effective member list for ONE target of a `type adapter` set: the block's shared bodies, with any
 // `<…>` section naming this target overriding them method-for-method. Order is deterministic (shared
 // first, in declaration order), which matters because the prototype pass and the body pass must agree.
-SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target)
+SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(AdapterNode* n, SharedIdentifier target)
 {
     auto out = std::make_shared<ClassMemberDeclarationList>();
     if (!n) return out;
@@ -20438,7 +20438,7 @@ SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode
 // A BUILT-IN target (`int32`, `string`): the conformance lands in the primitive registry (or on `string`'s
 // own ClassInfo), and a method takes `this` by value. Static dispatch: widening a built-in into a contract
 // value builds its vtable on demand (intrinsicContractVtbl).
-void CEmitter::applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt)
+void CEmitter::applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt)
 {
     SharedIdentifierList ifaces = n->baseTypes->interfaces;
     // TWO keys, deliberately: `_classes` is C-named (`string` -> kama_string), the conformance registry
@@ -20550,7 +20550,7 @@ bool CEmitter::adapterTargetHomeOk(SharedIdentifier tgt, const std::string& targ
 // One declared target's share of an adapter: the conformance, its methods (contract-scoped — reached only
 // through the contract, never off the type), and its completeness. The vtable is the target's own, emitted
 // with its other contracts; only the method BODIES move, to the adapter's module (fromAdapter).
-void CEmitter::injectAdapterMethods(ClassInfo& tci, IntrinsicImplNode* n, SharedIdentifier tgt,
+void CEmitter::injectAdapterMethods(ClassInfo& tci, AdapterNode* n, SharedIdentifier tgt,
                                     const std::string& contract, const std::string& shown)
 {
     for (auto& ex : tci.interfaces)
@@ -20624,7 +20624,7 @@ void CEmitter::applyTemplateAdapters(const std::string& inst)
 // its own ClassInfo), ONE INSTANCE of a generic type (`DynamicArray<uint8>`), or a generic TEMPLATE named bare
 // (`Optional`), which adapts every instance its `when` admits. The last two are applied per instance, as each
 // is registered (applyTemplateAdapters), because instances are discovered throughout collection.
-void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
+void CEmitter::applyAdapter(AdapterNode* n)
 {
     if (n->kindWord && *n->kindWord == "intrinsic") {   // the block's name until 0.9.510
         unsupported("`type intrinsic <…>` is now `type adapter <…>` — the same block, renamed", n->line);
@@ -20794,7 +20794,7 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
     std::vector<ImplEmit> out;
     if (!u || !u->codeDeclarationList) return out;
     for (auto& decl : *u->codeDeclarationList) {
-        if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+        if (auto* ii = dynamic_cast<AdapterNode*>(decl.get())) {
             SharedIdentifier c = intrinsicContract(ii);
             if (!c || !ii->targets || serdeGatedOff(c)) continue;
             for (auto& tgt : *ii->targets) {
@@ -20943,9 +20943,9 @@ ClassInfo* CEmitter::implTargetInfo(const std::string& tkey)
     // dedicated impl path (emitModuleContent / the prelude pass), NOT the normal per-class machinery — a
     // `ClassDeclarationNode` class emits via emitClassDefinitions and returns nullptr here.
     //
-    // There is no enum arm, because there can be no enum TARGET: `intrinsic_target_list` is a `simple_type`
-    // list, and `simple_type` is `primitive_type | class_type` where `class_type` is only `string`. It had
-    // one while `implements C for MyEnum` existed.
+    // A DECLARED target (a class or enum, or one instance of a generic) never arrives here: its adapter
+    // methods join its own `_classes` entry, marked `fromAdapter` (injectAdapterMethods), and implEmitsOf
+    // emits them in the adapter's unit.
     if (ti != _classes.end() && ti->second.isIntrinsicColl) return &ti->second;
     if (ClassInfo* pci = primConformance(tkey)) return pci;
     return nullptr;
@@ -36885,7 +36885,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         if (itf && itf->value && (*itf->value == "Serializer" || *itf->value == "Deserializer")) _usesSerde = true;
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
                 if (attrHasSerde(ed->attributes)) _usesSerde = true;
-            } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+            } else if (auto* ii = dynamic_cast<AdapterNode*>(decl.get())) {
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value && (*c->value == "Serializer" || *c->value == "Deserializer")) _usesSerde = true;
             }
@@ -36954,7 +36954,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList) {
-            auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get());
+            auto* ii = dynamic_cast<AdapterNode*>(decl.get());
             if (ii && ii->targets) {
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value) {
@@ -36995,7 +36995,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
     // `type adapter <…> implements C { … }` — inject each block's methods into every target's conformance
     // registry. Runs AFTER collectCollections so a collection target (`string` → `kama_string`) already has
-    // its ClassInfo. Coherence lives in applyIntrinsicImpl: one claim per (type, contract), and no method
+    // its ClassInfo. Coherence lives in applyAdapter: one claim per (type, contract), and no method
     // clobbering one the type already has.
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
@@ -37003,7 +37003,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         // Which file is claiming these conformances: an adapter's home rules are judged against it.
         ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         for (auto& decl : *u->codeDeclarationList)
-            if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) applyIntrinsicImpl(ii);
+            if (auto* ii = dynamic_cast<AdapterNode*>(decl.get())) applyAdapter(ii);
     }
     // Every unit is collected by here, so whether the program HAS a `std::collections::View` is settled —
     // and generic-instantiation discovery is still AHEAD, which is the other half of the constraint:
@@ -38027,7 +38027,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         } else if (dynamic_cast<IncludeNode*>(decl.get()) || dynamic_cast<ExternConstNode*>(decl.get())) {
             // FFI #include — emitted in the header by emitIncludes; an `extern const` emits nothing (the header
             // defines it; its size/kind check is emitExternLayoutChecks')
-        } else if (dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+        } else if (dynamic_cast<AdapterNode*>(decl.get())) {
             // `type adapter <…> implements C { … }` — its methods were injected into each target's
             // conformance registry and their bodies emitted just above; nothing at this top-level site.
         } else if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {

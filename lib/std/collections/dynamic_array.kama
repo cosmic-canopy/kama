@@ -251,7 +251,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     public const fn isize indexOf(const ref T item) when [T: Equatable<T>] {
         isize i = 0;
         // `item.equals(other: this[i])`, not `this[i].equals(…)` — the receiver must be the `ref T`
-        // identifier so a PRIMITIVE element (int32, whose `equals` is a scalar intrinsic conformance) resolves; a
+        // identifier so a PRIMITIVE element (int32, whose `equals` is a scalar adapter conformance) resolves; a
         // buffer element `this[i]` isn't a nameable receiver. `equals` is symmetric.
         while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
         return 0 - 1;

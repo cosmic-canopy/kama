@@ -49,6 +49,15 @@ type enum Level implements Error {
     public const fn string message() { return "lvl"; }
 }
 
+// A contract, and an ADAPTER giving it to types this file does not declare. `adapter` is followed by `<`, not
+// a name, so the kind rule's name capture is optional; `contract` and `adapter` must both scope as kind words.
+type contract Sized for value, intrinsic { const fn int32 width(); }
+
+type adapter <int32, bool> implements Sized {
+    public const fn int32 width() { return 4; }
+    <bool> { public const fn int32 width() { return 1; } }
+}
+
 // `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 @compileFor(HOSTED)
 fn int32 twice(int32 n) { return n + n; }

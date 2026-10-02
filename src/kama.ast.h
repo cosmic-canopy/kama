@@ -1257,29 +1257,32 @@ public:
         , body(body) { }
 };
 
-// `type adapter <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
-// PRIMITIVE, the kind that had no kama spelling at all (it existed only as a compiler-internal notion, so
-// the prelude had to retro-implement onto it 68 times).
+// `type adapter <int8, Uuid, Optional> implements C { …methods… <int8> { …methods… } }` — C's conformance
+// for types declared ELSEWHERE (a primitive, a std type, another package's type, one generic instance, or
+// a generic's every instance), written in the module that declares C. It began as `type intrinsic`, for
+// primitives only: the kind that had no kama spelling at all, so the prelude had to retro-implement onto
+// it 68 times.
 //
 // The set form is load-bearing: one body serves every target whose implementation is genuinely identical,
-// and a `<…>` SECTION overrides it for the targets where it is not. A primitive never gets a `_classes`
-// entry — its conformance lives in a separate registry — so this is not a `ClassDeclarationNode`.
-class IntrinsicImplNode : public StatementNode {
+// and a `<…>` SECTION overrides it for the targets where it is not. It declares no type — a primitive's
+// conformance lives in a separate registry, a declared target's methods join its own ClassInfo — so this
+// is not a `ClassDeclarationNode`.
+class AdapterNode : public StatementNode {
 public:
     SharedModifierList               modifiers;
-    SharedString                     kindWord;   // the positional kind word — must be `intrinsic`
+    SharedString                     kindWord;   // the positional kind word — must be `adapter`
     SharedIdentifierList             targets;    // the set, in declaration order
     SharedClassBaseDeclaration       baseTypes;  // `implements C` — exactly one contract per block
     SharedClassMemberDeclarationList members;    // bodies shared by every target
-    SharedIntrinsicSectionList       sections;   // per-target overrides
-    IntrinsicImplNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifierList targets,
-                      SharedClassBaseDeclaration baseTypes, SharedIntrinsicBody body)
+    SharedAdapterSectionList       sections;   // per-target overrides
+    AdapterNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifierList targets,
+                      SharedClassBaseDeclaration baseTypes, SharedAdapterBody body)
         : ASTNode(context), StatementNode(context)
         , modifiers(modifiers)
         , targets(targets)
         , baseTypes(baseTypes)
         , members(body ? body->members : SharedClassMemberDeclarationList())
-        , sections(body ? body->sections : SharedIntrinsicSectionList()) { }
+        , sections(body ? body->sections : SharedAdapterSectionList()) { }
 };
 
 class EnumMemberDeclarationNode : public StatementNode {
@@ -1339,7 +1342,7 @@ public:
         : ASTNode(context), ExpressionStatementNode(context), subject(subject), arms(arms) { }
 };
 
-// Fill a freshly parsed unit's `topLevelNames` / `hasIntrinsicImpl` (see CompilationUnit). Called from
+// Fill a freshly parsed unit's `topLevelNames` / `hasAdapter` (see CompilationUnit). Called from
 // the `compilation_unit` action in kama.y — the single reduction every parse goes through — so the walk
 // sees the RAW decl list, before `@compileFor` pruning can rewrite it.
 //
@@ -1380,7 +1383,7 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
                     if (var && var->name && var->name->value) unit->topLevelNames.insert(*var->name->value);
         } else if (auto* x = dynamic_cast<ExternConstNode*>(d)) {           // extern const T NAME;
             if (x->name && x->name->value) unit->topLevelNames.insert(*x->name->value);
-        } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
+        } else if (dynamic_cast<AdapterNode*>(d)) {
             // `type adapter <int32> implements Parseable { … }` registers a conformance for a PRIMITIVE,
             // program-wide, under no name of its own. Two files in lib/ have one.
             unit->unprunable = true;

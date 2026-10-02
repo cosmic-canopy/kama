@@ -150,7 +150,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     public fn ref V valAt(isize at) { return this.vals[at]; }
     public unsafe fn UnsafePtr<BTreeNode<K,V,A>> childPtr(isize at) { return addr(of: this.kids[at].derefMut()); }
 
-    // Three-way compare through a `ref K` receiver so a primitive key's scalar intrinsic conformance resolves (a raw
+    // Three-way compare through a `ref K` receiver so a primitive key's scalar adapter conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
     const fn Ordering cmpKeys(const ref K a, const ref K b) { return a.compareTo(other: b); }
 
@@ -546,7 +546,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     public fn void clearNode() { this.keys.clear(); this.vals.clear(); this.kids.clear(); this.leaf = true; }
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
-    // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
+    // primitive element's adapter `serialize` resolves) — the map serializes to a SORTED pair array.
     //
     // ⚠️ MARKED because the element write lives HERE, not in `SortedMap.serialize`. A B-tree's entries are
     // spread over a tree of nodes, so an in-order write is a recursion over nodes — and a graph write has

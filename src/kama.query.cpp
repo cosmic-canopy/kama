@@ -1686,7 +1686,7 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
             qc.typeKey = classKeyOfName(cd->name);
             takeBounds(cd->typeParams, cd->typeBounds);
             members = cd->members.get();
-        } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(d.get())) {
+        } else if (auto* ii = dynamic_cast<AdapterNode*>(d.get())) {
             // `type adapter <T1, T2> implements C { … <T1> { … } … }`. The enclosing type has no
             // ClassDeclarationNode here at all, and the block has N targets but only ONE source span, so
             // the key is the FIRST target by definition — there is no cursor position that could pick

@@ -217,8 +217,8 @@ struct VariantCase {
 // marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their own
 // machinery (isIntrinsicColl/isSmartPtr/isVariant + destructibility), not the kind.
 //
-// NOTE `Neutral` is unrelated to the `type adapter <…> implements C` SURFACE syntax, which confers
-// a contract on a primitive and creates no ClassInfo in `_classes` at all. It was spelled `Intrinsic`
+// NOTE `Neutral` is unrelated to the `type adapter <…> implements C` SURFACE syntax, which confers a
+// contract on a type declared elsewhere and declares no type of its own. It was spelled `Intrinsic`
 // until that syntax existed; the two never named the same concept.
 enum class TypeKind { Value, Resource, Contract, Neutral };
 
@@ -1523,7 +1523,7 @@ private:
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
-    // themselves are injected later in applyIntrinsicImpl, which also validates completeness/coherence.
+    // themselves are injected later in applyAdapter, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _intrinsicConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
     // Every enum's decl node, keyed by qualified name. Its remaining consumer is the LSP/query def-site
@@ -2205,11 +2205,11 @@ private:
     void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
 
     // `type adapter <…> implements C { … }` — contract conformance for a PRIMITIVE.
-    SharedIdentifier intrinsicContract(IntrinsicImplNode* n) const;   // the one declared contract, or null
+    SharedIdentifier intrinsicContract(AdapterNode* n) const;   // the one declared contract, or null
     // The members that serve ONE target: the block's shared bodies, with any `<…> { … }` section that
     // names this target overriding them method-for-method.
-    SharedClassMemberDeclarationList intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target);
-    void applyIntrinsicImpl(IntrinsicImplNode* n);   // validate + inject, once per target
+    SharedClassMemberDeclarationList intrinsicMembersFor(AdapterNode* n, SharedIdentifier target);
+    void applyAdapter(AdapterNode* n);   // validate + inject, once per target
     std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
     // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
     // genuinely come from different packages.
@@ -2230,7 +2230,7 @@ private:
     // A `type adapter` over a generic type, applied to each instance as it is registered: `exactArgs` set for
     // one instance (`DynamicArray<uint8>`), empty for every instance (`Optional`, narrowed by `when`).
     struct TemplateAdapter {
-        IntrinsicImplNode* node = nullptr;
+        AdapterNode* node = nullptr;
         SharedIdentifier   target;
         std::string        templateKey;
         std::string        exactInstance;   // the mangled instance an exact target names, "" for a template
@@ -2245,7 +2245,7 @@ private:
     std::string homeDisplay(const std::string& home) const;
     bool adapterHomeOk(const std::string& contract, SharedIdentifier contractNode, int line);
     bool adapterTargetHomeOk(SharedIdentifier tgt, const std::string& targetFile, int line);
-    void injectAdapterMethods(ClassInfo& tci, IntrinsicImplNode* n, SharedIdentifier tgt,
+    void injectAdapterMethods(ClassInfo& tci, AdapterNode* n, SharedIdentifier tgt,
                               const std::string& contract, const std::string& shown);
     std::vector<ImplEmit> implEmitsOf(SharedCompilationUnit u);
     bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serializable/Deserializable
@@ -2253,7 +2253,7 @@ private:
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                            const std::string& contract, const std::string& tkey, bool isPrimitive,
                            bool adapted = false);
-    void applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt);
+    void applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt);
     std::string receiverObject(const std::string& emitted) const;
     std::string conformanceGateReason(const std::string& inst, const std::string& contract);
     std::set<std::string> serDeclaredValueFields(const ClassInfo& ci) const;

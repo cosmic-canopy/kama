@@ -13,12 +13,17 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
-## [0.9.2] — 2026-09-30
+## [0.9.2] — 2026-10-02
 
 ### Changed
 
 - **Licensed under MIT OR Apache-2.0**, at your option, like kama itself — the extension was MIT only.
-  Nothing about how it works has changed.
+
+### Fixed
+
+- **`type adapter` is highlighted.** The `adapter` in `type adapter <int32, Uuid> implements C { … }` was
+  left uncoloured; it now colours like the other kind words (`value`, `resource`, …). Needs kama 0.9.510 or
+  later, where `type adapter` replaced `type intrinsic`.
 
 ## [0.9.1] — 2026-09-24
 

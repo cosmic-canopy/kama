@@ -210,6 +210,82 @@
 >}
 #^^ source.kama
 >
+>// A contract, and an ADAPTER giving it to types this file does not declare. `adapter` is followed by `<`, not
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// a name, so the kind rule's name capture is optional; `contract` and `adapter` must both scope as kind words.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>type contract Sized for value, intrinsic { const fn int32 width(); }
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^^ source.kama storage.modifier.kind.kama
+#             ^ source.kama
+#              ^^^^^ source.kama entity.name.type.kama
+#                   ^ source.kama
+#                    ^^^ source.kama keyword.control.kama
+#                       ^^^^^^^^^^^^^^^^^^^^ source.kama
+#                                           ^^^^^ source.kama keyword.other.modifier.kama
+#                                                ^ source.kama
+#                                                 ^^ source.kama keyword.other.kama
+#                                                   ^ source.kama
+#                                                    ^^^^^ source.kama storage.type.primitive.kama
+#                                                         ^ source.kama
+#                                                          ^^^^^ source.kama entity.name.function.kama
+#                                                               ^^^^^^ source.kama
+>
+>type adapter <int32, bool> implements Sized {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^ source.kama storage.modifier.kind.kama
+#            ^ source.kama
+#             ^ source.kama keyword.operator.relational.kama
+#              ^^^^^ source.kama storage.type.primitive.kama
+#                   ^^ source.kama
+#                     ^^^^ source.kama storage.type.primitive.kama
+#                         ^ source.kama keyword.operator.relational.kama
+#                          ^ source.kama
+#                           ^^^^^^^^^^ source.kama keyword.other.kama
+#                                     ^ source.kama
+#                                      ^^^^^ source.kama entity.name.type.kama
+#                                           ^^^ source.kama
+>    public const fn int32 width() { return 4; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^^ source.kama keyword.other.modifier.kama
+#                ^ source.kama
+#                 ^^ source.kama keyword.other.kama
+#                   ^ source.kama
+#                    ^^^^^ source.kama storage.type.primitive.kama
+#                         ^ source.kama
+#                          ^^^^^ source.kama entity.name.function.kama
+#                               ^^^^^ source.kama
+#                                    ^^^^^^ source.kama keyword.control.kama
+#                                          ^ source.kama
+#                                           ^ source.kama constant.numeric.integer.kama
+#                                            ^^^^ source.kama
+>    <bool> { public const fn int32 width() { return 1; } }
+#^^^^ source.kama
+#    ^ source.kama keyword.operator.relational.kama
+#     ^^^^ source.kama storage.type.primitive.kama
+#         ^ source.kama keyword.operator.relational.kama
+#          ^^^ source.kama
+#             ^^^^^^ source.kama keyword.other.modifier.kama
+#                   ^ source.kama
+#                    ^^^^^ source.kama keyword.other.modifier.kama
+#                         ^ source.kama
+#                          ^^ source.kama keyword.other.kama
+#                            ^ source.kama
+#                             ^^^^^ source.kama storage.type.primitive.kama
+#                                  ^ source.kama
+#                                   ^^^^^ source.kama entity.name.function.kama
+#                                        ^^^^^ source.kama
+#                                             ^^^^^^ source.kama keyword.control.kama
+#                                                   ^ source.kama
+#                                                    ^ source.kama constant.numeric.integer.kama
+#                                                     ^^^^^^ source.kama
+>}
+#^^ source.kama
+>
 >// `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >@compileFor(HOSTED)

@@ -171,7 +171,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // Key hashing/equality go through these `ref K` helpers so the receiver is always a plain borrow the
     // contract dispatch resolves — for a `string` OR user key (a class receiver) and for a PRIMITIVE key
-    // (`int32`, whose `hash`/`equals` are scalar-receiver intrinsic conformances). A raw-buffer element `this.keys[i]`
+    // (`int32`, whose `hash`/`equals` are scalar-receiver adapter conformances). A raw-buffer element `this.keys[i]`
     // is handed in by `ref`, never used as a receiver directly.
     // `k.hash()` is the CHEAP CONTENT hash (identity for an int, FNV for a string); the pluggable
     // `H::finish` avalanches it before it is masked to a slot. `H` defaults to `DefaultHasher`
