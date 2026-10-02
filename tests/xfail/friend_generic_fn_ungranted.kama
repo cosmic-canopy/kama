@@ -1,0 +1,11 @@
+// The grant names `reader`; `other` is a generic function the type never granted, and its body — checked before
+// any instance exists — reaches the private member all the same. Refused.
+type resource Box {
+    int32 v = 0;
+    public ctor make(int32 v) { this.v = v; }
+    const fn int32 secret() { return this.v; }
+    friend reader[secret];
+}
+fn T reader<T: Deserializable<T>>(const ref Box b, T fallback) { int32 s = b.secret(); return fallback; }
+fn T other<T: Deserializable<T>>(const ref Box b, T fallback) { int32 s = b.secret(); return fallback; }
+fn int32 main() { return 0; }

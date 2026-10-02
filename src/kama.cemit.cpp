@@ -15874,6 +15874,7 @@ void CEmitter::checkUninstantiatedTemplates()
         long byBefore[DK_Count];
         for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
         const std::string probeName = key + "__probe";
+        ScopedStr _pft(_probeFnTemplate, key);   // a `friend` grant naming this template reaches its body (KPG-28)
         emitFunction(tmpl, &probeName);   // nameOverride => `static` linkage, and no entry-point mangling
 
         // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred,
@@ -24902,6 +24903,12 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
 // is a friend — which is what a plain owner with a generic CLASS accessor already does.
 bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs)
 {
+    // The TEMPLATE's own body, checked before any instance exists (checkUninstantiatedTemplates): it stands for
+    // every instance, so a grant that names the template reaches it — SPEC's rule, which held only for an
+    // instance, so a library's generic accessor (instantiated by its users, never by the library) was refused
+    // in the library's own `kama check` (peer KPG-28). Each instance is still judged against its owner's
+    // arguments when it is emitted; the probe's arguments are opaque and have nothing to correspond to.
+    if (!_probeFnTemplate.empty() && _probeFnTemplate == tmplKey) return true;
     if (_currentFunc.empty()) return false;
     auto fi = _genericInsts.find(_currentFunc);
     if (fi == _genericInsts.end() || fi->second.templateKey != tmplKey) return false;

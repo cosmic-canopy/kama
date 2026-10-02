@@ -5359,6 +5359,9 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   A **generic free function** accessor reaches the corresponding instance, by the same rule a generic type
   accessor does: `friend reader[v]` on `Box<T>` admits `reader<int32>` into `Box<int32>` and no sibling
   instance. <!-- test: friend_holes --> <!-- xfail: friend_fn_generic_sibling -->
+  The grant reaches the generic function's own body too, which is checked once before any instance exists, <!-- test: friend_generic_fn_template -->
+  so a library's generic accessor that only its users instantiate passes the library's own check, while a
+  generic function the type never named is refused there. <!-- xfail: friend_generic_fn_ungranted -->
   **Type arguments on the accessor** name one instance and are honored: `friend Lens<int32>[c]` admits
   exactly `Lens<int32>`. <!-- xfail: friend_inst_sibling -->
   An argument may be one of the owner's own type parameters — `friend Tree<K,V>` is the corresponding

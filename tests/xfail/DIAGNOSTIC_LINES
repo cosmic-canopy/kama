@@ -462,6 +462,7 @@ friend_enum_nongranted	friend_enum_nongranted.kama:8
 friend_enum_unknown	friend_enum_unknown.kama:2
 friend_fn_generic_sibling	friend_fn_generic_sibling.kama:9
 friend_generic_arity	friend_generic_arity.kama:13
+friend_generic_fn_ungranted	friend_generic_fn_ungranted.kama:10
 friend_generic_member_typo	friend_generic_member_typo.kama:9
 friend_generic_sibling	friend_generic_sibling.kama:18
 friend_inst_on_fn	friend_inst_on_fn.kama:7 friend_inst_on_fn.kama:9

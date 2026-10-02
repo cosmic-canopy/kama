@@ -1512,6 +1512,7 @@ private:
                      { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
     ClassInfo&       primConformanceFor(const std::string& key) { return _primConformances[key]; }   // creates
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
+    std::string _probeFnTemplate;       // the generic FUNCTION whose uninstantiated body is being probed, or ""
     std::string _collectingUnitPath;    // the unit whose declarations are being collected right now
     // The view type the CURRENT method body is allowed to mint (its C name), or empty. Set on entry to
     // every method body when the owner implements a `@viewable` contract declaring a member of that name
