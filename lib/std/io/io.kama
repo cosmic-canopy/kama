@@ -96,6 +96,13 @@ type value IoError implements Error, Sendable {
         if (this.os == 0) { return Optional::None; }
         return Optional::Some(value: this.os);
     }
+    // The OS's own words for its code — `strerror`'s text, "Connection refused" — alone; `None` for an error kama
+    // raised itself, which no OS code backs, or a code the OS has no text for. What a client that prints exactly
+    // what libpq or the OS prints reaches for; `message()` says more (peer KPG-23).
+    public const fn Optional<string> osMessage() {
+        if (this.os == 0) { return Optional::None; }
+        return osText(code: this.os);
+    }
     // The kind, and when the OS reported it, its code and its own words:
     // "connection refused (os error 111: Connection refused)".
     public const fn string message() {

@@ -1900,7 +1900,8 @@ link itself, and `File.metadata()` asks an OPEN file, so a check and the read af
 apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,
 `Interrupted`, `Other`), which a caller branches on with `match (e.kind())`. `e.rawOsError()` is the POSIX errno or,
 on Windows, the Winsock or Win32 code, and `e.message()` quotes the system's own words for it: <!-- test: io_error_model -->
-`"not found (os error 2: No such file or directory)"`. So two failures of one kind stay distinguishable to whoever
+`"not found (os error 2: No such file or directory)"`; `e.osMessage()` is those words alone, as `strerror` gives
+them, or `None` when no OS code backs the error. So two failures of one kind stay distinguishable to whoever
 reads the log — `EPERM` and `EACCES` are both `PermissionDenied`, and say "Operation not permitted" and "Permission
 denied" — and an unclassified one is `Other` with its code and text rather than a bare "i/o error". An error kama
 raises itself, `IoError.of(kind: IoErrorKind::InvalidInput)`, has a kind and no code. `Interrupted` is a signal
