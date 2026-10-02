@@ -1,0 +1,9 @@
+// A bare hand-off takes the type's bare default, and a resource with no `copy` moves: out of a receiver the
+// caller still owns. It used to pass the receiver POINTER where a value was expected, and clang refused it.
+type resource Res {
+    string s;
+    public ctor make() { this.s = "ab".concat(other: "c"); }
+    public fn int32 hand() { return take(r: this); }
+}
+fn int32 take(Res r) { return 1; }
+fn int32 main() { return 0; }

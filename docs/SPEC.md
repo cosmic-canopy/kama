@@ -1090,6 +1090,11 @@ Those three are spelled out because "uniformly" above is a claim about the hand-
 the type, and it was true of `string` in only some of the shapes until `0.9.436` — with nothing here able
 to tell, since the fixtures tested the site and tested the type but never the intersection.
 
+**`this` is a named value.** In a method it names the receiver the CALLER owns, so the method may hand off <!-- test: this_receiver_handoff -->
+`copy this` (into a local, an argument, a return, a payload), and a bare hand-off takes the type's bare
+default, but it never moves the receiver: `give this`, or a bare hand-off that would move, is refused. <!-- xfail: this_give_in_method, this_bare_handoff -->
+In a named ctor `this` is the value under construction, the ctor's own, and `give this` hands it back.
+
 **A ternary hands off one arm, so each arm is the hand-off.** `c ? a : b` over a type that owns something <!-- test: ternary_owning_arms -->
 chooses between values; it never bit-copies one. Where it is handed off, a named arm carries the marker the
 same value would carry alone: `string label = useName ? copy name : copy fallback;`. A fresh arm, such as a

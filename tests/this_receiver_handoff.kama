@@ -1,0 +1,54 @@
+// A method's `this` names the receiver the CALLER owns, so it hands off like any named value: `copy this`
+// deep-copies it into a local, an argument, a return or a variant payload; a bare hand-off takes the type's
+// bare default (a `Copyable(bare: copy)` resource copies; a value copies); and `foreach (x in this)` iterates
+// it in place. Each was broken: `copy this` was refused as a marker on a fresh value, a bare `take(t: this)`
+// passed the receiver POINTER where a value was expected (a clang error), `foreach` took `&(self)`, and a
+// `copy this` that got through read the pointer's own bytes as the object (a stack overrun under ASan).
+import { core::println, std::collections::DynamicArray };
+
+type resource Tok implements Copyable<This>(bare: copy) {
+    string s;
+    public ctor make(string s) { this.s = give s; }
+    public ctor copy(ref Tok source) { this.s = copy source.s; }
+    public const fn int32 len() { return cast<int32>(this.s.length()); }
+    public const fn Tok dup() { return copy this; }
+    public const fn int32 viaLocal() { Tok t = copy this; return t.len(); }
+    public const fn int32 viaArg() { return take(t: copy this); }
+    public const fn int32 viaBare() { return take(t: this); }
+    public const fn int32 viaPayload() {
+        Optional<Tok> o = Optional::Some(value: copy this);
+        return match (o) { case Some(value: t): t.len(); case None: 0; };
+    }
+}
+fn int32 take(Tok t) { return t.len(); }
+
+@generate(of)
+type value Pt { public int32 x; public const fn int32 viaValue() { return show(p: this); } }
+fn int32 show(Pt p) { return p.x; }
+
+// `this` inside adapters: iterated, copied, and interpolated (a `char`, whose C type it shares with `uint32`).
+type contract Sized for value, resource, intrinsic { const fn int32 size(); }
+type adapter <DynamicArray<uint8>> implements Sized {
+    public const fn int32 size() {
+        int32 n = 0;
+        foreach (uint8 x in this) { n = n + cast<int32>(x); }
+        DynamicArray<uint8> c = copy this;
+        return n + cast<int32>(c.length());
+    }
+}
+type adapter <char> implements Sized { public const fn int32 size() { string s = "[${this}]"; return cast<int32>(s.length()); } }
+fn int32 sizeOf<T: Sized>(const ref T v) { return v.size(); }
+
+fn int32 main() {
+    Tok t = Tok.make(s: "ab".concat(other: "c"));
+    Tok d = t.dup();
+    DynamicArray<uint8> bytes = DynamicArray.empty();
+    bytes.add(item: 1ui8); bytes.add(item: 2ui8);
+    char ch = 'x';
+    Pt p = Pt.of(x: 4);
+    int32 r = d.len() + t.viaLocal() + t.viaArg() + t.viaBare() + t.viaPayload()   // 3 + 3 + 3 + 3 + 3
+            + p.viaValue()                                                        // 4
+            + sizeOf(v: bytes) + sizeOf(v: ch);                                   // 1 + 2 + 2, then 3
+    println(s: "${r}");
+    return r == 15 + 4 + 5 + 3 ? 0 : 1;
+}

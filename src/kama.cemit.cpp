@@ -7920,7 +7920,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // assumption is false.)
                     const bool lateInit = needsTargetType(init.get());
                     if (lateInit) _moveState[nm] = MoveState::Moved;
-                    std::string iv = narrowViewValue(ty, init, emitExpression(init), n->line);   // `ConstView<T> cv = v;`
+                    std::string iv = narrowViewValue(ty, init, receiverObject(emitExpression(init)), n->line);   // `ConstView<T> cv = v;`
                     if (lateInit) _moveState[nm] = MoveState::NotMoved;   // the assignment below makes it live
                     _matchTargetCType = pmt;
                     _variantTargetType = pvt;
@@ -7985,7 +7985,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
                         if (doCopy) { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
-                        else { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }
+                        else if (handoff != 2) { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
                     }
                     // A value/primitive: the plain `=` above IS the hand-off — `copy` and `give` are both
                     // just that copy (a value's "move" is a copy; the source stays valid, so no marker error).
@@ -8656,7 +8656,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[lty].bareDefault == COPY;
                 // A move needs a movable local (reject moving out of a field/element); a copy reads any lvalue.
-                std::string mv = doCopy ? std::string() : moveOnlySource(rhs, n->line);
+                std::string mv = doCopy || handoff == 2 ? std::string() : moveOnlySource(rhs, n->line);   // a refused `copy` is not a move
                 std::string rname;
                 if (auto* rid = dynamic_cast<IdentifierNode*>(rhs.get()))
                     if (rid->value && (!rid->qualifier || rid->qualifier->empty())) rname = *rid->value;
@@ -16696,7 +16696,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     size_t outerPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
     auto emitIterable = [&]() -> std::string {
         bool ph = _hoistOK; _hoistOK = true;
-        std::string r = emitExpression(fe->expression);
+        std::string r = receiverObject(emitExpression(fe->expression));   // `foreach (x in this)` iterates the object
         _hoistOK = ph;
         return r;
     };
@@ -17135,10 +17135,12 @@ bool CEmitter::isNamedValue(ASTNode* e)
     // its address and `give`/`copy` reach the same rules an element does (a `const ref` place refuses the
     // move; a writable one is "out of a field/element").
     if (auto* inv = dynamic_cast<InvocationNode*>(e)) return invocationReturnsPlace(inv);
-    // `this` inside a ctor names the value under construction — real storage the ctor owns and hands
-    // out, so `give this` is a move like any other. (In a METHOD `this` is a borrowed receiver, and
-    // moving out of it is exactly what the caller must not be able to do.)
-    if (_inNamedCtorBody && dynamic_cast<ThisAccessNode*>(e)) return true;
+    // `this` names storage: in a ctor, the value under construction, which the ctor owns and hands out (so
+    // `give this` is a move like any other); in a METHOD, the receiver the caller owns. A method may hand off a
+    // COPY of it (`copy this`) but never move it — moveOnlySource refuses that — and a bare hand-off of an
+    // owning receiver must say which. It was not a named value at all, so `copy this` was refused as a marker
+    // on a fresh value, and a bare `take(r: this)` passed the receiver POINTER where a value was expected.
+    if (dynamic_cast<ThisAccessNode*>(e) && (_inNamedCtorBody || _currentClass)) return true;
     if (auto* id = dynamic_cast<IdentifierNode*>(e)) {
         // a `::`-scope-resolved enum member / variant construction (`Color::Blue`, `Box::Empty`)
         // is a FRESH rvalue, not a movable named lvalue. Distinguish it from an object access
@@ -17611,6 +17613,13 @@ bool CEmitter::giveOfBorrowedBinding(SharedExpression e, int line)
 std::string CEmitter::moveOnlySource(SharedExpression e, int line)
 {
     if (giveOfBorrowedBinding(e, line)) return "";
+    // A method's receiver is the CALLER's: moving it out would leave the caller holding a moved-from value it
+    // never gave up. (A ctor's `this` is its own, and `give this` hands it back — below.)
+    if (dynamic_cast<ThisAccessNode*>(e.get()) && !_inNamedCtorBody) {
+        unsupported("cannot `give this` — a method borrows its receiver from the caller, who still owns it; "
+                    "hand off `copy this`, or take the value as a parameter", line);
+        return "";
+    }
     // A move MUTATES its source — it leaves it holding a moved-from value — so a const binding may not be
     // one. Every other write through a const root is caught by `checkConstWrite` on an assignment LHS; a
     // hand-off writes through the RHS instead, which is why it needed its own guard. This is the single
@@ -20729,7 +20738,7 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
             if (!c || !ii->targets || serdeGatedOff(c)) continue;
             for (auto& tgt : *ii->targets) {
                 if (!tgt) continue;
-                if (ClassInfo* t = implTargetInfo(primKey(tgt))) { out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt), {}}); continue; }
+                if (ClassInfo* t = implTargetInfo(primKey(tgt))) { out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt), {}, tgt}); continue; }
                 // A declared, non-generic target: its adapter methods are on its own ClassInfo, marked.
                 if (tgt->builtInVal != 0 || !tgt->value) continue;
                 const std::string key = resolveUserName(*tgt->value, tgt->qualifier);
@@ -22605,7 +22614,10 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
                 if (doCopy) s += copyCall(argCls, val);
-                else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); s += val; }
+                else {
+                    if (handoff != 2) { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); }
+                    s += val;
+                }
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !p.className.empty()
                        && _classes.count(p.className) && _classes[p.className].kind == TypeKind::Value) {
                 // A bare `this` is `self` (a `T*` — the receiver pointer). Passed to a by-value value-type
@@ -25865,6 +25877,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     if (rv.empty()) rv = tryHoistInlineValue(v, dstCType, line); // `:= new T(…)`
     if (rv.empty()) rv = narrowViewValue(dstCType, v, emitExpression(v), line);   // `return v;` into a `ConstView<T>`
     if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
+    else if (dynamic_cast<ThisAccessNode*>(v.get())) rv = receiverObject(rv);   // `return copy this;` from a method
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
     flushHoisted(depth);
     // The value line is where the user's expression IS, and both callers — a `return` and a
@@ -25900,7 +25913,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
         if (doCopy) { indent(depth); *_out << dst << " = " << copyCall(rc, emitExpression(v)) << ";\n"; }
-        else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
+        else if (handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
     else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isIntrinsicColl
@@ -26975,7 +26988,10 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
                 if (doCopy) field = copyCall(argCls, val);
-                else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); field = val; }
+                else {
+                    if (handoff != 2) { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); }
+                    field = val;
+                }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
                        && !isFixedColl(argCls) && handoff) {
                 // Hand a heap collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
@@ -28152,6 +28168,14 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 // `T__copy(&(x))` — a DEEP copy, and the ONE way the emitter is allowed to spell one. It used to be
 // written out at twelve sites; they are all this call now, so the intrinsic copy's allocation FACT below is
 // recorded in one place. (A non-intrinsic copy is an ordinary call in the C, and so an ordinary edge.)
+// A method's receiver is emitted as `self` — the object's ADDRESS (every user name is `k_`-prefixed, so `self`
+// can only be the receiver). Where the OBJECT is wanted — a value (`Res r = copy this;`), or an operand whose
+// address is taken again (`foreach (x in this)`) — it is `(*self)`. A scalar receiver is the value already.
+std::string CEmitter::receiverObject(const std::string& emitted) const
+{
+    return emitted == "self" && _currentClass && !_currentClass->isScalarRecv ? "(*self)" : emitted;
+}
+
 std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue)
 {
     // An INTRINSIC owning collection's `__copy` is a runtime C function, not an emitted kama body, so it
@@ -35566,6 +35590,12 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
 {
     if (!e) return SharedIdentifier();
     ASTNode* n = e.get();
+    // `this` in a built-in's adapter is the scalar itself; its kama type is the target the body was emitted for
+    // (`char`, not the `uint32_t` it shares with `uint32`), bound as `This`.
+    if (dynamic_cast<ThisAccessNode*>(n) && _currentClass && _currentClass->isScalarRecv && !_currentClass->enumNode) {
+        auto it = _typeSubst.find("This");
+        if (it != _typeSubst.end()) return it->second;
+    }
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
         if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
@@ -37252,6 +37282,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             for (auto& e : implEmitsOf(u)) {
                 ScopedStr _ts(_thisType, e.target->name);
                 ScopedSubst _es(_typeSubst, e.subst);
+                ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
+                                                        : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
                 for (auto& m : *e.members) {
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
@@ -37498,6 +37530,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& e : implEmitsOf(_preludeUnit)) {
             ScopedStr _ts(_thisType, e.target->name);
                 ScopedSubst _es(_typeSubst, e.subst);
+                ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
+                                                        : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
             for (auto& m : *e.members) {
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                 if (!md || !md->name || !md->name->value) continue;
@@ -37736,6 +37770,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     for (auto& e : implEmitsOf(unit)) {
         ScopedStr _ts(_thisType, e.target->name);
                 ScopedSubst _es(_typeSubst, e.subst);
+                ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
+                                                        : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
         for (auto& m : *e.members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;

@@ -1,0 +1,9 @@
+// A method borrows its receiver from the caller, who still owns it — so it may hand off a COPY of `this`, never
+// move it. (A ctor's `this` is its own, and `give this` hands it back.)
+type resource Res {
+    string s;
+    public ctor make() { this.s = "ab".concat(other: "c"); }
+    public fn int32 hand() { return take(r: give this); }
+}
+fn int32 take(Res r) { return 1; }
+fn int32 main() { return 0; }

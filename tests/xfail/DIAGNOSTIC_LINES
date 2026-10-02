@@ -1160,6 +1160,8 @@ ternary_arm_give	ternary_arm_give.kama:7
 ternary_arm_move_resource	ternary_arm_move_resource.kama:10
 ternary_handoff_bare_named	ternary_handoff_bare_named.kama:7
 ternary_move_in_arm	ternary_move_in_arm.kama:8
+this_bare_handoff	this_bare_handoff.kama:6
+this_give_in_method	this_give_in_method.kama:6
 this_outside	this_outside.kama:3
 truncate_widening	truncate_widening.kama:6
 try_new_bad_type	try_new_bad_type.kama:5

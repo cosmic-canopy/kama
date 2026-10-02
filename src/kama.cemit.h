@@ -2218,6 +2218,9 @@ private:
         ClassInfo* target;
         SharedClassMemberDeclarationList members;
         std::map<std::string, SharedIdentifier> subst;
+        // A BUILT-IN target as written (`char`): its ClassInfo carries only the C type, which `char` shares with
+        // `uint32`, so the body binds `This` to this node and `this` reads its kama type from it.
+        SharedIdentifier targetNode;
     };
     // A `type adapter` over a generic type, applied to each instance as it is registered: `exactArgs` set for
     // one instance (`DynamicArray<uint8>`), empty for every instance (`Optional`, narrowed by `when`).
@@ -2246,6 +2249,7 @@ private:
                            const std::string& contract, const std::string& tkey, bool isPrimitive,
                            bool adapted = false);
     void applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt);
+    std::string receiverObject(const std::string& emitted) const;
     std::string contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
                                  const std::string& what, int line);
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);

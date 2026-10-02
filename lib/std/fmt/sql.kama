@@ -54,14 +54,10 @@ type adapter <string> implements SqlParam {
     public const fn SqlValue toSql() { return SqlValue::Text(value: copy this); }
 }
 type adapter <char> implements SqlParam {
-    public const fn SqlValue toSql() { char c = this; return SqlValue::Text(value: "${c}"); }
+    public const fn SqlValue toSql() { return SqlValue::Text(value: "${this}"); }
 }
 type adapter <DynamicArray<uint8>> implements SqlParam {
-    public const fn SqlValue toSql() {
-        DynamicArray<uint8> b = DynamicArray.withCapacity(capacity: this.length());
-        for (isize i = 0; i < this.length(); i++) { b.add(item: this[i]); }
-        return SqlValue::Bytes(value: give b);
-    }
+    public const fn SqlValue toSql() { return SqlValue::Bytes(value: copy this); }
 }
 type adapter <Optional> implements SqlParam when [T: SqlParam] {
     public const fn SqlValue toSql() {
