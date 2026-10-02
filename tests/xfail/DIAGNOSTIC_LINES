@@ -1149,7 +1149,12 @@ string_bytes_no_constview_borrow	string_bytes_no_constview_borrow.kama:5
 string_bytes_no_constview_chained	string_bytes_no_constview_chained.kama:5
 string_plus_number	string_plus_number.kama:6
 struct_cycle_mutual	struct_cycle_mutual.kama:1
+tag_hole_not_contract	tag_hole_not_contract.kama:8
+tag_ref_template	tag_ref_template.kama:2
+tag_template_hole_type	tag_template_hole_type.kama:4
+tag_typed_hole_spec	tag_typed_hole_spec.kama:5
 tag_unknown	tag_unknown.kama:4
+template_escape	template_escape.kama:7 template_escape.kama:8
 ternary_arm_copy_borrow	ternary_arm_copy_borrow.kama:7
 ternary_arm_give	ternary_arm_give.kama:7
 ternary_arm_move_resource	ternary_arm_move_resource.kama:10

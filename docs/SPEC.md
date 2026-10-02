@@ -248,25 +248,37 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   It is named after the **contract** (`Formattable`), not `display`/`debug` — Kama has one to-string contract, no
   Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
 - **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
-  `stripIndent"…"`; no space) makes it *tagged*. The compiler splits the string into its trusted literal
-  **parts** and its rendered **holes** (each hole run through `Formattable`) and hands them to a function
-  `fn R name(ref Template t)`, which decides how they combine — so a tag is just a function you can define:
+  `stripIndent"…"`; no space) makes it *tagged*: it calls the ordinary function of that name, the TAG, with a
+  `Template` view over the string's trusted literal **parts** and its **holes**, kept separate — so a tag is
+  just a function you can define:
 
   ```kama fragment
-  fn string html(ref Template t) { /* literals verbatim, holes HTML-escaped — XSS-safe */ }
+  fn string html(Template t) { /* literals verbatim, holes HTML-escaped — XSS-safe */ }
+  fn SqlQuery sql(Template<SqlParam> t) { /* each hole a typed `?` parameter, never in the query text */ }
 
   string page = html"<b>${user}</b>";            // ${user} escaped, <b> kept raw
-  SqlQuery  q = sql"… WHERE id = ${id}";          // holes become `?` params, out-of-band (injection-safe)
+  SqlQuery  q = sql"… WHERE id = ${id}";          // the value travels out-of-band (injection-safe)
   string    s = stripIndent"…";                   // the literal template is dedented; hole values verbatim
   ```
 
-  Because parts and holes stay **separate**, a tag treats literals (trusted) and holes (values) differently:
-  `html` escapes holes but not literals, `sql` never splices a hole into the query text (values go to a
-  params array), `stripIndent` dedents only the template. `Template` (a prelude type) exposes `partCount()`
-  / `holeCount()` / `part(at:)` / `hole(at:)`; `stripIndent`, `html`, `sql` (+`SqlQuery`) live in `std::fmt`.
-  Format specifiers compose inside a tag (`sql"…${amt:.2}"`). An unknown tag (no matching `fn` in scope) is a
-  compile error. *(Type-preserved params — each hole keeping its static type into the params list rather than
-  a rendered `string` — is a compatible future extension; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.)*
+  **What a hole is, the tag decides.** A `Template` (`Template<string>`) hands each hole over as TEXT, <!-- test: tag_sql, tag_typed_holes -->
+  rendered through `Formattable` with its format spec (`html"${amt:.2}"`). A `Template<C>` for a contract `C`
+  hands each hole over as a `C` value, checked against `C` where the tagged string is written: `sql"…
+  ${point}"` is a compile error unless `Point` implements `SqlParam`, so an empty `Optional` hole is NULL — <!-- xfail: tag_hole_not_contract -->
+  never the text "None" — and bytes stay bytes. A format spec on a typed hole, a hole that is not `C`, and a <!-- xfail: tag_hole_not_contract, tag_typed_hole_spec -->
+  `Template` of anything but `string` or a contract are each refused. <!-- xfail: tag_template_hole_type -->
+
+  **`Template` is a VIEW.** The compiler builds it for one call, over holes that live only as long as the
+  statement's scope, so a tag takes it by value, never by `ref`, and it cannot be kept past that scope. <!-- xfail: tag_ref_template, template_escape -->
+  (While it was a copyable `value`, a tag that returned it left a heap-use-after-free in safe code.) It
+  exposes `partCount()` / `holeCount()` / `part(at:)` / `hole(at:)`, and the last two BORROW: `copy` what a
+  tag keeps. An unknown tag, with no matching `fn` in scope, is a compile error. <!-- xfail: tag_unknown -->
+
+  `std::fmt` ships `html`, `stripIndent`, and `sql` with `SqlQuery`, `SqlValue` (`Null`, `Bool`, `Int`,
+  `Float`, `Text`, `Bytes`) and the contract `SqlParam`. Its adapters cover the integers that fit an `int64`,
+  both floats, `bool`, `char`, `string`, `DynamicArray<uint8>` (bytes) and `Optional<T>` when `T` is
+  `SqlParam`; `uint64` and `usize` are left out, because not every value fits. A type opts in by naming its
+  one SQL value. Mapping a whole type to a row is an ORM's job, a library above std (ROADMAP_DETAIL §2).
 
 ## Collections & strings ✅
 

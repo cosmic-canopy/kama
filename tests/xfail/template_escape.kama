@@ -1,0 +1,10 @@
+// A `Template` is a VIEW over the tagged string's parts and holes, which live only as long as the statement's
+// scope. Kept past it — here, returned from the function that made it — it would point at freed holes (a
+// heap-use-after-free, in safe code, while it was a copyable `value`). The view escape check refuses it.
+fn Template keep(Template t) { return t; }
+fn Template make() {
+    string a = "abc".concat(other: "def");
+    Template t = keep"x=${a}";
+    return t;
+}
+fn int32 main() { return 0; }

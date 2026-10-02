@@ -1,0 +1,3 @@
+// A `Template` is a view, and a view is already a borrow: a tag takes it by value, never by `ref`.
+fn string shout(ref Template t) { return copy t.part(at: 0); }
+fn int32 main() { return 0; }

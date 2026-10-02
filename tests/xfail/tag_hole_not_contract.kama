@@ -1,0 +1,10 @@
+// A `Template<C>` tag takes each hole as a `C` value, and the hole is checked against `C` where the tagged string
+// is written. A struct with no single SQL value is not `SqlParam`, so it cannot be a hole of `sql`.
+import { std::fmt::sql, std::fmt::SqlQuery };
+@generate(of)
+type value Point { public int32 x; public int32 y; }
+fn int32 main() {
+    Point p = Point.of(x: 1, y: 2);
+    SqlQuery q = sql"insert into pts values (${p})";
+    return 0;
+}

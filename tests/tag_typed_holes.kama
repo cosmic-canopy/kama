@@ -1,0 +1,37 @@
+// A tag may take `Template<C>` for a contract `C`: each hole then arrives as a `C` value — not as text — and is
+// checked against `C` where the tagged string is written. Holes of every shape a hole can be: a local of a
+// built-in, an `Optional` (adapted for every instance, `when [T: Coded]`), a declared type that implements the
+// contract itself, a field, and an element. A hole read through `t.hole(at:)` dispatches through the contract,
+// called in place or bound to a contract local.
+import { core::println, std::collections::DynamicArray };
+
+type contract Coded for value, enum, intrinsic { const fn int32 code(); }
+type adapter <int32> implements Coded { public const fn int32 code() { return this; } }
+type adapter <Optional> implements Coded when [T: Coded] {
+    public const fn int32 code() { return match (this) { case Some(value: v): v.code(); case None: -1; }; }
+}
+@generate(of)
+type value Badge implements Coded {
+    public int32 n;
+    public const fn int32 code() { return this.n * 100; }
+}
+
+fn int32 sumOf(Template<Coded> t) {
+    int32 s = 0;
+    for (int32 i = 0; i < t.holeCount(); i++) { s = s + t.hole(at: i).code(); }
+    return s;
+}
+fn int32 firstOf(Template<Coded> t) { Coded c = t.hole(at: 0); return c.code(); }
+
+fn int32 main() {
+    int32 a = 5;
+    Optional<int32> b = Optional::Some(value: 7);
+    Optional<int32> c = Optional::None;
+    Badge d = Badge.of(n: 2);
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1000);
+    int32 r = sumOf"a=${a} b=${b} c=${c} d=${d} d.n=${d.n} xs0=${xs[0]}";
+    println(s: "${r}");
+    if (r != 5 + 7 - 1 + 200 + 2 + 1000) { return 1; }
+    return firstOf"${b}" == 7 ? 0 : 2;
+}

@@ -5156,31 +5156,72 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     _inSynthDispatch = prevSynth;
 }
 
-// A tagged string `<tag>"lit ${hole} lit"` lowers to: render each part + hole to an owned `kama_string`, pack
-// them into two C arrays, wrap a prelude `Template` (borrowed `UnsafePtr<string>` + counts) over them, and call the
-// tag function `fn R <tag>(ref Template)`. The tag decides how literals (trusted) and holes (values) combine —
-// escaping, dedenting, or `?`-parameter binding (holes stay out-of-band → injection-safe by construction).
-// Holes render via the SAME per-hole path as plain interpolation (spec/char/Formattable), so specs compose for free.
+// A tagged string `<tag>"lit ${hole} lit"` calls the tag, an ordinary function of one `Template<H>` parameter,
+// with a view over the literal's parts and its holes. `H` decides what a hole IS:
+//   * `string` (`Template`): each hole rendered to an owned `kama_string` through the same per-hole path plain
+//     interpolation takes (spec/char/Formattable), so format specs compose for free;
+//   * a contract `C` (`Template<C>`): each hole bound to `C` as a borrow — a fat pointer, checked against `C`
+//     HERE, where the tagged string is written — so a SQL tag gets `None` as NULL and bytes as bytes, never text.
+// Both pack into C arrays the view borrows for the one call; the hole temps live to the end of the scope.
 std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
 {
     CodeGenContext& ctx = *_synthCtx;
 
     std::string tagKey = resolveFunc(*is->tag, nullptr);
-    if (!_funcs.count(tagKey)) {
-        unsupported(("unknown string tag '" + *is->tag + "' — expected an imported `fn R " + *is->tag +
-                    "(ref kama__Template t)` (e.g. `html`, `sql`, `stripIndent` from std::fmt)").c_str(), is->line);
+    auto fit = _funcs.find(tagKey);
+    // The Template instance the tag takes, if it is a tag at all.
+    std::string tcls;
+    if (fit != _funcs.end() && fit->second.params.size() == 1) {
+        const std::string& pc = fit->second.params[0].className;
+        auto gi = _genericTypeInsts.find(pc);
+        if (gi != _genericTypeInsts.end() && gi->second.templateKey == preludeKey("Template")) tcls = pc;
+    }
+    if (tcls.empty()) {
+        unsupported(("unknown string tag '" + *is->tag + "' — a tag is a function of one `Template` parameter in "
+                     "scope, `fn R " + *is->tag + "(Template t)` (e.g. `html`, `sql`, `stripIndent` from std::fmt)").c_str(),
+                    is->line);
+        return "\"\"";
+    }
+    SharedIdentifier holeTy = _genericTypeInsts[tcls].typeArgs[0];
+    const std::string hct = cType(holeTy);
+    const bool text = hct == "kama_string";
+    if (!text && !isInterface(hct)) {
+        const std::string pk = primKeyOfCType(hct);   // `int32`, not its C spelling `int32_t`
+        const std::string shown = pk != hct ? pk : demangleForDisplay(hct);
+        unsupported(("`" + *is->tag + "` takes a `Template<" + shown + ">` — a tag's holes are text (`Template`) "
+                     "or the values of a contract (`Template<C>`), and `" + shown + "` is neither").c_str(), is->line);
         return "\"\"";
     }
 
-    // 1. Render each hole into its own owned `kama_string` temp; record it destructible so RAII frees it once
-    //    at scope end (the C arrays below hold borrowed fat-pointer copies — never separately freed).
+    // 1. The holes. TEXT: render each into its own owned `kama_string` temp, recorded destructible so RAII frees it
+    //    once at scope end (the C array below holds borrowed copies). TYPED: borrow each as a `C` value.
     std::vector<std::string> holeVars;
     for (size_t i = 0; i < is->holes.size(); ++i) {
         if (!is->holes[i]) continue;
+        const SharedExpression& h = is->holes[i];
+        const std::string where = "hole " + std::to_string(i + 1) + " of this `" + *is->tag + "` string";
+        if (!text) {
+            if (i < is->specs.size() && is->specs[i]) {
+                unsupported((where + " has a format spec, but `" + *is->tag + "` takes its holes as `"
+                             + demangleForDisplay(hct) + "` values, not text, so there is nothing for the spec to "
+                             "format").c_str(), is->line);
+                continue;
+            }
+            const std::string c = exprClass(h);
+            if (!valueReachesContract(h, c, hct)) {
+                const std::string shown = demangleForDisplay(c.empty() ? typeOfExpr(h) : c);
+                unsupported((where + " is " + aOrAn(shown) + ", which does not implement `" + demangleForDisplay(hct)
+                             + "` — `" + *is->tag + "` takes its holes as `" + demangleForDisplay(hct) + "` values")
+                            .c_str(), is->line);
+                continue;
+            }
+            holeVars.push_back(contractBorrowOf(hct, h, emitExpression(h), false, where, is->line));
+            continue;
+        }
         std::string hf = "kama_thf" + std::to_string(_tempCounter++);
         _hoisted.push_back("kama__Formatter " + hf + " = kama__Formatter__make();");
         recordDestructibleLocal(hf, "kama__Formatter");
-        emitHoleInto(hf, is->holes[i], (i < is->specs.size()) ? is->specs[i] : nullptr);
+        emitHoleInto(hf, h, (i < is->specs.size()) ? is->specs[i] : nullptr);
         std::string hv = "kama_thv" + std::to_string(_tempCounter++);
         _hoisted.push_back("kama_string " + hv + " = kama__Formatter__finish(&" + hf + ");");
         recordDestructibleLocal(hv, "kama_string");
@@ -5205,21 +5246,21 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
     std::string holesPtr = "NULL";
     if (!holeVars.empty()) {
         std::string ha = "kama_tha" + std::to_string(_tempCounter++);
-        std::string s = "kama_string " + ha + "[" + std::to_string(holeVars.size()) + "] = {";
+        std::string s = hct + " " + ha + "[" + std::to_string(holeVars.size()) + "] = {";
         for (size_t i = 0; i < holeVars.size(); ++i) s += (i ? ", " : " ") + holeVars[i];
         s += " };"; _hoisted.push_back(s);
         holesPtr = ha;
     }
 
-    // 4. Wrap a `Template` over the borrowed arrays (designated init — robust to field layout).
+    // 4. The view over the borrowed arrays (designated init — robust to field layout).
     std::string tv = "kama_tmpl" + std::to_string(_tempCounter++);
-    _hoisted.push_back("kama__Template " + tv + " = { .k__parts = " + pa + ", .k__nparts = " + std::to_string(partVars.size()) +
+    _hoisted.push_back(tcls + " " + tv + " = { .k__parts = " + pa + ", .k__nparts = " + std::to_string(partVars.size()) +
                        ", .k__holes = " + holesPtr + ", .k__nholes = " + std::to_string(holeVars.size()) + " };");
 
-    // 5. Call the tag: `<tag>(&__tmpl)` returns a fresh owned R (like Formatter__finish), which the enclosing
-    //    assignment/return/arg takes ownership of. Hand-emitted via the resolved cName (bypasses named-arg
-    //    matching, so the tag's Template parameter may have any name).
-    return _funcs[tagKey].cName + "(&" + tv + ")";
+    // 5. Call the tag with the view BY VALUE (a view is never passed by `ref`); its result — a fresh owned R —
+    //    goes to whatever the enclosing assignment/return/argument does with it. Hand-emitted through the
+    //    resolved cName, so the tag's parameter may have any name.
+    return fit->second.cName + "(" + tv + ")";
 }
 
 // Escape a decoded string's bytes into the body of a C `"..."` literal (no surrounding quotes) — the ONE
@@ -13201,6 +13242,13 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
             }
         }
     }
+    // ...and a VIEW may hold one: it is a borrow itself, and the escape check that keeps a view inside the scope
+    // it was made in keeps the contract values it borrows there too. `Template<SqlParam>`, the compiler-built
+    // view a typed tag receives, is the case — its holes borrow the tagged string's values for one call.
+    {
+        auto ti = _genericTypes.find(tmpl);
+        if (ti != _genericTypes.end() && ti->second.isBorrow) boxesContract = true;
+    }
     if (!opaqueArg && !boxesContract)
         for (auto& c : concrete) {
             const std::string base = (c && c->value && !c->genericArg) ? resolveUserName(*c->value, c->qualifier) : "";
@@ -19993,6 +20041,11 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
             mi.fromAdapter = adapted;
+            // An adapter's signature names types as ITS module sees them (`SqlValue`, imported in std::fmt), but
+            // the target's vtable is emitted in the target's module, which may not see them at all. Resolve the
+            // return type here, under the adapter's context and the instance's substitution, so every later
+            // reading names the same type. (Parameters are already C-resolved into `mi.params`.)
+            if (adapted && mi.returnType) mi.returnType = absolutizeType(deepSubstType(mi.returnType));
             // An enum ELECTS its default exactly as a value does (KR-106): one zero-argument `default ctor`.
             // Only its own members can — a contract's members belong to the contract, not to the type.
             if (contract.empty() && modHas(md->modifiers, "default")) {
@@ -20698,6 +20751,61 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
     auto ai = _adapterInstEmits.find(u->name ? *u->name : std::string());
     if (ai != _adapterInstEmits.end()) for (auto& e : ai->second) out.push_back(e);
     return out;
+}
+
+// A value bound to a contract BY VALUE — the borrow: a concrete object's fat pointer, a handle's pointee's, a
+// primitive widened over block-scoped storage, or an existing contract value passed through. `val` is `e`
+// already emitted, and `hoisted` says it is already a temp, so an rvalue needs no second one. `what` names the
+// position in a diagnostic (a contract parameter, a typed hole of a tagged string).
+std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
+                                       const std::string& what, int line)
+{
+    std::string c = exprClass(e);
+    if (c.empty() && _classes.count(constantTempCType(e))) c = constantTempCType(e);   // `Level::Low` into a contract
+    // by value: wrap a concrete object as an interface fat pointer (the borrow);
+    // pass an existing interface value straight through.
+    std::string dt = derefTarget(c);   // Owned/Shared<T> pointee via Deref ("" if not, incl. Weak)
+    bool dtImpl = false;
+    if (!dt.empty()) {
+        auto eit = _classes.find(dt);
+        if (eit != _classes.end())
+            for (auto& i : eit->second.interfaces) if (i == iface) { dtImpl = true; break; }
+    }
+    // Both arms below take the argument's ADDRESS, so a call result (`use(g: makeG(k: 4))`) would be
+    // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
+    // the borrow the callee reads, exactly as a `const ref` class rvalue is.
+    if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(e.get())))
+        && !hoisted && (!isNamedValue(e.get()) || !constantTempCType(e).empty())) {
+        if (_hoistOK) {
+            std::string t = "kama_ifcarg" + std::to_string(_tempCounter++);
+            _hoisted.push_back(c + " " + t + " = " + val + ";");
+            if (_classes[c].destructible) recordDestructibleLocal(t, c);
+            val = t;
+        } else
+            unsupported(("a temporary cannot be borrowed as " + what
+                         + " here — bind it to a local first, then pass that").c_str(), line);
+    }
+    if (dtImpl) {
+        // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
+        // — deref to the pointee (`T*`) and wrap THAT as the fat pointer, not the handle struct.
+        return "(" + iface + "){ (void*)" + derefFnName(c, true) + "(&(" + val + ")), &"
+           + dt + "__as_" + iface + " }";
+    } else if (!c.empty() && isClass(c)) {
+        // `this` already IS the object pointer (`self`), so wrap it without taking its
+        // address — `&self` would be a `C**` (same reason a by-ref `this` passes `self`).
+        if (dynamic_cast<ThisAccessNode*>(e.get()) && !_classes[c].isScalarRecv)
+            return "(" + iface + "){ (void*)(" + val + "), &" + contractVtblOf(c, iface) + " }";
+        else
+            return fatPointer(iface, c, val);
+    } else if (!primWidenKey(e, iface).empty()) {
+        // A PRIMITIVE passed where a contract value is expected — the parameter counterpart of
+        // the local-declaration widening. Same compound literal, same block lifetime; without
+        // this the scalar fell through to `return val` and emitted a raw int where the callee
+        // reads a fat pointer, which the C compiler caught but kama never explained.
+        std::string pk = primWidenKey(e, iface);
+        return "(" + iface + "){ (void*)&(" + primConformance(pk)->name + "){ " + val
+           + " }, &" + intrinsicContractVtbl(pk, iface) + " }";
+    } else return val;
 }
 
 // The C symbol of an impl-injected method. `injectImplMethods` already minted it, so the three emission
@@ -22350,50 +22458,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 if (!p.isConst) checkConstWrite(argExpr, srcLine);
                 s += "&(" + val + ")";
             } else {
-                // by value: wrap a concrete object as an interface fat pointer (the borrow);
-                // pass an existing interface value straight through.
-                std::string dt = derefTarget(c);   // Owned/Shared<T> pointee via Deref ("" if not, incl. Weak)
-                bool dtImpl = false;
-                if (!dt.empty()) {
-                    auto eit = _classes.find(dt);
-                    if (eit != _classes.end())
-                        for (auto& i : eit->second.interfaces) if (i == p.className) { dtImpl = true; break; }
-                }
-                // Both arms below take the argument's ADDRESS, so a call result (`use(g: makeG(k: 4))`) would be
-                // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
-                // the borrow the callee reads, exactly as a `const ref` class rvalue is (the `ref` arm below).
-                if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(argExpr.get())))
-                    && !valHoisted && (!isNamedValue(argExpr.get()) || !constantTempCType(argExpr).empty())) {
-                    if (_hoistOK) {
-                        std::string t = "kama_ifcarg" + std::to_string(_tempCounter++);
-                        _hoisted.push_back(c + " " + t + " = " + val + ";");
-                        if (_classes[c].destructible) recordDestructibleLocal(t, c);
-                        val = t;
-                    } else
-                        unsupported(("a temporary cannot be borrowed as contract parameter '" + p.name
-                                     + "' here — bind it to a local first, then pass that").c_str(), srcLine);
-                }
-                if (dtImpl) {
-                    // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
-                    // — deref to the pointee (`T*`) and wrap THAT as the fat pointer, not the handle struct.
-                    s += "(" + p.className + "){ (void*)" + derefFnName(c, true) + "(&(" + val + ")), &"
-                       + dt + "__as_" + p.className + " }";
-                } else if (!c.empty() && isClass(c)) {
-                    // `this` already IS the object pointer (`self`), so wrap it without taking its
-                    // address — `&self` would be a `C**` (same reason a by-ref `this` passes `self`).
-                    if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !_classes[c].isScalarRecv)
-                        s += "(" + p.className + "){ (void*)(" + val + "), &" + contractVtblOf(c, p.className) + " }";
-                    else
-                        s += fatPointer(p.className, c, val);
-                } else if (!primWidenKey(argExpr, p.className).empty()) {
-                    // A PRIMITIVE passed where a contract value is expected — the parameter counterpart of
-                    // the local-declaration widening. Same compound literal, same block lifetime; without
-                    // this the scalar fell through to `s += val` and emitted a raw int where the callee
-                    // reads a fat pointer, which the C compiler caught but kama never explained.
-                    std::string pk = primWidenKey(argExpr, p.className);
-                    s += "(" + p.className + "){ (void*)&(" + primConformance(pk)->name + "){ " + val
-                       + " }, &" + intrinsicContractVtbl(pk, p.className) + " }";
-                } else s += val;
+                s += contractBorrowOf(p.className, argExpr, val, valHoisted,
+                                      "contract parameter '" + p.name + "'", srcLine);
             }
         } else if (p.byRef) {
             // Soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
@@ -28105,6 +28171,11 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
     // paramListC), while a read-only place addresses as `T const*`: `copy this.data[p]` in `ViewIter.next()`
     // walks an `UnsafeConstPtr<T>`, and `copy cv[i]` reads through a `const ref T` place. The cast states
     // the ABI at the one site every deep copy funnels through, as the receiver and `__at` sites do.
+    // `copy this`: the receiver is emitted as `self`, which is already the object's ADDRESS (every user name is
+    // `k_`-prefixed, so `self` can only be the receiver). `&(self)` would be the address of the pointer, which
+    // `__copy` then read as the object — a stack overrun under ASan. A scalar receiver is the value itself.
+    if (lvalue == "self" && _currentClass && !_currentClass->isScalarRecv)
+        return cls + "__copy((" + cls + "*)(self))";
     return cls + "__copy((" + cls + "*)&(" + lvalue + "))";
 }
 
@@ -29863,8 +29934,12 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
             else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
             continue;
         }
-        rejectStoredInterface(mi.returnType, "returned from a method",
-                              mi.node ? mi.node->line : (ci.declLine()));
+        // A VIEW's place-returning method hands back a place inside what the view borrows (`Template<C>.hole(at:)`
+        // is a contract value the tagged string lent for one call): it lives exactly as long as the view, and
+        // the view cannot outlive its scope. Anything else returning a contract would dangle.
+        if (!(ci.isBorrow && mi.isPlaceReturn))
+            rejectStoredInterface(mi.returnType, "returned from a method",
+                                  mi.node ? mi.node->line : (ci.declLine()));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
         SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
                                                   : mi.node->params;
@@ -33688,7 +33763,9 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
     // primitive/void return stays "".
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         std::string rc = callReturnTypeRaw(inv);
-        return isClass(rc) ? rc : "";
+        // ...or a contract value, which only a view's place-returning method can hand back (`t.hole(at: i)` on a
+        // `Template<C>`): a call on it dispatches through the vtable, as on a contract-typed local.
+        return isClass(rc) || isInterface(rc) ? rc : "";
     }
 
     // a user-operator result carries the operator's return type, so a NESTED operator
@@ -35870,6 +35947,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // owned receiver isn't ALSO hoisted by the general string path below (which would double-evaluate it).
     if (cls == "kama_string" && (method == "chars" || method == "split")) {
         auto stableBorrow = [&](SharedExpression e, const char* what) -> std::string {
+            // A PLACE-returning call (`t.part(at: i)` on a `Template`) names a string someone else holds still for
+            // the loop. Take its address ONCE and read through that: zero-copy like a variable, read-once like a
+            // temp. Re-emitting the call for each of the two reads would run it — and its bounds check — twice.
+            if (auto* iv = dynamic_cast<InvocationNode*>(e.get()))
+                if (invocationReturnsPlace(iv) && _hoistOK) {
+                    const std::string pt = "kama_strplace" + std::to_string(_tempCounter++);
+                    _hoisted.push_back("const kama_string* " + pt + " = &(" + emitExpression(e) + ");");
+                    return "(*" + pt + ")";
+                }
             std::string t = hoistStringTemp(e);      // owned rvalue -> scope-dtor'd temp; "" if stable OR no slot
             if (!t.empty()) return t;
             if (!isStableStringRef(e.get())) {

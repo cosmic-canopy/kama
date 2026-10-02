@@ -680,20 +680,22 @@ type adapter <bool>    implements Formattable { public const fn void format(ref 
 type adapter <char>    implements Formattable { public const fn void format(ref Formatter f) { f.writeChar(c: this); } }
 type adapter <string>  implements Formattable { public const fn void format(ref Formatter f) { f.writeStr(s: this); } }
 
-// A tagged string `html"…${x}…"` hands its trusted literal PARTS and its rendered HOLE values to a tag
-// function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts
-// (stripIndent), or bind holes as out-of-band `?` params (sql, injection-safe by construction). The compiler
-// materializes this over two borrowed C arrays (invariant: partCount() == holeCount() + 1) and constructs it
-// ONLY in emitted code — there is no kama ctor. The `UnsafePtr` fields are borrows: `Template` owns nothing.
-type value Template {
-    UnsafePtr<string> _parts;
+// A tagged string `html"…${x}…"` calls an ordinary function `fn R name(Template<H> t)` — the TAG — with a view
+// over the literal's trusted PARTS and its HOLES, kept SEPARATE so the tag can escape holes (html), dedent parts
+// (stripIndent), or bind holes as out-of-band parameters (sql, injection-safe by construction). The compiler
+// builds it over two borrowed C arrays for the length of that one call (invariant: partCount() == holeCount()
+// + 1), which is why it is a VIEW: stack-only and escape-checked, since its holes are values that live only as
+// long as the statement. `Template` (`Template<string>`) hands its holes over as TEXT, each rendered through
+// `Formattable` with its format spec; `Template<C>` for a contract `C` hands them over as `C` values, each
+// checked against `C` where the tagged string is written. There is no kama ctor: only the compiler builds one.
+type view Template<H = string> {
+    UnsafeConstPtr<string> _parts;
     int32 _nparts;
-    UnsafePtr<string> _holes;
+    UnsafeConstPtr<H> _holes;
     int32 _nholes;
     public const fn int32 partCount() { return this._nparts; }
     public const fn int32 holeCount() { return this._nholes; }
-    // The i-th literal part / rendered hole, as a fresh owned copy (the backing bytes are borrowed, so a copy
-    // is what a tag can keep, iterate, or `give` onward).
-    public unsafe const fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return copy this._parts[at]; }
-    public unsafe const fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return copy this._holes[at]; }
+    // The i-th literal part / hole, BORROWED for the call — `copy` the ones a tag keeps.
+    public unsafe const fn const ref string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return this._parts[at]; }
+    public unsafe const fn const ref H hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return this._holes[at]; }
 }

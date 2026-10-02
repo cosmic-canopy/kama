@@ -1,0 +1,4 @@
+// A tag's holes are text (`Template`) or the values of a contract (`Template<C>`). An `int32` is neither: a
+// concrete type would admit only itself, which a contract it implements already says.
+fn int32 count(Template<int32> t) { return t.holeCount(); }
+fn int32 main() { int32 a = 1; return count"${a}"; }

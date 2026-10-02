@@ -1,7 +1,8 @@
-// Tagged strings — `sql"…"`: each hole becomes a `?` placeholder in the query TEXT, and the hole VALUE goes
-// out-of-band into a separate params array. Values never enter the text, so injection is impossible by design.
-// Exit code is a bitset of the checks (7 = all three, including the injection-safety assertion).
-import { std::fmt::sql, std::fmt::SqlQuery };
+// Tagged strings — `sql"…"`: each hole becomes a `?` placeholder in the query TEXT, and the hole's VALUE goes
+// out-of-band into the params as a typed `SqlValue`. Values never enter the text, so injection is impossible
+// by design; an `Optional` hole is NULL when empty (never the text "None"), and bytes stay bytes.
+// Exit code is a bitset of the checks (63 = all six, including the injection-safety assertion).
+import { std::collections::DynamicArray, std::fmt::sql, std::fmt::SqlQuery, std::fmt::SqlValue };
 
 fn int32 main() {
     int32 id = 42;
@@ -12,10 +13,27 @@ fn int32 main() {
     SqlQuery q = sql"SELECT * FROM u WHERE id = ${id} AND name = ${name}";
     if (q.queryText() == "SELECT * FROM u WHERE id = ? AND name = ?") { r = r + 1; }              // 1: placeholders
 
-    if (q.paramCount() == 2 && q.param(at: 0) == "42" && q.param(at: 1) == "Alice") { r = r + 2; } // 2: params out-of-band
+    if (q.paramCount() == 2 && q.param(at: 0) == SqlValue::Int(value: 42)
+        && q.param(at: 1) == SqlValue::Text(value: "Alice")) { r = r + 2; }                        // 2: typed params
 
     SqlQuery q2 = sql"name = ${evil}";
-    if (q2.queryText() == "name = ?" && q2.param(at: 0) == "' OR 1=1 --") { r = r + 4; }           // 3: payload ONLY in params
+    if (q2.queryText() == "name = ?" && q2.param(at: 0) == SqlValue::Text(value: "' OR 1=1 --")) { r = r + 4; }   // 3: payload ONLY in params
+
+    Optional<int32> score = Optional::None;
+    Optional<float64> ratio = Optional::Some(value: 0.5);
+    SqlQuery q3 = sql"update t set score = ${score}, ratio = ${ratio}";
+    if (q3.param(at: 0) == SqlValue::Null && q3.param(at: 1) == SqlValue::Float(value: 0.5)) { r = r + 8; }   // 4: NULL, not "None"
+
+    DynamicArray<uint8> blob = DynamicArray.empty();
+    blob.add(item: 0ui8); blob.add(item: 255ui8);
+    bool on = true;
+    SqlQuery q4 = sql"insert into b values (${blob}, ${on})";
+    bool bytesOk = match (q4.param(at: 0)) { case Bytes(value: b): b.length() == 2 && b[1] == 255ui8; case _: false; };
+    if (bytesOk && q4.param(at: 1) == SqlValue::Bool(value: true)) { r = r + 16; }                // 5: bytes stay bytes
+
+    SqlValue nothing = SqlValue::Null;
+    SqlQuery q5 = sql"update t set note = ${nothing}";
+    if (q5.param(at: 0) == SqlValue::Null) { r = r + 32; }                                          // 6: an explicit SqlValue
 
     return r;
 }

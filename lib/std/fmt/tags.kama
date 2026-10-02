@@ -1,15 +1,14 @@
 
-// Tagged strings (`html"…"`, `sql"…"`, `stripIndent"…"`). The compiler splits a tagged string into its trusted
-// literal PARTS and its rendered HOLE values and hands them to the tag as a `Template` (invariant:
+// Tagged strings (`html"…"`, `stripIndent"…"`; `sql"…"` is in sql.kama). The compiler splits a tagged string into
+// its trusted literal PARTS and its HOLE values and hands them to the tag as a `Template` view (invariant:
 // partCount() == holeCount() + 1). Because parts and holes stay SEPARATE, a tag treats them differently:
-// `html` escapes holes but not literals (XSS-safe), `sql` keeps holes out-of-band as `?` params (injection-safe
-// by construction), `stripIndent` dedents the literal template but leaves interpolated values verbatim.
+// `html` escapes holes but not literals (XSS-safe), `stripIndent` dedents the literal template but leaves
+// interpolated values verbatim.
 //
-// A tag is nothing more than a function `fn R name(ref Template t)` in scope — user code can define its own.
+// A tag is nothing more than a function `fn R name(Template t)` in scope — user code can define its own. A
+// `Template` hands its holes over as text; a `Template<C>` hands them over as values of the contract `C`.
 
-import { std::collections::DynamicArray };
-
-export { stripIndent, html, sql, SqlQuery };
+export { stripIndent, html };
 
 // ---- html : escape hole values, pass literals through -----------------------------------------------------
 
@@ -29,49 +28,17 @@ fn string htmlEscape(const ref string s) {
 }
 
 // Weave the template: literal parts verbatim, each hole HTML-escaped. A `<script>` in a hole becomes inert text.
-fn string html(ref Template t) {
+fn string html(Template t) {
     Formatter f = Formatter.make();
     int32 n = t.holeCount();
     int32 i = 0;
     while (i < n) {
-        string p = t.part(at: i); f.writeStr(s: ref p);
-        string hv = t.hole(at: i);
-        string e = htmlEscape(s: ref hv); f.writeStr(s: ref e);
+        f.writeStr(s: t.part(at: i));
+        string e = htmlEscape(s: t.hole(at: i)); f.writeStr(s: ref e);
         i = i + 1;
     }
-    string pl = t.part(at: n); f.writeStr(s: ref pl);
+    f.writeStr(s: t.part(at: n));
     return f.finish();
-}
-
-// ---- sql : parameterize holes, never splice them ----------------------------------------------------------
-
-// A parameterized query: `text` carries `?` placeholders (from the literal template); the hole VALUES live in
-// `params`, handed to a driver out-of-band. Values never enter `text`, so injection is impossible by design.
-type resource SqlQuery {
-    string text;
-    DynamicArray<string> params;
-    public ctor of(string text, DynamicArray<string> params) {
-        this.text = give text; this.params = give params;
-    }
-    public const fn const ref string queryText() { return this.text; }
-    public const fn isize paramCount() { return this.params.length(); }
-    public const fn const ref string param(isize at) { return this.params[at]; }
-}
-
-fn SqlQuery sql(ref Template t) {
-    Formatter f = Formatter.make();
-    DynamicArray<string> ps = DynamicArray.empty();
-    int32 n = t.holeCount();
-    int32 i = 0;
-    while (i < n) {
-        string p = t.part(at: i); f.writeStr(s: ref p);
-        string q = "?"; f.writeStr(s: ref q);            // a placeholder in the query text
-        string h = t.hole(at: i); ps.add(item: give h);  // the value goes out-of-band into params
-        i = i + 1;
-    }
-    string pl = t.part(at: n); f.writeStr(s: ref pl);
-    string txt = f.finish();
-    return SqlQuery.of(text: give txt, params: give ps);
 }
 
 // ---- stripIndent : dedent the literal template, keep holes verbatim ----------------------------------------
@@ -79,7 +46,7 @@ fn SqlQuery sql(ref Template t) {
 // Remove the common leading-space indentation from every line of the literal template (trimIndent-style) and
 // drop a single leading newline, so a multi-line string can be indented to match its surrounding source. Only
 // the literal PARTS are dedented; interpolated hole values are emitted exactly as given. Indentation is spaces.
-fn string stripIndent(ref Template t) {
+fn string stripIndent(Template t) {
     int32 n = t.holeCount();
 
     // Pass 1 — the minimum indentation across all content lines. A hole makes its line a content line.
@@ -88,8 +55,7 @@ fn string stripIndent(ref Template t) {
     int32 curIndent = 0;
     int32 i = 0;
     while (i <= n) {
-        string p1 = t.part(at: i);
-        foreach (char c in p1.chars()) {
+        foreach (char c in t.part(at: i).chars()) {
             if (atLineStart) {
                 if (c == ' ')       { curIndent = curIndent + 1; }
                 else if (c == '\n') { curIndent = 0; }                                  // blank line — skip
@@ -110,8 +76,7 @@ fn string stripIndent(ref Template t) {
     bool first = true;
     i = 0;
     while (i <= n) {
-        string p2 = t.part(at: i);
-        foreach (char c in p2.chars()) {
+        foreach (char c in t.part(at: i).chars()) {
             if (lineStart) {
                 if (c == '\n') {
                     if (first) { first = false; } else { f.writeChar(c: c); }           // drop one leading newline
@@ -126,7 +91,7 @@ fn string stripIndent(ref Template t) {
                 else          { f.writeChar(c: c); }
             }
         }
-        if (i < n) { string hv = t.hole(at: i); first = false; f.writeStr(s: ref hv); lineStart = false; }   // a hole is content
+        if (i < n) { first = false; f.writeStr(s: t.hole(at: i)); lineStart = false; }   // a hole is content
         i = i + 1;
     }
     return f.finish();

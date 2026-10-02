@@ -726,9 +726,13 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `${x:?}`-routed
   `@generate(Debug)` (spec hook already exists);
   per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
-  parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears); and tagged-string
-  *type-preserved params* (Model B — each hole keeping its static type into the params list, `html` returning
-  a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error — a **non-goal**: `"${x}"` is the one way to render a value (SPEC § *Interpolation*), and the emitter's message says so.
+  parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears). Tagged-string *typed
+  holes* (Model B) shipped at `0.9.512` as `Template<C>` (SPEC § *Tagged strings*). `html` returning a distinct
+  `SafeHtml` instead of a `string` is **genuinely optional** for std: a tag may return any type, so a web
+  framework that composes escaped fragments defines its own safe type, while std's `html` is the one-shot
+  escaper. An **ORM in std is a NON-GOAL** (user, 2026-10-01): mapping a type to a row — fields to columns,
+  generated `INSERT`/`SELECT`, rows decoded back — is a library's job above std, built from `@generate`'s field
+  walk, the `SqlParam` contract and a driver's row decoding. std ships the parameter layer only. Regex is a separate campaign. `string + <number>` stays a compile error — a **non-goal**: `"${x}"` is the one way to render a value (SPEC § *Interpolation*), and the emitter's message says so.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (SPEC + §8
   hot-reload); the **full `expose`** — richer wasm module exports + the scripting host interface — stays 2.0 (§7).
 

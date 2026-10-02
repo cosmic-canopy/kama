@@ -1,0 +1,7 @@
+// A format spec renders a hole to TEXT. A typed tag takes its holes as values, so a spec there formats nothing.
+import { std::fmt::sql, std::fmt::SqlQuery };
+fn int32 main() {
+    float64 amount = 3.25;
+    SqlQuery q = sql"update t set amount = ${amount:.2}";
+    return 0;
+}

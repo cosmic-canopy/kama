@@ -1,0 +1,97 @@
+// `sql"…"` — a parameterized query whose holes are typed. Each `${…}` becomes a `?` placeholder in the query
+// TEXT, and its VALUE travels out-of-band as a `SqlValue`, so a hole can never be spliced into the query
+// (injection-safe by construction), `None` is NULL rather than the word "None", and bytes are bytes.
+//
+// The tag takes `Template<SqlParam>`, so every hole is checked against `SqlParam` where the tagged string is
+// written: `sql"… ${point}"` is a compile error unless `Point` says what its ONE SQL value is. Mapping a whole
+// type to a row (several columns) is a different job — an ORM's, built on `@generate` and this contract, and
+// deliberately not std's.
+
+import { std::collections::DynamicArray };
+
+export { SqlValue, SqlParam, SqlQuery, sql };
+
+// One SQL value: what a driver binds to a `?`. The portable core every database has; a driver with richer
+// types (arrays, JSON, UUID, timestamps) defines its own contract for them.
+@generate(Equatable)
+type enum SqlValue implements SqlParam {
+    Null,
+    Bool(bool value),
+    Int(int64 value),
+    Float(float64 value),
+    Text(string value),
+    Bytes(DynamicArray<uint8> value);
+
+    // A value is its own SQL value, so an explicit one (`SqlValue n = SqlValue::Null; sql"… ${n}"`) is a hole
+    // like any other.
+    public const fn SqlValue toSql() {
+        return match (this) {
+            case Null: SqlValue::Null;
+            case Bool(value: b): SqlValue::Bool(value: b);
+            case Int(value: n): SqlValue::Int(value: n);
+            case Float(value: x): SqlValue::Float(value: x);
+            case Text(value: s): SqlValue::Text(value: copy s);
+            case Bytes(value: b): SqlValue::Bytes(value: copy b);
+        };
+    }
+}
+
+// A type that has ONE SQL value. A complex type opts in by choosing it — a `Point` as the text `(x,y)`, a
+// settings record as its JSON for a `jsonb` column. `uint64` and `usize` stay out: not every value fits a SQL
+// integer, so a caller converts explicitly and says what an overflow means.
+type contract SqlParam for value, resource, enum, intrinsic { const fn SqlValue toSql(); }
+
+type adapter <int8, int16, int32, int64, isize, uint8, uint16, uint32> implements SqlParam {
+    public const fn SqlValue toSql() { return SqlValue::Int(value: cast<int64>(this)); }
+}
+type adapter <float32, float64> implements SqlParam {
+    public const fn SqlValue toSql() { return SqlValue::Float(value: cast<float64>(this)); }
+}
+type adapter <bool> implements SqlParam {
+    public const fn SqlValue toSql() { return SqlValue::Bool(value: this); }
+}
+type adapter <string> implements SqlParam {
+    public const fn SqlValue toSql() { return SqlValue::Text(value: copy this); }
+}
+type adapter <char> implements SqlParam {
+    public const fn SqlValue toSql() { char c = this; return SqlValue::Text(value: "${c}"); }
+}
+type adapter <DynamicArray<uint8>> implements SqlParam {
+    public const fn SqlValue toSql() {
+        DynamicArray<uint8> b = DynamicArray.withCapacity(capacity: this.length());
+        for (isize i = 0; i < this.length(); i++) { b.add(item: this[i]); }
+        return SqlValue::Bytes(value: give b);
+    }
+}
+type adapter <Optional> implements SqlParam when [T: SqlParam] {
+    public const fn SqlValue toSql() {
+        return match (this) { case Some(value: v): v.toSql(); case None: SqlValue::Null; };
+    }
+}
+
+// A parameterized query: `text` carries `?` placeholders (from the literal template); the hole VALUES live in
+// `params`, handed to a driver out-of-band.
+type resource SqlQuery {
+    string text;
+    DynamicArray<SqlValue> params;
+    public ctor of(string text, DynamicArray<SqlValue> params) {
+        this.text = give text; this.params = give params;
+    }
+    public const fn const ref string queryText() { return this.text; }
+    public const fn isize paramCount() { return this.params.length(); }
+    public const fn const ref SqlValue param(isize at) { return this.params[at]; }
+}
+
+fn SqlQuery sql(Template<SqlParam> t) {
+    Formatter f = Formatter.make();
+    DynamicArray<SqlValue> ps = DynamicArray.empty();
+    int32 n = t.holeCount();
+    for (int32 i = 0; i < n; i++) {
+        f.writeStr(s: t.part(at: i));
+        f.writeStr(s: "?");                       // a placeholder in the query text
+        ps.add(item: t.hole(at: i).toSql());      // the value goes out-of-band into params
+    }
+    f.writeStr(s: t.part(at: n));
+    string txt = f.finish();
+    return SqlQuery.of(text: give txt, params: give ps);
+}

@@ -36,6 +36,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
+                                  Equatable<This> when [T: Equatable<T>],
                                   Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
                                   Sendable when [T: Sendable, A: Sendable] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
@@ -255,6 +256,21 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
         return 0 - 1;
     }
+
+    // Two arrays are equal when they hold equal elements in the same order — present only when the element is
+    // `Equatable`, as `contains` is. The allocator is not part of the value.
+    public const fn bool equals(const ref DynamicArray<T, A> other) when [T: Equatable<T>] {
+        if (this.len != other.len) { return false; }
+        isize i = 0;
+        while (i < this.len) {
+            if (!DynamicArray::<T, A>::sameElement(a: this[i], b: other[i])) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    // Both elements borrowed in place: `equals` needs a nameable receiver, and an owning element bound to a
+    // local would be a move out of the array.
+    static fn bool sameElement(const ref T a, const ref T b) when [T: Equatable<T>] { return a.equals(other: b); }
 
     // --- Serialization (present only when the element is Serializable/Deserializable) ---
     // A JSON array: each element serialized in order — a bad element write propagates its boxed error.
