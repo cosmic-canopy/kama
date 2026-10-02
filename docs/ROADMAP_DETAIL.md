@@ -2203,6 +2203,13 @@ remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h
 
 ## 9. Performance
 
+- **Float formatting is exact but not fast** (KR-23). Since `0.9.517` a float renders as its shortest round-trip
+  decimal (SPEC *Formatting*), found by a search over the digit count with libc's `snprintf`/`sscanf` — checked
+  against Python's `repr` (float64) and an exact rational reference (float32). It costs ~1.2 µs for a value that
+  needs all 17 digits against ~0.33 µs for the old `%.17g`, and ~0.29 µs against ~0.19 µs for a short decimal
+  (measured on the M-series dev box, 400k values each). A Ryu-class algorithm is faster than either and stays
+  exact; it is the answer if a serialization benchmark (the KR-23 track) shows float output mattering.
+
 Where kama currently stands is measured in [benchmarks/RESULTS.md](benchmarks/RESULTS.md) — read it there
 rather than here, so there is one number to keep current. Forward work:
 

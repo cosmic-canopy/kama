@@ -1519,21 +1519,134 @@ static inline kama_string kama_fmt_i64(int64_t v) {
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
 }
 
-// float64 -> fresh heap-owned kama_string, at shortest-round-trip precision (%.17g).
-static inline kama_string kama_fmt_f64(double v) {
+// Does decimal text `s` read back as exactly `v` — as a float64, or as a float32 when `f32` (parsed AS a
+// float32: decimal -> double -> float can round twice and disagree)? Through `sscanf`, which every libc kama
+// targets parses correctly rounded, and which — unlike `strtod` — the macOS SDK declares with no asm label, so
+// this block-scope declaration does not collide with a program that includes <stdio.h> after the runtime.
+static inline int kama__float_reads_back(const char* s, double v, int f32) {
+    extern int sscanf(const char*, const char*, ...);
+    if (f32) { float f = 0.0f; return sscanf(s, "%f", &f) == 1 && f == (float)v; }
+    double d = 0.0;
+    return sscanf(s, "%lf", &d) == 1 && d == v;
+}
+
+// Decimal digits `m` (exactly `nd` of them) times 10^(ex - nd + 1), written in printf's `%g` style: trailing zeros
+// dropped, scientific (`1e+16`, two exponent digits at least) when the exponent is below -4 or at least `sciAt`,
+// fixed otherwise. Returns the length.
+static inline int kama__fmt_float_render(char* out, int cap, int neg, unsigned long long m, int nd, int ex, int sciAt) {
     extern int snprintf(char*, size_t, const char*, ...);
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%.17g", v);
+    char d[24];
+    for (int i = nd - 1; i >= 0; --i, m /= 10ull) d[i] = (char)('0' + (int)(m % 10ull));
+    while (nd > 1 && d[nd - 1] == '0') --nd;
+    int k = 0;
+    if (neg) out[k++] = '-';
+    if (ex < -4 || ex >= sciAt) {
+        out[k++] = d[0];
+        if (nd > 1) { out[k++] = '.'; for (int i = 1; i < nd; ++i) out[k++] = d[i]; }
+        k += snprintf(out + k, (size_t)(cap - k), "e%c%02d", ex < 0 ? '-' : '+', ex < 0 ? -ex : ex);
+    } else if (ex < 0) {
+        out[k++] = '0'; out[k++] = '.';
+        for (int i = 0; i < -ex - 1; ++i) out[k++] = '0';
+        for (int i = 0; i < nd; ++i) out[k++] = d[i];
+        out[k] = 0;
+    } else {
+        for (int i = 0; i <= ex; ++i) out[k++] = i < nd ? d[i] : '0';
+        if (nd > ex + 1) { out[k++] = '.'; for (int i = ex + 1; i < nd; ++i) out[k++] = d[i]; }
+        out[k] = 0;
+    }
+    return k;
+}
+
+// Is there a `k`-digit decimal that reads back as `v`? Only the NEAREST one and its two neighbours can: the values
+// that read back as `v` are an interval around it, which holds the nearest k-digit decimal if it holds any. The one
+// exception is a power of two (`lopsided`), whose gap below is half the gap above, so the neighbour on the wide side
+// may be in while the nearest, on the narrow side, is not; only there are the neighbours tried, from integer
+// arithmetic on the digits (printf can only print the BINARY value, which is `v` again). The `%.{k-1}e` text is
+// itself what strtod reads, so the common try is one format and one parse. Writes the first that reads back (the
+// nearest first) when `out`, and returns its length; 0 when none does.
+static inline int kama__fmt_float_try(char* out, int cap, double v, int f32, int k, int sciAt, int lopsided) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    char e[48];
+    snprintf(e, sizeof e, "%.*e", k - 1, v);                  // [-]d.ddd…e±XX — exactly k significant digits
+    const int neg = e[0] == '-';
+    const char* q = e + neg;
+    unsigned long long m = 0;
+    for (; *q && *q != 'e'; ++q) if (*q >= '0' && *q <= '9') m = m * 10ull + (unsigned long long)(*q - '0');
+    int ex = 0, exNeg = 0;
+    if (*q == 'e') { ++q; if (*q == '-' || *q == '+') { exNeg = *q == '-'; ++q; } while (*q >= '0' && *q <= '9') ex = ex * 10 + (*q++ - '0'); }
+    if (exNeg) ex = -ex;
+    // At P digits (17 / 9) the nearest decimal ALWAYS reads back — that is what P is — so it is not parsed.
+    if (k == (f32 ? 9 : 17) || kama__float_reads_back(e, v, f32)) return out ? kama__fmt_float_render(out, cap, neg, m, k, ex, sciAt) : 1;
+    if (!lopsided) return 0;
+    unsigned long long lo = 1;                                  // [10^(k-1), 10^k): the k-digit mantissas
+    for (int i = 0; i < k - 1; ++i) lo *= 10ull;
+    const unsigned long long hi = lo * 10ull;
+    for (int step = 1; step < 3; ++step) {
+        unsigned long long m2; int ex2 = ex;
+        if (step == 1) { m2 = m + 1ull; if (m2 == hi) { m2 = lo; ex2 = ex + 1; } }               // 9.99… + 1 = 1.00…e+1
+        else           { m2 = m - 1ull; if (m2 < lo) { m2 = m2 * 10ull + 9ull; ex2 = ex - 1; } }  // 1.00… - 1 = 9.99…e-1
+        char cand[48];
+        snprintf(cand, sizeof cand, "%s%llue%d", neg ? "-" : "", m2, ex2 - (k - 1));
+        if (kama__float_reads_back(cand, v, f32)) return out ? kama__fmt_float_render(out, cap, neg, m2, k, ex2, sciAt) : 1;
+    }
+    return 0;
+}
+
+// The SHORTEST decimal that reads back as `v` — the fewest significant digits, and among decimals that short the
+// nearest (ties to even, as printf rounds) — in printf's `%g` style (`0.1`, `1e+16`, `nan`, `-inf`), written to
+// `out`; returns its length. Rust, Go, JavaScript, Python and PostgreSQL all print this; `%.17g` printed `0.1` as
+// `0.10000000000000001` (peer KPG-27). Exact, by search rather than Ryu. "Some k-digit decimal reads back" only
+// becomes true as k grows (pad a shorter one with a zero), so the fewest digits are a binary search over k, up to
+// P, which always reads back (17 for float64, 9 for float32). A NORMAL value starts at D (15 / 6, DBL_DIG /
+// FLT_DIG): every decimal that short reads back, and the values that read back as `v` lie closer to it than half a
+// D-digit step, so rounding `v` to D digits lands on its shortest form whenever that is D digits or fewer. A
+// subnormal has fewer bits and a wider interval, and can need as little as one digit (`5e-324`), so it searches
+// from 1. Scientific when the exponent is below -4 or at least D — `%.15g`'s rule, and PostgreSQL's for float8
+// (FLT_DIG's for float4). Checked against Python's `repr` for float64 and an exact rational reference for float32.
+static inline int kama__fmt_float_shortest(char* out, int cap, double v, int f32) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    const int P = f32 ? 9 : 17, D = f32 ? 6 : 15;
+    if (v != v || v - v != 0.0 || v == 0.0) return snprintf(out, (size_t)cap, "%g", v);   // nan, ±inf, ±0
+    int normal, lopsided;
+    if (f32) {
+        const float fv = (float)v; uint32_t b; kama_copy(&b, &fv, sizeof b);
+        const uint32_t expo = (b >> 23) & 0xFFu;
+        normal = expo != 0;
+        lopsided = (b & 0x7FFFFFu) == 0 && expo > 1;          // a power of two above the smallest normal
+    } else {
+        uint64_t b; kama_copy(&b, &v, sizeof b);
+        const uint64_t expo = (b >> 52) & 0x7FFull;
+        normal = expo != 0;
+        lopsided = (b & 0xFFFFFFFFFFFFFull) == 0 && expo > 1;
+    }
+    int lo = 1;
+    if (normal) {
+        const int n = kama__fmt_float_try(out, cap, v, f32, D, D, lopsided);
+        if (n) return n;
+        lo = D + 1;
+    }
+    int hiK = P;
+    while (lo < hiK) {
+        const int mid = (lo + hiK) / 2;
+        if (kama__fmt_float_try((char*)0, cap, v, f32, mid, D, lopsided)) hiK = mid; else lo = mid + 1;
+    }
+    const int n = kama__fmt_float_try(out, cap, v, f32, hiK, D, lopsided);
+    return n ? n : snprintf(out, (size_t)cap, "%.*g", P, v);
+}
+
+// float64 -> fresh heap-owned kama_string: the shortest decimal that reads back as `v` (kama__fmt_float_shortest).
+static inline kama_string kama_fmt_f64(double v) {
+    char buf[48];
+    int n = kama__fmt_float_shortest(buf, (int)sizeof buf, v, 0);
     if (n < 0) n = 0;
     if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
 }
 
-// float32 -> fresh heap-owned kama_string, at shortest-round-trip precision for single (%.9g).
+// float32 -> fresh heap-owned kama_string: the shortest decimal that reads back as `v` AS A float32.
 static inline kama_string kama_fmt_f32(float v) {
-    extern int snprintf(char*, size_t, const char*, ...);
-    char buf[24];
-    int n = snprintf(buf, sizeof buf, "%.9g", (double)v);
+    char buf[48];
+    int n = kama__fmt_float_shortest(buf, (int)sizeof buf, (double)v, 1);
     if (n < 0) n = 0;
     if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);

@@ -174,7 +174,10 @@ type contract Formattable for value, resource, enum, intrinsic { const fn void f
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
 value materializes in **one** allocation — no O(n²) concat. `Formatter` has `writeStr` / `writeI64` /
 `writeU64` / `writeF64` / `writeF32` / `writeBool` / `writeChar` and a `finish() -> string`. Every primitive
-(`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms. **`"${x}"` is the one way to render a value** —
+(`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms. A float renders as the **shortest decimal that reads <!-- test: float_shortest_roundtrip -->
+back as the same value**, the digits Rust, Go, Python, JavaScript and PostgreSQL print: `0.1`,
+`0.30000000000000004`, and `0.3` for the float32 `0.3f32`. The style is `%g`'s, scientific when the exponent is
+below -4 or at least 15 (6 for a float32), as PostgreSQL writes float8 and float4. **`"${x}"` is the one way to render a value** —
 it lowers to exactly this build, so there is no free wrapper beside it. `Formattable` is **infallible** (`void`,
 no `Result`) — an in-memory write can't fail, unlike `serialize` over an I/O sink.
 

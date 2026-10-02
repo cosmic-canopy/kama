@@ -1,0 +1,40 @@
+// A float renders as the SHORTEST decimal that reads back as the same value — the digits Rust, Go, Python,
+// JavaScript and PostgreSQL print. `%.17g` printed `0.1` as `0.10000000000000001` and the float32 `0.3` as
+// `0.300000012` (peer KPG-27). `%g` style: scientific when the exponent is below -4 or at least 15 (6 for a
+// float32), as `%.15g` and PostgreSQL write it.
+import { core::println };
+
+fn int32 check(string got, string want, int32 bit) {
+    if (got == want) { return 0; }
+    println(s: "got ".concat(other: got).concat(other: ", want ").concat(other: want));
+    return bit;
+}
+
+fn int32 main() {
+    float64 tenth = 0.1;
+    float64 sum = 0.1 + 0.2;
+    float32 third = 0.3f32;
+    float64 big = 1.0e15;
+    float64 under = 123456789012345.0;     // 15 digits, exponent 14: still fixed
+    float64 small = 0.0001;
+    float64 smaller = 0.00001;
+    float64 tiny = 5.0e-324;               // the smallest subnormal needs ONE digit
+    float64 twoPow = 9007199254740992.0;    // 2^53, where the gap below is half the gap above
+    float32 f1 = 16777216.0f32;            // 2^24
+    float32 f2 = 0.1f32;
+    float64 whole = 100.0;
+    int32 bad = 0;
+    bad = bad | check(got: "${tenth}", want: "0.1", bit: 1);
+    bad = bad | check(got: "${sum}", want: "0.30000000000000004", bit: 2);
+    bad = bad | check(got: "${third}", want: "0.3", bit: 4);
+    bad = bad | check(got: "${big}", want: "1e+15", bit: 8);
+    bad = bad | check(got: "${under}", want: "123456789012345", bit: 16);
+    bad = bad | check(got: "${small}", want: "0.0001", bit: 32);
+    bad = bad | check(got: "${smaller}", want: "1e-05", bit: 64);
+    bad = bad | check(got: "${tiny}", want: "5e-324", bit: 128);
+    bad = bad | check(got: "${twoPow}", want: "9.007199254740992e+15", bit: 256);
+    bad = bad | check(got: "${f1}", want: "1.6777216e+07", bit: 1024);   // 16777220 is itself a float32
+    bad = bad | check(got: "${f2}", want: "0.1", bit: 2048);
+    bad = bad | check(got: "${whole}", want: "100", bit: 4096);
+    return bad == 0 ? 0 : 1;    // an exit code is one byte, and the bits run past it
+}
