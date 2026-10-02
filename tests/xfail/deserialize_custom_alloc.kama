@@ -1,0 +1,9 @@
+// Deserializing makes a container from nothing, so its allocator must be default-made: a `BumpAllocator` needs
+// the arena it bumps, which no document can supply. The conformance is gated `when [T: …, A: default]`.
+import { std::collections::DynamicArray, std::collections::BumpAllocator,
+         std::serialization::text::json::deserializeJsonBuffer };
+fn int32 main() {
+    Result<DynamicArray<int32, BumpAllocator>, Owned<Error>> r =
+        deserializeJsonBuffer::<DynamicArray<int32, BumpAllocator>>(src: "[1]");
+    return 0;
+}

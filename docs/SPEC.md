@@ -4100,6 +4100,12 @@ does not qualify is refused at the **use** site, naming the field that disqualif
 For an enum it names the variant too — "`Put`'s field `v` (`Plain`)" — because a sum type gives the
 reader two places to look.
 
+**A conditional conformance is decided by the instance's own type arguments**, never by what else the <!-- test: serde_contract_named_only, generic_site_contract_vtable -->
+program imports. `DynamicArray<T>` is `Serializable` exactly when `T` is, in a program that serializes
+nothing as in one that does, and a generic function may bind its `T` to the contract. A container is
+`Deserializable` only when its allocator can be default-made, because deserializing builds one from <!-- test: serde_custom_alloc_containers -->
+nothing. An instance that misses a gate is refused naming the condition it failed. <!-- xfail: deserialize_custom_alloc -->
+
 A payload-less `enum` derives over its members: it serializes as the bare variant name, formats as it, and
 compares and hashes as its integer — which it still is, with a derive or without: `==`, `cast<IntType>`,
 `try cast`, its explicit member values and `match` are unchanged. <!-- test: enum_promoted_scalar_ops -->

@@ -1,0 +1,29 @@
+// Serialization and custom allocators in ONE program. Every container declared `Deserializable<This>` while its
+// `deserialize` built — and returned — the DEFAULT-allocator instance, so the conformance was false for
+// `DynamicArray<int32, BumpAllocator>` and a body read an `alloc` that a bump allocator cannot default-make.
+// Programs that serialize nothing never saw it (the compiler skips serde code nobody can use); naming a serde
+// contract anywhere (peer KPG-30) brought it out. A container is deserializable when its allocator can be
+// default-made; serializing needs no allocator and works for every one.
+import { std::collections::DynamicArray, std::collections::Deque, std::collections::Map,
+         std::collections::Arena, std::collections::BumpAllocator, std::collections::DefaultHasher,
+         std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
+
+fn int32 main() {
+    int32 r = 0;
+    Arena arena = Arena.make(capacity: 65536);
+    DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
+    xs.add(item: 3); xs.add(item: 4);
+    Deque<int32, BumpAllocator> d = Deque.withAllocator(allocator: arena.handle());
+    d.pushBack(item: 5);
+    Map<int32, int32, DefaultHasher, BumpAllocator> m = Map.withAllocator(allocator: arena.handle());
+    m.put(key: 1, value: 2);
+
+    Result<string, Owned<Error>> sx = serializeJsonBuffer(v: xs);              // serializes with any allocator
+    string js = match (sx) { case Ok(value: s): copy s; case Err(error: e): e.message(); };
+    if (js == "[3,4]") { r = r + 1; }
+
+    Result<DynamicArray<int32>, Owned<Error>> back = deserializeJsonBuffer::<DynamicArray<int32>>(src: copy js);
+    bool ok = match (back) { case Ok(value: v): v.length() == 2 && v[1] == 4; case Err(error: e): false; };
+    if (ok) { r = r + 2; }
+    return r == 3 && d.length() == 1 && m.length() == 1 ? 0 : 1;
+}

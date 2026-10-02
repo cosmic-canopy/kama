@@ -13586,6 +13586,48 @@ std::string CEmitter::whenGateReason(const std::string& inst, const std::string&
     return " — it is declared `when [" + cond + "]`" + why;
 }
 
+// Why a generic instance lacks a contract its template declares CONDITIONALLY: the `when` it failed, and the
+// argument that failed it. "" when the template declares no gated conformance to `contract`.
+std::string CEmitter::conformanceGateReason(const std::string& inst, const std::string& contract)
+{
+    auto gi = _genericTypeInsts.find(inst);
+    if (gi == _genericTypeInsts.end()) return "";
+    auto tt = _genericTypes.find(gi->second.templateKey);
+    if (tt == _genericTypes.end() || !tt->second.baseTypesDecl() || !tt->second.baseTypesDecl()->interfaces) return "";
+    std::string want = contract;
+    { GenericTypeInst fc; if (contractInstOf(contract, fc)) want = fc.templateKey; }
+    const std::vector<std::string>& params = _genericTypeParams[gi->second.templateKey];
+    NsCtx saved = _nsCtx;
+    auto hc = _genericTypeCtx.find(gi->second.templateKey);
+    if (hc != _genericTypeCtx.end()) _nsCtx = hc->second;   // the gate is spelled in the template's module
+    std::string out;
+    for (auto& itf : *tt->second.baseTypesDecl()->interfaces) {
+        if (!itf || !itf->value || !itf->whenParams || itf->whenParams->empty()) continue;
+        if (resolveUserName(*itf->value, itf->qualifier) != want) continue;
+        std::string cond;
+        for (size_t c = 0; c < itf->whenParams->size(); ++c) {
+            auto& p = (*itf->whenParams)[c];
+            auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+            cond += (c ? ", " : "") + (p && p->value ? *p->value : std::string("?")) + ": " + kamaTypeText(b);
+        }
+        for (size_t c = 0; c < itf->whenParams->size() && out.empty(); ++c) {
+            auto& p = (*itf->whenParams)[c];
+            auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+            std::vector<std::string> wp{p && p->value ? *p->value : ""}, wb{resolveWhenBound(b)};
+            std::vector<SharedIdentifier> wn{b};
+            if (whenConditionsHold(wp, wb, wn, params, gi->second.typeArgs)) continue;
+            for (size_t i = 0; i < params.size() && i < gi->second.typeArgs.size(); ++i)
+                if (params[i] == wp[0])
+                    out = " — `" + demangleForDisplay(inst) + "` implements it only `when [" + cond + "]`, and `"
+                        + demangleForDisplay(cType(gi->second.typeArgs[i])) + "` (for `" + wp[0]
+                        + "`) does not satisfy `" + kamaTypeText(b) + "`";
+        }
+        if (!out.empty()) break;
+    }
+    _nsCtx = saved;
+    return out;
+}
+
 // A generic instance's `implements` list, resolved under THIS instance's subst (which the caller has bound).
 // A generic contract implemented with the type's own param (`Box<T> implements Deref<T>`) mangles to the
 // concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
@@ -21540,9 +21582,13 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
                 // …and a failed bound on a `@generate`d generic INSTANCE says which field lost it the
                 // derive, for the same reason: the condition is invisible at the use site.
                 const std::string dnote = derivedUnmetNote(cls, *b->value);
-                unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
+                // ...and a CONDITIONAL conformance names the condition that failed: `DynamicArray<int32,
+                // BumpAllocator>` is `Deserializable` only when its allocator can be default-made.
+                const std::string gnote = why.empty() && dnote.empty() ? conformanceGateReason(cls, contract) : std::string();
+                const std::string shownCls = _genericTypeInsts.count(cls) ? demangleForDisplay(cls) : clsName;
+                unsupported(("type argument `" + shownCls + "` for type parameter `" + paramName
                              + "` does not satisfy bound `" + (contract != tmplName ? spellTypeNode(b) : *b->value) + "`"
-                             + (why.empty() ? "" : " — " + why) + dnote).c_str(), line);
+                             + (why.empty() ? "" : " — " + why) + dnote + gnote).c_str(), line);
             }
             ok = false;
         }
@@ -36722,6 +36768,28 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             if (_usesSerde) break;
         }
     }
+    // ...and the third way, which the two above missed: NAMING a serde contract. A `Serializable` parameter, a
+    // `<T: Serializable>` bound or an `Owned<Serializable>` observes the conformances this flag gates, so with
+    // the gate closed `s.add(value: list)` on a `fn add(Serializable value)` was refused for a
+    // `DynamicArray<int32>` — and accepted again once some unrelated import (a JSON encoder) opened it (peer
+    // KPG-30). A conformance must not depend on what else is imported. Every file outside std counts on its
+    // tokens (a mention in a comment or a string is not a token); std counts by module, since its collections
+    // name `Serializable` only to declare their own conditional conformances, which is what the gate is for —
+    // while anything under `std::serialization` exists to serialize.
+    for (auto& u : units) {
+        if (_usesSerde || !u) break;
+        auto uc = _unitCtx.find(u.get());
+        const std::string mod = uc != _unitCtx.end() ? uc->second.module : std::string();
+        // The prelude (`<prelude>`, its `<prelude>/std/…` units) is the language's own, and declares the contracts.
+        const bool synthetic = u->name && !u->name->empty() && (*u->name)[0] == '<';
+        const bool inStd = synthetic || mod == "std" || mod.compare(0, 5, "std::") == 0 || mod == "core";
+        if (inStd) {
+            if (mod == "std::serialization" || mod.compare(0, 20, "std::serialization::") == 0) _usesSerde = true;
+            continue;
+        }
+        for (const char* c : {"Serializable", "Deserializable", "Serializer", "Deserializer"})
+            if (u->identTokens.count(c)) { _usesSerde = true; break; }
+    }
 
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
@@ -37200,7 +37268,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
     for (ClassInfo* ci : classes) {
         if (ci->isIntrinsicColl || ci->isExternStruct) continue;
-        if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
+        if (ci->isGenericInst) continue;   // a generic instance's vtables are `static`, declared ahead just below
         if (_preludeEnums.count(ci->name)) continue;   // a prelude enum's vtbl is header-static (emitted below), no extern
         for (auto& ifn : contractsToEmitFor(*ci)) {
             bool staticOnly = contractIsStaticOnlyFor(*ci, ifn);
@@ -37209,6 +37277,21 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (it == _interfaces.end()) continue;
             if (it->second.isViewable) continue;   // a mint protocol has no vtbl TYPE, so this decl would not compile
             *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
+        }
+    }
+    // A generic instance's vtables are `static`, defined in this header further down — but a generic FUNCTION's
+    // body may bind an instance to a contract before then (`put<DynamicArray<Uuid>>` passing its `T` to a
+    // `Serializable` parameter, peer KPG-30): clang met the name before its definition and refused it. A
+    // tentative `static` declaration names each one ahead of every use; the definition completes it.
+    for (auto& inst : _genericTypeInstOrder) {
+        auto ci = _classes.find(inst);
+        if (ci == _classes.end() || ci->second.isIntrinsicColl || ci->second.isExternStruct) continue;
+        for (auto& ifn : contractsToEmitFor(ci->second)) {
+            bool staticOnly = contractIsStaticOnlyFor(ci->second, ifn);
+            if (staticOnly && !isPolyDispatchContract(ifn)) continue;
+            auto it = _interfaces.find(ifn);
+            if (it == _interfaces.end() || it->second.isViewable) continue;
+            *_out << "static const " << it->second.name << "_vtbl " << inst << "__as_" << it->second.name << ";\n";
         }
     }
 

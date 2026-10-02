@@ -1,0 +1,21 @@
+// A conditional conformance is decided by the instance's own type arguments, never by what else is imported.
+// `DynamicArray<int32>` is `Serializable` (its element is), so it binds to a `Serializable` parameter in a
+// program that imports nothing from std::serialization. The compiler skips serde code nobody can use, and it
+// judged "nobody" by two signals (a `@generate` derive, a serializer backend) that missed the third: NAMING a
+// serde contract, as `Sink.add` does. With one unrelated JSON import the same call built (peer KPG-30).
+import { std::collections::DynamicArray };
+
+type resource Sink {
+    isize n = 0;
+    public ctor make() { this.n = 0; }
+    public fn void add(Serializable value) { this.n = this.n + 1; }
+    public const fn isize count() { return this.n; }
+}
+
+fn int32 main() {
+    Sink s = Sink.make();
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    s.add(value: xs);
+    return cast<int32>(s.count()) - 1;
+}

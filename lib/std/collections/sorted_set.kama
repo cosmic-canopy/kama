@@ -6,7 +6,7 @@ export { SortedSet };
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
 type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [K: Copyable<K>],
-        Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>],
+        Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
         Sendable when [K: Sendable, A: Sendable] {
     SortedMap<K, Unit, A> m;
 
@@ -54,7 +54,7 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public ctor Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>] {
+    public ctor Result<SortedSet<K, A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, A: default] {
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject

@@ -1,0 +1,24 @@
+// A generic function binding its `T` to a contract needs `T`'s vtable for that contract. For a generic
+// instance (`DynamicArray<Uuid>` as `Serializable`) the vtable is `static`, defined in the shared header after
+// the generic function's body that names it, and clang refused the name it had not seen yet (peer KPG-30).
+// Every instance's vtables are now declared ahead of every use.
+import { std::collections::DynamicArray, std::uuid::Uuid };
+
+type resource Sink {
+    isize n = 0;
+    public ctor make() { this.n = 0; }
+    public fn void add(Serializable value) { this.n = this.n + 1; }
+    public const fn isize count() { return this.n; }
+}
+
+fn void put<T: Serializable>(ref Sink s, const ref T v) { s.add(value: v); }
+
+fn int32 main() {
+    Sink s = Sink.make();
+    DynamicArray<Uuid> ids = DynamicArray.empty();
+    ids.add(item: Uuid.fromBytes(bytes: [1ui8; 16]));
+    put::<DynamicArray<Uuid>>(s: ref s, v: ids);
+    DynamicArray<int32> xs = DynamicArray.empty();
+    put(s: ref s, v: xs);
+    return cast<int32>(s.count()) - 2;
+}

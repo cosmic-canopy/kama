@@ -102,7 +102,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
                    ValuesIterableMut<SlotMapValueIterMut<V>>, Sendable when [V: Sendable, A: Sendable],
                    Serializable when [V: Serializable],
-                   Deserializable<This> when [V: Deserializable<V>] {
+                   Deserializable<This> when [V: Deserializable<V>, A: default] {
     UnsafePtr<V> slotValues = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
     isize slotCount = 0; isize freeLen = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -279,7 +279,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // Rebuild the slot layout, then fill the occupied slots in the same ascending order the write used.
     // GlobalAllocator-only (the wire carries no allocator handle) — the same convention the other
     // collections' A-ignoring deserialize follows.
-    public unsafe ctor Result<SlotMap<V>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>] {
+    public unsafe ctor Result<SlotMap<V, A>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>, A: default] {
         SlotMap<V> result = SlotMap.empty();
         r.beginObject(count: 2ui64);
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();

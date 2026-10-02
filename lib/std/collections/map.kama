@@ -129,7 +129,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
-                   Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>],
+                   Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable] {
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     isize len = 0; isize cap = 0; isize tombs = 0; uint32 mods = 0; A alloc;
@@ -402,7 +402,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
-    public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>] {
+    public ctor Result<Map<K,V,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject(count: 2);

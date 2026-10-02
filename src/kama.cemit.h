@@ -2250,6 +2250,7 @@ private:
                            bool adapted = false);
     void applyBuiltinAdapterTarget(IntrinsicImplNode* n, SharedIdentifier tgt);
     std::string receiverObject(const std::string& emitted) const;
+    std::string conformanceGateReason(const std::string& inst, const std::string& contract);
     std::string contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
                                  const std::string& what, int line);
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
