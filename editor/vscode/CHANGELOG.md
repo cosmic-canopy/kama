@@ -13,7 +13,9 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
-## [0.9.2] — 2026-10-02
+## [0.9.3] — 2026-10-02
+
+0.9.2 was never published; its change is part of this release.
 
 ### Changed
 
