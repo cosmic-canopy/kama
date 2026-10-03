@@ -1,0 +1,15 @@
+// Given away in a loop and assigned again on only SOME paths back to its top: the other path would move it a
+// second time on the next pass (KRD-1 relaxes the loop rule to exactly this).
+type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
+fn void sink(Res r) { }
+
+fn int32 main() {
+    Res r = Res.make(v: 1);
+    int32 i = 0;
+    while (i < 3) {
+        sink(r: give r);
+        if (i == 1) { r = Res.make(v: i); }
+        i = i + 1;
+    }
+    return 0;
+}

@@ -1,0 +1,1 @@
+is moved on some paths but not others and is still live at scope exit

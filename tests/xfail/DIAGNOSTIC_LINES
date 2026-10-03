@@ -765,6 +765,11 @@ module_static_runtime_init	module_static_runtime_init.kama:3
 module_static_volatile	module_static_volatile.kama:8
 move_field	move_field.kama:7
 move_in_loop	move_in_loop.kama:9
+move_in_loop_break_maybe	move_in_loop_break_maybe.kama:15
+move_in_loop_continue	move_in_loop_continue.kama:12
+move_in_loop_partial	move_in_loop_partial.kama:10
+move_reassign_maybe	move_reassign_maybe.kama:10
+move_reassign_rhs_moved	move_reassign_rhs_moved.kama:10
 move_reuse_same_scope	move_reuse_same_scope.kama:9
 named_const_narrow	named_const_narrow.kama:1
 nameless_call_banned	nameless_call_banned.kama:4
@@ -1056,7 +1061,7 @@ scope_op_on_value	scope_op_on_value.kama:14
 scoped_bound_wrong_contract	main.kama:11
 section_nonstring	section_nonstring.kama:2
 self_local	self_local.kama:8
-self_move_owned	self_move_owned.kama:8 self_move_owned.kama:9
+self_move_owned	self_move_owned.kama:8
 self_param	self_param.kama:8
 self_returning_static_fn	self_returning_static_fn.kama:8
 sendable_arena_container	sendable_arena_container.kama:6

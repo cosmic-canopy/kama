@@ -1,0 +1,16 @@
+// A `continue` is a way back to the top of the loop: a local given away and not assigned again before it would be
+// moved a second time on the next pass.
+type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
+fn void sink(Res r) { }
+
+fn int32 main() {
+    Res r = Res.make(v: 1);
+    int32 i = 0;
+    while (i < 3) {
+        i = i + 1;
+        sink(r: give r);
+        if (i == 2) { continue; }
+        r = Res.make(v: i);
+    }
+    return 0;
+}

@@ -1,0 +1,16 @@
+// A `break` between the `give` and the reassignment leaves the loop with the local moved, while the loop's own exit
+// leaves it live: after the loop it is moved on some paths only, which no drop flag could settle.
+type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
+fn void sink(Res r) { }
+
+fn int32 main() {
+    Res r = Res.make(v: 1);
+    int32 i = 0;
+    while (i < 3) {
+        sink(r: give r);
+        if (i == 1) { break; }
+        r = Res.make(v: i);
+        i = i + 1;
+    }
+    return 0;
+}

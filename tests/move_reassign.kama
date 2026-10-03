@@ -1,0 +1,100 @@
+// A local a `give` consumed may be assigned again (peer KRD-1, @kama/redis): the store gives it a value, and every
+// later use is sound — straight-line, and in a loop whose every path back to its start assigns it again. The old
+// value is dropped only when it is still live: not after a `give`, and not when the right side consumed it. Every
+// `Probe` built is dropped exactly once, so the drop count equals the build count. Returns 0, or the failed case.
+import { std::collections::DynamicArray };
+
+static int32 built = 0;
+static int32 dropped = 0;
+
+type resource Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; built = built + 1; }
+    public const fn int32 get() { return this.id; }
+    ~Probe() { dropped = dropped + 1; }
+}
+
+type enum Box { Empty, Full(Probe p) }
+type enum Tree { Leaf, Node(DynamicArray<Tree> kids) }
+
+fn void sink<T>(T x) { }
+fn Probe wrap(Probe p) { return Probe.make(id: p.get() * 10); }
+fn Probe peek(const ref Box b) { return Probe.make(id: match (b) { case Full(p: q): q.get(); case Empty: -1; }); }
+fn int32 depth(const ref Tree t) { return match (t) { case Leaf: 0; case Node(kids: k): 1 + depth(t: k[0]); }; }
+
+fn int32 straightLine() {
+    Probe p = Probe.make(id: 1);
+    sink(x: give p);
+    p = Probe.make(id: 2);                       // re-armed: no drop of the moved value
+    if (p.get() != 2) { return 1; }
+    p = wrap(p: give p);                         // the right side consumed it: no drop of it either
+    if (p.get() != 20) { return 2; }
+    Box b = Box::Full(p: Probe.make(id: 3));
+    sink(x: give b);
+    b = Box::Full(p: Probe.make(id: 4));         // an enum target, after a give
+    b = Box::Full(p: peek(b: b));                // the right side READS the old value before it is dropped
+    int32 inBox = match (b) { case Full(p: q): q.get(); case Empty: 0; };
+    if (inBox != 4) { return 3; }
+    string s = "a".concat(other: "b");
+    sink(x: give s);
+    s = "c".concat(other: "d");
+    DynamicArray<int32> d = DynamicArray.empty();
+    sink(x: give d);
+    d = DynamicArray.empty();
+    Optional<string> o = Optional::Some(value: "x".concat(other: "y"));
+    sink(x: give o);
+    o = Optional::None;
+    if (s != "cd" || d.length() != 0) { return 4; }
+    return 0;
+}
+
+// The peer's shape: wrap a value in place, pass after pass.
+fn int32 loopRearm() {
+    Tree t = Tree::Leaf;
+    for (int32 i = 0; i < 3; i = i + 1) {
+        DynamicArray<Tree> one = DynamicArray.empty();
+        one.add(item: give t);
+        t = Tree::Node(kids: give one);
+    }
+    return depth(t: t);   // 3
+}
+
+// Every path back to the top assigns it again — one through a `continue`.
+fn int32 loopContinue() {
+    Probe p = Probe.make(id: 0);
+    int32 sum = 0;
+    int32 i = 0;
+    while (i < 4) {
+        i = i + 1;
+        sum = sum + p.get();
+        sink(x: give p);
+        if (i % 2 == 0) { p = Probe.make(id: i); continue; }
+        p = Probe.make(id: 100);
+    }
+    return sum;   // 0 + 100 + 2 + 100
+}
+
+// A `while (true)` ends only by its `break`: after it, the local is moved on that one path, so moved — and may be
+// assigned again.
+fn int32 loopBreak() {
+    Probe p = Probe.make(id: 7);
+    int32 n = 0;
+    while (true) {
+        n = n + 1;
+        sink(x: give p);
+        if (n == 3) { break; }
+        p = Probe.make(id: n);
+    }
+    p = Probe.make(id: 9);
+    return p.get() + n;   // 12
+}
+
+fn int32 main() {
+    int32 r = straightLine();
+    if (r != 0) { return r; }
+    if (loopRearm() != 3) { return 5; }
+    if (loopContinue() != 202) { return 6; }
+    if (loopBreak() != 12) { return 7; }
+    if (built != dropped) { return 8; }
+    return 0;
+}

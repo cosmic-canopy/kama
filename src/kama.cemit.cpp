@@ -5537,7 +5537,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             rejectUnresolvedName(v, nm);
             return "0";
         }
-        checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
+        if (v != _writeTarget) checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value (a store TO it is no read)
         recordRef(bindingKeyOf(nm), v);   // a local, a param, or an unindexed name (empty key => dropped)
         // KR-67: a BOUND name is a local/param/binding kama owns, so it reads by its prefixed C
         // spelling. An unbound one is a builtin or a synthesized compiler name — already in the
@@ -6051,6 +6051,13 @@ bool CEmitter::stmtIsJump(SharedStatement s)
 }
 
 // does this body end in a jump (so control doesn't fall through to a branch join)?
+// A loop condition that is the literal `true`: the loop ends only by `break` (or `return`), never by its own test.
+static bool alwaysTrue(SharedExpression e)
+{
+    auto* b = dynamic_cast<BooleanNode*>(e.get());
+    return b && b->value;
+}
+
 bool CEmitter::bodyDiverges(SharedStatement s)
 {
     if (!s) return false;
@@ -6149,6 +6156,11 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
 // sits beside (or right before) the per-body table reset that retires the whole function's entries.
 void CEmitter::popScope()
 {
+    // KRD-1: the end of a loop body is a back edge (unless the body cannot reach it), and the loop is over.
+    if (_scopes.back().isLoopBoundary && !_scopes.back().rearm.empty()) {
+        if (!_scopes.back().bodyDiverges) checkRearmed(_scopes.back(), _scopes.back().rearm.begin()->second, "the loop's next pass");
+        settleLoopExit(_scopes.back());
+    }
     // A loop body that a `break` left by label: the loop site places it once the C loop closes. Loops
     // nest, so an inner site has placed its label before any outer body can close.
     if (_scopes.back().isLoopBoundary && !_scopes.back().exitLabel.empty()) _loopExitPending = _scopes.back().exitLabel;
@@ -6244,6 +6256,13 @@ void CEmitter::emitLoopJump(int srcLine, bool isBreak, int depth)
                     "is no rest of the loop to skip — `continue` ends this element's pass", srcLine);
         return;
     }
+    // KRD-1: a `continue` is a back edge; a `break` carries its move states out of the loop.
+    if (!isBreak) checkRearmed(_scopes[li], srcLine, "this `continue`");
+    else if (!_scopes[li].rearm.empty()) {
+        std::map<std::string, MoveState> st;
+        for (const auto& r : _scopes[li].rearm) { auto ms = _moveState.find(r.first); if (ms != _moveState.end()) st[r.first] = ms->second; }
+        _scopes[li].breakStates.push_back(st);
+    }
     emitUnwindToLoop(depth);   // dtors must run before the jump
     if (isBreak && _switchDepth > _scopes[li].switchDepth) {
         std::string& label = _scopes[li].exitLabel;
@@ -6293,6 +6312,7 @@ void CEmitter::emitBlock(BlockNode* block, int depth)
 void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot)
 {
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot; sc.switchDepth = _switchDepth;
+    if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; }
     _scopes.push_back(sc);
     // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
@@ -6314,6 +6334,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     // ran its own cleanup) — the double-destruction guard.
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
+    _scopes.back().bodyDiverges = last && stmtIsJump(last);
 
     indent(depth);
     *_out << "}";
@@ -8239,6 +8260,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(w->booleanExpression);
+        _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // KRD-1: settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "while (" << cond << ") ";
@@ -8270,6 +8292,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // `do`/`while` condition sits at the bottom and its `continue` must skip TO it, which a naive
         // while(1) rewrite breaks — so a hoisting construct here stays a clean error (bind to a local).
         *_out << "do ";
+        _nextLoopExitsNormally = !alwaysTrue(d->booleanExpression);   // KRD-1: settleLoopExit
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
         placeLoopExit(depth);
@@ -8290,6 +8313,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(f->booleanExpression);
         std::string iter = emitForClause(f->iteratorStatements);
+        _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // KRD-1: settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "for (" << init << "; " << cond << "; " << iter << ") ";
@@ -8441,6 +8465,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitStatement(fe->body, depth + 2); last = fe->body;
         }
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
+        _scopes.back().bodyDiverges = last && stmtIsJump(last);
         popScope();   // retires the binding — see noteScopedBinding above
 
         indent(depth + 1); *_out << "}\n";   // close for
@@ -8454,6 +8479,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // (copy: refcount++). The null/retain is a statement, so it can't live in
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
+    // KRD-1's write-target state for an assignment statement (see the first handler below). It must outlive BOTH
+    // assignment handlers — the first falls through to the second (value-producing / variant targets) — so it
+    // lives here, at the statement: leaving the first handler's block must not mark the target live early.
+    struct WriteTargetGuard {
+        CEmitter& e; const ASTNode* saved; std::string key;
+        ~WriteTargetGuard() { e._writeTarget = saved; if (!key.empty()) e._moveState[key] = MoveState::NotMoved; }
+    } writeGuard{ *this, _writeTarget, std::string() };
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
 #if KAMA_INHERITANCE
         // A base install that reached here is a MISPLACED one — the well-formed one is lifted into the
@@ -8477,6 +8509,27 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             noteHandoffValue(rhs);   // a store consumes its value
             rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
         }
+        // KRD-1: a store gives a bare local a value, whatever it held — including nothing, after a `give`.
+        // `one.add(item: give t); t = Tree::Node(kids: give one);` re-arms `t`, and every later use is sound. The
+        // target is a WRITE, so reading it is no use-after-move (`_writeTarget`, by node: a `give t` on the right
+        // is still checked); each sub-path below drops the old value only if it is still live (assignTargetLive,
+        // after the right side), and the target is live once the store is done. A local moved on SOME paths is
+        // refused: whether to drop its old value would be a run-time question, and kama keeps no drop flag.
+        if (as->token == EQ)
+            if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
+                if (lid->value && (!lid->qualifier || lid->qualifier->empty())) {
+                    const std::string& nm = *lid->value;
+                    auto ms = _moveState.find(nm);
+                    if (ms != _moveState.end() && ms->second == MoveState::MaybeMoved && !_slotDeclared.count(nm)) {
+                        unsupported(("`" + nm + "` was given away on some paths but not others, so this assignment "
+                                     "cannot know whether to drop its old value — give it away on every path or "
+                                     "none before assigning it, or assign it inside each branch").c_str(), n->line);
+                        writeGuard.key = nm;   // one mistake, one diagnostic: not also "still live at scope exit"
+                        return;
+                    }
+                    _writeTarget = as->unaryExpression.get();
+                    writeGuard.key = nm;
+                }
         // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`) — makes it a live value
         // from here on, so its destructor comes back and ordinary move tracking takes over. Safe code never
         // gets here with a hole (checkDefiniteAssignment's rule 1: only an `out` argument fills a slot); the
@@ -8509,7 +8562,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 checkConstWrite(as->unaryExpression, n->line);
                 std::string b = emitExpression(as->unaryExpression);
                 line(n->line);
-                indent(depth); *_out << lty0 << "__dtor(&" << b << ");\n";
+                if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(depth); *_out << lty0 << "__dtor(&" << b << ");\n"; }
                 emitSmartPtrBaseUpcast(b, lty0, rhs0, handoff0, depth, n->line);
                 return;
             }
@@ -8669,7 +8722,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Cross-element upcast reseat: release the handle's old pointee, then widen a
                 // concrete-element `Shared`/`Owned` into this contract-element intrinsic handle.
                 line(n->line);
-                indent(depth); *_out << ty << "__dtor(&" << b << ");\n";
+                if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(depth); *_out << ty << "__dtor(&" << b << ");\n"; }
                 emitSmartPtrUpcast(b, ty, rhs, handoff, depth, n->line);
                 return;
             }
@@ -8683,7 +8736,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // the whole release-and-reseat with an address check (a no-op for `a = a`).
             int d2 = depth;
             if (rhsLval) { indent(depth); *_out << "if (&" << b << " != &(" << src << ")) {\n"; d2 = depth + 1; }
-            indent(d2); *_out << ty << "__dtor(&" << b << ");\n";   // release b's old
+            if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(d2); *_out << ty << "__dtor(&" << b << ");\n"; }   // release b's old (if live)
             if (knd == CollKind::Weak && rhsLval && exprClass(rhs) != ty) {
                 // Shared->Weak reseat: field-copy + weak retain. A fat contract Weak
                 // copies {obj, vtbl}; a thin Weak copies {ptr}.
@@ -8781,11 +8834,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     && !isGenericDotCtorCall(rhs.get())) {
                     checkConstWrite(as->unaryExpression, n->line);
                     std::string lname = lvalueMoveKey(as->unaryExpression);
-                    bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
                     std::string b = emitExpression(as->unaryExpression);
                     bool ph = _hoistOK; _hoistOK = true;
                     std::string rv = emitExpression(rhs);
                     _hoistOK = ph;
+                    // After the right side: `r = wrap(r: give r)` consumed the old value, and dropping it too
+                    // would free it twice.
+                    bool bMoved = !assignTargetLive(lname);
                     std::string t = "kama_asgn" + std::to_string(_tempCounter++);
                     line(n->line);
                     flushHoisted(depth);
@@ -8844,7 +8899,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (!lname.empty() && rname == lname) return;     // self-copy: no-op
                         std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
                         line(n->line);
-                        indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                        if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                         indent(depth); *_out << b << " = " << copyCall(lty, src) << ";\n";
                         return;
                     }
@@ -8852,10 +8907,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     std::string mv = moveOnlySource(rhs, n->line);
                     if (!lname.empty() && !mv.empty() && mv == lname)
                         unsupported("handing a value onto itself would use it after it was dropped", n->line);
+                    const bool live = assignTargetLive(lname);
                     if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target live again
                     std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
                     line(n->line);
-                    indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                    if (live) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                     indent(depth); *_out << b << " = " << src << ";\n";
                     indent(depth); *_out << moveNullStmt(lty, src) << "\n";
                     if (!mv.empty()) markMoved(mv);
@@ -8873,7 +8929,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 line(n->line);
                 flushHoisted(depth);                                   // Formatter build + operand temps first…
                 indent(depth); *_out << lty << " " << t << " = " << rv << ";\n";
-                indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                 indent(depth); *_out << b << " = " << t << ";\n";
                 return;
             }
@@ -8942,7 +8998,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 checkConstWrite(as->unaryExpression, n->line);
                 std::string mkey = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
                 bool destructible = _classes.count(lhsCType) && _classes[lhsCType].destructible;
-                bool bMoved = (!mkey.empty() && _moveState.count(mkey) && _moveState[mkey] == MoveState::Moved);
                 // A PLACE, not an expression. An assignment target is an lvalue by definition, and for an
                 // intrinsic-collection element the two spellings differ: `emitExpression` gives the by-value
                 // `Coll__get(…)` and `emitExpression(lhs) = rhs` is then not assignable C — it failed at the
@@ -8960,8 +9015,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 _matchTargetCType = pm; _variantTargetType = pv;
                 _hoistOK = ph;
                 flushHoisted(depth);
-                // RAII: drop a live destructible LHS before the blit (its owned resource would leak).
-                if (destructible && !bMoved) { indent(depth); *_out << lhsCType << "__dtor(&" << lhs << ");\n"; }
+                // RAII: drop a live destructible LHS before the blit (its owned resource would leak). Judged after
+                // the right side, which may have consumed it (`t = Tree::Node(kids: listOf(give t))`); and the new
+                // value is built into a temporary FIRST, because it may read the old one (`t = Node(kids: copy …)`).
+                if (destructible && assignTargetLive(mkey)) {
+                    std::string tmp = "kama_asgn" + std::to_string(_tempCounter++);
+                    indent(depth); *_out << lhsCType << " " << tmp << " = " << rv << ";\n";
+                    indent(depth); *_out << lhsCType << "__dtor(&" << lhs << ");\n";
+                    rv = tmp;
+                }
                 if (!mkey.empty()) _moveState[mkey] = MoveState::NotMoved;   // target is live again
                 indent(depth); *_out << lhs << " = " << rv << ";\n";
                 return;
@@ -9008,11 +9070,13 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
         emitBlockScoped(b, depth, loopBoundary, /*functionRoot=*/false);
     } else {
         Scope sc; sc.isLoopBoundary = loopBoundary; sc.switchDepth = _switchDepth;
+        if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; }
         _scopes.push_back(sc);
         *_out << "{\n";
         emitStatement(stmt, depth + 1);
         if (!stmtIsJump(stmt))
             emitScopeCleanup(_scopes.back(), depth + 1);
+        _scopes.back().bodyDiverges = stmtIsJump(stmt);
         indent(depth);
         *_out << "}";
         popScope();
@@ -17011,6 +17075,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         emitStatement(fe->body, depth + 2); last = fe->body;
     }
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
+    _scopes.back().bodyDiverges = last && stmtIsJump(last);
     popScope();   // retires the binding
 
     indent(depth + 1); *_out << "}\n";   // close while
@@ -17700,21 +17765,65 @@ void CEmitter::markMoved(const std::string& cVar)
                      "line " + std::to_string(f->line) + " as `" + f->alias + "`), and moving it would "
                      "take the storage `" + f->alias + "` views with it; move it after the window closes")
                         .c_str(), _curLine);
-    //  (Increment 3): moving a local declared OUTSIDE the nearest enclosing loop would move
-    // it again on the next iteration (double-move). Reject — conservative, no loop fixpoint. A value
-    // declared INSIDE the loop body is fresh each iteration, so moving it is fine.
-    int lb = -1;
-    for (int i = (int)_scopes.size() - 1; i >= 0; --i) if (_scopes[i].isLoopBoundary) { lb = i; break; }
-    if (lb >= 0) {
+    //  (Increment 3): moving a local declared OUTSIDE the enclosing loop would move it again on the next
+    // iteration — unless every path back to the loop's start gives it a new value (KRD-1: `one.add(item: give
+    // t); t = Tree::Node(kids: give one);`). So the move is a REQUIREMENT on each loop between the local's scope
+    // and here, checked at every back edge (the end of the body, each `continue`: checkRearmed) and settled
+    // after the loop from its exits (settleLoopExit). A value declared INSIDE the loop body is fresh each
+    // iteration, so moving it is fine. All of it is compile-time: there is no drop flag.
+    {
         int li = -1;
         for (int i = (int)_scopes.size() - 1; i >= 0 && li < 0; --i)
             for (auto& l : _scopes[i].locals) if (l.cVar == cVar) { li = i; break; }
-        if (li >= 0 && li < lb)
-            unsupported(("cannot `give` `" + cVar + "` inside a loop — it would be moved again on the next "
-                         "iteration; move it after the loop, or move a value declared in the loop body").c_str(), _curLine);
+        if (li >= 0)
+            for (int j = li + 1; j < (int)_scopes.size(); ++j)
+                if (_scopes[j].isLoopBoundary) _scopes[j].rearm.emplace(cVar, _curLine);
     }
     if (_slotDeclared.count(cVar)) _slotGiven.insert(cVar);   // see _slotGiven: a GIVE, not a missing fill
     _moveState[cVar] = MoveState::Moved;
+}
+
+// Does an assignment's target still hold a value to release? Judged AFTER its right side is emitted: a `give`
+// there (`r = wrap(r: give r)`) or before the statement (`give t; … t = …`, KRD-1) leaves nothing to drop, and a
+// moved resource or enum keeps its old bytes, so dropping it would free them twice. An empty key (an element, a
+// raw slot) is not move-tracked: it is live.
+bool CEmitter::assignTargetLive(const std::string& key) const
+{
+    if (key.empty()) return true;
+    auto it = _moveState.find(key);
+    return it == _moveState.end() || it->second == MoveState::NotMoved;
+}
+
+// KRD-1: at a back edge of `loop` — the end of its body, or a `continue` — every outer local given away in the
+// loop must hold a value again, or the next pass would move it twice.
+void CEmitter::checkRearmed(const Scope& loop, int line, const char* where)
+{
+    for (const auto& r : loop.rearm) {
+        auto ms = _moveState.find(r.first);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved)
+            unsupported(("`" + r.first + "` is given away inside this loop (line " + std::to_string(r.second) + ") and is "
+                         "not assigned again before " + where + " — the next pass would move it a second time. "
+                         "Give it a new value on every path back to the top of the loop, or move a value "
+                         "declared in the loop body").c_str(), line);
+    }
+}
+
+// KRD-1: an outer local given away in a loop, after the loop. Every pass began with it live (checkRearmed), so the
+// loop's own exit — its condition turning false — leaves it live; each `break` leaves it as that path had it. A
+// `while (true)` has no exit of its own, so only its breaks count.
+void CEmitter::settleLoopExit(Scope& loop)
+{
+    for (const auto& r : loop.rearm) {
+        bool moved = false, live = loop.exitsNormally;
+        for (const auto& b : loop.breakStates) {
+            auto it = b.find(r.first);
+            MoveState st = it == b.end() ? MoveState::NotMoved : it->second;
+            if (st != MoveState::NotMoved) moved = true;
+            if (st != MoveState::Moved)    live = true;
+        }
+        if (!moved && !live) continue;   // no exit at all: nothing after the loop runs
+        _moveState[r.first] = moved && live ? MoveState::MaybeMoved : moved ? MoveState::Moved : MoveState::NotMoved;
+    }
 }
 
 void CEmitter::checkNotMoved(const std::string& cVar, int line)

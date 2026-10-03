@@ -1,1 +1,1 @@
-inside a loop
+is given away inside this loop

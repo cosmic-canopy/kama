@@ -2073,6 +2073,15 @@ private:
                    // split) and `return` (which would leave the worker, not the enclosing function) are
                    // refused there; `continue` ends one element's pass and keeps its meaning.
                    bool isParallelForRoot = false;
+                   // KRD-1: an outer local given away inside this loop body, by name, with the line of the
+                   // `give`. Every path back to the loop's start (the end of the body, each `continue`) must
+                   // find it assigned again, or the next pass would move it twice; `breakStates` records its
+                   // state at each `break`, which with the loop's own exit (`exitsNormally` — false for a
+                   // `while (true)`) decides its state after the loop. `bodyDiverges`: the body's end is
+                   // unreachable, so it is no back edge.
+                   std::map<std::string, int> rearm;
+                   std::vector<std::map<std::string, MoveState>> breakStates;
+                   bool exitsNormally = true, bodyDiverges = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
                    // ALL before dropping any local (join-before-drop), on every exit path. `borrowedPlaces`
@@ -3463,6 +3472,11 @@ private:
     void dropCondTemps(size_t preLoc, int depth);              // drop+unregister a condition's hoisted temps
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     int  innermostLoopIndex() const;                           // the enclosing loop body's scope, or -1 (none in this function)
+    bool assignTargetLive(const std::string& key) const;      // the assignment's target still holds a value to drop
+    void checkRearmed(const Scope& loop, int line, const char* where);   // KRD-1: back edge — given locals are live again
+    void settleLoopExit(Scope& loop);                          // KRD-1: a given local's state after its loop
+    const ASTNode* _writeTarget = nullptr;                     // the bare local an `=` is storing to — a write, not a read
+    bool _nextLoopExitsNormally = true;                        // the loop site says whether its condition can end it
     bool isParallelForLoop(int loopIndex) const;               // that loop is the one a `parallel_for` body was outlined into
     bool inParallelForBody() const;                            // the current function is an outlined `parallel_for` body
     void emitLoopJump(int srcLine, bool isBreak, int depth);   // `break` / `continue`, judged and emitted

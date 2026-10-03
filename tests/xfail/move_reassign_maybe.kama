@@ -1,0 +1,12 @@
+// A local given away on SOME paths cannot simply be assigned: whether to drop its old value would be a run-time
+// question, and kama keeps no drop flag (KRD-1). Give it away on every path or none, or assign it in each branch.
+type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
+fn void sink(Res r) { }
+
+fn int32 main() {
+    Res r = Res.make(v: 1);
+    int32 n = 2;
+    if (n > 1) { sink(r: give r); }
+    r = Res.make(v: 2);
+    return 0;
+}

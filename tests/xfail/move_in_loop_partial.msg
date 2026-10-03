@@ -1,0 +1,1 @@
+is not assigned again before the loop's next pass

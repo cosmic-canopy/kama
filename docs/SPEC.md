@@ -1203,8 +1203,21 @@ rvalue (`new`/constructor/call result) never takes a marker.
 | collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy`) |
 
 A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a <!-- xfail: handoff_fresh -->
-field/element, moving inside a loop a value declared outside it, and a conditional move that is still live at
-scope exit are all rejected — there is no runtime drop flag.
+field/element, and a conditional move that is still live at scope exit are all rejected — there is no runtime <!-- xfail: move_in_loop_break_maybe -->
+drop flag. **Assigning a moved local gives it a value again**, and every later use is sound; the old value is <!-- test: move_reassign -->
+dropped only if it is still live, so a `give` before the assignment, or one on its right side
+(`r = wrap(r: give r)`), leaves nothing to drop:
+
+```kama fragment
+one.add(item: give t);              // t is moved…
+t = Tree::Node(kids: give one);     // …and holds a value again
+```
+
+A local moved on only some paths cannot be assigned: whether to drop its old value would be a run-time question. <!-- xfail: move_reassign_maybe -->
+Moving, inside a loop, a value declared outside it is allowed only when every path back to the loop's start — the <!-- xfail: move_in_loop, move_in_loop_partial, move_in_loop_continue -->
+end of the body, and each `continue` — assigns it again; otherwise the next pass would move it a second time. A
+`break` carries its state out of the loop, so a local moved before a `break` and live at the loop's own exit is
+moved on some paths only.
 
 **Shadowing is a compile error — kama has none.** A binding may not take the name of a parameter, an <!-- xfail: shadow_param, shadow_field, shadow_enclosing -->
 enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; one name = one binding within
