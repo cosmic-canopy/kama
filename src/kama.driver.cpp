@@ -7513,6 +7513,16 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             return 1;
                         }
                         VersionReq merged = intersect(accReq[r.name], req);
+                        // KB-39: a restart is for a tighter range that EXCLUDES the version already chosen. It used to
+                        // fire whenever the merged range's HIGHEST version differed from the chosen one — and a version
+                        // chosen from the LOCK is deliberately not the highest: the root's `^0.5.0` kept its locked
+                        // 0.5.0, a path dependency's `^0.5.0` then saw 0.5.1, and every restart chose 0.5.0 from the
+                        // lock again, until "did not converge". A chosen version the merged range still admits is kept.
+                        SemVer cur;
+                        if (parseSemVer(chosenVer[r.name], cur) && satisfies(merged, cur)) {
+                            accReq[r.name] = merged;
+                            continue;   // chosen version still satisfies the tighter range → dedup
+                        }
                         SemVer sv; VerPick pick; bool matched = false; std::string terr;
                         if (!selectVersion(r.name, r.spec, merged, matched, sv, pick, terr)) {
                             fprintf(stderr, "kama pkg install: %s\n", terr.c_str()); return 1;
@@ -7525,11 +7535,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             return 1;
                         }
                         accReq[r.name] = merged;
-                        if (semVerStr(sv) != chosenVer[r.name]) {   // chosen version no longer highest — restart
-                            seeded[r.name] = merged;
-                            return RESTART;
-                        }
-                        continue;   // chosen version still satisfies the tighter range → dedup
+                        seeded[r.name] = merged;   // the chosen version is excluded — resolve again with the tighter range
+                        return RESTART;
                     }
                     if (!sameSpec(ci->second, r.spec)) {
                         fprintf(stderr, "kama pkg install: dependency conflict on '%s': %s and %s require different "
