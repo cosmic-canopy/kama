@@ -1201,6 +1201,7 @@ rvalue (`new`/constructor/call result) never takes a marker.
 | plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" |
 | `Copyable` resource (has a `copy` ctor) | its declared `bare:` default | move | **deep copy** via `copy` |
 | collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy`) |
+| `enum` whose payload owns | **move** | move (emphasis) | **deep copy** when every payload copies (variant-wise), else ⛔ naming the payload |
 
 A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a <!-- xfail: handoff_fresh -->
 field/element, and a conditional move that is still live at scope exit are all rejected — there is no runtime <!-- xfail: move_in_loop_break_maybe -->

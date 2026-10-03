@@ -8078,8 +8078,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         bool cpy = isCopyable(ty);
                         bool doCopy;
                         if (handoff == 2) {                              // explicit `copy`
-                            if (!cpy) unsupported(("`" + ty + "` has no `copy` method — add `implements "
-                                                   "Copyable(bare: …)`, or use `give` to move it").c_str(), n->line);
+                            if (!cpy) unsupported(notCopyableMessage(ty, "use `give` to move it").c_str(), n->line);
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
@@ -8783,8 +8782,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool cpy = isCopyable(lty);
                 bool doCopy;
                 if (handoff == 2) {
-                    if (!cpy) unsupported(("`" + lty + "` has no `copy` method — add `implements "
-                                           "Copyable(bare: …)`, or use `give` to move it").c_str(), n->line);
+                    if (!cpy) unsupported(notCopyableMessage(lty, "use `give` to move it").c_str(), n->line);
                     doCopy = cpy;
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[lty].bareDefault == COPY;
@@ -17295,8 +17293,7 @@ std::string CEmitter::ternaryArmHandoff(const SharedExpression& arm, const std::
     if (isMoveOnlyValue(cls)) {
         const bool cpy = isCopyable(cls);
         if (wantCopy && !cpy) {
-            unsupported(("`" + shown + "` has no `copy` method — add `implements Copyable(bare: …)`, or choose "
-                         "with `if`/`else`").c_str(), line);
+            unsupported(notCopyableMessage(cls, "choose with `if`/`else`").c_str(), line);
             return emitExpression(v);
         }
         if (wantCopy || (cpy && it->second.bareDefault == COPY)) return copyCall(cls, emitPlace(v));
@@ -17627,7 +17624,88 @@ bool CEmitter::ownsByValue(const std::string& cls) const
 bool CEmitter::isCopyable(const std::string& cls) const
 {
     auto it = _classes.find(cls);
+    if (it != _classes.end() && it->second.isVariant)
+        return const_cast<CEmitter*>(this)->variantCopyable(it->second);
     return it != _classes.end() && it->second.copyable;
+}
+
+// KRD-4: an enum is copyable STRUCTURALLY — exactly when every payload it can hold is — like a collection, whose
+// copy is its elements'. An enum has no identity of its own (TYPE_MODEL: it owns nothing beyond its payloads), so
+// unlike a resource there is no copy for it to choose: `copy` copies the active variant's payloads, each its own
+// way. Coinductive: a mention of an enum already being judged (`Tree` inside `DynamicArray<Tree>`) is assumed to
+// copy, so a recursive enum copies exactly when the rest of it does. `DynamicArray<Tree>`'s own conditional
+// `Copyable` is decided while `Tree` is registered, by asking this very question.
+bool CEmitter::variantCopyable(const ClassInfo& c)
+{
+    if (!c.destructible || _variantCopyVisiting.count(c.name)) return true;   // owns nothing: bitwise
+    _variantCopyVisiting.insert(c.name);
+    bool ok = true;
+    // The BAKED field C type: `cType()` may register an instance, and a registration asks bounds — this very
+    // question, mid-answer, where the coinductive "assume it copies" would leak out as a final answer.
+    for (const auto& v : c.variants)
+        for (const auto& f : v.payload)
+            if (ok && !payloadCopyable(fieldCType(c.name, f))) ok = false;
+    _variantCopyVisiting.erase(c.name);
+    return ok;
+}
+
+bool CEmitter::payloadCopyable(const std::string& t)
+{
+    auto it = _classes.find(t);
+    if (it == _classes.end()) return true;                 // a primitive, a plain enum, a raw pointer: bitwise
+    if (isSmartPtrClass(t)) return smartKind(t) != CollKind::Owned;   // a `Shared`/`Weak` copies by retain; `Owned` is unique
+    if (it->second.isVariant) return variantCopyable(it->second);
+    if (!it->second.destructible) return true;             // owns nothing (a value, a view): bitwise
+    return it->second.copyable;                            // string, a collection of copyables, a Copyable resource
+}
+
+// Why `copy` of `cls` is refused. A resource is copied only by its own `copy` ctor, so the remedy is to declare
+// one; an enum cannot declare `Copyable` (that is a resource's choice to make) — it copies exactly when every
+// payload does — so the message names the payload that does not (KRD-4).
+std::string CEmitter::notCopyableMessage(const std::string& cls, const char* otherwise)
+{
+    auto it = _classes.find(cls);
+    if (it != _classes.end() && it->second.isVariant)
+        for (const auto& v : it->second.variants)
+            for (const auto& f : v.payload) {
+                const std::string pt = fieldCType(cls, f);
+                if (!payloadCopyable(pt))
+                    return "`" + cls + "` cannot be copied: its `" + v.name + "` variant holds a `" + pt + "`, which does "
+                           "not copy — an enum copies exactly when every payload does; " + otherwise;
+            }
+    return "`" + cls + "` has no `copy` method — add `implements Copyable<This>(bare: …)`, or " + otherwise;
+}
+
+// `Enum__copy`: the tag and every bitwise payload come across as they are; each owning payload of the ACTIVE
+// variant is replaced by its own copy (copyCall — a string's, a collection's, a resource's `copy`, an enum's).
+void CEmitter::emitVariantCopy(ClassInfo& ci)
+{
+    *_out << (_emitStaticClass ? "static inline " : "") << ci.name << " " << ci.name << "__copy(" << ci.name << "* src)\n{\n";
+    indent(1); *_out << ci.name << " out = *src;\n";
+    indent(1); *_out << "switch (src->kama_tag) {\n";
+    for (auto& v : ci.variants) {
+        bool any = false;
+        for (auto& f : v.payload) { auto cit = _classes.find(cType(f.type)); if (cit != _classes.end() && cit->second.destructible) { any = true; break; } }
+        if (!any) continue;
+        indent(2); *_out << "case " << ci.name << "_" << v.name << ":\n";
+        for (auto& f : v.payload) {
+            auto cit = _classes.find(cType(f.type));
+            if (cit == _classes.end() || !cit->second.destructible) continue;
+            const std::string place = "src->kama_u." + kName(v.name) + "." + kMember(ci, f.name);
+            if (isSmartPtrClass(cit->first)) {   // the handle came across bitwise; a copy is one more reference
+                indent(3); *_out << "(" << place << ").kama_ctrl->"
+                                 << (smartKind(cit->first) == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
+                continue;
+            }
+            indent(3); *_out << "out.kama_u." << kName(v.name) << "." << kMember(ci, f.name) << " = "
+                             << copyCall(cit->second.name, place) << ";\n";
+        }
+        indent(3); *_out << "break;\n";
+    }
+    indent(2); *_out << "default: break;\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return out;\n";
+    *_out << "}\n\n";
 }
 
 // Does concrete C-type `t` satisfy the contract `bound`? For `Copyable` (the conditional-implements
@@ -17706,6 +17784,8 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     if (preludeLeaf(bound_) == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
+        if (it->second.isVariant)                              // an enum → when every payload copies (KRD-4)
+            return const_cast<CEmitter*>(this)->variantCopyable(it->second);
         return it->second.copyable;                            // a resource → only if `implements Copyable`
     }
     // A graph is read back as `Shared<X>`: the root arrives behind a handle because a cycle cannot be
@@ -21778,7 +21858,10 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // structural there (a primitive is bitwise-copyable, as is any `value`) — so consult it rather
         // than let the two disagree. They did: `<T: Copyable<T>>` was unusable as a DECLARED bound while
         // `when [T: Copyable<T>]` worked, because the gate goes through `satisfiesBound` and this did not.
-        bool structural = !ci && satisfiesBound(rkey, contract);
+        // …and `Copyable` is a CAPABILITY for every kind, not only a primitive: a value copies bitwise and an
+        // enum when its payloads do (KRD-4), neither through a declared `copy` ctor, which is all the method-set
+        // test below can see. So it, too, is asked structurally — the gate and the bound give one answer.
+        bool structural = (!ci || preludeLeaf(tmplName) == "Copyable") && satisfiesBound(rkey, contract);
         if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
             // A failed `Sendable` bound says WHY (the field, the mutable pointee, the undeclared type):
             // it is the channel crossing's gate, and "does not satisfy" alone sent the author hunting.
@@ -22860,8 +22943,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 bool cpy = isCopyable(argCls);
                 bool doCopy;
                 if (handoff == 2) {
-                    if (!cpy) unsupported(("`" + argCls + "` has no `copy` method — add `implements "
-                                           "Copyable(bare: …)`, or use `give` to move it").c_str(), srcLine);
+                    if (!cpy) unsupported(notCopyableMessage(argCls, "use `give` to move it").c_str(), srcLine);
                     doCopy = cpy;
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
@@ -26165,8 +26247,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     else if (isMoveOnlyValue(rc) && isNamedValue(v.get())) {
         bool cpy = isCopyable(rc);
         bool doCopy;
-        if (handoff == 2) { if (!cpy) unsupported(("`" + rc + "` has no `copy` method — add `implements "
-                                                   "Copyable(bare: …)`, or use `give` to move it").c_str(), line);
+        if (handoff == 2) { if (!cpy) unsupported(notCopyableMessage(rc, "use `give` to move it").c_str(), line);
                             doCopy = cpy; }
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
@@ -30172,6 +30253,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
+    if (ci.isVariant && ci.destructible && variantCopyable(ci))
+        *_out << stat << ci.name << " " << ci.name << "__copy(" << ci.name << "* src);\n";
 #if KAMA_INHERITANCE
     if (ci.hasVtable) {
         // Virtual drop: read the runtime vtable off the object's vptr and call its `__dtor`. A base handle
@@ -30358,6 +30441,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
         indent(2); *_out << "default: break;\n";
         indent(1); *_out << "}\n";
         *_out << "}\n\n";
+        if (variantCopyable(ci)) emitVariantCopy(ci);   // KRD-4: beside its drop, wherever that is emitted
         _scopes.clear();
         _currentClass = nullptr;
         return;

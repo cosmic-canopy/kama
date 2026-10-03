@@ -343,6 +343,7 @@ enum_boundary_payload	enum_boundary_payload.kama:2
 enum_comptime_assert	enum_comptime_assert.kama:4
 enum_const_field	enum_const_field.kama:4
 enum_contract_method_not_public	enum_contract_method_not_public.kama:5
+enum_copy_payload	enum_copy_payload.kama:9
 enum_ctor_optional	enum_ctor_optional.kama:4
 enum_extends	enum_extends.kama:3
 enum_extern_and_expose	enum_extern_and_expose.kama:2

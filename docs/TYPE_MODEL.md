@@ -361,6 +361,12 @@ takes a marker.
 - **`Shared`/`Weak`** (shared ownership, `implements Copyable<This>(bare: copy)`) → a bare hand-off **retains**
   (refcount++); `copy` is the explicit retain; **`give` moves the handle** — the ref transfers and the
   source is consumed (how a `Shared` returns from a factory without a spurious retain/drop).
+- **`enum`** → a payload-free or bitwise one **copies** like a `value`. One whose payload owns something **moves**
+  on a bare hand-off, and **`copy` deep-copies it exactly when every payload it can hold copies** — the active <!-- test: enum_copy -->
+  variant's payloads, each its own way (a string's buffer, a collection's elements, a `Copyable` resource's
+  `copy` ctor, a `Shared` by one more reference). An enum declares nothing for it: it has no identity of its own,
+  so unlike a `resource` there is no copy for it to choose, and `Copyable` stays a `resource`'s declaration. A <!-- xfail: enum_copy_payload -->
+  recursive enum (`List(DynamicArray<Value> items)`) copies when the rest of it does.
 - **`contract`** → **no hand-off of its own.** A `contract` holds no state and isn't instantiable, so a
   contract-typed binding is always a concrete implementor (a `value`/`resource`) or a smart pointer over
   one — the hand-off follows *that* type's rule. In a generic `<T: SomeContract>`, a `T` hand-off is

@@ -1,0 +1,94 @@
+// An enum copies exactly when every payload it can hold does (peer KRD-4, @kama/redis): `copy` deep-copies the
+// active variant, structurally — a string's buffer, a collection's elements, a Copyable resource through its own
+// `copy` ctor, a `Shared` by one more reference — like a collection, whose copy is its elements'. An enum declares
+// nothing for it: it has no identity of its own, so there is no copy for it to choose. A recursive enum copies when
+// the rest of it does, and its collections are `Copyable` too (a by-value `foreach` over them works). Every `Doc` built
+// is dropped exactly once. Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray };
+
+static int32 built = 0;
+static int32 dropped = 0;
+static int32 copies = 0;
+
+type resource Doc implements Copyable<This>(bare: give) {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; built = built + 1; }
+    public ctor copy(ref Doc source) { this.id = source.id; built = built + 1; copies = copies + 1; }
+    public const fn int32 get() { return this.id; }
+    ~Doc() { dropped = dropped + 1; }
+}
+
+type enum Value { Nil, Num(int64 n), Text(string s), List(DynamicArray<Value> items), Held(Doc d), Ref(Shared<Doc> p) }
+
+type enum Bad implements Error { Oops; public const fn string message() { return "oops"; } }
+
+fn int64 total(const ref Value v) {
+    return match (v) {
+        case Nil: 0i64;
+        case Num(n: x): x;
+        case Text(s: t): cast<int64>(t.length());
+        case List(items: xs): {
+            int64 sum = 0i64;
+            isize i = 0;
+            while (i < xs.length()) { sum = sum + total(v: xs[i]); i = i + 1; }
+            := sum;
+        }
+        case Held(d: d): cast<int64>(d.get());
+        case Ref(p: p): cast<int64>(p.get());
+    };
+}
+
+fn int32 run() {
+    // The reporter's case: an Optional of a string, copied and both kept.
+    Optional<string> a = Optional::Some(value: "a".concat(other: "b"));
+    Optional<string> b = copy a;
+    string fromA = match (a) { case Some(value: s): copy s; case None: ""; };
+    string fromB = match (b) { case Some(value: s): copy s; case None: ""; };
+    if (fromA != "ab" || fromB != "ab") { return 1; }
+
+    // A recursive enum, deep: the copy owns its own list and strings.
+    DynamicArray<Value> items = DynamicArray.empty();
+    items.add(item: Value::Num(n: 2i64));
+    items.add(item: Value::Text(s: "xyz".concat(other: "")));
+    Value tree = Value::List(items: give items);
+    Value twin = copy tree;
+    if (total(v: tree) != 5i64 || total(v: twin) != 5i64) { return 2; }
+    sinkValue(v: give tree);                 // the copy outlives the original
+    if (total(v: twin) != 5i64) { return 3; }
+
+    // A Copyable resource payload copies through its own `copy` ctor.
+    Value held = Value::Held(d: Doc.make(id: 7));
+    Value held2 = copy held;
+    if (copies != 1 || total(v: held2) != 7i64) { return 4; }
+
+    // A `Shared` payload: one more reference, the same Doc.
+    Shared<Doc> shared = new Doc.make(id: 9);
+    Value r1 = Value::Ref(p: give shared);
+    Value r2 = copy r1;
+    if (total(v: r1) + total(v: r2) != 18i64) { return 5; }
+
+    // A collection of enums copies element by element, and iterates by value.
+    DynamicArray<Optional<string>> opts = DynamicArray.empty();
+    opts.add(item: Optional::Some(value: "p".concat(other: "q")));
+    opts.add(item: Optional::None);
+    DynamicArray<Optional<string>> optsCopy = copy opts;
+    int32 somes = 0;
+    foreach (Optional<string> o in optsCopy) { int32 one = match (o) { case Some(value: s): 1; case None: 0; }; somes = somes + one; }
+    if (somes != 1 || opts.length() != 2) { return 6; }
+
+    // Result, when both sides copy.
+    Result<string, Bad> ok = Result::Ok(value: "r".concat(other: "s"));
+    Result<string, Bad> ok2 = copy ok;
+    string rs = match (ok2) { case Ok(value: s): copy s; case Err(error: e): ""; };
+    if (rs != "rs") { return 7; }
+    return 0;
+}
+
+fn void sinkValue(Value v) { }
+
+fn int32 main() {
+    int32 r = run();
+    if (r != 0) { return r; }
+    if (built != dropped) { return 8; }   // the copies and the Shared's one Doc, each dropped once
+    return 0;
+}

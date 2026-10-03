@@ -1,0 +1,1 @@
+cannot be copied: its `Open` variant holds a `Res`, which does not copy

@@ -3473,6 +3473,11 @@ private:
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     int  innermostLoopIndex() const;                           // the enclosing loop body's scope, or -1 (none in this function)
     bool assignTargetLive(const std::string& key) const;      // the assignment's target still holds a value to drop
+    bool variantCopyable(const ClassInfo& c);                  // KRD-4: an enum copies when every payload does
+    bool payloadCopyable(const std::string& cType_);           //   …one payload's type
+    void emitVariantCopy(ClassInfo& ci);                       //   its generated `__copy`
+    std::string notCopyableMessage(const std::string& cls, const char* otherwise);   // why `copy` of `cls` is refused
+    std::set<std::string> _variantCopyVisiting;                //   the enums being judged (a recursive mention copies)
     void checkRearmed(const Scope& loop, int line, const char* where);   // KRD-1: back edge — given locals are live again
     void settleLoopExit(Scope& loop);                          // KRD-1: a given local's state after its loop
     const ASTNode* _writeTarget = nullptr;                     // the bare local an `=` is storing to — a write, not a read
