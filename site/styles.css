@@ -63,13 +63,17 @@ code, pre { font-family: var(--font-mono); }
 
 /* ------------------------------------------------------------------ nav + footer */
 .topnav {
-  position: relative; z-index: 3; display: flex; align-items: center; justify-content: space-between;
+  /* z-index 4, above `.hero-copy` (3): on the home page the nav floats over the hero, and the hero copy's own
+     padding starts at the top of the page — at an equal z-index the later element won, and its transparent
+     padding swallowed every tap and click on the nav (measured: no link reachable on a phone, and `Get
+     started`/`Tour` not even on a desktop). */
+  position: relative; z-index: 4; display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; padding: 1.1rem clamp(1.25rem, 4vw, 3rem); flex-wrap: wrap;
 }
 .brand { display: flex; align-items: center; gap: .7rem; color: var(--fg); }
 .brand span { font-family: var(--font-display); font-weight: 800; font-size: 1.2rem; letter-spacing: .04em; }
 .topnav-links { display: flex; gap: 1.4rem; font-size: .92rem; letter-spacing: .02em; }
-.topnav-links a { color: var(--fg-soft); }
+.topnav-links a { color: var(--fg-soft); white-space: nowrap; }   /* `Get started` is one link, so one line */
 .topnav-links a:hover, .topnav-links a[aria-current] { color: var(--ember-hi); }
 body:not(.home) .topnav { border-bottom: 1px solid var(--line-2); }
 
@@ -90,6 +94,27 @@ body:not(.home) .topnav { border-bottom: 1px solid var(--line-2); }
   display: flex; flex-direction: column;
 }
 .home .topnav { position: absolute; top: 0; left: 0; right: 0; }
+
+/* A phone: the links take a row of their own under the brand, spread across it, and scroll sideways only on a
+   screen too narrow for all five (a 320px phone). On the home page the nav stops floating and takes its own
+   space above the hero — the hero gradient starts at the page's own near-black, so it reads the same — which
+   keeps the hero copy clear of a nav of any height (a larger text size, another link) by construction. */
+@media (max-width: 640px) {
+  .topnav { row-gap: .55rem; padding-bottom: .9rem; }
+  .topnav-links {
+    width: 100%; justify-content: space-between; gap: clamp(.7rem, 3.2vw, 1.4rem);
+    overflow-x: auto; scrollbar-width: none; padding: .35rem 0;
+  }
+  .topnav-links::-webkit-scrollbar { display: none; }
+  .home .topnav { position: relative; }
+  .home .hero-copy { padding-top: 1.6rem; }
+  /* The kanji line fits one line on a common phone; where it cannot, its two lines are balanced, not one word. */
+  .eyebrow { letter-spacing: .14em; line-height: 1.45; text-wrap: balance; }
+}
+/* ...and a 320px phone still fits all five without scrolling, aligned with the page's own margin. */
+@media (max-width: 359px) {
+  .topnav-links { font-size: .84rem; gap: .55rem; }
+}
 
 .sun {
   position: absolute; right: 7%; bottom: 16vh; width: 46vmin; height: 46vmin; border-radius: 50%;
