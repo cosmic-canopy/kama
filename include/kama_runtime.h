@@ -217,6 +217,8 @@ static inline void* kama_alloc(size_t n, size_t align) { return kama__impl_alloc
 static inline void  kama_free(void* p, size_t n, size_t align) { kama__impl_free(p, n, align); }
 #endif
 static inline void  kama_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
+// The overlapping twin: a container shifting its own elements (`insertAt`, `remove`) moves a range onto itself.
+static inline void  kama_move(void* d, const void* s, size_t n) { extern void* memmove(void*, const void*, size_t); memmove(d, s, n); }
 static inline void* kama_alloc_zeroed(size_t n, size_t align) {
     extern void* memset(void*, int, size_t);
     void* p = kama_alloc(n, align); if (p) memset(p, 0, n); return p;
@@ -1825,6 +1827,31 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
+}
+
+// `copyElements(ptr: d, from: s, count: n)` — the floor's range copy (KRD-3). The compiler lowers it per element type:
+// `kama__copy_elements` (one memcpy) when the element copies bit for bit, and otherwise a loop of the element's own
+// copy behind `kama__copy_elements_check`. Both preconditions hold in EVERY build, each one comparison against an O(n)
+// copy: the count is not negative, and the ranges do not overlap — the destination is storage nobody owns, so an
+// overlap would overwrite source elements that are still live, and no order of copying makes that right for an
+// element with a destructor. Compared as integers: relational operators on pointers into different objects are
+// undefined in C, and "different objects" is exactly the case being asked about.
+static inline void kama__copy_elements_check(const void* d, const void* s, ptrdiff_t n, size_t size) {
+    static const char neg[] = "copyElements: the count is negative";
+    static const char ovl[] = "copyElements: the source and destination ranges overlap";
+    if (n < 0) kama_panic(kama_string_lit(neg, sizeof neg - 1));
+    const uintptr_t dl = (uintptr_t)d, sl = (uintptr_t)s, bytes = (uintptr_t)n * (uintptr_t)size;
+    if (n > 0 && dl < sl + bytes && sl < dl + bytes) kama_panic(kama_string_lit(ovl, sizeof ovl - 1));
+}
+// `drop(ptr: p, count: n)`'s count, checked in every build like `copyElements`'s.
+static inline ptrdiff_t kama__drop_count(ptrdiff_t n) {
+    static const char neg[] = "drop: the count is negative";
+    if (n < 0) kama_panic(kama_string_lit(neg, sizeof neg - 1));
+    return n;
+}
+static inline void kama__copy_elements(void* d, const void* s, ptrdiff_t n, size_t size) {
+    kama__copy_elements_check(d, s, n, size);
+    if (n > 0) kama_copy(d, s, (size_t)n * size);   // n == 0 may come with a null pointer, which memcpy may not
 }
 
 #if defined(KAMA_ALLOC_CHECK)

@@ -137,6 +137,23 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>], 
 
     // Reverse the borrowed range in place. `sort` + `reverse` is how a descending order is spelled, so
     // the sort API needs no second comparator just to flip a direction.
+    // Overwrite every element with a copy of the same-position element of `source`, which must be exactly as
+    // long — a mismatch traps, since silently copying the shorter would hide the bug. One memcpy when the element
+    // copies bit for bit; an element that owns has its old value dropped and a copy put in its place. A `source`
+    // that IS this range changes nothing; one that partly overlaps it traps, before anything is dropped —
+    // reading elements this call had already replaced would copy the copies.
+    public unsafe fn void copyFrom(ConstView<T> source) when [T: Copyable<T>] {
+        if (source.length() != this.len) { panic(msg: "View.copyFrom: the source is not as long as the view"); }
+        if (this.len == 0) { return; }
+        usize d0 = cast<usize>(this.data);
+        usize s0 = cast<usize>(source.dataPtr());
+        usize bytes = cast<usize>(this.len) * sizeof(T);
+        if (d0 == s0) { return; }
+        if (d0 < s0 + bytes && s0 < d0 + bytes) { panic(msg: "View.copyFrom: the source overlaps the view"); }
+        drop(ptr: this.data, count: this.len);
+        copyElements(ptr: this.data, from: source.dataPtr(), count: this.len);
+    }
+
     public fn void reverse() {
         isize i = 0;
         isize j = this.len - 1;

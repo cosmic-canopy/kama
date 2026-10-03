@@ -9131,6 +9131,10 @@
     "named": false
   },
   {
+    "type": "copyElements",
+    "named": false
+  },
+  {
     "type": "ctor",
     "named": false
   },

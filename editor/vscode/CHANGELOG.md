@@ -13,6 +13,13 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.4] — 2026-10-03
+
+### Added
+
+- `copyElements` is highlighted as a built-in, like `drop`. It is the new floor intrinsic that places copies
+  of a range of elements into raw storage (kama 0.9.528).
+
 ## [0.9.3] — 2026-10-02
 
 0.9.2 was never published; its change is part of this release.

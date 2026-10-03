@@ -39,7 +39,7 @@
   "new" "try" "cast" "bitcast" "truncate" "sizeof" "alignof"
 ] @keyword
 
-(intrinsic_name) @function.builtin   ; addr drop panic assert debugAssert — reserved call-site intrinsics
+(intrinsic_name) @function.builtin   ; addr drop copyElements panic assert debugAssert — reserved call-site intrinsics
 
 (modifier) @keyword
 (function_modifier) @keyword

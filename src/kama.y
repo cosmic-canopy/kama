@@ -391,14 +391,16 @@ struct kamayystype {
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
-/* The intrinsics the compiler lowers at the CALL SITE — `addr(of:)`, `drop(ptr:)`, `panic(msg:)`,
-   `assert(cond:, msg:)`, `debugAssert(cond:, msg:)`. Reserved words, like `sizeof`/`bitcast`: they were
-   floor NAMES, so a local or a parameter could take one and a `fn assert` could be declared beside the
-   intrinsic and silently never called. Each is legal only in call position (`intrinsic_callee`).
-   `debugAssert` carries its spelling as an alias for the same reason FILE_KW does: reservedWordNote
-   matches the token's name against the lexer table, and DEBUG_ASSERT folds to `debug_assert`. */
+/* The intrinsics the compiler lowers at the CALL SITE — `addr(of:)`, `drop(ptr:)`, `copyElements(ptr:, from:,
+   count:)`, `panic(msg:)`, `assert(cond:, msg:)`, `debugAssert(cond:, msg:)`. Reserved words, like
+   `sizeof`/`bitcast`: they were floor NAMES, so a local or a parameter could take one and a `fn assert`
+   could be declared beside the intrinsic and silently never called. Each is legal only in call position
+   (`intrinsic_callee`). `debugAssert` and `copyElements` carry their spelling as an alias for the same reason
+   FILE_KW does: reservedWordNote matches the token's name against the lexer table, and DEBUG_ASSERT folds
+   to `debug_assert`. */
 %token <string> ADDR DROP PANIC ASSERT
 %token <string> DEBUG_ASSERT "debugAssert"
+%token <string> COPY_ELEMENTS "copyElements"
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN SLOT STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -762,7 +764,7 @@ qualified_identifier
   | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
   ;
 intrinsic_name
-  : ADDR { $$ = $1; } | DROP { $$ = $1; } | PANIC { $$ = $1; } | ASSERT { $$ = $1; } | DEBUG_ASSERT { $$ = $1; }
+  : ADDR { $$ = $1; } | DROP { $$ = $1; } | COPY_ELEMENTS { $$ = $1; } | PANIC { $$ = $1; } | ASSERT { $$ = $1; } | DEBUG_ASSERT { $$ = $1; }
   ;
 intrinsic_callee
   : intrinsic_name  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC($$, @1); }

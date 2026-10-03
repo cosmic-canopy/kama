@@ -1,0 +1,127 @@
+// The range half of the manual-memory triad (peer KRD-3, @kama/redis): `drop(ptr: p, count: n)` and
+// `copyElements(ptr: d, from: s, count: n)`, and the collection surface built on them — `DynamicArray.addAll(items:)`,
+// `capacity()`, `View.copyFrom(source:)`, and every collection's `copy`, `clear` and drop. The compiler decides per
+// element type: a `uint8` run is one memcpy and no drop loop, a `string` run its own copy and destructor per element,
+// a `Copyable` resource its `copy` ctor, a `Shared` one more reference, an enum its payloads. Every `Doc` built is
+// dropped exactly once. Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray, std::collections::FixedArray, std::collections::Deque };
+
+static int32 built = 0;
+static int32 dropped = 0;
+
+type resource Doc implements Copyable<This>(bare: give) {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; built = built + 1; }
+    public ctor copy(ref Doc source) { this.id = source.id; built = built + 1; }
+    public const fn int32 get() { return this.id; }
+    ~Doc() { dropped = dropped + 1; }
+}
+
+// The floor intrinsics themselves, over raw blocks — the way a collection author meets them.
+unsafe fn int32 raw() {
+    GlobalAllocator a = GlobalAllocator.make();
+    UnsafePtr<uint8> b1 = cast<UnsafePtr<uint8>>(unwrapPtr(o: a.allocate(bytes: 16, align: 1)));
+    UnsafePtr<uint8> b2 = cast<UnsafePtr<uint8>>(unwrapPtr(o: a.allocate(bytes: 16, align: 1)));
+    isize i = 0;
+    while (i < 16) { b1[i] = truncate<uint8>(i * 3); i = i + 1; }
+    copyElements(ptr: b2, from: b1, count: 16);
+    drop(ptr: b2, count: 16);                       // nothing to run for `uint8`
+    if (b2[15] != 45) { return 1; }
+    copyElements(ptr: b2, from: b1, count: 0);          // an empty run is fine
+    a.deallocate(pointer: cast<UnsafePtr>(b1), bytes: 16, align: 1);
+    a.deallocate(pointer: cast<UnsafePtr>(b2), bytes: 16, align: 1);
+
+    UnsafePtr<Doc> d1 = cast<UnsafePtr<Doc>>(unwrapPtr(o: a.allocate(bytes: sizeof(Doc) * 2, align: alignof(Doc))));
+    UnsafePtr<Doc> d2 = cast<UnsafePtr<Doc>>(unwrapPtr(o: a.allocate(bytes: sizeof(Doc) * 2, align: alignof(Doc))));
+    d1[0] = Doc.make(id: 5);
+    d1[1] = Doc.make(id: 6);
+    copyElements(ptr: d2, from: d1, count: 2);          // two `copy` ctor calls
+    drop(ptr: d1, count: 2);                        // two destructor calls
+    if (d2[1].get() != 6) { return 2; }
+    drop(ptr: d2, count: 2);
+    a.deallocate(pointer: cast<UnsafePtr>(d1), bytes: sizeof(Doc) * 2, align: alignof(Doc));
+    a.deallocate(pointer: cast<UnsafePtr>(d2), bytes: sizeof(Doc) * 2, align: alignof(Doc));
+    return 0;
+}
+
+fn int32 collections() {
+    FixedArray<uint8> src = FixedArray.make(size: 1000);
+    for (isize i = 0; i < 1000; i++) { src[i] = truncate<uint8>(i); }
+
+    // addAll: one growth straight to what it needs, then doubling, like `add`.
+    DynamicArray<uint8> a = DynamicArray.empty();
+    a.addAll(items: src.view().slice(from: 10, count: 5));
+    if (a.length() != 5 || a.capacity() != 5 || a[0] != 10) { return 10; }
+    a.addAll(items: src.view());
+    if (a.length() != 1005 || a.capacity() != 1005 || a[1004] != 231) { return 11; }
+    a.add(item: 7);
+    if (a.capacity() != 2010) { return 12; }
+    a.reserve(n: 4000);
+    if (a.capacity() != 4000) { return 13; }
+
+    // Owning elements: copies, and the originals still live.
+    DynamicArray<string> s = DynamicArray.empty();
+    s.add(item: "p".concat(other: "q"));
+    s.add(item: "r".concat(other: "s"));
+    DynamicArray<string> t = copy s;
+    t.addAll(items: s.view());
+    if (t.length() != 4 || t[3] != "rs" || s[0] != "pq") { return 14; }
+    t.insertAt(index: 1, item: "x".concat(other: ""));
+    string gone = t.remove(index: 0);
+    if (gone != "pq" || t[0] != "x" || t.length() != 4) { return 15; }
+    t.clear();
+    if (t.length() != 0) { return 16; }
+
+    // View.copyFrom: same length, every element replaced; onto itself is a no-op.
+    FixedArray<uint8> dst = FixedArray.make(size: 1000);
+    dst.viewMut().copyFrom(source: src.view());
+    if (dst[999] != 231) { return 17; }
+    DynamicArray<string> u = DynamicArray.empty();
+    u.add(item: "old".concat(other: "1"));
+    u.add(item: "old".concat(other: "2"));
+    u.viewMut().copyFrom(source: s.view());
+    if (u[0] != "pq" || u[1] != "rs") { return 18; }
+
+    // Resources, `Shared` and enums through addAll and the copy ctors.
+    DynamicArray<Doc> docs = DynamicArray.empty();
+    docs.add(item: Doc.make(id: 1));
+    docs.add(item: Doc.make(id: 2));
+    DynamicArray<Doc> more = copy docs;
+    more.addAll(items: docs.view());
+    if (more.length() != 4 || more[3].get() != 2) { return 19; }
+    DynamicArray<Shared<Doc>> refs = DynamicArray.empty();
+    refs.add(item: new Doc.make(id: 9));
+    DynamicArray<Shared<Doc>> refs2 = copy refs;
+    refs2.addAll(items: refs.view());
+    if (refs2.length() != 2 || refs2[1].get() != 9) { return 20; }
+    DynamicArray<Optional<string>> opts = DynamicArray.empty();
+    opts.add(item: Optional::Some(value: "o".concat(other: "k")));
+    opts.add(item: Optional::None);
+    DynamicArray<Optional<string>> opts2 = copy opts;
+    opts2.addAll(items: opts.view());
+    if (opts2.length() != 4) { return 21; }
+    string first = match (opts2[2]) { case Some(value: v): copy v; case None: ""; };
+    if (first != "ok") { return 22; }
+
+    // FixedArray's copy, and a Deque whose ring wraps (two runs).
+    FixedArray<string> fs = FixedArray.filled(size: 3, value: "f".concat(other: "s"));
+    FixedArray<string> fs2 = copy fs;
+    if (fs2[2] != "fs") { return 23; }
+    Deque<string> q = Deque.empty();
+    for (int32 i = 0; i < 6; i++) { q.pushBack(item: "v${i}"); }
+    for (int32 i = 0; i < 3; i++) { Optional<string> front = q.popFront(); }
+    for (int32 i = 6; i < 9; i++) { q.pushBack(item: "v${i}"); }
+    Deque<string> q2 = copy q;
+    if (q2.length() != 6 || q2[0] != "v3" || q2[5] != "v8") { return 24; }
+    q.clear();
+    return 0;
+}
+
+fn int32 main() {
+    int32 r = raw();
+    if (r != 0) { return r; }
+    r = collections();
+    if (r != 0) { return r; }
+    if (built != dropped) { return 30; }   // every copy and every original, dropped exactly once
+    return 0;
+}

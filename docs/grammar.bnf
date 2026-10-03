@@ -215,7 +215,7 @@ qualified_identifier
   | qualifier basic_identifier
   ;
 intrinsic_name
-  : ADDR  | DROP  | PANIC  | ASSERT  | DEBUG_ASSERT
+  : ADDR  | DROP  | COPY_ELEMENTS  | PANIC  | ASSERT  | DEBUG_ASSERT
   ;
 intrinsic_callee
   : intrinsic_name

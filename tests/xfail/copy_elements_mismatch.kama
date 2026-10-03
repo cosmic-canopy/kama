@@ -1,0 +1,6 @@
+// `copyElements(from:)` must point at the element `ptr:` does: a `uint8` destination is not filled from `int32`s,
+// which would reinterpret four bytes as one each.
+unsafe fn void fill(UnsafePtr<uint8> d, UnsafePtr<int32> s) {
+    copyElements(ptr: d, from: s, count: 4);
+}
+fn int32 main() { return 0; }

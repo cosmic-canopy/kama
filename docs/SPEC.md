@@ -333,6 +333,15 @@ or **discard it to drop** (`xs.remove(index: i);` drops cleanly). This is the on
 across every container — a single method that hands ownership back (matching `Deque.popFront`/`popBack` and
 Rust's `Vec::remove`/`pop`), never a silent drop.
 
+**Bulk copies take a view.** `DynamicArray.addAll(items: ConstView<T>)` appends a copy of every element in one <!-- test: range_triad -->
+growth, and `View.copyFrom(source: ConstView<T>)` replaces every element of a window with a copy of the
+same-position one — the source must be exactly as long, and a mismatch traps (`copy_from_slice`'s rule). Both <!-- test: view_copy_from_length -->
+exist only for a `Copyable` element, and both are ONE `memcpy` when the element's copy is its bytes, in any
+build — they lower to the floor's [`copyElements`](#writing-a-collection-in-kama--sizeof-panicassert-place-returning-methods-),
+as every collection's `copy`, `clear` and drop lower to the range form of `drop`. `capacity()` answers how
+many elements fit before the next append moves the buffer: `reserve(n:)` raises it to exactly `n`, and
+`add`/`addAll` raise it geometrically (double, or straight to what a large `addAll` needs).
+
 ### Slices / spans — `View<T>` and `ConstView<T>` ✅
 
 A **`View<T>`** is a non-owning window over a contiguous run of `T` — a slice / span (zero copy, no
@@ -3273,6 +3282,23 @@ be written **in the language** rather than baked into the compiler. Three builti
   its destructor explicitly would run it *again* at scope exit. That is why `drop` takes a pointer and not a
   place: the double drop is **unspellable** rather than diagnosed. The old `drop(value: place)` form allowed <!-- xfail: drop_value_form -->
   it, and shipped that double free in six stdlib sites until `0.9.290`.
+- **The range forms — `drop(ptr: p, count: n)` and `copyElements(ptr: d, from: s, count: n)`.** The triad, a run <!-- test: range_triad -->
+  of elements at a time: `drop` destroys the `n` pointees from `p` on, and `copyElements` places copies of
+  `s[0..n)` into the storage at `d`, which nobody owns — whatever was there is overwritten, not dropped. The
+  compiler decides per element type, exactly as it does for `drop(ptr:)`: an element with no destructor is
+  dropped by doing nothing at all, an element whose copy is its bytes (a number, a `value`, an enum of those)
+  is copied by ONE `memcpy`, and anything else takes its own destructor or its own `copy` per element (a
+  `string`'s buffer, a `Copyable` resource's `copy` ctor, a `Shared` by one more reference). That holds in a
+  debug build as much as a release one: 256 MiB of `uint8` is one ~22 ms `memcpy` in both, where an element
+  loop is 1.3–2.2 s at `-O0`. This is what the collections are built on — `DynamicArray.addAll(items:)`,
+  `View.copyFrom(source:)`, every collection's `copy`, `clear` and drop — and why they need no knowledge of
+  their element type the language would otherwise have to expose; a type query a generic could branch on was
+  declined, as the first step to the `static if` kama does not have. A raw pointer has no length, so the count
+  is written here and only here; the safe surface above takes a view, which carries one.
+  `from:` may be either pointer of the pair; `ptr:` must be an `UnsafePtr<T>` of the same `T`, and `count:` an <!-- xfail: copy_elements_mismatch, copy_elements_not_copyable -->
+  `isize`. Each element must copy as `copy x` would (`Owned` cannot, a non-`Copyable` resource cannot). A
+  negative count, or ranges that overlap, trap in every build, before anything is written: an overlap would <!-- test: copy_elements_overlap -->
+  overwrite source elements that are still live.
 - **`sizeof(ptr: p)` / `alignof(ptr: p)`** — the size and alignment of the object an `UnsafePtr<T>` points at: <!-- test: alloc_size_truth -->
   the pointer forms of `sizeof`/`alignof`, labelled like `drop(ptr:)`. They are what the triad's last leg must
   be given: `deallocate(pointer, bytes, align)` promises the layout the block was **allocated** with, and a
@@ -6480,7 +6506,7 @@ however, **reserved** — see below.
 
 ## kama's keywords
 
-**The complete list — 89 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
+**The complete list — 90 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
 walking into it. The first external project found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
@@ -6488,8 +6514,8 @@ drift.
 
 ```
 abstract addr alignof as asm assert base bitcast bool borrow break case cast cchar char clong
-comptime const continue copy ctor culong debugAssert default do drop else enum export expose extends
-extern false file final float32 float64 fn fnptr for foreach friend give hardware if immutable
+comptime const continue copy copyElements ctor culong debugAssert default do drop else enum export expose
+extends extern false file final float32 float64 fn fnptr for foreach friend give hardware if immutable
 implements import in int16 int32 int64 int8 isize match new null operator out override panic
 parallel_for parallel_spawn private protected public ref return scope sizeof slot spawn static
 string this true truncate try type uint16 uint32 uint64 uint8 unsafe usize virtual void when while

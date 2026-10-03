@@ -18,7 +18,7 @@ name; `core`'s surface completes inside the import list (`import { core::| }`).
 Everything here is declared in [`prelude/global.kama`](../prelude/global.kama) and
 [`prelude/builtin.kama`](../prelude/builtin.kama) over [`kama_runtime.h`](../include/kama_runtime.h), except the
 handful the compiler lowers itself because they need the call site — `panic`, `assert`, `debugAssert` (the
-source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop`. Those eight are **reserved words**
+source text and `file:line`), `sizeof`, `alignof`, `bitcast`, `addr`, `drop`, `copyElements`. Those nine are **reserved words**
 (SPEC *kama's keywords*): each is legal only in call position, so no local, parameter, field or function can take
 the name, and each is written bare. The rule for which words are reserved is
 the greppability one in SPEC. The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
@@ -145,6 +145,6 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 - **Text rendering (`std::fmt` core):** the `Formattable` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
-  `alignof(T)`, `bitcast<T>(x)`, `drop(ptr:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc
-  adapter). The smart-pointer triad (`Owned`/`Shared`/`Weak`, in module `std::memory` but always in scope)
+  `alignof(T)`, `bitcast<T>(x)`, `drop(ptr:)` and its range form `drop(ptr:, count:)`, `copyElements(ptr:, from:,
+  count:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc adapter). The smart-pointer triad (`Owned`/`Shared`/`Weak`, in module `std::memory` but always in scope)
   is a built-in module, not bare floor.

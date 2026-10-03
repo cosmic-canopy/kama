@@ -1,6 +1,13 @@
 import { std::ptr::relocate, View, ConstView };
 export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
 
+// Relocation is a bitwise MOVE for every element type — the old bytes are abandoned, never dropped — so growing
+// the buffer and shifting its tail are one memcpy/memmove whatever `T` is. (A COPY is a per-type question, and
+// that one is `copyElements`'s.)
+extern "<string.h>";
+extern fn UnsafePtr memcpy(UnsafePtr d, UnsafeConstPtr s, usize n);
+extern fn UnsafePtr memmove(UnsafePtr d, UnsafeConstPtr s, usize n);
+
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
@@ -77,32 +84,70 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // the live prefix, and release the old block through the same allocator. Replaces the old in-place
     // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
     unsafe fn void growTo(isize nc) {
+        isize oc = this.cap;
+        UnsafePtr<T> od = this.moveToBlock(nc: nc);
+        this.releaseBlock(block: od, cap: oc);
+    }
+
+    // The two halves of `growTo`, apart because `addAll` reads its source between them: the source may be a
+    // view of this very buffer, so the old block must outlive the read. `moveToBlock` adopts a fresh block of
+    // `nc` elements holding the live prefix and hands back the old one, which `releaseBlock` returns.
+    unsafe fn UnsafePtr<T> moveToBlock(isize nc) {
         UnsafePtr<T> nd = null;
         nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
         UnsafePtr<T> od = this.data;
-        isize i = 0;
-        while (i < this.len) { nd[i] = od[i]; i = i + 1; }   // relocate the live prefix (raw move)
-        if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
+        if (this.len > 0) {   // relocate the live prefix: a raw move, so one memcpy for any `T`
+            UnsafePtr moved = memcpy(d: cast<UnsafePtr>(nd), s: cast<UnsafeConstPtr>(od), n: cast<usize>(this.len) * sizeof(T));
         }
         this.data = nd; this.cap = nc;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
         // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
+        return od;
+    }
+    unsafe fn void releaseBlock(UnsafePtr<T> block, isize cap) {
+        if (cap > 0) {
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(block), bytes: cast<usize>(cap) * sizeof(T), align: alignof(T));
+        }
+    }
+
+    // The capacity growth that keeps appends amortized O(1): double, or straight to `need` when doubling falls
+    // short (a large `addAll`). `add` is the `need == len + 1` case.
+    const fn isize grownCapacity(isize need) {
+        isize nc = this.cap == 0 ? 4 : this.cap * 2;
+        return nc < need ? need : nc;
     }
 
     public unsafe fn void add(T item) {
-        if (this.len == this.cap) {
-            isize nc = this.cap == 0 ? 4 : this.cap * 2;
-            this.growTo(nc: nc);
-        }
+        if (this.len == this.cap) { this.growTo(nc: this.grownCapacity(need: this.len + 1)); }
         this.data[this.len] = give item;   // relocate the element into the fresh slot (raw move)
         this.len = this.len + 1;
         this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
     }
 
+    // Append a copy of every element of `items`, in order: at most one growth (geometric, like `add`), then one
+    // memcpy when the element copies bit for bit (`uint8`, a `value`) or each element's own `copy` otherwise. The
+    // bulk form of `add(item: copy …)` — what a reader assembling a payload from a receive buffer wants. The old
+    // buffer is released only AFTER the read: `xs.addAll(items: xs.view())` is refused at compile time, but two
+    // `Shared` handles to one array alias where no static check can see it, and the read must still be sound.
+    public unsafe fn void addAll(ConstView<T> items) when [T: Copyable<T>] {
+        isize n = items.length();
+        if (n == 0) { return; }
+        isize oc = this.cap;
+        UnsafePtr<T> od = this.data;
+        if (this.len + n > this.cap) { od = this.moveToBlock(nc: this.grownCapacity(need: this.len + n)); }
+        copyElements(ptr: addr(of: this.data[this.len]), from: items.dataPtr(), count: n);
+        if (od != this.data) { this.releaseBlock(block: od, cap: oc); }
+        this.len = this.len + n;
+        this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
+    }
+
     public const fn isize length() { return this.len; }
+
+    // How many elements fit before the next append moves the buffer. `reserve(n:)` raises it to exactly `n`;
+    // `add`/`addAll` raise it geometrically.
+    public const fn isize capacity() { return this.cap; }
 
     // The DynamicArray->pointer bridge (see FixedArray.dataPtr for the split): `dataPtr()` is the
     // read-only half a const receiver may call, `dataPtrMut()` the writable one. Obtaining either is
@@ -132,18 +177,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`
     // is a plain append. The order-preserving counterpart to `remove` — for an ordered insert (e.g. a
-    // sorted array or a B-tree node keeping its keys sorted). The tail shift goes through a LOCAL pointer
-    // alias (`d[i] = d[i-1]`, a raw relocation) exactly like `remove`; the incoming element is the tracked
-    // `give` hand-off into the opened slot (the field-ptr target, like `add`).
+    // sorted array or a B-tree node keeping its keys sorted). The tail shift is a raw relocation (one memmove,
+    // exactly like `remove`'s); the incoming element is the tracked `give` hand-off into the opened slot (the
+    // field-ptr target, like `add`).
     public unsafe fn void insertAt(isize index, T item) {
         if (index < 0 || index > this.len) { panic(msg: "DynamicArray.insertAt index out of bounds"); }
-        if (this.len == this.cap) {
-            isize nc = this.cap == 0 ? 4 : this.cap * 2;
-            this.growTo(nc: nc);
+        if (this.len == this.cap) { this.growTo(nc: this.grownCapacity(need: this.len + 1)); }
+        if (index < this.len) {   // open slot `index`: a raw tail shift, one memmove for any `T`
+            UnsafePtr moved = memmove(d: cast<UnsafePtr>(addr(of: this.data[index + 1])), s: cast<UnsafeConstPtr>(addr(of: this.data[index])),
+                                      n: cast<usize>(this.len - index) * sizeof(T));
         }
-        UnsafePtr<T> d = this.data;
-        isize i = this.len;
-        while (i > index) { d[i] = d[i - 1]; i = i - 1; }   // open slot `index` (raw tail shift)
         this.data[index] = give item;                      // tracked hand-off into the slot
         this.len = this.len + 1;
         this.mods = this.mods + 1;                                     // structural change — invalidates iterators
@@ -168,14 +211,19 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         return DynamicArrayIterMut::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
-    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied). The copy
-    // draws from the SAME allocator as the source (the handle is copied), so a bump-backed list's copy
-    // lands in the same arena.
+    // Present ONLY for a Copyable element — a deep copy (a buffer of exactly `source.length()`, the elements
+    // copied in by `copyElements`: one memcpy for a bitwise element). The copy draws from the SAME allocator as the
+    // source (the handle is copied), so a bump-backed list's copy lands in the same arena.
     public ctor copy(ref DynamicArray<T, A> source) {
         this.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
-        isize i = 0;
-        while (i < source.len) { this.add(item: copy source[i]); i = i + 1; }
+        this.copyAllFrom(source: source);
         return this;
+    }
+    unsafe fn void copyAllFrom(ref DynamicArray<T, A> source) when [T: Copyable<T>] {
+        if (source.len == 0) { return; }
+        this.growTo(nc: source.len);
+        copyElements(ptr: this.data, from: source.data, count: source.len);
+        this.len = source.len;
     }
 
     // Grow the buffer so at least `n` elements fit without a later reallocation (a no-op if already big
@@ -191,12 +239,12 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     public unsafe fn T remove(isize index) {
         if (index < 0 || index >= this.len) { panic(msg: "DynamicArray.remove index out of bounds"); }
         T x = this.takeAt(idx: index);                 // move the element out (the slot is now stale)
-        isize i = index;
-        // Relocate the tail down one slot through a LOCAL pointer alias: `d[i] = d[i+1]` is a raw store
-        // (a bitwise move that leaves no owner holding a moved-from field), whereas `this.data[i] = …`
-        // routes an owning element through the move-tracker and is rejected.
-        UnsafePtr<T> d = this.data;
-        while (i + 1 < this.len) { d[i] = d[i + 1]; i = i + 1; }
+        // Relocate the tail down one slot: a raw move (no owner is left holding a moved-from value), so one
+        // memmove for any `T`.
+        if (index + 1 < this.len) {
+            UnsafePtr moved = memmove(d: cast<UnsafePtr>(addr(of: this.data[index])), s: cast<UnsafeConstPtr>(addr(of: this.data[index + 1])),
+                                      n: cast<usize>(this.len - index - 1) * sizeof(T));
+        }
         this.len = this.len - 1;
         this.mods = this.mods + 1;                      // structural change — invalidates any live iterator
         return give x;
@@ -239,8 +287,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // Drop every element and reset to empty (keeps the allocated buffer for reuse).
     public unsafe fn void clear() {   // `unsafe`: it drops each element through the raw buffer
-        isize i = 0;
-        while (i < this.len) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
+        drop(ptr: this.data, count: this.len);   // nothing at all for an element with no destructor
         this.len = 0;
         this.mods = this.mods + 1;
     }
@@ -299,11 +346,8 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         return Result::Ok(value: give this);
     }
 
-    unsafe ~DynamicArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
-        isize i = 0;
-        while (i < this.len) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
-        if (this.cap > 0) {
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
-        }
+    unsafe ~DynamicArray() {   // drop each element (nothing for a value), then release the buffer via the allocator
+        drop(ptr: this.data, count: this.len);
+        this.releaseBlock(block: this.data, cap: this.cap);
     }
 }

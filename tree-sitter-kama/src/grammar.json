@@ -4841,6 +4841,10 @@
         },
         {
           "type": "STRING",
+          "value": "copyElements"
+        },
+        {
+          "type": "STRING",
           "value": "panic"
         },
         {

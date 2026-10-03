@@ -1,6 +1,10 @@
 import { std::ptr::relocate, DynamicArray };
 export { Deque, DequeIter, DequeIterMut };
 
+// Relocation is a bitwise MOVE for every element type, so re-homing the ring is one memcpy per run.
+extern "<string.h>";
+extern fn UnsafePtr memcpy(UnsafePtr d, UnsafeConstPtr s, usize n);
+
 // A by-value iterator (the `foreach (T x in deque)` protocol): yields each element by value, front to back.
 // Like the DynamicArray iterator it snapshots the deque's mutation counter and rejects a structural change
 // made mid-iteration (a push may have reallocated + re-homed the buffer, so a cursor would dangle). The
@@ -69,9 +73,13 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     unsafe fn void growTo(isize nc) {
         UnsafePtr<T> nd = null;
         nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
-        UnsafePtr<T> od = this.data;
-        isize i = 0;
-        while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; }
+        if (this.len > 0) {   // relocate the ring's two runs, front first, into the new block's start
+            isize first = this.firstRun();
+            UnsafePtr m1 = memcpy(d: cast<UnsafePtr>(nd), s: cast<UnsafeConstPtr>(addr(of: this.data[this.head])), n: cast<usize>(first) * sizeof(T));
+            if (first < this.len) {
+                UnsafePtr m2 = memcpy(d: cast<UnsafePtr>(addr(of: nd[first])), s: cast<UnsafeConstPtr>(this.data), n: cast<usize>(this.len - first) * sizeof(T));
+            }
+        }
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }
@@ -81,6 +89,16 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
     }
+    // The live elements are at most two runs of the ring: `firstRun()` of them from `head` to the end of the
+    // buffer, then the rest from slot 0. A bulk operation is one call per run.
+    const fn isize firstRun() { return this.len < this.cap - this.head ? this.len : this.cap - this.head; }
+    unsafe fn void dropAll() {
+        if (this.len == 0) { return; }
+        isize first = this.firstRun();
+        drop(ptr: addr(of: this.data[this.head]), count: first);
+        drop(ptr: this.data, count: this.len - first);
+    }
+
     fn void ensureOne() { if (this.len == this.cap) { this.growTo(nc: this.cap == 0 ? 4 : this.cap * 2); } }
 
     // Append at the back — the common enqueue.
@@ -152,13 +170,20 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
-    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied in order).
+    // Present ONLY for a Copyable element — a deep copy (a fresh buffer of exactly `source.len`, the source's
+    // two runs copied in order to its start: one memcpy each for a bitwise element).
     public ctor copy(ref Deque<T, A> source) {
         this.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
-        this.reserve(n: source.len);
-        isize i = 0;
-        while (i < source.len) { this.pushBack(item: copy source[i]); i = i + 1; }
+        this.copyAllFrom(source: source);
         return this;
+    }
+    unsafe fn void copyAllFrom(ref Deque<T, A> source) when [T: Copyable<T>] {
+        if (source.len == 0) { return; }
+        this.growTo(nc: source.len);
+        isize first = source.firstRun();
+        copyElements(ptr: this.data, from: addr(of: source.data[source.head]), count: first);
+        copyElements(ptr: addr(of: this.data[first]), from: source.data, count: source.len - first);
+        this.len = source.len;
     }
 
     // Grow so at least `n` elements fit without a later reallocation (a no-op if already big enough).
@@ -166,8 +191,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     // Drop every live element and reset to empty (keeps the allocated buffer for reuse).
     public unsafe fn void clear() {   // `unsafe`: it drops each element through the raw buffer
-        isize i = 0;
-        while (i < this.len) { drop(ptr: addr(of: this[i])); i = i + 1; }
+        this.dropAll();
         this.len = 0; this.head = 0; this.mods = this.mods + 1;
     }
 
@@ -206,9 +230,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         return Result::Ok(value: give this);
     }
 
-    unsafe ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator
-        isize i = 0;
-        while (i < this.len) { drop(ptr: addr(of: this[i])); i = i + 1; }
+    unsafe ~Deque() {   // drop each live element (nothing for a value), then release the buffer via the allocator
+        this.dropAll();
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T), align: alignof(T));
         }

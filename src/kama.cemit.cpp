@@ -3045,13 +3045,14 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
 }
 
 // Is this call one of the floor builtins the compiler lowers ITSELF — `panic`, `assert`, `debugAssert`,
-// `addr`, `drop`? A bare one always is: they are keywords (0.9.425), so no declaration can take the name.
+// `addr`, `drop`, `copyElements`? A bare one always is: they are keywords (0.9.425), so no declaration can take the name.
 // (`sizeof`/`alignof`/`bitcast` are reserved words too.)
 bool CEmitter::isFloorBuiltinCall(const IdentifierNode* id) const
 {
     if (!id || !id->value) return false;
     const std::string& nm = *id->value;
-    if (nm != "panic" && nm != "assert" && nm != "debugAssert" && nm != "addr" && nm != "drop") return false;
+    if (nm != "panic" && nm != "assert" && nm != "debugAssert" && nm != "addr" && nm != "drop" && nm != "copyElements")
+        return false;
     return !id->qualifier || id->qualifier->empty();
 }
 
@@ -3458,7 +3459,7 @@ void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
             if (*q[0] == "global") {
                 // The retired floor qualifier. Its intrinsics are keywords, its capabilities are `core`'s.
                 const bool intrinsic = q.size() == 1 && (name == "panic" || name == "assert" || name == "debugAssert"
-                                                         || name == "addr" || name == "drop");
+                                                         || name == "addr" || name == "drop" || name == "copyElements");
                 if (intrinsic)
                     unsupported(("`global::" + name + "` — `" + name + "` is a keyword, so it needs no qualifier: "
                                  "write `" + name + "(…)`").c_str(), id->line, name);
@@ -21618,6 +21619,14 @@ std::string CEmitter::rawPointeeCType(SharedExpression e)
             SharedExpression of = (*inv->args)[0]->expression;
             std::string pc = exprClass(of);
             if (pc.empty()) pc = indexElemTypeRaw(of);   // unfiltered: a primitive element answers too
+            if (pc.empty()) {                             // a primitive element of a LOCAL raw pointer (`addr(of: p[1])`)
+                const std::string ct = typeOfExpr(e);
+                if (ct.size() > 1 && ct.back() == '*' && ct != "void*"
+                    && !(ct.size() > 7 && ct.compare(ct.size() - 7, 7, " const*") == 0)) {
+                    pc = ct.substr(0, ct.size() - 1);
+                    while (!pc.empty() && pc.back() == ' ') pc.pop_back();
+                }
+            }
             return pc;                                    // the caller decides whether it is destructible
         }
     std::string ct = lvalueCType(e);
@@ -27848,6 +27857,116 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             return pc + (isSize ? "__vsize(" : "__valign(") + emitExpression(a0->expression) + ")";
 #endif
         return (isSize ? "sizeof(" : "_Alignof(") + pc + ")";
+    }
+    // The RANGE half of the manual-memory triad (KRD-3): `drop(ptr: p, count: n)` destroys `n` consecutive
+    // pointees, and `copyElements(ptr: d, from: s, count: n)` places `n` copies into raw storage nobody owns. The
+    // per-type decision stays where `drop(ptr:)` already put it, in the compiler: a `uint8` buffer's drop is
+    // nothing at all and its copy one memcpy — in a debug build as much as a release one — while a `string`
+    // buffer's are a loop of its destructor and of its copy. The collections are plain kama over these, so this
+    // is the one place that knowledge lives. The alternative, a type query a generic could branch on, was
+    // declined: it is the first step to the `static if` the language refuses. A raw pointer has no length, so
+    // the count is spelled here and only here — the safe surface above (`addAll(items:)`,
+    // `copyFrom(source:)`) takes a view, which carries one. Measured on 256 MiB of `uint8`: an element loop is
+    // 1.3-2.2 s in a debug build and ~40 ms in release; the memcpy is ~22 ms in both.
+    const bool rangeDrop = name == "drop" && isFloorBuiltinCall(call->identifier.get()) && call->args
+                           && call->args->size() == 2;
+    if (rangeDrop || (name == "copyElements" && isFloorBuiltinCall(call->identifier.get()))) {
+        static const char* const kDropLabels[] = { "ptr", "count" };
+        static const char* const kCopyLabels[] = { "ptr", "from", "count" };
+        const char* const* want = rangeDrop ? kDropLabels : kCopyLabels;
+        const size_t nWant = rangeDrop ? 2 : 3;
+        bool shapeOk = call->args && call->args->size() == nWant;
+        for (size_t i = 0; shapeOk && i < nWant; ++i) {
+            ArgumentNode* a = (*call->args)[i].get();
+            shapeOk = a && a->name && a->name->value && *a->name->value == want[i];
+        }
+        if (!shapeOk) {
+            unsupported(rangeDrop ? "the range form of `drop` is `drop(ptr: p, count: n)` — `n` pointees from `p` on"
+                                  : "`copyElements` is `copyElements(ptr: d, from: s, count: n)` — `n` copies of `s[0..n)` "
+                                    "placed at `d`, labels in that order", call->line);
+            return "(void)0";
+        }
+        SharedExpression dst = (*call->args)[0]->expression;
+        SharedExpression cnt = (*call->args)[nWant - 1]->expression;
+        // Writable, because both change what lives there: a destructor mutates, and a fill stores.
+        const std::string pc = rawPointeeCType(dst);
+        if (pc.empty()) {
+            unsupported(("`" + name + "(ptr:)` takes an `UnsafePtr<T>` — the storage it "
+                         + (rangeDrop ? "destroys" : "fills") + ". An `UnsafeConstPtr<T>` cannot be written "
+                           "through, and a bare `UnsafePtr` names no element type").c_str(), call->line);
+            return "(void)0";
+        }
+        // An `isize`, like every length in kama; a constant adapts to it.
+        {
+            int64_t cv;
+            if (typeOfExpr(cnt) != "ptrdiff_t" && !constValue(cnt, cv)) {
+                unsupported(("`" + name + "(count:)` takes an `isize` — the number of elements, as `length()` "
+                             "answers it").c_str(), call->line);
+                return "(void)0";
+            }
+        }
+        if (rangeDrop) {
+            auto it = _classes.find(pc);
+            const bool runs = it != _classes.end() && (it->second.hasVtable || it->second.destructible);
+            // Nothing to run: the pointer and count are still evaluated, and a negative count still traps.
+            if (!runs) return "((void)(" + emitExpression(dst) + "), (void)kama__drop_count(" + emitExpression(cnt) + "))";
+            const std::string fn = pc + (it->second.hasVtable ? "__vdrop" : "__dtor");
+            return "({ " + pc + "* kama__p = (" + emitExpression(dst) + "); ptrdiff_t kama__n = kama__drop_count("
+                   + emitExpression(cnt) + "); for (ptrdiff_t kama__i = 0; kama__i < kama__n; ++kama__i) " + fn
+                   + "(&kama__p[kama__i]); })";
+        }
+        // The source may be either half of the pointer pair — reading is all `copyElements` does through it.
+        SharedExpression src = (*call->args)[1]->expression;
+        std::string sc = rawPointeeCType(src);
+        if (sc.empty()) {   // `UnsafeConstPtr<T>` (east-const `T const*`), or a call's result (`view.dataPtr()`)
+            std::string ct = lvalueCType(src);
+            if (ct.empty()) ct = typeOfExpr(src);
+            const std::string csuf = " const*";
+            if (ct.size() > csuf.size() && ct.compare(ct.size() - csuf.size(), csuf.size(), csuf) == 0)
+                sc = ct.substr(0, ct.size() - csuf.size());
+            else if (ct.size() > 1 && ct.back() == '*' && ct != "void*") {
+                sc = ct.substr(0, ct.size() - 1);
+                while (!sc.empty() && sc.back() == ' ') sc.pop_back();
+            }
+        }
+        if (sc != pc) {
+            unsupported(("`copyElements(from:)` must point at the element `ptr:` does — `ptr:` is an `UnsafePtr<"
+                         + demangleForDisplay(primKeyOfCType(pc)) + ">`, and `from:` "
+                         + (sc.empty() ? std::string("is not a typed raw pointer")
+                                       : "points at `" + demangleForDisplay(primKeyOfCType(sc)) + "`")).c_str(),
+                        call->line);
+            return "(void)0";
+        }
+        const std::string D = emitExpression(dst), S = emitExpression(src), N = emitExpression(cnt);
+        // What one element's copy is, decided exactly as a `copy x` hand-off of it is.
+        std::string each;
+        if (isSmartPtrClass(pc)) {
+            const CollKind k = smartKind(pc);
+            if (k == CollKind::Owned) {
+                unsupported("`copyElements` of `Owned` elements — an `Owned` is unique, so it cannot be copied; "
+                            "relocate them, or hold `Shared`", call->line);
+                return "(void)0";
+            }
+            each = "kama__d[kama__i] = kama__s[kama__i]; kama__d[kama__i].kama_ctrl->"
+                   + std::string(k == CollKind::Weak ? "kama_weak" : "kama_strong") + "++;";
+        } else if (ownsByValue(pc)) {
+            auto ci = _collections.find(pc);
+            if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable) {
+                unsupported(("`copyElements` of `" + demangleForDisplay(pc) + "` elements needs their elements to copy "
+                             "— they own resources but aren't `Copyable`").c_str(), call->line);
+                return "(void)0";
+            }
+            if (ci == _collections.end() && isMoveOnlyValue(pc) && !isCopyable(pc)) {
+                unsupported(notCopyableMessage(pc, "relocate the elements instead").c_str(), call->line);
+                return "(void)0";
+            }
+            each = "kama__d[kama__i] = " + copyCall(pc, "kama__s[kama__i]") + ";";
+        }
+        if (each.empty())   // its copy is its bytes: one memcpy
+            return "kama__copy_elements((" + D + "), (" + S + "), (" + N + "), sizeof(" + pc + "))";
+        return "({ " + pc + "* kama__d = (" + D + "); " + pc + " const* kama__s = (" + S + "); ptrdiff_t kama__n = ("
+               + N + "); kama__copy_elements_check(kama__d, kama__s, kama__n, sizeof(" + pc + ")); "
+               "for (ptrdiff_t kama__i = 0; kama__i < kama__n; ++kama__i) { " + each + " } })";
     }
     // `drop(place)` — run the destructor of a place's value (for a library owner over `UnsafePtr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is

@@ -1,0 +1,9 @@
+// `View.copyFrom(source:)` replaces every element, so the source must be exactly as long as the view: a
+// mismatch traps rather than copying the shorter and leaving the rest stale.
+import { std::collections::FixedArray };
+fn int32 main() {
+    FixedArray<uint8> a = FixedArray.make(size: 8);
+    FixedArray<uint8> b = FixedArray.make(size: 4);
+    a.viewMut().copyFrom(source: b.view());
+    return 0;
+}

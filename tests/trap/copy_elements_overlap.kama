@@ -1,0 +1,13 @@
+// `copyElements` places copies into storage nobody owns, so ranges that overlap trap — in every build, before
+// anything is written: the destination would overwrite source elements that are still live. (Shifting a
+// buffer's own elements is a relocation, which the collections do with a memmove.)
+import { std::collections::FixedArray };
+unsafe fn void shift(ref FixedArray<uint8> b) {
+    UnsafePtr<uint8> p = b.dataPtrMut();
+    copyElements(ptr: addr(of: p[1]), from: p, count: 4);
+}
+fn int32 main() {
+    FixedArray<uint8> b = FixedArray.make(size: 8);
+    shift(b: b);
+    return cast<int32>(b[1]);
+}

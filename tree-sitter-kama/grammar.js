@@ -991,7 +991,7 @@ module.exports = grammar({
 
     // kama.y `intrinsic_name`/`intrinsic_callee`: the call-site intrinsics are reserved words, legal only
     // as a callee — bare (`addr(of: x)`) or floor-qualified (`global::assert(…)`).
-    intrinsic_name: (_) => choice('addr', 'drop', 'panic', 'assert', 'debugAssert'),
+    intrinsic_name: (_) => choice('addr', 'drop', 'copyElements', 'panic', 'assert', 'debugAssert'),
     intrinsic_callee: ($) =>
       choice(
         $.intrinsic_name,

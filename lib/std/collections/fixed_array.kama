@@ -135,8 +135,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         this.copyFrom(source: source);
     }
     unsafe fn void copyFrom(ref FixedArray<T, A> source) when [T: Copyable<T>] {
-        isize i = 0;
-        while (i < this.size) { T v = copy source.data[i]; this.data[i] = give v; i = i + 1; }
+        copyElements(ptr: this.data, from: source.data, count: this.size);   // one memcpy for a bitwise element
     }
 
     // Serializable as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserializable is a
@@ -154,9 +153,8 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         return Result::Ok(value: Unit::Unit);
     }
 
-    unsafe ~FixedArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
-        isize i = 0;
-        while (i < this.size) { drop(ptr: addr(of: this.data[i])); i = i + 1; }
+    unsafe ~FixedArray() {   // drop each element (nothing for a value), then release the buffer via the allocator
+        drop(ptr: this.data, count: this.size);
         if (this.size > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T), align: alignof(T));
         }
