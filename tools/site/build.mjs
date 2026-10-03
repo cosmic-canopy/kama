@@ -15,7 +15,7 @@ import { PAGES, GROUPS, ORIGIN } from './pages.mjs';
 import { benchSection } from './bench.mjs';
 import { renderDoc, checkAnchors } from './render.mjs';
 import { highlight, kamaWords } from './highlight.mjs';
-import { shell, sidebar, toc, template, fill, setVersion } from './layout.mjs';
+import { shell, sidebar, toc, template, fill, setVersion, assetUrl } from './layout.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 // `_site/` by default — the Cloudflare Pages direct-upload input that `./ops deploy-site` and
@@ -88,7 +88,7 @@ writeFileSync(path.join(out, 'index.html'), shell({
     softwareVersion: version,
     author: { '@type': 'Organization', name: 'Cosmic Canopy LLC' },
   },
-  scripts: '<script src="/app.js" defer></script>',
+  scripts: `<script src="${assetUrl('app.js')}" defer></script>`,
 }));
 
 // ---------------------------------------------------------------- docs pages

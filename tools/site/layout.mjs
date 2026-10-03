@@ -3,6 +3,7 @@
 // are filled with a plain {{key}} substitution; anything structural is built here.
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { GROUPS, PAGES, ORIGIN } from './pages.mjs';
 
 const here = new URL('./templates/', import.meta.url);
@@ -14,6 +15,19 @@ export const fill = (tpl, vars) =>
 export const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 const BASE = template('base.html');
+
+// A file under site/ that changes between deploys, addressed by its content: `/styles.css?v=<hash>`. Cloudflare
+// serves CSS and JS with `max-age=14400`, so a phone that loaded the old stylesheet kept it for four hours after a
+// deploy — a fixed nav still broken on the device it was fixed for. A changed file is a new URL no cache has
+// seen; an unchanged one keeps its URL and stays cached. (Fonts and images are never edited in place.)
+const versions = new Map();
+export function assetUrl(name) {
+  if (!versions.has(name)) {
+    const bytes = readFileSync(new URL(`../../site/${name}`, import.meta.url));
+    versions.set(name, createHash('sha256').update(bytes).digest('hex').slice(0, 10));
+  }
+  return `/${name}?v=${versions.get(name)}`;
+}
 
 // Which host a page is served from. kama-lang.org's pages link to each other by path; the package registry
 // (registry.kama-lang.org, tools/site/registry.mjs) wears the same shell from another host, so its links to
@@ -27,6 +41,7 @@ export function shell({ url, title, description, bodyClass = '', content, script
     title: escAttr(title),
     description: escAttr(description),
     canonical: site.origin + url,
+    css: assetUrl('styles.css'),
     bodyClass,
     nav: topNav(url, site),
     content,

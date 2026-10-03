@@ -42,5 +42,13 @@ if ! KAMA_SITE_OUT="$tmp/site" node "$ROOT/tools/site/build.mjs" >"$tmp/log" 2>&
     exit 1
 fi
 
+# Every page names the stylesheet by its CONTENT (`/styles.css?v=<hash>`): Cloudflare lets a browser keep CSS for
+# four hours, so a page that named the bare file shipped a fix that phones did not see (66690524's nav fix, on
+# Android, the morning it deployed).
+want=$(node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex").slice(0,10))' "$ROOT/site/styles.css")
+for page in $(find "$tmp/site" -name index.html); do
+    grep -q "href=\"/styles.css?v=$want\"" "$page" || {
+        echo "check-site: FAIL — ${page#$tmp/site} does not link /styles.css?v=$want (the stylesheet's content hash)" >&2; exit 1; }
+done
 pages=$(sed -n 's/.*— \([0-9]*\) pages.*/\1/p' "$tmp/log" | head -1)
 echo "check-site: OK (${pages:-?} pages rendered from docs/)"
