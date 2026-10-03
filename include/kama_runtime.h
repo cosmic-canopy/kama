@@ -1487,6 +1487,21 @@ static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t st
 // `snprintf` is declared at BLOCK scope (the same pattern as `malloc`/`memcpy` at the top of this header),
 // so this stays `<stdio.h>`-free and the freestanding property holds — a program links `snprintf` from libc
 // only if it actually formats a float. Every result is a fresh heap-owned `kama_string`.
+//
+// ⚠️ KB-40 — on a HOSTED target that changed at 0.9.524: a block-scope declaration of a libc function is only as
+// good as its agreement with the libc's own header, and both of the ways it fails were met. glibc declares `sscanf`
+// with an ASM LABEL (`__isoc99_sscanf`), which cannot be added after a first use, so a program's own
+// `extern "<stdio.h>"` after the runtime failed to compile on Linux from 0.9.517 to 0.9.523 ("cannot apply asm label
+// to function after its first use"); and macOS's hardened <stdio.h> makes `snprintf` a MACRO, which mangles a
+// block-scope declaration that comes after it. So a hosted build includes <stdio.h> itself, first, and declares
+// neither: the libc's declarations are the ones in force, label, macro and all. The freestanding path keeps the
+// block-scope declarations — newlib and picolibc do neither — and stays <stdio.h>-free. tests/ffi_stdio_after_runtime.
+#if !defined(KAMA_TARGET_EMBEDDED)
+#include <stdio.h>
+#define KAMA__STDIO_DECLS
+#else
+#define KAMA__STDIO_DECLS extern int snprintf(char*, size_t, const char*, ...); extern int sscanf(const char*, const char*, ...);
+#endif
 
 // Reversed digit loop for an unsigned 64-bit value into `buf` (no NUL); returns the digit count.
 // `0` renders as a single '0'. buf must hold >= 20 bytes.
@@ -1521,10 +1536,9 @@ static inline kama_string kama_fmt_i64(int64_t v) {
 
 // Does decimal text `s` read back as exactly `v` — as a float64, or as a float32 when `f32` (parsed AS a
 // float32: decimal -> double -> float can round twice and disagree)? Through `sscanf`, which every libc kama
-// targets parses correctly rounded, and which — unlike `strtod` — the macOS SDK declares with no asm label, so
-// this block-scope declaration does not collide with a program that includes <stdio.h> after the runtime.
+// targets parses correctly rounded (declared per KB-40, at the top of this block).
 static inline int kama__float_reads_back(const char* s, double v, int f32) {
-    extern int sscanf(const char*, const char*, ...);
+    KAMA__STDIO_DECLS
     if (f32) { float f = 0.0f; return sscanf(s, "%f", &f) == 1 && f == (float)v; }
     double d = 0.0;
     return sscanf(s, "%lf", &d) == 1 && d == v;
@@ -1534,7 +1548,7 @@ static inline int kama__float_reads_back(const char* s, double v, int f32) {
 // dropped, scientific (`1e+16`, two exponent digits at least) when the exponent is below -4 or at least `sciAt`,
 // fixed otherwise. Returns the length.
 static inline int kama__fmt_float_render(char* out, int cap, int neg, unsigned long long m, int nd, int ex, int sciAt) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     char d[24];
     for (int i = nd - 1; i >= 0; --i, m /= 10ull) d[i] = (char)('0' + (int)(m % 10ull));
     while (nd > 1 && d[nd - 1] == '0') --nd;
@@ -1565,7 +1579,7 @@ static inline int kama__fmt_float_render(char* out, int cap, int neg, unsigned l
 // itself what strtod reads, so the common try is one format and one parse. Writes the first that reads back (the
 // nearest first) when `out`, and returns its length; 0 when none does.
 static inline int kama__fmt_float_try(char* out, int cap, double v, int f32, int k, int sciAt, int lopsided) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     char e[48];
     snprintf(e, sizeof e, "%.*e", k - 1, v);                  // [-]d.ddd…e±XX — exactly k significant digits
     const int neg = e[0] == '-';
@@ -1604,7 +1618,7 @@ static inline int kama__fmt_float_try(char* out, int cap, double v, int f32, int
 // from 1. Scientific when the exponent is below -4 or at least D — `%.15g`'s rule, and PostgreSQL's for float8
 // (FLT_DIG's for float4). Checked against Python's `repr` for float64 and an exact rational reference for float32.
 static inline int kama__fmt_float_shortest(char* out, int cap, double v, int f32) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     const int P = f32 ? 9 : 17, D = f32 ? 6 : 15;
     if (v != v || v - v != 0.0 || v == 0.0) return snprintf(out, (size_t)cap, "%g", v);   // nan, ±inf, ±0
     int normal, lopsided;
@@ -1686,7 +1700,7 @@ static inline int kama_fmt_flagchars(char* f, int32_t flags, int allowPlus) {
 // with optional `+`/`-`/`0` flags). `prec` is clamped to [0,64] and `width` to [0,256]. `snprintf` is declared
 // at block scope so this stays `<stdio.h>`-free (the same pattern as kama_fmt_f64). Buffer covers width 256.
 static inline kama_string kama_fmt_f64_prec(double v, int32_t prec, int32_t width, int32_t flags) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     if (prec < 0) prec = 0; if (prec > 64) prec = 64;
     if (width < 0) width = 0; if (width > 256) width = 256;
     char fmt[12]; int fi = 0; fmt[fi++] = '%';
@@ -1703,7 +1717,7 @@ static inline kama_string kama_fmt_f64_prec(double v, int32_t prec, int32_t widt
 // `width` is clamped to [0,256]; signed vs unsigned pick `lld`/`llu` (the `u` helper never emits `+`). The
 // zero-pad keeps the sign ahead of the zeros (printf `%+0*lld`). Block-scope `snprintf` keeps this stdio-free.
 static inline kama_string kama_fmt_i64_width(int64_t v, int32_t width, int32_t flags) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     if (width < 0) width = 0; if (width > 256) width = 256;
     char fmt[12]; int fi = 0; fmt[fi++] = '%';
     fi += kama_fmt_flagchars(fmt + fi, flags, 1);
@@ -1715,7 +1729,7 @@ static inline kama_string kama_fmt_i64_width(int64_t v, int32_t width, int32_t f
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
 }
 static inline kama_string kama_fmt_u64_width(uint64_t v, int32_t width, int32_t flags) {
-    extern int snprintf(char*, size_t, const char*, ...);
+    KAMA__STDIO_DECLS
     if (width < 0) width = 0; if (width > 256) width = 256;
     char fmt[12]; int fi = 0; fmt[fi++] = '%';
     fi += kama_fmt_flagchars(fmt + fi, flags, 0);
