@@ -455,6 +455,13 @@ Worth knowing before debugging, because each of these produced a confident wrong
     `fs_permissions_api` asserted POSIX umask bits of a plain create — the owner reads and writes, nobody else
     writes — and passed here, then failed CI's Windows leg at `0.9.457`; like `fs_umask.d`, that half is POSIX-only
     now. A test that asserts a Windows file's bits must set them (`openWith`, `createDirWith`, `setPermissions`).
+  - **`Metadata.owner`/`group` are the descriptor's SIDs (KPG-31, `0.9.522`)** — `Optional`s, read by the same
+    `GetFileSecurityW`/`GetKernelObjectSecurity` call that yields `permissions`, and `None` only where that call is
+    refused (another account's private file). A link's own owner comes from opening the reparse point itself
+    (`FILE_FLAG_OPEN_REPARSE_POINT`, `READ_CONTROL` only); a pipe's or a console's from its handle. ⚠️ **A new file's
+    owner is the token's DEFAULT owner, not always the user:** an administrator running elevated (CI's runner) owns
+    what it creates as `BUILTIN\Administrators` (`S-1-5-32-544`), so `tests/fs_owner.kama` accepts either. Still
+    never run on Windows when written: all of it — the fixture cross-builds (`zig cc`), and CI is its first run.
   - ⚠️ **`Get-Acl`'s SDDL is not the order on disk.** It lists deny entries first and then sorts by SID, so SYSTEM
     (`S-1-5-18`) prints before a user's `S-1-5-21-…` whatever order the list holds. kama writes deny entries,
     owner, group, Everyone, SYSTEM; read the descriptor in C

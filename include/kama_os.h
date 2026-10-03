@@ -347,13 +347,43 @@ static inline uint32_t kama__acl_class(PACL acl, PSID* sids, int nsids)
     return ((allowed & FILE_READ_DATA) ? 4u : 0u) | ((allowed & FILE_WRITE_DATA) ? 2u : 0u)
          | ((allowed & FILE_EXECUTE) ? 1u : 0u);
 }
+// The owner and group a file's security descriptor names, for std::fs::Metadata (KPG-31): a SID each, copied
+// into the caller's buffers of SECURITY_MAX_SID_SIZE (68) bytes, UserId's own size. A length of 0 is "unknown",
+// which kama reads as `None`. A stat that reads the descriptor anyway (for the nine bits) fills them for free.
+typedef struct kama__fileids { uint8_t* owner; int32_t* ownerLen; uint8_t* group; int32_t* groupLen; } kama__fileids;
+static inline void kama__sid_out(PSID s, uint8_t* out, int32_t* len)
+{
+    if (!out || !len) return;
+    *len = 0;
+    if (!s || !IsValidSid(s)) return;
+    const DWORD n = GetLengthSid(s);
+    if (n <= SECURITY_MAX_SID_SIZE && CopySid(n, out, s)) *len = (int32_t)n;
+}
+static inline void kama__sd_ids(PSECURITY_DESCRIPTOR sd, const kama__fileids* ids)
+{
+    if (!ids) return;
+    PSID owner = NULL, group = NULL; BOOL def;
+    GetSecurityDescriptorOwner(sd, &owner, &def);
+    GetSecurityDescriptorGroup(sd, &group, &def);
+    kama__sid_out(owner, ids->owner, ids->ownerLen);
+    kama__sid_out(group, ids->group, ids->groupLen);
+}
+// Owner and group alone, for an object whose nine bits do not come from its list (a pipe, a console, a link
+// itself). Silent on failure: a descriptor this process may not read leaves both unknown, and the stat stands.
+static inline void kama__sd_read_ids(HANDLE h, const kama__fileids* ids)
+{
+    BYTE sd[512]; DWORD need = 0;   /* a descriptor holding two SIDs and no list: < 160 bytes */
+    if (GetKernelObjectSecurity(h, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION, sd, sizeof sd, &need))
+        kama__sd_ids(sd, ids);
+}
 // The nine bits a security descriptor grants: the owner answers through its own entries and every-user
 // groups it belongs to, the group through its entry and those, and other through the every-user groups
 // (Everyone, Authenticated Users, Users) alone. SYSTEM and Administrators are no class, as root is none.
 // `groupIsOwner` reports the one case the bits cannot say apart (a service running as SYSTEM).
-static inline uint32_t kama__sd_mode(PSECURITY_DESCRIPTOR sd, int* groupIsOwner)
+static inline uint32_t kama__sd_mode(PSECURITY_DESCRIPTOR sd, int* groupIsOwner, const kama__fileids* ids)
 {
     PSID owner = NULL, group = NULL; PACL dacl = NULL; BOOL def, present = FALSE;
+    kama__sd_ids(sd, ids);
     GetSecurityDescriptorOwner(sd, &owner, &def);
     GetSecurityDescriptorGroup(sd, &group, &def);
     GetSecurityDescriptorDacl(sd, &present, &dacl, &def);
@@ -373,23 +403,25 @@ static inline uint32_t kama__sd_mode(PSECURITY_DESCRIPTOR sd, int* groupIsOwner)
 #define KAMA__SD_CAP 4096
 #define KAMA__SD_INFO (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION)
 typedef struct kama__sdbig { BYTE b[65536 + 1024]; } kama__sdbig;
-KAMA_NOINLINE static int32_t kama__sd_mode_big(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner)
+KAMA_NOINLINE static int32_t kama__sd_mode_big(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner,
+                                               const kama__fileids* ids)
 {
     kama__sdbig big; DWORD need = 0;
     BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, big.b, sizeof big.b, &need)
                 : GetFileSecurityW(w, KAMA__SD_INFO, big.b, sizeof big.b, &need);
     if (!ok) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EINVAL); } return -1; }
-    *mode = kama__sd_mode(big.b, groupIsOwner);
+    *mode = kama__sd_mode(big.b, groupIsOwner, ids);
     return 0;
 }
-static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner)
+static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* mode, int* groupIsOwner,
+                                         const kama__fileids* ids)
 {
     BYTE sd[KAMA__SD_CAP]; DWORD need = 0;
     BOOL ok = h ? GetKernelObjectSecurity(h, KAMA__SD_INFO, sd, sizeof sd, &need)
                 : GetFileSecurityW(w, KAMA__SD_INFO, sd, sizeof sd, &need);
-    if (!ok && GetLastError() == ERROR_INSUFFICIENT_BUFFER) return kama__sd_mode_big(h, w, mode, groupIsOwner);
+    if (!ok && GetLastError() == ERROR_INSUFFICIENT_BUFFER) return kama__sd_mode_big(h, w, mode, groupIsOwner, ids);
     if (!ok) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_ACCESS_DENIED ? EACCES : EINVAL); } return -1; }
-    *mode = kama__sd_mode(sd, groupIsOwner);
+    *mode = kama__sd_mode(sd, groupIsOwner, ids);
     return 0;
 }
 // The nine bits of a path: its access list, read back, with a file's DOS read-only attribute clearing every
@@ -397,12 +429,12 @@ static inline int32_t kama__sd_read_mode(HANDLE h, const wchar_t* w, uint32_t* m
 // a directory (Explorer sets it there to mark a customized folder), so it clears nothing there. A list this
 // process may not read — another user's private file — falls back to what the CRT reports (read/write from
 // the attribute, execute from the extension): an approximation, and documented as one.
-static inline uint32_t kama__path_mode(HANDLE h, const wchar_t* w, unsigned short crtMode)
+static inline uint32_t kama__path_mode(HANDLE h, const wchar_t* w, unsigned short crtMode, const kama__fileids* ids)
 {
     const int dir = (crtMode & _S_IFDIR) != 0, readOnly = !dir && !(crtMode & _S_IWRITE);
     uint32_t mode = 0; int same = 0;
     const int e = errno;
-    if (kama__sd_read_mode(h, w, &mode, &same) != 0)
+    if (kama__sd_read_mode(h, w, &mode, &same, ids) != 0)
         mode = ((crtMode & _S_IREAD) ? 0444u : 0u) | (readOnly ? 0u : 0222u) | ((crtMode & _S_IEXEC) ? 0111u : 0u);
     errno = e;   // the stat succeeded; an unreadable list is not its error
     if (readOnly) mode &= ~0222u;
@@ -424,9 +456,13 @@ static inline int32_t kama__file_kind(unsigned short m) {
 // kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here. `outMode` is the
 // nine permission bits the file's access list grants (kama__path_mode), not an access check for this process.
 // `follow` 0 asks about a symbolic link (or a junction) ITSELF — its kind is Symlink, its time its own — where 1
-// asks about what it points at, as `_wstat64` does.
+// asks about what it points at, as `_wstat64` does. The owner and group are the SIDs the object's descriptor
+// names (kama__fileids), a length of 0 where it cannot be read.
 KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
-                                            int64_t* outMtimeNs, uint32_t* outMode) {
+                                            int64_t* outMtimeNs, uint32_t* outMode, uint8_t* outOwner,
+                                            int32_t* outOwnerLen, uint8_t* outGroup, int32_t* outGroupLen) {
+    const kama__fileids ids = { outOwner, outOwnerLen, outGroup, outGroupLen };
+    *outOwnerLen = 0; *outGroupLen = 0;
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
     if (!follow) {
         WIN32_FIND_DATAW fd;
@@ -444,6 +480,10 @@ KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, ui
             *outKind = 2;
             *outMtimeNs = ((int64_t)t.QuadPart - 116444736000000000ll) * 100ll;   // 100 ns ticks since 1601
             *outMode = 0777u;   // a link's own bits, as POSIX shows them: access is decided at its target
+            // The link's OWN owner: opened as the reparse point itself, for READ_CONTROL only.
+            HANDLE lh = CreateFileW(w, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                    OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+            if (lh != INVALID_HANDLE_VALUE) { kama__sd_read_ids(lh, &ids); CloseHandle(lh); }
             return 0;
         }
     }
@@ -451,20 +491,24 @@ KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, ui
     if (r != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outKind = kama__file_kind((unsigned short)st.st_mode);
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
-    *outMode = kama__path_mode(NULL, w, (unsigned short)st.st_mode);
+    *outMode = kama__path_mode(NULL, w, (unsigned short)st.st_mode, &ids);
     return 0;
 }
 // The same facts for an OPEN file, through its descriptor — so a check and the read that follows it are about
 // one file, with no time between them in which the path can be pointed elsewhere.
 static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
-                                   uint32_t* outMode) {
+                                   uint32_t* outMode, uint8_t* outOwner, int32_t* outOwnerLen, uint8_t* outGroup,
+                                   int32_t* outGroupLen) {
+    const kama__fileids ids = { outOwner, outOwnerLen, outGroup, outGroupLen };
+    *outOwnerLen = 0; *outGroupLen = 0;
     struct _stat64 st;
     if (_fstat64(fd, &st) != 0) return -1;
     *outSize = (uint64_t)st.st_size; *outKind = kama__file_kind((unsigned short)st.st_mode);
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
     const intptr_t h = _get_osfhandle(fd);
-    *outMode = (*outKind == 0 || *outKind == 1) && h != -1 ? kama__path_mode((HANDLE)h, NULL, (unsigned short)st.st_mode)
+    *outMode = (*outKind == 0 || *outKind == 1) && h != -1 ? kama__path_mode((HANDLE)h, NULL, (unsigned short)st.st_mode, &ids)
                                                            : ((st.st_mode & _S_IREAD) ? 0444u : 0u) | ((st.st_mode & _S_IWRITE) ? 0222u : 0u);
+    if (*outKind != 0 && *outKind != 1 && h != -1) kama__sd_read_ids((HANDLE)h, &ids);   // a pipe's or a console's
     return 0;
 }
 
@@ -507,7 +551,7 @@ static inline int kama__acl_build(PACL acl, uint32_t mode, int isDir, PSID owner
 static inline int kama__mode_is(HANDLE h, const wchar_t* w, uint32_t mode)
 {
     uint32_t got = 0; int same = 0;
-    if (kama__sd_read_mode(h, w, &got, &same) != 0) return -1;
+    if (kama__sd_read_mode(h, w, &got, &same, NULL) != 0) return -1;
     const uint32_t cmp = same ? 0707u : 0777u;
     return (got & cmp) == (mode & cmp);
 }
@@ -1546,26 +1590,27 @@ static inline int32_t kama__file_kind(mode_t m) {
     return 7;
 }
 static inline void kama__stat_facts(const struct stat* st, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
-                                    uint32_t* outMode) {
+                                    uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
     *outSize = (uint64_t)st->st_size; *outKind = kama__file_kind(st->st_mode);
     *outMtimeNs = (int64_t)st->st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(*st);
     *outMode = (uint32_t)st->st_mode & 0777u;
+    *outUid = (uint32_t)st->st_uid; *outGid = (uint32_t)st->st_gid;   // the owner and group (KPG-31)
 }
 // `outMode` is the nine PERMISSION bits the file records, not an access check for this process (root ignores
 // them, and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
 // `follow` 0 is `lstat`: a symbolic link's own facts, its kind Symlink; 1 is `stat`, what it points at.
 static inline int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
-                                     int64_t* outMtimeNs, uint32_t* outMode) {
+                                     int64_t* outMtimeNs, uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
     struct stat st; if ((follow ? stat(path, &st) : lstat(path, &st)) != 0) return -1;
-    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode);
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid);
     return 0;
 }
 // The same facts for an OPEN file (`fstat`) — so a check and the read that follows it are about one file, with no
 // time between them in which the path can be pointed elsewhere.
 static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
-                                   uint32_t* outMode) {
+                                   uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
     struct stat st; if (fstat(fd, &st) != 0) return -1;
-    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode);
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid);
     return 0;
 }
 // Directory creation, rename and existence. 0777 is the POSIX default — the process umask narrows it,

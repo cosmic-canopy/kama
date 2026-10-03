@@ -1,0 +1,61 @@
+// Peer KPG-31: `Metadata.owner` and `group` — the account a file belongs to and its group, read by the same stat
+// as its permissions, so the two describe one file. libpq lets a private key be group-readable (0640) only when
+// root owns it. Linux and macOS report a `UserId`/`GroupId`; Windows an `Optional` of each, `None` only where
+// the file's security descriptor is private to another account. Returns 0, or the number of the failed check.
+import {
+    std::fs::File, std::fs::OpenMode, std::fs::Metadata, std::fs::stat, std::fs::writeText, std::fs::remove,
+    std::io::IoError, std::process::UserId, std::process::GroupId, std::process::currentUser, std::process::currentGroup,
+};
+
+// A file this process creates belongs to its effective user. Its group is the process's own on Linux, and the
+// directory's on macOS (BSD semantics), so either is right.
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 ownedByMe(const ref Metadata m, const ref Metadata dir) {
+    UserId me = match (currentUser()) { case Ok(value: u): u; case Err(error: e): { return 10; } };
+    GroupId mine = match (currentGroup()) { case Ok(value: g): g; case Err(error: e): { return 11; } };
+    if (!m.owner.equals(other: me)) { return 12; }
+    if (!m.group.equals(other: mine) && !m.group.equals(other: dir.group)) { return 13; }
+    return 0;
+}
+
+@compileFor(!OS_WINDOWS)
+fn bool sameOwner(const ref Metadata a, const ref Metadata b) { return a.owner.equals(other: b.owner) && a.group.equals(other: b.group); }
+
+// A new file's owner is the token's default owner: the user, or BUILTIN\Administrators (S-1-5-32-544) when an
+// administrator runs elevated, which CI does.
+@compileFor(OS_WINDOWS)
+unsafe fn int32 ownedByMe(const ref Metadata m, const ref Metadata dir) {
+    UserId o = match (m.owner) { case Some(value: u): u; case None: { return 20; } };
+    bool hasGroup = match (m.group) { case Some(value: g): true; case None: false; };
+    if (!hasGroup) { return 21; }
+    UserId me = match (currentUser()) { case Ok(value: u): u; case Err(error: e): { return 22; } };
+    if (!o.equals(other: me) && o.sid() != "S-1-5-32-544") { return 23; }
+    return 0;
+}
+
+@compileFor(OS_WINDOWS)
+fn bool sameOwner(const ref Metadata a, const ref Metadata b) {
+    string ao = match (a.owner) { case Some(value: u): u.sid(); case None: ""; };
+    string bo = match (b.owner) { case Some(value: u): u.sid(); case None: "-"; };
+    return ao == bo;
+}
+
+unsafe fn int32 run() {
+    bool wrote = match (writeText(path: "owner.txt", text: "key")) { case Ok(value: n): true; case Err(error: e): false; };
+    if (!wrote) { return 1; }
+    Metadata m = match (stat(path: "owner.txt")) { case Ok(value: md): md; case Err(error: e): { return 2; } };
+    Metadata dir = match (stat(path: ".")) { case Ok(value: md): md; case Err(error: e): { return 3; } };
+    int32 r = ownedByMe(m: m, dir: dir);
+    if (r != 0) { return r; }
+
+    // The same answer through the open descriptor (`fstat`), which is how libpq checks a key it is about to read.
+    Result<File, IoError> opened = File.open(path: "owner.txt", mode: OpenMode::Read);
+    File f = match (give opened) { case Ok(value: file): give file; case Err(error: e): { return 4; } };
+    Metadata fm = match (f.metadata()) { case Ok(value: md): md; case Err(error: e): { return 5; } };
+    if (!sameOwner(a: m, b: fm)) { return 6; }
+
+    remove(path: "owner.txt");
+    return 0;
+}
+
+fn int32 main() { return run(); }

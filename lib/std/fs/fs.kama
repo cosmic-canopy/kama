@@ -13,6 +13,7 @@ import {
     std::path::join,
     std::ptr::nonNull,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+    std::process::UserId, std::process::GroupId,
 };
 
 export { File, OpenMode, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
@@ -30,10 +31,23 @@ extern fn int32  kama_set_permissions(UnsafeConstPtr<cchar> path, uint32 mode);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize  kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
+// A stat's owner and group: a uid and gid on Linux and macOS, a SID each on Windows (a length of 0 where the file's
+// security descriptor cannot be read).
+@compileFor(!OS_WINDOWS)
 extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, int32 follow, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind,
-                                UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode);
+                                UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode, UnsafePtr<uint32> outUid,
+                                UnsafePtr<uint32> outGid);
+@compileFor(!OS_WINDOWS)
 extern fn int32  kama_fd_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind, UnsafePtr<int64> outMtimeNs,
-                              UnsafePtr<uint32> outMode);
+                              UnsafePtr<uint32> outMode, UnsafePtr<uint32> outUid, UnsafePtr<uint32> outGid);
+@compileFor(OS_WINDOWS)
+extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, int32 follow, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind,
+                                UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode, UnsafePtr<uint8> outOwner,
+                                UnsafePtr<int32> outOwnerLen, UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen);
+@compileFor(OS_WINDOWS)
+extern fn int32  kama_fd_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind, UnsafePtr<int64> outMtimeNs,
+                              UnsafePtr<uint32> outMode, UnsafePtr<uint8> outOwner, UnsafePtr<int32> outOwnerLen,
+                              UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen);
 extern fn int32  kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn isize  kama_desc_dup(isize h, int32 kind);
 extern fn int32  kama_mkdir(UnsafeConstPtr<cchar> path);
@@ -122,12 +136,38 @@ type value Permissions implements Formattable, Sendable {
 // `permissions` are what the file RECORDS, not what would happen: root ignores them, and on Windows an
 // access list can say more than nine bits can (see `Permissions`). The one bit that used to stand alone
 // here, `readOnly`, is `!permissions.has(p: Permissions::OwnerWrite)` — one way to ask it (KR-92).
+//
+// `owner` and `group` are the account the file belongs to and its group, from the same stat, so they describe
+// the same file as `permissions` (KPG-31: libpq lets a private key be group-readable only when root owns it).
+// On Linux and macOS they are the stat's `st_uid` and `st_gid`, always known. On Windows they are the SIDs the
+// file's security descriptor names — the descriptor the stat reads for `permissions` anyway — and `None` where
+// this account may not read it (another account's private file, where `permissions` is an approximation). A
+// `symlinkStat` of a link reports the link's own. The twins are whole types, like `UserId`'s: what an owner IS
+// differs by OS, and each keeps its own form.
+@compileFor(!OS_WINDOWS)
 @generate(of)
 type value Metadata implements Sendable {
     public usize size;
     public FileKind kind;
     public Timestamp modified;
     public Permissions permissions;
+    public UserId owner;
+    public GroupId group;
+
+    public const fn bool isDir() { return match (this.kind) { case Dir: true; case _: false; }; }
+    public const fn bool isFile() { return match (this.kind) { case File: true; case _: false; }; }
+    public const fn bool isSymlink() { return match (this.kind) { case Symlink: true; case _: false; }; }
+}
+
+@compileFor(OS_WINDOWS)
+@generate(of)
+type value Metadata implements Sendable {
+    public usize size;
+    public FileKind kind;
+    public Timestamp modified;
+    public Permissions permissions;
+    public Optional<UserId> owner;
+    public Optional<GroupId> group;
 
     public const fn bool isDir() { return match (this.kind) { case Dir: true; case _: false; }; }
     public const fn bool isFile() { return match (this.kind) { case File: true; case _: false; }; }
@@ -153,10 +193,101 @@ fn FileKind fileKind(int32 code) {
     return FileKind::Other;
 }
 
-unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode) {
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode, uint32 uid, uint32 gid) {
     if (rc != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Metadata.of(size: cast<usize>(sz), kind: fileKind(code: kind), modified: Timestamp.fromUnixNanos(n: mtime),
-                                         permissions: Permissions.fromBits(bits: mode & 0o777ui32)));
+                                         permissions: Permissions.fromBits(bits: mode & 0o777ui32),
+                                         owner: UserId.of(raw: uid), group: GroupId.of(raw: gid)));
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 follow) {
+    uint64 sz = 0ui64;
+    int32 kind = 0;
+    int64 mtime = 0i64;
+    uint32 mode = 0ui32;
+    uint32 uid = 0ui32;
+    uint32 gid = 0ui32;
+    int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
+                              outMtimeNs: addr(of: mtime), outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid);
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> fdMetadata(int32 fd) {
+    uint64 sz = 0ui64;
+    int32 kind = 0;
+    int64 mtime = 0i64;
+    uint32 mode = 0ui32;
+    uint32 uid = 0ui32;
+    uint32 gid = 0ui32;
+    int32 rc = kama_fd_meta(fd: fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
+                            outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid);
+}
+
+// A SID the seam copied out, as an account: `None` for a length of 0 (a descriptor this account may not read).
+@compileFor(OS_WINDOWS)
+fn Optional<UserId> sidUser(const ref InlineArray<uint8>#(68) b, int32 len) {
+    if (len == 0) { return Optional::None; }
+    return match (UserId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(len)))) {
+        case Ok(value: u): Optional::Some(value: u);
+        case Err(error: e): Optional::None;
+    };
+}
+
+@compileFor(OS_WINDOWS)
+fn Optional<GroupId> sidGroup(const ref InlineArray<uint8>#(68) b, int32 len) {
+    if (len == 0) { return Optional::None; }
+    return match (GroupId.fromSid(bytes: b.view().slice(from: 0, count: cast<isize>(len)))) {
+        case Ok(value: g): Optional::Some(value: g);
+        case Err(error: e): Optional::None;
+    };
+}
+
+@compileFor(OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode,
+                                               const ref InlineArray<uint8>#(68) owner, int32 ownerLen,
+                                               const ref InlineArray<uint8>#(68) grp, int32 groupLen) {
+    if (rc != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), kind: fileKind(code: kind), modified: Timestamp.fromUnixNanos(n: mtime),
+                                         permissions: Permissions.fromBits(bits: mode & 0o777ui32),
+                                         owner: sidUser(b: owner, len: ownerLen), group: sidGroup(b: grp, len: groupLen)));
+}
+
+@compileFor(OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 follow) {
+    uint64 sz = 0ui64;
+    int32 kind = 0;
+    int64 mtime = 0i64;
+    uint32 mode = 0ui32;
+    InlineArray<uint8>#(68) owner = [0; 68];
+    InlineArray<uint8>#(68) grp = [0; 68];
+    int32 ownerLen = 0;
+    int32 groupLen = 0;
+    int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
+                              outMtimeNs: addr(of: mtime), outMode: addr(of: mode), outOwner: addr(of: owner[0]),
+                              outOwnerLen: addr(of: ownerLen), outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, owner: owner, ownerLen: ownerLen,
+                      grp: grp, groupLen: groupLen);
+}
+
+@compileFor(OS_WINDOWS)
+unsafe fn Result<Metadata, IoError> fdMetadata(int32 fd) {
+    uint64 sz = 0ui64;
+    int32 kind = 0;
+    int64 mtime = 0i64;
+    uint32 mode = 0ui32;
+    InlineArray<uint8>#(68) owner = [0; 68];
+    InlineArray<uint8>#(68) grp = [0; 68];
+    int32 ownerLen = 0;
+    int32 groupLen = 0;
+    int32 rc = kama_fd_meta(fd: fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
+                            outMode: addr(of: mode), outOwner: addr(of: owner[0]), outOwnerLen: addr(of: ownerLen),
+                            outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, owner: owner, ownerLen: ownerLen,
+                      grp: grp, groupLen: groupLen);
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
@@ -263,15 +394,7 @@ type resource File implements Reader, Writer, Sendable {
     // What the filesystem records about this OPEN file (`fstat`) — so a check and the read after it are about one
     // file, where checking the path first leaves a moment for it to be pointed elsewhere. libpq checks `.pgpass`
     // this way: open, then refuse it unless it is a plain file that only its owner can read (KPG-18).
-    public unsafe fn Result<Metadata, IoError> metadata() {
-        uint64 sz = 0ui64;
-        int32 kind = 0;
-        int64 mtime = 0i64;
-        uint32 mode = 0ui32;
-        int32 rc = kama_fd_meta(fd: this.fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
-                                outMode: addr(of: mode));
-        return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode);
-    }
+    public unsafe fn Result<Metadata, IoError> metadata() { return fdMetadata(fd: this.fd); }
 
     // Read the whole file to EOF into an owning byte buffer.
     public unsafe fn Result<DynamicArray<uint8>, IoError> readAll() {
@@ -388,15 +511,7 @@ unsafe fn Result<Metadata, IoError> stat(const ref string path) { return pathMet
 // own size and time, and is not followed. Any other path answers as `stat` does. Rust's `symlink_metadata`.
 unsafe fn Result<Metadata, IoError> symlinkStat(const ref string path) { return pathMetadata(path: path, follow: 0); }
 
-unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 follow) {
-    uint64 sz = 0ui64;
-    int32 kind = 0;
-    int64 mtime = 0i64;
-    uint32 mode = 0ui32;
-    int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
-                              outMtimeNs: addr(of: mtime), outMode: addr(of: mode));
-    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode);
-}
+
 
 // Does the path exist? A plain `bool`, not a `Result`: "no" and "the lookup failed" are the same answer
 // to this question, and a caller that needs to tell them apart wants `stat`.
