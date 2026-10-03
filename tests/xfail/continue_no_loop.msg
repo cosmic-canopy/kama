@@ -1,0 +1,1 @@
+`continue` is not inside a loop: it starts the next pass of the innermost `while`, `do`, `for` or `foreach`

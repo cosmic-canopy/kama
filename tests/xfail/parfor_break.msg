@@ -1,0 +1,1 @@
+`break` cannot leave a `parallel_for`

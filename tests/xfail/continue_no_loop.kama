@@ -1,0 +1,9 @@
+// `continue` outside any loop is kama's error, not clang's ("'continue' statement not in loop statement").
+fn int32 main() {
+    Optional<int32> o = Optional::None;
+    match (o) {
+        case Some(value: v): { }
+        case None: { continue; }
+    };
+    return 0;
+}

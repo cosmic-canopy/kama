@@ -1,0 +1,22 @@
+// Inside a `parallel_for` body, `continue` ends one element's pass (each element is its own pass, on
+// whichever worker holds it), and a loop nested in the body is an ordinary loop that `break` leaves.
+// `break` and `return` aimed at the `parallel_for` itself are refused (xfail/parfor_break, parfor_return).
+import { std::collections::DynamicArray, std::concurrent::cpuCount };
+
+fn void scale(ref DynamicArray<int32> xs) {
+    parallel_for (ref int32 e in xs.viewMut(), workers: 2) {
+        if (e % 2 == 0) { continue; }                          // even elements keep their value
+        int32 k = 0;
+        while (true) { k = k + 1; if (k == e) { break; } }     // leaves this inner loop only
+        e = k * 10;
+    }
+}
+
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 1; i <= 6; i = i + 1) { xs.add(item: i); }
+    scale(xs: xs);
+    int32 s = 0;
+    foreach (int32 x in xs) { s = s + x; }
+    return s;   // 10 + 2 + 30 + 4 + 50 + 6
+}

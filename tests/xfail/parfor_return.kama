@@ -1,0 +1,17 @@
+// A `parallel_for` body runs on a worker, so `return` there ended that worker's chunk rather than
+// returning from `scale`, which is what the source says.
+import { std::collections::DynamicArray, std::concurrent::cpuCount };
+
+fn void scale(ref DynamicArray<int32> xs) {
+    parallel_for (ref int32 e in xs.viewMut(), workers: 2) {
+        if (e > 2) { return; }
+        e = e * 10;
+    }
+}
+
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    scale(xs: xs);
+    return 0;
+}

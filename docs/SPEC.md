@@ -3710,6 +3710,23 @@ is done with `if` / `else if`. There is no `switch` statement: `match` on an enu
 `&&`, `||` and `?:` evaluate an operand only when the result needs it, so `n > 0 && a[0].isEmpty()` never
 indexes an empty `a`, and the arm `?:` does not choose never runs — its calls, its temporaries, its drops. <!-- test: short_circuit_hoist -->
 
+**`break` and `continue` act on the innermost `while`, `do`, `for` or `foreach`.** A `match` is not a loop, <!-- test: match_arm_break -->
+so a `break` in one of its arms leaves the loop around the `match`, and outside any loop either word is an <!-- xfail: match_arm_break_no_loop, break_no_loop, continue_no_loop -->
+error:
+
+```kama fragment
+while (true) {
+    match (queue.next()) {
+        case Some(value: job): { run(job: job); }
+        case None: { break; }               // leaves the `while`, not just the `match`
+    };
+}
+```
+
+In a `parallel_for` body, `continue` ends that element's pass. `break` and `return` are errors there: the <!-- test: parfor_continue -->
+elements run on several workers at once, so there is no rest of the loop to skip, and the body does not run <!-- xfail: parfor_break, parfor_return -->
+in the enclosing function. A loop nested in the body is an ordinary loop.
+
 **Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
 `{ … }` block — never a bare statement, and never an empty `;`:
 
@@ -4924,7 +4941,7 @@ type value Palette {
   entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, fixed
   `InlineArray<T>#(N)`, and a `type value` whose fields are those. Statements: local + `const` decls, `=`
   assignment, fixed-array element writes (`t[i] = …`) and field writes (`this.f = …`), `if`/`else`,
-  `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions: arithmetic / bitwise / comparison /
+  `for`/`while`/`do`, `foreach` over a fixed array, `break`/`continue`, `return`. Expressions: arithmetic / bitwise / comparison /
   logical (short-circuit) / ternary / cast, array index and field reads, and calls to other comptime fns and
   to a value type's ctors, methods, operators and `static fn`s.
 - **Checked like run-time code, on every path.** A `comptime fn` body and every compile-time initializer answer to
@@ -5520,7 +5537,7 @@ arm names the value it produces with a **`:= <expr>;`** statement, which must be
 statement (single-exit) — it accepts any expression, and reads as "bind this value out" (a `match` in a
 typed position *is* an assignment from the outside, `x = match … { … := v; }`). `:=` is distinct from
 `return`, which leaves the enclosing function. An arm of a value-producing `match` must therefore either
-end in `:=` or **diverge** (`return` / `break` / `continue`); in particular a block arm cannot be *empty*, <!-- xfail: match_empty_arm -->
+end in `:=` or **diverge** (`return`, or a `break` / `continue` of the loop around the `match`); in particular a block arm cannot be *empty*, <!-- xfail: match_empty_arm -->
 since it would leave the match's value unset:
 
 ```kama

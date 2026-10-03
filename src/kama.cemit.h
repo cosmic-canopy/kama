@@ -2062,6 +2062,17 @@ private:
                        std::string guard; };   // a C flag: built only on some paths, dropped only if it was (guardHoisted)
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
+                   // A loop body's `break` lands just past the C loop — unless a `match` arm's C `switch`
+                   // sits between them, which would catch it (KPG-32). `switchDepth` is `_switchDepth` when
+                   // the loop opened, so a deeper one at the `break` means a switch is in the way; the
+                   // `break` then jumps to `exitLabel`, which the loop site places right after the C loop
+                   // closes (placeLoopExit) — exactly where a C `break` would have landed.
+                   int switchDepth = 0; std::string exitLabel;
+                   // The root of the function a `parallel_for` body is outlined into. Its elements run on
+                   // several workers at once, so `break` (whose meaning would depend on how the work was
+                   // split) and `return` (which would leave the worker, not the enclosing function) are
+                   // refused there; `continue` ends one element's pass and keeps its meaning.
+                   bool isParallelForRoot = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
                    // ALL before dropping any local (join-before-drop), on every exit path. `borrowedPlaces`
@@ -3451,6 +3462,14 @@ private:
     void emitScopeCleanup(const Scope& s, int depth);          // reverse-order dtors for one scope
     void dropCondTemps(size_t preLoc, int depth);              // drop+unregister a condition's hoisted temps
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
+    int  innermostLoopIndex() const;                           // the enclosing loop body's scope, or -1 (none in this function)
+    bool isParallelForLoop(int loopIndex) const;               // that loop is the one a `parallel_for` body was outlined into
+    bool inParallelForBody() const;                            // the current function is an outlined `parallel_for` body
+    void emitLoopJump(int srcLine, bool isBreak, int depth);   // `break` / `continue`, judged and emitted
+    void placeLoopExit(int depth);                             // after a C loop closes: its `break` label, if one was used
+    int  _switchDepth = 0;                                     // C `switch`es (match arms) open around the statement now emitted
+    int  _loopExitCounter = 0;                                 // `kama_brk<N>` — labels are function-scoped, N is program-wide
+    std::string _loopExitPending;                              // a closed loop body's used label, awaiting placeLoopExit
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName = false);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue

@@ -6149,6 +6149,9 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
 // sits beside (or right before) the per-body table reset that retires the whole function's entries.
 void CEmitter::popScope()
 {
+    // A loop body that a `break` left by label: the loop site places it once the C loop closes. Loops
+    // nest, so an inner site has placed its label before any outer body can close.
+    if (_scopes.back().isLoopBoundary && !_scopes.back().exitLabel.empty()) _loopExitPending = _scopes.back().exitLabel;
     for (auto& l : _scopes.back().locals) _moveState.erase(l.cVar);
     restoreLocalBindings(_scopes.back().bindings);
     _scopes.pop_back();
@@ -6187,6 +6190,79 @@ void CEmitter::emitUnwindToLoop(int depth)
     }
 }
 
+// The scope of the innermost loop body around the statement being emitted, or -1. The walk stops at the
+// function root: `_scopes` holds one function's scopes, and an outlined body (a `parallel_for` chunk)
+// starts its own.
+int CEmitter::innermostLoopIndex() const
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i) {
+        if (_scopes[i].isLoopBoundary) return i;
+        if (_scopes[i].isFunctionRoot) return -1;
+    }
+    return -1;
+}
+
+// A `parallel_for` body is outlined into its own function whose FIRST loop walks one worker's chunk. So
+// the loop at `loopIndex` is that chunk loop when no other loop sits below it in this function and the
+// function is an outlined body.
+bool CEmitter::isParallelForLoop(int loopIndex) const
+{
+    for (int i = loopIndex - 1; i >= 0; --i) {
+        if (_scopes[i].isLoopBoundary) return false;
+        if (_scopes[i].isFunctionRoot) return _scopes[i].isParallelForRoot;
+    }
+    return false;
+}
+
+bool CEmitter::inParallelForBody() const
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        if (_scopes[i].isFunctionRoot) return _scopes[i].isParallelForRoot;
+    return false;
+}
+
+// `break` leaves, and `continue` restarts, the innermost `while` / `do` / `for` / `foreach`. A `match` is
+// not a loop, but its arms are lowered to a C `switch`, and a C `break` inside one ends the switch only:
+// `case None: { break; }` ended the match and the loop ran on (KPG-32), and a value-producing match left
+// its result unset. So a `break` with a switch between it and its loop jumps to the loop's exit label
+// instead. C's `continue` passes through a switch, so it needs nothing. With no loop at all, both are
+// refused here rather than by clang — or not at all: a `break` in a `match` outside any loop compiled to
+// a no-op.
+void CEmitter::emitLoopJump(int srcLine, bool isBreak, int depth)
+{
+    line(srcLine);
+    int li = innermostLoopIndex();
+    if (li < 0) {
+        unsupported(isBreak
+            ? "`break` is not inside a loop: it leaves the innermost `while`, `do`, `for` or `foreach`, and a `match` is not a loop"
+            : "`continue` is not inside a loop: it starts the next pass of the innermost `while`, `do`, `for` or `foreach`",
+            srcLine);
+        return;
+    }
+    if (isBreak && isParallelForLoop(li)) {
+        unsupported("`break` cannot leave a `parallel_for`: its elements run on several workers at once, so there "
+                    "is no rest of the loop to skip — `continue` ends this element's pass", srcLine);
+        return;
+    }
+    emitUnwindToLoop(depth);   // dtors must run before the jump
+    if (isBreak && _switchDepth > _scopes[li].switchDepth) {
+        std::string& label = _scopes[li].exitLabel;
+        if (label.empty()) label = "kama_brk" + std::to_string(_loopExitCounter++);
+        indent(depth); *_out << "goto " << label << ";\n";
+        return;
+    }
+    indent(depth); *_out << (isBreak ? "break;\n" : "continue;\n");
+}
+
+// Called by every loop site right after its C loop closes, BEFORE anything else it emits there (an
+// iterator `foreach` drops its relocated temps next, which a `break` must still reach).
+void CEmitter::placeLoopExit(int depth)
+{
+    if (_loopExitPending.empty()) return;
+    indent(depth); *_out << _loopExitPending << ": ;\n";
+    _loopExitPending.clear();
+}
+
 // Destroy all scopes from innermost down to the function root (for return).
 void CEmitter::emitUnwindAll(int depth)
 {
@@ -6216,7 +6292,7 @@ void CEmitter::emitBlock(BlockNode* block, int depth)
 
 void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot)
 {
-    Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot;
+    Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot; sc.switchDepth = _switchDepth;
     _scopes.push_back(sc);
     // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
@@ -6797,7 +6873,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             _localCTypes[c.name] = c.cType;
         }
 
-        Scope root; root.isFunctionRoot = true;
+        Scope root; root.isFunctionRoot = true; root.isParallelForRoot = true;
         _scopes.push_back(root);
 
         // Reuse the foreach `ref` lowering: `foreach (ref elemTy loopVar in __slice) { <body> }`.
@@ -8003,6 +8079,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
+        if (inParallelForBody()) {   // the body runs on a worker: a C `return` would end its chunk, silently
+            unsupported("`return` cannot leave a `parallel_for` body: it runs on a worker, not in the enclosing "
+                        "function — let the loop finish, then return", n->line);
+            return;
+        }
         // Unwrap a give/copy marker for the place-return check below; the value path passes the original
         // `ret->expression` (marker and all) to emitOwnedValueInto, which re-unwraps + applies the matrix.
         SharedExpression retExpr = ret->expression;
@@ -8163,6 +8244,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << "while (" << cond << ") ";
             emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
             *_out << "\n";
+            placeLoopExit(depth);
         } else {                                                  // loop-and-a-half: recompute cond each pass
             bool drop = !_scopes.empty() && _scopes.back().locals.size() > preLoc;
             indent(depth); *_out << "while (1) {\n";
@@ -8178,6 +8260,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitBody(w->whileStatement, depth + 1, /*loopBoundary=*/true);
             *_out << "\n";
             indent(depth); *_out << "}\n";
+            placeLoopExit(depth);
         }
         return;
     }
@@ -8189,6 +8272,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         *_out << "do ";
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
+        placeLoopExit(depth);
         return;
     }
 
@@ -8211,6 +8295,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << "for (" << init << "; " << cond << "; " << iter << ") ";
             emitBody(f->body, depth, /*loopBoundary=*/true);
             *_out << "\n";
+            placeLoopExit(depth);
         } else {                                                  // loop-and-a-half; iter stays in the C header
             bool drop = !_scopes.empty() && _scopes.back().locals.size() > preLoc;
             indent(depth); *_out << "for (" << init << "; ; " << iter << ") {\n";
@@ -8226,6 +8311,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitBody(f->body, depth + 1, /*loopBoundary=*/true);
             *_out << "\n";
             indent(depth); *_out << "}\n";
+            placeLoopExit(depth);
         }
         {   // hand any temps the wrapper collected back to the enclosing scope, then retire the counter
             Scope& wrap = _scopes.back();
@@ -8239,18 +8325,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    if (dynamic_cast<BreakNode*>(n)) {
-        line(n->line);
-        emitUnwindToLoop(depth);   // dtors must run before the break keyword
-        indent(depth); *_out << "break;\n";
-        return;
-    }
-    if (dynamic_cast<ContinueNode*>(n)) {
-        line(n->line);
-        emitUnwindToLoop(depth);
-        indent(depth); *_out << "continue;\n";
-        return;
-    }
+    if (dynamic_cast<BreakNode*>(n))    { emitLoopJump(n->line, /*isBreak=*/true, depth);  return; }
+    if (dynamic_cast<ContinueNode*>(n)) { emitLoopJump(n->line, /*isBreak=*/false, depth); return; }
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         // A `comptime fn` iterates a fixed array, by value (KR-102).
@@ -8336,7 +8412,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
              << "); ++" << ix << ") {\n";
 
         // Loop-body scope (a loop boundary so break/continue unwind correctly).
-        Scope sc; sc.isLoopBoundary = true;
+        Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth;
         _scopes.push_back(sc);
         registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
         // The loop scope owns the binding: the type entries below (and `_refParams` for the `ref` form)
@@ -8368,6 +8444,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         popScope();   // retires the binding — see noteScopedBinding above
 
         indent(depth + 1); *_out << "}\n";   // close for
+        placeLoopExit(depth + 1);
         indent(depth);     *_out << "}\n";   // close wrapper
         return;
     }
@@ -8930,7 +9007,7 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
     if (auto* b = dynamic_cast<BlockNode*>(stmt.get())) {
         emitBlockScoped(b, depth, loopBoundary, /*functionRoot=*/false);
     } else {
-        Scope sc; sc.isLoopBoundary = loopBoundary;
+        Scope sc; sc.isLoopBoundary = loopBoundary; sc.switchDepth = _switchDepth;
         _scopes.push_back(sc);
         *_out << "{\n";
         emitStatement(stmt, depth + 1);
@@ -16892,7 +16969,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     indent(depth + 1); *_out << iterCType << " " << it << " = " << iterInit << ";\n";
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 
-    Scope sc; sc.isLoopBoundary = true;
+    Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth;
     // A `foreach` IS a window: it holds a borrowing iterator over its operand for the extent of the body,
     // which is exactly what `borrow` does — it just names the ELEMENTS instead of the view. So the operand
     // is frozen for the body, and `foreach (x in d) { d.add(…) }` becomes a compile error rather than the
@@ -16937,6 +17014,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     popScope();   // retires the binding
 
     indent(depth + 1); *_out << "}\n";   // close while
+    placeLoopExit(depth + 1);
     emitScopeCleanup(_scopes.back(), depth + 1);   // drop relocated iterable temps (e.g. `s.trim()`) after the loop
     popScope();                                    // wrapper scope
     indent(depth);     *_out << "}\n";   // close wrapper
@@ -26194,6 +26272,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     }
     indent(depth); *_out << "switch (" << sp << "->kama_tag) {\n";
+    ++_switchDepth;                                          // an arm's `break` must jump past it (emitLoopJump)
     auto beforeMove = _moveState;                            // each arm branches from the same pre-match state
     std::vector<std::map<std::string, MoveState>> armEnds;
     std::vector<bool> armDivs;
@@ -26432,6 +26511,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     emitMatchDefaultArm(hasWildcard, _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(),
                         subjCls, depth);
     indent(depth); *_out << "}\n";
+    --_switchDepth;
     // A materialized owning subject (a call/construction result) is dropped once after the switch —
     // bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
     //
@@ -26628,6 +26708,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
     std::string subjExpr = emitExpression(m->subject);
     flushHoisted(depth);
     indent(depth); *_out << "switch (" << subjExpr << ") {\n";
+    ++_switchDepth;                                          // an arm's `break` must jump past it (emitLoopJump)
     auto beforeMove = _moveState;
     std::vector<std::map<std::string, MoveState>> armEnds;
     std::vector<bool> armDivs;
@@ -26703,6 +26784,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
     emitMatchDefaultArm(hasWildcard, _enums.count(enumTy) && !_enums[enumTy].underlyingCType.empty(),
                         enumTy, depth);
     indent(depth); *_out << "}\n";
+    --_switchDepth;
 }
 
 // an inline constructor `Cls(args)` as a general rvalue (return / variant payload). A ctor

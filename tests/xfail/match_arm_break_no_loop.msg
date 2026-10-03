@@ -1,0 +1,1 @@
+`break` is not inside a loop: it leaves the innermost `while`, `do`, `for` or `foreach`, and a `match` is not a loop

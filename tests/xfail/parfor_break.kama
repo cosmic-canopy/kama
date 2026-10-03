@@ -1,0 +1,17 @@
+// A `parallel_for`'s elements run on several workers at once, so `break` has no "rest of the loop" to
+// skip: it stopped one worker's chunk, and which elements ran depended on how the work was split.
+import { std::collections::DynamicArray, std::concurrent::cpuCount };
+
+fn void scale(ref DynamicArray<int32> xs) {
+    parallel_for (ref int32 e in xs.viewMut(), workers: 2) {
+        if (e > 2) { break; }
+        e = e * 10;
+    }
+}
+
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    scale(xs: xs);
+    return 0;
+}

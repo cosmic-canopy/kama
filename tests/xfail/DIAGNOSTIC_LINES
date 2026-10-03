@@ -110,6 +110,7 @@ brace_foreach_bare	brace_foreach_bare.kama:7
 brace_if_bare	brace_if_bare.kama:6
 brace_if_empty_semi	brace_if_empty_semi.kama:6
 brace_while_bare	brace_while_bare.kama:5
+break_no_loop	break_no_loop.kama:5
 callerthread_on_body	callerthread_on_body.kama:4
 cast_aggregate_source	cast_aggregate_source.kama:6
 cast_const_oob	cast_const_oob.kama:5
@@ -229,6 +230,7 @@ constparam_shadow_local	constparam_shadow_local.kama:8
 constparam_shadow_match	constparam_shadow_match.kama:9
 constparam_shadow_param	constparam_shadow_param.kama:6
 contextual_word_type_name	contextual_word_type_name.kama:3
+continue_no_loop	continue_no_loop.kama:6
 contract_arg_nonconforming	contract_arg_nonconforming.kama:17
 contract_arity_mismatch	contract_arity_mismatch.kama:7
 contract_ctor_missing	contract_ctor_missing.kama:10 contract_ctor_missing.kama:5
@@ -682,6 +684,7 @@ local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
 main_void	main_void.kama:4
+match_arm_break_no_loop	match_arm_break_no_loop.kama:8
 match_arm_member_type_mismatch	match_arm_member_type_mismatch.kama:17
 match_arm_stale_target	match_arm_stale_target.kama:10 match_arm_stale_target.kama:9
 match_bad_variant	match_bad_variant.kama:7
@@ -875,10 +878,12 @@ packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
 parallel_spawn_workers	parallel_spawn_workers.kama:15
+parfor_break	parfor_break.kama:7
 parfor_const_view	parfor_const_view.kama:9
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11
 parfor_no_workers	parfor_no_workers.kama:14
 parfor_noncontiguous	parfor_noncontiguous.kama:9
+parfor_return	parfor_return.kama:7
 parfor_this	parfor_this.kama:11
 parfor_write_capture	parfor_write_capture.kama:11
 pin_conformance_concrete	pin_conformance_concrete.kama:7

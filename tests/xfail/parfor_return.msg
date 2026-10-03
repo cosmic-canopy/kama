@@ -1,0 +1,1 @@
+`return` cannot leave a `parallel_for` body

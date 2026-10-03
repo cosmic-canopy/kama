@@ -1,0 +1,183 @@
+// `break` in a `match` arm leaves the enclosing LOOP (KPG-32). A match arm is lowered to a C `switch`
+// case, and a bare C `break` there ends the switch only: the loop ran on, and a value-producing match
+// left its result unset. Every C loop shape the emitter writes is covered — `while` and `for` both
+// plain and loop-and-a-half (an owning temp in the condition), `do`, and `foreach` over an intrinsic
+// collection (indexed) and over a std one (iterator) — with payload and plain-enum subjects, a
+// value-producing match, nested matches, a loop nested in an arm, and the drops a `break` must run.
+// Returns 0, or the number of the first case that failed.
+import { std::collections::DynamicArray };
+
+type enum Step { Go, Stop }
+
+static int32 drops = 0;
+
+type resource Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    ~Probe() { drops = drops + 1; }
+}
+
+fn Optional<int32> upTo(int32 n, int32 limit) {
+    if (n < limit) { return Optional::Some(value: n); }
+    return Optional::None;
+}
+
+fn Step stepAt(int32 n, int32 stop) { return n == stop ? Step::Stop : Step::Go; }
+
+// An OWNING subject: the match keeps it in a temp the `break` has to drop.
+fn Optional<string> wordAt(int32 n) {
+    if (n < 2) { return Optional::Some(value: "w".concat(other: "${n}")); }
+    return Optional::None;
+}
+
+fn int32 whilePlain() {
+    int32 n = 0;
+    while (true) {
+        n = n + 1;
+        match (upTo(n: n, limit: 3)) { case Some(value: v): { } case None: { break; } };
+        if (n > 10) { return -1; }
+    }
+    return n;   // 3
+}
+
+fn int32 whileHalf() {
+    string seed = "ab";
+    int32 n = 0;
+    while (seed.concat(other: seed).length() > 0) {   // an owning temp: the loop-and-a-half form
+        n = n + 1;
+        match (stepAt(n: n, stop: 4)) { case Go: { } case Stop: { break; } };
+        if (n > 10) { return -1; }
+    }
+    return n;   // 4
+}
+
+fn int32 doWhile() {
+    int32 n = 0;
+    do {
+        n = n + 1;
+        match (upTo(n: n, limit: 2)) { case Some(value: v): { } case None: { break; } };
+    } while (n < 10);
+    return n;   // 2
+}
+
+fn int32 forPlain() {
+    int32 seen = 0;
+    for (int32 i = 0; i < 10; i = i + 1) {
+        seen = i;
+        match (stepAt(n: i, stop: 5)) { case Go: { } case Stop: { break; } };
+    }
+    return seen;   // 5
+}
+
+fn int32 forHalf() {
+    string seed = "ab";
+    int32 seen = 0;
+    for (int32 i = 0; seed.concat(other: seed).length() > cast<isize>(i); i = i + 1) {
+        seen = i;
+        match (upTo(n: i, limit: 2)) { case Some(value: v): { } case None: { break; } };
+    }
+    return seen;   // 2
+}
+
+fn int32 foreachIndexed() {
+    InlineArray<int32>#(5) xs = [1, 2, 3, 4, 5];
+    int32 sum = 0;
+    foreach (int32 x in xs) {
+        match (stepAt(n: x, stop: 4)) { case Go: { sum = sum + x; } case Stop: { break; } };
+    }
+    return sum;   // 1 + 2 + 3
+}
+
+fn int32 foreachIterator() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 1; i <= 5; i = i + 1) { xs.add(item: i); }
+    int32 sum = 0;
+    foreach (int32 x in xs) {
+        match (upTo(n: x, limit: 3)) { case Some(value: v): { sum = sum + v; } case None: { break; } };
+    }
+    return sum;   // 1 + 2
+}
+
+// A value-producing match whose arm diverges with `break`: the result was left unset.
+fn int32 valueArm() {
+    int32 total = 0;
+    int32 n = 0;
+    while (true) {
+        n = n + 1;
+        int32 v = match (upTo(n: n, limit: 4)) { case Some(value: x): x; case None: { break; } };
+        total = total + v;
+    }
+    return total;   // 1 + 2 + 3
+}
+
+// Two switches between the `break` and its loop.
+fn int32 nestedMatch() {
+    int32 n = 0;
+    while (true) {
+        n = n + 1;
+        match (upTo(n: n, limit: 100)) {
+            case Some(value: v): { match (stepAt(n: v, stop: 3)) { case Go: { } case Stop: { break; } }; }
+            case None: { }
+        };
+        if (n > 10) { return -1; }
+    }
+    return n;   // 3
+}
+
+// A loop inside an arm: its `break` leaves only that inner loop; the outer one is left by its own.
+fn int32 loopInArm() {
+    int32 inner = 0;
+    int32 outer = 0;
+    while (true) {
+        outer = outer + 1;
+        match (stepAt(n: outer, stop: 3)) {
+            case Go: {
+                int32 k = 0;
+                while (true) {
+                    k = k + 1;
+                    match (upTo(n: k, limit: 2)) { case Some(value: v): { inner = inner + 1; } case None: { break; } };
+                }
+            }
+            case Stop: { break; }
+        };
+    }
+    return outer * 10 + inner;   // 3 passes; the inner loop counts 1 on each of the first 2
+}
+
+// `continue` passes through a C switch on its own; it must still restart the loop.
+fn int32 continueArm() {
+    int32 kept = 0;
+    for (int32 i = 0; i < 6; i = i + 1) {
+        match (stepAt(n: i % 2, stop: 1)) { case Go: { } case Stop: { continue; } };
+        kept = kept + 1;
+    }
+    return kept;   // 3
+}
+
+// The drops a `break` must run: a loop-local resource, an owning match subject, and a binding of it.
+fn int32 dropsOnBreak() {
+    drops = 0;
+    int32 n = 0;
+    while (true) {
+        Probe p = Probe.make(id: n);
+        n = n + 1;
+        match (wordAt(n: n)) { case Some(value: w): { } case None: { break; } };
+    }
+    return drops;   // one Probe per pass: 2
+}
+
+fn int32 main() {
+    if (whilePlain() != 3) { return 1; }
+    if (whileHalf() != 4) { return 2; }
+    if (doWhile() != 2) { return 3; }
+    if (forPlain() != 5) { return 4; }
+    if (forHalf() != 2) { return 5; }
+    if (foreachIndexed() != 6) { return 6; }
+    if (foreachIterator() != 3) { return 7; }
+    if (valueArm() != 6) { return 8; }
+    if (nestedMatch() != 3) { return 9; }
+    if (loopInArm() != 32) { return 10; }
+    if (continueArm() != 3) { return 11; }
+    if (dropsOnBreak() != 2) { return 12; }
+    return 0;
+}

@@ -1,0 +1,7 @@
+// A bare `break` outside any loop is kama's error, not clang's ("'break' statement not in loop or switch
+// statement").
+fn int32 main() {
+    int32 n = 1;
+    if (n > 0) { break; }
+    return 0;
+}
