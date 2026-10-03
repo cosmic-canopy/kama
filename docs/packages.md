@@ -597,6 +597,12 @@ There is no registry *service* to run: a base URI plus two well-known paths, so 
   ] }
   ```
 
+The same tree can carry pages for people: `node tools/site/registry.mjs --registry <dir> --out <dir>` (in this
+repository) copies a registry byte for byte and writes beside it a searchable list of its packages and one page
+per package — install line, versions with their revisions and dates, dependencies, and the README out of the
+tarball, its HTML shown and never run. That is what [registry.kama-lang.org](https://registry.kama-lang.org)
+serves; the toolchain reads the same host and never sees the pages.
+
 `tarball` is resolved **relative to `<base>`** (or absolute), so metadata and artifacts can live on
 different hosts — an index on static pages, tarballs on a release host. Each version records its own
 `dependencies`, so a consumer resolves the whole transitive graph from metadata without downloading

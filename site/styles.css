@@ -425,3 +425,28 @@ pre.sample { margin: 0; padding: 1.6rem 1.8rem; }
 .doc-index .page h1 { font-size: clamp(2rem, 4vw, 2.6rem); margin: .5rem 0 .8rem; }
 .doc-index .page h2 { font-size: 1.2rem; margin: 2.4rem 0 .9rem; color: var(--amber); }
 .doc-index .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+
+/* ------------------------------------------------------------------ package registry (tools/site/registry.mjs) */
+.reg h1 { font-size: clamp(2rem, 4vw, 2.6rem); margin: .3rem 0 .8rem; overflow-wrap: anywhere; }
+.reg h2 { font-size: 1.2rem; margin: 2.2rem 0 .8rem; color: var(--amber); }
+.reg-ver { font-family: var(--font-mono); font-size: .5em; font-weight: 400; color: var(--fg-dim); vertical-align: middle; }
+.reg-dim { color: var(--fg-dim); }
+.reg-crumb { margin: 0; font-size: .9rem; }
+.reg-search input {
+  width: 100%; margin: 1.4rem 0 .4rem; padding: .8rem 1rem; font: inherit; font-size: 1rem;
+  color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 0;
+}
+.reg-search input:focus { outline: 1px solid var(--ember); border-color: var(--ember); }
+.reg-list { list-style: none; padding: 0; margin: 1.2rem 0; display: grid; gap: .8rem; }
+.reg-list .card h3 { overflow-wrap: anywhere; }
+.reg-none { color: var(--fg-dim); }
+.reg-meta { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 2.4rem; align-items: start; }
+.reg-meta dl { margin: 2.2rem 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; font-size: .95rem; }
+.reg-meta dt { color: var(--fg-dim); }
+.reg-meta dd { margin: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
+.reg-kw a { margin-right: .5rem; }
+.reg-versions { border-collapse: collapse; width: 100%; font-size: .92rem; display: block; overflow-x: auto; }
+.reg-versions th, .reg-versions td { border-bottom: 1px solid var(--line-2); padding: .5rem .8rem .5rem 0; text-align: left; white-space: nowrap; }
+.reg-versions th { color: var(--fg-dim); font-weight: 400; font-family: var(--font-ui); }
+.reg-readme { margin-top: 2.6rem; padding-top: 1.4rem; border-top: 1px solid var(--line-2); }
+@media (max-width: 760px) { .reg-meta { grid-template-columns: minmax(0, 1fr); } }

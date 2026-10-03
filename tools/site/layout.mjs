@@ -15,15 +15,22 @@ export const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quo
 
 const BASE = template('base.html');
 
-export function shell({ url, title, description, bodyClass = '', content, scripts = '', jsonld = '' }) {
+// Which host a page is served from. kama-lang.org's pages link to each other by path; the package registry
+// (registry.kama-lang.org, tools/site/registry.mjs) wears the same shell from another host, so its links to
+// the docs carry kama-lang.org's origin, and its own section — Packages — is the one marked current.
+export const PACKAGES = 'https://registry.kama-lang.org';
+const MAIN_SITE = { origin: ORIGIN, home: '', section: '' };
+export const REGISTRY_SITE = origin => ({ origin, home: ORIGIN, section: 'packages' });
+
+export function shell({ url, title, description, bodyClass = '', content, scripts = '', jsonld = '', site = MAIN_SITE }) {
   return fill(BASE, {
     title: escAttr(title),
     description: escAttr(description),
-    canonical: ORIGIN + url,
+    canonical: site.origin + url,
     bodyClass,
-    nav: topNav(url),
+    nav: topNav(url, site),
     content,
-    footer: footer(),
+    footer: footer(site),
     scripts,
     jsonld: jsonld ? `\n<script type="application/ld+json">${JSON.stringify(jsonld)}</script>` : '',
   });
@@ -36,17 +43,20 @@ const mark = size => `<picture>
       <img src="/assets/logo-68.png" alt="" width="${size}" height="${size}">
     </picture>`;
 
-function topNav(url) {
-  const on = p => (url.startsWith('/docs/') && p === '/docs/' ? ' aria-current="page"' : '');
+function topNav(url, site) {
+  const h = site.home;
+  const on = p => (!site.section && url.startsWith('/docs/') && p === '/docs/' ? ' aria-current="page"' : '');
+  const packages = site.section === 'packages' ? '/" aria-current="page' : PACKAGES + '/';
   return `<nav class="topnav">
-  <a class="brand" href="/">
+  <a class="brand" href="${h}/">
     ${mark(34)}
     <span>kama</span>
   </a>
   <div class="topnav-links">
-    <a href="/docs/getting-started/">Get started</a>
-    <a href="/docs/tour/">Tour</a>
-    <a href="/docs/"${on('/docs/')}>Docs</a>
+    <a href="${h}/docs/getting-started/">Get started</a>
+    <a href="${h}/docs/tour/">Tour</a>
+    <a href="${h}/docs/"${on('/docs/')}>Docs</a>
+    <a href="${packages}">Packages</a>
     <a href="https://github.com/cosmic-canopy/kama" rel="noopener">GitHub</a>
   </div>
 </nav>`;
@@ -55,16 +65,18 @@ function topNav(url) {
 let VERSION = '';
 export const setVersion = v => { VERSION = v; };
 
-function footer() {
+function footer(site) {
+  const h = site.home;
   return `<footer class="footer">
   <div class="footer-brand">
     ${mark(28)}
-    <span>kama · v${VERSION} on the road to 1.0 · MIT licensed</span>
+    <span>kama · v${VERSION} on the road to 1.0 · MIT OR Apache-2.0</span>
   </div>
   <div class="footer-links">
-    <a href="/docs/">Docs</a>
-    <a href="/docs/getting-started/">Getting started</a>
-    <a href="/docs/spec/">Spec</a>
+    <a href="${h}/docs/">Docs</a>
+    <a href="${h}/docs/getting-started/">Getting started</a>
+    <a href="${h}/docs/spec/">Spec</a>
+    <a href="${PACKAGES}/">Packages</a>
     <a href="https://github.com/cosmic-canopy/kama" rel="noopener">GitHub</a>
   </div>
 </footer>`;
