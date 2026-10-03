@@ -803,7 +803,7 @@ src/sk.kama"
 ex="$tmp/kr-exclude"; kpkg "$ex" ex 1.0.0; mkdir -p "$ex/tools" "$ex/tests/tls"
 echo gen > "$ex/tools/gen.sh"; echo notes > "$ex/NOTES.md"; echo fixture > "$ex/tests/tls/server.key"
 exjson() {
-    printf '{ "name": "ex", "version": "1.0.0", "kind": "library", "publish": { "exclude": [%s] } }\n' "$1" > "$ex/kama.json"
+    printf '{ "name": "ex", "version": "1.0.0", "kind": "library", "kama": ">=0.9.453", "publish": { "exclude": [%s] } }\n' "$1" > "$ex/kama.json"
     commit_all "$ex"
     if kpub "$ex" --registry "file://$kreg" >"$tmp/ex.out" 2>&1; then return 0; else return 1; fi
 }
@@ -1472,4 +1472,83 @@ if "$KAMA" build "$kc/kama.json" -o "$tmp/kreqapp2" >"$tmp/kreqb2.out" 2>&1; the
 grep -q "needs kama >=99.0.0" "$tmp/kreqb2.out" \
     || { echo "check-packages: FAIL — the build refusal did not name the requirement:" >&2; sed 's/^/  /' "$tmp/kreqb2.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships (KPG-2); $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds)"
+# ---- registry metadata, the catalog and `kama pkg search` (docs/packages.md § What a registry shows, § Searching)
+# 39a. `description`/`repository`/`keywords`/`license` reach the version's index entry; `catalog.json` lists every
+# package's HIGHEST version, sorted by name, and is rebuilt on each publish (a second version moves the entry).
+mreg="$(kama_native_path "$tmp")/mreg"; mkdir -p "$mreg"
+pub_meta() {   # pub_meta <dir> <manifest-json>
+    mkdir -p "$1/src"; printf '%s\n' "$2" > "$1/kama.json"
+    printf 'export { v };\nfn int32 v() { return 1; }\n' > "$1/src/$(basename "$1").kama"
+    commit_all "$1"
+    ( cd "$1" && "$KAMA" publish kama.json --registry "file://$mreg" )
+}
+geo1='{ "name": "@m/geo", "version": "1.0.0", "kind": "library", "kama": ">=0.9.523", "license": "MIT", "description": "Points and polygons", "repository": "https://example.com/geo", "keywords": ["geometry", "math"], "modules": { ".": { "visibility": "public" } } }'
+pub_meta "$tmp/m-geo" "$geo1" >"$tmp/meta.out" 2>&1 \
+    || { echo "check-packages: FAIL — publishing with registry metadata errored:" >&2; sed 's/^/  /' "$tmp/meta.out" >&2; exit 1; }
+grep -q '"description": "Points and polygons", "repository": "https://example.com/geo", "keywords": \["geometry", "math"\]' "$mreg/@m/geo/index.json" \
+    || { echo "check-packages: FAIL — the index entry does not carry the metadata:" >&2; sed 's/^/  /' "$mreg/@m/geo/index.json" >&2; exit 1; }
+grep -q '"license": "MIT"' "$mreg/@m/geo/index.json" || { echo "check-packages: FAIL — the index entry lost \`license\`" >&2; exit 1; }
+pub_meta "$tmp/m-plain" '{ "name": "plain", "version": "0.1.0", "kind": "library", "description": "a helper for geo things", "kama": ">=0.9.523", "modules": { ".": { "visibility": "public" } } }' >>"$tmp/meta.out" 2>&1 \
+    || { echo "check-packages: FAIL — publishing \`plain\` errored:" >&2; sed 's/^/  /' "$tmp/meta.out" >&2; exit 1; }
+sed -i.bak 's/"version": "1.0.0"/"version": "1.1.0"/; s/Points and polygons/Points, polygons and areas/' "$tmp/m-geo/kama.json" && rm -f "$tmp/m-geo/kama.json.bak"
+git -C "$tmp/m-geo" commit -qam v11 >/dev/null
+( cd "$tmp/m-geo" && "$KAMA" publish kama.json --registry "file://$mreg" ) >>"$tmp/meta.out" 2>&1 \
+    || { echo "check-packages: FAIL — publishing @m/geo 1.1.0 errored:" >&2; sed 's/^/  /' "$tmp/meta.out" >&2; exit 1; }
+cat > "$tmp/catalog.want" <<'CAT'
+{
+  "packages": [
+    { "name": "@m/geo", "version": "1.1.0", "license": "MIT", "description": "Points, polygons and areas", "repository": "https://example.com/geo", "keywords": ["geometry", "math"] },
+    { "name": "plain", "version": "0.1.0", "description": "a helper for geo things" }
+  ]
+}
+CAT
+cmp -s "$tmp/catalog.want" "$mreg/catalog.json" \
+    || { echo "check-packages: FAIL — catalog.json is not the highest version of each package, sorted:" >&2; diff "$tmp/catalog.want" "$mreg/catalog.json" >&2; exit 1; }
+
+# 39b. a key newer than the package's `kama` floor is refused at publish, and at --dry-run, writing nothing.
+cp "$mreg/@m/geo/index.json" "$tmp/geo.index.before"
+sed -i.bak 's/"kama": ">=0.9.523"/"kama": ">=0.9.500"/; s/"version": "1.1.0"/"version": "1.2.0"/' "$tmp/m-geo/kama.json" && rm -f "$tmp/m-geo/kama.json.bak"
+git -C "$tmp/m-geo" commit -qam v12 >/dev/null
+for mode in "--registry file://$mreg" "--dry-run"; do
+    if ( cd "$tmp/m-geo" && "$KAMA" publish kama.json $mode ) >"$tmp/floor.out" 2>&1; then
+        echo "check-packages: FAIL — publish ($mode) accepted \`description\` under a \`kama\` floor of >=0.9.500" >&2; exit 1; fi
+    grep -q 'is new in kama 0.9.523' "$tmp/floor.out" && grep -q '">=0.9.523"' "$tmp/floor.out" \
+        || { echo "check-packages: FAIL — the floor refusal ($mode) did not name the key's release and the fix:" >&2; sed 's/^/  /' "$tmp/floor.out" >&2; exit 1; }
+done
+cmp -s "$tmp/geo.index.before" "$mreg/@m/geo/index.json" || { echo "check-packages: FAIL — a refused publish changed the index" >&2; exit 1; }
+
+# 39c. each key is held to its shape wherever the manifest is read (`kama check` here, before any publish).
+badmeta() {   # badmeta <json-fragment> <expected-message-part>
+    d="$tmp/m-bad"; mkdir -p "$d/src"
+    printf '{ "name": "bad", "version": "0.1.0", "kind": "library", "kama": ">=0.9.523", %s, "modules": { ".": { "visibility": "public" } } }\n' "$1" > "$d/kama.json"
+    printf 'export { v };\nfn int32 v() { return 1; }\n' > "$d/src/bad.kama"
+    if "$KAMA" check "$d/kama.json" >"$tmp/bad.out" 2>&1; then echo "check-packages: FAIL — accepted $1" >&2; exit 1; fi
+    grep -qF -- "$2" "$tmp/bad.out" || { echo "check-packages: FAIL — refusing $1 did not say \"$2\":" >&2; sed 's/^/  /' "$tmp/bad.out" >&2; exit 1; }
+}
+long=$(printf 'x%.0s' $(seq 1 201))
+badmeta '"description": "two\nlines"'                         'no line breaks'
+badmeta '"description": " padded"'                            'a space at its start or end'
+badmeta "\"description\": \"$long\""                          'the limit is 200'
+badmeta '"repository": "http://example.com/x"'                'must be an `https://` URL'
+badmeta '"repository": "javascript:alert(1)"'                 'must be an `https://` URL'
+badmeta '"keywords": ["SQL"]'                                 'starting with a letter'
+badmeta '"keywords": ["a", "b", "c", "d", "e", "f"]'          'the limit is 5'
+badmeta '"keywords": ["sql", "sql"]'                          'listed twice'
+badmeta '"keywords": []'                                      '`keywords` is empty'
+
+# 39d. `kama pkg search`: every word must match (name, description or keyword, ignoring case); the name itself
+# ranks above a description mention; nothing matching exits 1; a registry with no catalog says so.
+if ! "$KAMA" pkg search GEO --registry "file://$mreg" >"$tmp/search.out" 2>&1; then
+    echo "check-packages: FAIL — pkg search geo found nothing:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; fi
+[ "$(sed -n 1p "$tmp/search.out" | awk '{print $1, $2}')" = "@m/geo 1.1.0" ] && [ "$(sed -n 2p "$tmp/search.out" | awk '{print $1}')" = "plain" ] \
+    || { echo "check-packages: FAIL — pkg search geo: the name match must rank above the description match:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; }
+"$KAMA" pkg search math --registry "file://$mreg" 2>&1 | grep -q '^@m/geo ' || { echo "check-packages: FAIL — pkg search did not match a keyword" >&2; exit 1; }
+if "$KAMA" pkg search geometry helper --registry "file://$mreg" >"$tmp/search.out" 2>&1; then
+    echo "check-packages: FAIL — pkg search matched a package missing one of the words:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; fi
+grep -q 'no package matches "geometry helper"' "$tmp/search.out" || { echo "check-packages: FAIL — an empty search did not say so:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; }
+nocat="$(kama_native_path "$tmp")/nocat"; mkdir -p "$nocat"
+if "$KAMA" pkg search geo --registry "file://$nocat" >"$tmp/search.out" 2>&1; then
+    echo "check-packages: FAIL — pkg search against a registry with no catalog succeeded" >&2; exit 1; fi
+grep -q 'keeps no catalog' "$tmp/search.out" || { echo "check-packages: FAIL — a catalog-less registry was not explained:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships (KPG-2); $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog)"

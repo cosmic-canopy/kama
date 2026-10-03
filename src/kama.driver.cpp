@@ -3209,6 +3209,11 @@ static std::string reservedByCRegister(const std::string& ident)
 // directory once the build configuration is settled.
 static BuildSettings g_rootSettings;
 
+// What a registry shows and searches about a package: `description`, `repository`, `keywords` and `license`.
+// `kama publish` records them in each version's index entry and in the registry's catalog; nothing that
+// builds reads them.
+struct PackageMeta { std::string description, repository, license; std::vector<std::string> keywords; };
+
 struct ManifestReader {
     const std::string& s;
     size_t i = 0;
@@ -3257,6 +3262,8 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* overridesOut = nullptr;// set to capture `overrides` (kama.local.json, M5.3)
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
     std::vector<std::string>* publishExcludeOut = nullptr;// set to capture `publish.exclude` (KR-100)
+    PackageMeta* metaOut = nullptr;                       // set to capture the registry metadata (description, …)
+    std::set<std::string>* topKeysOut = nullptr;          // set to capture every top-level key the manifest uses
     std::map<std::string, TargetSpec>* targetsOut = nullptr;  // set to capture `select.TARGET` entries
     std::map<std::string, SelectGroup>* groupsOut = nullptr;  // set to capture the other `select` groups
     // The `select.TARGET` value carrying `"default": true`. TARGET needs its own sink because it is
@@ -3994,6 +4001,46 @@ struct ManifestReader {
 
     // `publish`: what `kama publish` leaves out of the files git tracks. Closed like every object here —
     // `{ "exclude": [ … ] }` — so a typo'd `exlude` is refused rather than quietly shipping what it named.
+    // `description` is the one line a registry shows beside the name and searches: no line breaks or other
+    // control characters, no surrounding space, at most 200 characters.
+    bool validDescription(const std::string& d) {
+        if (d.empty()) return fail("`description` is empty — say what the package is in one line, or leave the key out");
+        size_t chars = 0;
+        for (unsigned char c : d) {
+            if (c < 0x20 || c == 0x7f) return fail("`description` is one line, with no line breaks or other control characters");
+            if ((c & 0xc0) != 0x80) ++chars;
+        }
+        if (d.front() == ' ' || d.back() == ' ') return fail("`description` has a space at its start or end");
+        if (chars > 200) return fail("`description` is " + std::to_string(chars) + " characters; the limit is 200 — it is "
+                                     "the line a registry's search shows, and the README is the place for the rest");
+        return true;
+    }
+    // `repository` is a link a registry page shows, so only an `https://` URL: anything else is either a scheme a
+    // browser should not follow from a stranger's manifest (`javascript:`) or one most cannot (`git@…`).
+    bool validRepository(const std::string& r) {
+        if (r.compare(0, 8, "https://") != 0 || r.size() == 8)
+            return fail("`repository` is \"" + r + "\" — it must be an `https://` URL (`https://github.com/you/pkg`)");
+        for (unsigned char c : r)
+            if (c <= 0x20 || c == 0x7f || c == '"' || c == '<' || c == '>' || c == '\\')
+                return fail("`repository` is \"" + r + "\" — a URL has no spaces, quotes, angle brackets or backslashes");
+        return true;
+    }
+    // `keywords` are what a search matches besides the name and description: at most five, each 1-20
+    // characters of `a-z`, `0-9` and `-`, starting with a letter — one spelling for each, so `SQL` and `sql`
+    // are not two keywords.
+    bool validKeywords(const std::vector<std::string>& ks) {
+        if (ks.empty()) return fail("`keywords` is empty — name up to five, or leave the key out");
+        if (ks.size() > 5) return fail("`keywords` names " + std::to_string(ks.size()) + "; the limit is 5");
+        std::set<std::string> seen;
+        for (const auto& k : ks) {
+            bool ok = !k.empty() && k.size() <= 20 && k[0] >= 'a' && k[0] <= 'z';
+            for (char c : k) ok = ok && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-');
+            if (!ok) return fail("keyword \"" + k + "\" is not 1-20 characters of a-z, 0-9 and '-', starting with a letter");
+            if (!seen.insert(k).second) return fail("keyword \"" + k + "\" is listed twice");
+        }
+        return true;
+    }
+
     bool publishObject() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`publish` must be a JSON object — `{ \"exclude\": [ … ] }`");
         ++i; ws();
@@ -4066,6 +4113,7 @@ struct ManifestReader {
             std::string key; if (!str(key)) return false;
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
             ++i;
+            if (topKeysOut) topKeysOut->insert(key);
             // RECOGNITION is unconditional; only STORAGE is sink-guarded. Every caller sets one or two
             // sinks and leaves the rest null, so folding the two together — `key == "sources" && sourcesOut`
             // — sent a known key the caller did not ask for down the same path as a typo. That is why
@@ -4255,8 +4303,22 @@ struct ManifestReader {
             // the compiler — it is registry metadata, the way npm's and cargo's are. Held to a STRING so a
             // typo'd shape is caught here like every other key; the identifier itself is not validated,
             // because the SPDX list is not a table kama should carry.
-            else if (key == "license") { std::string lic; if (!str(lic)) return false; }
+            else if (key == "license") { std::string lic; if (!str(lic)) return false; if (metaOut) metaOut->license = lic; }
             else if (key == "publish") { if (!publishObject()) return false; }   // read by `kama publish`
+            // Registry metadata — what a registry shows and searches (PackageMeta). Held to their shapes HERE, so
+            // a malformed one fails the next build, not a publish weeks later.
+            else if (key == "description") {
+                std::string d; if (!str(d) || !validDescription(d)) return false;
+                if (metaOut) metaOut->description = d;
+            }
+            else if (key == "repository") {
+                std::string r; if (!str(r) || !validRepository(r)) return false;
+                if (metaOut) metaOut->repository = r;
+            }
+            else if (key == "keywords") {
+                std::vector<std::string> k; if (!stringArray(k, "keywords") || !validKeywords(k)) return false;
+                if (metaOut) metaOut->keywords = k;
+            }
             else return fail("unknown key `" + key + "`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -5001,6 +5063,21 @@ static bool loadManifestNameVersion(const std::string& path, std::string& nameOu
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.nameOut = &nameOut; r.versionOut = &versionOut;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a manifest's registry metadata, its `kama` range and the set of top-level keys it uses — what
+// `kama publish` records, and what it checks the range against (keysWithinKamaFloor).
+static bool loadManifestPackageMeta(const std::string& path, PackageMeta& meta, std::string& kamaReq,
+                                    std::set<std::string>& keys, std::string& err)
+{
+    std::ifstream in(osp(path), std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.metaOut = &meta; r.kamaReqOut = &kamaReq; r.topKeysOut = &keys;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -7856,6 +7933,81 @@ static bool manifestRemoveDep(const std::string& path, const std::string& name, 
     return true;   // not present anywhere — idempotent no-op
 }
 
+// ---- `kama pkg search` — a registry's catalog.json, matched against the words given ---------------------------
+
+static std::string asciiLower(std::string s) { for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a'); return s; }
+
+// One package against the query. Every word must match the name, the description or a keyword (0 = no match);
+// a better match scores higher: the name itself, then part of the name, then a keyword, then the description.
+// The registry's own search page applies this same rule (docs/packages.md § Searching a registry).
+static int searchScore(const Json& pkg, const std::vector<std::string>& words)
+{
+    const std::string name = asciiLower(pkg.getStr("name"));
+    const std::string bare = name.find('/') == std::string::npos ? name : name.substr(name.find('/') + 1);
+    const std::string desc = asciiLower(pkg.getStr("description"));
+    std::vector<std::string> kws;
+    if (const Json* k = pkg.get("keywords")) if (k->type == Json::Arr) for (const auto& w : k->arr) kws.push_back(asciiLower(w.asStr()));
+    int score = 0;
+    for (const auto& w : words) {
+        int best = 0;
+        if (name == w || bare == w) best = 100;
+        else if (name.find(w) != std::string::npos) best = 20;
+        else if (std::find(kws.begin(), kws.end(), w) != kws.end()) best = 10;
+        else if (std::any_of(kws.begin(), kws.end(), [&](const std::string& k) { return k.find(w) != std::string::npos; })) best = 5;
+        else if (desc.find(w) != std::string::npos) best = 1;
+        if (!best) return 0;
+        score += best;
+    }
+    return score;
+}
+
+// `kama pkg search <words…> [--registry BASE]…` — each named registry's catalog, or the built-in one. Exit 0 with
+// matches, 1 with none (a search that finds nothing is not an error, but a script can tell).
+int cmdPkgSearch(const std::vector<std::string>& wordsIn, std::vector<std::string> registries)
+{
+    std::vector<std::string> words;
+    for (const auto& w : wordsIn) if (!w.empty()) words.push_back(asciiLower(w));
+    if (registries.empty()) registries.push_back(kDefaultRegistry);
+    int found = 0, failed = 0;
+    for (const auto& base : registries) {
+        const std::string url = joinUri(base, "catalog.json");
+        int rc = 0;
+        const std::string body = runCmdCapture("curl -fsSL \"" + url + "\" 2>" KAMA_DEVNULL, &rc);
+        if (rc != 0 || body.empty()) {
+            fprintf(stderr, "kama pkg search: cannot fetch %s — the registry is unreachable, or keeps no catalog "
+                    "(one that predates search: its packages still install by name)\n", url.c_str());
+            ++failed; continue;
+        }
+        Json cat; std::string perr;
+        const Json* pkgs = nullptr;
+        if (jsonParse(body, cat, perr)) pkgs = cat.get("packages");
+        if (!pkgs || pkgs->type != Json::Arr) {
+            fprintf(stderr, "kama pkg search: malformed catalog %s%s%s\n", url.c_str(), perr.empty() ? "" : ": ", perr.c_str());
+            ++failed; continue;
+        }
+        std::vector<std::pair<int, const Json*>> hits;
+        for (const auto& p : pkgs->arr) { int sc = searchScore(p, words); if (sc) hits.push_back({ sc, &p }); }
+        std::sort(hits.begin(), hits.end(), [](const std::pair<int, const Json*>& a, const std::pair<int, const Json*>& b) {
+            return a.first != b.first ? a.first > b.first : a.second->getStr("name") < b.second->getStr("name");
+        });
+        if (hits.empty()) continue;
+        if (registries.size() > 1) printf("%s%s\n", found ? "\n" : "", base.c_str());
+        size_t nw = 0, vw = 0;
+        for (const auto& h : hits) { nw = std::max(nw, h.second->getStr("name").size()); vw = std::max(vw, h.second->getStr("version").size()); }
+        for (const auto& h : hits) {
+            const std::string desc = h.second->getStr("description");
+            printf("%-*s  %-*s%s%s\n", (int)nw, h.second->getStr("name").c_str(), (int)vw, h.second->getStr("version").c_str(),
+                   desc.empty() ? "" : "  ", desc.c_str());
+        }
+        found += (int)hits.size();
+    }
+    if (found) return 0;
+    if (failed == (int)registries.size()) return 1;
+    std::string q; for (const auto& w : wordsIn) q += (q.empty() ? "" : " ") + w;
+    fprintf(stderr, "kama pkg search: no package matches \"%s\"\n", q.c_str());
+    return 1;
+}
+
 // `kama pkg add [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)` — mutate the
 // manifest, then install (lock + view update in one shot).
 int cmdPkgAdd(const std::string& base, const std::string& name, const DepSpec& d, bool dev)
@@ -7918,6 +8070,93 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
     std::ofstream o(osp(indexPath), std::ios::binary | std::ios::trunc);
     if (!o) { err = "cannot write '" + indexPath + "'"; return false; }
     o << out; return true;
+}
+
+// The release that introduced each top-level manifest key an older compiler refuses as unknown. A published
+// package using one must exclude every older compiler with its `kama` floor, so that compiler answers "needs kama
+// >=X — update" (ManifestReader::parse) rather than "unknown key". Keys older than `publish` are not listed: the
+// table starts where publishing gained a registry, and every key added from here on joins it in the commit that
+// adds it.
+static const struct { const char* key; const char* since; } kManifestKeySince[] = {
+    { "publish", "0.9.453" },
+    { "description", "0.9.523" }, { "repository", "0.9.523" }, { "keywords", "0.9.523" },
+};
+
+// Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
+// range is one interval, so it does exactly when its lower bound is at least the release before the key's, and
+// that release is outside it.
+static bool keysWithinKamaFloor(const std::set<std::string>& keys, const std::string& req, std::string& err)
+{
+    VersionReq vr; const bool parsed = !req.empty() && parseVersionReq(req, vr);
+    for (const auto& k : kManifestKeySince) {
+        if (!keys.count(k.key)) continue;
+        SemVer since, before; parseSemVer(k.since, since); before = since;
+        if (before.patch > 0) --before.patch;
+        else if (before.minor > 0) { --before.minor; before.patch = 999999; }
+        else { --before.major; before.minor = 999999; before.patch = 999999; }
+        if (parsed && vr.hasLo && cmpSemVer(vr.lo, before) >= 0 && !satisfies(vr, before)) continue;
+        err = std::string("`") + k.key + "` is new in kama " + k.since + ", and every older compiler refuses a manifest "
+              "that has it — so the package's `kama` range must start at " + k.since + " or later (it is " +
+              (req.empty() ? std::string("absent") : "\"" + req + "\"") + "). With \"kama\": \">=" + k.since +
+              "\", an older compiler says an update is needed instead of \"unknown key\"";
+        return false;
+    }
+    return true;
+}
+
+// `<registry>/catalog.json`: every package's highest version with what a registry shows about it, one line each,
+// sorted by name — what a registry's search reads (`kama pkg search`, a registry's own page). Rebuilt from every
+// index after each publish, so it can never disagree with them; a registry host may check that it does.
+static bool writeRegistryCatalog(const std::string& regDir, std::string& err)
+{
+    std::vector<std::string> indexes;   // relative package names
+    for (const auto& e : listDir(regDir)) {
+        if (e.empty() || e[0] == '.') continue;   // a publish's own staging files
+        if (e[0] == '@') {
+            for (const auto& sub : listDir(regDir + "/" + e))
+                if (!sub.empty() && sub[0] != '.' && fileExists(regDir + "/" + e + "/" + sub + "/index.json"))
+                    indexes.push_back(e + "/" + sub);
+        } else if (fileExists(regDir + "/" + e + "/index.json")) indexes.push_back(e);
+    }
+    std::sort(indexes.begin(), indexes.end());
+    std::string lines;
+    for (const auto& pkg : indexes) {
+        const std::string path = regDir + "/" + pkg + "/index.json";
+        std::ifstream in(osp(path), std::ios::binary);
+        std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        Json idx; std::string perr;
+        if (!jsonParse(src, idx, perr)) { err = "malformed registry index '" + path + "': " + perr; return false; }
+        const Json* versions = idx.get("versions");
+        const Json* best = nullptr; SemVer bestV;
+        if (versions && versions->type == Json::Arr)
+            for (const auto& v : versions->arr) {
+                SemVer sv; if (!parseSemVer(v.getStr("version"), sv)) continue;
+                if (!best || cmpSemVer(sv, bestV) > 0) { best = &v; bestV = sv; }
+            }
+        if (!best) continue;   // an index with no release version yet lists nothing to find
+        std::string line = "{ \"name\": \"" + jsonEscape(idx.getStr("name").empty() ? pkg : idx.getStr("name"))
+                         + "\", \"version\": \"" + jsonEscape(best->getStr("version")) + "\"";
+        for (const char* f : { "license", "description", "repository" })
+            if (!best->getStr(f).empty()) line += std::string(", \"") + f + "\": \"" + jsonEscape(best->getStr(f)) + "\"";
+        if (const Json* kw = best->get("keywords"))
+            if (kw->type == Json::Arr && !kw->arr.empty()) {
+                line += ", \"keywords\": [";
+                for (size_t i = 0; i < kw->arr.size(); ++i) line += (i ? ", \"" : "\"") + jsonEscape(kw->arr[i].asStr()) + "\"";
+                line += "]";
+            }
+        line += " }";
+        lines += (lines.empty() ? "\n    " : ",\n    ") + line;
+    }
+    const std::string out = "{\n  \"packages\": [" + lines + (lines.empty() ? "]\n}\n" : "\n  ]\n}\n");
+    const std::string path = regDir + "/catalog.json", tmpPath = path + ".tmp";
+    {
+        std::ofstream o(osp(tmpPath), std::ios::binary | std::ios::trunc);
+        o << out;
+        if (!o) { err = "cannot write '" + tmpPath + "'"; return false; }
+    }
+    remove(osp(path).c_str());
+    if (rename(osp(tmpPath).c_str(), osp(path).c_str()) != 0) { err = "cannot place '" + path + "'"; return false; }
+    return true;
 }
 
 // What a package IS, for publishing: the files source control versions under its directory, with the bytes
@@ -8140,6 +8379,13 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
             return 1;
         }
 
+    // The registry metadata the index entry records, and the floor a newer key needs. Refused before anything is
+    // written, so `--dry-run` refuses too: a version is permanent, and one that older compilers cannot read
+    // without being told why should not be spent.
+    PackageMeta meta; std::string kamaReq; std::set<std::string> topKeys;
+    if (!loadManifestPackageMeta(manifest, meta, kamaReq, topKeys, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
+    if (!keysWithinKamaFloor(topKeys, kamaReq, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 1; }
+
     VcsSnapshot snap;
     if (!vcsSnapshot(base, snap, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
     if (std::none_of(snap.files.begin(), snap.files.end(), [](const VcsFile& f) { return f.path == "kama.json"; })) {
@@ -8272,11 +8518,21 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     std::string entry = "{ \"version\": \"" + jsonEscape(version) + "\", \"integrity\": \"" + jsonEscape(integrity)
                       + "\", \"tarball\": \"" + jsonEscape(name + "/" + version + ".tar.gz") + "\""
                       + ", \"revision\": \"" + jsonEscape(snap.revision) + "\"";
+    // What a registry shows about this version (PackageMeta) — per version, since a description can change.
+    if (!meta.license.empty())     entry += ", \"license\": \"" + jsonEscape(meta.license) + "\"";
+    if (!meta.description.empty()) entry += ", \"description\": \"" + jsonEscape(meta.description) + "\"";
+    if (!meta.repository.empty())  entry += ", \"repository\": \"" + jsonEscape(meta.repository) + "\"";
+    if (!meta.keywords.empty()) {
+        entry += ", \"keywords\": [";
+        for (size_t k = 0; k < meta.keywords.size(); ++k) entry += (k ? ", \"" : "\"") + jsonEscape(meta.keywords[k]) + "\"";
+        entry += "]";
+    }
     if (!depsJson.empty()) entry += ", \"dependencies\": { " + depsJson + " }";
     if (!signature.empty()) entry += ", \"signature\": \"" + jsonEscape(signature) + "\", \"key\": \"" + jsonEscape(sigKey) + "\"";
     entry += " }";
 
     if (!appendIndexEntry(indexPath, name, entry, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
+    if (!writeRegistryCatalog(regDir, err)) { fprintf(stderr, "kama publish: the version is published, but %s\n", err.c_str()); return 1; }
     fprintf(stderr, "kama: published %s@%s (%s, %s%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(),
             snap.revision.c_str(), signature.empty() ? "" : ", signed", regDir.c_str());
     return 0;
@@ -9075,6 +9331,7 @@ void usage(FILE* out = stderr)
         "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
         "  kama pkg remove <kama.json> <name>\n"
         "  kama pkg update <kama.json> [<pkg>] re-resolve pins (advance a branch pin) and rewrite the lock\n"
+        "  kama pkg search <words…> [--registry BASE]…   packages whose name, description or keywords match every word\n"
         "  kama publish <kama.json> --registry <dir-or-file-uri> [--key <ssh-key>]   the committed git-tracked files, archived + recorded (+ signed) in the index\n"
         "  kama publish <kama.json> --dry-run [--registry <…>]   list what would ship, with its integrity; write nothing\n"
         "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
@@ -9094,7 +9351,8 @@ void pkgUsage()
         "  kama pkg add   [--dev] <kama.json> <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
         "                                --version V [--registry BASE])\n"
         "  kama pkg remove <kama.json> <name>\n"
-        "  kama pkg update <kama.json> [<pkg>] re-resolve pins and rewrite the lock\n");
+        "  kama pkg update <kama.json> [<pkg>] re-resolve pins and rewrite the lock\n"
+        "  kama pkg search <words…> [--registry BASE]…   find packages in a registry's catalog\n");
 }
 
 // ---- M1: toolchain version management (selector + `kama toolchain`) ----------------------------------
@@ -10528,6 +10786,20 @@ int main(int argc, char** argv)
             if (ws) { fprintf(stderr, "kama pkg remove: edits one project's manifest — name a member's kama.json\n"); return 2; }
             if (name.empty()) { fprintf(stderr, "kama pkg remove: missing <name>\n"); return 2; }
             return cmdPkgRemove(dir, name);
+        }
+        if (verb == "search") {
+            std::vector<std::string> words, registries;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (a == "--registry") {
+                    if (i + 1 >= argc) { fprintf(stderr, "kama pkg search: --registry needs a base URL\n"); return 2; }
+                    registries.push_back(argv[++i]);
+                }
+                else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg search: unknown option '%s'\n", a.c_str()); return 2; }
+                else words.push_back(a);
+            }
+            if (words.empty()) { fprintf(stderr, "kama pkg search: give the words to look for — `kama pkg search postgres`\n"); return 2; }
+            return cmdPkgSearch(words, registries);
         }
         fprintf(stderr, "kama pkg: unknown command '%s'\n", verb.c_str()); pkgUsage(); return 2;
     }

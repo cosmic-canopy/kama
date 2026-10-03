@@ -565,9 +565,17 @@ There is no registry *service* to run: a base URI plus two well-known paths, so 
         "integrity": "sha256-<tarball-hash>",
         "tarball": "geo/1.2.0.tar.gz",
         "revision": "git:<commit>",
+        "license": "MIT OR Apache-2.0",
+        "description": "Points, polygons and areas",
+        "repository": "https://github.com/you/geo",
+        "keywords": ["geometry", "math"],
         "dependencies": { "mathx": { "version": "^1.0.0" } } }
   ] }
   ```
+
+  `license`, `description`, `repository` and `keywords` are what a registry shows about the version, copied from
+  its manifest ([What a registry shows](#what-a-registry-shows--description-repository-keywords)); each is
+  present only when the manifest has it, and a reader that does not know one skips it.
 
   `revision` names the commit the tarball was built from (`kama publish` records it): check that commit out
   and you have the published source, and publishing it again — to another registry, from any machine —
@@ -575,6 +583,19 @@ There is no registry *service* to run: a base URI plus two well-known paths, so 
 
 - **Artifact** — whatever `tarball` points at: a gzipped tar of the package sources, the same format a
   `url` dependency takes.
+
+- **Catalog** — `<base>/catalog.json`, every package's highest version with what a registry shows about it,
+  sorted by name. It is what [searching a registry](#searching-a-registry) reads, and it is optional: a
+  registry without one still installs every package by name. `kama publish` rebuilds it from all the indexes
+  each time, so it never disagrees with them.
+
+  ```json
+  { "packages": [
+      { "name": "geo", "version": "1.2.0", "license": "MIT OR Apache-2.0",
+        "description": "Points, polygons and areas", "repository": "https://github.com/you/geo",
+        "keywords": ["geometry", "math"] }
+  ] }
+  ```
 
 `tarball` is resolved **relative to `<base>`** (or absolute), so metadata and artifacts can live on
 different hosts — an index on static pages, tarballs on a release host. Each version records its own
@@ -634,6 +655,10 @@ Publish refuses:
   develop against the local copy with `overrides` in `kama.local.json`, which never ships. A `path`
   **dev**-dependency is fine: nobody follows a fetched package's dev-dependencies. (Until `0.9.472` publish let
   one through and recorded it as `{}`, and the version was spent.)
+- a manifest key **newer than the package's `kama` floor**: `publish` needs `"kama"` to start at `0.9.453` or
+  later, and `description`, `repository` and `keywords` at `0.9.523` — otherwise every older compiler would
+  refuse the package with only "unknown key" instead of saying an update is needed
+  ([What compiler a package needs](#what-compiler-a-package-needs--kama)).
 
 Some tracked files belong to the repository but not the package — editor and CI configuration, a notes file,
 a fixture that only *looks* like a key. Leave them out with `publish.exclude`:
@@ -656,6 +681,48 @@ still ships the LF that was committed. kama writes the archive itself (tar heade
 and modes; the files in path order; deflate and gzip written from RFC 1951/1952) rather than handing it to
 the system `tar` and `gzip`, whose output differs between machines. That is what makes `revision` below a
 claim anyone can check, and lets a mirror hold the same integrity as the registry it copies.
+
+### What a registry shows — `description`, `repository`, `keywords`
+
+Three optional keys say what a package is, for a registry's pages and its search. Nothing that builds reads
+them; `kama publish` copies them, with `license`, into the version's index entry and the registry's catalog.
+
+```json
+{
+  "name": "@acme/geo",
+  "version": "1.2.0",
+  "kama": ">=0.9.523",
+  "license": "MIT OR Apache-2.0",
+  "description": "Points, polygons and areas",
+  "repository": "https://github.com/acme/geo",
+  "keywords": ["geometry", "math"]
+}
+```
+
+- `description` is one line — no line breaks or other control characters, no space at either end — of at most
+  200 characters: the line a search result shows. The README is the place for the rest.
+- `repository` is an `https://` URL, the link a registry page shows. Any other scheme is refused: a link a
+  browser should not follow from a stranger's manifest (`javascript:`), or one most cannot (`git@…`).
+- `keywords` are up to five words a search matches besides the name and description, each 1-20 characters of
+  `a-z`, `0-9` and `-`, starting with a letter — one spelling each, so `SQL` and `sql` are not two keywords.
+
+Each is checked wherever the manifest is read, so a malformed one fails the next build rather than a publish
+weeks later. They are new in `0.9.523`, so a package using them sets `"kama": ">=0.9.523"`; `kama publish`
+refuses one that does not.
+
+### Searching a registry
+
+```sh
+kama pkg search postgres tls
+kama pkg search geometry --registry https://kama.example.com
+```
+
+`kama pkg search` reads each `--registry`'s [catalog](#the-registry-is-a-static-file-tree) — or the built-in
+registry's, with none named — and lists the packages that match **every** word, best first, one per line with
+their latest version and description. A word matches a package when it appears, ignoring case, in its name, its
+description or one of its keywords; the name itself ranks first, then part of the name, then a keyword, then the
+description. Nothing matching exits 1, as `grep` does, so a script can tell. A registry's own search page applies
+the same rule to the same file, so the two always agree.
 
 ### Scopes and the `registries` config
 
@@ -894,7 +961,8 @@ When a manifest's `kama` range excludes the compiler reading it, that refusal le
 package needs kama >=0.9.453 … — `kama update` … What this compiler could not read: unknown key
 \`publish\`"* — an update is the fix, not an edit. So when a package starts using a manifest key, raise its
 `kama` floor to the release that introduced the key. (Compilers from `0.9.457` on; an older one names only
-the key.)
+the key.) `kama publish` holds a package to that for every key whose release it knows — `publish` and the
+registry metadata keys — so no registry version is unreadable to an older compiler without saying why.
 
 ## Command reference
 
@@ -907,6 +975,7 @@ the key.)
 | `kama pkg add [--dev] <kama.json> <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
 | `kama pkg remove <kama.json> <name>` | Drop a dependency and install. |
 | `kama pkg update <kama.json> [<pkg>]` | Re-resolve pins and rewrite the lock. |
+| `kama pkg search <words…> [--registry BASE]…` | List the packages in a registry's catalog whose name, description or keywords match every word (the built-in registry with no `--registry`). Exits 1 when nothing matches. |
 | `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. `--dry-run` (no `--registry` needed) lists what would ship and its integrity, and writes nothing. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
