@@ -3476,8 +3476,10 @@ private:
     bool assignTargetLive(const std::string& key) const;      // the assignment's target still holds a value to drop
     bool variantCopyable(const ClassInfo& c);                  // KRD-4: an enum copies when every payload does
     bool payloadCopyable(const std::string& cType_);           //   …one payload's type
+    bool variantNeedsCopyFn(const ClassInfo& ci);              //   …and whether its copy is a call (`T__copy`)
     void emitVariantCopy(ClassInfo& ci);                       //   its generated `__copy`
     std::string notCopyableMessage(const std::string& cls, const char* otherwise);   // why `copy` of `cls` is refused
+    std::string notCopyableReason(const std::string& t, std::set<std::string>& seen);  // …the type that is the cause
     std::set<std::string> _variantCopyVisiting;                //   the enums being judged (a recursive mention copies)
     void checkRearmed(const Scope& loop, int line, const char* where);   // KRD-1: back edge — given locals are live again
     void settleLoopExit(Scope& loop);                          // KRD-1: a given local's state after its loop

@@ -1,1 +1,1 @@
-cannot be copied: its `Open` variant holds a `Res`, which does not copy
+it holds a `Res` in its `Open` variant, and `Res` is a resource that does not declare

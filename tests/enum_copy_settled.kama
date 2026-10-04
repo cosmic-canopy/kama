@@ -1,0 +1,61 @@
+// Whether an enum copies is judged from what its payloads DECLARE, which is settled the moment it is first asked.
+// It was judged from `destructible`, a fact the compiler derives only AFTER generic instances register, so a
+// `DynamicArray<E>` met in a field during collection saw an `E` that "owned nothing", kept a `copy` ctor `E` cannot
+// support, and failed to compile (0.9.527–0.9.530): an error type whose variant holds a collection of itself
+// through a resource — the natural shape of an aggregate error — did not build. Every shape builds, in both
+// declaration orders, and an enum over a dtor-less `Copyable` resource copies through that resource's own `copy`.
+// Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray };
+
+// The reporter's shape: an enum, a resource holding a collection of the enum. Nothing copies.
+type enum E { A, B(Box box) }
+type resource Box {
+    DynamicArray<E> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public fn void add(E e) { this.items.add(item: give e); }
+    public const fn isize count() { return this.items.length(); }
+}
+
+// The same, declared resource-first.
+type resource Box2 {
+    DynamicArray<F> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public fn void add(F f) { this.items.add(item: give f); }
+    public const fn isize count() { return this.items.length(); }
+}
+type enum F { A, B(Box2 box) }
+
+// A collection of itself AND a payload that does not copy: the provisional "it copies" a recursive mention
+// gets must not survive into `DynamicArray<G>`'s answer.
+type resource Plain { int32 v; public ctor make(int32 v) { this.v = v; } }
+type enum G { L(DynamicArray<G> xs), P(Plain p), N }
+
+// A `Copyable` resource with no destructor: copying the enum runs its `copy` ctor.
+static int32 copies = 0;
+type resource Tok implements Copyable<This>(bare: give) {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public ctor copy(ref Tok source) { this.id = source.id; copies = copies + 1; }
+    public const fn int32 get() { return this.id; }
+}
+type enum H { T(Tok t), N }
+
+fn int32 main() {
+    Box b = Box.make();
+    b.add(e: E::A);
+    Box2 b2 = Box2.make();
+    b2.add(f: F::A);
+    if (b.count() != 1 || b2.count() != 1) { return 1; }
+
+    DynamicArray<G> gs = DynamicArray.empty();
+    gs.add(item: G::N);
+    G g = G::L(xs: give gs);
+    int32 inside = match (g) { case L(xs: xs): cast<int32>(xs.length()); case P(p: p): -1; case N: -2; };
+    if (inside != 1) { return 2; }
+
+    H a = H::T(t: Tok.make(id: 5));
+    H c = copy a;
+    int32 got = match (c) { case T(t: x): x.get(); case N: 0; };
+    if (got != 5 || copies != 1) { return 3; }
+    return 0;
+}

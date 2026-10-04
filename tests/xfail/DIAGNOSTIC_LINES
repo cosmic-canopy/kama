@@ -260,6 +260,7 @@ contract_static_mismatch	contract_static_mismatch.kama:12
 contract_type_arg	contract_type_arg.kama:9
 contract_with_body	contract_with_body.kama:2
 contract_with_field	contract_with_field.kama:2
+copy_collection_cause	copy_collection_cause.kama:7
 copy_conditional_off	copy_conditional_off.kama:13
 copy_const_ref_retain_write	copy_const_ref_retain_write.kama:16
 copy_const_ref_signature	copy_const_ref_signature.kama:9
@@ -345,6 +346,7 @@ enum_boundary_payload	enum_boundary_payload.kama:2
 enum_comptime_assert	enum_comptime_assert.kama:4
 enum_const_field	enum_const_field.kama:4
 enum_contract_method_not_public	enum_contract_method_not_public.kama:5
+enum_copy_dtorless_payload	enum_copy_dtorless_payload.kama:8
 enum_copy_payload	enum_copy_payload.kama:9
 enum_ctor_optional	enum_ctor_optional.kama:4
 enum_extends	enum_extends.kama:3

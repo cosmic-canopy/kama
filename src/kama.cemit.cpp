@@ -17647,9 +17647,19 @@ bool CEmitter::isCopyable(const std::string& cls) const
 // way. Coinductive: a mention of an enum already being judged (`Tree` inside `DynamicArray<Tree>`) is assumed to
 // copy, so a recursive enum copies exactly when the rest of it does. `DynamicArray<Tree>`'s own conditional
 // `Copyable` is decided while `Tree` is registered, by asking this very question.
+//
+// ⚠️ So the answer must rest only on facts SETTLED when it is first asked — what each payload type DECLARES (its
+// kind, a resource's `implements Copyable`, a smart handle's kind) — and never on a flag a later pass derives. It
+// began with `if (!c.destructible) return true;`, and `destructible` is the fixpoint `computeDestructible` runs
+// AFTER generic instances register: a `DynamicArray<E>` met in a field during collection saw an `E` that "owned
+// nothing", kept its `copy` ctor, and that ctor then failed to compile once the truth was known — so from 0.9.527 to
+// 0.9.530 an error type whose variant held a collection of itself through a resource did not build. The same flag
+// let an enum over a dtor-less resource through to C both ways: its `copy` was never emitted, and a non-`Copyable`
+// payload was not refused. `isImmutableType` reads the `immutable` qualifier rather than the computed flag for the
+// same reason.
 bool CEmitter::variantCopyable(const ClassInfo& c)
 {
-    if (!c.destructible || _variantCopyVisiting.count(c.name)) return true;   // owns nothing: bitwise
+    if (_variantCopyVisiting.count(c.name)) return true;
     _variantCopyVisiting.insert(c.name);
     bool ok = true;
     // The BAKED field C type: `cType()` may register an instance, and a registration asks bounds — this very
@@ -17666,26 +17676,77 @@ bool CEmitter::payloadCopyable(const std::string& t)
     auto it = _classes.find(t);
     if (it == _classes.end()) return true;                 // a primitive, a plain enum, a raw pointer: bitwise
     if (isSmartPtrClass(t)) return smartKind(t) != CollKind::Owned;   // a `Shared`/`Weak` copies by retain; `Owned` is unique
-    if (it->second.isVariant) return variantCopyable(it->second);
-    if (!it->second.destructible) return true;             // owns nothing (a value, a view): bitwise
-    return it->second.copyable;                            // string, a collection of copyables, a Copyable resource
+    const ClassInfo& ci = it->second;
+    if (ci.isVariant) return variantCopyable(ci);
+    if (ci.kind == TypeKind::Value || ci.isExternStruct) return true;   // owns nothing: bitwise
+    if (ci.isIntrinsicColl && (ci.collKind == CollKind::Fixed || isValueVectorKind(ci.collKind))) return true;
+    return ci.copyable;   // a resource only by declaring `Copyable`; a string; a collection whose elements copy
 }
 
-// Why `copy` of `cls` is refused. A resource is copied only by its own `copy` ctor, so the remedy is to declare
-// one; an enum cannot declare `Copyable` (that is a resource's choice to make) — it copies exactly when every
-// payload does — so the message names the payload that does not (KRD-4).
+// Does copying this enum take a function call — some payload it can hold copies by its own `copy` (a string, a
+// collection, a resource, a nested owning enum) or by a retain? A bitwise enum is its bytes and needs none.
+bool CEmitter::variantNeedsCopyFn(const ClassInfo& ci)
+{
+    return ci.isVariant && (ci.destructible || ci.moveOnly) && variantCopyable(ci);
+}
+
+// Why `t` does not copy, as a predicate for `t` as its subject ("is a resource that …", "copies only when …"),
+// followed down to the type that is ITSELF the reason — through an enum's payloads and a collection's element —
+// because only that type's author can do anything about it. "Add `implements Copyable`" is advice for a
+// resource, and it used to be handed to `DynamicArray` users, who cannot take it. "" when `t` copies, or when its
+// only reason is a type already in `seen`: a recursive `DynamicArray<E>` inside `E` fails only because `E` does,
+// so it is passed over for the payload that is the real cause.
+std::string CEmitter::notCopyableReason(const std::string& t, std::set<std::string>& seen)
+{
+    auto it = _classes.find(t);
+    if (it == _classes.end() || seen.count(t) || payloadCopyable(t)) return "";
+    if (isSmartPtrClass(t)) return "is unique — an `Owned` is moved, never copied";
+    const ClassInfo& ci = it->second;
+    seen.insert(t);
+    std::string why;
+    if (ci.isVariant) {
+        for (const auto& v : ci.variants)
+            for (const auto& f : v.payload) {
+                if (!why.empty()) break;
+                const std::string pt = fieldCType(t, f);
+                const std::string inner = notCopyableReason(pt, seen);
+                if (!inner.empty())
+                    why = "holds a `" + demangleForDisplay(pt) + "` in its `" + v.name + "` variant, and `"
+                        + demangleForDisplay(pt) + "` " + inner;
+            }
+    } else if (ci.isGenericInst && !ci.copyableWhenParams.empty() && _genericTypeInsts.count(t)) {
+        const GenericTypeInst& gi = _genericTypeInsts.at(t);
+        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+        for (const std::string& wp : ci.copyableWhenParams)
+            for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size() && why.empty(); ++i)
+                if (ps[i] == wp) {
+                    const std::string arg = cType(gi.typeArgs[i]);
+                    const std::string inner = notCopyableReason(arg, seen);
+                    if (!inner.empty())
+                        why = "copies only when its `" + wp + "` does, and `" + demangleForDisplay(arg) + "` " + inner;
+                }
+    } else if (ci.kind == TypeKind::Resource) {
+        why = "is a resource that does not declare `implements Copyable<This>(bare: …)`";
+    }
+    seen.erase(t);
+    return why;
+}
+
+// Why `copy` of `cls` is refused, naming the cause. Only a resource is told to declare `Copyable`,
+// since it is the one kind that chooses its copy. An enum copies exactly when its payloads do and a collection when
+// its elements do, so for those the message follows the chain to the type that is the reason.
 std::string CEmitter::notCopyableMessage(const std::string& cls, const char* otherwise)
 {
     auto it = _classes.find(cls);
-    if (it != _classes.end() && it->second.isVariant)
-        for (const auto& v : it->second.variants)
-            for (const auto& f : v.payload) {
-                const std::string pt = fieldCType(cls, f);
-                if (!payloadCopyable(pt))
-                    return "`" + cls + "` cannot be copied: its `" + v.name + "` variant holds a `" + pt + "`, which does "
-                           "not copy — an enum copies exactly when every payload does; " + otherwise;
-            }
-    return "`" + cls + "` has no `copy` method — add `implements Copyable<This>(bare: …)`, or " + otherwise;
+    const bool chooses = it != _classes.end() && it->second.kind == TypeKind::Resource
+                      && !(it->second.isGenericInst && !it->second.copyableWhenParams.empty());
+    if (it == _classes.end() || chooses)
+        return "`" + demangleForDisplay(cls) + "` has no `copy` method — add `implements Copyable<This>(bare: …)`, or "
+               + otherwise;
+    std::set<std::string> seen;
+    const std::string why = notCopyableReason(cls, seen);
+    return "`" + demangleForDisplay(cls) + "` cannot be copied: it " + (why.empty() ? "does not copy" : why) + "; "
+           + otherwise;
 }
 
 // `Enum__copy`: the tag and every bitwise payload come across as they are; each owning payload of the ACTIVE
@@ -17695,14 +17756,18 @@ void CEmitter::emitVariantCopy(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << ci.name << " " << ci.name << "__copy(" << ci.name << "* src)\n{\n";
     indent(1); *_out << ci.name << " out = *src;\n";
     indent(1); *_out << "switch (src->kama_tag) {\n";
+    // A payload copies by call exactly when it owns, or is, an identity: `ownsByValue` (a string, a collection, any
+    // `resource` — one without a destructor still has its own `copy` ctor to run — or an owning enum) or a smart
+    // handle. Everything else came across in `out = *src`.
+    auto byCall = [&](const std::string& pt) { return isSmartPtrClass(pt) || ownsByValue(pt); };
     for (auto& v : ci.variants) {
         bool any = false;
-        for (auto& f : v.payload) { auto cit = _classes.find(cType(f.type)); if (cit != _classes.end() && cit->second.destructible) { any = true; break; } }
+        for (auto& f : v.payload) if (byCall(fieldCType(ci.name, f))) { any = true; break; }
         if (!any) continue;
         indent(2); *_out << "case " << ci.name << "_" << v.name << ":\n";
         for (auto& f : v.payload) {
-            auto cit = _classes.find(cType(f.type));
-            if (cit == _classes.end() || !cit->second.destructible) continue;
+            auto cit = _classes.find(fieldCType(ci.name, f));
+            if (cit == _classes.end() || !byCall(cit->first)) continue;
             const std::string place = "src->kama_u." + kName(v.name) + "." + kMember(ci, f.name);
             if (isSmartPtrClass(cit->first)) {   // the handle came across bitwise; a copy is one more reference
                 indent(3); *_out << "(" << place << ").kama_ctrl->"
@@ -30419,7 +30484,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
-    if (ci.isVariant && ci.destructible && variantCopyable(ci))
+    if (variantNeedsCopyFn(ci))
         *_out << stat << ci.name << " " << ci.name << "__copy(" << ci.name << "* src);\n";
 #if KAMA_INHERITANCE
     if (ci.hasVtable) {
@@ -30607,7 +30672,6 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
         indent(2); *_out << "default: break;\n";
         indent(1); *_out << "}\n";
         *_out << "}\n\n";
-        if (variantCopyable(ci)) emitVariantCopy(ci);   // KRD-4: beside its drop, wherever that is emitted
         _scopes.clear();
         _currentClass = nullptr;
         return;
@@ -30979,6 +31043,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
+    if (variantNeedsCopyFn(ci)) emitVariantCopy(ci);   // beside its drop — or alone, for a dtor-less enum
     if (ci.isGraphNode) {
         emitGraphNodeHelpers(ci);   // visitEdges / writeNode / wireEdges
         emitGraphReadInto(ci);      // `K____readInto`: pass 1, shared by the shell reader and by nesting
@@ -38159,6 +38224,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             scopeOf(eci.declFile, eci.scope, eci.usings, eci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, eci.declFile);   // whose code this is — see diagFile()
             if (eci.destructible) emitDtorDefinition(eci);
+            if (variantNeedsCopyFn(eci)) emitVariantCopy(eci);
             // (its vtables went out ahead of the generic instantiations above — see there for why)
             emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
             emitVariantSynthBodies(eci);               // whatever `@generate` synthesized for it
@@ -38449,6 +38515,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                 if (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) {
                     ClassInfo& eci = it->second;
                     if (eci.destructible) emitDtorDefinition(eci);
+                    if (variantNeedsCopyFn(eci)) emitVariantCopy(eci);
                     // Model C: emit the `<Enum>__as_<C>` vtbl DEFINITION for any poly-dispatch contract the
                     // enum implements (classOf skips enums, so the class-vtbl loop above missed it). The
                     // header carries the matching `extern` decl. Enables dynamic dispatch + (P2) boxing.
