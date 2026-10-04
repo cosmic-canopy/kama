@@ -7704,8 +7704,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // the field-default fill below. It no longer silently runs the type's `default` ctor: that
                 // was a second piece of implicit construction, and a hole that quietly constructs itself is
                 // a contradiction. Spell `T x = T.empty();` to get the default.
-                bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
-                    || !d->initializer;
+                // A local about to be filled in place (`[v; N]`) is written element by element before anything
+                // reads it, so zeroing it first is only a second pass over the same storage.
+                const bool fillInit = d->initializer && isFillLiteral(d->initializer.get()) && isFixedColl(ty);
+                bool zeroInit = (_classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
+                    || !d->initializer) && !fillInit;
                 *_out << ty << " " << kName(nm) << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty, /*userName=*/true);  // track empty resources for move analysis
@@ -7729,6 +7732,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // unwrap a give/copy hand-off marker — the inner NAMED value drives
                 // move (give) vs duplicate (copy). A fresh rvalue never takes a marker.
                 SharedExpression init = d->initializer;
+                if (fillInit) {   // `InlineArray<T>#(N) a = [v; N];` — the copies are written into `a` itself
+                    line(n->line);
+                    ScopedStr _tv(_variantTargetType, ty), _tm(_matchTargetCType, ty);
+                    bool ph = _hoistOK; _hoistOK = true;
+                    const std::string place = kName(nm);
+                    const std::string st = emitArrayLiteral(static_cast<ArrayLiteralNode*>(init.get()), &place);
+                    _hoistOK = ph;
+                    flushHoisted(depth);
+                    indent(depth); *_out << st << ";\n";
+                    return;
+                }
                 int handoff = 0;   // 0 none, 1 give, 2 copy
                 if (auto* h = dynamic_cast<HandoffNode*>(d->initializer.get())) { handoff = h->isGive ? 1 : 2; init = h->value; }
                 if (handoff && !isNamedValue(init.get()))
@@ -9041,6 +9055,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool ph = _hoistOK; _hoistOK = true;
                 std::string pm = _matchTargetCType, pv = _variantTargetType;
                 _matchTargetCType = _variantTargetType = lhsCType;
+                if (isFillLiteral(as->expression.get()) && isFixedColl(lhsCType)) {   // filled where it lives
+                    const std::string st = emitArrayLiteral(static_cast<ArrayLiteralNode*>(as->expression.get()), &lhs);
+                    _matchTargetCType = pm; _variantTargetType = pv;
+                    _hoistOK = ph;
+                    flushHoisted(depth);
+                    if (!mkey.empty()) _moveState[mkey] = MoveState::NotMoved;
+                    indent(depth); *_out << st << ";\n";
+                    return;
+                }
                 std::string rv = emitExpression(as->expression);
                 _matchTargetCType = pm; _variantTargetType = pv;
                 _hoistOK = ph;
@@ -17123,7 +17146,19 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 // from the enclosing typed position (a Fixed local, return, or assignment, threaded via the same
 // target-type context as `match`/variant construction). List form -> a C99 compound literal over the
 // backing array (`(NAME){ .v = { … } }`, count checked == N); fill form -> the runtime `NAME__fill(v)`.
-std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
+//
+// `into`, when given, is the PLACE the value lands in — a local being declared, or an assignment's left side —
+// and a fill of an `InlineArray` is then the STATEMENT `NAME__fillInto(&place, v)`, which writes the copies
+// where the array lives. As a value (`place = NAME__fill(v)`) the array was built in a temporary and copied
+// over: a 1024-element local held two copies in its frame, 16 KB for an 8 KB array at -O0 and at -O2 alike,
+// and a field fill (`this.slots = [blank; (N)]`) kept an 8 KB temporary for storage that already existed.
+bool CEmitter::isFillLiteral(const ASTNode* n)
+{
+    auto* al = dynamic_cast<const ArrayLiteralNode*>(n);
+    return al && !al->elements;
+}
+
+std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* into)
 {
     if (!al) return "0";
     // An array literal builds either shape of 16-byte value aggregate — an `InlineArray<T,N>` or a
@@ -17177,6 +17212,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
     // `[v; N]` on a lane batch IS a splat — the same literal, and the operation every SIMD API names
     // separately. One spelling covers both because they mean the same thing: N copies of one value.
     if (isLiteralExpr(al->fillValue.get())) claimFloatLiterals(al->fillValue, elemCType, "an element", false, al->line);
+    if (into && !isSimd) return ty + "__fillInto(&(" + *into + "), " + emitOperandByValue(al->fillValue) + ")";
     return ty + (isSimd ? "__splat(" : "__fill(") + emitOperandByValue(al->fillValue) + ")";
 }
 

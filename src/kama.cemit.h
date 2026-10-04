@@ -2418,7 +2418,8 @@ private:
     bool isFixedColl(const std::string& cls) const;
     bool isSimdColl(const std::string& cls) const;
     bool isMaskColl(const std::string& cls) const;
-    std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
+    std::string emitArrayLiteral(ArrayLiteralNode* al, const std::string* into = nullptr);   // `[a,b,c]` / `[v; N]` -> a Fixed value
+    static bool isFillLiteral(const ASTNode* n);           // `[v; N]` — the form `emitArrayLiteral(…, into)` writes in place
     void registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName = "");   // Owned/Shared/Weak (customName: a library `Box<Contract>` routed here)
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
     void registerOptionalOfName(const std::string& sharedName);    // Optional<sharedName> — a library `Rc_<elem>` partner

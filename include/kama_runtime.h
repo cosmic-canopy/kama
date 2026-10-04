@@ -1030,6 +1030,12 @@ static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (p
    allocated, fixed-size and allocation-free, so it is what a `@noheap` region has to hand to C.     */\
 static inline T const* NAME##__dataPtr(NAME* self) { return self->kama_v; }                          \
 static inline T*     NAME##__dataPtrMut(NAME* self) { return self->kama_v; }                         \
+/* `[x; N]` written WHERE THE ARRAY LIVES — the local being declared, the field or element being assigned. The \
+   value form below has to be built in a temporary and copied over, so a 1024-element local held two copies in \
+   its frame (16 KB for an 8 KB array, at -O0 and at -O2) and a field assignment one more than it needed.     */\
+static inline void   NAME##__fillInto(NAME* self, T x) {                         \
+    for (size_t i = 0; i < (size_t)(N); ++i) self->kama_v[i] = x;                     \
+}                                                                               \
 static inline NAME   NAME##__fill(T x) {                                        \
     NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.kama_v[i] = x; return r;      \
 }

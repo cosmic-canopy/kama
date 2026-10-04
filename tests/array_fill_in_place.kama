@@ -1,0 +1,39 @@
+// `[v; N]` lands where it is written — a local being declared, a field or an element being assigned — rather than
+// being built in a temporary and copied over (which held two copies of the array in a local's frame). The value
+// is read ONCE, before any element is written, so a fill may read the array it overwrites. Returns 0, or the
+// number of the failed check.
+type resource Grid {
+    InlineArray<int32>#(16) cells;
+    public ctor make(int32 blank) { this.cells = [blank; (16)]; }
+    public fn void reset(int32 v) { this.cells = [v; (16)]; }
+    public const fn int32 at(isize i) { return this.cells[i]; }
+}
+
+fn int32 sum(const ref InlineArray<int32>#(16) xs) {
+    int32 s = 0;
+    for (isize i = 0; i < 16; i++) { s = s + xs[i]; }
+    return s;
+}
+
+fn InlineArray<int32>#(16) made(int32 v) { return [v; (16)]; }   // a value position keeps the value form
+
+fn int32 main() {
+    InlineArray<int32>#(16) a = [3; (16)];
+    if (sum(xs: a) != 48) { return 1; }
+    a[5] = 10;
+    a = [a[5]; (16)];                     // reads a[5] (10) before overwriting it
+    if (sum(xs: a) != 160) { return 2; }
+
+    Grid g = Grid.make(blank: 2);
+    if (g.at(i: 0) != 2 || g.at(i: 15) != 2) { return 3; }
+    g.reset(v: 4);
+    if (g.at(i: 7) != 4) { return 4; }
+
+    InlineArray<InlineArray<int32>#(16)>#(3) rows = [[1; (16)]; (3)];
+    rows[1] = [7; (16)];                  // an element filled in place
+    if (sum(xs: rows[0]) != 16 || sum(xs: rows[1]) != 112 || sum(xs: rows[2]) != 16) { return 5; }
+
+    InlineArray<int32>#(16) b = made(v: 6);
+    if (sum(xs: b) != 96) { return 6; }
+    return 0;
+}
