@@ -183,6 +183,7 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
         // way into the pool's body. The reader declared against the contract, so the chain names its member.
         if (tok == "kama__global_allocate")   { out += "GlobalHeap::allocate"; continue; }
         if (tok == "kama__global_deallocate") { out += "GlobalHeap::deallocate"; continue; }
+        if (tok == "kama__global_reallocate") { out += "GlobalHeap::reallocate"; continue; }
 
         // The language's own types under their C names, which no source spells: `string` is the runtime
         // header's `kama_string` (and its members `kama_string__<m>`), so a string's missing method read
@@ -22016,11 +22017,15 @@ void CEmitter::emitRuntimeSlotDefinitions()
     // by checkGlobalAllocator, which runs before any C is compiled — so a missing member emits nothing here.
     if (!_globalAllocator.empty()) {
         const ClassInfo& gci = _classes[_globalAllocator];
-        auto a = gci.methods.find("allocate"), d = gci.methods.find("deallocate");
-        if (a != gci.methods.end() && d != gci.methods.end())
+        auto a = gci.methods.find("allocate"), r = gci.methods.find("reallocate"), d = gci.methods.find("deallocate");
+        if (a != gci.methods.end() && r != gci.methods.end() && d != gci.methods.end())
             *_out << _globalAllocator << " kama_global_allocator = {0};\n"
                   << "void* kama__global_allocate(size_t n, size_t align) {\n"
                   << "    kama__Optional_UnsafePtr o = " << a->second.cName << "(&kama_global_allocator, n, align);\n"
+                  << "    return o.kama_tag == kama__Optional_UnsafePtr_Some ? o.kama_u.k_Some.k_value : 0;\n"
+                  << "}\n"
+                  << "void* kama__global_reallocate(void* p, size_t n, size_t newN, size_t align) {\n"
+                  << "    kama__Optional_UnsafePtr o = " << r->second.cName << "(&kama_global_allocator, p, n, newN, align);\n"
                   << "    return o.kama_tag == kama__Optional_UnsafePtr_Some ? o.kama_u.k_Some.k_value : 0;\n"
                   << "}\n"
                   << "void kama__global_deallocate(void* p, size_t n, size_t align) {\n"
@@ -29149,7 +29154,8 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             // funnel's block is blanked out of the header text besides.
             if (!member && next == '(' && isFunnelName(id)) {
                 if (pool)
-                    refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate" : "kama__global_allocate", line, true });
+                    refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate"
+                                        : id == "kama_realloc" ? "kama__global_reallocate" : "kama__global_allocate", line, true });
                 else if (!_allocSites.count(b.name) && !isCapacityGuardedDrop(b.name))
                     _allocSites[b.name] = AllocSite{ "calls `" + id + "`, the runtime's allocation funnel", line, file };
                 prevTok = id; i = e; continue;
@@ -29557,9 +29563,12 @@ void CEmitter::checkGlobalAllocator()
     _nsCtx = savedCtx; _typeSubst = savedSubst;
     if (!bad.empty()) { refuse(ci, bad, badLine); return; }
 
-    // A pool that reaches the funnel. Breadth-first from its two entries for the shortest chain; with a
+    // A pool that reaches the funnel. Breadth-first from its three entries for the shortest chain; with a
     // declaration, every funnel use in the graph is an edge back into these entries (buildCallGraph).
-    for (const char* entry : { "kama__global_allocate", "kama__global_deallocate" }) {
+    auto isEntry = [](const std::string& f) {
+        return f == "kama__global_allocate" || f == "kama__global_reallocate" || f == "kama__global_deallocate";
+    };
+    for (const char* entry : { "kama__global_allocate", "kama__global_reallocate", "kama__global_deallocate" }) {
         std::map<std::string, std::string> parent;
         std::vector<std::string> queue{ entry };
         std::set<std::string> seen{ entry };
@@ -29568,7 +29577,7 @@ void CEmitter::checkGlobalAllocator()
             auto it = _callEdges.find(queue[qi]);
             if (it == _callEdges.end()) continue;
             for (auto& e : it->second) {
-                if (e.first == "kama__global_allocate" || e.first == "kama__global_deallocate") {
+                if (isEntry(e.first)) {
                     parent[e.first + "#"] = queue[qi]; hit = e.first + "#"; break;
                 }
                 if (seen.insert(e.first).second) { parent[e.first] = queue[qi]; queue.push_back(e.first); }

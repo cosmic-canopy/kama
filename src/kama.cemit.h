@@ -1824,7 +1824,7 @@ private:
     // are removed from the `defined` set. With a declared `@globalAllocator` a use is an edge into the pool
     // instead; without one it is a fact.
     static bool isFunnelName(const std::string& id)
-    { return id == "kama_alloc" || id == "kama_alloc_zeroed" || id == "kama_free"; }
+    { return id == "kama_alloc" || id == "kama_alloc_zeroed" || id == "kama_realloc" || id == "kama_free"; }
     // A FOREIGN allocator: memory kama's funnel did not hand out and a declared pool therefore cannot serve,
     // so reaching one is a fact ALWAYS, pool or not. Outside the funnel's own block, kama's headers reach one
     // through exactly these names (measured over `include/` 2026-09-17, re-measured 2026-09-18). This list is

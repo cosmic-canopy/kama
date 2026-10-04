@@ -5,6 +5,20 @@ extern "<vendor_pool.h>";
 @globalAllocator type resource Pool implements GlobalHeap {
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: vendor_block_alloc(n: bytes)); }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+    // A new block, the bytes, and the old block back — the whole of `reallocate` for an allocator with nothing smarter.
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        Optional<UnsafePtr> fresh = this.allocate(bytes: newBytes, align: align);
+        match (fresh) {
+            case Some(value: q): {
+                UnsafePtr<uint8> d = cast<UnsafePtr<uint8>>(q);
+                UnsafePtr<uint8> s = cast<UnsafePtr<uint8>>(pointer);
+                copyElements(ptr: d, from: s, count: cast<isize>(bytes < newBytes ? bytes : newBytes));
+                this.deallocate(pointer: pointer, bytes: bytes, align: align);
+            }
+            case None: { }
+        };
+        return fresh;
+    }
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
 @noheap fn int32 tick() { Owned<Box> b = new Box.make(v: 3); return b.v; }

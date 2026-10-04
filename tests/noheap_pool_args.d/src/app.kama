@@ -42,6 +42,20 @@ import { core::args, std::concurrent::Atomic };
         this.head.store(value: slot + 1);
         this.release();
     }
+    // A new block, the bytes, and the old block back — the whole of `reallocate` for an allocator with nothing smarter.
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        Optional<UnsafePtr> fresh = this.allocate(bytes: newBytes, align: align);
+        match (fresh) {
+            case Some(value: q): {
+                UnsafePtr<uint8> d = cast<UnsafePtr<uint8>>(q);
+                UnsafePtr<uint8> s = cast<UnsafePtr<uint8>>(pointer);
+                copyElements(ptr: d, from: s, count: cast<isize>(bytes < newBytes ? bytes : newBytes));
+                this.deallocate(pointer: pointer, bytes: bytes, align: align);
+            }
+            case None: { }
+        };
+        return fresh;
+    }
 }
 
 fn int32 main() {

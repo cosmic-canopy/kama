@@ -2,5 +2,6 @@
 @globalAllocator type resource Pool {
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) { return Optional::None; }
 }
 fn int32 main() { return 0; }

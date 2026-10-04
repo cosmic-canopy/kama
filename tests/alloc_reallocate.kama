@@ -1,0 +1,59 @@
+// `Allocator.reallocate` (0.9.530): a growing `DynamicArray` RESIZES its block — it no longer allocates a new one,
+// copies and frees — so an arena grows the block it handed out last where it stands, and the default heap extends
+// or remaps (`realloc`). Proven by EXHAUSTION in the arena: 1000 `int32`s grow through blocks of 16, 32, … 4096
+// bytes, 8176 in all, and the arena holds 5000 — enough only if every growth happens in place. Owning and
+// over-aligned elements ride the same resize (it is a bitwise move, which relocation always is), and every `Probe`
+// built is dropped exactly once. Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray, std::collections::Arena, std::collections::BumpAllocator };
+
+static int32 built = 0;
+static int32 dropped = 0;
+
+type resource Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; built = built + 1; }
+    public const fn int32 get() { return this.id; }
+    ~Probe() { dropped = dropped + 1; }
+}
+
+@align(64) type value Wide { public int32 x = 0; public ctor make(int32 x) { this.x = x; } }
+
+unsafe fn bool aligned64(const ref DynamicArray<Wide> w) { return cast<usize>(w.dataPtr()) % 64 == 0; }
+
+fn int32 run() {
+    // In place: the array's block is the arena's last, so every doubling only moves the bump offset.
+    Arena arena = Arena.make(capacity: 5000);
+    DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
+    for (int32 i = 0; i < 1000; i++) { xs.add(item: i); }
+    if (xs.length() != 1000 || xs[0] != 0 || xs[999] != 999) { return 1; }
+
+    // Not the last block: two arrays interleave in one arena, so growth falls back to a fresh block and a copy.
+    Arena shared = Arena.make(capacity: 65536);
+    DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: shared.handle());
+    DynamicArray<int32, BumpAllocator> b = DynamicArray.withAllocator(allocator: shared.handle());
+    for (int32 i = 0; i < 100; i++) { a.add(item: i); b.add(item: i * 2); }
+    if (a[50] != 50 || a[99] != 99 || b[50] != 100 || b[99] != 198) { return 2; }
+
+    // The default heap: plain, owning (a string's buffer moves with its bytes) and over-aligned (C has no aligned
+    // `realloc`, so a fresh aligned block and the bytes).
+    DynamicArray<int64> big = DynamicArray.empty();
+    for (int64 i = 0; i < 100000; i++) { big.add(item: i); }
+    if (big[12345] != 12345i64 || big[99999] != 99999i64) { return 3; }
+    DynamicArray<string> words = DynamicArray.empty();
+    for (int32 i = 0; i < 500; i++) { words.add(item: "w${i}"); }
+    if (words[0] != "w0" || words[499] != "w499") { return 4; }
+    DynamicArray<Wide> wide = DynamicArray.empty();
+    for (int32 i = 0; i < 300; i++) { wide.add(item: Wide.make(x: i)); }
+    if (wide[299].x != 299 || !aligned64(w: wide)) { return 5; }
+    DynamicArray<Probe> probes = DynamicArray.empty();
+    for (int32 i = 0; i < 200; i++) { probes.add(item: Probe.make(id: i)); }
+    if (probes[199].get() != 199) { return 6; }
+    return 0;
+}
+
+fn int32 main() {
+    int32 r = run();
+    if (r != 0) { return r; }
+    if (built != dropped) { return 7; }
+    return 0;
+}

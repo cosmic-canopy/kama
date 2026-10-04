@@ -41,7 +41,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    **Stated precisely, because the stronger form is false and was measured false: the safe surface never
    *silently* exposes a raw pointer.** It cannot promise never to *name* one. A contract is public by
    definition, and two of kama's own extension points name `UnsafePtr` in a member — `HeapOwner<T>`'s
-   `ctor adopt(UnsafePtr<T> raw)`, the `new T(…)` hook, and `Allocator`'s `allocate`/`deallocate`, which
+   `ctor adopt(UnsafePtr<T> raw)`, the `new T(…)` hook, and `Allocator`'s `allocate`/`reallocate`/`deallocate`, which
    every container takes as `A: Allocator = GlobalAllocator`. An allocator cannot be expressed without
    naming raw memory, so this is not fixable by redesign. What holds instead is greppability at the
    declaration: **every position where a raw pointer is produced, handled, or named is marked `unsafe`

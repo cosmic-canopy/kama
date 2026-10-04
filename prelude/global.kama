@@ -118,15 +118,21 @@ type contract Comparable<T is This> for value, resource, intrinsic { const fn Or
 // block was allocated with, so an allocator may trust it (a size-class pool keeps no per-block header). The
 // compiler and the stdlib always pass `sizeof`/`alignof` of what they place, and for a pointer that may hold a
 // derived object, `sizeof(ptr:)`/`alignof(ptr:)`.
+// `reallocate` resizes a block the allocator handed out, keeping its first min(bytes, newBytes) bytes, and moves it
+// when it must: the allocator does the whole job — in place when it can, otherwise a new block, the bytes, and its
+// old block back — so `None` means what it means for `allocate` (out of memory), and the original block is then
+// untouched and still the caller's. C's `realloc`, and Zig's `remap`. A growing container calls it instead of
+// allocating, copying and freeing, which is the difference between moving pages and copying them (bench `bulk`).
 type contract Allocator for value {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);
+    fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align);
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
 // THE heap, where `Allocator` is a handle onto one: `@globalAllocator type resource Pool implements GlobalHeap`
 // replaces the default implementation of the runtime's funnel (`kama_alloc`/`kama_free`), so every box, container,
 // string and error box in the program draws from it — and `GlobalAllocator`, the default `A`, follows. Exactly one
 // instance exists, process-wide and shared by every isolate, and nothing stores or copies it: only the funnel calls
-// it. The same two members as `Allocator`, and a sibling rather than the same contract because a bound's kind clause
+// it. The same three members as `Allocator`, and a sibling rather than the same contract because a bound's kind clause
 // is what makes a container's `A` copyable (widening `Allocator` to `for value, resource` broke every container).
 // SPEC *Global allocator*.
 //
@@ -138,6 +144,7 @@ type contract Allocator for value {
 // declares none, is refused. What comes back is the pool's ordinary surface, access control included.
 type contract GlobalHeap for resource {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);
+    fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align);
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
@@ -564,13 +571,14 @@ type view Split implements Iterator<string> {
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty
 // struct). Concrete impls live at the end of the prelude, after the contracts they satisfy.
-// These two are the runtime's allocation FUNNEL (kama_runtime.h) — the only place a kama program's C obtains
-// or releases heap memory. They carry no `@heap` mark, and neither does any other runtime extern: the compiler
+// These three are the runtime's allocation FUNNEL (kama_runtime.h) — the only place a kama program's C obtains,
+// resizes or releases heap memory. They carry no `@heap` mark, and neither does any other runtime extern: the compiler
 // READS the shipped headers and derives what each one does with the heap (SPEC *No-heap subset*). That is why
 // a verdict is the same on every target — both arms of every `#if` are read — and why `@heap` on one of these
 // is now an error rather than a duplicate claim: a mark would override the derived fact, and a stale one would
 // re-refuse a program whose allocation the declared pool actually serves.
 extern fn UnsafePtr kama_alloc(usize n, usize align);
+extern fn UnsafePtr kama_realloc(UnsafePtr p, usize n, usize newN, usize align);
 extern fn void kama_free(UnsafePtr p, usize n, usize align);
 type value GlobalAllocator implements Allocator, Sendable {   // stateless: a container over it may cross an isolate
     // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
@@ -581,6 +589,12 @@ type value GlobalAllocator implements Allocator, Sendable {   // stateless: a co
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
         UnsafePtr p = null;
         p = kama_alloc(n: bytes, align: align);
+        if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
+        return Optional::Some(value: p);
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        UnsafePtr p = null;
+        p = kama_realloc(p: pointer, n: bytes, newN: newBytes, align: align);
         if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
         return Optional::Some(value: p);
     }

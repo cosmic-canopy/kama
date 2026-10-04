@@ -117,4 +117,4 @@ done
 guarded=$(grep -cE 'if \(self->kama_cap\)[[:space:]]*kama_free' include/*.h | awk -F: '{s+=$2} END {print s+0}')
 [ "$guarded" -eq 1 ] || fail "expected exactly ONE capacity-guarded kama_free in include/ (kama_string__dtor), found $guarded — CEmitter::isCapacityGuardedDrop names only that one, so a new one is silently a fact and will refuse programs SPEC says are legal"
 
-echo "check-alloc-funnel: PASS (the C allocator is called only inside the kama_alloc/kama_free funnel: include/, prelude/, lib/, and the C the emitter writes; the compiler's foreign-allocator list agrees with what include/ reaches; one capacity-guarded drop)"
+echo "check-alloc-funnel: PASS (the C allocator is called only inside the kama_alloc/kama_realloc/kama_free funnel: include/, prelude/, lib/, and the C the emitter writes; the compiler's foreign-allocator list agrees with what include/ reaches; one capacity-guarded drop)"

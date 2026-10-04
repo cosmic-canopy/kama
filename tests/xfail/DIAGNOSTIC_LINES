@@ -523,12 +523,12 @@ global_allocator_field_init	global_allocator_field_init.kama:3
 global_allocator_generic	global_allocator_generic.kama:2
 global_allocator_mutable_field	global_allocator_mutable_field.kama:3
 global_allocator_no_contract	global_allocator_no_contract.kama:2
-global_allocator_noheap_heap_pool	global_allocator_noheap_heap_pool.kama:10
-global_allocator_reach_private	global_allocator_reach_private.kama:14
+global_allocator_noheap_heap_pool	global_allocator_noheap_heap_pool.kama:24
+global_allocator_reach_private	global_allocator_reach_private.kama:15
 global_allocator_reach_undeclared	global_allocator_reach_undeclared.kama:9
-global_allocator_reach_wrong_type	global_allocator_reach_wrong_type.kama:16
+global_allocator_reach_wrong_type	global_allocator_reach_wrong_type.kama:17
 global_allocator_reaches_itself	global_allocator_reaches_itself.kama:3
-global_allocator_two	global_allocator_two.kama:6
+global_allocator_two	global_allocator_two.kama:7
 global_allocator_value	global_allocator_value.kama:2
 global_retired_capability	global_retired_capability.kama:3
 global_retired_intrinsic	global_retired_intrinsic.kama:3
@@ -792,7 +792,7 @@ new_arg_iface_nonimpl	new_arg_iface_nonimpl.kama:5
 new_arg_marker	new_arg_marker.kama:4
 new_arg_ref	new_arg_ref.kama:4
 new_bare_stateful	new_bare_stateful.kama:5
-new_bare_stateless_custom	new_bare_stateless_custom.kama:11
+new_bare_stateless_custom	new_bare_stateless_custom.kama:12
 new_dot_fallible_bad_type	new_dot_fallible_bad_type.kama:18
 new_plain_value	new_plain_value.kama:3
 new_ret_abstract	new_ret_abstract.kama:2 new_ret_abstract.kama:3
@@ -833,7 +833,7 @@ noheap_new	noheap_new.kama:4
 noheap_on_static	noheap_on_static.kama:4
 noheap_optional_dtor	noheap_optional_dtor.kama:7
 noheap_owned_drop	noheap_owned_drop.kama:6
-noheap_pool_resolve	app.kama:53
+noheap_pool_resolve	app.kama:67
 noheap_spawn	noheap_spawn.kama:13
 noheap_string_concat	noheap_string_concat.kama:4
 noheap_string_copy	noheap_string_copy.kama:5

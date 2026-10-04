@@ -61,5 +61,28 @@ type value BumpAllocator implements Allocator {
         return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
     }
 
+    // Resize IN PLACE when `pointer` is the block this arena handed out last and the region has the room: the bump
+    // offset moves and nothing is copied — so a container growing in an arena of its own grows where it stands.
+    // Otherwise a fresh block and the bytes; the old block is reclaimed with everything else at `reset()`. `None`
+    // only when the arena is exhausted, the block then untouched.
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        isize o = cast<isize>(cast<usize>(pointer) - cast<usize>(this.buffer));
+        if (o + cast<isize>(bytes) == this.offset[0]) {
+            if (o + cast<isize>(newBytes) > this.capacity) { return Optional::None; }
+            this.offset[0] = o + cast<isize>(newBytes);
+            return Optional::Some(value: pointer);
+        }
+        Optional<UnsafePtr> fresh = this.allocate(bytes: newBytes, align: align);
+        match (fresh) {
+            case Some(value: q): {
+                UnsafePtr<uint8> d = cast<UnsafePtr<uint8>>(q);
+                UnsafePtr<uint8> s = cast<UnsafePtr<uint8>>(pointer);
+                copyElements(ptr: d, from: s, count: cast<isize>(bytes < newBytes ? bytes : newBytes));
+            }
+            case None: { }
+        };
+        return fresh;
+    }
+
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }   // no-op: the Arena owns the region
 }

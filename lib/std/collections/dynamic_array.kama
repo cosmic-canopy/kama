@@ -80,18 +80,29 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         this.reserve(n: capacity);
     }
 
-    // Grow the backing buffer to `nc` elements: allocate a fresh block from `this.alloc`, bitwise-relocate
-    // the live prefix, and release the old block through the same allocator. Replaces the old in-place
-    // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
+    // Grow the backing buffer to `nc` elements through `this.alloc.reallocate`: relocation is a bitwise move for
+    // every `T`, which is exactly what a resize does with the bytes, and the allocator can extend the block in place
+    // or remap its pages instead of copying them (glibc does both; an arena grows its last block where it stands).
+    // Growing by allocate + copy + free was what the allocator contract offered from M10a until 0.9.530, and on
+    // Linux it cost 5x C and Rust: freed multi-megabyte blocks went back to the kernel and were faulted in again
+    // every round (bench `bulk`).
     unsafe fn void growTo(isize nc) {
-        isize oc = this.cap;
-        UnsafePtr<T> od = this.moveToBlock(nc: nc);
-        this.releaseBlock(block: od, cap: oc);
+        if (this.cap == 0) {
+            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+        } else {
+            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.reallocate(pointer: cast<UnsafePtr>(this.data),
+                bytes: cast<usize>(this.cap) * sizeof(T), newBytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+        }
+        this.cap = nc;
+        // The buffer may have MOVED, so every live iterator's pointer is now stale — a structural change even
+        // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
+        // how a realloc used to happen with the counter untouched (finding 7).
+        this.mods = this.mods + 1;
     }
 
-    // The two halves of `growTo`, apart because `addAll` reads its source between them: the source may be a
-    // view of this very buffer, so the old block must outlive the read. `moveToBlock` adopts a fresh block of
-    // `nc` elements holding the live prefix and hands back the old one, which `releaseBlock` returns.
+    // Growth that must keep the OLD block readable until the caller is done with it — `addAll` from a view of this
+    // very buffer, which a resize would free under the read. `moveToBlock` adopts a fresh block of `nc` elements
+    // holding the live prefix and hands back the old one, which `releaseBlock` returns.
     unsafe fn UnsafePtr<T> moveToBlock(isize nc) {
         UnsafePtr<T> nd = null;
         nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
@@ -136,7 +147,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         if (n == 0) { return; }
         isize oc = this.cap;
         UnsafePtr<T> od = this.data;
-        if (this.len + n > this.cap) { od = this.moveToBlock(nc: this.grownCapacity(need: this.len + n)); }
+        if (this.len + n > this.cap) {
+            usize from = cast<usize>(items.dataPtr());
+            usize start = cast<usize>(this.data);
+            if (oc > 0 && from >= start && from < start + cast<usize>(oc) * sizeof(T)) {
+                od = this.moveToBlock(nc: this.grownCapacity(need: this.len + n));   // the source is in this buffer
+            } else {
+                this.growTo(nc: this.grownCapacity(need: this.len + n));
+                od = this.data;
+            }
+        }
         copyElements(ptr: addr(of: this.data[this.len]), from: items.dataPtr(), count: n);
         if (od != this.data) { this.releaseBlock(block: od, cap: oc); }
         this.len = this.len + n;

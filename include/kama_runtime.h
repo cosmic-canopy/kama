@@ -144,10 +144,11 @@ static inline bool kama_type_name_eq(const char* a, const char* b) {
 // invisible to user code. Consequence (and the point): EVERY C function a kama
 // program calls must be brought in explicitly with `extern "<header.h>";`. The
 // runtime's own dependencies never leak. (All raw memory access is confined here.)
-// THE ALLOCATION FUNNEL. `kama_alloc`/`kama_free` are the two ways a kama program's C obtains and releases heap
-// memory, and both carry the block's LAYOUT — its size and its alignment — because that is what the prelude's
-// `Allocator` contract promises (`allocate(bytes, align)` / `deallocate(pointer, bytes, align)`), and the global
-// allocator is one. A pool trusts the size it is given back; SIMD storage needs its alignment honoured.
+// THE ALLOCATION FUNNEL. `kama_alloc`/`kama_free` are the ways a kama program's C obtains and releases heap
+// memory, and `kama_realloc` resizes a block it holds; all three carry the block's LAYOUT — its size and its
+// alignment — because that is what the prelude's `Allocator` contract promises (`allocate(bytes, align)` /
+// `reallocate(pointer, bytes, newBytes, align)` / `deallocate(pointer, bytes, align)`), and the global allocator is
+// one. A pool trusts the size it is given back; SIMD storage needs its alignment honoured.
 //  - `align` is a power of two. Up to the fundamental alignment, plain `malloc` already provides it.
 //  - Beyond it the block comes from the platform's aligned allocator, and must go back to ITS release: on
 //    Windows `_aligned_malloc` pairs only with `_aligned_free` — which is why `kama_free` takes `align` too.
@@ -158,8 +159,10 @@ static inline bool kama_type_name_eq(const char* a, const char* b) {
 // leg proves a declared pool's layouts exactly as it proves the default's.
 #if defined(KAMA_GLOBAL_ALLOCATOR)
 extern void* kama__global_allocate(size_t n, size_t align);
+extern void* kama__global_reallocate(void* p, size_t n, size_t newN, size_t align);
 extern void  kama__global_deallocate(void* p, size_t n, size_t align);
 static inline void* kama__impl_alloc(size_t n, size_t align) { return kama__global_allocate(n, align); }
+static inline void* kama__impl_realloc(void* p, size_t n, size_t newN, size_t align) { return kama__global_reallocate(p, n, newN, align); }
 static inline void  kama__impl_free(void* p, size_t n, size_t align) { kama__global_deallocate(p, n, align); }
 #else
 static inline void* kama__impl_alloc(size_t n, size_t align) {
@@ -178,6 +181,25 @@ static inline void kama__impl_free(void* p, size_t n, size_t align) {
     (void)align;
 #endif
     extern void free(void*); free(p);
+}
+// Resize keeping the first min(n, newN) bytes, moving the block if it must; NULL on exhaustion, with `p` untouched
+// and still owned — C's `realloc` contract, which `Allocator.reallocate` restates. This is what makes a growing
+// container cheap: glibc extends a block in place or REMAPS its pages to a new address, so nothing is copied and
+// nothing is handed back to the kernel to be faulted in again. Growing by allocate + copy + free instead was the
+// whole of a 5x gap to C and Rust on Linux (bench `bulk`): freed multi-megabyte blocks went back to the kernel and
+// every round re-faulted them. C has no aligned `realloc` outside Windows, so an over-aligned block takes a fresh
+// aligned block, the bytes, and the old one back.
+static inline void* kama__impl_realloc(void* p, size_t n, size_t newN, size_t align) {
+    if (align <= _Alignof(max_align_t)) { extern void* realloc(void*, size_t); return realloc(p, newN); }
+#if defined(_WIN32)
+    (void)n; extern void* _aligned_realloc(void*, size_t, size_t); return _aligned_realloc(p, newN, align);
+#else
+    void* q = kama__impl_alloc(newN, align);
+    if (!q) return NULL;
+    { extern void* memcpy(void*, const void*, size_t); memcpy(q, p, n < newN ? n : newN); }
+    kama__impl_free(p, n, align);
+    return q;
+#endif
 }
 #endif
 #if defined(KAMA_ALLOC_CHECK)
@@ -212,8 +234,22 @@ static inline void kama_free(void* p, size_t n, size_t align) {
     size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
     kama__impl_free((char*)p - kama__alloc_check_pad(align), kama__alloc_check_total(n, align), a);
 }
+// A resize is held to the same promise as a release — the layout it is handed must be the block's — and the header
+// travels with the block: the implementation moves header and payload together, so only the new size is written.
+static inline void* kama_realloc(void* p, size_t n, size_t newN, size_t align) {
+    size_t* h = (size_t*)(void*)((char*)p - 2 * sizeof(size_t));
+    if (h[0] != n || h[1] != align) kama__alloc_check_fail(n, align, h[0], h[1]);
+    size_t a = align > _Alignof(max_align_t) ? align : _Alignof(max_align_t);
+    size_t pad = kama__alloc_check_pad(align);
+    char* raw = (char*)kama__impl_realloc((char*)p - pad, kama__alloc_check_total(n, align),
+                                          kama__alloc_check_total(newN, align), a);
+    if (!raw) return NULL;
+    ((size_t*)(void*)(raw + pad - 2 * sizeof(size_t)))[0] = newN;
+    return raw + pad;
+}
 #else
 static inline void* kama_alloc(size_t n, size_t align) { return kama__impl_alloc(n, align); }
+static inline void* kama_realloc(void* p, size_t n, size_t newN, size_t align) { return kama__impl_realloc(p, n, newN, align); }
 static inline void  kama_free(void* p, size_t n, size_t align) { kama__impl_free(p, n, align); }
 #endif
 static inline void  kama_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }

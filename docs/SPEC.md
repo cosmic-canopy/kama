@@ -621,7 +621,7 @@ too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — th
 every node box, the root included, draw from `A` (via the placement `new(allocator:) BTreeNode` below), so
 `arena.reset()` reclaims the whole tree.
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
-`std.mem.Allocator` model), a two-method contract. It is **foundational**, so the `Allocator` contract and the
+`std.mem.Allocator` model), a three-method contract. It is **foundational**, so the `Allocator` contract and the
 default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`Hashable`) — both the collections
 *and* the smart pointers name them, and they survive `--no-std`. The concrete strategy types `Arena`/`BumpAllocator`
 stay in `std::collections`.
@@ -629,9 +629,20 @@ stay in `std::collections`.
 ```kama fragment
 type contract Allocator for value {
     fn Optional<UnsafePtr> allocate(usize bytes, usize align);  // None on OOM/exhaustion — fallible seam (never panics)
+    fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align);
     fn void deallocate(UnsafePtr pointer, usize bytes, usize align);
 }
 ```
+
+**`reallocate` resizes a block the allocator handed out** and keeps its first min(`bytes`, `newBytes`) bytes. It <!-- test: alloc_reallocate -->
+may move the block, and the allocator does the whole job: in place when it can, otherwise a new block, the bytes,
+and its old block back. So `None` means what it means for `allocate`, out of memory, and the original block is
+then untouched and still the caller's. That is C's `realloc` contract, and Zig's `remap`. `GlobalAllocator` is
+`realloc`. An arena's `BumpAllocator` grows the block it handed out last where it stands, by moving its offset,
+and otherwise bumps a fresh block and copies. An allocator with nothing smarter to do allocates, copies and
+deallocates. A growing `DynamicArray` calls it instead of doing those three steps itself, because a resize can
+extend a block or remap its pages where a copy cannot. On Linux the difference was 5× on a megabyte-scale
+append (bench `bulk`): freed blocks went back to the kernel, and every round faulted them in again.
 
 **Both halves carry the block's layout** — its size and its alignment (a power of two) — the model Rust's <!-- test: alloc_size_truth, alloc_align -->
 `Layout` and Zig's aligned allocation use. `allocate` must return storage aligned to `align`, since a type holding a `Simd` field
@@ -639,7 +650,7 @@ needs 16 and an `@align(64)` type needs 64; `deallocate` is handed back **exactl
 allocated with, so an allocator may trust it (a size-class pool keeps no per-block header). The compiler and
 the stdlib always pass `sizeof`/`alignof` of what they place, and the object's own layout
 (`sizeof(ptr:)`/`alignof(ptr:)`) when a base handle may hold a derived one. The container stores `A alloc` by
-value and routes every buffer through `this.alloc.allocate/deallocate`; dispatch is a **direct monomorphized
+value and routes every buffer through `this.alloc.allocate/reallocate/deallocate`; dispatch is a **direct monomorphized
 call** (no vtable), so a `GlobalAllocator` (a zero-size handle onto the runtime's allocation funnel, the system
 heap) costs nothing. A **stateful** allocator is a small handle pointing into a
 **caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
@@ -743,7 +754,7 @@ either: `Arena.make` draws its buffer from `GlobalAllocator`, so a `--no-heap` p
 way it scans the C it emits: every `static inline` body is a node in the same call graph, and what a runtime
 extern does with the heap is DERIVED. `#` lines are skipped, so **both arms of every `#if` are read** — which
 is what makes a no-heap verdict the same on every target, mechanically rather than by anyone remembering to
-say so. The scan bottoms out in two leaves. The **allocation funnel** (`kama_alloc`/`kama_free`) is an edge
+say so. The scan bottoms out in two leaves. The **allocation funnel** (`kama_alloc`/`kama_realloc`/`kama_free`) is an edge
 into the declared pool's entries when a program declares a global allocator, and a heap fact when it does not <!-- test: noheap_pool_fmt, noheap_pool_args -->
 — so a pool-backed program may build a string, format a number and read its arguments, all from storage it
 owns. A **foreign allocator** — one that hands back a block the program must release through a route the
@@ -829,7 +840,7 @@ type value Mixer {                                     // ...and the same gate o
 
 #### Global allocator — `@globalAllocator` ✅
 
-Every heap block a kama program's C obtains or releases goes through one funnel, the runtime's `kama_alloc`/`kama_free`,
+Every heap block a kama program's C obtains, resizes or releases goes through one funnel, the runtime's `kama_alloc`/`kama_realloc`/`kama_free`,
 and that includes each box, container buffer, string, error box and `spawn` bundle. It defaults to the platform
 allocator. A program replaces that default with a **declaration**:
 
@@ -842,11 +853,12 @@ import { std::concurrent::Atomic };
     Atomic<usize> bumped;
     Atomic<usize> head;
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { … }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) { … }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { … }
 }
 ```
 
-`GlobalHeap` has the same two members as `Allocator`, and it is a separate contract because the two are different
+`GlobalHeap` has the same three members as `Allocator`, and it is a separate contract because the two are different
 things. An `Allocator` is a **handle**: there are many of them, stored in containers and copied. `GlobalHeap` is
 **the heap**: there is exactly one, and only the funnel calls it. The default `A`, `GlobalAllocator`, is a handle
 onto the funnel, so it follows the declaration with no change. A bare `DynamicArray<T>` draws from the pool.
@@ -857,7 +869,7 @@ be freed in another ([tests/global_allocator_isolates.kama](../tests/global_allo
 declaration is held to rules that follow from that: <!-- test: global_allocator_pool, global_allocator_isolates -->
 - **At most one** per program. <!-- xfail: global_allocator_two -->
 - **A `type resource`, not generic, implementing `GlobalHeap`.** The heap has identity and must not be copied, and
-  the contract is what promises the funnel its two members. <!-- xfail: global_allocator_value, global_allocator_generic, global_allocator_no_contract -->
+  the contract is what promises the funnel its three members. <!-- xfail: global_allocator_value, global_allocator_generic, global_allocator_no_contract -->
 - **No constructor and no field initializer.** The instance is a C global, and nothing runs before `main` to
   construct it (an MCU has no hook for that either). It starts as zero bytes, so a pool is designed to begin at
   zero: an empty free list, and nothing bumped yet. <!-- xfail: global_allocator_ctor, global_allocator_field_init -->
@@ -2825,7 +2837,7 @@ It is **rejected where no body exists** — on a type, on a field, on an `abstra
 member — because there is nothing there to be unsafe. A contract member is a *conduit*: the implementation
 whose signature names `UnsafePtr` must itself be an `unsafe fn`, and a caller cannot invoke the member
 without holding an `UnsafePtr`. That is what keeps `A: Allocator` a perfectly safe **bound** while
-`allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
+`allocate`/`reallocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
 
 ```kama
 import { std::collections::FixedArray };

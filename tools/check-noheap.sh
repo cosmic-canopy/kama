@@ -291,6 +291,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 @globalAllocator type resource Pool implements GlobalHeap {
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::Some(value: malloc(n: bytes)); }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) { return Optional::None; }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }

@@ -5,6 +5,7 @@ type value Counting implements Allocator {
     public default ctor make() { return this; }
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) { return Optional::None; }
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) { return Optional::None; }
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
 fn int32 main() {
