@@ -1,0 +1,105 @@
+// A branch that cannot reach the join after it — every path through it ends in `return`, `break`, `continue`, a
+// `panic` or a loop with no way out, however deeply that is nested — contributes nothing to the move state there.
+// Until 0.9.533 only a branch whose LAST statement was a jump counted, so an `else` ending in an `if` whose two arms
+// both gave a local away and returned made the local look live at the join, and the function was refused: "moved
+// on some paths but not others" for a value moved on every path that reaches the end of its scope. Every `R`
+// built here is dropped exactly once. Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray };
+
+static int32 built = 0;
+static int32 dropped = 0;
+
+type resource R {
+    int32 n = 0;
+    public ctor make(int32 n) { this.n = n; built = built + 1; }
+    public const fn int32 value() { return this.n; }
+    ~R() { dropped = dropped + 1; }
+}
+
+type enum Kind { Keep, One, Other }
+
+fn void sink(R r) { }
+
+// The nested shape: the outer `else` exits only through its inner `if`'s two returning arms.
+fn int32 nested(ref DynamicArray<R> kept, int32 which) {
+    R v = R.make(n: which);
+    if (v.value() == 0) {
+        kept.add(item: give v);
+    } else {
+        if (v.value() == 1) {
+            R gone = give v;
+            return 1;
+        } else {
+            R last = give v;
+            return last.value();
+        }
+    }
+    return -1;
+}
+
+// The same as an `else if` chain.
+fn int32 chain(ref DynamicArray<R> kept, int32 which) {
+    R v = R.make(n: which);
+    if (which == 0) { kept.add(item: give v); }
+    else if (which == 1) { sink(r: give v); return 1; }
+    else { sink(r: give v); return 2; }
+    return 0;
+}
+
+// A `match` whose every arm returns, and a `panic` arm.
+fn int32 matched(ref DynamicArray<R> kept, Kind k) {
+    R v = R.make(n: 7);
+    if (k == Kind::Keep) {
+        kept.add(item: give v);
+    } else {
+        match (k) {
+            case One: { sink(r: give v); return 1; }
+            case Other: { sink(r: give v); return 2; }
+            case Keep: { panic(msg: "unreachable: Keep is handled above"); }
+        };
+    }
+    return 0;
+}
+
+// A loop with no way out, left only by `return`.
+fn int32 spin(ref DynamicArray<R> kept, int32 which) {
+    R v = R.make(n: which);
+    if (which == 0) {
+        kept.add(item: give v);
+    } else {
+        while (true) { sink(r: give v); return 9; }
+    }
+    return 0;
+}
+
+// Inside a loop: every path through the body either gives the local away and leaves or gives it away and goes
+// round, so the end of each pass sees it moved.
+fn int32 looped(ref DynamicArray<R> kept) {
+    int32 i = 0;
+    int32 sum = 0;
+    while (i < 4) {
+        i = i + 1;
+        R v = R.make(n: i);
+        if (i % 2 == 0) {
+            if (i == 4) { sink(r: give v); break; } else { kept.add(item: give v); continue; }
+        } else {
+            sum = sum + v.value();
+            sink(r: give v);
+        }
+    }
+    return sum;
+}
+
+fn int32 main() {
+    {
+        DynamicArray<R> kept = DynamicArray.empty();
+        if (nested(kept: kept, which: 0) != -1 || nested(kept: kept, which: 1) != 1 || nested(kept: kept, which: 5) != 5) { return 1; }
+        if (chain(kept: kept, which: 0) != 0 || chain(kept: kept, which: 1) != 1 || chain(kept: kept, which: 2) != 2) { return 2; }
+        if (matched(kept: kept, k: Kind::Keep) != 0 || matched(kept: kept, k: Kind::One) != 1 || matched(kept: kept, k: Kind::Other) != 2) { return 3; }
+        if (spin(kept: kept, which: 0) != 0 || spin(kept: kept, which: 3) != 9) { return 4; }
+        if (looped(kept: kept) != 4) { return 5; }
+        if (kept.length() != 5) { return 6; }
+    }
+    if (built != dropped) { return 7; }
+    return 0;
+}

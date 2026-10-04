@@ -6060,14 +6060,38 @@ static bool alwaysTrue(SharedExpression e)
     return b && b->value;
 }
 
-bool CEmitter::bodyDiverges(SharedStatement s)
+// Does control never fall out of the bottom of `s`, so that its move state must not be merged at the join after it?
+// Every path ends in a `return`, `break` or `continue`, a `panic`, a loop with no way out, or a branch whose every
+// arm does one of those. The model is `alwaysExits`', widened from `return` to every jump, and one-sided the same
+// way: "yes, provably" or "no", so a construct it does not model can only make a merge more conservative.
+// It used to ask only whether the LAST statement was a jump, so an `else` ending in an `if` whose two arms both
+// returned counted as falling through — and a local those arms both gave away read as live at the join: "moved on
+// some paths but not others" for a value moved on every path that reaches the end of its scope.
+bool CEmitter::bodyDiverges(SharedStatement s) const
 {
     if (!s) return false;
-    if (auto* b = dynamic_cast<BlockNode*>(s.get())) {
-        if (b->statements && !b->statements->empty()) return stmtIsJump(b->statements->back());
+    ASTNode* n = s.get();
+    if (stmtIsJump(s)) return true;
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) if (bodyDiverges(st)) return true;   // the rest is unreachable
         return false;
     }
-    return stmtIsJump(s);
+    if (auto* sc = dynamic_cast<ScopeNode*>(n)) return bodyDiverges(sc->body);    // `scope { … }` always runs
+    if (auto* bn = dynamic_cast<BorrowNode*>(n)) return bodyDiverges(bn->body);   // `borrow … { … }` always runs
+    if (auto* f = dynamic_cast<IfNode*>(n))
+        return f->elseStatement && bodyDiverges(f->ifStatement) && bodyDiverges(f->elseStatement);
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {   // exhaustive by construction: diverges when every arm does
+        if (!m->arms || m->arms->empty()) return false;
+        for (auto& a : *m->arms) {
+            if (!a) return false;
+            if (a->block) { if (!bodyDiverges(std::static_pointer_cast<StatementNode>(a->block))) return false; }
+            else if (!a->body || !exprDiverges(a->body.get())) return false;
+        }
+        return true;
+    }
+    if (auto* w = dynamic_cast<WhileNode*>(n)) return isLiteralTrue(w->booleanExpression) && !hasLoopBreak(w->whileStatement);
+    if (auto* fo = dynamic_cast<ForNode*>(n)) return !fo->booleanExpression && !hasLoopBreak(fo->body);
+    return exprDiverges(n);   // a bare `panic(…)`
 }
 
 void CEmitter::emitScopeCleanup(const Scope& s, int depth)

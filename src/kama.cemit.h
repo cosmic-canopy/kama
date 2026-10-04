@@ -3495,7 +3495,7 @@ private:
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName = false);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
-    static bool bodyDiverges(SharedStatement s);               // body ends in return/break/continue
+    bool bodyDiverges(SharedStatement s) const;                // control never falls out of its bottom
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text
