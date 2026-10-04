@@ -38,6 +38,7 @@ class P {
     a.w*b.y-a.x*b.z+a.y*b.w+a.z*b.x,
     a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w,
     a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z);
+  static int Chunk(int k){ switch(k%5){ case 0: return 7; case 1: return 64; case 2: return 1000; case 3: return 4096; default: return 65536; } }
   static int Main(string[] args){
     string w = args.Length>0?args[0]:"fib";
     ulong sum=0;
@@ -50,6 +51,11 @@ class P {
     else if(w=="map"){ const long N=100000, PASSES=10; var m=new System.Collections.Generic.Dictionary<int,long>((int)(N*2));   /* pre-sized */ for(long i=0;i<N;i++) m[(int)i]=i*2; for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=(ulong)m[k]; } }
     else if(w=="map_kernel"){ const long N=100000, PASSES=10; var m=new IntMap(262144); for(long i=0;i<N;i++) m.Put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=(ulong)m.Get(k); } }
     else if(w=="math"){ M4 mat=new M4(new V4(1,1,0,0),new V4(0,1,1,0),new V4(0,0,1,1),new V4(1,0,0,1)); double ms=0.0; for(ulong i=0;i<2000000;i++){ float s=(float)(i%8); V4 a=new V4(s,s+1,s+2,s+3), b=new V4(s+2,s+3,s+4,s+5); V4 c=V4add(a,b); V4 e=V4scale(c,3.0f); V4 f=V4sub(e,b); float dp=V4dot(a,b); V4 mv=M4transform(mat,a); M4 mm=M4mul(mat,mat); V4 q1=new V4(s,s+1,s+2,s+3), q2=new V4(s+1,s,s+3,s+2); V4 qq=QuatMul(q1,q2); float qdot=qq.x*qq.x+qq.y*qq.y+qq.z*qq.z+qq.w*qq.w; float acc=(f.x+f.y+f.z+f.w)+dp+(mv.x+mv.y+mv.z+mv.w)+(mm.c0.x+mm.c1.y+mm.c2.z+mm.c3.w)+qdot; ms+=acc; } sum=(ulong)ms; }
+    else if(w=="bulk"){ const int SRC=65536, TARGET=4194304; var src=new byte[SRC]; for(int i=0;i<SRC;i++) src[i]=(byte)(i*7+(i>>8)); var dst=new byte[TARGET];
+      for(int r=0;r<64;r++){ var buf=new System.Collections.Generic.List<byte>(); int k=r, off=r*13;
+        while(buf.Count<TARGET){ int c=Chunk(k++); if(c>TARGET-buf.Count) c=TARGET-buf.Count; off=(off+4099)%(SRC-c+1);
+          System.Collections.Generic.CollectionExtensions.AddRange(buf, new System.ReadOnlySpan<byte>(src,off,c)); }   /* List<byte>.AddRange(span): one copy */
+        buf.CopyTo(dst); ulong s=0; for(int i=r;i<TARGET;i+=4093) s+=dst[i]; sum+=s; } }
     return (int)(sum%256);
   }
 }

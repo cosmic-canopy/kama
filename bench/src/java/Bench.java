@@ -52,6 +52,12 @@ public class Bench {
     a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],
     a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2] }; }
 
+  static int chunk(int k){ switch(k%5){ case 0: return 7; case 1: return 64; case 2: return 1000; case 3: return 4096; default: return 65536; } }
+  // Java's standard library has no growable primitive byte array but ByteArrayOutputStream, whose buffer is reachable
+  // only by copying it out again (`toByteArray`). This is what that class does inside — `Arrays.copyOf` doubling,
+  // `System.arraycopy` in — without the copy-out or the `synchronized`, so it is the fair Java.
+  static final class ByteBuf { byte[] a=new byte[0]; int len;
+    void addAll(byte[] s,int off,int n){ if(len+n>a.length){ int nc=Math.max(a.length*2, len+n); a=java.util.Arrays.copyOf(a,nc); } System.arraycopy(s,off,a,len,n); len+=n; } }
   public static void main(String[] args){
     String w = args.length>0 ? args[0] : "fib";
     long sum=0;
@@ -64,6 +70,10 @@ public class Bench {
     else if(w.equals("map")){ final long N=100000, PASSES=10; HashMap<Integer,Long> m=new HashMap<>((int)(N*2));   /* pre-sized */ for(long i=0;i<N;i++) m.put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=m.get(k); } }
     else if(w.equals("map_kernel")){ final long N=100000, PASSES=10; IntMap m=new IntMap(262144); for(long i=0;i<N;i++) m.put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=m.get(k); } }
     else if(w.equals("math")){ float[][] mat={{1,1,0,0},{0,1,1,0},{0,0,1,1},{1,0,0,1}}; double ms=0.0; for(long i=0;i<2000000L;i++){ float s=(float)(i%8); float[] a={s,s+1,s+2,s+3}, b={s+2,s+3,s+4,s+5}; float[] c=v4add(a,b); float[] e=v4scale(c,3.0f); float[] f=v4sub(e,b); float dp=v4dot(a,b); float[] mv=m4transform(mat,a); float[][] mm=m4mul(mat,mat); float[] q1={s,s+1,s+2,s+3}, q2={s+1,s,s+3,s+2}; float[] qq=quatMul(q1,q2); float qdot=qq[0]*qq[0]+qq[1]*qq[1]+qq[2]*qq[2]+qq[3]*qq[3]; float acc=(f[0]+f[1]+f[2]+f[3])+dp+(mv[0]+mv[1]+mv[2]+mv[3])+(mm[0][0]+mm[1][1]+mm[2][2]+mm[3][3])+qdot; ms+=acc; } sum=(long)ms; }
+    else if(w.equals("bulk")){ final int SRC=65536, TARGET=4194304; byte[] src=new byte[SRC]; for(int i=0;i<SRC;i++) src[i]=(byte)(i*7+(i>>8)); byte[] dst=new byte[TARGET];
+      for(int r=0;r<64;r++){ ByteBuf buf=new ByteBuf(); int k=r, off=r*13;
+        while(buf.len<TARGET){ int c=chunk(k++); if(c>TARGET-buf.len) c=TARGET-buf.len; off=(off+4099)%(SRC-c+1); buf.addAll(src,off,c); }
+        System.arraycopy(buf.a,0,dst,0,TARGET); long s=0; for(int i=r;i<TARGET;i+=4093) s+=dst[i]&0xFF; sum+=s; } }
     System.exit((int)(sum%256));
   }
 }

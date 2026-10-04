@@ -11,7 +11,7 @@ bench/run build-image   # one-time: build the kama-bench toolchain image (heavy,
 bench/run all           # build + run + report in one container (does NOT build the image)
 # or step by step:
 bench/run build         # compile kama + all languages into bench/build/
-bench/run run [workload]# measure time/RSS/size (default: all nine workloads)
+bench/run run [workload]# measure time/RSS/size (default: all ten workloads)
 bench/run report        # render docs/benchmarks/RESULTS.md + results.json
 bench/run sh            # interactive shell in the bench image
 ```
@@ -31,7 +31,7 @@ Engine auto-detected (podman preferred); override with `KAMA_ENGINE=docker`.
 - **Native:** kama vs C, C++, Rust, Go, C# (JIT), Java (JIT), Lua, Python. C# Native AOT is also
   built, best-effort, into `bench/build/csharp-aot`, but not measured — the tables show the JIT build.
 - **WASM (under node):** kama→wasm (`-O3`) vs JavaScript, TypeScript.
-- **Workloads** (nine; one source per language under `src/<lang>/`):
+- **Workloads** (ten; one source per language under `src/<lang>/`):
   - `fib` — naive recursive Fibonacci summed over 0..31 (call / stack-frame cost).
   - `pi` — Leibniz series, 2×10⁷ float64 terms.
   - `collatz` — Collatz stopping times summed over 1..699 999 (integer ALU + branches).
@@ -44,9 +44,11 @@ Engine auto-detected (podman preferred); override with `KAMA_ENGINE=docker`.
   - `map_kernel` — the same workload on one hand-rolled open-addressing map, identical in every language
     (a codegen number).
   - `math` — 2×10⁶ iterations of `std::math` `Vec4`/`Mat4`/`Quat` ops (tracks SIMD lowering).
+  - `bulk` — 64× assemble a 4 MiB byte buffer from 7 B–64 KiB chunks, then copy it whole into a fixed
+    buffer, each language through its idiomatic bulk append and slice copy (what the stdlib makes of memcpy).
 
   Each emits a checksum as its exit code; the report asserts every language produces the **same**
-  checksum (fairness gate). TS compiles only the first six (see `src/ts/tsconfig.json`).
+  checksum (fairness gate). TS compiles the first six and `bulk` (see `src/ts/tsconfig.json`).
 - **Metrics:** time (`hyperfine`), peak RSS (`/usr/bin/time -v`), compile time (build wall-clock),
   package size (self-contained binary, or code + external runtime).
 

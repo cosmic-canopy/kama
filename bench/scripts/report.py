@@ -16,7 +16,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map", "map_kernel", "math"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map", "map_kernel", "math", "bulk"]
 NATIVE = ["kama", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
 WASM = ["kama-wasm", "js", "ts"]
 LABEL = {"kama": "kama", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -243,7 +243,7 @@ diverged:
   look every key up 10× in a scrambled (bijective LCG) order. Because the algorithm, hash, and capacity
   are pinned, **this is the row that answers "is kama on par with C?"** — the AOT cluster
   (kama/C/C++/Rust) should converge, exactly as it does on the compute kernels. (TS is absent here and in
-  `map`/`math`: its `tsconfig.json` compiles only fib/pi/collatz/dispatch/alloc/fnptr.)
+  `map`/`math`: its `tsconfig.json` compiles only fib/pi/collatz/dispatch/alloc/fnptr/bulk.)
 - **map** — the hash-map **library-design** row: the same workload, but each language uses its *idiomatic*
   map — kama `Map<int32, int64>`, C++ `unordered_map`, Rust `HashMap`, Go `map`, C# `Dictionary`, Java
   `HashMap` (boxed), Lua table, Python `dict`, JS `Map`. **⚠️ This measures map DESIGN, not codegen** —
@@ -267,6 +267,16 @@ diverged:
   whether the field-by-field ops lower to packed SIMD as the backend evolves. (There is no SIMD *campaign*
   and no explicit vector surface — vectorization is the C backend's, earned by the layout plus release
   inlining; see [SPEC.md](../SPEC.md) *Math*.)
+
+- **bulk** — bulk byte movement, the shape a protocol reader has: 64× (assemble a 4 MiB buffer from chunks of
+  a 64 KiB source, 7 B to 64 KiB each, then copy it whole into a fixed buffer and sample it). Each language uses
+  its idiomatic bulk append and slice copy — kama `DynamicArray.addAll` + `View.copyFrom`, Rust
+  `extend_from_slice` + `copy_from_slice`, C++ `vector::insert` + `std::copy`, Go `append(s, xs...)` + `copy`,
+  C `realloc` + `memcpy`, C# `List<byte>.AddRange(span)` + `CopyTo`, Java `System.arraycopy` into a doubled
+  `byte[]` (its standard library's only growable byte buffer, `ByteArrayOutputStream`, cannot hand its bytes
+  over without a second copy), Python `bytearray +=`, JS/TS `Uint8Array.set` into a doubled buffer, Lua
+  `table.move`. So this row measures what each standard library makes of `memcpy`; the AOT cluster should
+  converge on the machine's copy bandwidth.
 
 ## NATIVE — execution time (median, ms)
 

@@ -1,0 +1,43 @@
+// Bulk byte movement: assemble a 4 MiB buffer from chunks of a 64 KiB source — 7 B to 64 KiB each, the sizes a
+// protocol reader sees — copy it whole into a fixed buffer, and sample it; 64 times. Every language uses its own
+// idiomatic bulk append and slice copy, so this row measures what each standard library makes of memcpy.
+import { std::collections::DynamicArray, std::collections::FixedArray };
+
+fn isize chunk(isize k) {
+    isize m = k % 5;
+    if (m == 0) { return 7; }
+    if (m == 1) { return 64; }
+    if (m == 2) { return 1000; }
+    if (m == 3) { return 4096; }
+    return 65536;
+}
+
+fn int32 main()
+{
+    isize srcLen = 65536;
+    isize target = 4194304;
+    FixedArray<uint8> src = FixedArray.make(size: srcLen);
+    for (isize i = 0; i < srcLen; i++) { src[i] = truncate<uint8>(i * 7 + (i >> 8)); }
+    FixedArray<uint8> dst = FixedArray.make(size: target);
+    uint64 total = 0;
+    for (isize r = 0; r < 64; r++)
+    {
+        DynamicArray<uint8> buf = DynamicArray.empty();
+        isize k = r;
+        isize off = r * 13;
+        while (buf.length() < target)
+        {
+            isize c = chunk(k: k);
+            k = k + 1;
+            if (c > target - buf.length()) { c = target - buf.length(); }
+            off = (off + 4099) % (srcLen - c + 1);
+            buf.addAll(items: src.view().slice(from: off, count: c));
+        }
+        dst.viewMut().copyFrom(source: buf.view());
+        uint64 s = 0;
+        for (isize i = r; i < target; i = i + 4093) { s += cast<uint64>(dst[i]); }
+        total += s;
+    }
+    uint64 m = total % 256;
+    return cast<int32>(m);
+}
