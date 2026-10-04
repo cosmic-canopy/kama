@@ -2,7 +2,7 @@
 // and no destructor ever runs on a value the program did not make. The channel used to zero a sent item "so its drop
 // is a no-op", on the claim that a zero value is drop-safe. It is not the language's rule: a type states its empty
 // value (`File`, `TcpStream`: `fd = -1`, so descriptor 0 is ownable), and each send ran a destructor on a zeroed
-// copy — for a socket, `close(0)`, which took down whatever held descriptor 0 next (found building KPG-3). Here `id`
+// copy — for a socket, `close(0)`, which took down whatever held descriptor 0 next (found serving sockets). Here `id`
 // states its empty value as -1, and a destructor that sees 0 is one run on bytes nobody constructed.
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver };
 

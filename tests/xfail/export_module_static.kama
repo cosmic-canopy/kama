@@ -4,7 +4,7 @@
 //
 // This used to be diagnosed as "there is no such top-level declaration in this module", which is a
 // phantom: the declaration is right there on the next line. The export machinery simply could not see
-// module-scope declarations at all (see ROADMAP_DETAIL §2, the KB-3 entry).
+// module-scope declarations at all (see ROADMAP_DETAIL §2, the `comptime`-export entry).
 export { COUNT };
 
 static int32 COUNT = 5;

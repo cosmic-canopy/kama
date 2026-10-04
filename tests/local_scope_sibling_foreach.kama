@@ -1,5 +1,5 @@
-// The `foreach` half of local_scope_sibling_match (KB-20 was filed against `match` alone, but the
-// defect was the table, not the binder): a loop binding after a sibling block's same-named local took
+// The `foreach` half of local_scope_sibling_match (the defect was reported against `match` alone, but the
+// cause was the table, not the binder): a loop binding after a sibling block's same-named local took
 // the sibling's `string` and `takeE(v: m)` was refused. Both `foreach` paths — the indexed one over an
 // InlineArray here, the iterator one over an `Iterator<T>` — bind the same way.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }

@@ -1249,25 +1249,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
-# KB-36 — a call THROUGH a `fnptr` value reads that value. A call through a local, a parameter, a field or a bindable
+# A call THROUGH a `fnptr` value reads that value. A call through a local, a parameter, a field or a bindable
 # was indexed as nothing (a module `static` alone was), so a rename of the local left every call site behind — and
-# the parameter `decode` below was typed as `std::encoding::hex::decode` wherever that module was compiled. KB-38:
+# the parameter `decode` below was typed as `std::encoding::hex::decode` wherever that module was compiled. And
 # `F h = r.handler;` was refused, so the field read on line 10 was never emitted and never indexed either.
-echo "check-query: KB-36 calls through a fnptr value"
+echo "check-query: calls through a fnptr value"
 FIXTURE="$ROOT/tests/query/fnptr_calls.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 expect --def 5:46  -- "fnptr_calls.kama:5:20"    # a parameter, called
 expect --def 11:14 -- "fnptr_calls.kama:7:6"     # a local, called
 expect --def 12:14 -- "fnptr_calls.kama:3:9"     # a module `static`, called
 expect --def 13:16 -- "fnptr_calls.kama:4:26"    # a field, called
-expect --def 10:12 -- "fnptr_calls.kama:4:26"    # a field, bound to a local (KB-38)
+expect --def 10:12 -- "fnptr_calls.kama:4:26"    # a field, bound to a local
 expect --def 15:14 -- "fnptr_calls.kama:14:27"   # a `BindableFunctionPtr` local, called
 expect --refs 7:6  -- "fnptr_calls.kama:11:14"
 expect --refs 4:26 -- "fnptr_calls.kama:13:16"
 expect --refs 14:27 -- "fnptr_calls.kama:15:14"
 
-# KB-35 — an argument naming nothing is one diagnostic, and an indexed one names the name. Counted for KR-103's reason.
-echo "check-query: KB-35 an unresolved argument is one diagnostic"
+# An argument naming nothing is one diagnostic, and an indexed one names the name. Counted for KR-103's reason.
+echo "check-query: an unresolved argument is one diagnostic"
 ua=$("$KAMA" query "$ROOT/tests/xfail/unresolved_argument_one_diagnostic.kama" --diagnostics 2>&1 || true)
 if [ "$(printf '%s\n' "$ua" | grep -c ': error: ')" = 2 ] \
    && printf '%s\n' "$ua" | grep -qF 'cannot resolve `nosuch`' \

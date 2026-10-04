@@ -1,4 +1,4 @@
-// Peer KTLS-1 as reported: the constant is private to this PACKAGE's file, and the generic type that reads
+// The shape as reported: the constant is private to this PACKAGE's file, and the generic type that reads
 // it is instantiated by the package that depends on it.
 export { Box };
 

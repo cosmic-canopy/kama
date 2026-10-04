@@ -226,7 +226,7 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 {
     if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // an aggregate keeps its shape (KR-93)
     if (proto.kind == CTValue::Float) {
-        // A literal stored to a float32 is its own float32 value, never its float64 value rounded again (KB-37).
+        // A literal stored to a float32 is its own float32 value, never its float64 value rounded again.
         double d = (proto.isF32 && v.kind == CTValue::Float && v.isLit) ? (double)v.lit32 : ctAsF(v);
         v.kind = CTValue::Float; v.isF32 = proto.isF32; v.isLit = false;
         v.f = proto.isF32 ? (double)(float)d : d;
@@ -564,7 +564,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         auto mkInt = [&](int64_t r) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = r; };
         auto mkBool = [&](bool r) { out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false; out.i = r ? 1 : 0; };
         if (flt) {
-            // The run-time rule, at compile time (KB-37): a literal takes the other operand's type. Beside a typed
+            // The run-time rule, at compile time: a literal takes the other operand's type. Beside a typed
             // `float32` it is its float32 value and the arithmetic is float32's — each result rounded to float, which
             // is what one C `float` operation gives, since a double holds the exact result of one. Beside a typed
             // `float64` it is its float64 value. Between two literals the result is still a literal, carried as both.
@@ -1543,7 +1543,7 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
         // by a `comptime fn` call: the literal goes through `ctBuildArrayInit`, the same arm a comptime
         // LOCAL's initializer takes, and bakes through the same `ctRender`. It used to be refused as
         // "unsupported expression in comptime fn" — the general evaluator has no array-literal case, on
-        // purpose (an array is not a scalar value) — so the first external package built a 64-entry table
+        // purpose (an array is not a scalar value) — so a real package built a 64-entry table
         // by assignment inside a `comptime fn`. The consumer-driven audit (0.9.221) admitted the literal.
         CTValue elemProto; int64_t an; std::string aelem;
         const bool isArrayConst = ctArrayInfo(dc.type, elemProto, an, aelem);

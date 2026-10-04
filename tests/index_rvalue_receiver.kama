@@ -1,4 +1,4 @@
-// Peer KTLS-2: indexing a VALUE — a call result, or a member of one — handed `&(call)` to the accessor, so
+// Indexing a VALUE — a call result, or a member of one — handed `&(call)` to the accessor, so
 // `s.bytes()[1]` passed `kama check` and failed clang with "cannot take the address of an rvalue". A value
 // receiver is now held in a temporary: a hoisted local the scope drops when it owns something (`mkList()`),
 // a compound literal otherwise (a view, an array, a member copied out of a temporary).

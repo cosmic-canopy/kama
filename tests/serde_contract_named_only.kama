@@ -2,7 +2,7 @@
 // `DynamicArray<int32>` is `Serializable` (its element is), so it binds to a `Serializable` parameter in a
 // program that imports nothing from std::serialization. The compiler skips serde code nobody can use, and it
 // judged "nobody" by two signals (a `@generate` derive, a serializer backend) that missed the third: NAMING a
-// serde contract, as `Sink.add` does. With one unrelated JSON import the same call built (peer KPG-30).
+// serde contract, as `Sink.add` does. With one unrelated JSON import the same call built.
 import { std::collections::DynamicArray };
 
 type resource Sink {

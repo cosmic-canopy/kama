@@ -6,7 +6,7 @@
 // `default: break;`, and a pinned tag lowers to `typedef uint8_t Tri;`, so clang saw 256 values, three
 // cases, and a fall-through out of a non-void function. The value form had already been fixed for this
 // exact CFG edge (the panic arm); the statement form was declared correct "by construction" and was
-// not. Found by the first external project (their KB-12), who rewrote every such function to assign in
+// not. A real program hit it, and its author rewrote every such function to assign in
 // the arms. Both enum shapes, because the two `default:` arms are separate lines of the emitter.
 //
 // Measured siblings, kept as controls: the UNPINNED enum builds either way (a real C enum tag satisfies

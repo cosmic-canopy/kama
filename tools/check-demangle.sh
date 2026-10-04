@@ -98,7 +98,7 @@ want std__collections__DynamicArray_string_kama__GlobalAllocator__dtor  'std::co
 want kama__Optional_string  'Optional<string>'
 want kama_main              main
 
-# --- the language's own types under their C names (peer KTLS-3) -----------------------------------
+# --- the language's own types under their C names -------------------------------------------------
 want kama_string            string
 want kama_string__length    string::length
 want InlineArray_int32_4    'InlineArray<int32>#(4)'

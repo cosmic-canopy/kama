@@ -1,4 +1,4 @@
-// A raw pointer as a CONTAINER ELEMENT. Reported by the first external project (KB-10): declaring an
+// A raw pointer as a CONTAINER ELEMENT: declaring an
 // `InlineArray<UnsafePtr>#(1)` was enough to fail the build — the natural spelling for a
 // `WGPUPipelineLayoutDescriptor`'s array of bind-group layout handles.
 //

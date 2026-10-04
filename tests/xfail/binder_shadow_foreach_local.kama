@@ -3,7 +3,7 @@
 // The ban was enforced only at a DECLARATION until 0.9.253, so the three body-level binders slipped past
 // it. It was never a decision — and it did not even hold together: this exact shape used to fail at the
 // first USE with a bogus type error (the outer `m`'s type answered for the binding), which is what
-// consumer KB-20 reported. 0.9.248 answered that by making the shadow work; this is the reversal.
+// was reported. 0.9.248 answered that by making the shadow work; this is the reversal.
 //
 // Sibling-scope reuse stays legal — see tests/local_scope_sibling_foreach. Two blocks that never coexist
 // are not shadowing.

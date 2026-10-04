@@ -26,7 +26,7 @@ not made available. "No consumer yet" is not a verdict. A surface item is *sched
 (say why a consumer never needs it), or a *non-goal* (say what answers the need instead), and each verdict
 is written down in ROADMAP_DETAIL. Ponytail's ladder still applies to the implementation of whatever is
 decided: least code, deletion over addition. Learned the expensive way: the read-only place was refused
-three times as "the corpus asks for it nowhere" and then blocked the first external package.
+three times as "the corpus asks for it nowhere" and then blocked a package from being written at all.
 
 ## Verify the claim before you build on it
 
@@ -114,6 +114,22 @@ Notes:
   builds. A guard that cannot honor that says `# check-heavy: yes` in its own header and is then run
   alone. The other marker is `# check-legs: native san` (default `native`) for a guard that must also run
   on the sanitizer or wasm leg. Both live in the guard, not in a list, so enrollment stays automatic.
+
+## Gaps reported by other projects
+
+Projects built on kama report the gaps they hit, in their own trackers, under their own numbering. **This repo
+never names them.** Not a peer project or package, nor one of its gap ids (`KPG-…`, `KRD-…`, `KB-…`, …), in code,
+comments, tests, docs, commit messages or ROADMAP rows. Such a reference means nothing to a reader of kama, it
+dates the instant the other tracker renumbers or closes, and it was already purged once and crept back because
+this rule was not written here. A reported gap becomes kama's own in one of two ways:
+
+- **Fixed now.** The commit, the fixture and the comments describe the defect itself — the program that failed,
+  the wrong output, the versions it affected — never where the report came from.
+- **Not fixed now.** Port it into `docs/ROADMAP.md` as a `KR-<n>` row with its reasoning in ROADMAP_DETAIL, and
+  cite it by that id from then on.
+
+Naming a published package as an *example* of the ecosystem (`@kama/sodium` as a dependency in a docs snippet, a
+package that vendors many `csources`) is not a gap reference and is fine.
 
 ## Where things are written down
 

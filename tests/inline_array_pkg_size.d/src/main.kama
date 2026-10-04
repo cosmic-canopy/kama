@@ -1,5 +1,5 @@
 // Indexing an `InlineArray` field across a PACKAGE boundary, with the size constant deliberately NOT
-// imported. Reported by the first external project (KB-11), found while tidying an import that was
+// imported. Found while tidying an import that was
 // genuinely unused by name — so every "remove unused imports" pass, human or automated, hits it.
 //
 // Before the fix this was `raw pointer access requires an `unsafe fn`` — a diagnostic naming neither the

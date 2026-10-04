@@ -2033,7 +2033,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     }
     // ...and the lexer scans those same bytes from MEMORY, as ONE flex buffer — which its lookahead depends on:
     // `give`/`copy`/`truncate` are keywords only before a name, and contextualWord reads the text after the word in
-    // the buffer (KB-35). Through a FILE* flex loads the source 16 KB at a time, so that look, at a refill, met the
+    // the buffer. Through a FILE* flex loads the source 16 KB at a time, so that look, at a refill, met the
     // buffer's end instead of the text: `give s` straddling byte 16384 lexed as two names, and a correct file failed
     // to parse for its LENGTH ("unexpected IDENTIFIER", found when an edit to std::io moved one there). The editor's
     // door (parseSource) always scanned from memory. Windows' text stream turned CRLF into LF before the lexer saw
@@ -3154,7 +3154,7 @@ struct BuildSettings {
     // must not make for its consumer (one changes what compiles, the other demands an SDK) and are read
     // from the root only. This one can only turn contraction OFF, and it states a requirement of the
     // dependency's OWN arithmetic — which the consumer compiles. Shipped in 0.9.169 grouped with the
-    // other two, and the first consumer's raw `-ffp-contract=off` cflag (which propagates) would have
+    // other two, and a dependency's raw `-ffp-contract=off` cflag (which propagates) would have
     // silently lost its guarantee on migrating to the key.
     bool reproFloat = false;
     std::string kamaReq;      // the `kama` compiler-version range this manifest declares ("" = none)
@@ -3314,7 +3314,7 @@ struct ManifestReader {
     }
 
     // A flag array — `cflags`, `ldflags`, `cxxflags`, `objcflags`, `link`. Each element is ONE argument to the C
-    // compiler, passed exactly as written (shellArg), so a string means the same on every host (KPG-7). They used
+    // compiler, passed exactly as written (shellArg), so a string means the same on every host. They used
     // to be pasted into a shell command, so a manifest carried shell syntax: `-DX=\"h.h\"` to keep a quote,
     // `-Wl,-rpath,\$ORIGIN` to keep a dollar. Passed as written, those backslashes would reach the compiler and
     // silently mean something else — so an element carrying one is refused, naming the spelling that now works.
@@ -5116,8 +5116,8 @@ const std::string& ownImportName(const std::string& packageDir)
 //
 // A dependency's `cflags`/`ldflags`/`link` used to be read NOWHERE: at build time a dep's kama.json was
 // consulted for its `source`, its `name` and its `dependencies`, and for nothing else. So every consumer
-// had to repeat the block, and drift between the copies was silent — the first external project repeats
-// it in two packages today.
+// had to repeat the block, and drift between the copies was silent — a project of two packages carried
+// it twice.
 //
 // The rule is per-manifest resolution, then concatenation. Each manifest resolves its own settings under
 // today's precedence (project tier, then the selected target's; a target's `link` REPLACES that
@@ -6079,7 +6079,7 @@ static std::string jsonEscape(const std::string& s)
 // Write `kama.lock` deterministically (sorted std::map => byte-stable => reproducible re-install).
 static bool writeLockFile(const std::string& path, const std::map<std::string, LockEntry>& pkgs)
 {
-    // BINARY, like every stream this driver opens (KB-28): a text-mode ofstream turns each `\n` into `\r\n` on
+    // BINARY, like every stream this driver opens: a text-mode ofstream turns each `\n` into `\r\n` on
     // Windows, so a lock written there differed byte for byte from the same lock written anywhere else — every
     // committed kama.lock came back "modified" after a Windows install, which is the opposite of byte-stable.
     std::ofstream out(osp(path), std::ios::binary);
@@ -6324,7 +6324,7 @@ static int writeHostHeaderIfExposed(CEmitter& emitter)
                         "or rename the file\n", g_hostHeaderPath.c_str());
         return 1;
     }
-    std::ofstream out(osp(g_hostHeaderPath), std::ios::binary);   // LF on every host (KB-28)
+    std::ofstream out(osp(g_hostHeaderPath), std::ios::binary);   // LF on every host
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", g_hostHeaderPath.c_str()); return 1; }
     out << text.str();
     return 0;
@@ -6336,7 +6336,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
                         bool* externsGpu = nullptr, bool* externsIsolate = nullptr)
 {
-    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host (KB-28)
+    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
     if (!out) {
         fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str());
         return 1;
@@ -6349,7 +6349,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
-    // hosting model, so only for a program that actually creates a thread (KB-26 — see noteThreadSpawn).
+    // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
     out.close();
@@ -6374,7 +6374,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsGpu = nullptr,     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
                      bool* externsIsolate = nullptr) // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
 {
-    std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host (KB-28)
+    std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
 
     std::vector<std::unique_ptr<std::ofstream>> moduleFiles;
@@ -6394,7 +6394,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
-    // hosting model, so only for a program that actually creates a thread (KB-26 — see noteThreadSpawn).
+    // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
     header.close();
@@ -6432,7 +6432,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
                          externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate) != 0) return 1;
 
-    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host (KB-28)
+    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }
     { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
     out << "\n";
@@ -6452,7 +6452,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
 }
 
 // One manifest flag — a `cflags`/`ldflags`/`cxxflags`/`objcflags` entry, a `link` library, a `--link` — as exactly
-// ONE argument of a command the host's shell reads (KPG-7). They were pasted in raw, so `sh` stripped the quotes
+// ONE argument of a command the host's shell reads. They were pasted in raw, so `sh` stripped the quotes
 // from `-DCFG="my_config.h"` (the Mbed TLS idiom) and a manifest had to carry POSIX shell escapes that cmd.exe
 // reads differently. A flag made only of characters no shell treats specially is emitted as-is, so the command —
 // and the object cache keyed on it — is byte-identical for every manifest that already worked; anything else is
@@ -6531,11 +6531,11 @@ int runCmd(const std::string& cmd)
 #endif
 }
 
-// ---- a command too long for the HOST SHELL (KB-27) -------------------------------------------------------
+// ---- a command too long for the HOST SHELL ---------------------------------------------------------------
 // Every C compile and link goes through the host's shell — system() is `cmd /c` on Windows, and the `-j` pool
 // hands cmd the same line — and cmd.exe stops at 8,191 characters. A package with enough `csources` cannot build
 // there at all: each compile carries one `-I` per distinct csources DIRECTORY, and @kama/sodium spreads 120
-// sources over 78 of them (measured by the first consumer: 11,865 characters of `-I` before a single input).
+// sources over 78 of them (measured: 11,865 characters of `-I` before a single input).
 // cmd answers "The command line is too long.", once per job, and the build dies on a manifest that is legal
 // and builds everywhere else. POSIX has the same wall further out: `sh -c <string>` is ONE argument, and
 // Linux caps one argument at 131,072 bytes.
@@ -7513,7 +7513,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             return 1;
                         }
                         VersionReq merged = intersect(accReq[r.name], req);
-                        // KB-39: a restart is for a tighter range that EXCLUDES the version already chosen. It used to
+                        // A restart is for a tighter range that EXCLUDES the version already chosen. It used to
                         // fire whenever the merged range's HIGHEST version differed from the chosen one — and a version
                         // chosen from the LOCK is deliberately not the highest: the root's `^0.5.0` kept its locked
                         // 0.5.0, a path dependency's `^0.5.0` then saw 0.5.1, and every restart chose 0.5.0 from the
@@ -8373,7 +8373,7 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     if (!loadManifestDeps(manifest, deps, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
     // A `path` dependency names a directory on THIS machine, and a fetched package arrives without it: the
     // resolver refuses one below a fetched package (cmdPkgInstall), so every consumer's install would fail — and a
-    // published version is permanent (KPG-2, from @kama/postgres: the index recorded the dep as `{}` and the version
+    // published version is permanent (a package once published one: the index recorded the dep as `{}` and the version
     // was spent). Refused before anything is written, so `--dry-run` refuses it too. A `path` DEV-dependency is
     // not read here, and is harmless: nobody follows a fetched package's dev-dependencies.
     for (auto& kv : deps)
@@ -12526,7 +12526,7 @@ int main(int argc, char** argv)
         // compile flag on a link line is not merely redundant, it can be fatal. `-x <lang>` is a sticky
         // clang MODE flag: on the link command it applies to the `.o` inputs, so clang lexes Mach-O bytes
         // as source and emits a wall of `null character ignored` before `too many errors emitted`.
-        // Reported by the first engine consumer (KB-16) against a dependency whose `cflags` carried
+        // Found building an engine against a dependency whose `cflags` carried
         // `-x objective-c`: its own build was fine and every CONSUMER's link died, naming an object file
         // and nothing else. `ldflags` is the tier that reaches a link.
         //
@@ -12653,7 +12653,7 @@ int main(int argc, char** argv)
         // Each `csources` entry's own directory, so a header BESIDE the .c is findable — from the .c
         // itself, and from the kama file that `extern "shim.h";`s it. Deduped, and AFTER the project's
         // own dirs above so a first-party header still shadows a dependency's.
-        SpillList incList;   // the one part of the prefix that grows with a package — see fitCommand (KB-27)
+        SpillList incList;   // the one part of the prefix that grows with a package — see fitCommand
         incList.rsp = stripExtension(outPath) + ".includes.rsp";
         {
             std::set<std::string> seenDirs;
@@ -13000,9 +13000,9 @@ int main(int argc, char** argv)
         // gets a -D so kama_args_init() knows to reattach a console (see kama_runtime.h). The -D belongs
         // in `cmd` and NOT in the link tail: a per-TU `-c` job takes only the compile flags, so a
         // link-tail -D is silently lost in any multi-TU build.
-        // KRD-2: the main thread's stack is 8 MiB, the size Linux and macOS give it, rather than Windows' 1 MiB
+        // The main thread's stack is 8 MiB, the size Linux and macOS give it, rather than Windows' 1 MiB
         // default. An isolate's stack is stated as the main thread's own (kama_isolate.h), so a recursion that
-        // works on one works on the other — on every target, which is what the reporter found was not true.
+        // works on one works on the other — on every target, which until `0.9.529` it did not.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-Wl,--stack,8388608 ";
         if (!wasm && !stopsAtObject && g_target.isWindows() && g_target.subsystem == "windows") {
             link << "-Wl,--subsystem,windows ";
@@ -13031,7 +13031,7 @@ int main(int argc, char** argv)
             // A kama program is a batch program: `main` returns an exit code and the process is done.
             // (The reasoning, and the node teardown deadlock that made it unconditional, is above.)
             setScalar("EXIT_RUNTIME", "1");
-            // KRD-2: the main thread's stack, which an isolate's is too (kama_isolate.h: an unsized pthread inherits
+            // The main thread's stack, which an isolate's is too (kama_isolate.h: an unsized pthread inherits
             // this). 256 KiB — emscripten's own is 64 KiB, which a debug build, keeping every frame in linear memory,
             // exhausts at a few thousand calls — and no more, because every stack is carved out of the module's one
             // fixed memory. Under PROXY_TO_PTHREAD `main` itself runs on a pthread sized from this setting
@@ -13268,7 +13268,7 @@ int main(int argc, char** argv)
                     // flags on the link too, or the runtime is never pulled in.
                     // The user's `cflags` span comes OUT here, and only here: this command compiles
                     // nothing, it consumes objects. See where the span is recorded for what a compile
-                    // flag on a link line does (KB-16).
+                    // flag on a link line does.
                     std::ostringstream ld;
                     ld << linkDriver(base.substr(0, cflagsPos)) << base.substr(cflagsEnd) << linkGc;
                     // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).

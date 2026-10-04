@@ -1,7 +1,7 @@
 // A constructor must assign every field ON EVERY PATH — and only there. Until 0.9.450 the check counted an
 // assignment only at the ctor's top level and did not walk a `match` at all, so it misread both directions:
 //   - a trailing `match` whose every arm RETURNS was taken for a fall-through, and a fallible ctor that never
-//     touches `this` was told to assign every field (the peer project's KB-33, `RelayIdentity.fromSeed`);
+//     touches `this` was told to assign every field;
 //   - an `if`/`else` or `match` that assigns a field in every branch did not count as assigning it.
 // The rule now is definite assignment, as in Swift and C#: a branch walks a copy of the state it entered
 // with, and where branches rejoin a field counts only if every branch that can fall through assigned it.
@@ -16,7 +16,7 @@ fn Result<int32, E> parse(int32 code) {
 type value Plain {
     public int32 x;
     public ctor of(int32 x) { this.x = x; }
-    // KB-33 as filed: the `match` is the last statement and both arms return, so nothing falls off the end.
+    // The reported shape: the `match` is the last statement and both arms return, so nothing falls off the end.
     public ctor Result<Plain, E> fromCode(int32 code) {
         Result<int32, E> r = parse(code: code);
         match (r) {

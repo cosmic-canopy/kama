@@ -2,8 +2,8 @@
 // `Box::from_raw`) lets ownership ENTER kama from a host API; `release()` (`Box::into_raw`) lets it LEAVE:
 // the raw block comes back and the handle is emptied, so the destructor frees nothing. The host's own
 // userdata slot then holds the lifetime — borrow through it with a `ref T` parameter, `adopt` it back to
-// destroy. This is the sanctioned way for a value to outlive the frame that made it, and the reason the
-// first consumer no longer needs to calloc a `World` by hand (their KB-14/KB-15 both started there).
+// destroy. This is the sanctioned way for a value to outlive the frame that made it, and the reason a
+// program no longer needs to calloc a `World` by hand (two raw-seam defects started there).
 //
 // Exit code: 42 iff the pointee survived `install` (its dtor did not run), was readable through a `ref`
 // borrow, and was dropped exactly once by `teardown`; otherwise the drop count + 10 * the value read.

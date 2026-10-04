@@ -1,4 +1,4 @@
-// A receive that does not block forever (KPG-5, from @kama/postgres): `tryRecv()` takes a value only if one is
+// A receive that does not block forever: `tryRecv()` takes a value only if one is
 // buffered, `recvTimeout(timeout:)` waits at most that long. Each answers `Received(item)`, `Empty` (none yet, a
 // sender is live) or `Closed` (every sender gone, drained). A pool shared by worker isolates needs exactly this: an
 // `acquire` that waits for a returned connection until a deadline, then fails — with only the blocking `recv()`, an

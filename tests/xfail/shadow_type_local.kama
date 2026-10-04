@@ -1,4 +1,4 @@
 // KR-57's type half: a binding may not take the name of a type in scope. It had no negative fixture of its
-// own until KB-34 narrowed "in scope" to what a file declares or imports.
+// own until `0.9.449` narrowed "in scope" to what a file declares or imports.
 type value Node { int32 x; public ctor make() { this.x = 1; } }
 fn int32 main() { int32 Node = 2; return Node - 2; }

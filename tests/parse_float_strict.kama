@@ -1,4 +1,4 @@
-// Peer KPG-13 and what it led to. `parse::<float64>` refused a subnormal it had read exactly — strtod raises
+// Strict float parsing, and what it led to. `parse::<float64>` refused a subnormal it had read exactly — strtod raises
 // ERANGE in BOTH directions, and both were reported as OutOfRange. Only overflow is out of range now; an
 // underflow rounds to zero or a subnormal, as in Rust and Go and as the kama literal `1e-400` does (ruling).
 // The spelling is Rust's and is checked before strtod sees it, so what strtod alone would take is refused:

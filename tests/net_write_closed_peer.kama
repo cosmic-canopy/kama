@@ -1,5 +1,5 @@
 // A write to a peer that has closed returns `Err(IoError.of(kind: IoErrorKind::BrokenPipe))` — it used to raise SIGPIPE, whose default
-// action ended the whole process (exit 141) on the second write (KPG-1, from @kama/postgres). A database client, a
+// action ended the whole process (exit 141) on the second write. A database client, a
 // TLS stream and a web server all write through `TcpStream`, and each died when the other end hung up first.
 // The first writes may succeed — the kernel buffers them until the peer's reset arrives — so it writes until one
 // fails.

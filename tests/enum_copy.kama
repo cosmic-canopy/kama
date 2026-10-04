@@ -1,4 +1,4 @@
-// An enum copies exactly when every payload it can hold does (peer KRD-4, @kama/redis): `copy` deep-copies the
+// An enum copies exactly when every payload it can hold does: `copy` deep-copies the
 // active variant, structurally — a string's buffer, a collection's elements, a Copyable resource through its own
 // `copy` ctor, a `Shared` by one more reference — like a collection, whose copy is its elements'. An enum declares
 // nothing for it: it has no identity of its own, so there is no copy for it to choose. A recursive enum copies when
@@ -39,7 +39,7 @@ fn int64 total(const ref Value v) {
 }
 
 fn int32 run() {
-    // The reporter's case: an Optional of a string, copied and both kept.
+    // The motivating case: an Optional of a string, copied and both kept.
     Optional<string> a = Optional::Some(value: "a".concat(other: "b"));
     Optional<string> b = copy a;
     string fromA = match (a) { case Some(value: s): copy s; case None: ""; };

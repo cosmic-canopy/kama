@@ -1,4 +1,4 @@
-// The measurement the positional backend exists for. Consumer report KG-34: a six-field frame carrying 24
+// The measurement the positional backend exists for: a six-field frame carrying 24
 // bytes of data cost 91 bytes under KBIN, because every object carries every field NAME. A per-stream
 // name-interning scheme was built and reverted — kama's serialization sits behind contracts precisely so
 // there can be several serializers, and a size knob on the self-describing one hard-codes one consumer's

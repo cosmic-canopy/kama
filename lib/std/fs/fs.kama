@@ -138,7 +138,7 @@ type value Permissions implements Formattable, Sendable {
 // here, `readOnly`, is `!permissions.has(p: Permissions::OwnerWrite)` — one way to ask it (KR-92).
 //
 // `owner` and `group` are the account the file belongs to and its group, from the same stat, so they describe
-// the same file as `permissions` (KPG-31: libpq lets a private key be group-readable only when root owns it).
+// the same file as `permissions` (libpq lets a private key be group-readable only when root owns it).
 // On Linux and macOS they are the stat's `st_uid` and `st_gid`, always known. On Windows they are the SIDs the
 // file's security descriptor names — the descriptor the stat reads for `permissions` anyway — and `None` where
 // this account may not read it (another account's private file, where `permissions` is an approximation). A
@@ -174,7 +174,7 @@ type value Metadata implements Sendable {
     public const fn bool isSymlink() { return match (this.kind) { case Symlink: true; case _: false; }; }
 }
 
-// What a path names: a regular file, a directory, or one of the other things a filesystem holds (peer KPG-18:
+// What a path names: a regular file, a directory, or one of the other things a filesystem holds (
 // libpq refuses a `.pgpass` that is not a plain file — `PGPASSFILE=/dev/null` turns it off, and a FIFO would block
 // the connect — and `Metadata` used to say only whether it was a directory). `Symlink` is seen only by
 // `symlinkStat`, which does not follow the link. Windows reports a file, a directory, a character device (`NUL`, a
@@ -393,7 +393,7 @@ type resource File implements Reader, Writer, Sendable {
 
     // What the filesystem records about this OPEN file (`fstat`) — so a check and the read after it are about one
     // file, where checking the path first leaves a moment for it to be pointed elsewhere. libpq checks `.pgpass`
-    // this way: open, then refuse it unless it is a plain file that only its owner can read (KPG-18).
+    // this way: open, then refuse it unless it is a plain file that only its owner can read.
     public unsafe fn Result<Metadata, IoError> metadata() { return fdMetadata(fd: this.fd); }
 
     // Read the whole file to EOF into an owning byte buffer.

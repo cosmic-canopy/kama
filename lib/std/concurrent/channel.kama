@@ -24,7 +24,7 @@ export { Channel, Sender, Receiver, SendResult, RecvResult };
 // found nothing never filled it — either way the slot owns nothing, and dropping it would destroy a value that
 // lives elsewhere, or one that was never made. This used to be a `memset` to zero on the claim that "a zero value is
 // drop-safe", which is not the language's rule: `File`, `TcpStream`, `TcpListener` and `UdpSocket` spell empty as
-// `fd = -1` so that descriptor 0 is ownable, and a zeroed one closed stdin once per send (found building KPG-3, where
+// `fd = -1` so that descriptor 0 is ownable, and a zeroed one closed stdin once per send (found when
 // a worker isolate's sockets died under it). An unfilled `slot T` is not zero — it holds T's field defaults — which
 // is why only the send was wrong; `recv` forgets its unfilled slot anyway, so no path relies on it. Storing the
 // value onto its own address with `give` is the language's own "move into a raw slot": the bytes stay, the drop goes.
@@ -81,7 +81,7 @@ extern fn void  kama_channel_free(UnsafePtr ch);                     // called b
 // `Undelivered` — the same shape as `Optional<T>`'s `None`/`Some`, but named so a match reads clearly.)
 type enum SendResult<T> { Sent, Undelivered(T item) }
 
-// What a receive that does not block forever answers (`tryRecv`, `recvTimeout`, KPG-5): the value, `Empty` — none
+// What a receive that does not block forever answers (`tryRecv`, `recvTimeout`): the value, `Empty` — none
 // was there (`tryRecv`) or none arrived before the deadline (`recvTimeout`) while a sender is still live — or
 // `Closed`, every sender gone and the queue drained, which is `recv`'s `None`. Three answers, because "not yet" and
 // "never" want different code: a pool waiting for a returned connection retries on one and gives up on the other.
@@ -147,7 +147,7 @@ type resource Receiver<T: Sendable> implements Sendable {
         return kama_channel_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)));
     }
 
-    // Take a value if one is buffered, without waiting (KPG-5). `Empty` when none is but a sender is live;
+    // Take a value if one is buffered, without waiting. `Empty` when none is but a sender is live;
     // `Closed` when every sender is gone and the queue is drained.
     public fn RecvResult<T> tryRecv() {
         slot T dst;
@@ -155,7 +155,7 @@ type resource Receiver<T: Sendable> implements Sendable {
         return this.answer(r: r, dst: give dst);
     }
 
-    // Wait at most `timeout` for a value (KPG-5): the receive a pool's `acquire` needs, which must give up at a
+    // Wait at most `timeout` for a value: the receive a pool's `acquire` needs, which must give up at a
     // deadline rather than block forever. `Empty` when the deadline passes first, `Closed` as for `tryRecv`. The
     // deadline is taken on the monotonic clock, so moving the wall clock neither stretches nor cuts it; a zero or
     // negative `timeout` is a `tryRecv`.

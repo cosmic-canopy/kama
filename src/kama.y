@@ -39,7 +39,7 @@ static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string
                                           YYLTYPE* loc, yyscan_t scanner);
 static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner);
 /* A float literal: `bits` is 32 or 64 for a suffixed one, 0 for unsuffixed (a `Float64Node` that also carries its
-   `float32` value, for a destination that makes it one — KB-37). A value past the type's range is an error. */
+   `float32` value, for a destination that makes it one). A value past the type's range is an error. */
 static SharedExpression makeFloatLiteral(CodeGenContext& ctx, const std::string& spelling, int bits,
                                          YYLTYPE* loc, yyscan_t scanner);
 /* Digit separators (0.9.227): the lexer admits `_` between two digits of a run; every numeric parse below
@@ -284,7 +284,7 @@ struct LexerInstanceData {
       to find the name. */
    std::set<std::string> reservedReported;
 
-   /* KB-35: the last `copy`/`give`/`truncate` the lexer read as a NAME directly before `(` — `give(s)` — and its line.
+   /* The last `copy`/`give`/`truncate` the lexer read as a NAME directly before `(` — `give(s)` — and its line.
       A reader who meant the keyword gets a parse error about the call's labels; the reporter adds the hint. */
    std::string parenWord;
    int parenWordLine = 0;
@@ -391,7 +391,7 @@ struct kamayystype {
    which names an implementation detail, and reservedWordNote — which matches yysymbol_name against the
    lexer's keyword table, case-folded — would never recognise the word and would drop its note. */
 %token <string> FILE_KW "file"
-/* KB-35 — `copy`, `give` and `truncate` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
+/* `copy`, `give` and `truncate` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
    keyword tokens COPY/GIVE/TRUNCATE mean only the hand-off and the conversion and never begin a name. Admitted exactly
    where SLOT is. Aliased for FILE_KW's reason: a diagnostic names the word, and reservedWordNote recognises it. */
 %token <string> COPY_NAME "copy"
@@ -744,7 +744,7 @@ interp_index
   : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
   | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner)); }
   ;
-/* KB-35 — the three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
+/* The three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
    payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
    words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
    payload declared `V(int32 slot)`. */
@@ -832,7 +832,7 @@ qualified_identifier_no_generic
   | TYPE  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | SLOT  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `slot`, contextual for the same reason */
   | FILE_KW  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `file` — `File file = …` is the spelling a user reaches for first */
-  | name_word  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `copy`/`give`/`truncate` (KB-35) */
+  | name_word  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `copy`/`give`/`truncate` */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); (SCANNER_CODEGENCONTEXT).qualifiedIds.push_back($$); }
@@ -1324,7 +1324,7 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
-  | const_opt hardware_opt parameter_modifier_opt type name_word   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* ...and `copy`/`give`/`truncate` (KB-35) */
+  | const_opt hardware_opt parameter_modifier_opt type name_word   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* ...and `copy`/`give`/`truncate` */
   /* contextual `file` — a parameter may be named `file` */
   | const_opt hardware_opt parameter_modifier_opt type FILE_KW   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
@@ -1477,7 +1477,7 @@ spawn_statement
   : SPAWN invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   | SPAWN spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->stack = $2; $$ = n; }
   ;
-  /* KRD-2 — `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
+  /* `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
      kama_isolate.h and the SPEC) is not enough. Written at the spawn, the one place the depth that needs it
      is known. A SEPARATE alternative rather than an optional prefix: a call CAN begin with `(` — a turbofish
      method on a parenthesized receiver, `(x).f::<T>()` — so an empty `spawn_stack_opt` would make bison choose
@@ -1525,7 +1525,7 @@ borrow_binding
      The label is validated here rather than lexed as a keyword: `workers` must stay usable as an ordinary
      identifier (tests/parallel_spawn_pool.kama has a local called exactly that). Same hand-raised yyerror
      as the `is` check in type_param. */
-  /* KRD-2 adds `, stack: <expr>` — each worker's stack in bytes, as `spawn(stack:)` sets one isolate's — so
+  /* `, stack: <expr>` is the second clause — each worker's stack in bytes, as `spawn(stack:)` sets one isolate's — so
      the tail is a list of labelled clauses, each at most once and in either order. */
 parallel_clauses_opt
   : /* empty */                                { $$ = std::make_shared<ArgumentList>(); }
@@ -1813,7 +1813,7 @@ member_access
        named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
        contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
        only where a conversion can start, an ordinary member name after a DOT. */
-  | primary_expression DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }   /* `s.truncate(…)`, `p.give()` (KB-35) */
+  | primary_expression DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }   /* `s.truncate(…)`, `p.give()` */
   | qualified_identifier_no_generic DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
@@ -2235,7 +2235,7 @@ when_cond_list
         STAMP_LOC($1->whenBounds->back(), @5); $$ = $1; }
   ;
 handoff_default
-  : GIVE_NAME   { $$ = GIVE; }   /* `(bare: give)` — the word is followed by `)`, so it lexes as the name (KB-35) */
+  : GIVE_NAME   { $$ = GIVE; }   /* `(bare: give)` — the word is followed by `)`, so it lexes as the name */
   | COPY_NAME   { $$ = COPY; }
   ;
 class_body
@@ -2321,7 +2321,7 @@ method_when_opt
    opt into the `Copyable` contract with a method literally named `copy`. */
 method_name
   : IDENTIFIER   { $$ = $1; }
-  | name_word    { $$ = $1; }   /* `ctor copy(…)`, and a `truncate` or `give` member (KB-35) */
+  | name_word    { $$ = $1; }   /* `ctor copy(…)`, and a `truncate` or `give` member */
   | TYPE         { $$ = $1; }   /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT        { $$ = $1; }   /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   | FILE_KW     { $$ = $1; }   /* the file-gate word; contextual, so a type may declare a `file()` member */
@@ -2853,7 +2853,7 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
 
 /* bison's message names the TOKEN and never says what the token IS: `unexpected SLOT, expecting
  * IDENTIFIER or TYPE` reads like a parser fault rather than "you used a reserved word as a name". The
- * first external project hit that three times — `base`, `type`, `slot` — and reported each as a possible
+ * message was hit three times — `base`, `type`, `slot` — and each was reported as a possible
  * compiler bug, because nothing in the message suggests the word is spoken for. Two of the three are
  * contextual keywords now; this is the answer for the other 75.
  *
@@ -2950,7 +2950,7 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         msg += yysymbol_name(tok);
         /* Where a NAME is expected, the six contextual words are names too, so they are shown as the name they are:
            `expecting IDENTIFIER`, and the reserved-word note below says which words also qualify. Listed one by one
-           they were seven candidates at every binding site (KB-35) — past the display limit, which deleted the
+           they were seven candidates at every binding site — past the display limit, which deleted the
            `expecting` clause from every such message. Display only: the gate above reads the full set. */
         auto contextualName = [](yysymbol_kind_t k) {
             return k == YYSYMBOL_FILE_KW || k == YYSYMBOL_SLOT || k == YYSYMBOL_TYPE
@@ -2970,7 +2970,7 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         }
         msg += reservedWordNote(tok, wantedIdentifier);
         /* `give(s)` meant as the hand-off, `truncate(n)` as the conversion: each is a CALL of a name now, and the
-           error is about its labels. Say which reading the parser took (KB-35). */
+           error is about its labels. Say which reading the parser took. */
         const LexerInstanceData* data = yyget_extra(scanner);
         const YYLTYPE* at = yypcontext_location(ctx);
         if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)

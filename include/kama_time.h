@@ -90,7 +90,7 @@ static inline int64_t kama_now_wall_ns(void) {
 // default. So `sleep(1 ms)` and `sleep(8 ms)` both cost one tick and `sleep(16 ms)` costs two, and any
 // program pacing itself with `sleep` — a frame loop's 8 ms nap, a poll loop's 10 ms wait — ran at half
 // rate on Windows and at the asked rate everywhere else. Measured on this repo's Windows box before this
-// arm existed: 1 ms -> 13.4 ms, 8 ms -> 15.6 ms, 16 ms -> 23.6 ms (KR-76, reported by the first consumer).
+// arm existed: 1 ms -> 13.4 ms, 8 ms -> 15.6 ms, 16 ms -> 23.6 ms (KR-76).
 //
 // The contract was never broken — SPEC promises *at least* `d` — which is why this is reach rather than a
 // bug, and why the fix is here rather than in every program that noticed.

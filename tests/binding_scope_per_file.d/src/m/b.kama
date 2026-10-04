@@ -1,4 +1,4 @@
-// KB-34: every binding below takes a name that src/m/a.kama declares — privately (`label`, `pick`, `Node`,
+// Every binding below takes a name that src/m/a.kama declares — privately (`label`, `pick`, `Node`,
 // `hits`, `LIMIT`) or exported but not imported here (`shared`). Each binder kind is here once: a field, a
 // parameter, a local, a `foreach` variable, a `for` counter and a `match` binding. Until 0.9.449 the
 // shadowing check counted the sibling's names as in scope while the call check, rightly, did not. (A module

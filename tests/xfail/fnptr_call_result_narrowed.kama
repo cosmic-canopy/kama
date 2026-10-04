@@ -1,5 +1,5 @@
 // A call through a `fnptr` value has its signature's type, so the no-implicit-conversion rule sees it on every route a
-// `fnptr` is called through — a local, a module `static`, a field. Each was typed as nothing (KB-36), so an `int32`
+// `fnptr` is called through — a local, a module `static`, a field. Each was typed as nothing, so an `int32`
 // result narrowed into an `int8` silently.
 fnptr int32 F(int32 x);
 fn int32 dbl(int32 x) { return x * 2; }

@@ -1,4 +1,4 @@
-// Peer KPG-21: a Unix connect that never blocks, for a caller holding a deadline (libpq's `connect_timeout`).
+// A Unix connect that never blocks, for a caller holding a deadline (libpq's `connect_timeout`).
 // A local connect completes at once; the wait a BLOCKING connect can get stuck in is a listener whose queue is
 // full. Linux answers that with EAGAIN and starts nothing — `Err(WouldBlock)`, connect again — and macOS refuses
 // it outright (`ConnectionRefused`). Either way the answer comes back at once, which is what this proves by

@@ -1,5 +1,5 @@
 // A local given away on SOME paths cannot simply be assigned: whether to drop its old value would be a run-time
-// question, and kama keeps no drop flag (KRD-1). Give it away on every path or none, or assign it in each branch.
+// question, and kama keeps no drop flag. Give it away on every path or none, or assign it in each branch.
 type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
 fn void sink(Res r) { }
 

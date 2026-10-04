@@ -119,7 +119,7 @@ module.exports = grammar({
     [$.scoped_identifier, $.type_name],
   ],
 
-  // KB-35 — `give`, `copy` and `truncate` are keywords only at their grep anchor, and name a binding everywhere else,
+  // `give`, `copy` and `truncate` are keywords only at their grep anchor, and name a binding everywhere else,
   // exactly as `kama.l` decides it (contextualWord): `give`/`copy` directly before a name (other than `in`) or a
   // literal, `truncate` before `<`, a name and `>`. The decision needs the text AFTER the word, which a grammar
   // cannot see, so src/scanner.c makes it — the same lookahead, blanks and comments skipped. No string literal
@@ -738,7 +738,7 @@ module.exports = grammar({
 
     spawn_expression: ($) => seq('spawn', optional($.spawn_stack), $.call_expression),
 
-    // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes (KRD-2). The label
+    // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes. The label
     // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `workers:`.
     spawn_stack: ($) => seq('(', field('stack_label', $.identifier), ':', field('stack', $._expression), ')'),
 
@@ -872,7 +872,7 @@ module.exports = grammar({
       ),
 
     // kama.y `parallel_clauses_opt` — `, workers: <expr>` (MANDATORY on parallel_for, FORBIDDEN on
-    // parallel_spawn) and `, stack: <expr>` (each worker's stack in bytes, KRD-2), each at most once, in
+    // parallel_spawn) and `, stack: <expr>` (each worker's stack in bytes), each at most once, in
     // either order. Labels are ordinary identifiers the compiler checks, so `workers` and `stack` stay
     // usable as names (a local is called `workers` in tests/parallel_spawn_pool.kama).
     parallel_clause: ($) =>
@@ -1028,7 +1028,7 @@ module.exports = grammar({
     _callable: ($) =>
       choice(
         $.identifier,
-        $._slot_name,          // a `fnptr` binding may be named with a contextual word (KB-35)
+        $._slot_name,          // a `fnptr` binding may be named with a contextual word
         $._file_name,
         $.intrinsic_callee,
         $.scoped_identifier,
@@ -1430,7 +1430,7 @@ module.exports = grammar({
     // only ever be the keyword and `isize slot = 1;` was an ERROR node here while the compiler accepted it.
     // ALIASED to `identifier` on purpose: every node type, query and highlight stays exactly as it was, so
     // this is invisible to anything downstream. (`copy`/`give`/`truncate` need no alias: the grammar holds no
-    // literal for them, so they lex as identifiers wherever src/scanner.c does not claim the keyword — KB-35.)
+    // literal for them, so they lex as identifiers wherever src/scanner.c does not claim the keyword.)
     _slot_name: ($) => alias('slot', $.identifier),
     // `file` is contextual for the same reason and by the same mechanism — it leads the file gate above
     // and names an ordinary binding everywhere else. `File file = fs::open(…)` is the spelling it is
@@ -1439,7 +1439,7 @@ module.exports = grammar({
     _file_name: ($) => alias('file', $.identifier),
     _name: ($) => choice($.identifier, $._slot_name, $._file_name),
     // A `match` label, a `match` binding and a `foreach` binding take every contextual word, as a declarator does
-    // (KB-35) — `copy`/`give`/`truncate` arrive as identifiers already (see `externals`).
+    // — `copy`/`give`/`truncate` arrive as identifiers already (see `externals`).
     _binding_name: ($) => choice($._name, alias('type', $.identifier)),
 
     line_comment: ($) => token(seq('//', /[^\n]*/)),

@@ -1,5 +1,5 @@
 // A `match` is not a loop: `break` in an arm leaves the loop AROUND the match, so with no loop it has
-// nothing to leave. It compiled to a no-op (a C `break` ending the arm's `switch` case) until KPG-32.
+// nothing to leave. It compiled to a no-op (a C `break` ending the arm's `switch` case) until `0.9.521`.
 type enum Color { Red, Green }
 
 fn int32 main() {

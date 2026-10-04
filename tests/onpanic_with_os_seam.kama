@@ -3,7 +3,7 @@
 // <features.h> latches its feature set. Read first, <setjmp.h> latched the strict `-std=c11` set, and
 // `kama_os.h` then lost `lstat`, `getaddrinfo` and `struct addrinfo` in the same translation unit: eleven
 // clang errors, all naming kama's header, none the user's code. Linux/glibc only — the san and linux legs
-// are what can see it (consumer KB-25).
+// are what can see it.
 import { std::fs::exists };
 
 @noheap @onPanic(recover: 1)

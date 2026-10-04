@@ -1,7 +1,7 @@
 #!/bin/sh
 # check-lexer-buffer.sh — a source file lexes the same at any LENGTH.
 #
-# `give`, `copy` and `truncate` are keywords only where their grep anchor stands (KB-35), so the lexer reads the
+# `give`, `copy` and `truncate` are keywords only where their grep anchor stands, so the lexer reads the
 # text AFTER the word to decide — contextualWord, in src/kama.l — and its comment states the condition that makes
 # that safe: the whole source is one flex buffer. The editor's door scanned from memory and kept it; the file door
 # (`kama check`/`kama build`) read through a FILE*, which flex loads 16 KB at a time. So at a refill the look past

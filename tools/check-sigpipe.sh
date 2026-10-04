@@ -1,5 +1,5 @@
 #!/bin/sh
-# check-sigpipe.sh — a write to a closed socket or pipe is an ERROR, not the end of the program (KPG-1), and the
+# check-sigpipe.sh — a write to a closed socket or pipe is an ERROR, not the end of the program, and the
 # three places that must NOT change did not.
 #
 # A kama `main` ignores SIGPIPE, so a write to a peer that hung up, or to the stdin of a child that exited, returns

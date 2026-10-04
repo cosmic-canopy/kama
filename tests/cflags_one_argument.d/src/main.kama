@@ -1,4 +1,4 @@
-// A manifest `cflags` entry reaches the C compiler as one argument, exactly as written (KPG-7, from @kama/postgres):
+// A manifest `cflags` entry reaches the C compiler as one argument, exactly as written:
 // `-DONEARG_CONFIG_FILE="onearg_config.h"` keeps its quotes, and a value with spaces, `&` and `;` stays one value —
 // as does one carrying every cmd.exe metacharacter, with a `%PATH%` that stays text.
 extern "onearg.h";

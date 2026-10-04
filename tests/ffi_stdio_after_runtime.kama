@@ -1,4 +1,4 @@
-// A program that asks for <stdio.h> must build on every libc (peer KB-40). The runtime parses a float back to check
+// A program that asks for <stdio.h> must build on every libc. The runtime parses a float back to check
 // its shortest spelling, through `sscanf`, which glibc declares with an asm label (`__isoc99_sscanf`); a block-scope
 // declaration in the runtime, followed by this include, was "cannot apply asm label to function after its first use"
 // on Linux from 0.9.517 to 0.9.523 — macOS, whose SDK labels nothing here, built. A float is formatted as well, so

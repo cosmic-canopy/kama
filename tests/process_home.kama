@@ -1,4 +1,4 @@
-// Peer KPG-16: the current user's home directory, as libpq finds `~/.pgpass`. `homeDirectory()` reads `$HOME`
+// The current user's home directory, as libpq finds `~/.pgpass`. `homeDirectory()` reads `$HOME`
 // (`%USERPROFILE%` on Windows) when it is set and not empty, else the account's own record —
 // `UserId.homeDirectory()`: the passwd entry's `pw_dir`, or the profile Windows records for the SID. Returns 0.
 import { std::process::homeDirectory, std::process::currentUser, std::process::UserId, std::io::IoError };

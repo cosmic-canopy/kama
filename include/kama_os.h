@@ -111,7 +111,7 @@ static inline int32_t kama_last_error(void)   { return (int32_t)errno; }
 // accessors below), and `native` — the Winsock or Win32 code, 0 when the failure is the seam's own (no memory, an
 // argument it refuses) — in `_doserrno`, which is where the CRT puts the Win32 code of its own failures. So after
 // ANY failure, the CRT's or the seam's, `_doserrno` holds that failure's native code and never an older one's,
-// and kama_last_os_error reads it back for `IoError.rawOsError()` and its text (KPG-22).
+// and kama_last_os_error reads it back for `IoError.rawOsError()` and its text.
 static inline void kama__os_fail(unsigned long native, int posix) { _set_doserrno(native); errno = posix; }
 static inline int32_t kama_last_os_error(void) { unsigned long d = 0; _get_doserrno(&d); return (int32_t)d; }
 // The system's text for a native code, as UTF-8 in into[0..cap): its length, or 0 when the system has none. The
@@ -347,7 +347,7 @@ static inline uint32_t kama__acl_class(PACL acl, PSID* sids, int nsids)
     return ((allowed & FILE_READ_DATA) ? 4u : 0u) | ((allowed & FILE_WRITE_DATA) ? 2u : 0u)
          | ((allowed & FILE_EXECUTE) ? 1u : 0u);
 }
-// The owner and group a file's security descriptor names, for std::fs::Metadata (KPG-31): a SID each, copied
+// The owner and group a file's security descriptor names, for std::fs::Metadata: a SID each, copied
 // into the caller's buffers of SECURITY_MAX_SID_SIZE (68) bytes, UserId's own size. A length of 0 is "unknown",
 // which kama reads as `None`. A stat that reads the descriptor anyway (for the nine bits) fills them for free.
 typedef struct kama__fileids { uint8_t* owner; int32_t* ownerLen; uint8_t* group; int32_t* groupLen; } kama__fileids;
@@ -1548,7 +1548,7 @@ static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { r
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) {
     ptrdiff_t r = (ptrdiff_t)write((int)fd, buf, n);
 #if !defined(__EMSCRIPTEN__)
-    if (r < 0 && (fd == 1 || fd == 2)) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }   // KPG-1
+    if (r < 0 && (fd == 1 || fd == 2)) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }   // EPIPE
 #endif
     return r;
 }
@@ -1594,7 +1594,7 @@ static inline void kama__stat_facts(const struct stat* st, uint64_t* outSize, in
     *outSize = (uint64_t)st->st_size; *outKind = kama__file_kind(st->st_mode);
     *outMtimeNs = (int64_t)st->st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(*st);
     *outMode = (uint32_t)st->st_mode & 0777u;
-    *outUid = (uint32_t)st->st_uid; *outGid = (uint32_t)st->st_gid;   // the owner and group (KPG-31)
+    *outUid = (uint32_t)st->st_uid; *outGid = (uint32_t)st->st_gid;   // the owner and group
 }
 // `outMode` is the nine PERMISSION bits the file records, not an access check for this process (root ignores
 // them, and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
@@ -1788,7 +1788,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     if (pid < 0) return -1;
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
         // SIGPIPE at its default, which is what an exec'd program expects: an ignored signal survives exec, so a
-        // `head` or `yes` spawned from here would otherwise get EPIPE where it expects to be stopped (KPG-1).
+        // `head` or `yes` spawned from here would otherwise get EPIPE where it expects to be stopped.
         { extern int kama__sigpipe_owned; if (kama__sigpipe_owned) (void)signal(SIGPIPE, SIG_DFL); }
         if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }
         if (inFd  >= 0) { dup2(inFd,  0); if (inFd  > 2) close(inFd);  }
@@ -1931,7 +1931,7 @@ fail:
 // Handles are `ptrdiff_t` (isize). The address calls (bind/connect/sendto/recvfrom/getsockname) are written
 // once, below the platform split. `family` is kama's 4 or 6, never an AF_* value, which differ per OS.
 static inline int32_t   kama_net_init(void) { return 0; }   // POSIX: nothing to init (Windows: WSAStartup)
-// A write to a peer that has closed must return EPIPE, not raise SIGPIPE (KPG-1): MSG_NOSIGNAL on every send, and on
+// A write to a peer that has closed must return EPIPE, not raise SIGPIPE: MSG_NOSIGNAL on every send, and on
 // Apple SO_NOSIGPIPE on every socket kama makes or accepts as well. Per SOCKET, so it holds in a `--shared` library
 // too, where the process-wide disposition belongs to the host (see kama__sigpipe_init).
 static inline void kama__nosigpipe(ptrdiff_t fd) {

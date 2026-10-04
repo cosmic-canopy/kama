@@ -187,7 +187,7 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
 
         // The language's own types under their C names, which no source spells: `string` is the runtime
         // header's `kama_string` (and its members `kama_string__<m>`), so a string's missing method read
-        // "`kama_string` has no method `bytes`" (peer KTLS-3); an intrinsic array is keyed by its typedef,
+        // "`kama_string` has no method `bytes`"; an intrinsic array is keyed by its typedef,
         // so an index check read "out of bounds for `InlineArray_int32_4`".
         if (tok == "kama_string") { out += "string"; continue; }
         if (depth < 4 && tok.compare(0, 13, "kama_string__") == 0 && tok.size() > 13) {
@@ -2434,7 +2434,7 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
     if (lLit != rLit) {
         SharedExpression lit = lLit ? lhs : rhs;
         const std::string& otherT = lLit ? rt : lt;
-        claimFloatLiterals(lit, otherT, ("an operand of `" + opName + "`").c_str(), false, line);   // KB-37, before any return
+        claimFloatLiterals(lit, otherT, ("an operand of `" + opName + "`").c_str(), false, line);   // before any return
         if (otherT.empty() || !(cNumBits(otherT) || cNumTargetWidth(otherT))) return;
         governWideLiterals(lit);
         rejectConstOutOfRange(otherT, lit, ("an operand of `" + opName + "`").c_str(), false, line);
@@ -2578,7 +2578,7 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
     if (gi != _genericTypeInsts.end()) {
         // A wrapper given the very value it would hold — `Optional<Step> first = xs.remove(index: 0);`. This
         // returned early, as though `Optional<Mat4> o = m;` were a conversion; kama has none, so it reached
-        // clang ("assigning to 'kama__Optional_…' from incompatible type"), which is all the peer saw (KPG-20).
+        // clang ("assigning to 'kama__Optional_…' from incompatible type"), which is all the author saw.
         for (const auto& a : gi->second.typeArgs)
             if (a && cType(a) == src) {
                 const std::string hint = wrapperHint(dstCType, src);
@@ -2616,7 +2616,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
     // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
     if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
-    if (value && isLiteralExpr(value.get())) claimFloatLiterals(value, dstCType, what, false, line);   // KB-37, the same
+    if (value && isLiteralExpr(value.get())) claimFloatLiterals(value, dstCType, what, false, line);   // the same
     rejectConstOutOfRange(dstCType, value, what, false, line);
     rejectNumericConversion(dstCType, value, what, /*isInit*/false, line);   // milestone 6
     rejectTypeIdentityMismatch(dstCType, value, what, /*isInit*/false, line);
@@ -2669,7 +2669,7 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // half-resolved and the rule below is careful not to lower one unless it must. `constValue` fails in
     // a few dynamic_casts for anything that is not a constant, which is almost every initializer.
     governWideLiterals(init);                           // 5b-B — a declared type is always a destination
-    if (init && isLiteralExpr(init.get()) && hasUnsuffixedFloat(init.get()))   // KB-37, gated as the comment below asks
+    if (init && isLiteralExpr(init.get()) && hasUnsuffixedFloat(init.get()))   // gated as the comment below asks
         claimFloatLiterals(init, classifierCType(declType), what, true, line);
     int64_t folded;
     if (init && constValue(init, folded))
@@ -2686,7 +2686,7 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // owns no identity can never make it fire, so there is no destination worth lowering for it. That
     // covers most initializers in the program.
     if (init) {
-        // An `Optional`/`Result` given a value of one of its argument types (KPG-20): the variant is named. Ahead
+        // An `Optional`/`Result` given a value of one of its argument types: the variant is named. Ahead
         // of every rule below, which would each say it less usefully or — for a payload-free variant such as
         // `IoError::NotFound`, which `exprClass` does not type — not at all. Gated on the declared NAME, so no
         // other declaration's type is lowered here.
@@ -2873,7 +2873,7 @@ bool CEmitter::isComptimeParamHere(const std::string& nm) const
 }
 
 // A name spelled like a contextual keyword, which a reader may have meant AS the keyword: the word is the keyword only at
-// its anchor (KB-35), so `give(s)`, `give -n` and `truncate(n)` read it as a name — and a name nothing declares.
+// its anchor, so `give(s)`, `give -n` and `truncate(n)` read it as a name — and a name nothing declares.
 static std::string contextualNameHint(const std::string& nm)
 {
     if (nm == "give" || nm == "copy")
@@ -3939,7 +3939,7 @@ std::string CEmitter::resolveModuleVar(const std::string& name, SharedStringList
 // type's methods, a generic fn — is emitted `static inline` in the header, ahead of every unit, while a
 // constant its file keeps private was defined only in that unit, AFTER its `#include` of the header. So
 // `public fn int32 limit() { return LIMIT; }` in a `type resource Box<T>` passed `kama check` and failed
-// clang with "use of undeclared identifier" (peer KTLS-1) — in a one-file program as much as across
+// clang with "use of undeclared identifier" — in a one-file program as much as across
 // packages, since `kama build` of one file writes the header region first too. Only a size position was
 // safe, because it folds to a literal; a read in an expression names the C object.
 //
@@ -4689,7 +4689,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     //   - a TAGGED enum that declares `Equatable<This>` — the hand-written conformance, which is the
     //     sanctioned answer until the derive ships — compared fine against a named local and was refused
     //     against a variant literal, with a message naming `operator==`, a thing kama does not have and
-    //     rejects if written. The first consumer's report (KB-17) is exactly this line.
+    //     rejects if written.
     //
     // `typeOfExpr` answers for an enum value in every spelling, so both are one rule. Accepting only a
     // variant class from it widens the classifier for nothing else.
@@ -4989,12 +4989,12 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     // `findBinaryOperator` falls back from the mixed-type form (`op_mul__Vec4`) to the same-type form
     // (`op_mul`) whenever the mixed one is absent, and nothing then confirmed the operand actually IS the
     // declared parameter type — so `Mat4 * Vec4` against `Mat4 operator*(Mat4)` resolved, emitted, and
-    // failed in the C compiler. The consumer filed this as ergonomic friction; it is a check/build
+    // failed in the C compiler. It reads as ergonomic friction; it is a check/build
     // divergence, and the same hole reached every by-value hand-off (see rejectClassIdentityMismatch).
     //
     // ...and it was only ever the CLASS half. A primitive parameter took any number C would convert to it, so
     // `v * k` against `operator*(float32 s)` narrowed an `int64` silently, and a literal operand stayed a C
-    // `double` (KB-37). An operand is judged by the argument funnel, which is every rule an argument answers to.
+    // `double`. An operand is judged by the argument funnel, which is every rule an argument answers to.
     if (mi->arity == 1) {   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
         if (!mi->params.empty())
             rejectValueKindMismatch(mi->params[0].className, rhs, "the right-hand operand", line);
@@ -5354,7 +5354,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return s + "f";
     };
     if (auto* v = dynamic_cast<Float64Node*>(n)) {
-        // An unsuffixed literal a `float32` position claimed (KB-37) — its own float32 value, never the double
+        // An unsuffixed literal a `float32` position claimed — its own float32 value, never the double
         // rounded again. One past float32's range was refused where it was claimed.
         if (v->unsuffixed && _float32Lits.count(n))
             return std::isinf(v->value32) ? std::string("0.0f") : float32Spelling(v->value32);
@@ -5632,7 +5632,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<TernaryExpressionNode*>(n)) {
-        // A literal arm is typed by the other arm, as `typeOfExpr` types the ternary (KB-37): `c ? 0.1 : x` on a
+        // A literal arm is typed by the other arm, as `typeOfExpr` types the ternary: `c ? 0.1 : x` on a
         // `float32 x` is a float32 expression, and C would otherwise make it a `double` one.
         const bool lLit = isLiteralExpr(v->LHS.get()), rLit = isLiteralExpr(v->RHS.get());
         if (lLit != rLit)
@@ -5803,7 +5803,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          ? emitExpression((*ea->expressionlist)[0]) : "0";
         if (!_inUnsafe) {
             // A receiver that resolves to nothing is not a raw pointer: `nosuch[0]` — and `copy[0]` with no `copy` in
-            // reach (KB-35) — said "raw pointer access requires an `unsafe fn`". Emitting it names what is wrong.
+            // reach — said "raw pointer access requires an `unsafe fn`". Emitting it names what is wrong.
             const long said = _diagAttempts;
             if (typeOfExpr(recv).empty()) emitExpression(recv);
             if (_diagAttempts == said) unsupported("raw pointer access requires an `unsafe fn`", ea->line);
@@ -5870,7 +5870,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
         // The target is a literal operand's destination, as it is for `cast<int8>(300)`: `cast<float32>(0.1)` is the
-        // float32 literal, not a double rounded again (KB-37).
+        // float32 literal, not a double rounded again.
         if (isLiteralExpr(v->unaryExpression.get())) claimFloatLiterals(v->unaryExpression, target, "a cast", false, v->line);
         if (rejectBareCChar(v->type, "a cast target", v->line)) return "0";
         checkBodyType(v->type, "a cast target", v->line);
@@ -6158,7 +6158,7 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
 // sits beside (or right before) the per-body table reset that retires the whole function's entries.
 void CEmitter::popScope()
 {
-    // KRD-1: the end of a loop body is a back edge (unless the body cannot reach it), and the loop is over.
+    // Re-arming: the end of a loop body is a back edge (unless the body cannot reach it), and the loop is over.
     if (_scopes.back().isLoopBoundary && !_scopes.back().rearm.empty()) {
         if (!_scopes.back().bodyDiverges) checkRearmed(_scopes.back(), _scopes.back().rearm.begin()->second, "the loop's next pass");
         settleLoopExit(_scopes.back());
@@ -6237,7 +6237,7 @@ bool CEmitter::inParallelForBody() const
 
 // `break` leaves, and `continue` restarts, the innermost `while` / `do` / `for` / `foreach`. A `match` is
 // not a loop, but its arms are lowered to a C `switch`, and a C `break` inside one ends the switch only:
-// `case None: { break; }` ended the match and the loop ran on (KPG-32), and a value-producing match left
+// `case None: { break; }` ended the match and the loop ran on, and a value-producing match left
 // its result unset. So a `break` with a switch between it and its loop jumps to the loop's exit label
 // instead. C's `continue` passes through a switch, so it needs nothing. With no loop at all, both are
 // refused here rather than by clang — or not at all: a `break` in a `match` outside any loop compiled to
@@ -6258,7 +6258,7 @@ void CEmitter::emitLoopJump(int srcLine, bool isBreak, int depth)
                     "is no rest of the loop to skip — `continue` ends this element's pass", srcLine);
         return;
     }
-    // KRD-1: a `continue` is a back edge; a `break` carries its move states out of the loop.
+    // Re-arming: a `continue` is a back edge; a `break` carries its move states out of the loop.
     if (!isBreak) checkRearmed(_scopes[li], srcLine, "this `continue`");
     else if (!_scopes[li].rearm.empty()) {
         std::map<std::string, MoveState> st;
@@ -6945,7 +6945,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
     indent(d); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
     indent(d); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
-    // Each worker's stack (KRD-2), evaluated once for all of them — when the loop says one.
+    // Each worker's stack, evaluated once for all of them — when the loop says one.
     const std::string stkExpr = isolateStackArg(pf->stack, pf->line);
     const std::string STK = "__pfstk" + sfx;
     if (!stkExpr.empty()) { indent(d); *_out << "size_t " << STK << " = " << stkExpr << ";\n"; }
@@ -7263,7 +7263,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
             // and that may be inside another type's body: `DynamicArray<Item>` declaring a local `T`, where
             // `Kind kind = Kind::First;` was resolved against dynamic_array.kama's names and refused — "`Kind`
             // is not a type or module in reach here", pointing into std, for a type declared ten lines up
-            // (peer KPG-19). A diagnostic then names the field's own line, in the type's own file.
+            // in the same file. A diagnostic then names the field's own line, in the type's own file.
             //
             // ...and with nothing of the BODY in reach. The default is stated "once" (SPEC § Construction), so a
             // constructor's parameter, the enclosing body's local, or a field of the enclosing class must not
@@ -8267,7 +8267,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(w->booleanExpression);
-        _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // KRD-1: settleLoopExit
+        _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // for settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "while (" << cond << ") ";
@@ -8299,7 +8299,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // `do`/`while` condition sits at the bottom and its `continue` must skip TO it, which a naive
         // while(1) rewrite breaks — so a hoisting construct here stays a clean error (bind to a local).
         *_out << "do ";
-        _nextLoopExitsNormally = !alwaysTrue(d->booleanExpression);   // KRD-1: settleLoopExit
+        _nextLoopExitsNormally = !alwaysTrue(d->booleanExpression);   // for settleLoopExit
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
         placeLoopExit(depth);
@@ -8320,7 +8320,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(f->booleanExpression);
         std::string iter = emitForClause(f->iteratorStatements);
-        _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // KRD-1: settleLoopExit
+        _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // for settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "for (" << init << "; " << cond << "; " << iter << ") ";
@@ -8486,7 +8486,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // (copy: refcount++). The null/retain is a statement, so it can't live in
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
-    // KRD-1's write-target state for an assignment statement (see the first handler below). It must outlive BOTH
+    // The re-arming write-target state for an assignment statement (see the first handler below). It must outlive BOTH
     // assignment handlers — the first falls through to the second (value-producing / variant targets) — so it
     // lives here, at the statement: leaving the first handler's block must not mark the target live early.
     struct WriteTargetGuard {
@@ -8516,7 +8516,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             noteHandoffValue(rhs);   // a store consumes its value
             rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
         }
-        // KRD-1: a store gives a bare local a value, whatever it held — including nothing, after a `give`.
+        // Re-arming: a store gives a bare local a value, whatever it held — including nothing, after a `give`.
         // `one.add(item: give t); t = Tree::Node(kids: give one);` re-arms `t`, and every later use is sound. The
         // target is a WRITE, so reading it is no use-after-move (`_writeTarget`, by node: a `give t` on the right
         // is still checked); each sub-path below drops the old value only if it is still live (assignTargetLive,
@@ -9177,10 +9177,10 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 // `InlineArray<isize>#(MAX_CREW)` mangles to `InlineArray_isize_MAX_CREW`, the constant's NAME. The
 // function's own prototype is fine, because `paramListC` re-`cType`s the AST node at EMIT time, by which
 // point the constant is known — so one instantiation ends up spelled two ways, and the CALL SITE's cast
-// (which reads `className`) names a type nothing declares. Reported by a consumer as KB-22, against a
+// (which reads `className`) names a type nothing declares. Found in a
 // tree where the constant's file sorted after the callee's; it reproduces only in that order, which is why
 // four hand-built probes missed it. ⚠️ Since collectModuleVars/foldModuleConsts, a constant the plain folder
-// can reach is known before ANY signature registers, in any file order (KB-23); what is left for this pass
+// can reach is known before ANY signature registers, in any file order; what is left for this pass
 // is the interpreter-folded constant, and removing it breaks exactly that (measured).
 //
 // The refresh is deliberately SELF-CHECKING: a stale name resolves to nothing, so it only ever replaces a
@@ -9289,7 +9289,7 @@ const std::vector<ParamSig>& CEmitter::instParamSigs(const GenericInst& gi)
 // over EVERY unit before any other collection, so no reader of a constant depends on FILE ORDER: a
 // `comptime isize DERIVED = PROBE_N;` aliasing a constant from a file that sorts later used to fold after
 // `collectCollections` had already asked for it, and an `InlineArray<Leaf>#(DERIVED)` field degraded to a raw
-// pointer with no diagnostic naming the declaration (consumer KB-23). foldModuleConsts finishes the job.
+// pointer with no diagnostic naming the declaration. foldModuleConsts finishes the job.
 void CEmitter::collectModuleVars(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
@@ -10398,7 +10398,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     // will happily box one into a contract existential. What static-only did was suppress the
     // `<Enum>__as_<C>` vtbl the boxing then referenced — so `encode(v: msg)`, whose parameter IS the
     // `Serializable` existential, emitted a call naming a symbol nothing defined and failed in CLANG.
-    // Consumer bug KB-18: the one obvious thing to do with a derived message type was the one thing that
+    // The defect: the one obvious thing to do with a derived message type was the one thing that
     // did not work, while the same value as a FIELD (reached statically through a `when [T: Serializable]`
     // clause) round-tripped fine. A derive registers what the derive needs.
     auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
@@ -10902,7 +10902,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.serId       = fIdSet ? (int)fId : -1;
                             fi.serDeprecated = fDeprecated;
                             fi.serDefault = fDefault;
-                            // A member name is declared once (consumer KB-21). A duplicate FIELD used to
+                            // A member name is declared once. A duplicate FIELD used to
                             // reach clang as `duplicate member` in a generated file; the METHOD twin below
                             // was accepted outright and the last body won.
                             if (ci.fieldNames.count(fi.name))
@@ -11109,7 +11109,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
                         else if (mi.isFinal && !mi.isVirtual)
                             unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
-                        // KB-21's silent half: two bodies under one name compiled, and the LAST one
+                        // The duplicate's silent half: two bodies under one name compiled, and the LAST one
                         // answered every call. Same rule as `duplicate function` at file scope — kama has
                         // no overloading — so a member name is declared once. (`redeclares … inherits` is
                         // the base-class case and lives with the inheritance checks.)
@@ -11206,7 +11206,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.type        = kd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = kvis;
-                            if (ci.fieldNames.count(fi.name))   // KB-21, the `const` field spelling
+                            if (ci.fieldNames.count(fi.name))   // a duplicate, the `const` field spelling
                                 unsupported(("duplicate field '" + fi.name + "' in '" + ci.name
                                              + "' — a member name may be declared only once in its type").c_str(),
                                             d->name ? d->name->line : mn->line);
@@ -12395,7 +12395,7 @@ bool CEmitter::contractInstOf(const std::string& key, GenericTypeInst& out) cons
 // those are stdlib types and a program that never imports one does not have one. So its absence has a fixable
 // CAUSE, not a typo, and every site that would say "no such method" says this instead: the dispatch site, the
 // `borrow` gate, and a call made ON the missing result (`s.bytes().length()`), whose receiver has no type.
-// `s.bytes()` read "`kama_string` has no method `bytes`" (peer KTLS-3), and `borrow s.bytes() as v` blamed
+// `s.bytes()` read "`kama_string` has no method `bytes`", and `borrow s.bytes() as v` blamed
 // the string for not being a container.
 std::string CEmitter::missingViewCause(const std::string& cls, const std::string& method)
 {
@@ -14285,7 +14285,7 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(pf->type);
         scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
         scanExprForCollections(pf->expression);
-        scanExprForCollections(pf->workers);   // the clauses are expressions too (KRD-2)
+        scanExprForCollections(pf->workers);   // the clauses are expressions too
         scanExprForCollections(pf->stack);
         scanStmtForCollections(pf->body);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
@@ -14525,7 +14525,7 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
 // in question is the inner call's own, and that call is solved first: discovery scans a call's arguments
 // before the call (scanExprForGenerics), so the inner instance is already recorded for this node. So
 // `abs(x: sin(x: t))` reported "cannot infer generic type parameter 'T'", and so did the fully explicit
-// `abs(x: sin::<float64>(x: t))` (peer KPG-12). Null when this call resolved nothing — its own failure is
+// `abs(x: sin::<float64>(x: t))`. Null when this call resolved nothing — its own failure is
 // reported where it is, and the caller then reports the inference it could not make.
 //
 // Substituted under the TEMPLATE's context and then absolutized, so a returned `Box<T>` names the template's
@@ -15383,7 +15383,7 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanStmtForGenerics(fe->body, bodyTys);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
-        scanExprForGenerics(pf->workers, localTys);   // the clauses are expressions too (KRD-2)
+        scanExprForGenerics(pf->workers, localTys);   // the clauses are expressions too
         scanExprForGenerics(pf->stack, localTys);
         scanStmtForGenerics(pf->body, localTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
@@ -16025,7 +16025,7 @@ void CEmitter::checkUninstantiatedTemplates()
         long byBefore[DK_Count];
         for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
         const std::string probeName = key + "__probe";
-        ScopedStr _pft(_probeFnTemplate, key);   // a `friend` grant naming this template reaches its body (KPG-28)
+        ScopedStr _pft(_probeFnTemplate, key);   // a `friend` grant naming this template reaches its body
         emitFunction(tmpl, &probeName);   // nameOverride => `static` linkage, and no entry-point mangling
 
         // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred,
@@ -16760,7 +16760,7 @@ bool CEmitter::isCRvalue(SharedExpression e)
 // The receiver of an index, as a place `&(…)` can be taken of. A receiver that is already one is emitted as
 // such. A VALUE is held in a temporary: `s.bytes()[1]`, `d.viewMut()[0] = 7`, `mkArr()[1]`, `mkPlain().arr[1]`
 // all handed `&(call)` to the accessor, which passed `kama check` and failed clang with "cannot take the
-// address of an rvalue" (peer KTLS-2). A fresh value that owns something (`mkList()[1]`, `(a + b)[0]`) goes
+// address of an rvalue". A fresh value that owns something (`mkList()[1]`, `(a + b)[0]`) goes
 // into a hoisted local the scope drops — the receiver hoist emitMethodCall does; anything else, a view or an
 // array or a member copied out of a temporary, into a compound literal, which lives to the end of the block.
 //
@@ -17133,7 +17133,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
         // materialized into a hoisted temp (ISO C, no statement-expression), like an operator operand.
         for (size_t i = 0; i < al->elements->size(); ++i) {
             const SharedExpression& el = (*al->elements)[i];
-            if (isLiteralExpr(el.get())) claimFloatLiterals(el, elemCType, "an element", false, al->line);   // KB-37
+            if (isLiteralExpr(el.get())) claimFloatLiterals(el, elemCType, "an element", false, al->line);
             s += (i ? ", " : " ") + emitOperandByValue(el);
         }
         s += isSimd ? " }" : " } }";
@@ -17641,7 +17641,7 @@ bool CEmitter::isCopyable(const std::string& cls) const
     return it != _classes.end() && it->second.copyable;
 }
 
-// KRD-4: an enum is copyable STRUCTURALLY — exactly when every payload it can hold is — like a collection, whose
+// An enum is copyable STRUCTURALLY — exactly when every payload it can hold is — like a collection, whose
 // copy is its elements'. An enum has no identity of its own (TYPE_MODEL: it owns nothing beyond its payloads), so
 // unlike a resource there is no copy for it to choose: `copy` copies the active variant's payloads, each its own
 // way. Coinductive: a mention of an enum already being judged (`Tree` inside `DynamicArray<Tree>`) is assumed to
@@ -17861,7 +17861,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     if (preludeLeaf(bound_) == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
-        if (it->second.isVariant)                              // an enum → when every payload copies (KRD-4)
+        if (it->second.isVariant)                              // an enum → when every payload copies
             return const_cast<CEmitter*>(this)->variantCopyable(it->second);
         return it->second.copyable;                            // a resource → only if `implements Copyable`
     }
@@ -17923,7 +17923,7 @@ void CEmitter::markMoved(const std::string& cVar)
                      "take the storage `" + f->alias + "` views with it; move it after the window closes")
                         .c_str(), _curLine);
     //  (Increment 3): moving a local declared OUTSIDE the enclosing loop would move it again on the next
-    // iteration — unless every path back to the loop's start gives it a new value (KRD-1: `one.add(item: give
+    // iteration — unless every path back to the loop's start gives it a new value (as in `one.add(item: give
     // t); t = Tree::Node(kids: give one);`). So the move is a REQUIREMENT on each loop between the local's scope
     // and here, checked at every back edge (the end of the body, each `continue`: checkRearmed) and settled
     // after the loop from its exits (settleLoopExit). A value declared INSIDE the loop body is fresh each
@@ -17941,7 +17941,7 @@ void CEmitter::markMoved(const std::string& cVar)
 }
 
 // Does an assignment's target still hold a value to release? Judged AFTER its right side is emitted: a `give`
-// there (`r = wrap(r: give r)`) or before the statement (`give t; … t = …`, KRD-1) leaves nothing to drop, and a
+// there (`r = wrap(r: give r)`) or before the statement (`give t; … t = …`) leaves nothing to drop, and a
 // moved resource or enum keeps its old bytes, so dropping it would free them twice. An empty key (an element, a
 // raw slot) is not move-tracked: it is live.
 bool CEmitter::assignTargetLive(const std::string& key) const
@@ -17951,7 +17951,7 @@ bool CEmitter::assignTargetLive(const std::string& key) const
     return it == _moveState.end() || it->second == MoveState::NotMoved;
 }
 
-// KRD-1: at a back edge of `loop` — the end of its body, or a `continue` — every outer local given away in the
+// At a back edge of `loop` — the end of its body, or a `continue` — every outer local given away in the
 // loop must hold a value again, or the next pass would move it twice.
 void CEmitter::checkRearmed(const Scope& loop, int line, const char* where)
 {
@@ -17965,7 +17965,7 @@ void CEmitter::checkRearmed(const Scope& loop, int line, const char* where)
     }
 }
 
-// KRD-1: an outer local given away in a loop, after the loop. Every pass began with it live (checkRearmed), so the
+// An outer local given away in a loop, after the loop. Every pass began with it live (checkRearmed), so the
 // loop's own exit — its condition turning false — leaves it live; each `break` leaves it as that path had it. A
 // `while (true)` has no exit of its own, so only its breaks count.
 void CEmitter::settleLoopExit(Scope& loop)
@@ -18103,7 +18103,7 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
 // and `val` (the emitted, already-move-marked argument expression). Shared-nothing by construction: the
 // entry is a BARE top-level fn (no env capture) and its one argument is MOVED (the source is marked moved
 // via the existing `give` seam, so any post-spawn use is the standard use-after-move error).
-// The stack, in bytes, an isolate-starting construct's `stack:` clause asks the seam for (KRD-2), or "" when it has
+// The stack, in bytes, an isolate-starting construct's `stack:` clause asks the seam for, or "" when it has
 // none — the seam's plain entries then give the size kama_isolate.h states, and a clause goes to the `_sized` ones.
 // A byte count is a `usize`, as `allocate(bytes:)` takes one, and a constant adapts; a constant is emitted FOLDED,
 // so `64 * 1024 * 1024 * 4` is the number it says rather than C `int` arithmetic that overflows. Zero asks for no
@@ -18959,7 +18959,7 @@ void CEmitter::buildVtables() {}
 // An `InlineArray<T>#(N)` whose size never folded registers no collection, so the declaration silently became a
 // raw pointer and every diagnostic after it was about something else — "`s` is never assigned" of a ctor that
 // assigns it, "raw pointer access requires an `unsafe fn`", "an array literal … its type must be known"
-// (consumer KB-23). Called once every module constant, enum member and type constant is settled, so a size
+// — none naming the size. Called once every module constant, enum member and type constant is settled, so a size
 // that still does not fold is the author's to fix: say so at the declaration, naming the size. Returns a
 // placeholder for the caller to install (sized to agree with an array-literal initializer, if any), so nothing after this reports the raw pointer instead —
 // the build is already refused, so it never reaches C. Null when the type is not an unfolded InlineArray.
@@ -19150,7 +19150,7 @@ void CEmitter::computeDestructible()
             // nothing (no dtor, no owning field — a token, an identity) is not destructible, but it
             // still moves by declared kind. An intrinsic that holds one — `Result<Token, E>`,
             // `Optional<Token>` — must move too, or a local of that type is never move-tracked and
-            // `match (give r)` on it is refused as if `r` were a field. Measured on the first external
+            // `match (give r)` on it is refused as if `r` were a field. Measured on a real
             // package: every `Result<K, E>` whose `K` had a dtor worked, and the one whose payload was
             // a bare resource did not. Same fixpoint, same scope setup, read through isMoveOnlyValue
             // so a nested intrinsic (`Optional<Result<Token, E>>`) propagates. A `value` is computed too:
@@ -21972,7 +21972,7 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // than let the two disagree. They did: `<T: Copyable<T>>` was unusable as a DECLARED bound while
         // `when [T: Copyable<T>]` worked, because the gate goes through `satisfiesBound` and this did not.
         // …and `Copyable` is a CAPABILITY for every kind, not only a primitive: a value copies bitwise and an
-        // enum when its payloads do (KRD-4), neither through a declared `copy` ctor, which is all the method-set
+        // enum when its payloads do, neither through a declared `copy` ctor, which is all the method-set
         // test below can see. So it, too, is asked structurally — the gate and the bound give one answer.
         bool structural = (!ci || preludeLeaf(tmplName) == "Copyable") && satisfiesBound(rkey, contract);
         if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
@@ -22045,7 +22045,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "char** kama_argv = 0;\n"
           << "int kama__argv_state = 0;\n"
           << "#endif\n";
-    // SIGPIPE (KPG-1). A write to a closed socket or pipe raised it, and its default action ended the process —
+    // SIGPIPE. A write to a closed socket or pipe raised it, and its default action ended the process —
     // `TcpStream.write` to a peer that hung up, or to the stdin of a child that exited — where the API promises
     // `Err(IoError::BrokenPipe)`. A program's `main` ignores it (kama__sigpipe_init, called from kama_args_init),
     // as Go, Rust, Python and Node do, so every such write returns EPIPE. Two things keep that from being
@@ -23514,10 +23514,10 @@ void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, in
 // That was never a decision. It was the check not reaching these sites, and it did not even hold together:
 // until `0.9.248` a binder shadowing an enclosing local read the OUTER local's type and failed at the first
 // use with a bogus type error, and one shadowing a `ref` parameter emitted `(*m)` on a plain int and died
-// in clang with no kama diagnostic at all. Those were two shapes of the KB-20 class. `0.9.248` answered
+// in clang with no kama diagnostic at all. Those were two shapes of the same scope leak. `0.9.248` answered
 // them by making the shadow WORK, which settled a language question inside a bug fix and in the wrong
 // direction; this is that reversal. Sibling-scope reuse is untouched and stays legal — two blocks that
-// never coexist are not shadowing, and that half of KB-20 (`0.9.247`) is the real fix.
+// never coexist are not shadowing, and that half (`0.9.247`) is the real fix.
 //
 // Same three questions, in the same order, with the same three messages as the declarator's check, so the
 // rule reads identically wherever it fires. The `ctor`/static exemptions come along for the same reason
@@ -23558,8 +23558,8 @@ bool CEmitter::isLanguageName(const std::string& nm)
 // purpose: a bare name resolves to a sibling file's PRIVATE declaration (so a call can say "not exported by
 // …" rather than "unknown"), and an `extern` spelling is one key for every file that declares it. Taking
 // their answer as "in scope" refused a parameter `label` because a sibling file had a private `label` its
-// call was refused for, and a local `free` because a DEPENDENCY declared `extern fn free` privately (peer
-// KB-34, measured at 0.9.448). A binding is emitted `k_<name>` (SPEC § C names), so a name the file cannot
+// call was refused for, and a local `free` because a DEPENDENCY declared `extern fn free` privately (measured
+// at 0.9.448). A binding is emitted `k_<name>` (SPEC § C names), so a name the file cannot
 // see collides with nothing in C either.
 void CEmitter::checkBindingName(const std::string& nm, const char* kind, int srcLine)
 {
@@ -23697,7 +23697,7 @@ bool CEmitter::invocationIsConstPlace(InvocationNode* iv)
 {
     if (!iv) return false;
     if (iv->identifier && iv->identifier->value) {
-        if (callsThroughLocal(iv)) return false;   // a `fnptr` returns a value (KB-36)
+        if (callsThroughLocal(iv)) return false;   // a `fnptr` returns a value
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
         return fit != _funcs.end() && fit->second.isConstPlace;
     }
@@ -24280,7 +24280,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     // definite assignment, as Swift and C# have it: a branch walks a COPY of the state it was entered with, so
     // an assignment inside it counts for a `return` inside it, and where branches rejoin a field counts only
     // if every branch that can fall through assigned it. Until 0.9.450 only TOP-LEVEL assignments counted and
-    // a `match` was not walked at all, which misread both directions (peer KB-33): a trailing `match` whose
+    // a `match` was not walked at all, which misread both directions: a trailing `match` whose
     // every arm returned was taken for a fall-through, so a fallible ctor that never touched `this` was told
     // to assign every field; and an `Ok(this)` returned from inside an arm went unchecked.
     using Assigned = std::map<std::string, std::set<std::string>>;
@@ -25292,7 +25292,7 @@ bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::stri
     // The TEMPLATE's own body, checked before any instance exists (checkUninstantiatedTemplates): it stands for
     // every instance, so a grant that names the template reaches it — SPEC's rule, which held only for an
     // instance, so a library's generic accessor (instantiated by its users, never by the library) was refused
-    // in the library's own `kama check` (peer KPG-28). Each instance is still judged against its owner's
+    // in the library's own `kama check`. Each instance is still judged against its owner's
     // arguments when it is emitted; the probe's arguments are opaque and have nothing to correspond to.
     if (!_probeFnTemplate.empty() && _probeFnTemplate == tmplKey) return true;
     if (_currentFunc.empty()) return false;
@@ -25486,7 +25486,7 @@ void CEmitter::resolveFriends()
 {
     // A whole-program pass, so no unit is "current": without the owner's file installed as the
     // diagnostic context, every grant error printed `:6:0:` with no file name at all — which is exactly
-    // how the first external package's report quoted them. The same rung ScopedContractNs installs.
+    // how a real package's build printed them. The same rung ScopedContractNs installs.
     const std::string savedDiag = _emitDeclFile;
     // Both tables, because a generic TEMPLATE is never in `_classes` (it lives in `_genericTypes`, see
     // the member's comment) and this pass used to iterate only the first. That one omission was two of
@@ -25546,7 +25546,7 @@ void CEmitter::resolveFriends()
                 // (a free function). The first two used to be spelled only bare: `resolveUserName` was
                 // handed the LAST qualifier segment with no path, so `fmod::user::Holder[n]` resolved
                 // `user` as a class and failed, and an owner had to `import` a module purely to name its
-                // friend (reported by the first external package). Fixed in 0.9.230.
+                // friend. Fixed in 0.9.230.
                 std::string clsName = resolveUserName(val, qual);          // `mod::Type`
                 if (asType(clsName, g)) resolved = true;
                 if (!resolved) {                                           // `mod::Type::method`
@@ -25752,7 +25752,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
     }
     // Copy from another FunctionPtr — any expression of `fnptr` type. `exprClass` answers a local, but it keeps only
     // what `isClass` accepts, so a FIELD (`this.cb`, `r.handler`) read as no FunctionPtr at all and `F f = this.cb;`
-    // was refused by the very rule that names it (KB-38). `typeOfExpr` is the unfiltered answer.
+    // was refused by the very rule that names it. `typeOfExpr` is the unfiltered answer.
     if (isSigType(exprClass(init)) || isSigType(typeOfExpr(init))) {
         out.kind = FnPtrTarget::SigValue;
         return true;
@@ -25810,7 +25810,7 @@ void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t,
 // Which `fnptr` types C can see, and the field that made each one visible. A `type extern value` exists
 // for one reason — to match a C header's layout — so a callback field declared on one is a slot C calls
 // through, and a kama function bound into it has crossed exactly as surely as one handed over as an
-// argument. That is the hole the first consumer found: their three WebGPU callbacks all ride inside
+// argument. That is the hole a WebGPU binding found: its three callbacks all ride inside
 // descriptor structs, so `checkForeignCrossing` (per-ARGUMENT, keyed on the parameter's own type) never
 // looked at them, and a tree carrying ZERO annotations built clean.
 //
@@ -26478,7 +26478,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // A place-returning call (`fn ref T`, `const fn const ref T`) is an lvalue too: it emits as `(*call)` and
     // names storage its receiver owns. Materializing it as an "owning temp" was a bitwise copy the switch then
     // DESTROYED — the receiver's own payload freed under it, or a handle's share released that was never
-    // taken (KPG-29). `subjPlaceCall` also drives the cast below: a `const ref` place is `T const*` in C.
+    // taken. `subjPlaceCall` also drives the cast below: a `const ref` place is `T const*` in C.
     const bool subjPlaceCall = invocationReturnsPlace(dynamic_cast<InvocationNode*>(m->subject.get()));
     bool subjLvalue = dynamic_cast<IdentifierNode*>(m->subject.get())
                    || dynamic_cast<MemberAccessNode*>(m->subject.get())
@@ -26857,7 +26857,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 // arm diverges: `fn int32 pick(Tri t) { match (t) { case A: return 1; … } }` is proven exhaustive by
 // kama's own return-path walk (alwaysExits), and the same dead `default: break;` edge is then a
 // `-Werror=return-type` error from clang instead of `-Werror=uninitialized`. Same CFG edge, same
-// argument, one arm. The first consumer hit exactly this (their KB-12) and rewrote every such function
+// argument, one arm. A program hit exactly this, and its author rewrote every such function
 // to assign in the arms.
 //
 // A real C enum tag keeps `default: break;` BYTE-FOR-BYTE: clang already treats a switch that names
@@ -27394,7 +27394,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // Checked FIRST (before the move-only branches): if the field is a poly-dispatch-contract handle and
             // the arg's type implements the contract, boxing is always right. `exprClass` is "" for a variant
             // literal, so recover the source enum via variantExprEnumCType. Any user type that implements it —
-            // an enum, a `value`, a `resource` — not only an enum: `std::io::IoError` became a `value` (KPG-22) and
+            // an enum, a `value`, a `resource` — not only an enum: `std::io::IoError` became a `value` and
             // `return Result::Err(error: e)` into an `Owned<Error>` reached clang unboxed ("initializing 'void *'
             // with an expression of incompatible type"), while an enum in the same position boxed.
             auto enumClass = [&](const std::string& c) {
@@ -27813,7 +27813,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
         // gate existed to make necessary rather than decorative.
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
-        recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it (KB-36)
+        recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
         return emitReorderedCall(name, callee, "", sig.params, call->args, call->line);
     }
@@ -27891,8 +27891,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // An element or field IS a place, but not when its ROOT is a temporary: `addr(of: f.view()[0])`
         // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
         // dangle — and until 0.9.231 it escaped the front end and died in clang ("cannot take the address
-        // of an rvalue"), which a package author who does not read C could not act on (the first external
-        // package reported it). A place-returning call at the root (`b.at(i: 0)`) is storage the callee
+        // of an rvalue"), which a package author who does not read C could not act on.
+        // A place-returning call at the root (`b.at(i: 0)`) is storage the callee
         // still owns and stays fine, as it does for `isNamedValue`.
         else if (rootIsTemporary(a))
             unsupported(("`addr(of: …)` on an element of a temporary — `" + unparseExpr(a) + "` is rooted in "
@@ -27966,7 +27966,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 #endif
         return (isSize ? "sizeof(" : "_Alignof(") + pc + ")";
     }
-    // The RANGE half of the manual-memory triad (KRD-3): `drop(ptr: p, count: n)` destroys `n` consecutive
+    // The RANGE half of the manual-memory triad: `drop(ptr: p, count: n)` destroys `n` consecutive
     // pointees, and `copyElements(ptr: d, from: s, count: n)` places `n` copies into raw storage nobody owns. The
     // per-type decision stays where `drop(ptr:)` already put it, in the compiler: a `uint8` buffer's drop is
     // nothing at all and its copy one memcpy — in a debug build as much as a release one — while a `string`
@@ -28573,7 +28573,7 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // be here: pruneInactiveDecls walks TOP-LEVEL declarations only, so a member's `@compileFor`
             // is never evaluated and never stripped — it would reach this branch on every build and do
             // nothing at all, silently. A gate that silently fails open is the worst shape a conditional
-            // can take, and it is exactly what the first external project hit with `@compileFor(NATIVE)`.
+            // can take, and a real program hit exactly that with `@compileFor(NATIVE)`.
             if (onMember) unsupported(kCompileForOnMember, line);
         } else if (an == "align" || an == "packed") {
             // Layout control is a property of a TYPE, not of one declaration — so there is one way to
@@ -28778,7 +28778,7 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
 // runtime". The driver reads it for wasm, where the answer is a HOSTING MODEL (`-pthread`, PROXY_TO_PTHREAD,
 // a SharedArrayBuffer and its COOP/COEP headers), not a link flag: keyed on which seam headers a module
 // externs, importing `Atomic` alone made a browser build threaded, because `std::concurrent`'s `Isolate`
-// methods are emitted whether or not a program uses them (consumer KB-26).
+// methods are emitted whether or not a program uses them.
 void CEmitter::noteThreadSpawn()
 {
     if (!_probingTemplate) _spawnsThreads = true;   // a probe emits no code
@@ -30908,7 +30908,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // A body that can reach its closing brace falls off the end — `alwaysExits`, the test a non-`void`
     // function's missing return is judged by. One ending in an `if`/`match` whose every branch returns does
     // not, and gets no `return` after it: the same C a function ending that way is given, and the answer
-    // checkNamedCtorComplete proved `kama_self` complete against (peer KB-33).
+    // checkNamedCtorComplete proved `kama_self` complete against.
     bool fellOffEnd = !(body && alwaysExits(body));
     if (fellOffEnd) {
         emitScopeCleanup(_scopes.back(), 1);
@@ -31757,7 +31757,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(kama__Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
-    // The fields the data may leave out start from their declared value (KPG-26); the rest start from zero.
+    // The fields the data may leave out start from their declared value; the rest start from zero.
     const std::set<std::string> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "result", resC);
     // Zero-init makes an Optional field `Some(zeroed)` (tag 0) — reset every one to None first.
@@ -31801,7 +31801,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     std::string box = emitStickyErrBox(2);
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    // A field the data left out that it had to carry (KPG-26). Asked AFTER the sticky failure, which is the
+    // A field the data left out that it had to carry. Asked AFTER the sticky failure, which is the
     // first thing wrong with a stream that broke off. `Optional`, `@deprecated` and `@field(default)` may be absent.
     const std::string missing = serMissingFieldTest(ci, rf);
     if (!missing.empty()) {
@@ -31946,7 +31946,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         *_out << "}\n\n";
         return;
     }
-    // Closing an object means DRAINING it to the end tag, never a bare `moreFields()` (consumer KG-35).
+    // Closing an object means DRAINING it to the end tag, never a bare `moreFields()`.
     // The bare call answered true at a truncated buffer's end (KBIN peeks 0 past the end, which is not
     // the end tag) and consumed nothing, so an object missing its closing bytes decoded as the complete
     // value — the 49- and 50-byte prefixes of a 51-byte `Create(name: "matt")` both came back as it.
@@ -33083,7 +33083,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
     if (ci.isVariant || ci.isScalarEnum()) { emitGraphReadIntoVariant(ci); return; }
-    // The fields the data may leave out start from their declared value (KPG-26), as in the by-value reader.
+    // The fields the data may leave out start from their declared value, as in the by-value reader.
     const std::set<std::string> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "(*self)", "void");
     // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
@@ -33112,7 +33112,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
-    const std::string missing = serMissingFieldTest(ci, rf);   // a field the data had to carry (KPG-26)
+    const std::string missing = serMissingFieldTest(ci, rf);   // a field the data had to carry
     if (!missing.empty()) { indent(1); *_out << "if (" << missing << ") kama_de_graph_fail(g, kama__DeError_MissingField);\n"; }
     *_out << "}\n\n";
 }
@@ -34214,7 +34214,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // A call THROUGH a `fnptr` value — a local or parameter, then a module `static` — is typed by the value's
     // signature, asked first and in the emitter's order. A bare name that is a local is never a function: the
     // function tables below answer by NAME across the whole program (`unimportedFuncKey` searches every unit),
-    // so a parameter `decode` read as `std::encoding::hex::decode` wherever that module was compiled (KB-36).
+    // so a parameter `decode` read as `std::encoding::hex::decode` wherever that module was compiled.
     if (inv->identifier && inv->identifier->value && !inv->expression) {
         const std::string& nm = *inv->identifier->value;
         if (callsThroughLocal(inv)) {
@@ -34302,7 +34302,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     if (inv->identifier && inv->identifier->value) {
         const std::string fk = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
         // A GENERIC callee returns what the instance this call routes to declares — the template's own
-        // `retCType` still spells `T`, so `id(x: p).gx()` had no receiver type (KPG-12's emit-side half).
+        // `retCType` still spells `T`, so `id(x: p).gx()` had no receiver type.
         if (_generics.count(fk))
             if (SharedIdentifier r = genericCallReturnNode(inv, fk)) return cType(r);
         auto f = _funcs.find(fk);
@@ -34409,7 +34409,7 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
         // element access and method dispatch work — but a local of the same name shadows it (checked first).
         // Resolved as a READ resolves it — through this file's imports — not as this file's own name: an
         // imported `comptime InlineArray` table was untyped everywhere but the file that declared it, so it
-        // could not be indexed, iterated or `.view()`ed there (peer KPG-24), while emission found it fine.
+        // could not be indexed, iterated or `.view()`ed there, while emission found it fine.
         if (!_localTypes.count(*id->value)) {
             auto ms = _moduleStatics.find(resolveModuleVarImpl(*id->value, id->qualifier));
             if (ms != _moduleStatics.end()) { std::string ct = cType(ms->second); if (isClass(ct)) return ct; }
@@ -34937,7 +34937,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         const std::string fc = fieldCType(clsName, f);
                         if (isSigType(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
-                            recordFieldRef(fo, method, site);   // a call through the field reads it (KB-36)
+                            recordFieldRef(fo, method, site);   // a call through the field reads it
                             const SigInfo& sig = _sigs.at(fc);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
                             return emitReorderedCall(method, sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
@@ -35154,7 +35154,7 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
     if (!iv) return false;
     if (isGlobalHeapCall(iv)) return true;   // `ref Pool`, so a caller binds a borrow and never a copy
     if (iv->identifier && iv->identifier->value) {           // bare call: a free fn (or an inline ctor)
-        if (callsThroughLocal(iv)) return false;             // a `fnptr` returns a value (KB-36)
+        if (callsThroughLocal(iv)) return false;             // a `fnptr` returns a value
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
         return fit != _funcs.end() && fit->second.isPlaceReturn;   // a ctor isn't in _funcs -> false (a value)
     }
@@ -36250,7 +36250,7 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     }
     // ...and a CALL's result: `plain(x: 4).toString()`, `sin(x: t).abs()`. A scalar receiver is passed by value,
     // so an rvalue serves, but with no arm here the call was "cannot resolve the receiver — its type is not
-    // known here", generic callee or not (found with KPG-12, whose generic half callReturnTypeRaw now types).
+    // known here", generic callee or not (found beside the generic half, which callReturnTypeRaw now types).
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         const std::string rt = callReturnTypeRaw(inv);
         return isClass(rt) ? std::string() : rt;
@@ -36454,7 +36454,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // store: the receiver is borrowed in place, `&(p[0])`, exactly as a FIELD element (`this.buf[i].m()`,
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
     // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.228 this was
-    // refused as "untyped to ownership" with the borrow/own spellings (the first consumer's KB-14).
+    // refused as "untyped to ownership" with the borrow/own spellings.
     if (cls.empty()) {
         const std::string et = ptrLocalElemType(receiver);
         if (!et.empty() && _classes.count(et)) cls = et;
@@ -36589,7 +36589,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // NAME the receiver. This message used to be four words with no subject, and it was reached by a
         // module `static`/`comptime` used as one — so a `"${WIDTH}"` five lines down reported "method call
         // on unresolved receiver" against the CONSTANT's declaration line, naming neither the constant nor
-        // the interpolation that lowered to the call. That cost the reporter ~40 minutes of bisection for
+        // the interpolation that lowered to the call. That cost ~40 minutes of bisection for
         // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
         std::string who;
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
@@ -36600,7 +36600,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // Telling someone that `n` is "not in reach" when `n` is the local on the line above sends them
         // hunting for a scope bug that is not there.
         // (A THIRD used to be handled here: an element of a LOCAL raw `UnsafePtr<T>` — `p[0].m()` —
-        // refused as "untyped to ownership" with the borrow/own spellings, the first consumer's KB-14.
+        // refused as "untyped to ownership" with the borrow/own spellings.
         // Since 0.9.228 the receiver is typed at the top of this function — a call borrows the element in
         // place, as the field form always did — so a class-typed local element never reaches this line;
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
@@ -37401,8 +37401,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // ...and the third way, which the two above missed: NAMING a serde contract. A `Serializable` parameter, a
     // `<T: Serializable>` bound or an `Owned<Serializable>` observes the conformances this flag gates, so with
     // the gate closed `s.add(value: list)` on a `fn add(Serializable value)` was refused for a
-    // `DynamicArray<int32>` — and accepted again once some unrelated import (a JSON encoder) opened it (peer
-    // KPG-30). A conformance must not depend on what else is imported. Every file outside std counts on its
+    // `DynamicArray<int32>` — and accepted again once some unrelated import (a JSON encoder) opened it.
+    // A conformance must not depend on what else is imported. Every file outside std counts on its
     // tokens (a mention in a comment or a string is not a token); std counts by module, since its collections
     // name `Serializable` only to declare their own conditional conformances, which is what the gate is for —
     // while anything under `std::serialization` exists to serialize.
@@ -37521,7 +37521,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     // Each walk names the file it is in: an inference failure is raised HERE, and diagFile() fell through to
-    // `_sourcePath` — the entry file, the file a query asked about, or "" in a multi-unit build (peer KPG-11).
+    // `_sourcePath` — the entry file, the file a query asked about, or "" in a multi-unit build.
     for (auto& u : units)
         if (u && u->codeDeclarationList) {
             _nsCtx = _unitCtx[u.get()];
@@ -37911,7 +37911,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     // A generic instance's vtables are `static`, defined in this header further down — but a generic FUNCTION's
     // body may bind an instance to a contract before then (`put<DynamicArray<Uuid>>` passing its `T` to a
-    // `Serializable` parameter, peer KPG-30): clang met the name before its definition and refused it. A
+    // `Serializable` parameter): clang met the name before its definition and refused it. A
     // tentative `static` declaration names each one ahead of every use; the definition completes it.
     for (auto& inst : _genericTypeInstOrder) {
         auto ci = _classes.find(inst);
@@ -38747,7 +38747,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     // A program with a `@onPanic` region defines KAMA_ONPANIC BEFORE the runtime header, which builds its
     // recovery path on that macro and includes `<setjmp.h>` itself. ⚠️ NOT here: a standard header read before
     // kama_runtime.h latches glibc's feature set ahead of its `_DEFAULT_SOURCE`, and kama_os.h then loses
-    // `lstat`/`getaddrinfo` in the same translation unit — eleven errors naming kama's header (consumer KB-25).
+    // `lstat`/`getaddrinfo` in the same translation unit — eleven errors naming kama's header.
     if (unit && unit->codeDeclarationList && unitsUseOnPanic({unit}))
         *_out << "#define KAMA_ONPANIC 1\n";
     if (unit && unit->codeDeclarationList && unitsDeclareGlobalAllocator({unit}))
@@ -38811,7 +38811,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     _featureOnPanic     = unitsUseOnPanic(units);
     _featureGlobalAlloc = unitsDeclareGlobalAllocator(units);
     if (_featureOnPanic)   // see emit(): program-wide, since every TU includes this header
-        *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h> (KB-25)
+        *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h>
     if (_featureGlobalAlloc)   // ...and the same for the funnel's implementation
         *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
     *_out << "#include \"kama_runtime.h\"\n";

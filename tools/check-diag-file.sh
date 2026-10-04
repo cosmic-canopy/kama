@@ -407,7 +407,7 @@ done
 # ---- 10. generic INFERENCE names its file — in every front end -----------------------------------------
 #
 # Inference runs in the discovery walks (collectGenericInsts, registerInstGenerics), which swapped only the
-# name context, so diagFile() fell through to the file being compiled (peer KPG-11). `kama build` printed
+# name context, so diagFile() fell through to the file being compiled. `kama build` printed
 # `:4:0: error:` — no file at all — once the program imported anything from std; `kama check` named the
 # project's root file; `kama query <f> --diagnostics` stamped the error onto whichever file was ASKED about,
 # at a line it may not have. A body and a generic TEMPLATE's body are both walked there, so both are probed.

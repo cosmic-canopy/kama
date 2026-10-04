@@ -4,7 +4,7 @@
 # `cflags`/`ldflags`/`link` used to be read only from the ROOT manifest. A dependency's copies were read
 # nowhere at all — at build time a dep's kama.json was consulted for its `source`, its `name` and its
 # `dependencies`, and for nothing else — so every consumer had to repeat the block and drift between the
-# copies was silent. The first external project repeats it in two packages.
+# copies was silent. A two-package project carried it twice.
 #
 # Two halves, and the second is the one that would be missing from a guard written only for the fix:
 # a rule that propagates EVERYTHING would pass every positive case here. So the negative half asserts
@@ -854,7 +854,7 @@ printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
 # A DEPENDENCY's `reproducible-float` reaches the consumer. Unlike `no-heap` and `webgpu` (asserted
 # above NOT to propagate) this key can only turn contraction off, and it states a requirement of the
 # dependency's own arithmetic — which the consumer compiles. 0.9.169 shipped it grouped with the other
-# two, so the first consumer's raw `-ffp-contract=off` cflag propagated and the key replacing it did not.
+# two, so a dependency's raw `-ffp-contract=off` cflag propagated and the key replacing it did not.
 app rfldep geo <<'JSON'
 { "name": "rfldep", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
   "dependencies": { "geo": { "path": "./vendor/geo" } },
@@ -951,12 +951,12 @@ else
 fi
 
 echo "check-buildsettings: and the mirror — a COMPILE flag does not ride the link line"
-# The other direction of the same rule, and the one that was actually wrong (KB-16, the first engine
-# consumer). The per-TU path reuses the compile prefix for the link — deliberately, so a
+# The other direction of the same rule, and the one that was actually wrong (found building
+# an engine). The per-TU path reuses the compile prefix for the link — deliberately, so a
 # `--cc "clang -fsanitize=…"` reaches both — and that carried the user's `cflags` onto a command that
 # compiles nothing. `-x <lang>` is the flag that turns this from redundant into fatal: it is a sticky
 # clang MODE flag, so on the link it applies to the `.o` inputs and clang lexes Mach-O bytes as source.
-# The consumer saw twenty `source file is not valid UTF-8`, each naming an object file and nothing else.
+# The link printed twenty `source file is not valid UTF-8`, each naming an object file and nothing else.
 #
 # Asserted with `-x objective-c` itself rather than a stand-in, because the flag's stickiness IS the bug.
 app xmode <<'JSON'
@@ -967,7 +967,7 @@ JSON
 mkdir -p "$tmp/xmode/csrc"; printf 'int xmode_shim(void) { return 1; }\n' > "$tmp/xmode/csrc/shim.c"
 lines=$("$KAMA" build "$tmp/xmode/kama.json" --cc "echo CC:" -o "$tmp/xmode/app" 2>/dev/null | grep "^CC:" || true)
 if printf '%s\n' "$lines" | grep -v -- " -c " | grep -q -- "-DXMODE_TIER"; then
-    bad "the link line carries the project's \`cflags\` — a compile flag on a link command (KB-16)"
+    bad "the link line carries the project's \`cflags\` — a compile flag on a link command"
     printf '%s\n' "$lines" | sed 's/^/    /' >&2
 else ok "the link line carries none of the project's \`cflags\`"; fi
 if printf '%s\n' "$lines" | grep -- " -c " | grep -q -- "-DXMODE_TIER"; then

@@ -1,4 +1,4 @@
-// KB-34's rule, held from the other side: a sibling's name this file IMPORTS is in its scope, so a binding
+// The no-shadowing rule, held from the other side: a sibling's name this file IMPORTS is in its scope, so a binding
 // may not take it — only a name the file neither declares nor imports is free (tests/binding_scope_per_file.d).
 import { label };
 export { twice };

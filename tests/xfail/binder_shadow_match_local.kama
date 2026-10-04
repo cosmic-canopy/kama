@@ -1,4 +1,4 @@
-// A `match` payload binding may not take a live name. This is the spelling consumer KB-20 was filed
+// A `match` payload binding may not take a live name. This is the spelling the defect was reported
 // against — the binding silently took the enclosing local's TYPE and the error landed at the first use,
 // naming the argument and mentioning neither the binding nor the declaration it collided with.
 //

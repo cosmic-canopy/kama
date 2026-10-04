@@ -247,7 +247,7 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
         return UnixStream.open(address: address, nonBlocking: false);
     }
 
-    // A connect that never blocks, for a caller holding a deadline (peer KPG-21: libpq bounds the connect with
+    // A connect that never blocks, for a caller holding a deadline (libpq bounds the connect with
     // `connect_timeout`). A local connect completes at once, so the usual answer is a connected stream — left
     // non-blocking, ready for a `Poller`. A listener whose queue is FULL is the one wait a blocking connect can
     // get stuck in, and the OSes answer it differently:

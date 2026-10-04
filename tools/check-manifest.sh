@@ -857,7 +857,7 @@ JSON
 wsreject 'belongs in a project'"'"'s kama.json' "\`modules\` in a kama_workspace.json"
 
 # ---------------------------------------------------------------------------------------------------
-# KPG-7: a flag entry is ONE argument, exactly as written — so a flag written for the shell that used to read it is
+# A flag entry is ONE argument, exactly as written — so a flag written for the shell that used to read it is
 # refused, naming the spelling that works now (tests/cflags_one_argument.d is the positive half). A manifest error
 # says `kama: <path>:`, never `error:`, which is why this is here and not an xfail fixture.
 proj flagdollar <<'JSON'

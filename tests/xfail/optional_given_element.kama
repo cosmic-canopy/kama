@@ -1,4 +1,4 @@
-// Peer KPG-20: nothing turns a `T` into an `Optional<T>` — the variant is named. `kama check` accepted the
+// Nothing turns a `T` into an `Optional<T>` — the variant is named. `kama check` accepted the
 // element at every crossing (a payload enum, a value type), and clang refused it ("assigning to
 // 'kama__Optional_…' from incompatible type"); a plain enum or a number was refused, but as "a number — a
 // type value was expected". Each crossing below is reported, and says how to wrap; the row pins every line.

@@ -297,7 +297,7 @@ public:
     double value;
     // An UNSUFFIXED literal is typed by its destination and by the other operand of an operator (D2a), so it also
     // carries the value it has as a `float32` — parsed from the source text, since rounding `value` again would be
-    // a double rounding (KB-37). Unused for a `f64`-suffixed literal.
+    // a double rounding. Unused for a `f64`-suffixed literal.
     float value32 = 0.0f;
     Float64Node(CodeGenContext& context, double value) : ASTNode(context),  ExpressionNode(context), value(value) { }
 };
@@ -542,7 +542,7 @@ public:
 class IsolateNode : public ExpressionStatementNode {
 public:
     SharedExpression call;   // an InvocationNode
-    SharedExpression stack;  // `spawn(stack: n) f(…)` — the isolate's stack in bytes; null = the stated default (KRD-2)
+    SharedExpression stack;  // `spawn(stack: n) f(…)` — the isolate's stack in bytes; null = the stated default
     IsolateNode(CodeGenContext& context, SharedExpression call)
         : ASTNode(context),  ExpressionStatementNode(context), call(call) { }
 };
@@ -692,7 +692,7 @@ public:
     // spelling the user actually wrote, kept so a wrong label gets a sentence instead of a syntax error.
     SharedExpression workers;
     SharedIdentifier workersLabel;
-    SharedExpression stack;   // `, stack: n` — each worker's stack in bytes; null = the stated default (KRD-2)
+    SharedExpression stack;   // `, stack: n` — each worker's stack in bytes; null = the stated default
     ParallelForNode(CodeGenContext& context, SharedIdentifier type,
                     SharedIdentifier name,
                     SharedExpression expression,

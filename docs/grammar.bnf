@@ -185,7 +185,7 @@ interp_index
   : IDENTIFIER
   | DEC_LITERAL_NO_SUFFIX
   ;
-/* KB-35 — the three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
+/* The three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
    payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
    words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
    payload declared `V(int32 slot)`. */
@@ -253,7 +253,7 @@ qualified_identifier_no_generic
   | TYPE
   | SLOT     /* ...and `slot`, contextual for the same reason */
   | FILE_KW     /* ...and `file` — `File file = …` is the spelling a user reaches for first */
-  | name_word     /* ...and `copy`/`give`/`truncate` (KB-35) */
+  | name_word     /* ...and `copy`/`give`/`truncate` */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
@@ -647,7 +647,7 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE      /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT      /* contextual `type` */
-  | const_opt hardware_opt parameter_modifier_opt type name_word      /* ...and `copy`/`give`/`truncate` (KB-35) */
+  | const_opt hardware_opt parameter_modifier_opt type name_word      /* ...and `copy`/`give`/`truncate` */
   /* contextual `file` — a parameter may be named `file` */
   | const_opt hardware_opt parameter_modifier_opt type FILE_KW
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
@@ -800,7 +800,7 @@ spawn_statement
   : SPAWN invocation_expression SEMICOLON
   | SPAWN spawn_stack invocation_expression SEMICOLON
   ;
-  /* KRD-2 — `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
+  /* `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
      kama_isolate.h and the SPEC) is not enough. Written at the spawn, the one place the depth that needs it
      is known. A SEPARATE alternative rather than an optional prefix: a call CAN begin with `(` — a turbofish
      method on a parenthesized receiver, `(x).f::<T>()` — so an empty `spawn_stack_opt` would make bison choose
@@ -847,7 +847,7 @@ borrow_binding
      The label is validated here rather than lexed as a keyword: `workers` must stay usable as an ordinary
      identifier (tests/parallel_spawn_pool.kama has a local called exactly that). Same hand-raised yyerror
      as the `is` check in type_param. */
-  /* KRD-2 adds `, stack: <expr>` — each worker's stack in bytes, as `spawn(stack:)` sets one isolate's — so
+  /* `, stack: <expr>` is the second clause — each worker's stack in bytes, as `spawn(stack:)` sets one isolate's — so
      the tail is a list of labelled clauses, each at most once and in either order. */
 parallel_clauses_opt
   : /* empty */
@@ -1104,7 +1104,7 @@ member_access
        named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
        contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
        only where a conversion can start, an ordinary member name after a DOT. */
-  | primary_expression DOT name_word      /* `s.truncate(…)`, `p.give()` (KB-35) */
+  | primary_expression DOT name_word      /* `s.truncate(…)`, `p.give()` */
   | qualified_identifier_no_generic DOT name_word
   ;
 invocation_expression
@@ -1454,7 +1454,7 @@ when_cond_list
 
   ;
 handoff_default
-  : GIVE_NAME      /* `(bare: give)` — the word is followed by `)`, so it lexes as the name (KB-35) */
+  : GIVE_NAME      /* `(bare: give)` — the word is followed by `)`, so it lexes as the name */
   | COPY_NAME
   ;
 class_body
@@ -1540,7 +1540,7 @@ method_when_opt
    opt into the `Copyable` contract with a method literally named `copy`. */
 method_name
   : IDENTIFIER
-  | name_word       /* `ctor copy(…)`, and a `truncate` or `give` member (KB-35) */
+  | name_word       /* `ctor copy(…)`, and a `truncate` or `give` member */
   | TYPE            /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT           /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   | FILE_KW        /* the file-gate word; contextual, so a type may declare a `file()` member */

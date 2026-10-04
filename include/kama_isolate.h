@@ -16,7 +16,7 @@
 
 typedef pthread_t kama_isolate_t;
 
-// An isolate's stack is STATED, not the OS's (KRD-2). Left to `pthread_create(&t, NULL, …)` it was 512 KiB on
+// An isolate's stack is STATED, not the OS's. Left to `pthread_create(&t, NULL, …)` it was 512 KiB on
 // macOS, 8 MiB with glibc and 128 KiB with musl — three answers to "how deep may this recursion go", so a
 // program that worked on its main thread crashed in an isolate on two of them. It is the main thread's own
 // size. Natively that is 8 MiB on a 64-bit target (Linux's and macOS's main thread; kama links Windows' up from

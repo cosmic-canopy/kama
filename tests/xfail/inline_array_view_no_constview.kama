@@ -1,4 +1,4 @@
-// `view()` on an `InlineArray` has the same cause as KTLS-3's `bytes()`: the view it returns is a stdlib type.
+// `view()` on an `InlineArray` has the same cause as a string's `bytes()`: the view it returns is a stdlib type.
 // The message used to name the array by its C typedef (`InlineArray_int32_3`) and the wrong view type (`View<T>`
 // for the read-only `view()`, which returns a `ConstView<T>`).
 fn int32 main() {

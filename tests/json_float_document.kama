@@ -1,7 +1,7 @@
 // A float in a JSON document is held to the integers' rule: a number past the destination's range is a bad
 // DOCUMENT, and so is a malformed one. Both used to decode — `1e400` as `inf`, `1.2.3` as 1.2 — through a
 // lenient parse that reported nothing, and a `float32` field rounded twice and overflowed to `inf`. An
-// underflow still decodes: it rounds to zero or a subnormal (KPG-13).
+// underflow still decodes: it rounds to zero or a subnormal.
 import { std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
 
 fn int32 f64s(string src) {   // 1 decoded, 0 refused

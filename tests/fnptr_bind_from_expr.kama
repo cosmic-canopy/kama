@@ -1,4 +1,4 @@
-// A `fnptr` local binds any expression of its `fnptr` type, not only a function name or another local (KB-38). The rule
+// A `fnptr` local binds any expression of its `fnptr` type, not only a function name or another local. The rule
 // recognised "another FunctionPtr" through `exprClass`, which keeps only classes, so every route below but the ternary
 // was refused with "a FunctionPtr binds a free function name or another FunctionPtr" — the rule that admits it. Calling
 // the field directly and handing it to a parameter both worked, which is why it read as a rule, not a bug.

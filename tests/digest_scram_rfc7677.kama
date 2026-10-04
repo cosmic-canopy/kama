@@ -1,6 +1,6 @@
 // SCRAM-SHA-256 (RFC 5802 / RFC 7677) — PostgreSQL's default authentication since 14 — computed end to end from
 // std::digest, reproducing RFC 7677's own example: the client proof `dHzbZapW…` and the server signature `6rriTRBi…`.
-// This is the call sequence `@kama/postgres` needs (KPG-9), which had to carry its own HMAC and PBKDF2 until they
+// This is the call sequence a SCRAM-SHA-256 client needs, which had to carry its own HMAC and PBKDF2 until they
 // were in std: SaltedPassword = Hi(password, salt, i) is PBKDF2-HMAC-SHA-256; the keys are HMACs and a SHA-256.
 import { std::digest::pbkdf2, std::digest::sha256::Sha256, std::digest::sha256::sha256, std::digest::sha256::hmacSha256,
          std::encoding::base64::encode as b64Encode, std::encoding::base64::decode as b64Decode,

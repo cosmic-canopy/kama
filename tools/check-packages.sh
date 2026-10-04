@@ -839,7 +839,7 @@ echo '// edit' >> "$dr/src/dr.kama"
 if kpub "$dr" --dry-run >/dev/null 2>"$tmp/dr4.err"; then kfail "--dry-run hid the dirty-tree refusal"; fi
 grep -q "uncommitted changes" "$tmp/dr4.err" || kfail "--dry-run dirty refusal unclear" "$tmp/dr4.err"
 
-# 26m2. a `path` dependency is refused at publish (KPG-2). The resolver refuses one below a fetched package, so a
+# 26m2. a `path` dependency is refused at publish. The resolver refuses one below a fetched package, so a
 # version published with it could never be installed — and versions are permanent. Refused on --dry-run too, and
 # named with the fix. A `path` DEV-dependency ships: nobody follows a fetched package's dev-dependencies.
 pd="$tmp/kr-pathdep"; kpkg "$pd" pd 1.0.0
@@ -1294,7 +1294,7 @@ grep -q "app/out/" "$tmp/out.out" \
     || { echo "check-packages: FAIL — used the CWD's manifest instead of the input file's own project:" >&2
          sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
 
-# ---- a MULTI-MODULE library, consumed as a dependency (KB-4) -----------------------------------------
+# ---- a MULTI-MODULE library, consumed as a dependency ------------------------------------------------
 # A library whose own files import across its own modules built standalone and then failed the moment
 # anything depended on it. The free-ride rule below — a sibling must declare what it imports, or it
 # builds where it sits and fails alone — never exempted a package importing ITSELF, and a file reaching
@@ -1306,7 +1306,7 @@ grep -q "app/out/" "$tmp/out.out" \
 #
 # ⚠️ Nothing could have caught it: `tests/mod_dir_module.d` has the multi-module shape but is an
 # EXECUTABLE, so nothing ever consumes it. It takes two packages, which is why this lives here rather
-# than in a `.d` fixture. Reported from a real external project port.
+# than in a `.d` fixture. Found porting a real project.
 mm="$tmp/mm"
 mkdir -p "$mm/lib/src/a" "$mm/lib/src/b" "$mm/app/src"
 cat > "$mm/lib/kama.json" <<'JSON'
@@ -1359,7 +1359,7 @@ printf 'import { mmmid::mv };\nfn int32 main() { return mv(); }\n' > "$mm/app/sr
 "$KAMA" pkg install "$mm/app/kama.json" >/dev/null 2>&1
 if "$KAMA" build "$mm/app/kama.json" >"$tmp/mm.out" 2>&1; then
     echo 'check-packages: FAIL — a genuine free-ride was ACCEPTED. mmmid imports mmlib without' >&2
-    echo '                 declaring it, so it cannot build on its own; the KB-4 exemption must' >&2
+    echo '                 declaring it, so it cannot build on its own; the self-import exemption must' >&2
     echo '                 cover a package OWN name and nothing else.' >&2; exit 1
 fi
 grep -q "does not declare it" "$tmp/mm.out" \
@@ -1367,8 +1367,8 @@ grep -q "does not declare it" "$tmp/mm.out" \
          sed 's/^/  /' "$tmp/mm.out" >&2; exit 1; }
 
 
-# ---- the output is named for the PROJECT, and dep links are RELATIVE (KB-1, KB-6) --------------------
-# KB-1: the default output took the stem of the alphabetically FIRST source file, ignoring `name` and
+# ---- the output is named for the PROJECT, and dep links are RELATIVE ---------------------------------
+# The default output took the stem of the alphabetically FIRST source file, ignoring `name` and
 # `entry` entirely. A project named `tests` with `entry: src/main.kama` built a binary called
 # `engine_test`, and adding a file that sorted earlier silently RENAMED the shipped executable — a
 # published artifact changing name because someone added `assets.kama`. Libraries had it too.
@@ -1397,7 +1397,7 @@ grep -q '/namedproj$' "$tmp/nm.out" \
          echo "                 The binary is named for the project, not for whichever file sorts first." >&2
          sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
 
-# KB-6: a path dependency's view link must be RELATIVE, so one resolved tree is valid under every mount
+# A path dependency's view link must be RELATIVE, so one resolved tree is valid under every mount
 # point at once (host and container share this repo). An absolute link dangles the moment the tree moves,
 # and the resulting error blames the manifest, which is correct. The STORE stays absolute — it is
 # machine-global and does not travel with the tree — which the git/registry cases above already cover.
@@ -1551,7 +1551,7 @@ if "$KAMA" pkg search geo --registry "file://$nocat" >"$tmp/search.out" 2>&1; th
     echo "check-packages: FAIL — pkg search against a registry with no catalog succeeded" >&2; exit 1; fi
 grep -q 'keeps no catalog' "$tmp/search.out" || { echo "check-packages: FAIL — a catalog-less registry was not explained:" >&2; sed 's/^/  /' "$tmp/search.out" >&2; exit 1; }
 
-# 40. KB-39 (peer friendly-fire-department): a lock that pins a registry package BELOW its newest match, reached
+# 40. a lock that pins a registry package BELOW its newest match, reached
 # both directly and through a path dependency, is kept. The second requestor saw the newer version as the highest in
 # the merged range and restarted resolution; every restart took the lock's version again — "did not converge".
 kreg="$(kama_native_path "$tmp")/kreg"; mkdir -p "$kreg"
@@ -1581,10 +1581,10 @@ printf 'import { kb::viaB, sod::ver };\nfn int32 main() { return viaB() + ver();
 grep -q '"version": "0.5.0"' "$ka/kama.lock" || { echo "check-packages: FAIL — the lock did not pin sod 0.5.0:" >&2; sed 's/^/  /' "$ka/kama.lock" >&2; exit 1; }
 pub_sod 0.5.1 51 >"$tmp/kb39.out" 2>&1 || { echo "check-packages: FAIL — publishing sod 0.5.1 errored:" >&2; sed 's/^/  /' "$tmp/kb39.out" >&2; exit 1; }
 "$KAMA" pkg install "$ka/kama.json" >"$tmp/kb39.out" 2>&1 \
-    || { echo "check-packages: FAIL — KB-39: re-install with the lock below the newest match errored:" >&2; sed 's/^/  /' "$tmp/kb39.out" >&2; exit 1; }
-grep -q '"version": "0.5.0"' "$ka/kama.lock" || { echo "check-packages: FAIL — KB-39: the lock's sod 0.5.0 was not kept:" >&2; sed 's/^/  /' "$ka/kama.lock" >&2; exit 1; }
+    || { echo "check-packages: FAIL — re-install with the lock below the newest match errored:" >&2; sed 's/^/  /' "$tmp/kb39.out" >&2; exit 1; }
+grep -q '"version": "0.5.0"' "$ka/kama.lock" || { echo "check-packages: FAIL — the lock's sod 0.5.0 was not kept:" >&2; sed 's/^/  /' "$ka/kama.lock" >&2; exit 1; }
 "$KAMA" build "$ka/kama.json" -o "$tmp/kb39app" >"$tmp/kb39b.out" 2>&1 \
-    || { echo "check-packages: FAIL — KB-39: the resolved tree did not build:" >&2; sed 's/^/  /' "$tmp/kb39b.out" >&2; exit 1; }
-run "$tmp/kb39app"; [ "$RC" = 100 ] || { echo "check-packages: FAIL — KB-39: the app returned $RC, expected 100 (both paths see sod 0.5.0)" >&2; exit 1; }
+    || { echo "check-packages: FAIL — the resolved tree did not build:" >&2; sed 's/^/  /' "$tmp/kb39b.out" >&2; exit 1; }
+run "$tmp/kb39app"; [ "$RC" = 100 ] || { echo "check-packages: FAIL — the app returned $RC, expected 100 (both paths see sod 0.5.0)" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships (KPG-2); $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept (KB-39))"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept)"

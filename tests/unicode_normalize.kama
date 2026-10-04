@@ -1,4 +1,4 @@
-// `std::unicode` normalization (peer KPG-15): the kama surface over the generated tables, which
+// `std::unicode` normalization: the kama surface over the generated tables, which
 // tools/check-unicode.sh holds to the UCD's whole NormalizationTest.txt. These are the cases a program meets: the
 // SASLprep fold SCRAM needs (NFKC turns `Ａ` and `ﬁ` into plain letters), an accent composed and decomposed, a
 // Hangul syllable, and text that is already in form. Returns 0.

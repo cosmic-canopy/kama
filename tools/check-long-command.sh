@@ -1,5 +1,5 @@
 #!/bin/sh
-# check-long-command.sh — a legal manifest builds however long its C command lines get (KB-27).
+# check-long-command.sh — a legal manifest builds however long its C command lines get.
 #
 # Every C compile and link goes through the host's shell, and cmd.exe stops at 8,191 characters. Each compile
 # carries one `-I` per distinct `csources` DIRECTORY, so a package with enough of them — @kama/sodium has 120

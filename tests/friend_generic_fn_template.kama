@@ -1,6 +1,6 @@
 // A `friend` grant to a GENERIC free function reaches the function's own body — checked once, before any
 // instance exists — and not only each instance. A library's generic accessor is instantiated by its users and
-// never by the library, so its `kama check` refused the grant it relies on (peer KPG-28). `reader` below is
+// never by the library, so its `kama check` refused the grant it relies on. `reader` below is
 // never instantiated; `count` is, and both use the grant.
 import { core::println };
 

@@ -1,4 +1,4 @@
-// An enum copies exactly when every payload does (KRD-4). `Res` is a resource that never chose to be copyable, so
+// An enum copies exactly when every payload does. `Res` is a resource that never chose to be copyable, so
 // `Handle` cannot be copied — and an enum cannot declare `Copyable` itself, so the message names the payload rather
 // than suggesting a `copy` ctor.
 type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }

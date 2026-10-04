@@ -1,4 +1,4 @@
-// All six CONTEXTUAL keywords — `copy`, `give`, `truncate`, `type`, `slot`, `file` — name any binding (KB-35), and each
+// All six CONTEXTUAL keywords — `copy`, `give`, `truncate`, `type`, `slot`, `file` — name any binding, and each
 // still does its keyword's job in the same function. SPEC and the parser's own diagnostic said so for years; the parser
 // took `copy`, `give` and `truncate` only as a method's name, and took none of the six as a `match` binding, a `match`
 // label, a `foreach` binding or in an interpolation hole — so a payload declared `V(int32 slot)` could not be matched.

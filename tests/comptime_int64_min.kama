@@ -1,4 +1,4 @@
-// Peer KPG-14: int64's minimum has no C literal. `-9223372036854775808` is unary minus on a magnitude past
+// int64's minimum has no C literal. `-9223372036854775808` is unary minus on a magnitude past
 // LLONG_MAX, which C types as unsigned (clang: -Wimplicitly-unsigned-literal), and every place kama writes a
 // value it FOLDED spelled it that way; only an expression literal had the <stdint.h> spelling. Each position
 // below wrote it: a module constant, a `comptime fn` result, a table element, a struct field, a type constant,

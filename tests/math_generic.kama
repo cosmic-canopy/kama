@@ -39,7 +39,7 @@ fn int32 main() {
     float64 s = sin(x: 0.0);
     float64 c = cos(x: 0.0);
     if (abs(x: s) < 0.000001 && abs(x: c - 1.0) < 0.000001) { t = t + 1; }
-    // a NESTED generic call infers: the inner call is solved first, so `exp(x: 1.0)` is a `float64` (KPG-12)
+    // a NESTED generic call infers: the inner call is solved first, so `exp(x: 1.0)` is a `float64`
     if (abs(x: log(x: exp(x: 1.0)) - 1.0) < 0.000001) { t = t + 1; }
     // atan2 keeps C's (y, x) order, but the argument is NAMED, so the classic mix-up cannot happen quietly
     float64 q = atan2(y: 1.0, x: 1.0);

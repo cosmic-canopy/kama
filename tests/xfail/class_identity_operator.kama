@@ -1,5 +1,5 @@
-// The OPERATOR operand, which was the one argument position nothing checked at all. Reported by the first
-// external project as `Mat4 * Vec4` passing `kama check` and failing in the C compiler; they filed it as
+// The OPERATOR operand, which was the one argument position nothing checked at all. It surfaced as
+// `Mat4 * Vec4` passing `kama check` and failing in the C compiler, which reads as
 // ergonomic friction, and it is a check/build divergence.
 //
 // The mechanism is a fallback: `findBinaryOperator` looks for the mixed-type form (`op_mul__Vec4`) and,

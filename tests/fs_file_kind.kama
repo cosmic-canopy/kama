@@ -1,4 +1,4 @@
-// Peer KPG-18: what a path names, and the same question asked of an OPEN file. `Metadata.kind` is a `FileKind`
+// What a path names, and the same question asked of an OPEN file. `Metadata.kind` is a `FileKind`
 // (`isDir()`/`isFile()`/`isSymlink()` ask the common questions), `File.metadata()` reads the descriptor — so a
 // check and the read after it are about one file — and `symlinkStat` describes a link without following it.
 // libpq's `.pgpass` rule is the shape: open it, then refuse anything that is not a plain file (`/dev/null` turns it

@@ -1,6 +1,6 @@
 // An `InlineArray` field sized by a runtime `static` is refused AT THE FIELD, naming the size. It used to
 // register no collection and leave a raw pointer behind, so the only diagnostics were "'s' is never
-// assigned" of a ctor that assigns it and "raw pointer access requires an `unsafe fn`" (consumer KB-23).
+// assigned" of a ctor that assigns it and "raw pointer access requires an `unsafe fn`".
 static isize N = 4;
 type value Leaf { public isize a; public default ctor none() { this.a = 0; } }   // elected: `s` needs no fill of its own
 type value Board {

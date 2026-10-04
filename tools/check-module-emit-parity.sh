@@ -75,7 +75,7 @@ n_main=$(LC_ALL=C grep -c 'Counter__start()' "$main_c" || true)
 $n_inside time(s) inside \`geo\` and $n_main time(s) one module over — a member's type is being resolved \
 in the READER's scope"
 
-# ── Case 2: the same rule at the ARGUMENT path (the KB-13 residual, 0.9.189) ───────────────────────────
+# ── Case 2: the same rule at the ARGUMENT path (the import residual, 0.9.189) ──────────────────────────
 #
 # The declaration path was baked in 0.9.176; PASSING a field along was still resolved at the read site,
 # through three more resolvers (lvalueCType / exprClass / receiverScalarCType, all reached from
@@ -132,7 +132,7 @@ KEOF
 rule no longer fires here, so this probe cannot see the read-site divergence any more"
 
 [ "$in_ok" = "$out_ok" ] || note "handing a field to a mismatched parameter is refused inside the declaring \
-module and ACCEPTED one module over — a member's type is being resolved in the READER's scope (the KB-13 \
+module and ACCEPTED one module over — a member's type is being resolved in the READER's scope (the wrong-file import \
 residual). Route the read site through fieldCType(), never cTypeInInstance(owner, f.type)"
 
 exit $fail

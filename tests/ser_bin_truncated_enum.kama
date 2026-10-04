@@ -1,4 +1,4 @@
-// A KBIN buffer missing its closing `endObject` byte(s) is REFUSED (consumer KG-35).
+// A KBIN buffer missing its closing `endObject` byte(s) is REFUSED.
 //
 // The derived enum deserializer used a bare `moreFields()` call to "close" each object. KBIN peeks 0 past
 // the end of the buffer, which is not the end tag, so that call answered true, consumed nothing and set no

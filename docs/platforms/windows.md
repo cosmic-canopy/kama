@@ -198,7 +198,7 @@ Worth knowing before debugging, because each of these produced a confident wrong
   Launched from a terminal, a `--subsystem windows` build starts with `GetStdHandle(-11)` **null** and
   `_get_osfhandle(1)` **-2**; `AttachConsole(ATTACH_PARENT_PROCESS)` then INSTALLS a std handle as a side
   effect, so any handle test placed after it reads back the handle the attach just made and concludes
-  the process was handed a stdout. That is how KB-30's fix made KB-31: the rebind was skipped exactly
+  the process was handed a stdout. That is how the fix for a clobbered redirect broke the terminal case: the rebind was skipped exactly
   where it was needed, and the program printed nothing. Decide on `_get_osfhandle`, never on
   `GetStdHandle`.
   ⚠️ **NO AUTOMATED GUARD COVERS THE TERMINAL CASE** — it needs a process whose stdout is a real console,
@@ -225,13 +225,13 @@ Worth knowing before debugging, because each of these produced a confident wrong
 - **cmd.exe's command line stops at 8,191 characters**, and every C compile and link reaches it (`system()`,
   and the `-j` pool's `cmd /c`). `CreateProcessW` takes 32,767 and clang takes `@file` of any length, so the
   limit is the shell's. A package with enough `csources` directories (`@kama/sodium`: 120 sources in 78, one
-  `-I` each) answered *"The command line is too long."* and could not build here at all — filed by the first
-  consumer as KB-27. Since `0.9.393` a command that would not fit moves the lists the DRIVER generated
+  `-I` each) answered *"The command line is too long."* and could not build here at all.
+  Since `0.9.393` a command that would not fit moves the lists the DRIVER generated
   (includes, inputs, objects) into response files beside the objects; a command that fits is byte-for-byte
   what it was. `tools/check-long-command.sh` holds it down.
 - **A text-mode `std::ofstream` writes `\r\n`.** kama's own `std::fs` opens everything binary, but the driver
   wrote `kama.lock`, the emitted C and the generated header in text mode, so a lock written here differed byte
-  for byte from the same lock written anywhere else (KB-28, `0.9.392`). Every stream the driver opens is
+  for byte from the same lock written anywhere else (fixed `0.9.392`). Every stream the driver opens is
   binary now; `tools/check-lf-output.sh` holds it down. ⚠️ And msys2's `grep` strips a CR at end of line
   before matching, so `grep -c $'\r'` counts ZERO on a CRLF file — count the bytes with `tr -cd '\r' | wc -c`.
 - **`%RANDOM%` is seeded from the system clock**, so processes started in the same tick draw identical
@@ -313,7 +313,7 @@ Worth knowing before debugging, because each of these produced a confident wrong
   materializes `.kama/deps/<name>` with `mklink /J` because the relative alternative — a directory
   *symlink* — needs `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary
   install cannot depend on. So a resolved dependency tree is **not relocatable here**, and
-  `tools/check-packages.sh`'s KB-6 case asserts only what survives: the link is made, and the tree builds
+  `tools/check-packages.sh`'s relative-link case asserts only what survives: the link is made, and the tree builds
   where it was resolved.
 - **`system()` is cmd.exe, and cmd's `echo` does not strip quotes** the way `/bin/sh` does. That matters
   to any guard using `--cc "echo <compiler>"` to read a command line back: kama quotes every input path,
@@ -455,7 +455,7 @@ Worth knowing before debugging, because each of these produced a confident wrong
     `fs_permissions_api` asserted POSIX umask bits of a plain create — the owner reads and writes, nobody else
     writes — and passed here, then failed CI's Windows leg at `0.9.457`; like `fs_umask.d`, that half is POSIX-only
     now. A test that asserts a Windows file's bits must set them (`openWith`, `createDirWith`, `setPermissions`).
-  - **`Metadata.owner`/`group` are the descriptor's SIDs (KPG-31, `0.9.522`)** — `Optional`s, read by the same
+  - **`Metadata.owner`/`group` are the descriptor's SIDs (`0.9.522`)** — `Optional`s, read by the same
     `GetFileSecurityW`/`GetKernelObjectSecurity` call that yields `permissions`, and `None` only where that call is
     refused (another account's private file). A link's own owner comes from opening the reparse point itself
     (`FILE_FLAG_OPEN_REPARSE_POINT`, `READ_CONTROL` only); a pipe's or a console's from its handle. ⚠️ **A new file's

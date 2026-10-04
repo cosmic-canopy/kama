@@ -71,7 +71,7 @@ type enum IoErrorKind implements Sendable {
     }
 }
 
-// An I/O error in the two parts it really has (peer KPG-22; the model Rust, Go, Python and .NET share): its KIND,
+// An I/O error in the two parts it really has (the model Rust, Go, Python and .NET share): its KIND,
 // which a caller branches on, and — when the operating system reported it — the OS's own CODE, whose text the
 // message quotes. They are different facts: `chmod` of another user's file and of a file this user may not touch
 // are both PermissionDenied to a caller, and "Operation not permitted" (EPERM) and "Permission denied" (EACCES)
@@ -98,7 +98,7 @@ type value IoError implements Error, Sendable {
     }
     // The OS's own words for its code — `strerror`'s text, "Connection refused" — alone; `None` for an error kama
     // raised itself, which no OS code backs, or a code the OS has no text for. What a client that prints exactly
-    // what libpq or the OS prints reaches for; `message()` says more (peer KPG-23).
+    // what libpq or the OS prints reaches for; `message()` says more.
     public const fn Optional<string> osMessage() {
         if (this.os == 0) { return Optional::None; }
         return osText(code: this.os);

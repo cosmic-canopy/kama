@@ -387,8 +387,8 @@ fi
 # `@compileFor(NATIVE)` / `(WASM)` / `(EMBEDDED)` / `(WINDOWS)`, and none of those is a flag: a built-in
 # target NAME deliberately does not become one (see derivedTargetFlags in kama.driver.cpp). A manifest
 # build rejects the name, but a LOOSE build reads no manifest and treats an undeclared flag as simply
-# inactive — so the documented spelling compiles clean and the declaration is silently GONE. The first
-# external project on kama nearly shipped it, off our own examples.
+# inactive — so the documented spelling compiles clean and the declaration is silently GONE. A program
+# built on kama nearly shipped it, off our own examples.
 #
 # The live platform gates are the derived ones (`ARCH_*`/`OS_*`/`ABI_*`, plus `HOSTED`/`SIMD128`), which
 # is what tests/compilefor_platform.kama uses.

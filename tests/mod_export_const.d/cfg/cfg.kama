@@ -1,6 +1,6 @@
 // SPEC § Compile-time constants: a module `comptime` is "a module-level named constant (subject to the
 // module `export { }` surface)". This fixture is that sentence's proof, and it exists because the
-// sentence was false in four separate ways at once — reported by the first external project on kama.
+// sentence was false in four separate ways at once — found by using it.
 //
 // Naming a `comptime` here was rejected outright ("no such top-level declaration"). Worse, and unseen:
 // a `comptime` lowered to `static const` in its OWN unit's `.c`, so even a sibling file in this same

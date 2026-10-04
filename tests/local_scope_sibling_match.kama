@@ -1,5 +1,5 @@
 // A local declared in one block is gone when the block closes — a later SIBLING block may bind the
-// same name and gets ITS type (consumer KB-20).
+// same name and gets ITS type.
 //
 // The emitter's per-name local tables were flat maps that `popScope` never touched, so `string m` here
 // stayed typed to the end of `main`. A `match` payload binding does not write `_localCTypes` (by design:

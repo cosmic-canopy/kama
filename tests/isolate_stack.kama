@@ -1,11 +1,11 @@
-// An isolate's stack is STATED (peer KRD-2, @kama/redis): the main thread's own — 8 MiB on a 64-bit native target,
-// 256 KiB on wasm, whose stacks share one fixed memory — not the OS's thread default. Until 0.9.529 it was the OS's, 512 KiB on macOS, where the
-// reporter's 20 000-deep recursion ran on the main thread and died with SIGBUS in an isolate. `spawn(stack: n)`
+// An isolate's stack is STATED: the main thread's own — 8 MiB on a 64-bit native target,
+// 256 KiB on wasm, whose stacks share one fixed memory — not the OS's thread default. Until 0.9.529 it was the OS's, 512 KiB on macOS, where a
+// 20 000-deep recursion that ran on the main thread died with SIGBUS in an isolate. `spawn(stack: n)`
 // asks for more in both spawn forms, and `parallel_for`'s `stack:` clause sizes each worker. Returns 0, or the
 // number of the failed check.
 import { std::concurrent::Isolate, std::collections::DynamicArray };
 
-// The depths, per target. SHARED fits the stated default on both the main thread and an isolate — the reporter's
+// The depths, per target. SHARED fits the stated default on both the main thread and an isolate — the motivating
 // 20 000 natively; less on wasm, whose 256 KiB default holds a few thousand debug frames. DEEP is past that default
 // and inside BIG, so the deep checks pass only because the clause took effect: natively ~50 bytes a debug frame
 // makes 400 000 levels ~20 MiB (more under ASan) against 8 MiB, and on wasm, whose memory is fixed, a smaller pair.
@@ -33,7 +33,7 @@ fn void worker(ref Job j) { j.run(); }
 fn void owned(Job j) { j.run(); }
 
 fn int32 main() {
-    // The reporter's case: the same depth on the main thread and in an isolate, on the stated default.
+    // The motivating case: the same depth on the main thread and in an isolate, on the stated default.
     int64 depth = SHARED;
     if (down(n: depth) != depth) { return 1; }
     Job j = Job.make(depth: depth);

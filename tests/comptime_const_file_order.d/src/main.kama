@@ -1,4 +1,4 @@
-// Module `comptime` constants are known to every reader in ANY file order (consumer KB-23). A constant
+// Module `comptime` constants are known to every reader in ANY file order. A constant
 // aliasing one from a file that sorts LATER was folded only after `collectCollections` had asked for it, so
 // `InlineArray<Leaf>#(DERIVED)` registered no collection and the field became a raw pointer — reported as
 // "'s' is never assigned" of a ctor that assigns it, with nothing naming the declaration. The same early
@@ -25,7 +25,7 @@ type enum Code : int32 { A = OFFSET, B = OFFSET + 1 }
 
 type value Leaf { public isize a; public ctor at(isize a) { this.a = a; } }
 type value Board {
-    InlineArray<Leaf>#(DERIVED) s;            // KB-23: a field sized by the alias
+    InlineArray<Leaf>#(DERIVED) s;            // a field sized by the alias
     public ctor e() {
         this.s = [Leaf.at(a: 0); DERIVED];    // built whole: `Leaf` elected no default (KR-106)
         isize i = 0;

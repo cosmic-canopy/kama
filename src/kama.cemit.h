@@ -1446,7 +1446,7 @@ private:
     // so a scoped binding can be undone at scope exit. Those tables are flat maps with no scope of their
     // own; until a `Scope` owned the bindings it introduced, a block-declared local lived to the end of its
     // function, and a later SIBLING block's `match`/`foreach` binding of the same name — which by design
-    // does not write `_localCTypes` — was typed by the stale entry (consumer KB-20; the same leak sat in
+    // does not write `_localCTypes` — was typed by the stale entry (and the same leak sat in
     // `_constLocals`, `_slotLocals` and `_refParams`). `saveLocalBinding` takes one BEFORE the binder
     // writes; `popScope` restores a scope's, in reverse, when it closes. Shared by the match emitter and
     // the classifier's arm binding, which may not diagnose and so pushes no scope of its own.
@@ -2063,7 +2063,7 @@ private:
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // A loop body's `break` lands just past the C loop — unless a `match` arm's C `switch`
-                   // sits between them, which would catch it (KPG-32). `switchDepth` is `_switchDepth` when
+                   // sits between them, which would catch it. `switchDepth` is `_switchDepth` when
                    // the loop opened, so a deeper one at the `break` means a switch is in the way; the
                    // `break` then jumps to `exitLabel`, which the loop site places right after the C loop
                    // closes (placeLoopExit) — exactly where a C `break` would have landed.
@@ -2073,7 +2073,7 @@ private:
                    // split) and `return` (which would leave the worker, not the enclosing function) are
                    // refused there; `continue` ends one element's pass and keeps its meaning.
                    bool isParallelForRoot = false;
-                   // KRD-1: an outer local given away inside this loop body, by name, with the line of the
+                   // Re-arming: an outer local given away inside this loop body, by name, with the line of the
                    // `give`. Every path back to the loop's start (the end of the body, each `continue`) must
                    // find it assigned again, or the next pass would move it twice; `breakStates` records its
                    // state at each `break`, which with the loop's own exit (`exitsNormally` — false for a
@@ -2384,7 +2384,7 @@ private:
     void governWideLiterals(SharedExpression e);
     std::string moduleStaticCTypeRaw(SharedExpression e);   // a module static's type, NOT filtered by isClass
     std::set<const void*> _litGoverned;
-    // KB-37. An unsuffixed float literal is typed by its destination and by an operator's other operand, so next to
+    // An unsuffixed float literal is typed by its destination and by an operator's other operand, so next to
     // a `float32` it IS one — and must be spelled as a C `float`, or C's usual arithmetic conversions do the
     // operation in `double` (`x == 0.319` was always false). Each position that types a literal CLAIMS the float
     // literals of its literal subtree for the type it gives them, at that position and before the value is
@@ -2847,7 +2847,7 @@ private:
     uint32_t serWireId(const ClassInfo& ci, const FieldInfo& f) const;
     // Refuse a duplicate wire name or wire id within one type. Runs ONCE per type after every member is
     // registered — the attribute loop runs per DECLARATION and cannot see siblings, and the existing
-    // duplicate check there is on the FIELD name (consumer KB-21), not the wire name.
+    // duplicate check there is on the FIELD name, not the wire name.
     void validateSerFieldKeys(ClassInfo& ci, int line);
     // Emit `FieldKey __key = …; int32_t __slot = …;` — the two-arm resolution a derived `deserialize`
     // opens each iteration with. A named backend answers `Name`, a numbered or positional one answers
@@ -3450,7 +3450,7 @@ private:
     // scope-dtor'd temp (dropped via dropCondTemps at the guard/wrapper it was hoisted into), a literal/lvalue
     // is a borrow temp (no drop). Setup is flushed into `_hoisted` at `depth`.
     std::string logSpanOf(SharedExpression e, int depth);
-    std::string isolateStackArg(SharedExpression stack, int line);   // KRD-2: a `stack:` clause, or the stated default
+    std::string isolateStackArg(SharedExpression stack, int line);   // a `stack:` clause, or the stated default
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                             bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
@@ -3474,15 +3474,15 @@ private:
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     int  innermostLoopIndex() const;                           // the enclosing loop body's scope, or -1 (none in this function)
     bool assignTargetLive(const std::string& key) const;      // the assignment's target still holds a value to drop
-    bool variantCopyable(const ClassInfo& c);                  // KRD-4: an enum copies when every payload does
+    bool variantCopyable(const ClassInfo& c);                  // an enum copies when every payload does
     bool payloadCopyable(const std::string& cType_);           //   …one payload's type
     bool variantNeedsCopyFn(const ClassInfo& ci);              //   …and whether its copy is a call (`T__copy`)
     void emitVariantCopy(ClassInfo& ci);                       //   its generated `__copy`
     std::string notCopyableMessage(const std::string& cls, const char* otherwise);   // why `copy` of `cls` is refused
     std::string notCopyableReason(const std::string& t, std::set<std::string>& seen);  // …the type that is the cause
     std::set<std::string> _variantCopyVisiting;                //   the enums being judged (a recursive mention copies)
-    void checkRearmed(const Scope& loop, int line, const char* where);   // KRD-1: back edge — given locals are live again
-    void settleLoopExit(Scope& loop);                          // KRD-1: a given local's state after its loop
+    void checkRearmed(const Scope& loop, int line, const char* where);   // back edge — given locals are live again
+    void settleLoopExit(Scope& loop);                          // a given local's state after its loop
     const ASTNode* _writeTarget = nullptr;                     // the bare local an `=` is storing to — a write, not a read
     bool _nextLoopExitsNormally = true;                        // the loop site says whether its condition can end it
     bool isParallelForLoop(int loopIndex) const;               // that loop is the one a `parallel_for` body was outlined into
@@ -3574,7 +3574,7 @@ private:
     // THE FILE RUNG FOR MODULE-SCOPE VARIABLES. Qualified name -> the file that declared it. Without this
     // `declFileOf` returns "" for a module `comptime`/`static`, so `checkReach` waves through every
     // cross-file reference and the mistake only surfaces as a clang "use of undeclared identifier" — a
-    // check/build divergence, and the reason KB-3 read as "a comptime cannot be exported" when the real
+    // check/build divergence, and the reason the defect read as "a comptime cannot be exported" when the real
     // state was that module-scope variables had never been wired into the module system at all.
     std::map<std::string, std::string> _moduleVarFile;
     // KR-97: the declaration and its NAME node, same key — the def site `kama query` and the language server
@@ -3616,7 +3616,7 @@ private:
         bool    isSigned = true;
         double  f = 0.0;      // Float payload
         bool    isF32 = false;
-        // KB-37: an unsuffixed float LITERAL (or arithmetic on literals only) that no position has typed yet — `f` is
+        // An unsuffixed float LITERAL (or arithmetic on literals only) that no position has typed yet — `f` is
         // its value as a float64 and `lit32` as a float32, each rounded once from the source. A store, a cast and a
         // typed operand decide which one it is, exactly as the emitter's claims decide how it is spelled.
         bool    isLit = false;
@@ -3870,7 +3870,7 @@ private:
     const SigInfo* calledSig(const std::string& ct) const;
     // Is this call's callee a bare name bound to a local or parameter? Then it is a call THROUGH that value and
     // never a function: the function tables answer a name the file cannot see (an `extern` is one global key,
-    // a sibling's private function is resolved for its diagnostic), so they must not be asked (KB-36).
+    // a sibling's private function is resolved for its diagnostic), so they must not be asked.
     bool callsThroughLocal(const InvocationNode* inv) const;
     // The extern-call gate. CALLING a C function is the unsafe act — the declaration is bodiless, so it
     // carries no marker of its own. No scalar exemption: see the definition.

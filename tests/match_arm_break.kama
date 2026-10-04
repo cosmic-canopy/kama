@@ -1,4 +1,4 @@
-// `break` in a `match` arm leaves the enclosing LOOP (KPG-32). A match arm is lowered to a C `switch`
+// `break` in a `match` arm leaves the enclosing LOOP. A match arm is lowered to a C `switch`
 // case, and a bare C `break` there ends the switch only: the loop ran on, and a value-producing match
 // left its result unset. Every C loop shape the emitter writes is covered — `while` and `for` both
 // plain and loop-and-a-half (an owning temp in the condition), `do`, and `foreach` over an intrinsic

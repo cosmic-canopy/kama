@@ -1,6 +1,6 @@
 // A generic function binding its `T` to a contract needs `T`'s vtable for that contract. For a generic
 // instance (`DynamicArray<Uuid>` as `Serializable`) the vtable is `static`, defined in the shared header after
-// the generic function's body that names it, and clang refused the name it had not seen yet (peer KPG-30).
+// the generic function's body that names it, and clang refused the name it had not seen yet.
 // Every instance's vtables are now declared ahead of every use.
 import { std::collections::DynamicArray, std::uuid::Uuid };
 

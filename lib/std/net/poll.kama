@@ -50,7 +50,7 @@ type resource Poller implements Sendable {
     // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready. Returns the count
     // ready (0 = timed out). A signal that interrupts the wait (EINTR — SIGCHLD from a child, a profiler's
     // SIGPROF, whatever `SA_RESTART` says) is not an I/O event, so the wait resumes with the time that is LEFT,
-    // measured on the monotonic clock: the caller's deadline holds either way (KPG-17). It used to surface as
+    // measured on the monotonic clock: the caller's deadline holds either way. It used to surface as
     // `Other(4)`, which a caller could tell from a real failure only by a platform's magic number.
     public unsafe fn Result<int32, IoError> wait(int32 timeoutMs) {
         Instant start = monotonicNow();

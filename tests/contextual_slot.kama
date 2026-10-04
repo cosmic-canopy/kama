@@ -2,8 +2,8 @@
 // label, a member read — and it still leads a declaration where a declaration can begin. It joins
 // `type`, `copy`, `give`, `truncate`, `default` and `base`.
 //
-// It was reserved outright until `0.9.140`, which cost the first external project real time: `slot` is an
-// entirely natural name for an index into a table, and that is exactly where they hit it — a texture
+// It was reserved outright until `0.9.140`, which cost real time in practice: `slot` is an
+// entirely natural name for an index into a table, and that is exactly where it was hit — a texture
 // registry's lookup. The diagnostic named the token ("unexpected SLOT") but not that it was reserved, so
 // it read like a parser fault. `slot` was the THIRD reserved word found by walking into it (`base`,
 // `type`, `slot`), which is why SPEC now publishes the whole list rather than leaving the next one to be

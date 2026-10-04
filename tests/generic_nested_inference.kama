@@ -1,4 +1,4 @@
-// Peer KPG-12: a generic call infers from another generic call's result. `abs(x: sin(x: t))` was refused —
+// A generic call infers from another generic call's result. `abs(x: sin(x: t))` was refused —
 // "cannot infer generic type parameter 'T'" — on the stated ground that the inner call returns "the very `T`
 // being resolved". It does not: the inner call is solved first (its arguments are scanned before it), so it
 // returns its instance's type. The explicit `abs(x: sin::<float64>(x: t))` was refused too. Covered here:

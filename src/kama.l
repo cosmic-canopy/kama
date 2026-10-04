@@ -345,7 +345,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
 <IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
   /* A hole holds names only — no declaration begins in one, no hand-off, no conversion — so every CONTEXTUAL word is
-     a name here: `${slot}`, `${p.type}` (KB-35: the hole refused all six). */
+     a name here: `${slot}`, `${p.type}` (until `0.9.470` the hole refused all six). */
 <IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext);
                                                   if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE) t = IDENTIFIER;
                                                   if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
@@ -634,7 +634,7 @@ unsigned decodeUTF8Codepoint(const char* bytes, int len)
   return cp;
 }
 
-/* KB-35. `copy`, `give` and `truncate` name a binding, as `type`, `slot` and `file` do, and are keywords only where
+/* `copy`, `give` and `truncate` name a binding, as `type`, `slot` and `file` do, and are keywords only where
    their grep anchor stands (SPEC § kama's keywords): `give`/`copy` directly before a NAME — a hand-off's operand is a
    named value — other than `in` (a `foreach` binding so named), or before a literal, which the checker then refuses
    as no named value; `truncate` before `<`, a name and `>`. Anywhere else the word is its NAME token, which the

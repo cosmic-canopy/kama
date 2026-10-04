@@ -95,7 +95,7 @@ static inline int kama__channel_unheld(kama_channel_t* ch) {
     return ch->senders == 0 && ch->receivers == 0 && !ch->factoryLive;
 }
 
-// A timed receive (`Receiver.recvTimeout`, KPG-5) must not be stretched or cut short by the wall clock moving, so the
+// A timed receive (`Receiver.recvTimeout`) must not be stretched or cut short by the wall clock moving, so the
 // condvar a receiver waits on is put on CLOCK_MONOTONIC where the platform lets a condvar choose its clock. Apple
 // does not (no pthread_condattr_setclock); it has a RELATIVE timed wait instead, used below. Anywhere setclock is
 // refused, `monotonic` stays 0 and the wait runs in wall-clock slices of at most KAMA__CHANNEL_SLICE_NS, each
@@ -274,7 +274,7 @@ static inline int kama_channel_recv(void* h, void* out) {
     return kama__channel_take(ch, out);
 }
 
-// The receive that does not wait (`Receiver.tryRecv`, KPG-5): 0 = an element was written to `out`, 1 = none is
+// The receive that does not wait (`Receiver.tryRecv`): 0 = an element was written to `out`, 1 = none is
 // buffered but a sender is live (Empty), -1 = drained and every sender gone (Closed).
 static inline int kama_channel_try_recv(void* h, void* out) {
     kama_channel_t* ch = (kama_channel_t*)h;
@@ -283,7 +283,7 @@ static inline int kama_channel_try_recv(void* h, void* out) {
     return kama__channel_take(ch, out);
 }
 
-// The receive that waits at most `nanos` (`Receiver.recvTimeout`, KPG-5), with the same three answers as
+// The receive that waits at most `nanos` (`Receiver.recvTimeout`), with the same three answers as
 // kama_channel_try_recv. A zero or negative span is a try. The deadline is monotonic; see kama__channel_cond_init.
 static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
     kama_channel_t* ch = (kama_channel_t*)h;

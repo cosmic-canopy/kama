@@ -1,4 +1,4 @@
-// `give` is the hand-off only before a name (KB-35): `give(s)` calls something NAMED `give`, and a call names its
+// `give` is the hand-off only before a name: `give(s)` calls something NAMED `give`, and a call names its
 // arguments. Written for the hand-off, the parse error says which reading was taken.
 fn void take(string s) { }
 fn int32 main() {

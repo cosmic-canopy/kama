@@ -206,8 +206,8 @@ Everything else here is library or toolchain work that does **not** gate the tag
    is the sentence that says so. Refined 2026-09-06: **digests are in** (`std::digest::sha1`/`sha256`,
    SPEC § Digest) — a non-cryptographic protocol needs one (RFC 6455, git ids, content addressing, the
    registry's own integrity strings), and every batteries stdlib ships them; what stays out is the
-   constant-time half — ciphers, key exchange, signatures — which is `@kama/sodium`'s job. Recorded emphatically because the first consumer's queue lists TLS with
-   the status "ROADMAP" and is waiting for it: `wss://` is not coming to `std`, and the answer for a
+   constant-time half — ciphers, key exchange, signatures — which is `@kama/sodium`'s job. Recorded emphatically because TLS has been mistaken for scheduled work, listed with
+   the status "ROADMAP" and waited on: `wss://` is not coming to `std`, and the answer for a
    secure socket is a package or terminating TLS at a reverse proxy. A non-goal that reads like a
    backlog item gets re-triaged forever. No new language
    surface; pure library/codegen. The items below are what the campaign left open:
@@ -221,7 +221,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
      `UnixStream.pair()` (socketpair) is genuinely optional until `std::process` can hand a descriptor to a child —
      between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; (a
      non-blocking Unix `connect` was filed here as optional, and that was WRONG — a blocking connect to a full
-     queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it shipped for KPG-21);
+     queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it has shipped);
      getters for the keepalive and
      user-timeout knobs are genuinely optional — no std option has one, and a program sets what it wants;
      `UnixDatagram` does not implement `DatagramSocket` YET — that contract's addresses are `SocketAddr`s — and that
@@ -697,7 +697,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   *(The generic-instance param edge is fixed — an inherited slot's signature is now rebound to its
   parent-resolved absolute spelling in `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
-  **ASCII** casing/whitespace. `std::unicode` exists since `0.9.506` with NORMALIZATION (peer KPG-15: SCRAM's
+  **ASCII** casing/whitespace. `std::unicode` exists since `0.9.506` with NORMALIZATION (SCRAM's
   SASLprep needs NFKC), generated from one pinned UCD and held to its NormalizationTest.txt; what remains for it is
   Unicode-correct casing + whitespace, and an eager `DynamicArray<string>` collect for `split` (the lazy `Split`
   iterator ships today). Its tables reach only a program that imports it — a module's C is included by the TUs
@@ -931,17 +931,17 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   it. `tools/check-release-arith.sh` now asserts the semantics *and* the zero cost in a real release
   build.
 
-- **Found by the first external project on kama** (a game port, 2026-08-31). Six of its reports are now
+- **Found by porting a game to kama** (2026-08-31). Six of these defects are now
   fixed: a multi-module library not being consumable as a dependency, the output being named after the
   alphabetically first source file, absolute dependency symlinks, three stale claims in the WebGPU
-  example, and — in `0.9.128` — the two recorded below. They are kept together because their provenance
+  example, and — in `0.9.128` — the two recorded below. They are kept together because how they were found
   is the point: every one was found by someone *using* the language rather than by the corpus, and not
   one of them had a fixture that could have caught it. ⚠️ **Two of the six turned out to be bigger than
   their report** (the `comptime` export was a whole unwired subsystem; the frame loop was a seam gap, not
   an example typo), which is the argument for probing a user's report rather than patching its sentence.
 
   - **A module-scope `comptime` constant could not be exported — FIXED 0.9.128.** Kept as a record
-    because probing it found something much larger than the report, and the shape recurs. KB-3 was
+    because probing it found something much larger than the report, and the shape recurs. It was
     filed as "naming a `comptime` in `export { }` is rejected", and the plan was to decide between
     fixing the doc and fixing the compiler. ⚠️ **Neither resolution was available: the probe found the
     subsystem had never been wired at all, and returned FIVE different answers for one declaration.**
@@ -984,12 +984,12 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     runs at unbounded rate, allocating a swapchain per iteration. ⚠️ The trigger is trivial and permanent:
     `Occluded` (a wgpu-native extension the example never consults, not one of `webgpu.h`'s six statuses)
     is returned with a NULL texture whenever the window is not visible — another window in front is
-    enough. The reporter reached 15.6 GB resident and took a machine down through the kernel watchdog,
+    enough. The program reached 15.6 GB resident and took a machine down through the kernel watchdog,
     twice. ⚠️ **The language half is the larger point, and it promoted a row** — see the safe `std::gpu`
     wrapper in [§8](#s8). Nothing in kama could have caught this: the allocation is inside wgpu-native,
     reached through `UnsafePtr` handles carrying no RAII, so there is no kama object, no destructor and
     nothing for `@noheap` to see. ⚠️ **But be precise about which half would have caught it** — the
-    reporter's framing, and this entry's first draft, both said RAII, and that is wrong. RAII would not
+    original framing, and this entry's first draft, both said RAII, and that is wrong. RAII would not
     have helped: the leak is wgpu-native's swapchain, triggered by ignoring an untyped `status` int. What
     prevents *this* bug is a **typed acquire result** whose error enum names `Occluded`. RAII prevents
     the *other* leak in the same file — five hand-written `wgpu*Release` calls per frame, all on the
@@ -1004,15 +1004,15 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     that seam is kama's or an engine's is the more arguable half, but a window seam that polls events and
     throws them away is not finished. **Now split across two rows** — the size accessor and the handle
     RAII ride the safe-wrapper row, and input is its own (`std::input`, a peer of `std::gpu`). ⚠️ The
-    arguable half has an answer now: the first engine built on kama **derives its own window** and
+    arguable half has an answer now: an engine built on kama **derives its own window** and
     duplicates ~60 lines of surface-derivation out of `kama_gpu.c` to get keyboard and mouse, which is
     the outcome a seam that throws its events away forces on everybody.
 
-- **The first consumer's second audit (2026-09-01), triaged against this tree.** Everything below was
-  REPRODUCED here before being scheduled — their report names the symptom, and three times running the
-  shape underneath it has been different. They keep their own gap list and renumber it between audits,
-  so find an entry by its text, never by a remembered KG number. They
-  pin `0.9.132` and have verified `@noheap` transitivity by behaviour in their own tree.
+- **A second audit of kama in use (2026-09-01), triaged against this tree.** Everything below was
+  REPRODUCED here before being scheduled — a report names the symptom, and three times running the
+  shape underneath it has been different. Find an entry by its text, never by a remembered number.
+  `@noheap` transitivity has also been verified by behaviour, on `0.9.132`, in a program built
+  outside this tree.
 
   - **A contract member returning a type declared BESIDE the contract — FIXED `0.9.134`.** ⚠️ **It was
     FIVE sites doing the same partial swap, not one bug.** A contract's member signatures are rendered
@@ -1033,7 +1033,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     - ⚠️ **The misattributed diagnostic was the same bug, not a second one.** It named one file's path
       with another's LINE (`impl.kama:9`, where line 9 of that file is a closing brace and line 9 of the
       contract's file is the member) — because the scope had moved and the diagnostic file had not. It
-      cost the reporter the bisection; it cost one line to fix.
+      cost a bisection to find; it cost one line to fix.
   - **A module `comptime` cannot be interpolated — FIXED `0.9.134`, and it was neither of those things.**
     Reported as comptime-specific and interpolation-specific; it is a MODULE-SCOPE name failing as a
     method RECEIVER. Interpolation only lowers `${X}` to a method call on the value, so a module `static`
@@ -1057,7 +1057,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
-    the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
+    the CoreAudio thread, a synth runs on the frame loop and feeds the device through a ring — so
     stall tolerance IS latency, and the two cannot be traded. A macOS session logged **326 underruns** at
     a 170 ms queue; deepening it to 683 ms fixed occlusion outright and still left **~290 during window
     drags**, because `glfwPollEvents` blocks inside a nested run loop for the whole drag while the
@@ -1105,9 +1105,9 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
       list.** A project with its OWN window seam now writes its own `link` + per-target `ldflags`, which
       is the right outcome: kama's hardcoded GLFW/framework list exists for a program that externs
       `kama_gpu.h`, and a project that does not is not entitled to track it.
-  - **Declared NOT ours, and they agree** — the audio backend, WebGPU binding breadth, their RFC6455
+  - **Declared NOT ours** — the audio backend, WebGPU binding breadth, an engine's RFC6455
     framing, module statics being per-isolate (correct behaviour), and a PATH entry that is a directory
-    breaking `make` in the emscripten image. Their `ENGINE_TODO.md` holds those.
+    breaking `make` in the emscripten image. Each belongs to the engine, not to kama.
 
 - **The docs taught a `@compileFor` spelling that silently deleted code — FIXED 2026-09-01.** Kept as a
   record because it is the house rule's own failure mode, caught by a user rather than by us.
@@ -1123,13 +1123,13 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   `a.byteLen()`, documented twice beside `dataPtr()` and — verified across every commit in the repo —
   **never implemented at all**; write `cast<usize>(a.length()) * sizeof(T)`.
 
-- **The audio-seam cluster — found by the first external project, 2026-09-01.** Ten gaps hit designing
+- **The audio-seam cluster — 2026-09-01.** Ten gaps hit designing
   one audio device seam, recorded together because they are one story and because every citation was
-  re-read against this tree before it was filed. The stake in their words: their engine says *"the
+  re-read against this tree before it was filed. The stake: the engine design that hit them says *"the
   platform split is one mechanism throughout — a `type contract` with `@compileFor`-gated
   implementations"*, and **that is not true today and cannot be made true** — the first two below are
-  exactly why, and their shipped platform seam had to push its split down into C `#ifdef`s instead.
-  ⚠️ **Every claim here was verified against the compiler, and two of their three "small wins" are
+  exactly why, and a shipped platform seam had to push its split down into C `#ifdef`s instead.
+  ⚠️ **Every claim here was verified against the compiler, and two of the three "small wins" are
   small while the third is not** — sizing a user's report is our job, not theirs.
 
   - **THE PLATFORM SEAM (`@compileFor` on `extern`; attributes on members; `InlineArray` bridges) — SHIPPED `0.9.131`.** `@compileFor` gates `extern "<h>";`, `extern fn` and `fnptr`;
@@ -1225,30 +1225,30 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     The diagnostic anchors on the innermost user body — the frame holding the call the author can change —
     which also kept the message count at one per defect instead of one per stack frame.
 
-  - **SHIPPED `0.9.160`/`0.9.161` — no `-fsanitize` flag remains, on any target or tier.** The consumer's
+  - **SHIPPED `0.9.160`/`0.9.161` — no `-fsanitize` flag remains, on any target or tier.** The
     finding was that kama's unconditional `-fsanitize=integer-divide-by-zero,shift-exponent,
     float-cast-overflow` (with `-fsanitize-trap`, so no sanitizer runtime) made emscripten refuse
     `-sWASM_WORKERS`, and with it AudioWorklet — no audio thread in the browser at all — and that the
-    refusal was over-broad for trap-only mode. The answer taken was the second of the three they offered,
+    refusal was over-broad for trap-only mode. The answer taken was the second of the three proposed,
     on every target rather than wasm alone: the four faults are now the compiler's own checks in the
     emitted C (`KAMA_DIV`/`MOD`/`SHL`/`SHR`, `kama_f2i_chk`, and in debug `KAMA_ADD`/`SUB`/`MUL`/`NEG`
     plus the place operators for `+=`/`++`), which cost the branch the sanitizer already cost, print a
     message where `ud2` printed nothing, run the panic hook, and are what an `@onPanic` region can recover
     from. Release codegen parity is asserted by `tools/check-release-arith.sh`. (Wasm Workers also need
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.)
-- **The defects the first external project's queue turned up, and what each one cost to find.** All
+- **The defects building a game on kama turned up, and what each one cost to find.** All
   reproduced against the shipped compiler before anything was written; two were fixed in `0.9.148` and
-  `0.9.149`, one in `0.9.150`, `0.9.170`–`0.9.175` closed the raw-seam triage (KB-12, KB-14, KB-15 and
-  three findings of ours — the git log has each), and the residue below is what is left. Their KB-13
-  (triaged 2026-09-04 against `0.9.164`) is the first open bullet.
+  `0.9.149`, one in `0.9.150`, `0.9.170`–`0.9.175` closed the raw-seam triage (three reported defects and
+  three found here — the git log has each), and the residue below is what is left. The spurious import
+  error (triaged 2026-09-04 against `0.9.164`) is the first open bullet.
 
   - **A module `static` cannot own a destructible resource — considered, deliberately DEFERRED, not a
     row (2026-09-04).** `static World g = World.make();` is refused, and the diagnostic states this stance.
-    It surfaced as the ROOT of the first consumer's calloc'd `World` (on the web `main`'s frame is unwound
+    It surfaced as the ROOT of a game's calloc'd `World` (on the web `main`'s frame is unwound
     while the rAF callback lives), which is what made it look like the fix. It is not, and the reasoning
     is kept here so it is not re-derived. (The seam it was mistaken for — a local `UnsafePtr<T>` element
     is deliberately untyped to ownership so `nd[i] = od[i]` stays a bitwise relocate; widening `exprClass`
-    fixes their KB-14 and breaks 45 fixtures — became DIAGNOSTICS in `0.9.174`, and then the audit found the
+    fixes the reported case and breaks 45 fixtures — became DIAGNOSTICS in `0.9.174`, and then the audit found the
     narrower fix: a CALL is not a store, so `0.9.227` types the RECEIVER alone through `ptrLocalElemType`
     and `p[0].m()` resolves on a local as it always did on a field, `exprClass` untouched; `drop` through a
     raw element stays refused, the SPEC has *The raw seam*.)
@@ -1273,12 +1273,12 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
       assigning such a static would have hit is fixed, `0.9.173`.) A pulling case would be an
       isolate-local driver object with a destructor; on an MCU nothing exits, so even there the gap is
       the initializer. If a case arrives, this entry is the design; reopen it as a row then.
-  - **KG-15 in their doc is stale**: `Mat4 * Vec4` is caught by `kama check` today ("the right-hand
+  - **A reported check/build split on `Mat4 * Vec4` is stale**: it is caught by `kama check` today ("the right-hand
     operand expects a `Mat4`, so it cannot be given a `Vec4`"), and check and build agree.
 
   - **SHIPPED `0.9.176`–`0.9.181` — the two wrong-file rows, and three more defects the first one was
     hiding.** Both ROADMAP rows are deleted; what follows is the record, then the original filing.
-    - **The KB-13 row was not a message bug.** The filing (and this section) described a spurious import
+    - **The wrong-file import row was not a message bug.** The filing (and this section) described a spurious import
       error. It is that, but the same read-site resolution MISSES across a module boundary rather than
       firing: the consumer's scope prefix differs, `_classes.find` comes up empty, and the field is
       silently dropped from the analysis. **Measured, one program written twice**: `slot Box b;` inside
@@ -1329,7 +1329,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     - What the fix unmasked (an unresolved name or member left to clang) shipped in `0.9.182`–`0.9.184`;
       the surface claim is in SPEC "Scope resolution uses `::`", the residue is the enum-initializer row below.
 
-  - **A file must import a type it never names (their KB-13) — the original filing.** Twelve lines, two files in one module:
+  - **A file must import a type it never names — the original filing.** Twelve lines, two files in one module:
     `decl.kama` exports `type enum Kind` and a `type value Holder { public int32 n; public Kind k; … }`;
     `main.kama` imports `Holder` and `makeHolder` only and declares `Holder h = makeHolder();`. Result:
     "`Kind` is declared in `src/decl.kama` and this file does not import it", against a file that never
@@ -1345,13 +1345,13 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     which fix is right: bake the answer at collect time, where the declaring file's scope is installed;
     the read-site scope swap is the measured wrong one (30 fixtures, 17 agreement pairs). "Is this field
     owning" is a fact about the class, not about the reader. **The position is a second wrong-file
-    mechanism**: `site->line` is the field's line in `decl.kama` (7 in their repro, 5 with a value field)
+    mechanism**: `site->line` is the field's line in `decl.kama` (7 in the repro, 5 with a value field)
     stamped with `main.kama`'s path — a 6-line file blamed at `7:0`. `run_tests.sh`'s
     `diag_position_faults` would flag it, in a `.d/` fixture that exercises it. Their cost statement is
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
-  - **KB-13's RESIDUAL — a field PASSED ALONG still demanded the import — FIXED `0.9.189`.** Re-audited
+  - **That filing's RESIDUAL — a field PASSED ALONG still demanded the import — FIXED `0.9.189`.** Re-audited
     2026-09-05 against `0.9.188`: `f489d19` closed the declaration (`Holder h = makeHolder();` built with
     `Kind` unimported), and the one shape left was handing the field to a function that declares the type
     itself — `takesKind(k: h.k)` in a file that imports `Holder`, `makeHolder` and `takesKind` and never
@@ -1376,7 +1376,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     triples differ on aarch64-macos, 0 with `-ffp-contract=off` — and ONLY in a release build, which is
     the finding worth keeping (see the vacuous-fixture note above).
 
-  - **An `InlineArray` field's SIZE had to be imported with the type — FIXED `0.9.150` (their KB-11).**
+  - **An `InlineArray` field's SIZE had to be imported with the type — FIXED `0.9.150`.**
     Indexing `b.cells[0]` across a package boundary needed `geom::N` in the reader's import block; the
     same shape inside one package always compiled. ⚠️ **The diagnostic named the wrong problem
     entirely** — "raw pointer access requires an `unsafe fn`" for a missing-import bug, pointing the
@@ -1389,14 +1389,14 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     analysis-agreement pairs** — the five-site NsCtx partial-swap hazard, and the same seam the
     class-identity rule's generic-body gate sat on until `0.9.185`.
 
-  **⚠️ What their queue is worth reading for.** KG-15 was filed as "ergonomic friction" and was a
-  check/build divergence reaching four positions, not one; KB-10 was filed as an `InlineArray` problem and
+  **⚠️ What these reports are worth reading for.** `Mat4 * Vec4` was filed as "ergonomic friction" and was a
+  check/build divergence reaching four positions, not one; another was filed as an `InlineArray` problem and
   was `isConcreteTypeArg` not recognising a raw pointer, which broke EVERY generic inference over a
-  pointer element; KB-11 was filed as an import problem and was a silent skip plus a size resolved
-  in the wrong scope; KB-13 was filed as an import-rule problem and is the KB-11 read-site resolution
+  pointer element; the field-size row was filed as an import problem and was a silent skip plus a size resolved
+  in the wrong scope; the wrong-file import was filed as an import-rule problem and is that read-site resolution
   again, at three or more sites. **All four were bigger than the report, in the same direction: a
-  consumer describes the shape they hit, not the rule that is wrong.** Re-derive the rule before sizing
-  the fix. KB-12 is the exception that proves it from the other side: filed as "emit a terminator after
+  user describes the shape they hit, not the rule that is wrong.** Re-derive the rule before sizing
+  the fix. One report is the exception that proves it from the other side: filed as "emit a terminator after
   the match", it is the statement-form half of a fix that already exists, and the right change is the
   sibling's, not the one suggested.
 
@@ -1415,7 +1415,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     a local declaration is its only caller, so an assignment, an argument, a return, a field and a module
     `static` bound through `emitExpression`'s bare-name arm, which checked nothing — a shape-mismatched
     function bound there compiled, and the call passed the wrong argument count. **A per-region panic
-    policy** was promoted by measurement rather than by argument — see the consumer's underrun numbers
+    policy** was promoted by measurement rather than by argument — see the underrun numbers
     above — and **shipped in `0.9.162` as `@onPanic(recover: <literal>)`** (SPEC *Recoverable regions*):
     `setjmp`/`longjmp`, gated on `@noheap` plus a transitive no-destructible-local walk, the hook not
     run for a recovered panic. ⚠️ `__builtin_setjmp` is not supported on arm64 macOS, so `<setjmp.h>` is
@@ -1439,7 +1439,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   which is the same profile as the `fnptr` entry above and the same reason it waits. Note also that the
   turbofish's absence on a method is *not* an extra restriction: `3c9b441` removed the one receiver
   turbofish (`r.deserialize::<T>()`, sugar for a `__kamaDeserialize<T>` free trampoline), and with no
-  generic methods a method turbofish has nothing to name. Verdict (audit, 2026-09-07): a **non-goal** — a method's own type parameter would need a second turbofish grammar on a receiver call, and the free-function spelling above is the idiom. Reaffirmed by the maintainer 2026-09-30 when `@kama/postgres` asked for `row.get::<int32>(index: 0)` (KPG-8): beside `column::<int32>(row: r, index: 0)` it would be two ways to do one thing, and it buys a spelling, not a capability.
+  generic methods a method turbofish has nothing to name. Verdict (audit, 2026-09-07): a **non-goal** — a method's own type parameter would need a second turbofish grammar on a receiver call, and the free-function spelling above is the idiom. Reaffirmed by the maintainer 2026-09-30 when a database client asked for `row.get::<int32>(index: 0)`: beside `column::<int32>(row: r, index: 0)` it would be two ways to do one thing, and it buys a spelling, not a capability.
 
 - **A `comptime` parameter's type is an integer, `bool` or `char`** ([kama.y](../src/kama.y),
   `comptime_param_type`) — no compile-time float, array or struct parameter. This is where a
@@ -1464,11 +1464,11 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   never were by decision. The check simply lived in `emitDeclarator` and nothing else called it. Its
   absence was rationalized once in a source comment (*"the consumer-driven audit answered it: the
   exemption STAYS"*) that no row, SPEC sentence or fixture ever backed, and `0.9.248` had made the
-  shadow WORK while fixing consumer KB-20 — a language decision taken inside a bug fix, in the wrong
+  shadow WORK while fixing a local-scope leak — a language decision taken inside a bug fix, in the wrong
   direction. `checkBinderShadow` now refuses a `for` counter, a `foreach` variable and a `match` payload
   binding that takes the name of a parameter, an enclosing-scope local or an in-scope field, with the
   same three messages the declarator gives. Sibling-scope reuse is untouched (`0.9.247`), which is the
-  half of KB-20 that was a real bug. Six `tests/xfail/binder_shadow_*` fixtures, one per binder × message.
+  half of that fix that was a real bug. Six `tests/xfail/binder_shadow_*` fixtures, one per binder × message.
   ⚠️ **The corpus had exactly one instance and it is the argument for the rule**: `tests/net_addr_ctor`
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
@@ -1481,7 +1481,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ### `DeError` names the field it reports (KR-109)
 
-Filed 2026-10-01 with peer KPG-26, which made a derived `deserialize` report a missing field (`0.9.516`). The
+Filed 2026-10-01 with the change that made a derived `deserialize` report a missing field (`0.9.516`). The
 error is `DeError::MissingField`, a payload-less variant, so the message reads "missing field" with nothing to
 say which: a config file missing `port` is debugged by elimination. Serde's `missing_field(field)` names it,
 and that is the answer an author expects. The obstacle is the type, not the derive: `DeError` is a prelude
@@ -1619,13 +1619,13 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `serializeJsonBuffer`/`deserializeJsonBuffer` of an
   intrinsic value. (A `const` field is a separate general language gap — doesn't parse today.)
   ✅ The enum half of this bullet SHIPPED with the derives: a bare `serializeJsonBuffer`/`deserializeJsonBuffer` of an enum value works
-  (consumer KB-18 — it was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
+  (the cause was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
   generic enums, per instantiation. See *Derive follow-ons* in §2.
 - **Binary backend follow-on.** Delta/snapshot replication stays ENGINE-level (above serde); generic byte
   compression is an io-adapter layer (§1 transform adapters), not a serde concern. The schema-locked
   positional mode is no longer deferred: it is the *Positional binary backend* row, built on the design below.
-- **Field addressing — SHIPPED `0.9.257`–`0.9.262`.** Where it came from: consumer KG-34 measured a six-field
-  frame at 24 bytes of data and 91 on the wire under KBIN, because every object carries every field NAME. A
+- **Field addressing — SHIPPED `0.9.257`–`0.9.262`.** Where it came from: a six-field
+  frame measured 24 bytes of data and 91 on the wire under KBIN, because every object carries every field NAME. A
   per-stream name-interning scheme (the `encoding/gob` shape) was BUILT, measured at 226 bytes where 338 was,
   and **reverted before commit** — kama's serialization sits behind contracts precisely so there can be several
   serializers, and a size knob on the self-describing one hard-codes one consumer's problem into the stdlib
@@ -1974,6 +1974,18 @@ Candidates, all of which are reachability over the SAME graph and none of which 
   unwind into foreign code, and an `@onPanic` handler itself.
 - **no recursion** — bounded stack. This is the one embedded and real-time users actually ask for, and it is
   a cycle check on a graph already built. Pairs with a computed worst-case frame size later.
+  - **The worst-case stack, measured as a real budget (2026-10-04).** A wasm32 game holds its stack to a
+    deliberate 64 KB with two guards that each see half of it: a run-time limit sees DEPTH but only on a path
+    somebody takes (the break it missed needed a browser to find), and `-Wframe-larger-than=32768
+    -Werror=frame-larger-than` sees every FRAME but not the chain under it. A bound per entry point — a frame
+    callback, a simulation step, an `@noheap` audio callback — reported as a chain the way `@noheap` reports
+    one, would make the whole budget a build-time fact. Its largest frames at `0.9.530` were 21.9 KB (22.9
+    native), 12.1 KB and 9.9 KB, and its tests reach 51.6 KB.
+  - **The weights already exist.** clang and emcc both write every function's frame with `-fstack-usage` (a
+    `.su` file per translation unit: `kamaShape 16400 static` on wasm32), so the edges this walk follows can
+    carry the compiler's own numbers — nothing estimated. A call through a `fnptr` or a contract slot is the
+    same unknown edge `@noheap` already makes declare itself, and a `dynamic` `.su` entry (a VLA, `alloca`)
+    is the same kind of unknown.
 - **no blocking** — no syscall that can sleep, for an audio/render callback or an interrupt handler. Needs
   the OS seam to carry the marker, which `@heap extern fn` shows is a solved shape.
 - **no unsafe** — nothing reached is an `unsafe fn` or an extern call.
@@ -2175,7 +2187,7 @@ remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h
   `CommandEncoder`, each an `UnsafePtr` handle whose destructor calls the matching `wgpu*Release`. Plus a
   `Result<SurfaceTexture, SurfaceError>` acquire whose error enum **names `Occluded`**, and the two seam
   holes below (drawable size; the discarded event queue).
-  - **Why it was promoted.** The first external project's KB-5 — an unbounded-allocation frame loop that
+  - **Why it was promoted.** A WebGPU frame loop with unbounded allocation — one that
     reached 15.6 GB and took a machine down twice. ⚠️ **Be precise about which half would have caught it:**
     RAII would *not* have. That allocation is inside wgpu-native, triggered by ignoring an untyped status
     int; what prevents it is the **typed acquire result**. RAII prevents the *other* leak in the same file
@@ -2795,7 +2807,7 @@ rather than here, so there is one number to keep current. Forward work:
   hosted-services and ops work:
   - **Official vs community packages — DECIDED and SHIPPED (2026-09-06).** The `@kama` scope is the mark
     and the channel (`packages.md` § Scopes says so); `@kama`/`@std` get reserved the day M3.3's host
-    exists. **`@kama/sodium` shipped** as `../kama-sodium` — libsodium 1.0.20 vendored through
+    exists. **`@kama/sodium` shipped** — libsodium 1.0.20 vendored through
     `csources`/`cincludes`, six modules, proven native (debug/release), wasm and through a file-registry
     publish→install round trip. What it forced in-tree: `kama seed --license`, the `cincludes` key,
     the move-only propagation fix, `csources` as gnu11, `std::digest`; what it rowed: the four rows above

@@ -51,7 +51,7 @@ note() { echo "check-doc-claims: FAIL — $1" >&2; fail=1; }
 # release cycle. It is not a doc about kama — it is the file `kama agents install` writes into every new
 # project from inside the binary, and an agent reading it has been told to trust it. It carried three
 # claims the compiler had stopped honouring up to thirty versions ago ("there is no const raw pointer",
-# reported by the first external package at 0.9.233), and nothing could have caught them: the marker
+# still there at 0.9.233), and nothing could have caught them: the marker
 # discipline that keeps SPEC honest simply did not reach it. Generated guidance that reinstalls itself
 # needs MORE of an instrument than a doc a reader consults once, not less.
 #

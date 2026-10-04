@@ -1,4 +1,4 @@
-// KB-34 (the peer project's report): the no-shadowing rule counts what a file can SEE — what it declares
+// The no-shadowing rule counts what a file can SEE — what it declares
 // and what it imports, the rule a call is held to. A sibling file's private names (src/m/a.kama) and a
 // dependency's file-private `extern` (vendor/shadowlib) are neither, so a binding may take them.
 import { bindscope::m::Tally, bindscope::m::twice, bindscope::m::sumTo, shadowlib::one };

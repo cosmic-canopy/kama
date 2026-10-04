@@ -1,5 +1,5 @@
 // Given away in a loop and assigned again on only SOME paths back to its top: the other path would move it a
-// second time on the next pass (KRD-1 relaxes the loop rule to exactly this).
+// second time on the next pass (re-assignment relaxes the loop rule to exactly this).
 type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
 fn void sink(Res r) { }
 

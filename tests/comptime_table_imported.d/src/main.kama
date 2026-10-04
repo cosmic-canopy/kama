@@ -1,6 +1,6 @@
 // An imported `comptime InlineArray` is the same table as in the file that declares it: indexed in safe code,
 // iterated, and `.view()`ed. It was typed only in its own file, because the lookups that type a module-level
-// name resolved it as THIS file's own (peer KPG-24): indexing fell to the raw-pointer path ("requires an
+// name resolved it as THIS file's own: indexing fell to the raw-pointer path ("requires an
 // `unsafe fn`", then clang), `.view()` had no receiver, and a `foreach` lost the table's `const`.
 import { std::collections::ConstView, RANGES, tables::gen::WEIGHTS };
 

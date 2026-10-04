@@ -1,4 +1,4 @@
-/* Each manifest `cflags` entry is ONE argument, exactly as written (KPG-7): a shell used to strip the quotes from
+/* Each manifest `cflags` entry is ONE argument, exactly as written: a shell used to strip the quotes from
    the header name, and would have split the greeting at its spaces and run `c` as a second command at the `;`.
    ONEARG_META carries every cmd.exe metacharacter, and a `%PATH%` cmd would expand if it could. */
 #include "onearg.h"

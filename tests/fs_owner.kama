@@ -1,4 +1,4 @@
-// Peer KPG-31: `Metadata.owner` and `group` — the account a file belongs to and its group, read by the same stat
+// `Metadata.owner` and `group` — the account a file belongs to and its group, read by the same stat
 // as its permissions, so the two describe one file. libpq lets a private key be group-readable (0640) only when
 // root owns it. Linux and macOS report a `UserId`/`GroupId`; Windows an `Optional` of each, `None` only where
 // the file's security descriptor is private to another account. Returns 0, or the number of the failed check.

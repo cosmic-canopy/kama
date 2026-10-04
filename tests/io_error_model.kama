@@ -1,4 +1,4 @@
-// `std::io::IoError` in the two parts an I/O error has (peer KPG-22, the model Rust, Go and .NET share): its KIND,
+// `std::io::IoError` in the two parts an I/O error has (the model Rust, Go and .NET share): its KIND,
 // which a caller branches on — `match (e.kind())` — and, when the OS reported it, the OS's own CODE, whose text the
 // message quotes. A kama-raised error has a kind and no code. Platform-neutral: what each OS SAYS differs, so this
 // checks that it is said, not the words; `osMessage()` hands the OS's words over alone. Returns 0.
@@ -39,7 +39,7 @@ fn int32 main() {
     if (hasCode(e: eof) || eof.message() != "unexpected end of file") { return 10; }
     if (IoError.of(kind: IoErrorKind::Interrupted).message() != "interrupted") { return 11; }
 
-    // The OS's words alone (peer KPG-23): exactly the text `message()` quotes after the code, and nothing for a
+    // The OS's words alone: exactly the text `message()` quotes after the code, and nothing for a
     // kama-raised error.
     string osText = match (nf.osMessage()) { case Some(value: t): copy t; case None: ""; };
     if (osText.length() == 0 || !m.contains(substring: osText.concat(other: ")"))) { return 13; }

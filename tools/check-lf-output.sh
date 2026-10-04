@@ -1,5 +1,5 @@
 #!/bin/sh
-# check-lf-output.sh — every file kama writes is LF, on every host (KB-28).
+# check-lf-output.sh — every file kama writes is LF, on every host.
 #
 # `kama pkg install` wrote kama.lock through a TEXT-mode ofstream, so on Windows every `\n` became `\r\n`: each
 # committed lock came back "modified" after a first Windows install, byte-identical once normalised. The

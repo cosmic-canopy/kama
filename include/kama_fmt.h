@@ -46,7 +46,7 @@ static inline int kama__float_spelling(const char* p, size_t n) {
 // range — mirroring `ParseError`'s variants so the kama side is a plain map.
 //
 // OUT OF RANGE IS OVERFLOW ONLY. strtod raises ERANGE in both directions, and this used to refuse both — so a
-// subnormal it had read exactly (`5e-324`, `2.2250738585072009e-308`) was "out of range" (peer KPG-13). A value
+// subnormal it had read exactly (`5e-324`, `2.2250738585072009e-308`) was "out of range". A value
 // below the smallest subnormal rounds to zero and is `Ok(0.0)`, as in Rust and Go, and as the kama literal
 // `1e-400` already is (maintainer ruling, 2026-10-01). A value past the largest finite one has no float
 // spelling, and reporting it beats folding it to an infinity nobody wrote — `inf` must be written to be read.

@@ -3023,7 +3023,7 @@ silently stop applying the moment a real board triple (`xtensa-none-elf`) was us
 build**, which reads no manifest and treats an undeclared flag as simply inactive — so the
 declaration is dropped and the only symptom is a missing symbol somewhere else, or nothing at all if
 both sides were gated. A manifest build rejects the name outright. These four spellings were in this
-document's own examples until 2026-09-01, and the first external project nearly shipped them off
+document's own examples until 2026-09-01, and a program built on kama nearly shipped them off
 these pages; `tools/check-compilefor.sh` now greps the docs for them, because the half of that guard
 which proves the *compiler* rejects such a name is exactly what made the docs drifting invisible.
 
@@ -6547,7 +6547,7 @@ however, **reserved** — see below.
 ## kama's keywords
 
 **The complete list — 90 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
-walking into it. The first external project found three that way — `base`, `type`, `slot` — each costing
+walking into it. One port found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
 drift.
@@ -6569,7 +6569,7 @@ Each is a keyword only at its anchor in the table below: `type`, `slot` and `fil
 else the word is a name — `give + 1`, `copy(x: 1)` through a `fnptr`, `truncate < n` — so `give(s)` is a call of
 something named `give`, and its diagnostic says so. <!-- xfail: give_positional_call --> Until `0.9.470` the
 parser took `copy`, `give` and `truncate` only as a method's name, and none of the six as a pattern, `foreach` or
-hole binding (KB-35). Each was made contextual for the same reason: the word is one a program genuinely
+hole binding. Each was made contextual for the same reason: the word is one a program genuinely
 wants as a name, and admitting it cost **no bison conflicts** at any name position. `type` is what lets an
 FFI binding emit a C field literally called `type` without inventing a name
 (`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table

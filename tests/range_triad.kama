@@ -1,4 +1,4 @@
-// The range half of the manual-memory triad (peer KRD-3, @kama/redis): `drop(ptr: p, count: n)` and
+// The range half of the manual-memory triad: `drop(ptr: p, count: n)` and
 // `copyElements(ptr: d, from: s, count: n)`, and the collection surface built on them — `DynamicArray.addAll(items:)`,
 // `capacity()`, `View.copyFrom(source:)`, and every collection's `copy`, `clear` and drop. The compiler decides per
 // element type: a `uint8` run is one memcpy and no drop loop, a `string` run its own copy and destructor per element,

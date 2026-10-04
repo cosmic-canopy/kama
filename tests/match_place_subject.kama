@@ -1,5 +1,5 @@
 // A `match` on a call that returns a PLACE (`fn ref T`, `const fn const ref T`) borrows that place: the payload
-// bindings alias storage the receiver still owns, and the switch never copies or destroys it. KPG-29: the
+// bindings alias storage the receiver still owns, and the switch never copies or destroys it. Before, the
 // subject was materialized as an "owning temp" — a bitwise copy the switch then destroyed — so the receiver's
 // own string was freed under it, and a `Shared` handle lost a share it never took. Each method runs three
 // times: the second run reads freed memory and the drop at the end frees it again, unless the place is borrowed.

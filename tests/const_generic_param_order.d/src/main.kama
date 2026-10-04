@@ -9,7 +9,7 @@
 //
 // ⚠️ FILE ORDER IS LOAD-BEARING HERE. `score.kama` sorts before `main.kama`, and moving the constant into
 // a file that sorts FIRST makes this build clean — which is why four hand-built probes missed it when it
-// was reported (consumer KB-22). Do not "tidy" these file names.
+// was reported. Do not "tidy" these file names.
 import { cgpo::MAX_CREW, cgpo::tallyVote };
 
 type resource World {

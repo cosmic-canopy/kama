@@ -1,6 +1,6 @@
 // A float renders as the SHORTEST decimal that reads back as the same value — the digits Rust, Go, Python,
 // JavaScript and PostgreSQL print. `%.17g` printed `0.1` as `0.10000000000000001` and the float32 `0.3` as
-// `0.300000012` (peer KPG-27). `%g` style: scientific when the exponent is below -4 or at least 15 (6 for a
+// `0.300000012`. `%g` style: scientific when the exponent is below -4 or at least 15 (6 for a
 // float32), as `%.15g` and PostgreSQL write it.
 import { core::println };
 

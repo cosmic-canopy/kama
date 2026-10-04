@@ -1,4 +1,4 @@
-// A derived `deserialize` reports a field the data left out (peer KPG-26). It used to zero-initialize the
+// A derived `deserialize` reports a field the data left out. It used to zero-initialize the
 // result and fill whatever arrived, so `{"x": 1}` read as `Ok(x: 1, y: 0)`. Now a missing field is
 // `Err(DeError::MissingField)`, unless the data may leave it out:
 //   * `Optional`           — absent is `None`;

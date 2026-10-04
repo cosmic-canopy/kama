@@ -1,4 +1,4 @@
-// KR-89 (consumer KB-32) — the give site is the VARIABLE, not the type. `string b = give a;` then reading
+// KR-89 — the give site is the VARIABLE, not the type. `string b = give a;` then reading
 // `a` built clean and answered "" — silently — though the same shape on a `DynamicArray`, an `Owned`, a
 // `Shared` or a `Weak` was refused, and though `string` is refused in every OTHER position. The emitter
 // nulled the source's buffer and never recorded the move.

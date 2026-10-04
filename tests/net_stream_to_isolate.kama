@@ -1,4 +1,4 @@
-// A connection accepted on one isolate is SERVED on another (KPG-3, from @kama/postgres): `TcpStream` crosses a
+// A connection accepted on one isolate is SERVED on another: `TcpStream` crosses a
 // `Channel` because it declares `Sendable` — a descriptor is process-wide, and the type is move-only, so one owner at
 // a time is guaranteed. Without it a connection pool could not be shared by worker isolates, and a server could not
 // hand each accepted socket to a worker. The whole std I/O vocabulary declares it the same way: `File`, the

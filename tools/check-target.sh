@@ -188,14 +188,14 @@ reject    WINDOWS "-static-libgcc" "a C-only program links no C++ runtime to mak
 # 2c. WASM THREADS ARE A HOSTING MODEL, not a link flag: `-pthread` + PROXY_TO_PTHREAD run `main` on a worker
 #     and need a SharedArrayBuffer, whose COOP/COEP headers break a cross-origin WebSocket. So a browser build
 #     is threaded only when the program CREATES a thread (`spawn`/`isolate`/`parallel_for`) — never because it
-#     imported `std::concurrent::Atomic`, whose module also carries `Isolate` (consumer KB-26: that one import
+#     imported `std::concurrent::Atomic`, whose module also carries `Isolate` (that one import
 #     made a WebGPU client die four layers away, reading `getContext` on a worker with no `document`).
 ATOMIC_ONLY="$ROOT/tests/atomic_signed.kama"
 if [ ! -f "$ATOMIC_ONLY" ]; then echo "check-target: missing $ATOMIC_ONLY" >&2; exit 1; fi
 want   WASM "-pthread"        "a program that spawns needs emscripten pthreads" "$THREADED"
 want   WASM "PROXY_TO_PTHREAD" "…and main on a worker, so it may block on join" "$THREADED"
-reject WASM "-pthread"        "importing Atomic creates no thread (KB-26)" "$ATOMIC_ONLY"
-reject WASM "PROXY_TO_PTHREAD" "importing Atomic must not move main to a worker (KB-26)" "$ATOMIC_ONLY"
+reject WASM "-pthread"        "importing Atomic creates no thread" "$ATOMIC_ONLY"
+reject WASM "PROXY_TO_PTHREAD" "importing Atomic must not move main to a worker" "$ATOMIC_ONLY"
 
 #     The opt-IN to the DLL, both spellings. `--shared` was already taken (it picks the OUTPUT kind), so
 #     this is its own switch — and it has to be a real one, because the target's `ldflags` escape hatch
@@ -264,7 +264,7 @@ done
 #     not build any program that touched a file or a socket: the `-D` turns on a console reattach that
 #     declares `CreateFileA` at block scope, and `std::fs`/`std::net` pull kama_os.h -> <winsock2.h> ->
 #     <windows.h>, which declares it too. clang refused `fileapi.h` itself with *conflicting types*.
-#     Filed by the first consumer (KB-29) after its first Windows bundle, which worked around it with
+#     Found shipping a first Windows bundle, whose build worked around it with
 #     objcopy and lost the terminal reattach. So: one real build per seam, on the one host that can.
 case "$(uname -s)" in
   MSYS*|MINGW*|CYGWIN*)
@@ -285,7 +285,7 @@ case "$(uname -s)" in
     #     terminal still prints, and it used to rebind fds 0/1/2 whenever AttachConsole succeeded — but a
     #     process launched with STARTF_USESTDHANDLES (a shell redirect, a pipe, a CI runner) was already
     #     handed a stdout, and the parent of a redirect usually has a console too, so the attach succeeded
-    #     and the file got NOTHING. `app > log.txt` wrote 0 bytes where a console build wrote 13 (KB-30).
+    #     and the file got NOTHING. `app > log.txt` wrote 0 bytes where a console build wrote 13.
     #     The console build is the control: the two must agree, whatever the number is.
     printf 'import { core::print };\nfn int32 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
     # ⚠️ Checked, and loudly. These two were unchecked, so when `print` became an import-or-error `core`
@@ -313,7 +313,7 @@ case "$(uname -s)" in
     fi
     #     ⚠️ THE OTHER HALF IS NOT GUARDED HERE, DELIBERATELY, AND THAT IS WORTH READING BEFORE YOU ADD IT.
     #     The assertion above passes whether the reattach works or not — a redirect takes the skip branch
-    #     either way — so it stayed green through the whole of KB-31, during which a GUI build launched
+    #     either way — so it stayed green through a whole regression, during which a GUI build launched
     #     from a TERMINAL printed nothing at all. The missing case needs a process whose stdout is a real
     #     console, and no agent or CI shell here has one: three arrangements were tried and each was
     #     measured VACUOUS — it reported success against a deliberately broken header —

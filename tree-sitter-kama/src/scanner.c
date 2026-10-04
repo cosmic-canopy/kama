@@ -1,4 +1,4 @@
-// The one decision a grammar cannot make: whether `give`, `copy` or `truncate` is the KEYWORD or a NAME (KB-35).
+// The one decision a grammar cannot make: whether `give`, `copy` or `truncate` is the KEYWORD or a NAME.
 //
 // kama's lexer makes it from the text AFTER the word (contextualWord in src/kama.l), and this is the same rule, so the
 // editor and the compiler read one file one way:

@@ -8,7 +8,7 @@
 // many lines EARLY, and the deficit accumulated over every literal in the file. The column stayed
 // correct, which made it read as a compiler fault rather than as an offset.
 //
-// The first external project lost real time to it: a parse error in a file holding a WGSL shader named a
+// It cost real time in practice: a parse error in a file holding a WGSL shader named a
 // line 27 above the mistake, and 27 was exactly the newline count of the shader string. Any file holding
 // a shader is exposed by construction.
 //

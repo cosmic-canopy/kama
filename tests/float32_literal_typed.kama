@@ -1,5 +1,5 @@
 // An unsuffixed float literal is typed by its destination, and by the other operand of an operator — so beside a
-// `float32` it IS a `float32` (KB-37). It was emitted as a C `double` wherever it stood, so C's usual arithmetic
+// `float32` it IS a `float32`. It was emitted as a C `double` wherever it stood, so C's usual arithmetic
 // conversions did the operation in `double`: `x == 0.319` compared the float against 0.31900000000000001 and was
 // false for every literal a `float32` cannot hold exactly, `x * 0.1` multiplied by a `double` 0.1, and `x += 0.1`
 // added one. Each check below is false before the fix. Exact binary fractions (0.5, 0.25) were never affected,

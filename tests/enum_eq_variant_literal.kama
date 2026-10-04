@@ -4,7 +4,7 @@
 // operator — emitting `==` between two structs, and reporting it as *"no operator '==' — define
 // `operator==` on the type"*, which names a thing kama does not have and rejects if written.
 //
-// Filed by the first engine consumer (KB-17) against the shape below: a frame opcode compared to a named
+// Found in an engine, in the shape below: a frame opcode compared to a named
 // case. Binding the literal to a local first worked, which is what made it look like a rule rather than a
 // hole. All four operand shapes are covered here — literal on either side, both sides literal, and a
 // payload-carrying construction, which reaches the classifier through a different node kind.

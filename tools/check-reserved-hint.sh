@@ -7,7 +7,7 @@
 # `tests/xfail/*.msg` can only assert the first: `.msg` is a positive substring match, so nothing can say
 # "and this message must NOT appear". The half with no instrument is the one that broke.
 #
-# The defect (KB-9, reported by the first external project on 0.9.140, fixed in 0.9.142):
+# The defect (present on 0.9.140, fixed in 0.9.142):
 #
 #     isize out = 1;              -> the full note
 #     Thing out = Thing.make();   -> bare `syntax error, unexpected OUT`
@@ -26,7 +26,7 @@
 # literal form. Hence "admits a name but not a number".
 #
 # Both directions are checked below, because each protects against the opposite regression: widening the
-# gate brings the noise back, narrowing it brings KB-9 back.
+# gate brings the noise back, narrowing it brings the defect back.
 
 set -eu
 
@@ -62,12 +62,12 @@ probe() {
         else bad "$3: the reserved-word note fired where the parser wanted an EXPRESSION, not a name"; fi
     else
         if [ "$2" = reject ]; then ok "$3 — correctly silent"
-        else bad "$3: no reserved-word note (KB-9 — is the gate reading bison's message again?)"; fi
+        else bad "$3: no reserved-word note (is the gate reading bison's message again?)"; fi
     fi
 }
 
 echo 'check-reserved-hint: a naming position explains itself'
-# ⚠️ The user-defined-type case is KB-9 itself: 22 tokens are expected there, so it is exactly the one a
+# ⚠️ The user-defined-type case is the defect itself: 22 tokens are expected there, so it is exactly the one a
 # message-string gate cannot see. The builtin case is its control — it worked before the fix and must
 # keep working, or the display half regressed.
 probe '    Thing out = Thing.make();' want   'a user-defined type (`Thing out`)'
@@ -86,7 +86,7 @@ probe '    if (true) { } else else { }'  reject 'a doubled `else`'
 #
 # ⚠️ bison prints `expecting …` only while at most FOUR tokens are expected and drops the clause entirely past
 # that (see the `parse.error custom` note in kama.y). A binding site expected exactly four — IDENTIFIER, `file`,
-# SLOT, TYPE — until `copy`, `give` and `truncate` became names too (KB-35, 0.9.470) and made it seven: the clause
+# SLOT, TYPE — until `copy`, `give` and `truncate` became names too (0.9.470) and made it seven: the clause
 # vanished from every such message, and this assertion is what said so. The display now folds the contextual words
 # into the name they are, so a binding site shows `expecting IDENTIFIER` and the note lists the six. The NOTE's
 # gate reads the uncapped expected-token SET, not this prose, which is the whole reason that indirection exists.

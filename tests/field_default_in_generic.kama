@@ -1,4 +1,4 @@
-// Peer KPG-19: a field default is resolved in the scope of the type that declares it. The fill runs wherever a
+// A field default is resolved in the scope of the type that declares it. The fill runs wherever a
 // value of the type comes into being — here inside `DynamicArray<Item>`'s own body, which declares a local `T`
 // — and `Kind kind = Kind::First;` was resolved against dynamic_array.kama's names: "`Kind` is not a type or
 // module in reach here", pointing into std. The multi-module twin is tests/field_default_in_generic.d.

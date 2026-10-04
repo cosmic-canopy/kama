@@ -1,4 +1,4 @@
-// A local a `give` consumed may be assigned again (peer KRD-1, @kama/redis): the store gives it a value, and every
+// A local a `give` consumed may be assigned again: the store gives it a value, and every
 // later use is sound — straight-line, and in a loop whose every path back to its start assigns it again. The old
 // value is dropped only when it is still live: not after a `give`, and not when the right side consumed it. Every
 // `Probe` built is dropped exactly once, so the drop count equals the build count. Returns 0, or the failed case.

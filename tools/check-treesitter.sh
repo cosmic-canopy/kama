@@ -140,7 +140,7 @@ rm -rf "$tmp/g/node_modules" "$tmp/g/src"
 if ! (cd "$tmp/g" && "$TS" generate >"$tmp/gen.log" 2>&1); then
     note "'tree-sitter generate' FAILED — grammar.js does not compile:"
     sed 's/^/      /' "$tmp/gen.log" >&2
-# src/scanner.c is the one HAND-WRITTEN file in src/ (the keyword-or-name lookahead, KB-35), so generate never makes it.
+# src/scanner.c is the one HAND-WRITTEN file in src/ (the keyword-or-name lookahead), so generate never makes it.
 elif ! diff -ru -x scanner.c "$G/src" "$tmp/g/src" >"$tmp/gen.diff" 2>&1; then
     note "src/ differs from a fresh 'tree-sitter generate'. Regenerate and commit:"
     echo "      (cd tree-sitter-kama && node_modules/.bin/tree-sitter generate)" >&2

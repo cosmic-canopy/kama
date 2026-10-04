@@ -260,7 +260,7 @@ fn Result<GroupId, IoError> currentGroup() {
 // macOS, `%USERPROFILE%` on Windows — when it is set and not empty, else what the account database records for the
 // user (`UserId.homeDirectory()`). The variable comes first because a service manager, a container or a test may set
 // it apart from the account, and the program is meant to follow it; the account is what is left when nothing set it.
-// Rust's `std::env::home_dir`, and how libpq finds `~/.pgpass` (peer KPG-16).
+// Rust's `std::env::home_dir`, and how libpq finds `~/.pgpass`.
 @compileFor(!OS_WINDOWS)
 unsafe fn Result<string, IoError> homeDirectory() { return homeFrom(variable: "HOME"); }
 @compileFor(OS_WINDOWS)

@@ -1,5 +1,5 @@
 // `copy`, `give` and `truncate` name a BINDING — a local, a parameter, a field, a member, a pattern — exactly as `type`,
-// `slot` and `file` do (KB-35), and like them they name no type. The message names the word and the rule.
+// `slot` and `file` do, and like them they name no type. The message names the word and the rule.
 type value give { public int32 x; }
 fn int32 main() { return 0; }
 // ⚠️ Not in tree-sitter-kama/test/parse-errors.txt: tree-sitter accepts a reserved word at a DECLARATION site, for every

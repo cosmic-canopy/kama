@@ -6,7 +6,7 @@
 # next scheduler tick, ~15.625 ms by default, so `sleep(1 ms)` and `sleep(8 ms)` BOTH cost one tick.
 # Every program that paces itself with `sleep` — a frame loop's 8 ms nap, a poll loop's 10 ms wait — ran
 # at half rate there and at the asked rate everywhere else. Measured before the fix on this repo's Windows
-# box: 1 ms -> 13.4 ms, 8 ms -> 15.6 ms. Reported by the first consumer, whose frame loop found it.
+# box: 1 ms -> 13.4 ms, 8 ms -> 15.6 ms. A game's frame loop is what found it.
 #
 # ⚠️ THE ASSERTION IS RELATIVE, AND THAT IS THE WHOLE DESIGN. An absolute ceiling ("8 ms must take under
 # 14 ms") is a coin flip on a loaded box, and these guards run in PARALLEL with dozens of others, so load

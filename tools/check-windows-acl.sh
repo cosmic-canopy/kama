@@ -7,7 +7,7 @@
 # renames "Everyone" out from under the check), must hold exactly the owner and SYSTEM (`SY`) — protected
 # (`D:P`), no inherited (`ID`) entry, no Everyone (`WD`), Users (`BU`), Authenticated Users (`AU`) or
 # Administrators (`BA`). That is the set Win32-OpenSSH accepts for a private key — it refuses a key anyone else
-# can read — and a relay's signing key is the file this row was filed for (the peer project's KG-37).
+# can read — and a relay's signing key is the file this row was filed for.
 #
 # A `0o644` file must add Everyone and the file's group, and nothing else; a private directory holds the same two
 # entries a private file does. An EXISTING file given a private list — the other half of the seam, where

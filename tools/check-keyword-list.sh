@@ -2,8 +2,8 @@
 # check-keyword-list.sh — SPEC publishes kama's keywords, and the published list stays equal to the
 # lexer's table.
 #
-# Why this exists. Every keyword that is NOT published is found by walking into it. The first external
-# project found three that way — `base`, `type`, `slot` — and each cost a build cycle, because the parse
+# Why this exists. Every keyword that is NOT published is found by walking into it. Three were
+# found that way in one port — `base`, `type`, `slot` — and each cost a build cycle, because the parse
 # error names the token (`unexpected SLOT`) without saying that the word is reserved or why. `type` and
 # `slot` have since become contextual; `base` has not. The fix for the general case is a published list,
 # and a published list is worth exactly as much as the guarantee that it is current — hence this guard.

@@ -2,7 +2,7 @@
 // `deserialize` built — and returned — the DEFAULT-allocator instance, so the conformance was false for
 // `DynamicArray<int32, BumpAllocator>` and a body read an `alloc` that a bump allocator cannot default-make.
 // Programs that serialize nothing never saw it (the compiler skips serde code nobody can use); naming a serde
-// contract anywhere (peer KPG-30) brought it out. A container is deserializable when its allocator can be
+// contract anywhere brought it out. A container is deserializable when its allocator can be
 // default-made; serializing needs no allocator and works for every one.
 import { std::collections::DynamicArray, std::collections::Deque, std::collections::Map,
          std::collections::Arena, std::collections::BumpAllocator, std::collections::DefaultHasher,

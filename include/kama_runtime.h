@@ -415,7 +415,7 @@ static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
 // list), so it is included — and KAMA_ONPANIC defined by the emitted C — only for a program that declares a
 // region; every other program keeps this header dependency-light and the recovery path empty. ⚠️ Included
 // HERE, after the feature-test block at the top of this file, never by the emitted C above it: read first, it
-// latched glibc's strict set and hid kama_os.h's POSIX declarations (consumer KB-25).
+// latched glibc's strict set and hid kama_os.h's POSIX declarations.
 #if defined(KAMA_ONPANIC)
 #include <setjmp.h>
 typedef struct kama_recover { jmp_buf jb; struct kama_recover* prev; } kama_recover_t;
@@ -1526,7 +1526,7 @@ static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t st
 // so this stays `<stdio.h>`-free and the freestanding property holds — a program links `snprintf` from libc
 // only if it actually formats a float. Every result is a fresh heap-owned `kama_string`.
 //
-// ⚠️ KB-40 — on a HOSTED target that changed at 0.9.524: a block-scope declaration of a libc function is only as
+// ⚠️ STDIO — on a HOSTED target that changed at 0.9.524: a block-scope declaration of a libc function is only as
 // good as its agreement with the libc's own header, and both of the ways it fails were met. glibc declares `sscanf`
 // with an ASM LABEL (`__isoc99_sscanf`), which cannot be added after a first use, so a program's own
 // `extern "<stdio.h>"` after the runtime failed to compile on Linux from 0.9.517 to 0.9.523 ("cannot apply asm label
@@ -1574,7 +1574,7 @@ static inline kama_string kama_fmt_i64(int64_t v) {
 
 // Does decimal text `s` read back as exactly `v` — as a float64, or as a float32 when `f32` (parsed AS a
 // float32: decimal -> double -> float can round twice and disagree)? Through `sscanf`, which every libc kama
-// targets parses correctly rounded (declared per KB-40, at the top of this block).
+// targets parses correctly rounded (declared per the ⚠️ note at the top of this block).
 static inline int kama__float_reads_back(const char* s, double v, int f32) {
     KAMA__STDIO_DECLS
     if (f32) { float f = 0.0f; return sscanf(s, "%f", &f) == 1 && f == (float)v; }
@@ -1647,7 +1647,7 @@ static inline int kama__fmt_float_try(char* out, int cap, double v, int f32, int
 // The SHORTEST decimal that reads back as `v` — the fewest significant digits, and among decimals that short the
 // nearest (ties to even, as printf rounds) — in printf's `%g` style (`0.1`, `1e+16`, `nan`, `-inf`), written to
 // `out`; returns its length. Rust, Go, JavaScript, Python and PostgreSQL all print this; `%.17g` printed `0.1` as
-// `0.10000000000000001` (peer KPG-27). Exact, by search rather than Ryu. "Some k-digit decimal reads back" only
+// `0.10000000000000001`. Exact, by search rather than Ryu. "Some k-digit decimal reads back" only
 // becomes true as k grows (pad a shorter one with a zero), so the fewest digits are a binary search over k, up to
 // P, which always reads back (17 for float64, 9 for float32). A NORMAL value starts at D (15 / 6, DBL_DIG /
 // FLT_DIG): every decimal that short reads back, and the values that read back as `v` lie closer to it than half a
@@ -1865,7 +1865,7 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
 #endif
 }
 
-// `copyElements(ptr: d, from: s, count: n)` — the floor's range copy (KRD-3). The compiler lowers it per element type:
+// `copyElements(ptr: d, from: s, count: n)` — the floor's range copy. The compiler lowers it per element type:
 // `kama__copy_elements` (one memcpy) when the element copies bit for bit, and otherwise a loop of the element's own
 // copy behind `kama__copy_elements_check`. Both preconditions hold in EVERY build, each one comparison against an O(n)
 // copy: the count is not negative, and the ranges do not overlap — the destination is storage nobody owns, so an
@@ -2186,13 +2186,13 @@ struct _SECURITY_ATTRIBUTES;
 
 // Does this process already have a working fd here? `fd` is 0, 1 or 2.
 //
-// ⚠️ THE QUESTION IS ABOUT THE FD, NOT THE WIN32 HANDLE, and the difference is the whole of KB-31.
+// ⚠️ THE QUESTION IS ABOUT THE FD, NOT THE WIN32 HANDLE, and the difference is why a GUI build once went silent.
 // `print` goes through kama_raw_write -> `_write(fd, ...)`; it never touches a HANDLE. In a
 // GUI-subsystem process the two disagree: launched from a terminal, the CRT leaves fd 1 UNBOUND (-2)
 // while a console handle is available. Worse, `AttachConsole` POPULATES the std handles as a side
 // effect — so a handle test placed after the attach (which is where it has to go) reads back the
 // handle the attach just installed, concludes the process was handed a stdout, and skips the rebind
-// precisely when it is needed. That is what KB-30's fix did, and it made a `--subsystem windows`
+// precisely when it is needed. That is what the fix for a clobbered redirect did, and it made a `--subsystem windows`
 // build silent in a terminal where the pre-0.9.405 unconditional rebind printed. Measured both ways
 // at 0.9.406: `_get_osfhandle(1)` = -2 and `_write` = -1/ERROR_INVALID_HANDLE with the handle test,
 // fd = 260 and `_write` = 16 without it.
@@ -2200,7 +2200,7 @@ struct _SECURITY_ATTRIBUTES;
 // Asking about the fd answers BOTH cases with one test, which is why it is the right question and not
 // merely the fixed one:
 //   * a redirect or a pipe — the CRT binds the fd from the inherited handle, so it is real, and the
-//     rebind is skipped and the caller's `> log.txt` survives (that is KB-30, and it still holds);
+//     rebind is skipped and the caller's `> log.txt` survives (that was the fix, and it still holds);
 //   * a terminal launch — the fd is unbound whatever the handle says, so the rebind runs;
 //   * Explorer, no console at all — the fd is unbound, and `AttachConsole` fails, so nothing happens.
 //
@@ -2214,7 +2214,7 @@ static inline int kama__fd_is_bound(int fd) {
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
-    // A write to a closed peer or pipe returns `IoError::BrokenPipe` instead of killing the process (KPG-1) —
+    // A write to a closed peer or pipe returns `IoError::BrokenPipe` instead of killing the process —
     // defined beside the runtime slots, where <signal.h> is included; see kama__sigpipe_init there.
     { extern void kama__sigpipe_init(void); kama__sigpipe_init(); }
 #endif
