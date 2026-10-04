@@ -1766,7 +1766,8 @@ void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out
         collectBindings(fe->body, out, stmtOnly);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         add(pf->name, pf->type);
-        if (!stmtOnly) collectBindingsExpr(pf->expression, out);
+        if (!stmtOnly) { collectBindingsExpr(pf->expression, out); collectBindingsExpr(pf->workers, out);
+                         collectBindingsExpr(pf->stack, out); }
         collectBindings(pf->body, out, stmtOnly);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         // A `borrow` alias carries NO declared type — it is inferred from the host's `.view()` return —

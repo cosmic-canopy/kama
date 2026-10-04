@@ -1,0 +1,8 @@
+// A parallel loop's clauses are each said once: two `workers:` would be two answers to one question.
+import { std::collections::DynamicArray };
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, workers: 2, workers: 3) { e = e * 2; }
+    return 0;
+}

@@ -3606,8 +3606,53 @@
           "value": "spawn"
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "spawn_stack"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "SYMBOL",
           "name": "call_expression"
+        }
+      ]
+    },
+    "spawn_stack": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "FIELD",
+          "name": "stack_label",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "stack",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ")"
         }
       ]
     },
@@ -4090,16 +4135,11 @@
           }
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "parallel_workers"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "parallel_clause"
+          }
         },
         {
           "type": "STRING",
@@ -4159,16 +4199,11 @@
           }
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "parallel_workers"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "parallel_clause"
+          }
         },
         {
           "type": "STRING",
@@ -4184,7 +4219,7 @@
         }
       ]
     },
-    "parallel_workers": {
+    "parallel_clause": {
       "type": "SEQ",
       "members": [
         {
@@ -4193,7 +4228,7 @@
         },
         {
           "type": "FIELD",
-          "name": "workers_label",
+          "name": "label",
           "content": {
             "type": "SYMBOL",
             "name": "identifier"
@@ -4205,7 +4240,7 @@
         },
         {
           "type": "FIELD",
-          "name": "workers",
+          "name": "value",
           "content": {
             "type": "SYMBOL",
             "name": "_expression"
@@ -4388,6 +4423,18 @@
         {
           "type": "STRING",
           "value": "spawn"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "spawn_stack"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "SYMBOL",

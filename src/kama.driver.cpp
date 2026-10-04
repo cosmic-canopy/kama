@@ -13000,6 +13000,10 @@ int main(int argc, char** argv)
         // gets a -D so kama_args_init() knows to reattach a console (see kama_runtime.h). The -D belongs
         // in `cmd` and NOT in the link tail: a per-TU `-c` job takes only the compile flags, so a
         // link-tail -D is silently lost in any multi-TU build.
+        // KRD-2: the main thread's stack is 8 MiB, the size Linux and macOS give it, rather than Windows' 1 MiB
+        // default. An isolate's stack is stated as the main thread's own (kama_isolate.h), so a recursion that
+        // works on one works on the other — on every target, which is what the reporter found was not true.
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-Wl,--stack,8388608 ";
         if (!wasm && !stopsAtObject && g_target.isWindows() && g_target.subsystem == "windows") {
             link << "-Wl,--subsystem,windows ";
             cmd  << "-DKAMA_SUBSYSTEM_WINDOWS=1 ";
@@ -13027,6 +13031,12 @@ int main(int argc, char** argv)
             // A kama program is a batch program: `main` returns an exit code and the process is done.
             // (The reasoning, and the node teardown deadlock that made it unconditional, is above.)
             setScalar("EXIT_RUNTIME", "1");
+            // KRD-2: the main thread's stack, which an isolate's is too (kama_isolate.h: an unsized pthread inherits
+            // this). 256 KiB — emscripten's own is 64 KiB, which a debug build, keeping every frame in linear memory,
+            // exhausts at a few thousand calls — and no more, because every stack is carved out of the module's one
+            // fixed memory. Under PROXY_TO_PTHREAD `main` itself runs on a pthread sized from this setting
+            // (crt1_proxy_main.c). A manifest's `emSettings` may set its own, and then both follow it.
+            setScalar("STACK_SIZE", "262144");
             // A wasm build holding C++ LINKS with `emcc`, never `em++` (the same invocation compiles
             // kama's C, and emcc applies one `-x` to every input) — and `emcc` then links the C-only
             // runtime libraries, so a C++ object's `std::string`, `__cxa_throw` and typeinfo are

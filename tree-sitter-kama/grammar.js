@@ -736,7 +736,11 @@ module.exports = grammar({
     // `Isolate h = spawn worker(p: give x);` — the handle form. `spawn` is an initializer only here.
     _variable_initializer: ($) => choice($._expression, $.spawn_expression),
 
-    spawn_expression: ($) => seq('spawn', $.call_expression),
+    spawn_expression: ($) => seq('spawn', optional($.spawn_stack), $.call_expression),
+
+    // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes (KRD-2). The label
+    // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `workers:`.
+    spawn_stack: ($) => seq('(', field('stack_label', $.identifier), ':', field('stack', $._expression), ')'),
 
     constant_declarator: ($) =>
       seq(
@@ -845,7 +849,7 @@ module.exports = grammar({
         field('name', $.identifier),
         'in',
         field('collection', $._expression),
-        optional($.parallel_workers),
+        repeat($.parallel_clause),
         ')',
         field('body', $.block),
       ),
@@ -862,16 +866,17 @@ module.exports = grammar({
         field('name', $.identifier),
         'in',
         field('collection', $._expression),
-        optional($.parallel_workers),
+        repeat($.parallel_clause),
         ')',
         field('body', $.block),
       ),
 
-    // `, workers: <expr>` — MANDATORY on parallel_for, FORBIDDEN on parallel_spawn. Optional in the
-    // grammar for both so each mistake gets a sentence from the compiler rather than a syntax error, and
-    // `workers` stays an ordinary identifier (it is a local in tests/parallel_spawn_pool.kama).
-    parallel_workers: ($) =>
-      seq(',', field('workers_label', $.identifier), ':', field('workers', $._expression)),
+    // kama.y `parallel_clauses_opt` — `, workers: <expr>` (MANDATORY on parallel_for, FORBIDDEN on
+    // parallel_spawn) and `, stack: <expr>` (each worker's stack in bytes, KRD-2), each at most once, in
+    // either order. Labels are ordinary identifiers the compiler checks, so `workers` and `stack` stay
+    // usable as names (a local is called `workers` in tests/parallel_spawn_pool.kama).
+    parallel_clause: ($) =>
+      seq(',', field('label', $.identifier), ':', field('value', $._expression)),
 
     break_statement: ($) => seq('break', ';'),
     continue_statement: ($) => seq('continue', ';'),
@@ -895,7 +900,7 @@ module.exports = grammar({
       ),
     borrow_binding: ($) =>
       seq(field('host', $._expression), 'as', field('alias', $.identifier)),
-    spawn_statement: ($) => seq('spawn', $.call_expression, ';'),
+    spawn_statement: ($) => seq('spawn', optional($.spawn_stack), $.call_expression, ';'),
 
     // Exactly ONE string-literal operand, and it is embedded assembly — never interpolated.
     asm_statement: ($) => seq('asm', '(', field('code', $.string_literal), ')', ';'),

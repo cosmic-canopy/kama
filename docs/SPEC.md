@@ -5865,6 +5865,33 @@ of RAII in field order (dropping the `Sender` closes the channel, which ends the
 loop, which the `Isolate` drop then joins). Either way a forgotten join is impossible: there is no
 detach-by-forgetting.
 
+#### The stack ✅
+
+**An isolate's stack is stated, and it is the main thread's.** On a 64-bit native target that is **8 MiB** — <!-- test: isolate_stack -->
+what Linux and macOS give a main thread, and what kama links Windows' main thread up to from its 1 MiB
+default. A 32-bit native target gives **2 MiB**, since its address space would not hold many 8 MiB
+reservations. Natively the size is reserved, not committed, so an isolate that never recurses deeply touches a
+few pages of it. On wasm nothing is merely reserved: every stack is carved out of the module's one fixed linear
+memory. So kama states **256 KiB** there for the main thread and, by inheritance, every isolate (emscripten's own
+default is 64 KiB). A project that sets `STACK_SIZE` in `emSettings` moves both together, so the rule holds there
+as well. In a debug build a wasm frame lives in that stack, so it bounds call depth just as it does natively. Before `0.9.529` an isolate
+took the OS's thread default instead: 512 KiB on macOS, 8 MiB with glibc, 128 KiB with musl. A recursion
+that worked on the main thread then crashed in an isolate on two of the three.
+
+Where the stated size is not enough, the spawn site says so — the one place that knows the depth it needs:
+
+```kama fragment
+scope { spawn(stack: 64 * 1024 * 1024) walk(tree: ref deep); }   // 64 MiB for this isolate
+Isolate h = spawn(stack: 256 * 1024) worker(p: give job);         // or less
+parallel_for (ref Node n in nodes, workers: cpuCount(), stack: 16 * 1024 * 1024) { … }
+```
+
+`stack:` is a `usize` byte count, rounded up to a multiple of 64 KiB, the largest page any target uses, and <!-- test: isolate_stack -->
+never below the platform's thread minimum (64 KiB, or 128 KiB on Linux arm64). A constant `stack: 0` asks for no
+stack and is a compile error. `parallel_for` and <!-- xfail: spawn_stack_zero -->
+`parallel_spawn` take it as a clause beside `workers:`, applying to each worker, and each clause is said at
+most once. <!-- xfail: parfor_clause_twice -->
+
 #### The bundle ✅
 
 An isolate entry is an ordinary top-level `fn` that returns **`void`** and takes **exactly one**
@@ -6068,7 +6095,8 @@ declare one), so a built-in construct does not get one either. Write `workers: c
 per core, `workers: 4` for a fixed width, or any expression: `workers: cpuCount() - 2` to leave headroom.
 It is *exactly* what you asked for, capped only by `length` (more workers than elements would leave some
 with no slice) — not silently reduced to the core count, since oversubscription is the caller's call.
-A literal `workers: 0` or negative is a compile error. <!-- xfail: parfor_no_workers -->
+A literal `workers: 0` or negative is a compile error. <!-- xfail: parfor_no_workers --> A second clause,
+`stack:`, sizes each worker's stack (see *The stack* above).
 
 Stating it is the point: how many isolates a loop splits into used to be invisible, which is what made the
 chunking below surprising. Now `grep 'workers:'` finds every parallelism-width decision in a codebase.

@@ -1,0 +1,9 @@
+// `stack:` is the isolate's stack in bytes, so a constant 0 asks for no stack at all: a mistake, not a size.
+// Leaving the clause out gives the stated default.
+type resource Job implements Sendable { int32 v; public ctor make() { this.v = 1; } public fn void run() { } }
+fn void worker(ref Job j) { j.run(); }
+fn int32 main() {
+    Job j = Job.make();
+    scope { spawn(stack: 0) worker(j: ref j); }
+    return 0;
+}

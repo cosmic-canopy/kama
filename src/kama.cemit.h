@@ -3450,6 +3450,7 @@ private:
     // scope-dtor'd temp (dropped via dropCondTemps at the guard/wrapper it was hoisted into), a literal/lvalue
     // is a borrow temp (no drop). Setup is flushed into `_hoisted` at `depth`.
     std::string logSpanOf(SharedExpression e, int depth);
+    std::string isolateStackArg(SharedExpression stack, int line);   // KRD-2: a `stack:` clause, or the stated default
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                             bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)

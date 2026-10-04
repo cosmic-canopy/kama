@@ -1,0 +1,65 @@
+// An isolate's stack is STATED (peer KRD-2, @kama/redis): the main thread's own — 8 MiB on a 64-bit native target,
+// 256 KiB on wasm, whose stacks share one fixed memory — not the OS's thread default. Until 0.9.529 it was the OS's, 512 KiB on macOS, where the
+// reporter's 20 000-deep recursion ran on the main thread and died with SIGBUS in an isolate. `spawn(stack: n)`
+// asks for more in both spawn forms, and `parallel_for`'s `stack:` clause sizes each worker. Returns 0, or the
+// number of the failed check.
+import { std::concurrent::Isolate, std::collections::DynamicArray };
+
+// The depths, per target. SHARED fits the stated default on both the main thread and an isolate — the reporter's
+// 20 000 natively; less on wasm, whose 256 KiB default holds a few thousand debug frames. DEEP is past that default
+// and inside BIG, so the deep checks pass only because the clause took effect: natively ~50 bytes a debug frame
+// makes 400 000 levels ~20 MiB (more under ASan) against 8 MiB, and on wasm, whose memory is fixed, a smaller pair.
+@compileFor(!ARCH_WASM32) comptime int64 SHARED = 20000;
+@compileFor(ARCH_WASM32) comptime int64 SHARED = 2000;
+@compileFor(!ARCH_WASM32) comptime int64 DEEP = 400000;
+@compileFor(ARCH_WASM32) comptime int64 DEEP = 12000;
+@compileFor(!ARCH_WASM32) comptime usize BIG = 256 * 1024 * 1024;
+@compileFor(ARCH_WASM32) comptime usize BIG = 2 * 1024 * 1024;
+
+fn int64 down(int64 n) {
+    if (n == 0) { return 0; }
+    return down(n: n - 1) + 1;
+}
+
+type resource Job implements Sendable {
+    int64 depth = 0;
+    int64 got = -1;
+    public ctor make(int64 depth) { this.depth = depth; }
+    public fn void run() { this.got = down(n: this.depth); }
+    public const fn int64 result() { return this.got; }
+}
+
+fn void worker(ref Job j) { j.run(); }
+fn void owned(Job j) { j.run(); }
+
+fn int32 main() {
+    // The reporter's case: the same depth on the main thread and in an isolate, on the stated default.
+    int64 depth = SHARED;
+    if (down(n: depth) != depth) { return 1; }
+    Job j = Job.make(depth: depth);
+    scope { spawn worker(j: ref j); }
+    if (j.result() != depth) { return 2; }
+
+    // Deeper than the default: the scope form, sized at the spawn.
+    Job deep = Job.make(depth: DEEP);
+    scope { spawn(stack: BIG) worker(j: ref deep); }
+    if (deep.result() != DEEP) { return 3; }
+
+    // The handle form — a crash here is the failure; nothing comes back over a moved bundle.
+    Job handed = Job.make(depth: DEEP);
+    Isolate h = spawn(stack: BIG) owned(j: give handed);
+    h.join();
+
+    // Each worker of a parallel loop.
+    DynamicArray<Job> jobs = DynamicArray.empty();
+    jobs.add(item: Job.make(depth: DEEP));
+    jobs.add(item: Job.make(depth: DEEP));
+    parallel_for (ref Job x in jobs, workers: 2, stack: BIG) { x.run(); }
+    if (jobs[0].result() != DEEP || jobs[1].result() != DEEP) { return 4; }
+
+    // A small request is rounded up to the platform's floor (64 KiB, 128 KiB on Linux arm64), not refused.
+    Job tiny = Job.make(depth: 10);
+    scope { spawn(stack: 1024) worker(j: ref tiny); }
+    if (tiny.result() != 10) { return 5; }
+    return 0;
+}

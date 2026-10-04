@@ -887,6 +887,7 @@ parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
 parallel_spawn_workers	parallel_spawn_workers.kama:15
 parfor_break	parfor_break.kama:7
+parfor_clause_twice	parfor_clause_twice.kama:6
 parfor_const_view	parfor_const_view.kama:9
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11
 parfor_no_workers	parfor_no_workers.kama:14
@@ -1150,6 +1151,7 @@ source_utf8_verbatim	source_utf8_verbatim.kama:5
 spawn_bundle_shared	spawn_bundle_shared.kama:13
 spawn_in_nested_block	spawn_in_nested_block.kama:24
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15
+spawn_stack_zero	spawn_stack_zero.kama:7
 static_call_nonstatic	static_call_nonstatic.kama:8
 static_on_comptime	static_on_comptime.kama:5
 static_on_comptime_fn	static_on_comptime_fn.kama:5

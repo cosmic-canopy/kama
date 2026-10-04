@@ -542,6 +542,7 @@ public:
 class IsolateNode : public ExpressionStatementNode {
 public:
     SharedExpression call;   // an InvocationNode
+    SharedExpression stack;  // `spawn(stack: n) f(…)` — the isolate's stack in bytes; null = the stated default (KRD-2)
     IsolateNode(CodeGenContext& context, SharedExpression call)
         : ASTNode(context),  ExpressionStatementNode(context), call(call) { }
 };
@@ -691,6 +692,7 @@ public:
     // spelling the user actually wrote, kept so a wrong label gets a sentence instead of a syntax error.
     SharedExpression workers;
     SharedIdentifier workersLabel;
+    SharedExpression stack;   // `, stack: n` — each worker's stack in bytes; null = the stated default (KRD-2)
     ParallelForNode(CodeGenContext& context, SharedIdentifier type,
                     SharedIdentifier name,
                     SharedExpression expression,

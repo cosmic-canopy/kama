@@ -6944,6 +6944,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
     indent(d); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
     indent(d); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
+    // Each worker's stack (KRD-2), evaluated once for all of them — when the loop says one.
+    const std::string stkExpr = isolateStackArg(pf->stack, pf->line);
+    const std::string STK = "__pfstk" + sfx;
+    if (!stkExpr.empty()) { indent(d); *_out << "size_t " << STK << " = " << stkExpr << ";\n"; }
+    const std::string spawnFn = stkExpr.empty() ? "kama_isolate_spawn(&" : "kama_isolate_spawn_sized(&";
+    const std::string spawnTail = stkExpr.empty() ? ");\n" : ", " + STK + ");\n";
     if (pf->deferJoin) {
         // ⚠️ K IS `length()` EXACTLY — one long-lived isolate per element, and capping it at the core
         // count would be a BUG, not a safeguard. A cap does not skip the extras; it gives one isolate
@@ -6970,7 +6976,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
         }
         noteThreadSpawn();
-        indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
+        indent(d+1); *_out << H << "[" << SP << "++] = " << spawnFn << trampFn << ", " << A << spawnTail;
         indent(d); *_out << "}\n";
         // Hand the join to the enclosing `scope`, which runs it on EVERY exit path (fall-through and the
         // return/break/continue unwinds) before dropping any local — the same join-before-drop guarantee
@@ -7003,7 +7009,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
     }
     noteThreadSpawn();
-    indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
+    indent(d+1); *_out << H << "[" << SP << "++] = " << spawnFn << trampFn << ", " << A << spawnTail;
     indent(d); *_out << "}\n";
     indent(d); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
                      << "kama_isolate_join(" << H << "[" << J << "]);\n";
@@ -14278,6 +14284,8 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(pf->type);
         scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
         scanExprForCollections(pf->expression);
+        scanExprForCollections(pf->workers);   // the clauses are expressions too (KRD-2)
+        scanExprForCollections(pf->stack);
         scanStmtForCollections(pf->body);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForCollections(b->host);
@@ -15374,6 +15382,8 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanStmtForGenerics(fe->body, bodyTys);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
+        scanExprForGenerics(pf->workers, localTys);   // the clauses are expressions too (KRD-2)
+        scanExprForGenerics(pf->stack, localTys);
         scanStmtForGenerics(pf->body, localTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         std::map<std::string, SharedIdentifier> bodyTys = localTys;   // the aliases live in the window only
@@ -18027,6 +18037,28 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
 // and `val` (the emitted, already-move-marked argument expression). Shared-nothing by construction: the
 // entry is a BARE top-level fn (no env capture) and its one argument is MOVED (the source is marked moved
 // via the existing `give` seam, so any post-spawn use is the standard use-after-move error).
+// The stack, in bytes, an isolate-starting construct's `stack:` clause asks the seam for (KRD-2), or "" when it has
+// none — the seam's plain entries then give the size kama_isolate.h states, and a clause goes to the `_sized` ones.
+// A byte count is a `usize`, as `allocate(bytes:)` takes one, and a constant adapts; a constant is emitted FOLDED,
+// so `64 * 1024 * 1024 * 4` is the number it says rather than C `int` arithmetic that overflows. Zero asks for no
+// stack at all, which is a mistake rather than a size.
+std::string CEmitter::isolateStackArg(SharedExpression stack, int line)
+{
+    if (!stack) return "";
+    int64_t cv;
+    if (constValue(stack, cv)) {
+        if (cv > 0) return "((size_t)" + std::to_string(cv) + "ull)";
+        unsupported(("`stack: " + std::to_string(cv) + "` asks for no stack — it is the isolate's stack in bytes, "
+                     "rounded up to a multiple of 64 KiB; leave the clause out for the stated default").c_str(), line);
+        return "";
+    }
+    if (typeOfExpr(stack) != "size_t") {
+        unsupported("`stack:` takes a `usize` — the isolate's stack in bytes, as `allocate(bytes:)` takes one", line);
+        return "";
+    }
+    return "((size_t)(" + emitExpression(stack) + "))";
+}
+
 std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                                   bool& isBorrow, bool borrowOK)
 {
@@ -18280,7 +18312,9 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     if (isBorrow) {
         // M4.2 borrow: `val` is already `(void*)&(local)` — spawn with it directly. No box, no free.
         noteThreadSpawn();
-        indent(depth); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << val << ");\n";
+        const std::string stk = isolateStackArg(iso->stack, iso->line);
+        indent(depth); *_out << hnd << " = kama_isolate_spawn" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_"
+                             << cName << ", " << val << (stk.empty() ? "" : ", " + stk) << ");\n";
     } else {
         // M2/M4.1 move: heap the moved bundle, spawn with the box (the trampoline frees it). The malloc
         // temp stays scoped to its sub-block.
@@ -18291,7 +18325,9 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
         indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
         noteThreadSpawn();
-        indent(depth + 1); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
+        const std::string stk = isolateStackArg(iso->stack, iso->line);
+        indent(depth + 1); *_out << hnd << " = kama_isolate_spawn" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_"
+                                 << cName << ", " << arg << (stk.empty() ? "" : ", " + stk) << ");\n";
         indent(depth);     *_out << "}\n";
     }
     // Register into the innermost scope AFTER emission (re-fetch: isolatePrep may have grown _scopes and
@@ -18312,12 +18348,14 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
     if (!_classes.count(iso_t))
         unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);
     std::string arg = "kama_kama_iso_arg" + std::to_string(_tempCounter++);
+    const std::string stk = isolateStackArg(iso->stack, iso->line);
     std::ostringstream e;
     noteThreadSpawn();
     e << "({ " << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << "); "
       << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
       << "*" << arg << " = (" << val << "); "
-      << iso_t << "__fromRaw(kama_isolate_spawn_boxed(&__kama_iso_" << cName << ", " << arg << ")); })";
+      << iso_t << "__fromRaw(kama_isolate_spawn_boxed" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_" << cName
+      << ", " << arg << (stk.empty() ? "" : ", " + stk) << ")); })";
     return e.str();
 }
 
@@ -24772,7 +24810,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             for (auto& h : is->holes) rec(h);
         } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) { rec(bc->unaryExpression);
         } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) { rec(ad->operand);
-        } else if (auto* io = dynamic_cast<IsolateNode*>(n)) { rec(io->call);    // `isolate f(x: p)`
+        } else if (auto* io = dynamic_cast<IsolateNode*>(n)) { rec(io->call); rec(io->stack);   // `spawn(stack: n) f(x: p)`
         } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) { rec(pe->expression);
         } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { rec(po->expression);
         } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { rec(su->expression);
@@ -24910,7 +24948,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
             scan(fe->expression); walkSkippable(fe->body);
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
-            scan(pf->expression); walkSkippable(pf->body);
+            scan(pf->expression); scan(pf->workers); scan(pf->stack); walkSkippable(pf->body);
         } else if (auto* cl = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
             // `const T x = …;` and `comptime T N = …;` read their initializers like any declaration.
             if (cl->variables) for (auto& v : *cl->variables) if (v) scan(v->initializer);
@@ -28813,7 +28851,7 @@ const std::set<std::string>& CEmitter::foreignAllocators()
         "getaddrinfo",              // kama_os.h: kama_resolve_host — the resolver's own arena
         "GetEnvironmentStringsW",   // kama_os.h: kama_envp_build
         "opendir",                  // kama_os.h: kama_diropen (POSIX) — the DIR* is libc-owned
-        "pthread_create",           // kama_isolate.h: kama_isolate_spawn — the thread's stack
+        "pthread_create",           // kama_isolate.h: kama__isolate_start — the thread's stack
         "CreateThread",             // kama_os.h: kama_capture2 (Win32)
         "CreateProcessW",           // kama_os.h: kama_proc_spawn (Win32)
         "malloc", "calloc", "realloc", "strdup", "_strdup", "strndup",
