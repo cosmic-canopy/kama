@@ -22725,6 +22725,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         // distinction is the whole of the rule below, and `valHoisted` cannot carry it: the element-access
         // arm sets that for `ref a[i]`, which IS a place the callee may legitimately write through.
         bool argIsTemp = false;
+        // A plain rvalue a `ref` borrows through a compound literal of this C type — see where it is set.
+        std::string rvalueBorrowCType;
         InvocationNode* ctorIv = dynamic_cast<InvocationNode*>(argExpr.get());
         std::string ctorCls;
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
@@ -22914,6 +22916,22 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 }
             }
             if (!st.empty()) argIsTemp = true;   // a `__strtmp`/`__primtmp` temp — see the check below
+            // Any other RVALUE of a plain type — arithmetic, a call result, a negation, a cast, a field of a
+            // temporary, a ternary over values — has no address either. Only a literal, a `string` and a class
+            // were materialized, so `take(v: a + 1)` passed `kama check` and reached C as `&(a + 1)`: "cannot
+            // take the address of an rvalue". It is borrowed through a compound literal of the PARAMETER's
+            // type, `(int32_t[]){ a + 1 }` — the destination types it, as it types a literal's temp. That
+            // storage lives to the end of the enclosing block and needs no hoisted statement, so it reaches
+            // a loop condition too and evaluates the argument where it is written. A class rvalue keeps the
+            // `kama_refarg` arm below (its temp may own something to drop); a constant keeps its own literal.
+            // An `out` argument is a marked VARIABLE or nothing, and its own rule says so.
+            if (st.empty() && p.byRef && !p.isOut && !argIsVariant && !argIsMatch && !pKindCType.empty()
+                && !isClass(pKindCType) && !isInterface(pKindCType) && pKindCType != "kama_string"
+                && isCRvalue(argExpr) && constantTempCType(argExpr).empty()
+                && !isClass(exprClass(argExpr)) && !exprIsString(argExpr)) {
+                rvalueBorrowCType = pKindCType;
+                argIsTemp = true;   // a temporary like any other — the rule below holds for it
+            }
             if (st.empty() && (argIsVariant || argIsMatch) && !p.className.empty()) {
                 // target-type the union instance / match result to the param's type, then emit
                 std::string pmt = _matchTargetCType, pvt = _variantTargetType;
@@ -23042,6 +23060,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 const bool constPlaceToConstRef = p.isConst && !p.className.empty() && isConstReceiver(argExpr);
                 if (!constantTempCType(argExpr).empty())   // `Color::Red`, an `extern const`: no address, borrow a temporary
                     s += "(" + constantTempCType(argExpr) + "[]){ " + val + " }";
+                else if (!rvalueBorrowCType.empty())       // `a + 1`, `f()`: the same, typed by the parameter
+                    s += "(" + rvalueBorrowCType + "[]){ " + val + " }";
                 else
                 s += (isClass(p.className) || constPlaceToConstRef)
                          ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base / the read-only place

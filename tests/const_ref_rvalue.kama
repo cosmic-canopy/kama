@@ -1,0 +1,49 @@
+// A `const ref` parameter borrows any rvalue of a plain type — arithmetic, a call result, a negation, a
+// cast, a field of a temporary, a ternary over values — through storage that lives to the end of the
+// enclosing block, typed by the PARAMETER (as a literal's temp is). Each of these passed `kama check` and
+// failed in the C compiler with "cannot take the address of an rvalue", because only a LITERAL, a `string`
+// and a class-typed rvalue were materialized; everything else reached C as `&(a + 1)`.
+import { std::collections::FixedArray, std::collections::Map };
+
+type enum Color { Red, Green, Blue }
+type value Pt { public int32 x; public int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
+type value G<T> {
+    T x;
+    public ctor make(const ref T v) { this.x = v; }
+    public const fn T get() { return this.x; }
+}
+
+fn int32 take(const ref int32 v) { return v; }
+fn int64 takeWide(const ref int64 v) { return v; }
+fn float64 takeF(const ref float64 v) { return v; }
+fn int32 shade(const ref Color c) { return c == Color::Blue ? 3 : 1; }
+fn int32 two() { return 2; }
+fn Color pick() { return Color::Blue; }
+fn Pt mk() { return Pt.make(x: 4, y: 5); }
+
+fn int32 main() {
+    int32 a = 5;
+    int32 b = 6;
+    bool c = true;
+    int32 r = 0;
+    if (take(v: 0 - 1) == -1)          { r = r + 1; }     // the reported shape
+    if (take(v: a + 1) == 6)           { r = r + 1; }     // arithmetic over a local
+    if (take(v: two()) == 2)           { r = r + 1; }     // a call result
+    if (take(v: -a) == -5)             { r = r + 1; }     // a negation
+    if (takeWide(v: cast<int64>(a)) == 5i64) { r = r + 1; }   // a cast
+    if (takeF(v: 1.5 * 2.0) == 3.0)    { r = r + 1; }     // float arithmetic
+    if (take(v: mk().y) == 5)          { r = r + 1; }     // a field of a temporary
+    if (take(v: c ? a : b) == 5)       { r = r + 1; }     // a ternary over values
+    if (shade(c: pick()) == 3)         { r = r + 1; }     // a plain enum call result
+    int32 n = 0;
+    while (take(v: n + 1) <= 3) { n = n + 1; }           // a loop condition: nowhere to hoist to
+    if (n == 3)                        { r = r + 1; }
+    G<int32> g = G::<int32>.make(v: a * 2);              // a generic ctor's `const ref T`
+    if (g.get() == 10)                 { r = r + 1; }
+    FixedArray<int32> f = FixedArray::<int32>.filled(size: 4, value: 0 - 1);
+    if (f[3] == -1)                    { r = r + 1; }
+    Map<int32, int32> m = Map.empty();
+    m.put(key: 6, value: 60);
+    if (m.contains(key: a + 1))        { r = r + 1; }     // a stdlib `const ref K`
+    return r;                                             // 13
+}

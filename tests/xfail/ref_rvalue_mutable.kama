@@ -1,0 +1,11 @@
+// A non-literal RVALUE — arithmetic, a call result — to a non-const `ref` is a temporary like a literal is:
+// the callee's write lands in storage nothing can read back. Until `const ref` learned to borrow these, the
+// shape reached the C compiler as `&(a + 1)` and failed there; it is refused here in kama's words instead,
+// with the same two repairs. See tests/const_ref_rvalue for the `const ref` half.
+fn void bump(ref int32 v) { v = v + 1; }
+
+fn int32 main() {
+    int32 a = 5;
+    bump(v: a + 1);
+    return a;
+}
