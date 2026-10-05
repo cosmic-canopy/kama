@@ -35,11 +35,13 @@ tests/xfail/digit_sep_after_prefix.kama
 tests/xfail/digit_sep_double.kama
 tests/xfail/digit_sep_trailing.kama
 tests/xfail/enum_bare_spelling.kama
+tests/xfail/export_after_extern.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/file_gate_after_import.kama
 tests/xfail/file_gate_still_parsed.kama
 tests/xfail/float_bare_dot.kama
 tests/xfail/give_positional_call.kama
+tests/xfail/import_after_decl.kama
 tests/xfail/import_empty_braces.kama
 tests/xfail/interp_hole_operator.kama
 tests/xfail/leading_zero.kama

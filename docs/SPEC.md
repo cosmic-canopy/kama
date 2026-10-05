@@ -5712,6 +5712,10 @@ control*). Two imports binding the same bare name is a compile error — disambi
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 
+**A file's header comes first, in one order:** `file @compileFor(…);` if the file is gated, then its one
+`import { … };`, then its one `export { … };`, then its declarations. An `extern "h.h";` is a declaration, so <!-- xfail: export_after_extern, import_after_decl -->
+it follows both blocks.
+
 **`visibility` decides what a module reaches beyond itself**, in four widening forms — a **list** of
 modules in this project, `"children"` (every module nested under it, at any depth), `"internal"` (every
 module in this project) and `"public"` (plus **dependent projects**, and the only form that crosses a

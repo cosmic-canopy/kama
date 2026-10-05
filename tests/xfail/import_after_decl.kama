@@ -1,0 +1,5 @@
+// The other half of the header rule: an `import` after a declaration (here, after the `export` block and a
+// function) is out of order, and the note gives the order.
+fn int32 helper() { return 1; }
+import { std::math::abs };
+fn int32 main() { return helper(); }

@@ -1,0 +1,5 @@
+// `import`/`export` appear only in a file's header, which comes before every declaration — an `extern` among
+// them. The parse error used to be a bare "unexpected EXPORT", which did not say the rule.
+extern fn int32 puts(UnsafeConstPtr<uint8> s);
+export { main };
+fn int32 main() { return 0; }

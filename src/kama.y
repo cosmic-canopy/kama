@@ -2995,6 +2995,11 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         else if (tok == YYSYMBOL_IDENTIFIER && n == 1 && expected[0] == YYSYMBOL_OPERATOR)
             msg += " — a `ref T` member is a place-returning `ref T operator[](…)`; a field is never a `ref` (a place "
                    "is passed and returned, never stored), so declare the field by value";
+        /* `import`/`export` appear nowhere but a file's header, so an unexpected one is always out of order. */
+        else if (tok == YYSYMBOL_IMPORT || tok == YYSYMBOL_EXPORT)
+            msg += std::string(" — `") + (tok == YYSYMBOL_IMPORT ? "import" : "export") + " { … };` belongs to the "
+                   "file's header, which comes first and in this order: `file @compileFor(…);` if any, ONE `import "
+                   "{ … };`, ONE `export { … };`, then the declarations (`extern \"h.h\";` is a declaration)";
         else
             msg += reservedWordNote(tok, wantedIdentifier);
         /* `give(s)` meant as the hand-off, `truncate(n)` as the conversion: each is a CALL of a name now, and the
