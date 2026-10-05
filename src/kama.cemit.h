@@ -2162,6 +2162,10 @@ private:
     std::string emitCondition(SharedExpression cond);
     int                _curLine = 0;                   // last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // the ENCLOSING FUNCTION is an `unsafe fn`
+    // The body being emitted is a generic INSTANCE whose type arguments include a raw pointer
+    // (`DynamicArray<UnsafePtr>`). Its raw-ness is the instantiator's — see rejectRawOutsideUnsafe.
+    bool               _rawInstanceBody = false;
+    static bool instArgsNameRaw(const std::vector<SharedIdentifier>& args);
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
     // A `ctor` names the value it is building with `this`, but a ctor is a static factory with no `self`

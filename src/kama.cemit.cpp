@@ -15571,10 +15571,13 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     // _comptimeSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`, and the body can READ `N`);
     // a type param binds a type in _typeSubst. Both are cleared identically at the end.
     bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
+    const bool savedRaw = _rawInstanceBody;
+    _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
 
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
 
+    _rawInstanceBody = savedRaw;
     _typeSubst.clear();
     _comptimeSubst.clear();
     _nsCtx = savedCtx;
@@ -16037,8 +16040,8 @@ void CEmitter::checkUninstantiatedTemplates()
 
     // Which templates a real instantiation already covered. Built once — `_genericInsts` is keyed by
     // MANGLED name, so the template key is in the value, and asking per template would be quadratic.
-    std::set<std::string> instantiated;
-    for (auto& kv : _genericInsts) instantiated.insert(kv.second.templateKey);
+    std::set<std::string> instantiated;   // an instance over a raw pointer judges nothing raw (rejectRawOutsideUnsafe)
+    for (auto& kv : _genericInsts) if (!instArgsNameRaw(kv.second.typeArgs)) instantiated.insert(kv.second.templateKey);
 
     std::ostringstream sink;
     std::ostream* savedOut = _out;
@@ -16150,8 +16153,8 @@ void CEmitter::checkUninstantiatedTypeTemplates()
 {
     if (_genericTypes.empty()) return;
 
-    std::set<std::string> instantiated;
-    for (auto& kv : _genericTypeInsts) instantiated.insert(kv.second.templateKey);
+    std::set<std::string> instantiated;   // as above: only an instance over no raw pointer walked the body for it
+    for (auto& kv : _genericTypeInsts) if (!instArgsNameRaw(kv.second.typeArgs)) instantiated.insert(kv.second.templateKey);
 
     // Snapshot the keys: registering a probe instance walks the template's members transitively, and a
     // sibling template reached that way must not be visited mid-iteration.
@@ -19791,9 +19794,24 @@ bool CEmitter::grantedMint(const ClassInfo& ci, const std::string& member) const
 // one specific grant: `viewMut()`, the writable half.
 bool CEmitter::declaresViewable(const ClassInfo& ci) const { return grantedMint(ci, "viewMut"); }
 
+// A GENERIC is judged as written. Inside `DynamicArray<T>`, `T` is not a raw pointer, whatever a program binds
+// it to: `pop()`'s `T x = this.takeAt(…)` is safe code moving a value it knows nothing about, and refusing it
+// for `DynamicArray<UnsafePtr>` made a container of raw pointers impossible to instantiate even from inside an
+// `unsafe fn` ("this call's result is a raw pointer", raised at the stdlib's line). It is the rule the signature
+// check already keeps — a declaration's error must not depend on which instantiation happens to exist. The raw
+// pointer is the INSTANTIATOR's, and the containment rule holds it there: the program's local, field read and
+// `match` binding of a `DynamicArray<UnsafePtr>` each need an `unsafe fn`. What the template SPELLS stays checked:
+// by any instance over other arguments, or, when every instance is over a raw pointer, by the opaque-parameter
+// probe (checkUninstantiatedTemplates counts only those other instances as having walked the body).
+bool CEmitter::instArgsNameRaw(const std::vector<SharedIdentifier>& args)
+{
+    for (const auto& a : args) if (namesUnsafePtr(a)) return true;
+    return false;
+}
+
 bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
 {
-    if (_inUnsafe) return false;
+    if (_inUnsafe || _rawInstanceBody) return false;
     unsupported((std::string(what) + " is a raw pointer, so it requires an `unsafe fn` — mark the "
                  "enclosing function `unsafe`").c_str(), line);
     return true;
@@ -34053,6 +34071,8 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
+    struct RawScope { bool& b; bool prev; ~RawScope() { b = prev; } } _raw{ _rawInstanceBody, _rawInstanceBody };
+    _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
     _emitStaticClass = true;
     // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
     // bound — so `Fixed<24>` can fail while `Fixed<16>` passes, and the diagnostic names which.

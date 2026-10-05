@@ -2950,6 +2950,13 @@ p): … }` binds an `UnsafePtr` and never spells the word — the payload's decl
 `T`. Before the type-keyed rule existed, that shape compiled into a double free with zero `unsafe` tokens
 in the function.
 
+**A generic is judged as written.** That `match` is the program's own code, so the type it binds is read with
+the instance's arguments in. Inside the generic itself they are not: in `DynamicArray<T>`, `T` is never a raw
+pointer, so `DynamicArray<UnsafePtr<int32>>` instantiates and its safe methods stay safe. The raw pointer is <!-- test: raw_ptr_container -->
+the instantiator's: the local, the field read and the `match` binding that hold one need an `unsafe fn`, as
+anywhere. What a generic spells for itself is checked all the same, by an instance over other arguments or,
+when there is none, by the walk every uninstantiated generic gets. <!-- xfail: raw_generic_spelled -->
+
 **`extern` has no scalar exemption.** `extern fn int32 kama_close_socket(isize fd)` names no pointer and is
 a double-close primitive by effect; roughly half the stdlib's extern declarations are pointer-free. Danger at
 this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it

@@ -1,0 +1,17 @@
+// A generic is judged as written: inside `DynamicArray<T>`, `T` is not a raw pointer, whatever the program binds
+// it to. `DynamicArray<UnsafePtr>` could not be instantiated at all, even from an `unsafe fn` — `pop()`'s
+// `T x = this.takeAt(…)` was refused as "this call's result is a raw pointer, so it requires an `unsafe fn`",
+// raised at the stdlib's own line, so the only container of addresses was a `DynamicArray<usize>`. The raw
+// pointer is the instantiator's, and the containment rule holds it there (this function is `unsafe`; a safe
+// one could not name the local). tests/xfail/raw_generic_spelled keeps the template's OWN spelling checked.
+import { std::collections::DynamicArray };
+unsafe fn int32 run() {
+    int32 a = 3; int32 b = 4;
+    DynamicArray<UnsafePtr<int32>> xs = DynamicArray.empty();
+    xs.add(item: addr(of: a)); xs.add(item: addr(of: b));
+    int32 sum = 0;
+    foreach (UnsafePtr<int32> p in xs) { sum = sum + p[0]; }
+    UnsafePtr<int32> last = match (xs.pop()) { case Some(value: p): p; case None: null; };
+    return sum + last[0];                    // 7 + 4
+}
+fn int32 main() { return run(); }

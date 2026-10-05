@@ -1,0 +1,6 @@
+// The other half of judging a generic as written: what the TEMPLATE spells is still checked when every instance
+// of it is over a raw pointer. `Box<UnsafePtr>` is the only instance here, so no instance walks `bad()` with the
+// raw rule on — the opaque-parameter probe does, and the local it spells is refused at the template's line.
+type value Box<T> { T v; public ctor make(T v) { this.v = v; } public fn int32 bad() { UnsafePtr<uint8> p = null; return 0; } }
+unsafe fn int32 f() { Box<UnsafePtr> b = Box.make(v: null); return b.bad(); }
+fn int32 main() { return f(); }
