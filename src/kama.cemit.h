@@ -3301,8 +3301,10 @@ private:
     bool isGenericDotCtorCall(ASTNode* r);
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
     std::string rawPointeeCType(SharedExpression e);  // pointee class of an `UnsafePtr<T>` expression (drop(ptr:)'s gate), "" otherwise
-    std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
+    std::string ptrLocalElemType(SharedExpression e);  // if `e` is `buf[i]` on a local/param/static UnsafePtr<T>, the element C-type; else "" (never a store's class)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    std::string memberFieldClass(std::string recv, MemberAccessNode* ma);   // the class of field `ma` off a `recv` receiver (auto-deref), ""
+    std::string receiverClass(SharedExpression e);      // exprClass, widened for a place reached THROUGH a raw element — see the definition
     std::string exprClassImpl(SharedExpression e);      // the uncached body (see ClassifierMemo)
     std::string handoffSourceClass(SharedExpression e, int handoff);  // exprClass, widened for a MARKED bare-local `buf[i]`
     // a MARKED hand-off whose SOURCE class did not resolve, into a destination that owns — a compiler bug, refused loudly

@@ -21836,9 +21836,16 @@ std::string CEmitter::ptrLocalElemType(SharedExpression e)
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     auto* id = dynamic_cast<IdentifierNode*>(recv.get());
     if (!id || !id->value) return "";
+    // A module `static` raw pointer is the same storage question as a local one (`static UnsafePtr<R> g;`
+    // then `g[0].get()`), and a local of that name shadows it.
+    std::string ct;
     auto it = _localCTypes.find(*id->value);
-    if (it == _localCTypes.end()) return "";
-    const std::string& ct = it->second;
+    if (it != _localCTypes.end()) ct = it->second;
+    else if (!_localTypes.count(*id->value) && !_paramNames.count(*id->value)) {
+        const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+        auto ms = mk.empty() ? _moduleStatics.end() : _moduleStatics.find(mk);
+        if (ms != _moduleStatics.end()) ct = cType(ms->second);
+    }
     if (ct.size() > 1 && ct.back() == '*' && ct != "void*") return ct.substr(0, ct.size() - 1);
     return "";
 }
@@ -34506,31 +34513,7 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
         return "";
     }
 
-    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
-        std::string recv = exprClass(ma->expression);
-        // Auto-deref a smart-pointer / `Deref<T>` receiver to its pointee T — but ONLY when the member is
-        // not a field of the wrapper itself. A smart pointer's OWN field (e.g. `Owned<T,A>.alloc`, accessed
-        // as `this.alloc` inside its dtor) must resolve on the wrapper, not be forwarded to the pointee.
-        bool memberOnWrapper = !recv.empty() && ma->identifier && ma->identifier->value
-                            && _classes.count(recv) && findFieldOwner(&_classes[recv], *ma->identifier->value);
-        if (!memberOnWrapper) {
-            if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
-            else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }   // user Deref<T> auto-deref
-        }
-        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
-            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
-            if (owner)
-                for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type) {
-                        // Resolve the field type under its OWNER INSTANCE's type args — NOT the ambient
-                        // _typeSubst, which inside an enum-variant/arg emission may bind only some params
-                        // (e.g. `Optional<T>`'s `T`), leaving a nested `DynamicArray<T,A>`'s `A` unbound.
-                        std::string ft = fieldCType(recv, f);
-                        if (isClass(ft)) return ft;
-                    }
-        }
-        return "";
-    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return memberFieldClass(exprClass(ma->expression), ma);
 
     // `list[i]` / `a[i]` resolves to the ELEMENT type, so `list[i].m()` finds the method.
     if (dynamic_cast<ElementAccessNode*>(n)) {
@@ -34809,6 +34792,62 @@ bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, c
     return true;
 }
 
+// The class of field `ma` read off a receiver of class `recv`, or "". Shared by exprClass and receiverClass,
+// which differ only in how they type the RECEIVER.
+std::string CEmitter::memberFieldClass(std::string recv, MemberAccessNode* ma)
+{
+    // Auto-deref a smart-pointer / `Deref<T>` receiver to its pointee T — but ONLY when the member is
+    // not a field of the wrapper itself. A smart pointer's OWN field (e.g. `Owned<T,A>.alloc`, accessed
+    // as `this.alloc` inside its dtor) must resolve on the wrapper, not be forwarded to the pointee.
+    bool memberOnWrapper = !recv.empty() && ma->identifier && ma->identifier->value
+                        && _classes.count(recv) && findFieldOwner(&_classes[recv], *ma->identifier->value);
+    if (!memberOnWrapper) {
+        if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
+        else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }   // user Deref<T> auto-deref
+    }
+    if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+        ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+        if (owner)
+            for (auto& f : owner->fields)
+                if (f.name == *ma->identifier->value && f.type) {
+                    // Resolve the field type under its OWNER INSTANCE's type args — NOT the ambient
+                    // _typeSubst, which inside an enum-variant/arg emission may bind only some params
+                    // (e.g. `Optional<T>`'s `T`), leaving a nested `DynamicArray<T,A>`'s `A` unbound.
+                    std::string ft = fieldCType(recv, f);
+                    if (isClass(ft)) return ft;
+                }
+    }
+    return "";
+}
+
+// The class of `e` as a RECEIVER — what a member is read off, or a method called on. It is `exprClass`, widened
+// for a place reached THROUGH a raw element: `p[0]` and `p[0].inner`, on a local, a parameter or a module
+// `static`. exprClass leaves those untyped on purpose — a STORE of a raw element is a plain C store (SPEC *The
+// raw seam*), and exprClass feeds the store path — but neither a member access nor a call stores the element.
+// Each borrows it in place, so each needs the pointee's type: a member to be spelled the way that type spells
+// it (a `type extern value`'s fields are the header's, so `p[0].quot` emitted `k_quot` and failed in the C
+// compiler), and a call to find its method (`g[0].get()` through a static was "cannot resolve the receiver").
+std::string CEmitter::receiverClass(SharedExpression e)
+{
+    std::string c = exprClass(e);
+    if (!c.empty() || !e) return c;
+    std::string et = ptrLocalElemType(e);
+    if (!et.empty()) {
+        // `UnsafeConstPtr<T>` lowers east-const (`T const*`); the read-only half is checked where the place is
+        // used (a store, a non-`const fn` call), so the class is the bare `T`.
+        const std::string csuf = " const";
+        if (et.size() > csuf.size() && et.compare(et.size() - csuf.size(), csuf.size(), csuf) == 0)
+            et = et.substr(0, et.size() - csuf.size());
+        return isClass(et) ? et : "";
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get()))
+        if (ma->expression) {
+            const std::string r = receiverClass(ma->expression);
+            if (!r.empty()) return memberFieldClass(r, ma);
+        }
+    return "";
+}
+
 std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
     std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
@@ -34828,7 +34867,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         if (rid->value && !rid->synthesized && !isValueName(*rid->value, rid->qualifier)
             && rejectDotOnTypeRead(ma, rid, field))
             return "0";
-    std::string cls = exprClass(ma->expression);
+    std::string cls = receiverClass(ma->expression);
     // Auto-deref an Owned/Shared: `n.field` -> `(n).ptr->[base]field` (T*).
     // A Weak can't be dereffed — it must be upgraded with upgrade() first.
     if (isSmartPtrClass(cls)) {
@@ -36535,10 +36574,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // which ptrElemType has always typed) is. So the RECEIVER alone is typed here, at the one site that
     // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.228 this was
     // refused as "untyped to ownership" with the borrow/own spellings.
-    if (cls.empty()) {
-        const std::string et = ptrLocalElemType(receiver);
-        if (!et.empty() && _classes.count(et)) cls = et;
-    }
+    if (cls.empty()) cls = receiverClass(receiver);
     // A `string` receiver that `exprClass` can't name — a bare literal (`"x".trim()`) or a `+` chain
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
     // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.

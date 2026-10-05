@@ -7,7 +7,7 @@ extern fn usize strlen(UnsafeConstPtr<cchar> s);
 // `addr(of:)` on a const root hands back the read-only pointer, so a `const fn` can honestly return one
 // (returning it as `UnsafePtr<int32>` is tests/xfail/const_addr).
 type value Cell {
-    int32 n;
+    public int32 n;                                       // read below through a raw pointer, from outside the type
     public ctor make() { this.n = 3; }
     public unsafe const fn UnsafeConstPtr<int32> peek() { return addr(of: this.n); }
 }

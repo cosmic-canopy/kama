@@ -1,0 +1,53 @@
+// An element of a raw pointer is a place of the POINTEE's type for a member access and a method call — through
+// a local, a parameter and a module `static` alike. A store of the element itself (`p[i] = v`) stays a plain C
+// store (SPEC *The raw seam*); a member names the pointee's field, so it is spelled the way that type spells it.
+//
+// Two defects, one gap. A field read or written through `p[0]` emitted kama's own spelling (`k_quot`), which a
+// `type extern value` does not have — its fields are the header's — so `p[0].quot` passed `kama check` and failed
+// in the C compiler with "no member named 'k_quot'". And a method call through a `static` raw pointer,
+// `g[0].get()`, was "cannot resolve the receiver of `get`": the receiver was typed through a local or a field,
+// never a static.
+import { std::memory::Owned };
+extern "<stdlib.h>";
+
+type extern value div_t { int32 quot; int32 rem; }
+extern fn div_t div(int32 numer, int32 denom);
+
+type resource Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 get() { return this.n; }
+    public fn void bump() { this.n = this.n + 1; }
+}
+
+type value Inner { public int32 a; public ctor make(int32 a) { this.a = a; } public const fn int32 twice() { return this.a * 2; } }
+type value Outer { public Inner inner; public ctor make() { this.inner = Inner.make(a: 3); } }
+
+static UnsafePtr<div_t> g_d = null;
+static UnsafePtr<Counter> g_c = null;
+
+unsafe fn int32 viaParam(UnsafeConstPtr<div_t> p) { return p[0].quot; }      // read through a parameter
+
+unsafe fn int32 run() {
+    div_t r = div(numer: 17, denom: 5);                  // quot 3, rem 2
+    UnsafePtr<div_t> p = addr(of: r);
+    p[0].rem = p[0].rem + 4;                             // write and read through a local: rem 6
+    int32 total = viaParam(p: p) + p[0].rem;             // 3 + 6
+    g_d = p;
+    g_d[0].quot = g_d[0].quot * 2;                       // through a static: quot 6
+    total = total + r.quot;                              // 15 — the writes landed in `r`
+    Owned<Counter> box = new Counter.make(n: 7);
+    g_c = box.release();
+    g_c[0].bump();                                       // a mutating method through a static
+    total = total + g_c[0].get();                        // 15 + 8
+    Owned<Counter> back = Owned.adopt(raw: g_c);         // dropped once, here
+    g_c = null;
+    Outer o = Outer.make();
+    UnsafePtr<Outer> q = addr(of: o);
+    q[0].inner.a = 4;                                    // a member of a member, written
+    UnsafeConstPtr<Outer> cq = addr(of: o);
+    total = total + q[0].inner.a + cq[0].inner.twice();  // 23 + 4 + 8, read through a const pointer too
+    return total;                                        // 35
+}
+
+fn int32 main() { return run(); }

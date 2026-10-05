@@ -2872,8 +2872,10 @@ A pointer to a struct is read the same way, through its element: `p[0].x`. The p
 and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
 the emitter does not resolve a class for a raw element in a **store**. A **method call** on a raw element
 (`p[0].m()`) is not a store: it borrows the element in place, so it resolves, through a local pointer as <!-- test: unsafe_ptr_elem_method -->
-through a field one (until `0.9.232` the local form was refused, the field form never was). What stays
-resolves is a **`drop`**: it takes the POINTER, not the element — `drop(ptr: p)` destroys `*p` and <!-- test: drop_raw_pointee -->
+through a field one or a module `static` one. Nor is a **member** of the element (`p[0].x`, `p[0].inner.x`): <!-- test: raw_elem_pointee -->
+it names the pointee's field, spelled the way the pointee's type spells it — a `type extern value`'s fields
+are the header's — and private to that type as it is anywhere else. What stays <!-- xfail: raw_elem_private_field -->
+refused is a **`drop`** of the element: it takes the POINTER, not the element — `drop(ptr: p)` destroys `*p` and <!-- test: drop_raw_pointee -->
 `drop(ptr: addr(of: p[i]))` destroys one element — so the thing being destroyed is named rather than
 inferred from an untyped slot. To take the value out or
 release it instead: **borrow it** through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or

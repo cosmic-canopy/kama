@@ -1,7 +1,7 @@
 // The store rule walks the whole place: `q[0].n = …` writes a FIELD of the element the read-only pointer
 // reaches, and is refused exactly as `q[0] = …` is (tests/xfail/const_ptr_store).
 type value Cell {
-    int32 n;
+    public int32 n;
     public ctor make() { this.n = 1; }
 }
 

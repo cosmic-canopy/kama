@@ -912,6 +912,7 @@ protected_on_value_operator	protected_on_value_operator.kama:6 protected_on_valu
 ptr_arithmetic	ptr_arithmetic.kama:5
 public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
+raw_elem_private_field	raw_elem_private_field.kama:12
 raw_ptr_field_access	raw_ptr_field_access.kama:6
 rc_bare_handoff	rc_bare_handoff.kama:6
 reach_as_downcast_private	main.kama:2

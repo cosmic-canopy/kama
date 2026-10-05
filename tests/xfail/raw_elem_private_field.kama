@@ -1,0 +1,14 @@
+// A private field is private through a raw pointer too. `p[0].secret` read another type's private field from an
+// `unsafe fn` with no error: the element's type was not resolved for a member access, so neither the field's
+// spelling nor its visibility was checked. Typing the pointee for member access (tests/raw_elem_pointee)
+// checks both.
+type value Vault {
+    int32 secret;
+    public ctor make() { this.secret = 9; }
+}
+unsafe fn int32 peek() {
+    Vault v = Vault.make();
+    UnsafePtr<Vault> p = addr(of: v);
+    return p[0].secret;
+}
+fn int32 main() { return peek(); }
