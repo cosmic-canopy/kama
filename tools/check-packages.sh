@@ -1587,4 +1587,46 @@ grep -q '"version": "0.5.0"' "$ka/kama.lock" || { echo "check-packages: FAIL —
     || { echo "check-packages: FAIL — the resolved tree did not build:" >&2; sed 's/^/  /' "$tmp/kb39b.out" >&2; exit 1; }
 run "$tmp/kb39app"; [ "$RC" = 100 ] || { echo "check-packages: FAIL — the app returned $RC, expected 100 (both paths see sod 0.5.0)" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept)"
+# 41. a path dependency between two workspace members is judged by the workspace holding the package that
+#     DECLARED it, not by the one being built. A project outside the workspace path-depends on member `net`,
+#     and `net`'s own `../util` comes with it — the workspace carries both. It used to be judged against the
+#     outside project's workspace (none) and refused, which forced a consumer to copy the sources instead.
+xws="$tmp/xws"; mkdir -p "$xws/libs/util/src" "$xws/libs/net/src" "$tmp/xout/src"
+printf '{ "projects": { "libs/*": { "optional": false } } }\n' > "$xws/kama_workspace.json"
+printf '{ "name": "util", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$xws/libs/util/kama.json"
+printf 'export { v };\nfn int32 v() { return 7; }\n' > "$xws/libs/util/src/util.kama"
+cat > "$xws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } },
+  "dependencies": { "util": { "path": "../util" } } }
+JSON
+printf 'import { util::v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$xws/libs/net/src/net.kama"
+cat > "$tmp/xout/kama.json" <<'JSON'
+{ "name": "xout", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "net": { "path": "../xws/libs/net" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { net::u };\nfn int32 main() { return u(); }\n' > "$tmp/xout/src/main.kama"
+"$KAMA" pkg install "$tmp/xout/kama.json" >"$tmp/xws.out" 2>&1 \
+    || { echo "check-packages: FAIL — a member's sibling dep, consumed from outside its workspace, was refused:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
+"$KAMA" build "$tmp/xout/kama.json" -o "$tmp/xoutapp" >"$tmp/xws.out" 2>&1 \
+    || { echo "check-packages: FAIL — the outside consumer did not build:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
+run "$tmp/xoutapp"; [ "$RC" = 7 ] || { echo "check-packages: FAIL — the outside consumer returned $RC, expected 7" >&2; exit 1; }
+# ...and with no workspace over `net`, its `../util` is a bare path, and the refusal says which two were not listed.
+mv "$xws/kama_workspace.json" "$tmp/xws-root.bak"
+if "$KAMA" pkg install "$tmp/xout/kama.json" >"$tmp/xws.out" 2>&1; then
+    echo "check-packages: FAIL — a transitive path dep with no workspace over it was accepted" >&2; exit 1; fi
+grep -qF 'no kama_workspace.json lists both `net` and its `../util`' "$tmp/xws.out" \
+    || { echo "check-packages: FAIL — the refusal did not name the unlisted pair:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
+mv "$tmp/xws-root.bak" "$xws/kama_workspace.json"
+# ...and a FETCHED package's path dep is refused whatever surrounds it: the store carries only the package.
+xg="$tmp/xws-git"; mkdir -p "$xg/src"; cp "$xws/libs/net/kama.json" "$xg/kama.json"; cp "$xws/libs/net/src/net.kama" "$xg/src/"
+( cd "$xg" && git init -q . && git add -A && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
+cat > "$tmp/xout/kama.json" <<JSON
+{ "name": "xout", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "net": { "git": "file://$xg", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+if "$KAMA" pkg install "$tmp/xout/kama.json" >"$tmp/xws.out" 2>&1; then
+    echo "check-packages: FAIL — a fetched package's path dep was accepted" >&2; exit 1; fi
+grep -qF '`net` was fetched, and a fetched package cannot reference a local path' "$tmp/xws.out" \
+    || { echo "check-packages: FAIL — the fetched refusal did not say so:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package)"

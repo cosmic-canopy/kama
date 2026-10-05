@@ -411,6 +411,11 @@ reproducibly. Between two members of one `kama_workspace.json` that objection do
 workspace carries them both — so a path dependency there is permitted, and one pointing outside the
 workspace is still refused.
 
+The workspace that permits it is the one holding the package that **declares** the dependency, which need
+not be the project you are building. A game in its own repository can path-depend on `../engine-repo/gfx`,
+and `gfx`'s own `{ "path": "../engine" }` comes with it, as long as `engine-repo/kama_workspace.json` lists
+both. A fetched package's path dependency is refused wherever it is: the store carries only the package.
+
 Each package's imports are checked against **its own** manifest. If `libs/net` imports `config` while only
 `apps/server` declares it, the build **fails** and names the line to add:
 

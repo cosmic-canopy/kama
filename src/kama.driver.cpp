@@ -7365,8 +7365,11 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     // This is where a broken workspace file is SAID OUT LOUD. The resolution and editor paths pass no
     // `err` and quietly get "no workspace", because they must keep answering on a tree mid-edit; install
     // is the command that acts on the whole thing, so a member that is not there is its problem.
+    //
+    // It is not what permits a transitive path dependency: that is the workspace holding the package
+    // which DECLARED it, asked per request below, and it is often this one.
     std::string wsErr;
-    const std::set<std::string> wsMembers = workspaceMembers(base, &wsErr);
+    workspaceMembers(base, &wsErr);
     if (!wsErr.empty()) { fprintf(stderr, "kama pkg install: %s\n", wsErr.c_str()); return 2; }
 
     // Range deps (git+version) select the highest matching tag. Because the BFS resolves each node on
@@ -7391,8 +7394,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         if (!makeDirs(viewDir)) { fprintf(stderr, "kama pkg install: cannot create %s\n", viewDir.c_str()); return 1; }
 
         // `requestor` is a display name for diagnostics; `requestorDir` is the directory of the manifest
-        // that declared this dep — what a path spec is actually relative to.
-        struct Req { std::string name; DepSpec spec; std::string requestor; std::string requestorDir; bool dev; };
+        // that declared this dep — what a path spec is actually relative to. `localRequestor`: that
+        // manifest is on this disk as written — the root, or a package reached by path — not a fetched copy.
+        struct Req { std::string name; DepSpec spec; std::string requestor; std::string requestorDir; bool dev;
+                     bool localRequestor; };
         std::map<std::string, DepSpec> chosen;        // name -> the one resolved (tag-pinned) spec
         std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
         std::map<std::string, std::string> chosenVer; // range deps: name -> resolved concrete "x.y.z"
@@ -7550,13 +7555,30 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 // not carried with it. Between two members of one kama_workspace.json it is exactly as
                 // reproducible as the workspace itself, which is what makes a member able to declare the
                 // siblings it imports, and so able to be lifted out and still build.
-                if (!r.spec.path.empty() && r.requestor != "<root manifest>" &&
-                    !(wsMembers.count(absolutePath(r.requestorDir)) && wsMembers.count(r.spec.pathAbs))) {
-                    fprintf(stderr, "kama pkg install: path dependency '%s' (required by %s) is only allowed at the "
-                            "top level, or between two members of one kama_workspace.json — a fetched "
-                            "package cannot reference a local path reproducibly\n",
-                            r.name.c_str(), r.requestor.c_str());
-                    return 1;
+                //
+                // The workspace that carries both is the one holding the DECLARING package, not the one
+                // being built. A project that path-depends on a member of another repository's workspace
+                // gets that member's siblings with it, and judging them against the building project's
+                // own workspace refused exactly what the rule permits.
+                if (!r.spec.path.empty() && r.requestor != "<root manifest>") {
+                    std::string why;
+                    if (!r.localRequestor) {
+                        why = "`" + r.requestor + "` was fetched, and a fetched package cannot reference a local "
+                              "path reproducibly";
+                    } else {
+                        std::string werr;
+                        const std::set<std::string> owners = workspaceMembers(r.requestorDir, &werr);
+                        if (!werr.empty()) why = werr;
+                        else if (!(owners.count(absolutePath(r.requestorDir)) && owners.count(r.spec.pathAbs)))
+                            why = "no kama_workspace.json lists both `" + r.requestor + "` and its `" +
+                                  r.spec.path + "`";
+                    }
+                    if (!why.empty()) {
+                        fprintf(stderr, "kama pkg install: path dependency '%s' (required by %s) is only allowed at "
+                                "the top level, or between two members of one kama_workspace.json — %s\n",
+                                r.name.c_str(), r.requestor.c_str(), why.c_str());
+                        return 1;
+                    }
                 }
 
                 // First encounter of a versioned dep (git range or registry): fold in any seeded (restart)
@@ -7681,7 +7703,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     for (auto& ck : childDeps) { directNames.push_back(ck.first);
                         // storePath is where THIS package's manifest lives — the dir its own path specs
                         // are relative to. For a path dep that is the local package dir itself.
-                        q.push_back({ck.first, ck.second, r.name, storePath, r.dev}); }
+                        q.push_back({ck.first, ck.second, r.name, storePath, r.dev, !r.spec.path.empty()}); }
                     std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
                 }
                 if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
@@ -7694,8 +7716,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         };
 
         std::deque<Req> prodQ, devQ;
-        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", base, false});
-        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", base, true});
+        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", base, false, true});
+        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", base, true, true});
         int rc = drain(prodQ);                       // phase 1 (prod) drains fully before phase 2 → prod wins
         if (rc == 0) rc = drain(devQ);               // phase 2 (dev)
         if (rc == RESTART) continue;                 // a tighter range surfaced — re-resolve with it seeded
