@@ -879,6 +879,72 @@ tar -xzOf "$tmp/kreg/cz/1.0.0.tar.gz" cz/raw.bin > "$tmp/cz.got" || kfail "raw.b
 git -C "$cz" cat-file blob HEAD:raw.bin | cmp -s - "$tmp/cz.got" \
     || kfail "the published raw.bin is not the committed bytes — a CR or the Ctrl-Z did not survive the read"
 
+# 24b. THE HOSTED REGISTRY'S SHAPE, over HTTP. Every registry case above uses a `file://` base, so the fetch the
+# live registry depends on never ran here. Production is two origins: registry.kama-lang.org (Pages) serves each
+# `index.json`, and its `_redirects` 302s every other path to dl.kama-lang.org (R2), so an index's `tarball` stays
+# relative and the lock records only the registry's URL (provisioning/pages/main.tf). That makes curl's `-L`
+# LOAD-BEARING: drop it and every real install fails while every `file://` case passes. So this serves case 19's
+# own tree the same way — an index origin that redirects tarballs to a second origin — and asserts the redirect
+# was actually taken, the same version and integrity resolve, and the program builds and runs.
+# Plain HTTP on loopback, not https: a self-signed cert would test curl's trust store, not kama. SKIPPED, with a
+# NOTE and a PASS-line mention, where python3 is absent (msys2 ships without it).
+HTTPNOTE=""
+if command -v python3 >/dev/null 2>&1; then
+    cat > "$tmp/regserve.py" <<'PY'
+import functools, http.server, sys, threading
+root = sys.argv[1]
+files = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+dl = http.server.ThreadingHTTPServer(("127.0.0.1", 0), files)          # the tarball origin (R2's role)
+class Index(http.server.SimpleHTTPRequestHandler):                     # the index origin (Pages' role)
+    def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
+    def do_GET(self):
+        if self.path.endswith("/index.json"): return super().do_GET()
+        self.send_response(302)
+        self.send_header("Location", "http://127.0.0.1:%d%s" % (dl.server_address[1], self.path))
+        self.send_header("Content-Length", "0"); self.end_headers()
+idx = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Index)
+threading.Thread(target=dl.serve_forever, daemon=True).start()
+print(idx.server_address[1], dl.server_address[1], flush=True)         # port 0: the OS picks, no race with the parallel guards
+idx.serve_forever()
+PY
+    python3 "$tmp/regserve.py" "$reg" >"$tmp/regserve.port" 2>"$tmp/regserve.log" &
+    hpid=$!
+    # Up to 30 s: the loop leaves the moment the server answers, so a generous cap only matters on a loaded box.
+    i=0; while [ ! -s "$tmp/regserve.port" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+    hport=$(cut -d' ' -f1 "$tmp/regserve.port"); dport=$(cut -d' ' -f2 "$tmp/regserve.port")
+    [ -n "$hport" ] || { kill "$hpid" 2>/dev/null; echo "check-packages: FAIL — the loopback registry never came up" >&2; cat "$tmp/regserve.log" >&2; exit 1; }
+    hc="$tmp/hc"; mkdir -p "$hc/src"
+    cat > "$hc/kama.json" <<JSON
+{ "name": "hc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "registries": { "default": "http://127.0.0.1:$hport" },
+  "dependencies": { "rg": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+    printf 'import { rg::area };\nfn int32 main() { return area(); }\n' > "$hc/src/main.kama"
+    if "$KAMA" pkg install "$hc/kama.json" >"$tmp/hc.out" 2>&1; then hrc=0; else hrc=1; fi
+    kill "$hpid" 2>/dev/null || true; wait "$hpid" 2>/dev/null || true
+    [ "$hrc" -eq 0 ] || { echo "check-packages: FAIL — install from an http registry (index + redirected tarball) failed:" >&2; sed 's/^/  /' "$tmp/hc.out" >&2; sed 's/^/  server: /' "$tmp/regserve.log" >&2; exit 1; }
+    # The redirect must have HAPPENED, or this case proves nothing about `-L`: a 302 for the tarball at the index
+    # origin, then a 200 for the same path at the tarball origin.
+    grep -q '"GET /rg/1\.2\.0\.tar\.gz HTTP/1\.[01]" 302' "$tmp/regserve.log" \
+        || { echo "check-packages: FAIL — the tarball was not redirected (the case no longer mirrors the hosted registry):" >&2; cat "$tmp/regserve.log" >&2; exit 1; }
+    grep -q '"GET /rg/1\.2\.0\.tar\.gz HTTP/1\.[01]" 200' "$tmp/regserve.log" \
+        || { echo "check-packages: FAIL — the redirected tarball was never fetched from the second origin:" >&2; cat "$tmp/regserve.log" >&2; exit 1; }
+    grep -q '"version": "1.2.0"' "$hc/kama.lock" \
+        || { echo "check-packages: FAIL — the http registry did not resolve the highest version" >&2; cat "$hc/kama.lock" >&2; exit 1; }
+    # One artifact, one hash: the same integrity case 19 published, whichever transport carried it.
+    want=$(sed -n 's/.*"integrity": "\(sha256-[^"]*\)".*/\1/p' "$reg/rg/index.json" | head -1)
+    grep -q "\"integrity\": \"$want\"" "$hc/kama.lock" \
+        || { echo "check-packages: FAIL — the http install pinned a different integrity than was published ($want)" >&2; cat "$hc/kama.lock" >&2; exit 1; }
+    "$KAMA" build "$hc/kama.json" -o "$tmp/hc.bin" >"$tmp/hcb.out" 2>&1 \
+        || { echo "check-packages: FAIL — the http-registry consumer did not build:" >&2; sed 's/^/  /' "$tmp/hcb.out" >&2; exit 1; }
+    if "$tmp/hc.bin"; then hx=0; else hx=$?; fi   # `set -e`: the exit code IS the assertion
+    [ "$hx" -eq 12 ] || { echo "check-packages: FAIL — the http-registry program returned $hx, want 12 (rg 1.2.0)" >&2; exit 1; }
+    HTTPNOTE="http registry with a redirected tarball origin"
+else
+    echo "check-packages: NOTE — python3 absent, skipping the http-registry case"
+    HTTPNOTE="http registry skipped (no python3)"
+fi
+
 # ==== M3.2a: sign-on-publish / verify-on-install (SSHSIG via ssh-keygen -Y) ============================
 # `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
 # install enforces (a present signature must verify; a missing one is an error); the default is warn-only.
@@ -1776,4 +1842,4 @@ grep -qF "dependency '$rk': \`$rk\` is reserved" "$tmp/kn.out" \
     || { echo "check-packages: FAIL — the reserved key \`$rk\` was not refused by name:" >&2; sed 's/^/  /' "$tmp/kn.out" >&2; exit 1; }
 done
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved `core`/`std` key, refused by name)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved `core`/`std` key, refused by name)"
