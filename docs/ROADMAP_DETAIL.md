@@ -1491,6 +1491,30 @@ payload makes it destructible — so either `MissingField(string field)` (a sour
 beside the code. Scheduled, not optional: a missing-field error that cannot say which field is a bug report
 waiting to be filed. Wants a maintainer verdict on the shape before any code.
 
+<a id="s4-json-value"></a>
+
+### An untyped JSON value (KR-110)
+
+**Scheduled, not optional.** The typed path cannot read a document whose keys are data. glTF keeps
+`extensions` and `extras` as open objects. A web API often answers with a map keyed by ids. A config file may
+carry blocks for tools its reader has never heard of. A program that reads glTF today declares a schema for
+everything it touches, and makes every optional glTF member `Optional` or `@field(default)`. It still cannot
+reach an extension it did not predict. Every mainstream standard library that has JSON also has the dynamic
+half: Go decodes into `map[string]any`, Python into `dict`, .NET has `JsonDocument`/`JsonNode`, and Swift has
+`JSONSerialization`. Rust leaves it to serde_json's `Value`.
+
+**Shape, to decide before code:**
+- A tagged enum, `Null`, `Bool(bool)`, `Number(…)`, `String(string)`, `Array(DynamicArray<JsonValue>)` and
+  `Object(…)`, holding itself through a collection. That shape copies and drops correctly since `0.9.531`
+  (`tests/enum_copy_settled`).
+- `Object` keeps insertion order, as JSON text does, so a read and a write round-trip.
+- **Numbers are the real question.** A `float64` loses integers past 2^53. Keeping the number's text and
+  converting on read, as `serde_json`'s `arbitrary_precision` and .NET's `JsonElement` do, keeps every
+  number exact, at the cost of making `Number` a `string` underneath.
+- A parse (`parseJson(text:) -> Result<JsonValue, DeError>`) and a write, in the module of the typed back end.
+- Whether a typed schema may hold an opaque subtree: a `JsonValue` field in a `@generate(Deserializable)`
+  type, which is how a glTF reader keeps `extensions` without modelling them.
+
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on
@@ -2562,6 +2586,23 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-std-core-names"></a>
+
+### A project or dependency named `std` or `core` (KR-111)
+
+Measured `0.9.535`: a library whose manifest says `"name": "core"` passes `kama check` only until it has a
+root file. `src/core.kama` is then "two files of module `core`" beside the prelude's own `core.kama`.
+Consumed as a dependency, `import { core::v }` resolves to the floor module and reports that `core` does
+not export `v`. A dependency named `std` installs, and `import { std::v }` then reports "cannot resolve module
+'std'", with a note blaming the compiler's install for a missing `lib/kama.json`. Both names are reserved:
+`kama seed` refuses them, and the resolver treats a `std`/`core` root as the standard library. The manifest
+reader does not refuse them, because its comment records that refusing `std` there broke the stdlib's own
+manifest, `lib/kama.json`, which is named `std`.
+
+The fix is to tell the reader when it reads the stdlib's manifest, or to refuse at the callers that know the
+path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
+diagnostic, not a feature: no program can use such a package today.
 
 - **`kama describe --json` (KR-84)** — GOALS §7's "other half" of self-description: the language surface
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an

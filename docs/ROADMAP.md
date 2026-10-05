@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-110**
+**Next id: KR-112**
 
 ## The shape
 
@@ -82,6 +82,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-107 | **An `fnptr` type is not a type argument** — `DynamicArray<Op>` (the callback-registry shape SPEC names) does not instantiate: the turbofish is refused as ambiguous, the instance has no methods, and the element store trips the fnptr-bind rule. Any generic over an `fnptr` element, `BindableFunctionPtr` included. Found probing the default rule (`0.9.480`) | — | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
 | KR-108 | **`DatagramSocket` generic over its address** — so `UnixDatagram` implements it beside `UdpSocket`: a syslog client sends to `/dev/log` or UDP 514 through one code path. A source break for `<S: DatagramSocket>` bounds; the maintainer rules on it | S | [§1](ROADMAP_DETAIL.md#s1-datagram-address) |
 | KR-109 | **`DeError` names the field it reports** — since `0.9.516` a derived `deserialize` returns `Err(MissingField)` for a field the data left out, and the message is "missing field", not "missing field `port`"; `TypeMismatch` likewise names nothing. A payload changes a prelude enum that every backend latches as its sticky error code (`DeError` would become destructible), so the shape wants a maintainer verdict before any code | M | [§4](ROADMAP_DETAIL.md#s4-deerror-names) |
+| KR-110 | **An untyped JSON value — `text::json`'s document tree** — a JSON document is read only through a typed `@generate(Deserializable)` schema: unknown fields are skipped, and every member a schema does not own is declared `Optional` or `@field(default)`. A document whose KEYS are data (glTF's `extensions`, a response keyed by ids), or whose shape a program only partly knows, has no reading at all. A tagged enum (`Null`/`Bool`/`Number`/`String`/`Array`/`Object`), a parse and a write, and whether a typed field may hold one as an opaque subtree. Number fidelity past 2^53 is the open design question | M | [§4](ROADMAP_DETAIL.md#s4-json-value) |
+| KR-111 | **A project or dependency named `std` or `core` installs and cannot be imported** — `import { core::v }` resolves to the floor module and `std::…` to the stdlib, so either package is unreachable, and a project file `src/core.kama` collides with the prelude's own (`two files of module core`). `kama seed` refuses both names; the manifest reader cannot yet, because `lib/kama.json` is itself named `std`. Refuse both as a project `name` and as a dependency key | S | [§10](ROADMAP_DETAIL.md#s10-std-core-names) |
 | KR-22 | **Collections knobs** — HashDoS-resistant keyed hashing; zero-size-field elision; thin smart-ptr handles | — | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-23 | **Performance** — bench cohort (add Zig), serialization benchmark track, devirtualization ladder, CPU-tuning knob | — | [§9](ROADMAP_DETAIL.md#s9) |
 | KR-24 | **Hot-reload library** — `dlopen` + file-watch + fn-pointer rebind. Both compiler primitives already ship | — | [§8](ROADMAP_DETAIL.md#s8) |
