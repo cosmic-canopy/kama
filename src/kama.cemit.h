@@ -2593,6 +2593,9 @@ private:
     // The concrete type node of an argument expression ("" cases return null): literals map to
     // their builtin kind; identifiers resolve through `localTys` (declared types in scope).
     SharedIdentifier exprTypeNode(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys);
+    // The type `this` is while discovery walks a member body (a class's `_classes` key, an instance's
+    // mangled name); "" in a free function. `localTys` cannot carry it — `this` is not a name.
+    std::string _scanThisCls;
     // A1: infer the concrete generic-variant instance of a value-producing variant ctor used as a `match`
     // subject (`Optional::Some(x)` -> the `Optional<int32>` instance node), binding each bare-type-param
     // payload field via `exprTypeNode(arg, localTys)`. `reg` registers the instance (discovery only). Returns

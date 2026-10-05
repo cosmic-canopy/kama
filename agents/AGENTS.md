@@ -119,11 +119,11 @@ feature.
 
 - **Every call uses named arguments.** `add(a: 1, b: 2)`, never `add(1, 2)`. There are no positional
   calls, which is why kama needs no function overloading.
-- **Bind intermediates to a local.** An interpolation hole takes an identifier with member/index
-  accessors and nothing else, so `"${a.length()}"` is a lexical error — bind the call first. And a
-  GENERIC function infers from *named locals*, not from a nested call: with `fn R showIt<T>(T x)`,
-  `showIt(x: Leaf.make(n: 7))` cannot infer `T`, while a `Leaf l = Leaf.make(n: 7);` one line up
-  makes it work. (A non-generic call nests freely — this is about inference, not about nesting.)
+- **Bind intermediates to a local in an interpolation.** A hole takes an identifier with member/index
+  accessors and nothing else, so `"${a.length()}"` is a lexical error — bind the call first. (A generic
+  call is not limited that way: it infers `T` from a local, a field — `this.yaw` too — an element, or a
+  nested call such as `showIt(x: Leaf.make(n: 7))`. Where nothing says the type, write it:
+  `showIt::<Leaf>(…)`.)
 - **`match`, never `switch`.** `switch` does not exist. `match` is exhaustive and produces a value.
 - **No `null`, no exceptions.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
   safe type is a compile error. <!-- xfail: null_safe_compare --> A **constructor may fail** — the return type goes between `ctor` and

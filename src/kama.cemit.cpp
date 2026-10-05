@@ -14484,6 +14484,10 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
         auto cs = _comptimeSubst.find(*id->value);
         return cs != _comptimeSubst.end() ? primTypeNode(cs->second.kind) : nullptr;
     }
+    // `this` in a member body is the enclosing type, so `cos(x: this.yaw)` infers through the field arm below
+    // exactly as `cos(x: cam.yaw)` does on a local. It was "not a literal or a locally-typed value", and the
+    // repair it forced — `float32 y = this.yaw;` first — was a local per call in every method that did maths.
+    if (dynamic_cast<ThisAccessNode*>(n)) return _scanThisCls.empty() ? nullptr : synthId(_scanThisCls);
     if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
     if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
     if (auto* b  = dynamic_cast<BinaryExpressionNode*>(n)) {
@@ -15475,6 +15479,7 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
             // bare — is what used to reject a generic call whose argument is typed by the enclosing
             // template, and a template with no instantiation has no code to discover anyway.
             if (cd->typeParams && !cd->typeParams->empty()) continue;
+            ScopedStr _stc(_scanThisCls, classKeyOfName(cd->name));
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 // A field's DEFAULT INITIALIZER is code too — it runs in every ctor — so a generic call in one
@@ -16323,6 +16328,7 @@ void CEmitter::registerInstGenerics()
             // `return copy v;` then fails to lower.
             auto sit = _classes.find(mangled);
             if (sit == _classes.end()) continue;
+            ScopedStr _stc(_scanThisCls, mangled);
             auto cit = _genericTypeCtx.find(gi.templateKey);
             _nsCtx = (cit != _genericTypeCtx.end()) ? cit->second : savedCtx;
             ScopedStr _cu(_collectingUnitPath, tit->second.declFile);   // as for a generic fn, above

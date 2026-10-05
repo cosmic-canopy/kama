@@ -1465,7 +1465,7 @@ predates it).
 
 A generic call infers from any argument whose type is known, including another generic call's result:
 `abs(x: sin(x: t))` is `abs<float64>`, because the inner call is solved first. A field, an element and a
-`?:` infer the same way. <!-- test: generic_nested_inference -->
+`?:` infer the same way, and so do `this` and its fields in a member body (`cos(x: this.yaw)`). <!-- test: generic_nested_inference, infer_this_field -->
 One limit worth knowing: a `ref` parameter may not name a smart pointer, so a contract instantiated at <!-- xfail: ref_handle -->
 `Owned<T>` — e.g. `Order<Owned<T>>` — is not expressible; sort or compare the resources themselves.
 Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate

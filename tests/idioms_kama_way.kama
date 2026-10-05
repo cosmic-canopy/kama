@@ -65,10 +65,10 @@ fn int32 main()
     int32 len = v + q;
     string msg = "v=${v} len=${len}";
 
-    // (7) Named arguments everywhere; generic free fns infer their type args FROM A BOUND LOCAL —
-    //     an inline ctor argument is not enough ("argument is not a literal or a locally-typed value").
+    // (7) Named arguments everywhere; a generic free fn infers its type args from the argument — a local,
+    //     a field, or a nested call alike.
     Leaf lf = Leaf.make(n: 7);
-    int32 s = showIt(x: lf);
+    int32 s = showIt(x: lf) + showIt(x: Leaf.make(n: 0));
 
     Point p = Point.make(x: 1);
     Result<string, Owned<Error>> j = serializeJsonBuffer(v: p);
