@@ -871,6 +871,7 @@ operator_eq_missing	operator_eq_missing.kama:10
 operator_missing	operator_missing.kama:10
 opindex_const_write	opindex_const_write.kama:9
 optional_given_element	optional_given_element.kama:12 optional_given_element.kama:17 optional_given_element.kama:18 optional_given_element.kama:19 optional_given_element.kama:21 optional_given_element.kama:22 optional_given_element.kama:23 optional_given_element.kama:24 optional_given_element.kama:25
+out_local	out_local.kama:4
 out_marker_on_ref_param	out_marker_on_ref_param.kama:6
 out_missing_marker	out_missing_marker.kama:7
 out_read_before_assign	out_read_before_assign.kama:4
@@ -1042,8 +1043,11 @@ ref_arg_overlap	ref_arg_overlap.kama:11
 ref_arg_overlap_field	ref_arg_overlap_field.kama:13
 ref_arg_overlap_receiver	ref_arg_overlap_receiver.kama:11
 ref_arg_rvalue_mut	ref_arg_rvalue_mut.kama:10 ref_arg_rvalue_mut.kama:8
+ref_arg_unlabeled	ref_arg_unlabeled.kama:7
+ref_field	ref_field.kama:4
 ref_handle	ref_handle.kama:5
 ref_literal_mutable	ref_literal_mutable.kama:16
+ref_local	ref_local.kama:8
 ref_on_slot	ref_on_slot.kama:12 ref_on_slot.kama:13 ref_on_slot.kama:14
 ref_rvalue_mutable	ref_rvalue_mutable.kama:9
 ref_string_literal_mutable	ref_string_literal_mutable.kama:10

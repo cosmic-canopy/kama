@@ -1,0 +1,7 @@
+// In a type's body `ref T` can only begin a place-returning `operator[]`, so a would-be `ref` FIELD reached its
+// name with only `operator` wanted: "unexpected IDENTIFIER, expecting OPERATOR", about an operator nobody wrote.
+type value Holder {
+    ref int32 slot0;
+    public ctor make() { }
+}
+fn int32 main() { return 0; }

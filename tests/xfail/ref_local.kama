@@ -1,0 +1,10 @@
+// A reference LOCAL does not exist — a place is passed and returned, never stored — and `const ref int32
+// first = xs[0];` used to answer that `ref` "is a reserved word, so it cannot be used as a name here", which
+// sent the reader off to rename something. The note now says what kama has instead.
+import { std::collections::DynamicArray };
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 4);
+    const ref int32 first = xs[0];
+    return first;
+}

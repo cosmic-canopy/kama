@@ -1,0 +1,8 @@
+// Every argument is named, and a `ref`/`out` marker follows the name. Written without the name, the marker
+// stood where the parser wanted a label, and the note said `ref` "cannot be used as a name here" — true, and
+// beside the point: the name was missing, not taken.
+fn int32 take(const ref int32 v) { return v; }
+fn int32 main() {
+    int32 x = 1;
+    return take(ref x);
+}

@@ -3341,7 +3341,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   A static is the least conditional of the three — `this` and a `ref` param outlive the call only because the
   caller holds them — so `static Counters g; fn ref Counters counters() { return g; }` is legal, and a local
   that merely shares a static's name is not. <!-- test: reffn_at, reffn_static -->
-  A place is second-class (used in-place, never stored). Its read-only form is
+  A place is second-class (used in-place, never stored): there is no `ref` local and no `ref` field, and a <!-- xfail: ref_local, ref_field, out_local -->
+  value is read where it is or copied out. Its read-only form is
   **`const ref T`** — the place a `const fn` may return (§ `const fn` below).
 
 **`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the

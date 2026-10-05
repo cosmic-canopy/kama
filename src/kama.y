@@ -2968,7 +2968,35 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
                 msg += yysymbol_name(shown[i]);
             }
         }
-        msg += reservedWordNote(tok, wantedIdentifier);
+        /* A `ref`/`out` where a declaration's TYPE was wanted: a reference LOCAL (`const ref int32 first = xs[0];`,
+           `ref T x = …;`). A place is second-class in kama — passed and returned, never stored — so there is no
+           such declaration, and the reserved-word note that `const ref` used to get ("cannot be used as a name
+           here") sent the reader off to rename something. `int32` stands for every type start: the set holds
+           it exactly where a declaration may begin, and never in an argument or after a name. */
+        bool typeWanted = false, closeWanted = false;
+        for (int i = 0; i < n; ++i) {
+            if (expected[i] == YYSYMBOL_INT32)  typeWanted = true;
+            if (expected[i] == YYSYMBOL_RPAREN) closeWanted = true;
+        }
+        if ((tok == YYSYMBOL_REF || tok == YYSYMBOL_OUT) && typeWanted)
+            msg += tok == YYSYMBOL_REF
+                ? " — a local cannot be a `ref`: a place is passed (`ref`/`const ref` parameters) and returned "
+                  "(`fn ref T`), never stored. Read it where it is (`xs[0]`), copy it out (`int32 first = xs[0];`), "
+                  "or hand it to a function that takes `const ref`"
+                : " — `out` marks a parameter a callee fills; a local filled later is a `slot` "
+                  "(`slot int32 q;` then `f(q: out q)`)";
+        /* An argument list wants a LABEL first (`take(v: ref x)`), so a marker where the label goes is the label
+           left out, not a name taken. */
+        else if ((tok == YYSYMBOL_REF || tok == YYSYMBOL_OUT) && wantedIdentifier && closeWanted)
+            msg += std::string(" — every argument is named, and `") + (tok == YYSYMBOL_REF ? "ref" : "out")
+                   + "` follows the name: `v: " + (tok == YYSYMBOL_REF ? "ref" : "out") + " x`";
+        /* ...and in a type's body, `ref T` can only begin a place-returning `operator[]`, so a would-be `ref`
+           FIELD (`ref int32 f;`) reaches the name with only `operator` wanted. */
+        else if (tok == YYSYMBOL_IDENTIFIER && n == 1 && expected[0] == YYSYMBOL_OPERATOR)
+            msg += " — a `ref T` member is a place-returning `ref T operator[](…)`; a field is never a `ref` (a place "
+                   "is passed and returned, never stored), so declare the field by value";
+        else
+            msg += reservedWordNote(tok, wantedIdentifier);
         /* `give(s)` meant as the hand-off, `truncate(n)` as the conversion: each is a CALL of a name now, and the
            error is about its labels. Say which reading the parser took. */
         const LexerInstanceData* data = yyget_extra(scanner);

@@ -50,8 +50,12 @@ tests/xfail/lex_string_unterminated.kama
 tests/xfail/lex_tab_column.kama
 tests/xfail/lex_verbatim_unterminated.kama
 tests/xfail/module_static_volatile.kama
+tests/xfail/out_local.kama
 tests/xfail/pin_keyword_typo.kama
 tests/xfail/recover_multi_error.kama
+tests/xfail/ref_arg_unlabeled.kama
+tests/xfail/ref_field.kama
+tests/xfail/ref_local.kama
 tests/xfail/reserved_word_as_name.kama
 tests/xfail/source_bom_column.kama
 tests/xfail/source_utf8_nul.kama
