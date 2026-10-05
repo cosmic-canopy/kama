@@ -1,0 +1,9 @@
+// One member of the header's struct has one kama field: binding `quot` twice would write the same bytes under
+// two names (and the second plain spelling is a C "duplicate member").
+extern "<stdlib.h>";
+type extern value div_t {
+    int32 quot;
+    @linkName("quot") int32 quotient;
+    int32 rem;
+}
+fn int32 main() { return 0; }

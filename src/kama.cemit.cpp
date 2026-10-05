@@ -762,7 +762,10 @@ std::string CEmitter::kName(const std::string& name)
 // `type expose value` publishes its layout and field names to a host. Everything else kama owns.
 std::string CEmitter::kMember(const ClassInfo& owner, const std::string& name)
 {
-    return (owner.isExternStruct || owner.isExposeStruct) ? name : kName(name);
+    if (!(owner.isExternStruct || owner.isExposeStruct)) return kName(name);
+    for (const FieldInfo& f : owner.fields)          // a `@linkName` field binds the header's spelling
+        if (f.name == name && !f.cName.empty()) return f.cName;
+    return name;
 }
 
 void CEmitter::restoreFileRung(NsCtx& ns, const std::string& declFile) const
@@ -10836,12 +10839,25 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // in/out decision.
                     bool serGen = ci.genSerialize || ci.genDeserialize;
                     bool fMarked = false, fSkip = false, fDeprecated = false, fDefault = false; std::string fName;
+                    std::string fLink;   // `@linkName("…")` — the C member a `type extern value` field binds
+                    bool fSerAttr = false;   // any attribute but `@linkName`, which is not serialization metadata
                     int64_t fId = -1; bool fIdSet = false;
                     if (fd->attributes)
                         for (auto& at : *fd->attributes) {
                             if (!at || !at->name) continue;
                             const std::string& an = *at->name;
-                            if (an == "skip") { fSkip = true; fMarked = true; }
+                            if (an != "linkName") fSerAttr = true;
+                            // The field form of the attribute an `extern fn` and an `extern const` take: the
+                            // kama name is what kama code writes, the string is the member the C reads. It is
+                            // how a header field named with a kama keyword (`base`, `match`) is bound at all.
+                            if (an == "linkName") {
+                                if (!ci.isExternStruct)
+                                    unsupported("`@linkName` on a field names the C member it binds, and only a "
+                                                "`type extern value`'s fields are C's to name — every other type's "
+                                                "fields are spelled by kama", fd->line);
+                                else fLink = linkNameOf(fd->attributes, fd->line);
+                            }
+                            else if (an == "skip") { fSkip = true; fMarked = true; }
                             // `@deprecated` REFINES `@field` rather than standing in for it: it does not set
                             // `fMarked`, so a field carrying it alone still fails the mandatory-mark gate
                             // below. That is deliberate — the mark says whether a field is on the wire at
@@ -10900,7 +10916,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                     "names one field. Give each its own `@field` declaration", fd->line);
                         fIdSet = false;   // else every declarator takes the id and the duplicate check piles on
                     }
-                    if (!serGen && !ci.genFormat && fd->attributes && !fd->attributes->empty())
+                    if (!fLink.empty() && fd->declarators && fd->declarators->size() > 1) {
+                        unsupported("`@linkName` binds one C member, and this declaration declares several fields "
+                                    "— give the bound field a declaration of its own", fd->line);
+                        fLink.clear();
+                    }
+                    if (!serGen && !ci.genFormat && fSerAttr)
                         unsupported("field attributes (`@field`/`@skip`/`@deprecated`) require `@generate(...)` "
                                     "on the type", fd->line);
                     // `@generate(Formattable)` honors `@skip` (omit a field from the dump) but does NOT require every
@@ -10949,6 +10970,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.serId       = fIdSet ? (int)fId : -1;
                             fi.serDeprecated = fDeprecated;
                             fi.serDefault = fDefault;
+                            fi.cName      = fLink;
+                            // One C member has one kama field: two bindings of `base` would write the same
+                            // bytes under two names, and the second is a C "duplicate member" otherwise.
+                            for (const FieldInfo& g : ci.fields) {
+                                const std::string& gc = g.cName.empty() ? g.name : g.cName;
+                                if (!fi.cName.empty() ? gc == fi.cName : (!g.cName.empty() && g.cName == fi.name)) {
+                                    unsupported(("C member `" + gc + "` is bound by both `" + g.name + "` and `" + fi.name
+                                                 + "` — one member of the header's struct has one kama field").c_str(),
+                                                d->name ? d->name->line : mn->line);
+                                    break;
+                                }
+                            }
                             // A member name is declared once. A duplicate FIELD used to
                             // reach clang as `duplicate member` in a generated file; the METHOD twin below
                             // was accepted outright and the last body won.
@@ -26004,9 +26037,10 @@ void CEmitter::emitExternLayoutChecks()
             const std::string at = ci.declFile + (ln ? ":" + std::to_string(ln) : std::string());
             const std::string ct = fieldCType(ci.name, f);
             if (ct.empty()) continue;
-            const std::string field = "((" + ci.name + "*)0)->" + f.name;
+            const std::string field = "((" + ci.name + "*)0)->" + kMember(ci, f.name);
             const std::string kamaTy = f.type && f.type->value ? *f.type->value : ct;
-            const std::string note = "kama: `" + demangleForDisplay(ci.name) + "." + f.name + "` is declared `" + kamaTy
+            const std::string bound = f.cName.empty() ? std::string() : " (the header's `" + f.cName + "`)";
+            const std::string note = "kama: `" + demangleForDisplay(ci.name) + "." + f.name + "`" + bound + " is declared `" + kamaTy
                 + "` (" + at + "), but the C header's field differs in size or in kind (integer, floating, bool) — "
                   "make the kama field match the header";
             *_out << "_Static_assert(sizeof(" << field << ") == sizeof(" << ct << ") && KAMA_C_KIND(" << field

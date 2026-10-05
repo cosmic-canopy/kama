@@ -185,6 +185,9 @@ struct FieldInfo {
     // A field's type is a fact about its class, never about whoever reads it — see bakeFieldCTypes.
     // Sibling of ParamSig::className and ClassInfo::tagCType, which bake the same kind of answer.
     std::string      cTypeBaked;
+    // `@linkName("…")` on a field of a `type extern value`: the header's spelling of the member, when the
+    // kama name differs (a C field named with a kama keyword, `base`). "" = the kama name. Read by kMember.
+    std::string      cName;
     // Serialization metadata (from `@field`/`@skip`/`@deprecated` on a `@generate`d type; see collectClasses).
     bool             serSkip = false;   // `@skip` — omit from serialization
     std::string      serName;           // wire name (`@field(name: "…")`; empty => use `name`)

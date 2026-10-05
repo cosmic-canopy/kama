@@ -1413,6 +1413,23 @@ definition. A file that would rather not repeat it wraps the extern in an ordina
 the wrapper costs nothing, because `--release` folds the program into one translation unit and a
 pass-through compiles to the same instructions as the direct call.
 
+**On a field of a `type extern value`, `@linkName` names the C member** — the same attribute, for a struct
+field a header spelled with a kama keyword or a name the binding would rather not take:
+
+```kama
+extern "settings.h";                     // struct Settings { BaseSettings base; int match; float mass; }
+type extern value BaseSettings { public int32 up; public int32 slope; }
+type extern value Settings {
+    @linkName("base")  public BaseSettings baseSettings;
+    @linkName("match") public int32 matchCount;
+    public float32 mass;
+}
+```
+
+kama code writes the kama name (`s.baseSettings.up = 1`, `Settings.of(baseSettings: …)`); the C reads the <!-- test: linkname_extern_field -->
+member. It marks only an extern value's fields, since every other type's fields are kama's to spell, and one <!-- xfail: linkname_field_not_extern -->
+member of the header's struct has one kama field. <!-- xfail: linkname_field_shared_member -->
+
 **Every declaration of one C symbol in a program must agree** — same return type, same parameter names,
 same parameter types. They are one entry: kama emits no prototype, so nothing downstream could catch a
 mismatch, and calls are lowered by *named argument*, so two declarations differing only in parameter order

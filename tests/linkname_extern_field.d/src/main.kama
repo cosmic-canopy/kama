@@ -1,0 +1,30 @@
+// `@linkName("…")` on a field of a `type extern value` binds a C member spelled differently from its kama
+// name — the field form of the attribute an `extern fn` and an `extern const` already take. It is how a C
+// field named with a kama keyword is bound at all: `public int32 base;` is a parse error, and before this
+// the field could only be left out and reached through a cast pointer at its offset.
+extern "settings.h";
+
+@generate(of)
+type extern value BaseSettings { public int32 up; public int32 slope; }
+
+@generate(of)
+type extern value Settings {
+    @linkName("base")  public BaseSettings baseSettings;
+    @linkName("match") public int32 matchCount;
+    public float32 mass;
+}
+
+extern fn void settings_init(UnsafePtr<Settings> s);
+extern fn int32 settings_sum(UnsafeConstPtr<Settings> s);
+
+unsafe fn int32 run() {
+    Settings s = Settings.of(baseSettings: BaseSettings.of(up: 0, slope: 0), matchCount: 0, mass: 0.0f32);
+    settings_init(s: addr(of: s));                          // C writes `base` and `match`
+    int32 r = s.baseSettings.slope + s.matchCount;          // 45 + 3, read by kama name
+    s.baseSettings.up = 10;                                 // kama writes, C reads: 10 + 45 + 3 + 2
+    UnsafePtr<Settings> p = addr(of: s);
+    p[0].matchCount = 4;                                    // through a raw element too: 10 + 45 + 4 + 2
+    return r + settings_sum(s: addr(of: s));                // 48 + 61
+}
+
+fn int32 main() { return run(); }                           // 109

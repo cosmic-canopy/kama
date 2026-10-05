@@ -1,0 +1,5 @@
+{
+  "name": "linknamefield", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "csources": ["csrc/settings.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}
