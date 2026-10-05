@@ -184,11 +184,16 @@ Worth knowing before debugging, because each of these produced a confident wrong
 - **`long` is 32-bit** (LLP64). `strtol` silently saturates above `INT32_MAX`; use `strtoll`.
 - **Every path handed to the OS is converted, and the conversion lives on the STACK** (`kama__wpathbuf`
   in `include/kama_os.h` — a `wchar_t[32776]`, 64 KB, one per fs wrapper and two in `kama_rename`). POSIX
-  has no such step, so this is the only platform where an `fs` call has a large frame. Two facts measured
-  at `0.9.408` and worth not re-deriving: **a kama-built exe reserves 2 MB**, and a worker from
-  `pthread_create(&t, NULL, …)` gets the same 2 MB because winpthreads inherits `SizeOfStackReserve` —
-  so a buffer is 3% of a stack, not a risk. And the stack form is **2.7× faster** than the `malloc`/`free`
-  pair it replaced (22 ns/op vs 61), so this is not a cost paid for the no-heap property.
+  has no such step, so this is the only platform where an `fs` call has a large frame. Two facts worth not
+  re-deriving: **a kama-built exe's main thread reserves 8 MiB** (`-Wl,--stack,8388608` since `0.9.529`; it
+  was 2 MB) and an isolate gets the same 8 MiB, so a buffer is under 1% of a stack, not a risk. And the
+  stack form is **2.7× faster** than the `malloc`/`free` pair it replaced (22 ns/op vs 61, measured
+  `0.9.408`), so this is not a cost paid for the no-heap property.
+  The consequence for a program: `-Wframe-larger-than=N` below ~132 KB (`kama_rename`'s 131,192 bytes;
+  `kama_mkdir` is 65,608) cannot be set on the Windows arm of a project that imports `std::fs`. Kept
+  deliberately (2026-10-04). Sizing the buffer to the path would make the frame variable, which such a flag
+  and a computed stack bound (KR-79) both stop seeing. A heap fallback for long paths would make every
+  `std::fs` call a heap fact on every target.
   ⚠️ **Those wrappers are `KAMA_NOINLINE` and must stay so.** `createDirAll`/`removeDirAll` recurse once
   per directory level; fold a 64 KB buffer into the recursing frame and a ~32-deep tree overruns the
   stack, at runtime, inside `rm -rf`. `tools/check-long-path.sh` builds a 64-level tree for exactly this
