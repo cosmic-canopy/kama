@@ -6,7 +6,7 @@
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::collections::FixedArray };
 
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
-fn uint16 portOf(ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
 // The OS's own code for an unclassified failure (0 when there is none).
 fn int32 otherCode(const ref IoError e) { return match (e.rawOsError()) { case Some(value: c): c; case None: 0; }; }

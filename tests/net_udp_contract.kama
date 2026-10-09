@@ -23,7 +23,7 @@ fn int32 recvVia(DatagramSocket d, View<uint8> into) {
     return match (r) { case Ok(value: rf): cast<int32>(rf.count); case Err(error: e): -1; };
 }
 
-fn int32 portOf(ref UdpSocket s) {
+fn int32 portOf(const ref UdpSocket s) {
     Result<SocketAddr, IoError> r = s.localAddr();
     return match (r) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }

@@ -21,6 +21,8 @@ extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
 extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp,
                                       UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
+extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp,
+                                      UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_set_ttl(isize fd, uint32 ttl);
 extern fn int32 kama_set_broadcast(isize fd, int32 on);
@@ -160,14 +162,19 @@ type resource UdpSocket implements DatagramSocket, Sendable {
         return Result::Ok(value: Unit::Unit);
     }
 
-    // Resolve the actual local address (after bind port 0, this yields the OS-assigned ephemeral port).
-    public unsafe fn Result<SocketAddr, IoError> localAddr() {
+    // The local address (after bind port 0, this yields the OS-assigned ephemeral port), and — once `connect` has
+    // fixed one — the peer's. Asking a socket where it is changes nothing, so a `const fn` may ask.
+    public const fn Result<SocketAddr, IoError> localAddr() { return this.addressOf(peer: false); }
+    public const fn Result<SocketAddr, IoError> peerAddr() { return this.addressOf(peer: true); }
+    unsafe const fn Result<SocketAddr, IoError> addressOf(bool peer) {
         int32 family = 4;
         InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
         uint32 zone = 0ui32;
-        if (kama_getsockname_addr(fd: this.fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port),
-                                  outScope: addr(of: zone)) != 0) { return Result::Err(error: lastError()); }
+        int32 rc = peer
+            ? kama_getpeername_addr(fd: this.fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port), outScope: addr(of: zone))
+            : kama_getsockname_addr(fd: this.fd, outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port), outScope: addr(of: zone));
+        if (rc != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone));
     }
 

@@ -1,0 +1,47 @@
+// Every socket answers `localAddr()` (and a connected one `peerAddr()`) from a `const fn`: asking a socket where it
+// is changes nothing, so a `const ref` is all a caller needs to hold. UDP gained `peerAddr()` for a `connect`ed
+// socket. Returns 42.
+import { std::net::TcpListener, std::net::TcpStream, std::net::UdpSocket, std::net::SocketAddr, std::io::IoError,
+         std::net::UnixListener };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn uint16 udpPort(const ref UdpSocket s) { return match (s.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn uint16 udpPeer(const ref UdpSocket s) { return match (s.peerAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn uint16 local(const ref TcpStream s) { return match (s.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn uint16 peer(const ref TcpStream s) { return match (s.peerAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn bool named(const ref UnixListener l) { return match (l.localAddr()) { case Ok(value: a): !a.isUnnamed(); case Err(error: e): false; }; }
+
+fn int32 tcp(ref TcpListener l, ref TcpStream c) {
+    return match (l.accept()) {
+        case Ok(value: s): (local(s: c) == peer(s: s) && peer(s: c) == portOf(l: l)) ? 0 : 2;
+        case Err(error: e): 12;
+    };
+}
+fn int32 udp(ref UdpSocket u, ref UdpSocket v) {
+    if (udpPort(s: u) == 0ui16) { return 3; }
+    if (udpPeer(s: v) != 0ui16) { return 4; }              // not connected: no peer
+    return match (v.connect(host: "127.0.0.1", port: udpPort(s: u))) {
+        case Ok(value: x): udpPeer(s: v) == udpPort(s: u) ? 0 : 5;
+        case Err(error: e): 15;
+    };
+}
+
+fn int32 main() {
+    int32 rc = match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
+        case Ok(value: l): match (TcpStream.connect(host: "127.0.0.1", port: portOf(l: l))) {
+            case Ok(value: c): tcp(l: l, c: c);
+            case Err(error: e): 11;
+        };
+        case Err(error: e): 10;
+    };
+    if (rc != 0) { return rc; }
+    rc = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) {
+        case Ok(value: u): match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) {
+            case Ok(value: v): udp(u: u, v: v);
+            case Err(error: e): 14;
+        };
+        case Err(error: e): 13;
+    };
+    if (rc != 0) { return rc; }
+    return match (UnixListener.bind(path: "addr_const.sock")) { case Ok(value: x): named(l: x) ? 42 : 6; case Err(error: e): 16; };
+}

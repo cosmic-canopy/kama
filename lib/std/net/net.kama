@@ -211,8 +211,8 @@ type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
     }
     // This end's address (the ephemeral port a connect was given), and the peer's — how a server learns
     // who an accepted stream belongs to.
-    public fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
-    public fn Result<SocketAddr, IoError> peerAddr() { return socketAddrOf(fd: this.fd, peer: true); }
+    public const fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
+    public const fn Result<SocketAddr, IoError> peerAddr() { return socketAddrOf(fd: this.fd, peer: true); }
 
     // `Writer` primitive: single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the
     // socket buffer is full). EINTR-retried. Callers wanting every byte sent use the free `std::io::writeAll`.
@@ -357,7 +357,7 @@ type resource TcpListener implements Sendable {
     }
 
     // The address it listens on — the one way to learn the port the OS picked for `bind(host:, port: 0)`.
-    public fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
+    public const fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).

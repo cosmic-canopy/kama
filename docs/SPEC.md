@@ -2087,7 +2087,9 @@ OS's default is simply not set. `shutdown(how:)` closes one half: `Shutdown::Wri
 reads end-of-file while this side still reads its reply, and a later write here is `BrokenPipe`.
 `localAddr()` on a `TcpListener` is how a program learns the port the OS picked for `bind(port: 0)` — every
 socket fixture binds that way, so no two can collide (`tools/check-fixture-ports.sh`) — and a `TcpStream` has
-`localAddr()` and `peerAddr()`, the peer being how a server learns who an accepted stream belongs to.
+`localAddr()` and `peerAddr()`, the peer being how a server learns who an accepted stream belongs to. A
+`UdpSocket` has both too, its peer being the one `connect` fixed. Asking a socket where it is changes nothing, so
+every socket's `localAddr()`/`peerAddr()` is a `const fn`: a `const ref` to the socket is enough to ask. <!-- test: net_addr_const -->
 
 **Unix-domain sockets (`std::net`).** A byte stream between two processes on one machine, named by a path:
 `UnixStream.connect(path:)` and `UnixListener.bind(path:)` + `accept()`, on Linux, macOS and Windows 10 1803+.

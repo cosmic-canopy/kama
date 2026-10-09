@@ -326,8 +326,8 @@ type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
         if (kama_shutdown(fd: this.fd, how: h) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
-    public fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
-    public fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
+    public const fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public const fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
     // Who is on the other end: its process, user and groups — the same call on every OS, answered by each OS's
     // own `PeerCredentials`. What a server needs for postgres-style `peer` authentication.
     public fn Result<PeerCredentials, IoError> peerCredentials() { return PeerCredentials.of(fd: this.fd); }
@@ -415,7 +415,7 @@ type resource UnixListener implements Sendable {
         if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
-    public fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public const fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
@@ -544,8 +544,8 @@ type resource UnixDatagram implements Sendable {
         if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
-    public fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
-    public fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
+    public const fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
+    public const fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
