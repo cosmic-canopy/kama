@@ -64,6 +64,10 @@ std::string kama_win_shortpath(const std::string& p);
 // neither a directory symlink nor an 8.3 alias is the answer here.
 bool kama_win_make_junction(const std::string& target, const std::string& linkPath);
 
+// The target a directory JUNCTION at `linkPath` stores, whether or not it exists; "" when `linkPath` is no
+// junction. The reading half of kama_win_make_junction: how a dangling `.kama/deps` link is named.
+std::string kama_win_junction_target(const std::string& linkPath);
+
 // Start `line` as a child process via CreateProcessW with the command line passed VERBATIM — no argv
 // re-quoting layer — and return its process handle (for kama_win_wait), or -1. This is what the `-j`
 // pool uses in place of a generated .bat: cmd.exe parses a batch FILE in the console code page (437 by

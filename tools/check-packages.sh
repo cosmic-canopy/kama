@@ -238,7 +238,7 @@ if ! "$KAMA" pkg install "$t8/kama.json" >"$tmp/t8.out" 2>&1; then
 grep -q '"dev": true' "$t8/kama.lock" || { echo "check-packages: FAIL — lock did not tag the dev-dep" >&2; sed 's/^/  /' "$t8/kama.lock" >&2; exit 1; }
 if "$KAMA" build "$t8/kama.json" -o "$tmp/a8" >"$tmp/e8" 2>&1; then
     echo "check-packages: FAIL — a prod build imported a dev-dependency" >&2; exit 1; fi
-grep -qi "cannot resolve module" "$tmp/e8" || { echo "check-packages: FAIL — prod build failed with the wrong error:" >&2; sed 's/^/  /' "$tmp/e8" >&2; exit 1; }
+grep -q 'is a dev-dependency in .*only a `--dev` build resolves' "$tmp/e8" || { echo "check-packages: FAIL — prod build failed with the wrong error:" >&2; sed 's/^/  /' "$tmp/e8" >&2; exit 1; }
 if "$KAMA" build "$t8/kama.json" --dev -o "$tmp/a8" >"$tmp/e8b" 2>&1; then run "$tmp/a8"
     [ "$RC" = 7 ] || { echo "check-packages: FAIL — --dev app returned $RC, expected 7" >&2; exit 1; }
 else echo "check-packages: FAIL — --dev build could not import the dev-dependency:" >&2; sed 's/^/  /' "$tmp/e8b" >&2; exit 1; fi
@@ -1398,8 +1398,8 @@ grep -q '/namedproj$' "$tmp/nm.out" \
          sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
 
 # A path dependency's view link must be RELATIVE, so one resolved tree is valid under every mount
-# point at once (host and container share this repo). An absolute link dangles the moment the tree moves,
-# and the resulting error blames the manifest, which is correct. The STORE stays absolute — it is
+# point at once (host and container share this repo). An absolute link dangles the moment the tree moves
+# (the case after this one says what a dangling link reports). The STORE stays absolute — it is
 # machine-global and does not travel with the tree — which the git/registry cases above already cover.
 rl="$tmp/rl"
 mkdir -p "$rl/dep/src" "$rl/app/src"
@@ -1440,6 +1440,45 @@ fi
 "$KAMA" build "$rlbuild" >"$tmp/rl.out" 2>&1 \
     || { echo "check-packages: FAIL — the resolved tree does not build $rlwhere:" >&2
          sed 's/^/  /' "$tmp/rl.out" >&2; exit 1; }
+
+# A view link whose target is gone: the tree was resolved on another machine or mount (`pkg install` on a host,
+# the build in a container — a registry package links into that machine's store), or a path dependency's folder
+# moved. Until 0.9.556 this said "kama.json declares no dependency named …", blaming a manifest that does declare
+# it; the note names the link and where it points. A declared dependency with no link at all is "not installed".
+dl="$tmp/dl"
+mkdir -p "$dl/dep/src" "$dl/dep2/src" "$dl/app/src"
+for d in dldep dldep2; do
+    dir="$dl/${d#dl}"
+    printf '{ "name": "%s", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' "$d" > "$dir/kama.json"
+    printf 'export { %s_v };\nfn int32 %s_v() { return 4; }\n' "$d" "$d" > "$dir/src/$d.kama"
+done
+cat > "$dl/app/kama.json" <<'JSON'
+{ "name": "dlapp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "dldep": { "path": "../dep" } } }
+JSON
+printf 'import { dldep::dldep_v };\nfn int32 main() { return dldep_v(); }\n' > "$dl/app/src/app.kama"
+"$KAMA" pkg install "$dl/app/kama.json" >"$tmp/dl.out" 2>&1 \
+    || { echo "check-packages: FAIL — the dangling-link project did not install:" >&2; sed 's/^/  /' "$tmp/dl.out" >&2; exit 1; }
+mv "$dl/dep" "$dl/dep-gone"
+if "$KAMA" build "$dl/app/kama.json" >"$tmp/dl.out" 2>&1; then
+    echo "check-packages: FAIL — a build through a dangling dependency link succeeded" >&2; exit 1; fi
+grep -q '\.kama/deps/dldep links to .*dep, which does not exist here' "$tmp/dl.out" \
+    || { echo "check-packages: FAIL — a dangling dependency link was not named as one:" >&2
+         sed 's/^/  /' "$tmp/dl.out" >&2; exit 1; }
+mv "$dl/dep-gone" "$dl/dep"
+# ...and a dependency added to the manifest after the last install: declared, but no link.
+cat > "$dl/app/kama.json" <<'JSON'
+{ "name": "dlapp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "dldep": { "path": "../dep" }, "dldep2": { "path": "../dep2" } } }
+JSON
+printf 'import { dldep::dldep_v, dldep2::dldep2_v };\nfn int32 main() { return dldep_v() + dldep2_v(); }\n' > "$dl/app/src/app.kama"
+if "$KAMA" build "$dl/app/kama.json" >"$tmp/dl.out" 2>&1; then
+    echo "check-packages: FAIL — a build importing an uninstalled dependency succeeded" >&2; exit 1; fi
+grep -q 'declares `dldep2`, but it is not installed' "$tmp/dl.out" \
+    || { echo "check-packages: FAIL — a declared but uninstalled dependency was not reported as one:" >&2
+         sed 's/^/  /' "$tmp/dl.out" >&2; exit 1; }
 
 
 # ---- `kama`: the compiler-version range a package declares (docs/packages.md § What compiler a package needs)
@@ -1629,4 +1668,4 @@ if "$KAMA" pkg install "$tmp/xout/kama.json" >"$tmp/xws.out" 2>&1; then
 grep -qF '`net` was fetched, and a fetched package cannot reference a local path' "$tmp/xws.out" \
     || { echo "check-packages: FAIL — the fetched refusal did not say so:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest); ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package)"

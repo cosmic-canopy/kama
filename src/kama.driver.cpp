@@ -4708,6 +4708,28 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 // A module that does not resolve used to be one line — the name, and the directory the search had
 // started from. There is no search now, so "from <dir>" named a place nothing had looked; and the three
 // ways to arrive here want three different answers. §2i's own words, in the order a user meets them.
+static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err,
+                             std::map<std::string, DepSpec>* devDeps, RegConfig* reg, std::string* kamaReq);
+
+// What a dependency link names, when that target is not there; "" for no link, or a live one. A tree resolved on
+// one machine and built on another (`pkg install` on a host, the build in a container) keeps links into the first
+// machine's store, and a moved sibling leaves a path dependency's relative link pointing at nothing.
+static std::string danglingLinkTarget(const std::string& link)
+{
+#ifdef _WIN32
+    const std::string t = kama_win_junction_target(link);   // a junction stores its target, always absolute
+    return !t.empty() && !dirExists(t) ? t : std::string();
+#else
+    struct stat ls, ts;
+    if (lstat(link.c_str(), &ls) != 0 || !S_ISLNK(ls.st_mode) || stat(link.c_str(), &ts) == 0) return "";
+    char buf[PATH_MAX];
+    const ssize_t n = readlink(link.c_str(), buf, sizeof(buf) - 1);
+    if (n <= 0) return "?";
+    const std::string t(buf, (size_t)n);
+    return t[0] == '/' ? t : joinPathLexical(dirName(link), t);   // a path dependency's link is relative
+#endif
+}
+
 static void reportUnresolvedModule(const std::string& name, const std::vector<std::string>& segs,
                                    const std::string& fromFile, const std::string& buildManifestDir,
                                    const std::string& stdlibDir, bool reserved)
@@ -4721,14 +4743,36 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
         return;
     }
     // A project build: the manifest is in hand, so the answer is which of its two lists is missing an
-    // entry. Its own name means a folder nobody listed; anything else means a dependency nobody declared.
+    // entry. Its own name means a folder nobody listed. Anything else is a dependency — and the manifest
+    // may well declare it while the `.kama/deps` view does not deliver it, so that is asked before the
+    // manifest is blamed: until 0.9.556 a dangling link was reported as an undeclared dependency.
     if (!buildManifestDir.empty()) {
         const std::string manifest = buildManifestDir + "/kama.json";
         const ManifestModules& mm = manifestModulesCached(manifest);
-        if (!mm.projectName.empty() && mm.projectName == segs[0])
+        if (!mm.projectName.empty() && mm.projectName == segs[0]) {
             fprintf(stderr, "kama: note: `%s` is this project, but %s lists no module `%s` — a folder is a "
                             "module only once it is listed under \"modules\"\n",
                     segs[0].c_str(), manifest.c_str(), name.c_str());
+            return;
+        }
+        std::map<std::string, DepSpec> deps, devDeps; std::string derr;
+        bool prod = false, dev = false;
+        if (loadManifestDeps(manifest, deps, derr, &devDeps, nullptr, nullptr)) {
+            for (const auto& d : deps)    prod = prod || importNameOf(d.first) == segs[0];
+            for (const auto& d : devDeps) dev  = dev  || importNameOf(d.first) == segs[0];
+        }
+        const std::string link = buildManifestDir + (prod || !dev ? "/.kama/deps/" : "/.kama/dev-deps/") + segs[0];
+        const std::string target = danglingLinkTarget(link);
+        if (!target.empty())
+            fprintf(stderr, "kama: note: %s links to %s, which does not exist here — the dependencies were "
+                            "installed on another machine or mount, or that folder has moved. Run `kama pkg "
+                            "install` here\n", link.c_str(), target.c_str());
+        else if (prod)
+            fprintf(stderr, "kama: note: %s declares `%s`, but it is not installed — run `kama pkg install`\n",
+                    manifest.c_str(), segs[0].c_str());
+        else if (dev)
+            fprintf(stderr, "kama: note: `%s` is a dev-dependency in %s, which only a `--dev` build resolves\n",
+                    segs[0].c_str(), manifest.c_str());
         else
             fprintf(stderr, "kama: note: %s declares no dependency named `%s` — add it under "
                             "\"dependencies\" and run `kama pkg install`\n", manifest.c_str(), segs[0].c_str());
@@ -6254,8 +6298,8 @@ static bool makeDirs(const std::string& path)
 // ⚠️ A target INSIDE the user's own tree is linked RELATIVELY; only the machine-global store stays
 // absolute. The distinction is what makes a resolved tree relocatable: an absolute
 // `game/.kama/deps/engine -> /Users/me/proj/engine` dangles the moment the same repo is mounted
-// anywhere else — a container at /work, CI with a different checkout root, a second worktree — and the
-// resulting error ("declares no dependency named `engine`") blames the manifest, which is correct.
+// anywhere else — a container at /work, CI with a different checkout root, a second worktree (the build then
+// names the dangling link: reportUnresolvedModule).
 // A relative `../../../engine` is right under every mount point simultaneously, so one resolved tree
 // serves host and container at once. Re-running `pkg install` per environment is not an alternative:
 // each run overwrites the other's links, so the two fight. (Reported from a real external port, which

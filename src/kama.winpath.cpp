@@ -312,6 +312,42 @@ bool kama_win_make_junction(const std::string& target, const std::string& linkPa
     return true;
 }
 
+std::string kama_win_junction_target(const std::string& linkPath)
+{
+    // The same MOUNT_POINT layout kama_win_make_junction writes, read back with FSCTL_GET_REPARSE_POINT.
+    struct MountPointReparse {
+        DWORD ReparseTag;
+        WORD  ReparseDataLength;
+        WORD  Reserved;
+        WORD  SubstituteNameOffset;
+        WORD  SubstituteNameLength;
+        WORD  PrintNameOffset;
+        WORD  PrintNameLength;
+        WCHAR PathBuffer[1];
+    };
+    const DWORD kTagMountPoint = 0xA0000003;
+    const DWORD kFsctlGetReparsePoint = 0x000900A8;
+    const std::wstring wlink = wide(kama_win_ospath(linkPath));
+    if (wlink.empty()) return std::string();
+    HANDLE h = CreateFileW(wlink.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return std::string();
+    std::vector<char> buf(16 * 1024, 0);              // MAXIMUM_REPARSE_DATA_BUFFER_SIZE
+    DWORD got = 0;
+    const BOOL ok = DeviceIoControl(h, kFsctlGetReparsePoint, nullptr, 0, &buf[0], (DWORD)buf.size(), &got, nullptr);
+    CloseHandle(h);
+    const MountPointReparse* r = reinterpret_cast<const MountPointReparse*>(&buf[0]);
+    if (!ok || r->ReparseTag != kTagMountPoint) return std::string();
+    // The print name is the display form; a junction made elsewhere may leave it empty, and then the
+    // substitute name is the target, minus its NT `\??\` prefix.
+    const char* names = reinterpret_cast<const char*>(r->PathBuffer);
+    std::wstring t = r->PrintNameLength
+        ? std::wstring(reinterpret_cast<const WCHAR*>(names + r->PrintNameOffset), r->PrintNameLength / sizeof(WCHAR))
+        : std::wstring(reinterpret_cast<const WCHAR*>(names + r->SubstituteNameOffset), r->SubstituteNameLength / sizeof(WCHAR));
+    if (t.size() >= 4 && t.compare(0, 4, L"\\??\\") == 0) t = t.substr(4);
+    return narrow(t);
+}
+
 intptr_t kama_win_spawn_shell(const std::string& line)
 {
     std::wstring w = wide(line);
