@@ -300,6 +300,38 @@ own tests instantiate it, which is the case the rule exists for. **A defect agai
 principle `0.9.542` applied to the unsafe rule: a generic is judged as written, and a declaration's error must not
 depend on which instantiation exists.
 
+**Measured on `0.9.544` by making the as-written walk cover every template** (an instance that already reported
+against a template suppresses it, so each mistake is reported once). The patch is kept, not landed. Two of its
+changes are sound and needed regardless:
+- a call's recorded instance is matched exactly under the probe, so the probe does not take a real
+  instantiation's `inner<int32>` for its own opaque `T`;
+- a `type value`'s parameter that a field holds, not behind a raw pointer, is a value at every legal
+  instantiation, since a value owns nothing, so `Box<T>.get()` copies.
+
+With those, 29 of 2,316 fixtures fail, in three groups:
+- **Probe weaknesses that an uninstantiated generic hits today:**
+  - a `comptime` parameter is left unbound in function templates: a `comptime assert` over `N`, `[0; (N + 1)]`,
+    `a[0]` on an `InlineArray<T>#(N)`, and `"${F:x}"` all fail;
+  - a `friend` grant is not matched to the probe's instance;
+  - `foreach (T x in xs)` over a `ConstView<T>` of a move-only `T` names a missing `iterator()` rather than the
+    copy it would need.
+- **Generics that rely on their instances,** which SPEC refuses and a bound fixes: `<`/`>` on an unbounded `T`
+  (`Comparable`), a member or field of an unbounded `T`, copying or moving a field of a resource's `T`, and a
+  contract value of an unbounded `T`.
+- **Generic ARITHMETIC (`this.v + this.v`), which no bound can express.** `Real` declares the math functions,
+  not the operators, and §2 already records that "no bound spells an integer primitive". So strict enforcement
+  would remove a capability. It is already missing for an uninstantiated generic, which the probe refuses with no
+  fix available.
+
+**Design:** arithmetic becomes a contract, as comparison already is (`<` calls `Comparable.compareTo`). A prelude
+`type contract Arithmetic<T is This> for value, intrinsic` declares `add`/`sub`/`mul`/`div` (and `rem`/`neg` as
+SPEC rules). The numeric primitives conform through a `type adapter` in its home module, and `+ - * /` on a `T`
+bounded by it call those members. Monomorphized, the adapter's `return this + other;` is the primitive operator,
+so the cost is zero. Then the as-written walk covers every template, the corpus migrates to the bounds it was
+using silently, and SPEC's sentence holds. It is a source break for generics that relied on their instances,
+which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
+contract before code.**
+
 <a id="s2-check-passes-c-fails"></a>
 
 ### Four constructs pass `kama check` and fail in the C compiler (KR-116)
