@@ -332,18 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-replace-swap"></a>
-
-### Moving a value out of a field: `replace` and `swap` (KR-122)
-
-`give this.batch` is refused ("cannot `give` out of a field … use Optional<T>"), and rightly: it would leave the
-owner holding a moved-from value. But `Optional` cannot empty itself in place either, so a resource held in a
-field can never be handed out. A `finish()` that returns its batch cannot be written. **A gap in the ownership
-surface.** **Design:** Rust's `mem::replace` and `mem::swap`, as safe `std::memory` functions over an unsafe core:
-`T replace<T>(ref T place, T with)` hands back the old value and leaves `with` in its place, and
-`void swap<T>(ref T a, ref T b)`. A field is never moved-from, so the move state gains nothing to track. `take`
-is `replace(place:, with: T.default())`, so it is not a third function.
-
 <a id="s2-borrow-any-place"></a>
 
 ### `borrow` names any place for a block (KR-123)

@@ -1080,6 +1080,7 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
 
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
+const std::vector<SharedCompilationUnit>& preludeModuleUnits();                // the embedded triad + `core`, defined below
 
 // The name an `import` must write to reach this unit: the module its PATH puts it in, and nothing else.
 // A file used to be able to answer this with a `namespace` declaration, which is precisely the defect
@@ -1649,8 +1650,17 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // translation unit comes out three lines long and empty. The skip is kept because handing the C
     // compiler an empty file for a module we already have is work with no result, not because dropping
     // it breaks.
-    for (int pi = 0; pi < KAMA_PRELUDE_MODULE_COUNT; ++pi)
-        if (const char* m = KAMA_PRELUDE_MODULES[pi].module) if (*m) providedWhole.insert(m);
+    //
+    // PARTIAL, though, not whole — the names the embedded files declare (KR-122). `std::memory` is a stdlib
+    // module like any other, and a file of it that is not embedded (`replace.kama`) resolves from disk the way a
+    // pruned module's other files do. Whole, the module claimed everything and `std::memory::replace` was
+    // "not exported". A `--no-std` install has only the embedded names, and anything else in the module is
+    // then absent, as the whole stdlib is.
+    for (const SharedCompilationUnit& u : preludeModuleUnits())
+        for (int pi = 0; pi < KAMA_PRELUDE_MODULE_COUNT; ++pi)
+            if (u && u->name && *u->name == KAMA_PRELUDE_MODULES[pi].name)
+                if (const char* m = KAMA_PRELUDE_MODULES[pi].module) if (*m)
+                    for (auto& n : u->topLevelNames) provided[m].insert(n);
     // A CLI input is loaded entire — but it is one FILE, and its namespace may have other files. So it
     // contributes PARTIAL, exactly like a pruned module below: the names it actually declares. Marking it
     // `whole` claimed the whole module was present, and a file that imports a SIBLING from inside its own

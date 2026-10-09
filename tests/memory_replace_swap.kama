@@ -1,0 +1,29 @@
+// `replace` and `swap` (KR-122): a resource held in a field is handed out with a fresh one left in its place, and
+// two places exchange what they hold. Every value built is dropped exactly once. Returns 42.
+import { std::memory::replace, std::memory::swap, std::memory::Owned, std::collections::DynamicArray };
+static int32 drops = 0;
+type resource Batch {
+    DynamicArray<int64> items;
+    public ctor make(int64 v) { this.items = DynamicArray.empty(); this.items.add(item: v); }
+    public const fn int64 first() { return this.items[0]; }
+    ~Batch() { drops = drops + 1; }
+}
+type resource Builder {
+    Batch batch;
+    public ctor make() { this.batch = Batch.make(v: 1i64); }
+    public fn Batch finish() { return replace(place: this.batch, with: Batch.make(v: 2i64)); }
+    public const fn int64 now() { return this.batch.first(); }
+}
+fn int32 main() {
+    int64 r = 0i64;
+    {
+        Builder b = Builder.make();
+        Batch done = b.finish();
+        r = done.first() * 10i64 + b.now();          // 12
+        Batch x = Batch.make(v: 7i64);
+        Batch y = Batch.make(v: 8i64);
+        swap(a: x, b: y);
+        r = r * 100i64 + x.first() * 10i64 + y.first();   // 1287
+    }
+    return r == 1287i64 && drops == 4 ? 42 : 1;
+}

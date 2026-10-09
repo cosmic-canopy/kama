@@ -1,0 +1,29 @@
+// The two moves that keep a PLACE full (KR-122). `give this.batch` is refused, because it would leave the owner
+// holding a moved-from value, and `Optional` cannot empty itself in place either — so a resource held in a field
+// could never be handed out. These hand out what a place holds while putting a value back in the same step, so a
+// field is never moved-from and the move state has nothing new to track. Rust's `mem::replace` and `mem::swap`.
+//
+// `take` is `replace(place: x, with: T.default())`, so it is not a third function. Unlike the triad beside them,
+// these are an ordinary import: nothing in the syntax lowers into them.
+import { std::ptr::relocate };
+export { replace, swap };
+
+// Hand back what `place` holds, and leave `with` there.
+unsafe fn T replace<T>(ref T place, T with) {
+    UnsafePtr<T> p = addr(of: place);
+    slot T old;
+    relocate(from: p, at: 0, into: out old);   // `place`'s value, bitwise; its bytes are stale until the next line
+    p[0] = give with;                          // a raw store relocates `with` in without dropping the stale bytes
+    return give old;
+}
+
+// Exchange what `a` and `b` hold. One place passed as both is refused at the call; reached through raw pointers it
+// is still exchanged with itself, unchanged.
+unsafe fn void swap<T>(ref T a, ref T b) {
+    UnsafePtr<T> pa = addr(of: a);
+    UnsafePtr<T> pb = addr(of: b);
+    slot T held;
+    relocate(from: pa, at: 0, into: out held);
+    pa[0] = pb[0];                             // a bitwise relocate: `b`'s bytes are stale until the next line
+    pb[0] = give held;
+}

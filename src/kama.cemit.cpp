@@ -18575,7 +18575,8 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
             return "";
         }
     unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
-                "moved-from value; move a local instead, or use Optional<T>", line);
+                "moved-from value; `replace(place: …, with: …)` from `std::memory` hands it out and leaves a value "
+                "in its place, or move a local instead", line);
     return "";
 }
 
@@ -24098,15 +24099,21 @@ void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, in
 // (`try` → `Optional`, `new` → `Owned`, interpolation → `Formattable`) — so, like `string`, nothing may
 // take one: a user `type value Optional` used to be accepted and hide the real one for its whole file.
 // Read off the tables rather than listed, so a name added to the prelude is reserved by that act.
+//
+// The triad's names are read off the EMBEDDED units, not off the module: `std::memory` also has files a program
+// imports like any stdlib name (`replace`, `swap` — KR-122), and those are no more in every scope than
+// `std::collections::DynamicArray` is.
 bool CEmitter::isLanguageName(const std::string& nm)
 {
     if (_languageNames.empty()) {
         auto take = [&](const std::string& key) {
-            for (const std::string pfx : { "kama__", "std__memory__" }) {
-                const size_t n = pfx.size();
-                if (key.compare(0, n, pfx) == 0 && key.find("__", n) == std::string::npos) _languageNames.insert(key.substr(n));
-            }
+            const std::string pfx = "kama__";
+            const size_t n = pfx.size();
+            if (key.compare(0, n, pfx) == 0 && key.find("__", n) == std::string::npos) _languageNames.insert(key.substr(n));
         };
+        for (auto& u : _preludeModuleUnits)   // what the triad EXPORTS: `Ctrl`, private to `shared.kama`, is no one's
+            if (u && u->name && u->exportList && _moduleResolver && _moduleResolver(*u->name) == "std::memory")
+                for (auto& n : *u->exportList) if (n) _languageNames.insert(*n);
         for (auto& kv : _classes) if (!kv.second.isGenericInst) take(kv.first);
         for (auto& kv : _enums) take(kv.first);
         for (auto& kv : _interfaces) if (!kv.second.isGenericInst) take(kv.first);

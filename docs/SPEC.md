@@ -1305,6 +1305,29 @@ own a concrete implementer behind a fat handle and dispatch polymorphically (see
 pointer works as a *field*, *return*, and a **collection element** — `DynamicArray<Shared<Shape>>` stores and drops
 each handle in RAII order and dispatches polymorphically through it. See **Generics** below.
 
+### Handing out what a place holds — `replace` and `swap` ✅
+
+A field or an element cannot be `give`n: that would leave its owner holding a moved-from value. `std::memory`
+has the two moves that keep the place full instead. **`replace(place:, with:)`** hands back what `place` held <!-- test: memory_replace_swap -->
+and leaves `with` there, and **`swap(a:, b:)`** exchanges what two places hold. Nothing is ever moved-from, so the
+move state has nothing new to track. Unlike the triad, they are an ordinary import, and `take` is
+`replace(place: x, with: T.default())`.
+
+```kama
+import { std::memory::replace, std::collections::DynamicArray };
+
+type resource Batch {
+    DynamicArray<int64> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+}
+type resource Builder {
+    Batch batch;
+    public ctor make() { this.batch = Batch.make(); }
+    public fn Batch finish() { return replace(place: this.batch, with: Batch.make()); }   // a fresh batch stays
+}
+fn int32 main() { Builder b = Builder.make(); Batch done = b.finish(); return 0; }
+```
+
 ## Functions ✅
 
 ```kama
