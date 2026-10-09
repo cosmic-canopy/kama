@@ -3400,6 +3400,10 @@ private:
     // param, function) — the set a `.` head resolves through before it could mean a type. A live binding
     // WINS over a same-spelled type, the precedence isTypeReceiver uses.
     bool isValueName(const std::string& nm, SharedStringList qualifier);
+    bool isDataName(const std::string& nm, SharedStringList qualifier);   // a binding or module variable, not a function
+    // A function's NAME where a value is wanted (`a * pi`, `float32 x = pi`): refused, naming the call. A
+    // function is a value only where a `fnptr` is — see the definition.
+    bool rejectFunctionAsValue(SharedExpression e, const char* what, int line);
     // `X.name` with no call, where `X` is a TYPE: an enum variant, a field, a `comptime` constant, a static
     // or a method reached with the constructor spelling. Reports and returns true; false when `X` is not
     // a type at all (the identifier arm then says what `X` is not).

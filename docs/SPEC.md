@@ -3530,7 +3530,9 @@ fn int32 main() {
 ```
 
 A bare **function name used as a value** is its function pointer (Rust-like), so binding and passing need no
-operator — `c = cmp` and `f(cb: cmp)` just work. An `fnptr` can also be a **parameter** (`fn run(Op op, …) {
+operator — `c = cmp` and `f(cb: cmp)` just work. That is the only place a function is a value: where an `fnptr`
+(or a `BindableFunctionPtr` promoted from one) is wanted. Anywhere else — an operand (`a * pi`), a `float32`
+local or argument — the name is refused, naming the call that was meant (`pi()`). <!-- xfail: fn_as_operand, fn_as_local, fn_as_argument --> An `fnptr` can also be a **parameter** (`fn run(Op op, …) {
 op(…) }` — the core callback shape), and it can be **stored and invoked later** — in a field or a module <!-- test: fnptr_stored -->
 `static` — which is the callback-registry shape: install a handler now, dispatch through it on a later
 call ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)). Binding is checked in **every** one of those <!-- xfail: fnptr_bind_arg_shape -->

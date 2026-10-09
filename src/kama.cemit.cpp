@@ -2628,6 +2628,8 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     // documented silent path — which is exactly why every bind position but a local initializer went
     // unchecked. This is the funnel they all share, and it already has the destination type.
     checkFnPtrValueBind(dstCType, value, line);
+    if (!dstCType.empty() && !isSigType(dstCType) && !isBindableClass(dstCType)
+        && rejectFunctionAsValue(value, what, line)) return;
     rejectClassIdentityMismatch(dstCType, value, what, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
@@ -2703,6 +2705,16 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
                              + aOrAn(primKeyOfCType(it).empty() ? demangleForDisplay(it) : primKeyOfCType(it))
                              + " is not one — " + hint).c_str(), line);
                 return;
+            }
+        }
+        // A function's NAME initializes only a `fnptr` (or a bindable promoted from one): the declared type
+        // is lowered for the question only when the initializer IS a function name, which is almost never.
+        {
+            FnPtrTarget ft;
+            if (resolveFnPtrTarget(init, ft) && (ft.kind == FnPtrTarget::Function || ft.kind == FnPtrTarget::Method)) {
+                const std::string dt = classifierCType(declType);
+                if (!dt.empty() && !isSigType(dt) && !isBindableClass(dt) && rejectFunctionAsValue(init, what, line))
+                    return;
             }
         }
         const std::string srcT = typeOfExpr(init);
@@ -5593,6 +5605,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
+        const bool lhsFn = rejectFunctionAsValue(v->LHS, "an operator's operand", v->line);
+        const bool rhsFn = rejectFunctionAsValue(v->RHS, "an operator's operand", v->line);   // both said, not one
+        if (lhsFn || rhsFn) return "0";
         // GOALS §3b: `== null` / `!= null` on a safe type is a compile error — a value,
         // smart pointer, or contract is never null (the C habit checks the wrong thing here).
         // `null` is only for `UnsafePtr<T>` at the FFI boundary (exprClass is empty for those).
@@ -5835,6 +5850,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        if (rejectFunctionAsValue(v->expression, "an operator's operand", v->line)) return "0";
         std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // op_neg/op_not/op_bnot/op_pos
         if (!uop.empty()) return uop;
         std::string op;
@@ -26135,6 +26151,26 @@ bool CEmitter::reachesUnannotatedSig(const std::string& cty, std::string& chainO
     return false;
 }
 
+// A function's NAME is a value in exactly one place: where a `fnptr` (or a `BindableFunctionPtr` promoted from
+// it) is wanted, which checkFnPtrValueBind judges. Anywhere else it decayed to its C address, so `a * pi`, `-pi`,
+// `pi > 1.0f32`, `float32 x = pi` and `take(v: pi)` all passed `kama check` — `typeOfExpr` has no arm for a bare
+// function name, so the kind rule took its silent path — and the C compiler then refused "invalid operands",
+// or, for an argument, converted an address to a float without a word. The repair is the call it was meant
+// to be, so the message names it.
+bool CEmitter::rejectFunctionAsValue(SharedExpression e, const char* what, int line)
+{
+    // A name that is a VALUE here — a local, a parameter, a `foreach`/`match` binding, a `static` — is not a
+    // function reference, whatever function shares its spelling elsewhere (a sibling file's private `label`).
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get()))
+        if (id->value && isDataName(*id->value, id->qualifier)) return false;
+    FnPtrTarget t;
+    if (!e || !resolveFnPtrTarget(e, t)) return false;
+    if (t.kind != FnPtrTarget::Function && t.kind != FnPtrTarget::Method) return false;
+    unsupported(("`" + t.name + "` is a function, and " + what + " wants a value — call it (`" + t.name
+                 + "(…)`) for its result; a function is a value only where a `fnptr` is wanted").c_str(), line);
+    return true;
+}
+
 // A `fnptr`-typed destination in any position OTHER than a local initializer — an assignment, a call
 // argument, a return, a field or module `static` initializer. Reached from `rejectValueKindMismatch`,
 // which is the funnel every one of those already passes through with the destination's C type in hand.
@@ -34808,13 +34844,18 @@ std::string CEmitter::dotOnTypeAdvice(DotMemberKind k, const std::string& disp, 
 
 bool CEmitter::isValueName(const std::string& nm, SharedStringList qualifier)
 {
+    return isDataName(nm, qualifier) || _funcs.count(resolveFunc(nm, qualifier));
+}
+
+// A name that HOLDS data here — a local, a parameter, a comptime parameter, a field of `this`, a module
+// `static` or constant. A function is a value name too (isValueName) but not this.
+bool CEmitter::isDataName(const std::string& nm, SharedStringList qualifier)
+{
     const bool q = qualifier && !qualifier->empty();
     if (!q && (_localTypes.count(nm) || _paramNames.count(nm) || _refParams.count(nm) || _comptimeSubst.count(nm)))
         return true;
     if (!q && _currentClass && findFieldOwner(_currentClass, nm)) return true;
-    if (!resolveModuleVar(nm, qualifier).empty()) return true;
-    if (_funcs.count(resolveFunc(nm, qualifier))) return true;
-    return false;
+    return !resolveModuleVar(nm, qualifier).empty();
 }
 
 bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, const std::string& field)

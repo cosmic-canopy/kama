@@ -1,0 +1,6 @@
+// A function's NAME is a value only where a `fnptr` is wanted. Elsewhere it decayed to its C address, so this passed
+// `kama check` and the C compiler refused it, or, for an argument, converted the address without a word. The fix is the
+// call that was meant: `pi()`.
+import { std::math::pi };
+fn float32 take(float32 v) { return v; }
+fn int32 main() { float32 a = 2.0f32; float32 x = a * pi; return 0; }

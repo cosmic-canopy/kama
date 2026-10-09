@@ -444,6 +444,9 @@ float_bare_dot	float_bare_dot.kama:6
 float_literal_suffix_overflow	float_literal_suffix_overflow.kama:4
 float_literal_to_int	float_literal_to_int.kama:1
 floatint_local	floatint_local.kama:1
+fn_as_argument	fn_as_argument.kama:6
+fn_as_local	fn_as_local.kama:6
+fn_as_operand	fn_as_operand.kama:6
 fn_type_param_default	fn_type_param_default.kama:10
 fnptr_bind_arg_shape	fnptr_bind_arg_shape.kama:11
 fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16

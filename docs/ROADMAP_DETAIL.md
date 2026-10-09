@@ -332,15 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-check-passes-c-fails"></a>
-
-### A function used as an operand passes `kama check` and fails in the C compiler (KR-116)
-
-Measured on `0.9.542`. Each program is either valid and must build, or invalid and must be refused by kama.
-Today each does neither.
-- **A function's name used as an operand** (`a * pi`, with `pi` a `fn`): "invalid operands" in C, in any file.
-  Invalid kama, and kama must say so; a function is not a value except where an `fnptr` is wanted.
-
 <a id="s2-gcc-exhaustive-match"></a>
 
 ### Under gcc, a function ending in an exhaustive `match` does not build (KR-117)
