@@ -1273,6 +1273,40 @@ static bool isDeferrableLiteral(const ASTNode* n)
     return n->unsuffixed && isNumericLiteral(n);
 }
 
+// An expression made only of UNSUFFIXED numeric literals — `1.0`, `-2`, `0.5 * 3.0` — and so typed by whatever it
+// meets, as one literal is (isDeferrableLiteral, widened to the shapes a literal expression is built from).
+static bool isUnsuffixedLiteralTree(const ASTNode* n)
+{
+    if (!n) return false;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isUnsuffixedLiteralTree(u->expression.get());
+    if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n))
+        return isUnsuffixedLiteralTree(b->LHS.get()) && isUnsuffixedLiteralTree(b->RHS.get());
+    return isDeferrableLiteral(n);
+}
+
+// A value-producing `match` whose every arm VALUE is a literal (or whose arm diverges) is a literal written once per
+// arm, and so is typed by its destination the way a literal is: `fn isize f(K k) { return match (k) { case A: 0;
+// case B: 1; }; }` is an `isize` match. typeOfExpr answers its arms' default (`int32`) when nothing else speaks,
+// which the conversion rule then refused as an implicit widening. Each arm is still checked against the
+// destination where the match is emitted, so an arm that does not fit is refused there, as a lone literal is.
+static bool isLiteralMatch(const ASTNode* n)
+{
+    auto* m = dynamic_cast<const MatchNode*>(n);
+    if (!m || !m->arms || m->arms->empty()) return false;
+    bool anyValue = false;
+    for (auto& a : *m->arms) {
+        if (!a) continue;
+        SharedExpression v = a->body;
+        if (!v && a->block && a->block->statements)
+            for (auto& st : *a->block->statements)
+                if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
+        if (!v) continue;                                  // a diverging arm yields nothing
+        if (!isLiteralExpr(v.get())) return false;
+        anyValue = true;
+    }
+    return anyValue;
+}
+
 // A value-producing expression that carries NO type of its own and must be HANDED its destination —
 // a `match`, an array literal, or a ternary that yields one.
 //
@@ -2235,7 +2269,8 @@ void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpres
     // which is a step past Rust, where `let f: f64 = 3;` is an error. But `int32 x = 1.5;` cannot be the
     // same thing in reverse: no reading of `1.5` is an `int32`, so context is not typing the literal, it
     // is silently truncating it. That one is a real conversion and is rejected.
-    if (isLiteralExpr(value.get()) && !(cNumFloat(src) && !cNumFloat(dstCType))) return;
+    if ((isLiteralExpr(value.get()) || isLiteralMatch(value.get())) && !(cNumFloat(src) && !cNumFloat(dstCType)))
+        return;
 
     const std::string dstName = primKeyOfCType(dstCType);
     const std::string srcName = primKeyOfCType(src);
@@ -14696,6 +14731,14 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
     if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
     if (auto* b  = dynamic_cast<BinaryExpressionNode*>(n)) {
+        // A comparison is a `bool`, whatever its operands are.
+        if (isComparisonToken(b->token)) return primTypeNode(IDENTIFIER_BOOL_VAL);
+        // A literal is typed by the OTHER operand (SPEC *Numeric conversions*), so a typed operand speaks for
+        // the expression: `sqrt(x: 1.0 + a)` with `float32 a` is `sqrt<float32>`. Reading the left operand
+        // first bound `T` to the literal's own `float64`, and then refused both the argument and the return,
+        // while `sqrt(x: a + 1.0)` inferred — the same expression, its operands swapped.
+        if (isUnsuffixedLiteralTree(b->LHS.get()) && !isUnsuffixedLiteralTree(b->RHS.get()))
+            if (SharedIdentifier r = exprTypeNode(b->RHS, localTys)) return r;
         SharedIdentifier l = exprTypeNode(b->LHS, localTys);
         return l ? l : exprTypeNode(b->RHS, localTys);
     }
@@ -14709,6 +14752,8 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (auto* h  = dynamic_cast<HandoffNode*>(n)) return exprTypeNode(h->value, localTys);
     // `c ? a : b` is either arm's type — the same answer the binary arm above gives for its operands.
     if (auto* t  = dynamic_cast<TernaryExpressionNode*>(n)) {
+        if (isUnsuffixedLiteralTree(t->LHS.get()) && !isUnsuffixedLiteralTree(t->RHS.get()))   // as for `+` above
+            if (SharedIdentifier r = exprTypeNode(t->RHS, localTys)) return r;
         SharedIdentifier l = exprTypeNode(t->LHS, localTys);
         return l ? l : exprTypeNode(t->RHS, localTys);
     }
@@ -36253,6 +36298,38 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
     auto to   = scalar(toTok);
     auto fr   = scalar(holeBuiltinType(v->unaryExpression));
     std::string tname = (v->type && v->type->value) ? *v->type->value : "T";
+    // A LITERAL operand is typed by its destination, as everywhere (SPEC *Numeric conversions*). A bitcast's
+    // destination is the bit width of its target, so `bitcast<uint64>(1.0)` reads `1.0` as a `float64` and
+    // `bitcast<uint32>(-1)` reads `-1` as an `int32`. A suffixed literal keeps the width it states, and the
+    // equal-width rule below judges it. It was "not a resolvable numeric scalar" — a binding was demanded for a
+    // constant (`float64 one = 1.0; bitcast<uint64>(one)`).
+    if (fr.first == 0 && to.first != 0 && v->unaryExpression && isLiteralExpr(v->unaryExpression.get())) {
+        const ASTNode* lit = v->unaryExpression.get();
+        while (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(lit)) lit = u->expression.get();
+        const bool isFloat = dynamic_cast<const Float64Node*>(lit) || dynamic_cast<const Float32Node*>(lit);
+        if (!isDeferrableLiteral(v->unaryExpression.get())) {                 // suffixed: its own width
+            const std::string ct = litRvalueCType(const_cast<ASTNode*>(lit));
+            for (int tok : { IDENTIFIER_INT8_VAL, IDENTIFIER_INT16_VAL, IDENTIFIER_INT32_VAL, IDENTIFIER_INT64_VAL,
+                             IDENTIFIER_UINT8_VAL, IDENTIFIER_UINT16_VAL, IDENTIFIER_UINT32_VAL, IDENTIFIER_UINT64_VAL,
+                             IDENTIFIER_FLOAT32_VAL, IDENTIFIER_FLOAT64_VAL })
+                if (scalar(tok).second == ct) { fr = scalar(tok); break; }
+        } else if (isFloat) {                                                  // a float of the target's width
+            if (to.first == 4) { fr = scalar(IDENTIFIER_FLOAT32_VAL);
+                                 claimFloatLiterals(v->unaryExpression, "float", "a `bitcast` operand", false, v->line); }
+            else if (to.first == 8) fr = scalar(IDENTIFIER_FLOAT64_VAL);
+        } else {                                                               // an integer of the target's width
+            const int sTok[] = { 0, IDENTIFIER_INT8_VAL, IDENTIFIER_INT16_VAL, 0, IDENTIFIER_INT32_VAL, 0, 0, 0, IDENTIFIER_INT64_VAL };
+            const int uTok[] = { 0, IDENTIFIER_UINT8_VAL, IDENTIFIER_UINT16_VAL, 0, IDENTIFIER_UINT32_VAL, 0, 0, 0, IDENTIFIER_UINT64_VAL };
+            int64_t val = 0;
+            const bool neg = constValue(v->unaryExpression, val) && val < 0;
+            // Signed when the target is (or the value is negative); its range check then runs as for any
+            // destination, so a literal that fits neither half of the width is refused there.
+            const bool wantSigned = neg || toTok == IDENTIFIER_INT8_VAL || toTok == IDENTIFIER_INT16_VAL
+                                 || toTok == IDENTIFIER_INT32_VAL || toTok == IDENTIFIER_INT64_VAL;
+            if (to.first <= 8) fr = scalar(wantSigned ? sTok[to.first] : uTok[to.first]);
+            if (fr.first) rejectConstOutOfRange(fr.second, v->unaryExpression, "a `bitcast` operand", false, v->line);
+        }
+    }
     if (to.first == 0) {
         unsupported(("bitcast<" + tname + ">(x) — the target `" + tname + "` must be a numeric scalar "
                      "(`int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v->line);

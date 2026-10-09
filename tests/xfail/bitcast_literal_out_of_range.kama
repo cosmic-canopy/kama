@@ -1,0 +1,3 @@
+// A literal `bitcast` operand is typed by the target's width, and range-checked there like any destination's
+// literal: 300 is no 8-bit pattern, signed or not.
+fn int32 main() { int8 x = bitcast<int8>(300); return x; }

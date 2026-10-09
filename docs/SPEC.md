@@ -1700,8 +1700,11 @@ are all conversions. What is **not** a conversion, and needs no cast:
 | arithmetic on one type, which yields that type | `a + b` on two `uint8`s |
 | a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
 | a literal handed to a generic `T`, which takes the width its typed siblings bind | `pick(a: 0, b: n)` on an `isize n` |
+| a literal OPERAND of a generic argument, typed by the other operand | `sqrt(x: 1.0 + a)` on a `float32 a` is `sqrt<float32>` |
+| a `match` whose every arm is a literal, typed by its destination | `return match (k) { case A: 0; case B: 1; };` from an `isize` function |
+| a `bitcast` literal, typed by the target's width | `bitcast<uint64>(1.0)` reads `1.0` as a `float64` |
 
-A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
+A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a <!-- test: literal_destinations -->
 cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local, lit_oob_constref_argument -->
 
 **A float literal is typed the same way.** Beside a `float32` — an operand, a ternary's other arm, a destination, <!-- test: float32_literal_typed -->

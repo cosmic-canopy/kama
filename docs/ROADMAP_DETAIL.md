@@ -332,21 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-literal-destinations"></a>
-
-### A literal is not typed by its destination in three positions (KR-118)
-
-SPEC: a literal is typed by its destination, or, as an operand, by the other operand. Measured on `0.9.542`:
-- **Generic inference reads a literal operand first.** With `float32 a`, `sqrt(x: 1.0 + a)` infers `T = float64` and
-  then refuses both the argument and the return. `sqrt(x: a + 1.0)` works. So does `exp(x: 0.0 - d)`, once it
-  is rewritten as `exp(x: 0.0f32 - d)`. Inference must ask the expression its type, and `1.0 + a` is a `float32`.
-- **A literal `match` arm in a typed position:** `fn isize f(K k) { return match (k) { case A: 0; case B: 1; }; }`
-  reports "expects `isize` … `int32`". The arms take the match's destination.
-- **`bitcast<uint64>(1.0)`** reports "the operand's type isn't a resolvable numeric scalar". A literal operand takes
-  the float width that matches the target's width.
-
-One rule, three places it was not applied; **a defect each**.
-
 <a id="s2-diagnostics-batch"></a>
 
 ### Diagnostics and docs that say nothing or misstate the rule (KR-119)

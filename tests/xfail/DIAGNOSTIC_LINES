@@ -83,6 +83,7 @@ binder_shadow_foreach_param	binder_shadow_foreach_param.kama:10
 binder_shadow_match_field	binder_shadow_match_field.kama:13
 binder_shadow_match_local	binder_shadow_match_local.kama:12
 bitcast_clong	bitcast_clong.kama:2
+bitcast_literal_out_of_range	bitcast_literal_out_of_range.kama:3
 bitcast_nonscalar	bitcast_nonscalar.kama:6 bitcast_nonscalar.kama:7
 bitcast_width	bitcast_width.kama:5
 borrow_alias_reseat	borrow_alias_reseat.kama:15
@@ -687,7 +688,7 @@ lit_oob_comptime	lit_oob_comptime.kama:6
 lit_oob_constref_argument	lit_oob_constref_argument.kama:9
 lit_oob_field	lit_oob_field.kama:3
 lit_oob_local	lit_oob_local.kama:9
-lit_oob_match_arm	lit_oob_match_arm.kama:6 lit_oob_match_arm.kama:8
+lit_oob_match_arm	lit_oob_match_arm.kama:8
 lit_oob_module_const	lit_oob_module_const.kama:10
 lit_oob_return	lit_oob_return.kama:2
 lit_oob_variant	lit_oob_variant.kama:4

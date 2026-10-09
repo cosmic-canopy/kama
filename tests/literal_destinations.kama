@@ -1,0 +1,26 @@
+// A literal is typed by its destination, or as an operand by the other operand (SPEC *Numeric conversions*).
+// Three positions did not apply that rule, each a correct program refused:
+//   - generic inference took `T` from a literal operand first: `sqrt(x: 1.0 + a)` with `float32 a` was
+//     `sqrt<float64>`, then refused both the argument and the return, while `sqrt(x: a + 1.0)` was fine;
+//   - a `match` whose every arm is a literal was typed `int32`, so `return match (k) { case A: 0; … }` from an
+//     `isize` function was refused as an implicit widening;
+//   - `bitcast<uint64>(1.0)` demanded a binding for its constant operand.
+import { std::math::sqrt, std::math::exp };
+
+type enum K { A, B }
+fn T same<T>(T x) { return x; }
+fn float32 grow(float32 a) { return sqrt(x: 1.0 + a); }          // sqrt<float32>
+fn float32 decay(float32 d) { return exp(x: 0.0 - d); }          // exp<float32>
+fn isize pick(K k) { return match (k) { case A: 0; case B: 1; }; }
+
+fn int32 main() {
+    int32 r = 0;
+    if (grow(a: 3.0f32) == 2.0f32) { r = r + 1; }
+    if (decay(d: 0.0f32) == 1.0f32) { r = r + 2; }
+    float32 a = 0.5f32;
+    if (same(x: a < 1.0)) { r = r + 4; }                          // a comparison is a `bool`
+    if (pick(k: K::B) == 1) { r = r + 8; }
+    if (bitcast<uint64>(1.0) == 4607182418800017408ui64) { r = r + 16; }
+    if (bitcast<uint32>(-1) == 4294967295ui32) { r = r + 32; }
+    return r;                                                      // 63
+}
