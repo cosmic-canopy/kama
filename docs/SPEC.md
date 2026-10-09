@@ -5728,6 +5728,15 @@ A value is wrapped by naming its variant — `Optional::Some(value: x)`, `Result
 wrapper is expected is refused at every crossing, with the variant to write: <!-- xfail: optional_given_element -->
 an initializer, an assignment, an argument, a return, a field. The same holds for either arm of a `Result`. <!-- xfail: result_given_element -->
 
+**A boxed error — `Owned<Error>` — and `.as<T>()`.** Where a failure can come from more than one error type, the
+error is boxed: reading data returns `Result<T, Owned<Error>>`, because the format reader fails with its own
+error and a type's hand-written `deserialize` may fail with another. `e.message()` reports any of them. To branch <!-- test: as_downcast_value -->
+on one, `e.as<T>()` asks whether the box holds a `T` and answers `Optional<T>`: `Some` with a copy when it does,
+`None` when it holds something else. It is a checked test, never a reinterpretation, and the box keeps what it
+holds. `T` is any concrete type implementing `Error` — an enum, a value such as `IoError` (whose `kind()` is what
+code branches on), a copyable resource. A type that owns something and cannot be copied is refused, since a <!-- xfail: as_downcast_uncopyable -->
+bitwise copy would alias the box's.
+
 ## Modules ✅
 
 A **module is a FOLDER**, and a file's identity is **where it sits** — never anything it declares. A

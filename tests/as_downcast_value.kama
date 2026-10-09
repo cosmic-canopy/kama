@@ -1,0 +1,50 @@
+// `.as<T>()` recovers any concrete type a boxed `Error` holds, not only an enum. The error model is a value with a
+// `kind()` (std::io's `IoError`), and until 0.9.567 `.as<IoError>()` was refused as "not an enum". A type that owns
+// something comes back through its own `copy`, so the box keeps what it holds and each is dropped once.
+// Returns 42.
+import { std::io::IoError, std::io::IoErrorKind, std::memory::Owned };
+
+static int32 drops = 0;
+
+type enum Why implements Error { Late; public const fn string message() { return "late"; } }
+
+type resource Probe { int64 v; public ctor make(int64 v) { this.v = v; } public const fn int64 value() { return this.v; } ~Probe() { drops = drops + 10; } }
+// An enum holding a `Shared` copies by retaining it, so it comes back too.
+type enum Held implements Error { Plain, Shared(Shared<Probe> p); public const fn string message() { return "held"; } }
+
+type resource Detailed implements Error, Copyable<This>(bare: give) {
+    string what;
+    public ctor make(const ref string what) { this.what = copy what; }
+    public ctor copy(ref Detailed source) { this.what = copy source.what; }
+    public const fn string message() { return copy this.what; }
+    public const fn string detail() { return copy this.what; }
+    ~Detailed() { drops = drops + 1; }
+}
+
+fn Result<int32, Owned<Error>> io() { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+fn Result<int32, Owned<Error>> late() { return Result::Err(error: Why::Late); }
+fn Result<int32, Owned<Error>> detailed() { return Result::Err(error: Detailed.make(what: "server.port")); }
+fn Result<int32, Owned<Error>> held() { Shared<Probe> sp = new Probe.make(v: 8i64); return Result::Err(error: Held::Shared(p: give sp)); }
+
+fn int32 kindOf(Result<int32, Owned<Error>> r) {
+    return match (r) {
+        case Ok(value: v): 0;
+        case Err(error: e): match (e.as<IoError>()) {
+            case Some(value: x): x.kind() == IoErrorKind::InvalidInput ? 1 : 9;
+            case None: match (e.as<Why>()) {
+                case Some(value: w): 2;
+                case None: match (e.as<Detailed>()) {
+                    case Some(value: d): d.detail() == "server.port" ? 4 : 9;
+                    case None: match (e.as<Held>()) { case Some(value: h): match (h) { case Shared(p: p): cast<int32>(p.value()); case Plain: 9; }; case None: 9; };
+                };
+            };
+        };
+    };
+}
+
+fn int32 main() {
+    int32 seen = kindOf(r: io()) + kindOf(r: late()) + kindOf(r: detailed()) + kindOf(r: held());   // 1 + 2 + 4 + 8
+    // The copy handed out and the boxed original: two `Detailed`, each dropped once (2). The `Probe` is retained by
+    // the copy and released by both, so it is dropped once, when the last goes (10).
+    return seen == 15 && drops == 12 ? 42 : 1;
+}

@@ -43,6 +43,7 @@ arg_kind_intrinsic_string	arg_kind_intrinsic_string.kama:7
 arg_label_one_diagnostic	arg_label_one_diagnostic.kama:5
 arg_str_bare	arg_str_bare.kama:3
 arg_unknown	arg_unknown.kama:3
+as_downcast_uncopyable	as_downcast_uncopyable.kama:11
 asm_outside_unsafe	asm_outside_unsafe.kama:4
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7
 assign_str_bare	assign_str_bare.kama:2
@@ -376,7 +377,7 @@ enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5
 enum_unknown_variant_scope	enum_unknown_variant_scope.kama:5
 enum_variant_arity	enum_variant_arity.kama:4
 enum_variant_dot	enum_variant_dot.kama:7
-error_downcast_owned	error_downcast_owned.kama:13
+error_downcast_owned	error_downcast_owned.kama:14
 export_after_extern	export_after_extern.kama:4
 export_const_unexported	main.kama:3
 export_leak_field	export_leak_field.kama:8

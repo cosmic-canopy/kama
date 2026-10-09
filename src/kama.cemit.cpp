@@ -36606,7 +36606,7 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
     return t;
 }
 
-// Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`,
+// Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to its concrete type `T`,
 // yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table — and then, when
 // the pointers differ, the vtbl's `__type` name. The pointer alone is not an identity: a PRELUDE
 // enum (`DeError`, `SerError`) has no home module, so its vtbl is `static` in the shared header and every
@@ -36614,8 +36614,11 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
 // unit's address, and `.as<DeError>()` in the caller's unit answered `None` for exactly the error serde
 // returns (tests/as_downcast_cross_unit.d). A C name is unique program-wide, so the name compare is exact;
 // the pointer compare stays first because it is the common hit and costs nothing. On a hit it
-// COPIES the enum value out (`*(T*)(op).obj`) — a borrow, so `op` stays valid on the `None` branch. `T` must
-// be a non-destructible enum implementing the contract (a value copy-out of an owned payload would alias).
+// COPIES the value out, so `op` stays valid on the `None` branch and still owns what it boxed: bitwise for a type
+// that owns nothing, through the type's own `copy` for one that does. Any concrete type implementing the contract
+// is a target — an enum (`DeError`'s kinds), a value (`IoError`), a copyable resource — because the error model
+// is a value with a `kind()` (KPG-22's ruling), and until 0.9.567 `.as<IoError>()` was refused as "not an enum".
+// Only a type that owns something and cannot be copied is refused: a bitwise copy of it would alias the box's.
 std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
 {
     checkBodyType(ad->type, "an `.as<T>()` target", ad->type ? ad->type->line : 0);
@@ -36630,27 +36633,31 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
     }
     std::string enumC = cType(ad->type);
     std::string tname = (ad->type && ad->type->value) ? *ad->type->value : enumC;
-    if (!_classes.count(enumC) || !(_classes[enumC].isVariant || _classes[enumC].isScalarEnum())) {
-        unsupported(("`.as<" + tname + ">()` — `" + tname + "` is not an enum").c_str(), ad->type ? ad->type->line : 0);
+    auto tc = _classes.find(enumC);
+    if (tc == _classes.end() || tc->second.isIntrinsicColl || isInterface(enumC)) {
+        unsupported(("`.as<" + tname + ">()` — `" + tname + "` is not a concrete type a boxed `" + contract
+                     + "` can hold").c_str(), ad->type ? ad->type->line : 0);
         return "0";
     }
-    if (!implementsContractTemplate(&_classes[enumC], contract)) {
+    if (!implementsContractTemplate(&tc->second, contract)) {
         unsupported(("`.as<" + tname + ">()` — `" + tname + "` does not implement `" + contract + "`").c_str(),
                     ad->type ? ad->type->line : 0);
         return "0";
     }
-    if (_classes[enumC].destructible) {
+    if (tc->second.destructible && !isCopyable(enumC)) {
         unsupported(("`.as<" + tname + ">()` recovers `" + tname + "` by copying it out of the box, but `"
-                     + tname + "` owns resources (it has an owning payload) — copying would alias them; "
-                     "handle it through the boxed `Error`'s methods instead").c_str(),
+                     + tname + "` owns resources and cannot be copied — a bitwise copy would alias the box's; "
+                     "implement `Copyable<" + tname + ">`, or handle it through the boxed `Error`'s methods").c_str(),
                     ad->type ? ad->type->line : 0);
         return "0";
     }
     std::string optC = cType(optionalTypeNode(ad->type));
     std::string op = "(" + emitExpression(ad->operand) + ")";   // side-effect-free (a binding / field access)
+    const std::string held = "(*(" + enumC + "*)" + op + ".kama_obj)";
+    const std::string out = tc->second.destructible ? copyCall(enumC, held) : held;   // the box keeps its own
     return "((" + op + ".kama_vtbl == &" + enumC + "__as_" + contract + " || kama_type_name_eq(" + op
          + ".kama_vtbl->kama_type, \"" + enumC + "\")) ? "
-         + "(" + optC + "){ .kama_tag = " + optC + "_Some, .kama_u.k_Some = { .k_value = *(" + enumC + "*)" + op + ".kama_obj } } : "
+         + "(" + optC + "){ .kama_tag = " + optC + "_Some, .kama_u.k_Some = { .k_value = " + out + " } } : "
          + "(" + optC + "){ .kama_tag = " + optC + "_None })";
 }
 

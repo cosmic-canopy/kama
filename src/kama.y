@@ -1755,7 +1755,7 @@ primary_expression_no_parenthesis
   | as_downcast_expression   { $$ = $1; }
   ;
 
-/* Model C: `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`, yielding
+/* Model C: `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to its concrete type `T`, yielding
    `Optional<T>`. Mirrors cast_expression's genericDepth mid-rules so the `<…>` parses without spaces and a
    trailing `>>` stays a shift. `.as` (DOT AS) is distinct from `.member` (DOT IDENTIFIER) — no conflict. */
 as_downcast_expression

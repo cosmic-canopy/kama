@@ -1,0 +1,12 @@
+// `.as<T>()` hands back a copy and the box keeps its own. A type that owns something and cannot be copied cannot be
+// handed back: a bitwise copy would alias what the box owns.
+import { std::memory::Owned };
+type resource Held implements Error {
+    string what;
+    public ctor make() { this.what = "held"; }
+    public const fn string message() { return copy this.what; }
+}
+fn Result<int32, Owned<Error>> f() { return Result::Err(error: Held.make()); }
+fn int32 main() {
+    return match (f()) { case Ok(value: v): v; case Err(error: e): match (e.as<Held>()) { case Some(value: h): 1; case None: 2; }; };
+}

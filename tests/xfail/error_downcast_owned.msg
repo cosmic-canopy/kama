@@ -1,1 +1,1 @@
-owns resources
+owns resources and cannot be copied
