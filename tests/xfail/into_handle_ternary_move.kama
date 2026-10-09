@@ -1,0 +1,15 @@
+// A `?:` arm that lands in a handle converts on its own path, so it may not MOVE a named value into the box: `p`
+// would be given away when `first` holds and still owned, then dropped, when it does not. Boxing a value is a
+// hand-off like any other, and a move in one arm of a `?:` is refused as tests/xfail/ternary_arm_give is.
+type resource Probe implements Error {
+    int32 id;
+    public ctor of(int32 id) { this.id = id; }
+    public const fn string message() { return "probe"; }
+}
+type enum Kind implements Error { Bad; public const fn string message() { return "bad"; } }
+
+fn Owned<Error> pick(bool first) {
+    Probe p = Probe.of(id: 1);
+    return first ? give p : Kind::Bad;
+}
+fn int32 main() { Owned<Error> e = pick(first: true); return 0; }

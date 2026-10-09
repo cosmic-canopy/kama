@@ -206,6 +206,17 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
                     continue;
                 }
             }
+            // ...and a handle over a contract (`Owned<Error>`), whose C name splices the element and the allocator into
+            // one token: the `__` rewriting below read it as `std::memory::Owned_kama::Error_kama::GlobalAllocator`.
+            if (depth < 4 && ic != _collections.end() && ic->second.elemIsInterface && isSmartPtrClass(tok)) {
+                const CollKind k = ic->second.kind;
+                std::string h = std::string(k == CollKind::Owned ? "Owned" : k == CollKind::Shared ? "Shared" : "Weak")
+                              + "<" + demangleForDisplay(ic->second.elemClass, depth + 1);
+                const std::string& a = ic->second.allocType;
+                if (!a.empty() && a != "GlobalAllocator" && a != preludeName("GlobalAllocator")) h += ", " + demangleForDisplay(a, depth + 1);
+                out += h + ">";
+                continue;
+            }
         }
 
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
@@ -5721,11 +5732,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                v->line);
         // An owning ternary is a hand-off per arm where a hand-off consumes it, and a place where an arm names a
         // value and nothing consumes it (`_handoffTernaries`). Otherwise both arms are fresh, and so is it.
-        const std::string tcls = ternaryClass(v);
+        // A `?:` landing in a handle its arms are not (`Owned<Error> e = c ? DeError.of(…) : IoError.of(…)`) is that
+        // handle: an arm that is not one converts into it (emitIntoHandle) on its own path — the statements it hoists
+        // are guarded below like any arm's — and an arm that already is one is handed off as one.
+        const std::string intoDst = _intoHandleDst;
+        _intoHandleDst.clear();
+        const std::string tcls = intoDst.empty() ? ternaryClass(v) : intoDst;
         const bool owns = ternaryOwns(tcls);
         const bool handoff = owns && _handoffTernaries.count(v);
         const bool place = owns && !handoff && isNamedValue(v);
         auto arm = [&](const SharedExpression& e) {
+            if (!intoDst.empty() && intoHandleKind(intoDst, e) != IntoHandle::None) return intoHandleArm(intoDst, e, v->line);
             return handoff ? ternaryArmHandoff(e, tcls, v->line)
                  : place   ? ternaryArmPlace(e, tcls, v->line)
                            : emitExpression(e);
@@ -8302,16 +8319,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     else
                         *_out << kName(nm) << ".ptr = (" << src << ").ptr; " << kName(nm) << ".kama_ctrl = (" << src << ").kama_ctrl;\n";
                     indent(depth); *_out << "if (" << kName(nm) << ".kama_ctrl) " << kName(nm) << ".kama_ctrl->kama_weak++;\n";
-                } else if (isSmartPtrUpcast(ty, init)) {
-                    // Cross-element upcast: widen a concrete-element `Shared`/`Owned` into this
-                    // contract-element (intrinsic fat) handle. The pointee is shared/moved; `nm`
-                    // was already zero-declared above.
+                } else if (intoHandleKind(ty, init) != IntoHandle::None) {
+                    // A value into a handle it is not — boxed into a contract handle, or widened from a concrete or
+                    // derived owner (`Owned<Error> e = DeError.of(…)`, `Shared<Shape> s = sq;`). The same
+                    // conversion every by-value position makes (emitIntoHandle). `nm` was zero-declared above.
                     line(n->line);
-                    emitSmartPtrUpcast(kName(nm), ty, init, handoff, depth, n->line);
-                } else if (isSmartPtrBaseUpcast(ty, init)) {
-                    // Base-class upcast: widen a derived-class handle into this base-class handle.
-                    line(n->line);
-                    emitSmartPtrBaseUpcast(kName(nm), ty, init, handoff, depth, n->line);
+                    bool ph = _hoistOK; _hoistOK = true;
+                    std::string e = emitIntoHandle(ty, d->initializer, 0, n->line);
+                    _hoistOK = ph;
+                    flushHoisted(depth);
+                    indent(depth); *_out << kName(nm) << " = " << e << ";\n";
                 } else if (isSmartPtrHandoffMismatch(ty, init)) {
                     // Both sides own, but the widening isn't valid — a clear diagnostic instead of
                     // the misleading "collection hand-off" message below.
@@ -8322,38 +8339,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                  "upcast needs the same ownership kind and an `is a` element (a concrete that "
                                  "implements the contract `" + e + "`, or a derived of the base `" + e + "`)").c_str(),
                                 n->line);
-                } else if (isSmartPtrClass(ty) && !primWidenKey(init, _classes[ty].collElemClass).empty()) {
-                    // `Owned<Hashable> h = 42;` — a PRIMITIVE boxed into an owning contract handle. The
-                    // borrow form cannot serve this: its fat pointer borrows a block-scoped compound
-                    // literal, so the escape check forbids storing or returning it. An owned box is the
-                    // form that outlives its scope — a field, a collection element, a return.
-                    line(n->line);
-                    std::string pk = primWidenKey(init, _classes[ty].collElemClass);
-                    std::string t = emitPrimBoxIntoContract(ty, pk, emitExpression(init), n->line);
-                    flushHoisted(depth);
-                    indent(depth); *_out << kName(nm) << " = " << t << ";\n";
-                } else if (isSmartPtrClass(ty) && isInterface(_classes[ty].collElemClass)
-                           && exprClass(init) == "kama_string"
-                           && classDeclaresContract("kama_string", _classes[ty].collElemClass)) {
-                    // `Owned<Show> o = give s;` — a `string` boxed into an owning contract handle: the same box,
-                    // with the string MOVED (or deep-copied) into the heap cell; the vtbl's `__dtor` frees it.
-                    // A named string needs the marker like any owning hand-off; a fresh one moves in bare.
-                    line(n->line);
-                    std::string v = emitExpression(init);
-                    bool moveOut = false;
-                    if (isNamedValue(init.get())) {
-                        if (handoff == 0)
-                            unsupported("a `string` hand-off must say `give` (move) or `copy` (deep)", n->line);
-                        else if (handoff == 2) v = copyCall("kama_string", v);
-                        else moveOut = true;
-                    }
-                    std::string t = emitPrimBoxIntoContract(ty, "kama_string", v, n->line);
-                    if (moveOut) {
-                        _hoisted.push_back(moveNullStmt("kama_string", v));
-                        std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv);
-                    }
-                    flushHoisted(depth);
-                    indent(depth); *_out << kName(nm) << " = " << t << ";\n";
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move). The
                     // marker rule differs between those two, so the handoff travels in and is judged there.
@@ -8972,20 +8957,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 _moveState[sn] = MoveState::NotMoved;
             }
         }
-        // Base-class upcast reseat: `b = [give] d` where `b: Shared<Base>` and `d: Shared<Derived>`
-        // (both thin library handles — the LHS isn't an intrinsic smart ptr, so this precedes the
-        // smart-ptr path below). Release the handle's old pointee, then widen the derived handle in.
+        // A value into a handle it is not (`e = DeError.of(…)` at an `Owned<Error> e`, `s = sq` at a `Shared<Shape>`
+        // or a `Shared<Base>`): the conversion every by-value position makes (emitIntoHandle). It is built first — it
+        // may read the old value — then the old value is released and the new one stored.
         if (as->token == EQ) {
-            SharedExpression rhs0 = as->expression;
-            int handoff0 = 0;   // 0 none, 1 give, 2 copy
-            if (auto* h = dynamic_cast<HandoffNode*>(rhs0.get())) { handoff0 = h->isGive ? 1 : 2; rhs0 = h->value; }
-            std::string lty0 = exprClass(as->unaryExpression);
-            if (isSmartPtrBaseUpcast(lty0, rhs0)) {
+            const std::string lty0 = exprClass(as->unaryExpression);
+            if (intoHandleKind(lty0, as->expression) != IntoHandle::None) {
                 checkConstWrite(as->unaryExpression, n->line);
                 std::string b = emitExpression(as->unaryExpression);
                 line(n->line);
+                bool ph = _hoistOK; _hoistOK = true;
+                std::string e = emitIntoHandle(lty0, as->expression, 0, n->line);
+                _hoistOK = ph;
+                flushHoisted(depth);
                 if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(depth); *_out << lty0 << "__dtor(&" << b << ");\n"; }
-                emitSmartPtrBaseUpcast(b, lty0, rhs0, handoff0, depth, n->line);
+                indent(depth); *_out << b << " = " << e << ";\n";
                 return;
             }
         }
@@ -9168,14 +9154,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             SharedExpression rhs = as->expression;
             int handoff = 0;   // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
-            if (isSmartPtrUpcast(ty, rhs)) {
-                // Cross-element upcast reseat: release the handle's old pointee, then widen a
-                // concrete-element `Shared`/`Owned` into this contract-element intrinsic handle.
-                line(n->line);
-                if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(depth); *_out << ty << "__dtor(&" << b << ");\n"; }
-                emitSmartPtrUpcast(b, ty, rhs, handoff, depth, n->line);
-                return;
-            }
             bool rhsLval = isSmartPtrLValue(rhs);
             if (handoff && !rhsLval)
                 unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
@@ -17923,122 +17901,212 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
     return id && id->value && isSmartPtrExpr(e);
 }
 
-// Is `src` a concrete-element owning handle being widened into the contract-element
-// intrinsic `dstTy`? True iff dst is an intrinsic smart-ptr over an INTERFACE, src is a
-// named library heap-owner (`Shared`/`Owned`) whose concrete pointee nominally implements
-// that interface, and the ownership KIND matches (library `Shared`(copyable)↔intrinsic
-// `Shared`; library `Owned`↔intrinsic `Owned`). A `Weak` or a contract→contract source
-// (not a library heap-owner) is not handled here.
-bool CEmitter::isSmartPtrUpcast(const std::string& dstTy, SharedExpression src)
+// The user class a Box source is — an enum, a `value` or a `resource`; not a collection, a handle, a contract or an
+// extern struct. `exprClass` is "" for a variant literal, whose enum comes from the literal itself.
+std::string CEmitter::boxSourceClass(SharedExpression src)
 {
-    if (!isSmartPtrClass(dstTy) || !isInterface(_classes[dstTy].collElemClass)) return false;
-    if (!src || !isNamedValue(src.get())) return false;
-    std::string libT = heapOwnerTarget(exprClass(src));         // concrete pointee ("" if not a library owner)
-    if (libT.empty()) return false;
-    auto it = _classes.find(libT);
-    if (it == _classes.end()) return false;
-    const std::string& dstElem = _classes[dstTy].collElemClass; // interface C name
-    bool implementsIt = false;
-    for (auto& i : it->second.interfaces) if (i == dstElem) { implementsIt = true; break; }
-    if (!implementsIt) return false;
-    // kind must agree: a copyable library owner is a `Shared`, a move-only one an `Owned`.
-    CollKind dk = smartKind(dstTy);
-    return isCopyable(exprClass(src)) ? (dk == CollKind::Shared) : (dk == CollKind::Owned);
+    auto userClass = [&](const std::string& c) {
+        auto it = _classes.find(c);
+        return it != _classes.end() && !it->second.isIntrinsicColl && !isSmartPtrClass(c)
+            && heapOwnerTarget(c).empty() && !isInterface(c) && !it->second.isExternStruct;
+    };
+    const std::string c = exprClass(src);
+    if (userClass(c)) return c;
+    const std::string v = variantExprEnumCType(src);
+    if (userClass(v)) return v;
+    const std::string t = typeOfExpr(src);   // `E::A` of an integer enum
+    return userClass(t) ? t : std::string();
 }
 
-// Emit the upcast field-bridge into the already-declared intrinsic handle `nm`. Mirrors the
-// library→intrinsic bridge in emitBindableBind: the pointee via `deref()`, the concrete's
-// `__as_<Contract>` vtable, and (Shared/Weak) the shared `kama_ctrl` block. Retains a
-// `Shared` (strong++) or moves an `Owned` (suppress the library source's dtor). Precondition:
-// isSmartPtrUpcast(dstTy, src).
-void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
-                                  SharedExpression src, int handoff, int depth, int line)
+CEmitter::IntoHandle CEmitter::intoHandleKind(const std::string& dstC, SharedExpression src)
 {
-    std::string srcCls  = exprClass(src);
-    std::string libT    = heapOwnerTarget(srcCls);              // concrete pointee C name
-    const std::string& dstElem = _classes[dstTy].collElemClass; // interface C name
-    CollKind dk = smartKind(dstTy);
-    // give/copy on an upcast follows the same matrix as a same-type hand-off: `give` MOVES the
-    // handle (every kind is movable), `copy` RETAINS (an `Owned` can't be copied — it's unique),
-    // bare defaults to the source's nature (a `Shared`/`Weak` retains, an `Owned` moves).
-    bool copyable = isCopyable(srcCls);
-    bool retain = (handoff == 1) ? false : (handoff == 2 ? true : copyable);
-    if (handoff == 2 && !copyable)
-        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
-    std::string srcE = emitExpression(src);
-    // pointee: a library owner exposes it via `deref()` (T*); the concrete's per-contract vtable
-    // fattens it. The refcount block is the library `.c` (kama_ctrl-compatible), shared with the source.
-    indent(depth); *_out << nm << ".kama_obj = (void*)" << derefFnName(srcCls, true) << "(&(" << srcE << "));\n";
-    indent(depth); *_out << nm << ".kama_vtbl = &" << libT << "__as_" << dstElem << ";\n";
-    if (dk != CollKind::Owned) {                                // intrinsic Owned<I> is {obj, vtbl} — no ctrl
-        indent(depth); *_out << nm << ".kama_ctrl = (kama_ctrl*)(" << srcE << ").k_c;\n";
-        if (retain) { indent(depth); *_out << "if (" << nm << ".kama_ctrl) " << nm << ".kama_ctrl->"
-                                            << (dk == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n"; }
+    if (!src || dstC.empty() || !_classes.count(dstC)) return IntoHandle::None;
+    if (auto* h = dynamic_cast<HandoffNode*>(src.get())) src = h->value;
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(src.get()))
+        return intoHandleKind(dstC, t->LHS) != IntoHandle::None || intoHandleKind(dstC, t->RHS) != IntoHandle::None
+             ? IntoHandle::Ternary : IntoHandle::None;
+    // A value-producing `match` is typed by its destination arm by arm, and each arm lands through
+    // emitOwnedValueInto, which converts it: the `match` as a whole is not one value of one class.
+    if (dynamic_cast<MatchNode*>(src.get())) return IntoHandle::None;
+    const std::string sc = exprClass(src);
+    if (sc == dstC) return IntoHandle::None;
+    // A library owner of a DERIVED class into the same kind of owner over one of its bases. A `virtual` class
+    // drops through its vtable, so the base handle frees the whole object.
+    const std::string baseT = heapOwnerTarget(dstC), srcT = heapOwnerTarget(sc);
+    if (!baseT.empty() && !srcT.empty() && baseT != srcT && isBaseOf(baseT, srcT) && isCopyable(dstC) == isCopyable(sc))
+        return IntoHandle::BaseUpcast;
+    if (!isSmartPtrClass(dstC) || smartKind(dstC) == CollKind::Weak) return IntoHandle::None;
+    const std::string& contract = _classes[dstC].collElemClass;
+    if (!isInterface(contract)) return IntoHandle::None;
+    if (!srcT.empty()) {   // a library owner over a concrete: into the contract handle of the same KIND
+        auto it = _classes.find(srcT);
+        const bool implementsIt = it != _classes.end()
+            && std::find(it->second.interfaces.begin(), it->second.interfaces.end(), contract) != it->second.interfaces.end();
+        const bool kindAgrees = isCopyable(sc) ? smartKind(dstC) == CollKind::Shared : smartKind(dstC) == CollKind::Owned;
+        return implementsIt && kindAgrees ? IntoHandle::ContractUpcast : IntoHandle::None;
     }
-    // A stateful-allocator dst (M11d): carry the concrete source's own `alloc` value into the fat handle, so
-    // the iface box frees obj/ctrl through the SAME allocator the source used. (The object's layout needs no
-    // carrying: the vtable reports it, a derived object's included.)
-    std::string dstAlloc = _collections.count(dstTy) ? _collections[dstTy].allocType : "";
-    if (!dstAlloc.empty() && dstAlloc != preludeName("GlobalAllocator")) {
-        indent(depth); *_out << nm << ".kama_alloc = (" << srcE << ").k_alloc;\n";
-    }
-    // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
-    // the destination handle now owns the ref (it shares the same ctrl without an increment).
-    if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
+    if (isSmartPtrClass(sc)) return IntoHandle::None;   // another contract handle: not a conversion this makes
+    const std::string bc = boxSourceClass(src);
+    if (!bc.empty()) return implementsContractTemplate(&_classes[bc], contract) ? IntoHandle::Box : IntoHandle::None;
+    if (sc == "kama_string") return classDeclaresContract("kama_string", contract) ? IntoHandle::Box : IntoHandle::None;
+    return primWidenKey(src, contract).empty() ? IntoHandle::None : IntoHandle::Box;
 }
 
-// Is `src` a derived-class handle being widened into the base-class handle `dstTy`? Both are
-// thin library `Shared`/`Owned` structs; the pointee is a `virtual class` (so it has a virtual
-// destructor). True iff both are library owners of the same kind and dst's pointee is a base of
-// src's pointee.
-bool CEmitter::isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression src)
+std::string CEmitter::boxValueExpr(const std::string& dstC, const std::string& cty, const std::string& vtbl,
+                                   const std::string& val, int line)
 {
-    if (!src || !isNamedValue(src.get())) return false;
-    std::string baseT = heapOwnerTarget(dstTy);                // dst pointee ("" if not a library owner)
-    if (baseT.empty()) return false;
-    std::string derivedT = heapOwnerTarget(exprClass(src));    // src pointee
-    if (derivedT.empty() || baseT == derivedT) return false;
-    if (!isBaseOf(baseT, derivedT)) return false;
-    return isCopyable(dstTy) == isCopyable(exprClass(src));     // both Shared, or both Owned
+    rejectIfNoHeap(("boxing a value into an `" + demangleForDisplay(dstC) + "` handle").c_str(), line);
+    // The handle frees what it holds through its allocator, and this block comes from the global heap — so only a
+    // handle that frees there may hold it.
+    const std::string a = _collections.count(dstC) ? _collections[dstC].allocType : std::string();
+    if (!a.empty() && a != preludeName("GlobalAllocator"))
+        unsupported(("`" + demangleForDisplay(dstC) + "` frees through `" + demangleForDisplay(a) + "`, and a value "
+                     "boxed where it is written comes from the global heap — build it with `new(allocator: …)`").c_str(), line);
+    std::string e = "(" + dstC + "){ .kama_obj = kama_box_value((" + cty + "[]){ " + val + " }, " + layoutOf(cty)
+                  + "), .kama_vtbl = &" + vtbl;
+    if (smartKind(dstC) == CollKind::Shared) e += ", .kama_ctrl = kama_ctrl_new()";
+    return e + " }";
 }
 
-// Emit the base upcast into the already-declared handle `nm`. Builds it through the library's own
-// ctor/`adopt` (so the dest fields aren't poked directly), with the pointer adjusted to the base
-// subobject via the `__base` chain (offset 0 in Kama's single-vptr model). A `Shared` retains
-// (shares the ctrl, strong++); an `Owned` moves (source consumed). Precondition: isSmartPtrBaseUpcast.
-void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
-                                      SharedExpression src, int handoff, int depth, int line)
+std::string CEmitter::intoHandleArm(const std::string& dstC, const SharedExpression& arm, int line)
 {
-    std::string srcCls   = exprClass(src);
-    std::string baseT    = heapOwnerTarget(dstTy);
-    std::string derivedT = heapOwnerTarget(srcCls);
-    // Same give/copy matrix as a same-type hand-off: `give` MOVES, `copy` RETAINS (`Owned` can't
-    // be copied), bare defaults to the source's nature (`Shared`/`Weak` retain, `Owned` move).
-    bool copyable = isCopyable(srcCls);
-    bool retain = (handoff == 1) ? false : (handoff == 2 ? true : copyable);
-    if (handoff == 2 && !copyable)
-        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
-    std::string srcE = emitExpression(src);
-    // base-subobject pointer: the derived pointee (via deref()) walked down the `__base` chain.
-    std::string bp = basePathTo(&_classes[derivedT], &_classes[baseT]);
-    if (!bp.empty()) bp.pop_back();                            // drop trailing '.'
-    std::string basePtr = "&((" + derefFnName(srcCls, true) + "(&(" + srcE + ")))->" + bp + ")";
-    if (copyable) {
-        // Shared/Weak: build the base handle sharing the source's ctrl; retain bumps the count,
-        // a move transfers the ref (no bump — the source's dtor is suppressed below). Carry the
-        // source's allocator handle so the base handle releases the shared ctrl through the SAME
-        // allocator (a zero-init default would `free` an arena-owned ctrl → double-free on reset).
-        std::string allocArg = boxAllocatorArg(dstTy).empty() ? "" : (", (" + srcE + ").k_alloc");
-        // The library ctor is the named factory `make(p, c, alloc)` (M8d.2 F7 renamed the nameless primary),
-        // so it returns the base handle BY VALUE — assign it into the already-declared `nm` (not the old
-        // in-place `__ctor(&nm, …)`, which no longer exists).
-        indent(depth); *_out << nm << " = " << dstTy << "__make(" << basePtr << ", (" << srcE << ").k_c" << allocArg << ");\n";
-        if (retain) { indent(depth); *_out << "(" << srcE << ").k_c->k_strong++;\n"; }
-    } else {
-        // Owned: adopt the base subobject (no ctrl); always a move.
-        indent(depth); *_out << nm << " = " << dstTy << "__adopt(" << basePtr << ");\n";
+    auto* h = dynamic_cast<HandoffNode*>(arm.get());
+    SharedExpression v = h ? h->value : arm;
+    if (isNamedValue(v.get()) && !dynamic_cast<TernaryExpressionNode*>(v.get())) {
+        const int handoff = h ? (h->isGive ? 1 : 2) : 0;
+        const std::string sc = exprClass(v), bc = boxSourceClass(v);
+        bool moves = false, canCopy = false;
+        if (!heapOwnerTarget(sc).empty()) { canCopy = isCopyable(sc); moves = handoff == 1 || (handoff == 0 && !canCopy); }
+        else if (sc == "kama_string")     { canCopy = true; moves = handoff == 1; }
+        else if (!bc.empty() && isMoveOnlyValue(bc)) {
+            canCopy = isCopyable(bc);
+            moves = handoff == 1 || (handoff == 0 && !(canCopy && _classes[bc].bareDefault == COPY));
+        }
+        if (moves) {
+            const std::string what = unparseExpr(v);
+            unsupported(("cannot move `" + what + "` in one arm of a `?:` — it would be moved on one path and still "
+                         "live on the other; " + (canCopy ? "say `copy " + what + "` in the arm"
+                                                          : "a `" + demangleForDisplay(bc.empty() ? sc : bc) + "` has no "
+                                                            "`copy`, so move it on every path or none, or choose with "
+                                                            "`if`/`else`")).c_str(), line);
+            return "(" + dstC + "){0}";
+        }
     }
-    if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
+    return emitIntoHandle(dstC, arm, 0, line);
+}
+
+std::string CEmitter::emitIntoHandle(const std::string& dstC, SharedExpression src, int handoff, int line)
+{
+    if (auto* h = dynamic_cast<HandoffNode*>(src.get())) { handoff = h->isGive ? 1 : 2; src = h->value; }
+    const IntoHandle kind = intoHandleKind(dstC, src);
+    const bool named = isNamedValue(src.get());
+    if (handoff && !named && kind != IntoHandle::Ternary) {
+        unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", line);
+        handoff = 0;
+    }
+    switch (kind) {
+    case IntoHandle::None:
+        return std::string();
+    case IntoHandle::Ternary: {
+        // Each arm converts on its own path: the ternary hands the handle to its arms (see its emitter).
+        noteHandoffValue(src);
+        ScopedStr _d(_intoHandleDst, dstC);
+        return emitExpression(src);
+    }
+    case IntoHandle::Box: {
+        const std::string& contract = _classes[dstC].collElemClass;
+        const std::string bc = boxSourceClass(src);
+        if (!bc.empty()) {
+            std::string v;
+            if (dynamic_cast<ThisAccessNode*>(src.get())) v = receiverObject(emitExpression(src));
+            else {
+                ScopedStr _v(_variantTargetType, bc), _m(_matchTargetCType, bc);   // a literal of the source's own type
+                v = handoff == 2 ? emitPlace(src) : emitExpression(src);
+                if (ctorThisAsValue(src, bc)) v = "(*" + v + ")";
+            }
+            if (named && isMoveOnlyValue(bc)) {
+                // The by-value matrix: `copy` duplicates, `give` moves, bare follows the type's own `bare:` default.
+                const bool cpy = isCopyable(bc);
+                if (handoff == 2 && !cpy) unsupported(notCopyableMessage(bc, "use `give` to move it").c_str(), line);
+                const bool doCopy = handoff == 2 ? cpy : handoff == 1 ? false : cpy && _classes[bc].bareDefault == COPY;
+                if (doCopy) v = copyCall(bc, v);
+                else if (handoff != 2) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
+            }
+            return boxValueExpr(dstC, bc, bc + "__as_" + contract, v, line);
+        }
+        if (exprClass(src) == "kama_string") {
+            std::string v = handoff == 2 ? emitPlace(src) : emitExpression(src);
+            if (named) {
+                if (handoff == 0) unsupported("a `string` hand-off must say `give` (move) or `copy` (deep)", line);
+                else if (handoff == 2) v = copyCall("kama_string", v);
+                else if (!_hoistOK) unsupported("moving a `string` into a handle here needs a statement slot — bind "
+                                                "the handle to a local first", line);
+                else {   // the box takes the bytes; the source is emptied once they are read
+                    const std::string t = "kama_into" + std::to_string(_tempCounter++);
+                    _hoisted.push_back("kama_string " + t + " = " + v + "; " + moveNullStmt("kama_string", v));
+                    std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv);
+                    v = t;
+                }
+            }
+            return boxValueExpr(dstC, "kama_string", intrinsicContractVtbl("kama_string", contract), v, line);
+        }
+        const std::string pk = primWidenKey(src, contract);   // a primitive owns nothing: its value goes in, marker or not
+        return boxValueExpr(dstC, implTargetInfo(pk)->name, intrinsicContractVtbl(pk, contract), emitExpression(src), line);
+    }
+    case IntoHandle::ContractUpcast:
+    case IntoHandle::BaseUpcast: {
+        const std::string sc = exprClass(src);
+        const bool copyable = isCopyable(sc);
+        if (handoff == 2 && !copyable) unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
+        // `give` moves the handle and `copy` retains it; bare follows its nature (a `Shared` retains, an `Owned`
+        // moves). A fresh handle — a call's result — is moved in: nothing else holds it.
+        const bool retain = named && (handoff == 1 ? false : handoff == 2 ? true : copyable);
+        if (!_hoistOK) {
+            unsupported("widening a handle here needs a statement slot — bind it to a local first", line);
+            return "(" + dstC + "){0}";
+        }
+        std::string se = emitExpression(src);
+        if (!named) {
+            const std::string f = "kama_up" + std::to_string(_tempCounter++);
+            _hoisted.push_back(sc + " " + f + " = " + se + ";");
+            se = f;
+        }
+        const std::string t = "kama_into" + std::to_string(_tempCounter++);
+        std::string st = dstC + " " + t + " = {0}; ";
+        if (kind == IntoHandle::ContractUpcast) {
+            // The pointee through the owner's `deref()`, fattened with the concrete's per-contract vtable; a `Shared`
+            // shares the owner's control block (the library one is `kama_ctrl`-compatible).
+            const std::string& contract = _classes[dstC].collElemClass;
+            st += t + ".kama_obj = (void*)" + derefFnName(sc, true) + "(&(" + se + ")); ";
+            st += t + ".kama_vtbl = &" + heapOwnerTarget(sc) + "__as_" + contract + ";";
+            if (smartKind(dstC) == CollKind::Shared) {
+                st += " " + t + ".kama_ctrl = (kama_ctrl*)(" + se + ").k_c;";
+                if (retain) st += " if (" + t + ".kama_ctrl) " + t + ".kama_ctrl->kama_strong++;";
+            }
+            // A stateful allocator travels with the box, so it frees through the allocator the source used.
+            const std::string a = _collections.count(dstC) ? _collections[dstC].allocType : std::string();
+            if (!a.empty() && a != preludeName("GlobalAllocator")) st += " " + t + ".kama_alloc = (" + se + ").k_alloc;";
+        } else {
+            // The base subobject (offset 0 down the `__base` chain), built through the owner's own `make`/`adopt` so
+            // its fields are not poked from here. A `Shared` carries the source's control block and allocator.
+            const std::string baseT = heapOwnerTarget(dstC), srcT = heapOwnerTarget(sc);
+            std::string bp = basePathTo(&_classes[srcT], &_classes[baseT]);
+            if (!bp.empty()) bp.pop_back();
+            const std::string basePtr = "&((" + derefFnName(sc, true) + "(&(" + se + ")))->" + bp + ")";
+            if (copyable) {
+                const std::string allocArg = boxAllocatorArg(dstC).empty() ? "" : (", (" + se + ").k_alloc");
+                st += t + " = " + dstC + "__make(" + basePtr + ", (" + se + ").k_c" + allocArg + ");";
+                if (retain) st += " (" + se + ").k_c->k_strong++;";
+            } else {
+                st += t + " = " + dstC + "__adopt(" + basePtr + ");";
+            }
+        }
+        _hoisted.push_back(st);
+        if (named && !retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
+        return t;
+    }
+    }
+    return std::string();
 }
 
 std::string CEmitter::ownerElem(const std::string& cls)
@@ -18054,7 +18122,7 @@ bool CEmitter::isSmartPtrHandoffMismatch(const std::string& dstTy, SharedExpress
     if (!src || !isNamedValue(src.get())) return false;
     std::string de = ownerElem(dstTy), se = ownerElem(exprClass(src));
     if (de.empty() || se.empty() || de == se) return false;    // both must own; a same-element conv is handled elsewhere
-    return !isSmartPtrUpcast(dstTy, src) && !isSmartPtrBaseUpcast(dstTy, src);
+    return intoHandleKind(dstTy, src) == IntoHandle::None;
 }
 
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so
@@ -23309,7 +23377,13 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         bool ctorImplementsParam = false;
         if (!ctorCls.empty() && isInterface(p.className))
             for (auto& i : _classes[ctorCls].interfaces) if (i == p.className) { ctorImplementsParam = true; break; }
-        if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
+        // A value into a by-value HANDLE parameter it is not (`take(e: DeError.of(…))` at an `Owned<Error> e`): boxed or
+        // widened, the conversion every by-value position makes (emitIntoHandle), which settles the hand-off itself.
+        const bool intoHandle = !p.byRef && !p.isOut && intoHandleKind(p.className, argExpr) != IntoHandle::None;
+        if (intoHandle) {
+            val = emitIntoHandle(p.className, argExpr, handoff, srcLine);
+            valHoisted = true;
+        } else if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isIntrinsicColl) {
             std::string t = "kama_ctorarg" + std::to_string(_tempCounter++);
             if (ctorIsFactory) {
@@ -23588,6 +23662,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                          ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base / the read-only place
                          : ("&(" + val + ")");
             }
+        } else if (intoHandle) {
+            s += val;   // a fresh handle the callee owns
         } else {
             // By value. A *named* smart pointer TRANSFERS into the param, which the
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
@@ -26962,6 +27038,17 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         rejectValueKindMismatch(dstCType, v, what, line);
         rejectContractNonConformance(dstCType, v, what, line);     // the branch that rule leaves to a contract
     }
+    // A value into a handle it is not (`return DeError.of(…);` from a fn returning `Owned<Error>`): boxed or widened,
+    // the conversion every by-value position makes (emitIntoHandle), which settles the hand-off itself.
+    if (intoHandleKind(dstCType, v) != IntoHandle::None) {
+        bool ph = _hoistOK; _hoistOK = true;
+        std::string e = emitIntoHandle(dstCType, v, handoff, line);
+        _hoistOK = ph;
+        flushHoisted(depth);
+        this->line(line);
+        indent(depth); *_out << dst << " = " << e << ";\n";
+        return;
+    }
     bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
     std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
@@ -28014,10 +28101,18 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // The kind rule for a payload. This construction does its own named-argument matching instead
             // of going through `emitReorderedCall`, so it is the fourth hand-off site and needs its own
             // call — the same reason the payload LABEL needed its own `recordNodeRef` two lines up.
-            // (An `Owned<Error>`/`Shared<Error>` field reads as Unknown, so the enum-boxing path below is
+            // (An `Owned<Error>`/`Shared<Error>` field reads as Unknown, so the conversion just below is
             // untouched.)
             rejectValueKindMismatch(fcls, argExpr,
                                     ("payload field `" + f.name + "`").c_str(), srcLine);
+            // A value into a handle field (`Result::Err(error: e)` at an `Owned<Error>`): boxed or widened, the
+            // conversion every by-value position makes (emitIntoHandle).
+            if (intoHandleKind(fcls, argExpr) != IntoHandle::None) {
+                s += (first ? " ." : ", .");
+                s += kMember(ci, f.name) + " = " + emitIntoHandle(fcls, argExpr, handoff, srcLine);
+                first = false;
+                continue;
+            }
             // an inline construction as the payload (inline `new`, an inline generic-instance ctor,
             // or a nested `Some(Some(…))` / value-producing `match`) materializes against the field type;
             // propagate the target so the nested variant/match resolves.
@@ -28032,35 +28127,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             std::string argCls = handoffSourceClass(argExpr, handoff);
             rejectUnresolvedHandoff(argCls, fcls, argExpr, handoff, ("payload field `" + f.name + "`").c_str(), srcLine);
             std::string field;
-            // Model C (P2): a value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
-            // `Result::Err(error: e)`) is BOXED + upcast — heap-copy it, attach its `<Type>__as_Error` vtbl.
-            // Checked FIRST (before the move-only branches): if the field is a poly-dispatch-contract handle and
-            // the arg's type implements the contract, boxing is always right. `exprClass` is "" for a variant
-            // literal, so recover the source enum via variantExprEnumCType. Any user type that implements it —
-            // an enum, a `value`, a `resource` — not only an enum: `std::io::IoError` became a `value` and
-            // `return Result::Err(error: e)` into an `Owned<Error>` reached clang unboxed ("initializing 'void *'
-            // with an expression of incompatible type"), while an enum in the same position boxed.
-            auto enumClass = [&](const std::string& c) {
-                auto it = _classes.find(c);
-                return it != _classes.end() && !it->second.isIntrinsicColl && !isSmartPtrClass(c)
-                    && !isInterface(c) && !it->second.isExternStruct;
-            };
-            std::string boxEnum = enumClass(argCls) ? argCls : variantExprEnumCType(argExpr);
-            if (boxEnum.empty() && enumClass(typeOfExpr(argExpr))) boxEnum = typeOfExpr(argExpr);   // `E::A` of an integer enum
-            if (isSmartPtrClass(fcls) && !boxEnum.empty() && enumClass(boxEnum)
-                && isPolyDispatchContract(_classes[fcls].collElemClass)
-                && implementsContractTemplate(&_classes[boxEnum], _classes[fcls].collElemClass)) {
-                if (!_hoistOK)
-                    unsupported("boxing an error into a variant here needs a statement slot — bind the "
-                                "constructed value to a local first", srcLine);
-                if (isNamedValue(argExpr.get()) && _classes[boxEnum].destructible) {
-                    if (handoff != 1)
-                        unsupported(("moving `" + boxEnum + "` into an error box transfers ownership — say "
-                                     "`give`").c_str(), srcLine);
-                    std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
-                }
-                field = emitEnumBoxIntoContract(fcls, boxEnum, val, srcLine);
-            } else if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
+            if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 // A named smart pointer MOVES/RETAINS into the union (which now owns it, dropped by the
                 // switch-on-tag dtor). Same hand-off as a by-value call arg, hoisted (ISO C).
                 CollKind k = smartKind(argCls);
@@ -32155,7 +32222,7 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
     // Boundary: a sticky failure (a scalar value the format can't represent) -> Err(boxed).
     indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
-    std::string box = emitStickyErrBox(2, preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
+    std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } };\n";
@@ -32583,7 +32650,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
-    std::string box = emitStickyErrBox(2);
+    std::string box = emitStickyErrBox();
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     // A field the data left out that it had to carry. Asked AFTER the sticky failure, which is the
@@ -32592,7 +32659,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     if (!missing.empty()) {
         indent(1); *_out << "if (" << missing << ") {\n";
         if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
-        std::string mbox = emitStickyErrBox(2, preludeName("DeError"), "kama__DeError_MissingField");
+        std::string mbox = emitStickyErrBox(preludeName("DeError"), "kama__DeError_MissingField");
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << mbox << " } };\n";
         indent(1); *_out << "}\n";
     }
@@ -32619,7 +32686,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
         emitSerFieldWrite(f.type, access, d, resC);
     });
     indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
-    std::string box = emitStickyErrBox(2, preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
+    std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } };\n";
@@ -32724,7 +32791,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "}\n";
         indent(1); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
         indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
-        std::string nbox = emitStickyErrBox(2);
+        std::string nbox = emitStickyErrBox();
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << nbox << " } };\n";
         indent(1); *_out << "}\n";
         indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama_result } };\n";
@@ -32793,7 +32860,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "else {\n";
         indent(2); *_out << "r.kama_vtbl->k_fail(r.kama_obj);\n";
         indent(2); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
-        std::string ubox = emitStickyErrBox(2);
+        std::string ubox = emitStickyErrBox();
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << ubox << " } };\n";
         indent(1); *_out << "}\n";
     }
@@ -32801,7 +32868,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&kama_result);\n"; }
-    std::string ebox = emitStickyErrBox(2);
+    std::string ebox = emitStickyErrBox();
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << ebox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama_result } };\n";
@@ -33115,18 +33182,13 @@ SharedIdentifier CEmitter::resultUnitOwnedErrorTypeNode()
     return resultOwnedErrorTypeNode(unit);
 }
 
-// Emit (raw C) the boxing of a sticky enum error (`DeError` for read, `SerError` for write) drawn from
-// `errExpr` into an `Owned<Error>`; returns the temp holding it. Reuses the P2 boxing
-// (emitEnumBoxIntoContract) — flushes its one hoisted statement here since the synth serde bodies are
-// hand-emitted C, not the expression/hoist path.
-std::string CEmitter::emitStickyErrBox(int depth, const std::string& enumType, const std::string& errExpr)
+// The boxing of a sticky enum error (`DeError` for read, `SerError` for write) drawn from `errExpr` into an
+// `Owned<Error>` — an expression (boxValueExpr), so the synthesized serde bodies, which are hand-emitted C rather
+// than the expression/hoist path, take it in place.
+std::string CEmitter::emitStickyErrBox(const std::string& enumType, const std::string& errExpr)
 {
-    std::string ownedErr = cType(ownedErrorTypeNode());
-    size_t base = _hoisted.size();
-    std::string t = emitEnumBoxIntoContract(ownedErr, enumType, errExpr, 0);
-    for (size_t i = base; i < _hoisted.size(); ++i) { indent(depth); *_out << _hoisted[i] << "\n"; }
-    _hoisted.resize(base);
-    return t;
+    const std::string ownedErr = cType(ownedErrorTypeNode());
+    return boxValueExpr(ownedErr, enumType, enumType + "__as_" + _classes[ownedErr].collElemClass, errExpr, 0);
 }
 
 // Synthesize an `Optional<elem>` type node (the `.as<T>()` result). Resolves like a user-written
@@ -34446,7 +34508,7 @@ void CEmitter::emitGraphDriverTail(const std::string& resC)
 {
     indent(1); *_out << "kama_ser_graph_free(&__g);\n";
     indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
-    std::string box = emitStickyErrBox(2, preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
+    std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } };\n";
@@ -34594,12 +34656,12 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(1); *_out << "if (__g.failed) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
     indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeError)__g.code);\n";
-    std::string gbox = emitStickyErrBox(2);
+    std::string gbox = emitStickyErrBox();
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << gbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
-    std::string rbox = emitStickyErrBox(2);
+    std::string rbox = emitStickyErrBox();
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << rbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = __ret } };\n";
@@ -34669,7 +34731,7 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(1); *_out << "kama_de_graph_free(&__g);\n";
     indent(1); *_out << "if (__g.failed) {\n";
     indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeError)__g.code);\n";
-    std::string gbox = emitStickyErrBox(2);
+    std::string gbox = emitStickyErrBox();
     indent(2); *_out << "if (__rv.kama_tag == " << resC << "_Ok) " << cType(retNode->genericArgs->at(0))
                      << "__dtor(&__rv.kama_u.k_Ok.k_value);\n";
     indent(2); *_out << "else " << cType(ownedErrorTypeNode()) << "__dtor(&__rv.kama_u.k_Err.k_error);\n";
@@ -36559,51 +36621,6 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     s +=   lval + " = (" + target + "){ .kama_tag = " + target + "_Some, .kama_u.k_Some = { ." + someName + " = "
              + val + " } }; }";
     return s;
-}
-
-// Model C (P2): box an enum VALUE into an `Owned<C>`/`Shared<C>` fat handle (C a poly-dispatch contract).
-// Heap-copies the enum in and attaches the `<Enum>__as_<C>` vtbl — mirrors the infallible interface boxing
-// (new-into-Owned, ~1350-1377) but the payload is an existing value, not a ctor call. The default
-// GlobalAllocator handle is the plain `{obj,vtbl}` (KAMA_OWNED_IFACE_TYPE); a Shared handle also gets a
-// fresh ctrl. Pushed as ONE hoisted statement (the caller must have a statement slot); returns the temp.
-// `Owned<C>`/`Shared<C>` over a PRIMITIVE — the owning counterpart of the borrow widening. Mirrors
-// emitEnumBoxIntoContract exactly (heap-copy the value in, attach the vtbl, a Shared also gets a ctrl);
-// the one difference is the vtbl symbol, which is keyed by the CONFORMANCE key (`int32`) and not the C
-// type, so `char` and `uint32` do not share one. A primitive owns nothing, so the box's `__dtor` is null
-// and dropping the handle just frees the box; a `string` (key `kama_string`) has its own `__dtor` there.
-std::string CEmitter::emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,
-                                              const std::string& valExpr, int srcLine)
-{
-    rejectIfNoHeap("boxing a primitive into an owning contract handle", srcLine);
-    const std::string& contract = _classes[ownedCType].collElemClass;
-    ClassInfo* pci = implTargetInfo(primKey_);
-    std::string t = "kama_kama_pbox" + std::to_string(_tempCounter++);
-    std::string s = ownedCType + " " + t + " = {0}; ";
-    s += t + ".kama_obj = kama_alloc(" + layoutOf(pci->name) + "); ";
-    s += "if (!" + t + ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
-    s += "*(" + pci->name + "*)" + t + ".kama_obj = (" + valExpr + "); ";
-    s += t + ".kama_vtbl = &" + intrinsicContractVtbl(primKey_, contract) + ";";
-    if (smartKind(ownedCType) == CollKind::Shared)
-        s += " " + t + ".kama_ctrl = kama_ctrl_new();";
-    _hoisted.push_back(s);
-    return t;
-}
-
-std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, const std::string& enumCType,
-                                              const std::string& enumValExpr, int srcLine)
-{
-    rejectIfNoHeap("boxing an error into an `Owned<Error>` handle", srcLine);   // no-heap gate
-    const std::string& contract = _classes[ownedCType].collElemClass;
-    std::string t = "kama_kama_ebox" + std::to_string(_tempCounter++);
-    std::string s = ownedCType + " " + t + " = {0}; ";
-    s += t + ".kama_obj = kama_alloc(" + layoutOf(enumCType) + "); ";
-    s += "if (!" + t + ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
-    s += "*(" + enumCType + "*)" + t + ".kama_obj = (" + enumValExpr + "); ";
-    s += t + ".kama_vtbl = &" + enumCType + "__as_" + contract + ";";
-    if (smartKind(ownedCType) == CollKind::Shared)
-        s += " " + t + ".kama_ctrl = kama_ctrl_new();";
-    _hoisted.push_back(s);
-    return t;
 }
 
 // Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to its concrete type `T`,

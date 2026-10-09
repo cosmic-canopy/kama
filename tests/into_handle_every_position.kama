@@ -1,0 +1,158 @@
+import { std::memory::Owned, std::memory::Shared, std::collections::DynamicArray };
+// A value lands in a handle it is not the same way in every by-value position: a local, an assignment, a field
+// store, a `return`, a `match` arm, a field initializer, an argument, a variant payload and a `?:` arm. It is BOXED
+// into `Owned<C>`/`Shared<C>` when its type implements the contract — a `resource`, a `value`, an enum, a primitive,
+// a `string` — and WIDENED when it is an owner of a concrete type or of a derived class. Each position used to carry
+// its own subset: only a payload boxed a user type, only a local boxed a primitive or widened a handle, and a `return`
+// or an argument reached clang for every one of them ("assigning to 'Owned_Error' from incompatible type").
+//
+// `Probe` counts its drops: every box is dropped exactly once, by the handle that holds it, and a source that was
+// moved in never. Exit code 42 iff every count and every message is what it should be.
+
+static int32 drops = 0;
+
+type resource Probe implements Error {
+    int32 id;
+    public ctor of(int32 id) { this.id = id; }
+    ~Probe() { drops = drops + 1; }
+    public const fn string message() { int32 n = this.id; return "probe ${n}"; }
+}
+type value Code implements Error {
+    int32 n = 0;
+    public ctor of(int32 n) { this.n = n; }
+    public const fn string message() { int32 v = this.n; return "code ${v}"; }
+}
+type enum Kind implements Error {
+    Bad, Worse;
+    public const fn string message() { return match (this) { case Bad: "bad"; case Worse: "worse"; }; }
+}
+type enum Why implements Error {
+    Because(string reason), Unknown;
+    public const fn string message() { return match (this) { case Because(reason: r): copy r; case Unknown: "unknown"; }; }
+}
+type resource Holder {
+    Owned<Error> e = Code.of(n: 1);                                   // a field initializer
+    public ctor of() { }
+    public fn void reset() { this.e = Probe.of(id: 30); }              // a field store
+    public const fn string say() { return this.e.message(); }
+}
+
+type virtual(maxDepth: 1) resource Shape {
+    DynamicArray<int32> tag;
+    public ctor make() { this.tag.add(item: 0); }
+    ~Shape() { }
+    public fn int32 area() { return this.compute(); }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    DynamicArray<int32> side;
+    public ctor make(int32 s) { this.base = Base.make(); this.side.add(item: s); }
+    ~Square() { }
+    protected override fn int32 compute() { return this.side[0] * this.side[0]; }
+}
+
+fn Owned<Probe> made(int32 id) { return new Probe.of(id: id); }
+fn Owned<Square> square(int32 s) { return new Square.make(s: s); }
+fn int32 says(Owned<Error> e, string want) { return e.message() == want ? 1 : 0; }   // takes the box, drops it
+fn int32 area(Owned<Shape> s) { return s.area(); }
+
+fn Owned<Error> returned(int32 which) {
+    if (which == 0) { return Probe.of(id: 20); }       // a fresh resource
+    if (which == 1) { Probe p = Probe.of(id: 21); return give p; }   // a named one, moved
+    if (which == 2) { return Code.of(n: 22); }         // a value
+    if (which == 3) { return made(id: 23); }           // a concrete owner, widened
+    return Kind::Worse;                                // an enum
+}
+fn Owned<Shape> widened() { Owned<Square> q = new Square.make(s: 4); return give q; }
+
+fn int32 locals() {
+    int32 ok = 0;
+    {
+        Owned<Error> a = Probe.of(id: 1);
+        Probe p = Probe.of(id: 2);
+        Owned<Error> b = give p;
+        Owned<Error> c = Code.of(n: 3);
+        Owned<Error> d = Kind::Bad;
+        Owned<Error> e = Why::Because(reason: "because");
+        Shared<Error> f = Code.of(n: 4);
+        Shared<Error> g = f;
+        Owned<Hashable> h = 5;
+        string s = "text";
+        Owned<Hashable> t = give s;
+        Owned<Error> u = made(id: 6);
+        ok = ok + (a.message() == "probe 1" ? 1 : 0) + (b.message() == "probe 2" ? 1 : 0)
+                + (c.message() == "code 3" ? 1 : 0) + (d.message() == "bad" ? 1 : 0)
+                + (e.message() == "because" ? 1 : 0) + (g.message() == "code 4" ? 1 : 0)
+                + (u.message() == "probe 6" ? 1 : 0);
+    }
+    return drops == 3 && ok == 7 ? 1 : 0;              // probes 1, 2, 6
+}
+
+fn int32 assignments() {
+    int32 before = drops;
+    Owned<Error> e = Kind::Bad;
+    e = Probe.of(id: 7);
+    e = Code.of(n: 8);                                 // drops probe 7
+    int32 one = drops - before;
+    Holder h = Holder.of();
+    int32 init = h.say() == "code 1" ? 1 : 0;
+    h.reset();
+    int32 stored = h.say() == "probe 30" ? 1 : 0;
+    Owned<Shape> s = new Shape.make();
+    Owned<Square> q = new Square.make(s: 3);
+    s = give q;
+    int32 widenedArea = s.area();
+    return one == 1 && init == 1 && stored == 1 && e.message() == "code 8" && widenedArea == 9 ? 1 : 0;
+}
+
+fn int32 returns() {
+    int32 before = drops;
+    int32 ok = 0;
+    {
+        Owned<Error> a = returned(which: 0);
+        Owned<Error> b = returned(which: 1);
+        Owned<Error> c = returned(which: 2);
+        Owned<Error> d = returned(which: 3);
+        Owned<Error> e = returned(which: 4);
+        ok = (a.message() == "probe 20" ? 1 : 0) + (b.message() == "probe 21" ? 1 : 0) + (c.message() == "code 22" ? 1 : 0)
+           + (d.message() == "probe 23" ? 1 : 0) + (e.message() == "worse" ? 1 : 0);
+    }
+    Owned<Shape> w = widened();
+    return ok == 5 && drops - before == 3 && w.area() == 16 ? 1 : 0;
+}
+
+fn int32 arguments() {
+    int32 before = drops;
+    Probe p = Probe.of(id: 41);
+    Owned<Probe> o = new Probe.of(id: 43);
+    int32 ok = says(e: Probe.of(id: 40), want: "probe 40") + says(e: give p, want: "probe 41")
+             + says(e: Code.of(n: 42), want: "code 42") + says(e: Kind::Worse, want: "worse")
+             + says(e: give o, want: "probe 43") + says(e: made(id: 44), want: "probe 44");
+    Owned<Square> q = new Square.make(s: 5);
+    int32 a = area(s: give q) + area(s: square(s: 6));
+    return ok == 6 && drops - before == 4 && a == 61 ? 1 : 0;
+}
+
+fn int32 armsAndPayloads(bool first) {
+    int32 before = drops;
+    int32 ok = 0;
+    {
+        Owned<Error> t = first ? Probe.of(id: 50) : Kind::Bad;
+        Kind k = first ? Kind::Bad : Kind::Worse;
+        Owned<Error> m = match (k) { case Bad: Probe.of(id: 51); case Worse: Code.of(n: 52); };
+        Result<int32, Owned<Error>> r = Result::Err(error: Probe.of(id: 53));
+        Optional<Owned<Error>> o = Optional::Some(value: Kind::Worse);
+        string want = first ? "probe 50" : "bad";
+        string wantM = first ? "probe 51" : "code 52";
+        int32 inErr = match (r) { case Err(error: e): e.message() == "probe 53" ? 1 : 0; case Ok(value: v): 0; };
+        int32 inSome = match (o) { case Some(value: e): e.message() == "worse" ? 1 : 0; case None: 0; };
+        ok = (t.message() == want ? 1 : 0) + (m.message() == wantM ? 1 : 0) + inErr + inSome;
+    }
+    int32 want = first ? 3 : 1;                        // probes 50 and 51 exist only on the first path
+    return ok == 4 && drops - before == want ? 1 : 0;
+}
+
+fn int32 main() {
+    int32 r = locals() + assignments() + returns() + arguments() + armsAndPayloads(first: true) + armsAndPayloads(first: false);
+    return r == 6 ? 42 : r;
+}

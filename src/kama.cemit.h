@@ -2602,8 +2602,6 @@ private:
     std::string constantTempCType(SharedExpression e);
     std::string scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m);
     void        emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key);
-    std::string emitPrimBoxIntoContract(const std::string& ownedCType, const std::string& primKey_,
-                                        const std::string& valExpr, int srcLine);
     void registerGenericContractInst(const std::string& tmpl, SharedIdentifierList args);
     // A contract's method-prototype list, from _interfaces (concrete/instance) or _genericContracts
     // (a template). Bound-checking matches by method NAME, which is type-parameter-independent, so it
@@ -2726,21 +2724,31 @@ private:
     void rejectMintProtocolValue(SharedIdentifier ty, const char* what, int line);   // a `@viewable` contract is not a value
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
     std::string moveNullStmt(const std::string& cls, const std::string& expr) const;   // the moved-FROM intrinsic's reset, by shape
-    // Cross-element smart-ptr UPCAST: widen a CONCRETE-element owning handle into a
-    // CONTRACT-element (intrinsic fat) handle — the Liskov "is a" (`Shared<Shape> s = a;`
-    // where `a: Shared<Sq>`). The concrete side is a library `Shared`/`Owned` struct (thin
-    // `T*` + optional ctrl); the contract side is the intrinsic `{obj, vtbl, ctrl}`. `dst` is
-    // the intrinsic type, `src` the library-owner lvalue.
-    bool isSmartPtrUpcast(const std::string& dstTy, SharedExpression src);
-    void emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
-                            SharedExpression src, int handoff, int depth, int line);
-    // Base-class upcast: widen a `Shared`/`Owned` over a DERIVED class into one over a BASE
-    // class (both thin library handles). Adjusts the pointer to the base subobject; a `Shared`
-    // retains, an `Owned` moves. Safe because a `virtual class` has a virtual destructor
-    // (drop dispatches to the most-derived via the vtable's `__dtor`).
-    bool isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression src);
-    void emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
-                                SharedExpression src, int handoff, int depth, int line);
+    // THE conversion into a handle, asked by every by-value position a value meets a handle type at — a local, an
+    // assignment, a `return`, a `match` arm, a field initializer, an argument, a variant payload. Three of them:
+    //   Box             a value whose type implements the contract — a primitive, a `string`, an enum, a `value`, a
+    //                   `resource` — into `Owned<C>`/`Shared<C>` (`Owned<Error> e = DeError.of(…)`): heap-copied in,
+    //                   with its `__as_C` vtable;
+    //   ContractUpcast  a library `Owned<T>`/`Shared<T>` into the contract handle of the same kind (`Shared<Shape>
+    //                   s = sq;`) — the Liskov "is a": the same pointee, fattened with `T__as_C`;
+    //   BaseUpcast      a library `Owned<Derived>`/`Shared<Derived>` into one over a base (`Owned<Shape> s = sq;`).
+    // `Ternary`: a `?:` whose arm needs one of them; each arm converts on its own path.
+    // Each position used to carry its own subset, so a `return`, an argument and an assignment reached clang for
+    // most of them ("assigning to 'Owned_Error' from incompatible type"), and only a variant payload boxed an enum.
+    enum class IntoHandle { None, Box, ContractUpcast, BaseUpcast, Ternary };
+    IntoHandle intoHandleKind(const std::string& dstC, SharedExpression src);
+    // The converted value — an expression of type `dstC` (an upcast hoists the statements that build it). Hand-offs
+    // follow the by-value matrix: `give` moves, `copy` duplicates, bare follows the source type's own default.
+    std::string emitIntoHandle(const std::string& dstC, SharedExpression src, int handoff, int line);
+    std::string boxSourceClass(SharedExpression src);   // the user class a Box source is ("" if none)
+    // One arm of a `?:` that lands in a handle, converted on its own path — refused where that would move a named
+    // value on one path and leave it live on the other (ternaryArmHandoff's rule).
+    std::string intoHandleArm(const std::string& dstC, const SharedExpression& arm, int line);
+    // `(H){ .kama_obj = <a heap copy of val>, .kama_vtbl = &vtbl [, .kama_ctrl] }` — a value of C type `cty` boxed into
+    // the handle `dstC`. An expression, so it needs no statement slot: a `?:` arm and a derived reader both use it.
+    std::string boxValueExpr(const std::string& dstC, const std::string& cty, const std::string& vtbl,
+                             const std::string& val, int line);
+    std::string _intoHandleDst;   // the handle a `?:` being emitted lands in — its arms convert into it
     // The pointee class of an owning handle — a library `Shared`/`Owned`/`Weak` or an intrinsic
     // contract handle; "" if `cls` isn't an owning handle.
     std::string ownerElem(const std::string& cls);
@@ -3065,8 +3073,8 @@ private:
     SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)
     SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
     SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
-    // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); returns the temp.
-    std::string emitStickyErrBox(int depth, const std::string& enumType = "kama__DeError",
+    // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); an expression.
+    std::string emitStickyErrBox(const std::string& enumType = "kama__DeError",
                                  const std::string& errExpr = "r.kama_vtbl->k_errorCode(r.kama_obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
@@ -3473,11 +3481,6 @@ private:
                               ObjectCreationNode* oc, int srcLine);
     std::string emitTryCast(const std::string& target, const std::string& lval,        // try cast<T> -> Optional<T>
                             CastNode* cst, int srcLine);
-    // Model C (P2): box an enum VALUE (`enumCType`, given by `enumValExpr`) into an `Owned<C>`/`Shared<C>`
-    // fat handle (`ownedCType`, C a poly-dispatch contract), heap-copying the enum in. Emits the
-    // malloc+move+vtbl[+ctrl] as a HOISTED statement (needs a statement slot) and returns the temp name.
-    std::string emitEnumBoxIntoContract(const std::string& ownedCType, const std::string& enumCType,
-                                        const std::string& enumValExpr, int srcLine);
     // The enum cType a variant literal names (`IoError::NotFound` / `IoError::Other(...)`), or "" if `e`
     // isn't a variant reference. `exprClass` returns "" for a variant literal (its type comes from context),
     // so Model-C error boxing resolves the source enum through this.

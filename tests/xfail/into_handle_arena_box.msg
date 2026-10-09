@@ -1,0 +1,1 @@
+and a value boxed where it is written comes from the global heap — build it with `new(allocator: …)`

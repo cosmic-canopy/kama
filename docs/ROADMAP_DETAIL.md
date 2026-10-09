@@ -387,6 +387,29 @@ is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctio
 the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
 for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
 
+<a id="s2-weak-two-spellings"></a>
+
+### `Shared` to `Weak`: two spellings for a contract, one for a concrete type (KR-132)
+
+Found 2026-10-09 while making the conversion into a handle the same in every position (`0.9.568`). A weak
+reference is taken from a `Shared` two ways, depending on what the handle holds:
+
+```kama fragment
+Shared<Shape> s = new Sq.make(s: 2);   Weak<Shape> a = s;            // a contract handle: implicit
+                                       Weak<Shape> b = s.downgrade(); // ...or explicit
+Shared<Sq>   q = new Sq.make(s: 2);    Weak<Sq>    c = q;            // refused: "unrelated types"
+                                       Weak<Sq>    d = q.downgrade(); // the one spelling
+```
+
+The implicit form is written only at a local and an assignment (the `Shared->Weak` arm of the local-declaration
+emitter); as an argument, `g(w: s)` at a `Weak<Shape>` parameter, it reaches clang. It was not folded into the
+handle conversion with boxing and upcasts because those change what a handle OWNS (a box, a wider type), while this
+one changes WHETHER it owns — a strong reference into a weak one — which is exactly what GOALS' *explicit over
+implicit* asks to be written. **Recommendation:** retire the implicit form; `downgrade()` is the one spelling for
+both kinds (three in-tree uses: `tests/shared_iface.kama` ×2, `tests/weak_contract_local_only.kama`). The other
+answer, the implicit form for both kinds and in every position, keeps two spellings. A maintainer verdict, since it
+is a source break.
+
 ### Operators on an enum (KR-96) — support them, or declare a non-goal
 
 Until `0.9.443` an `operator` declared in an enum body parsed and was never registered, so `e + 1` answered

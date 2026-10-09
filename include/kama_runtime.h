@@ -1915,6 +1915,17 @@ static inline kama_ctrl* kama_ctrl_new(void) {
     return c;
 }
 
+// A value moved onto the heap for an owning contract handle — `Owned<Error> e = DeError.of(kind: k)`, a primitive into
+// an `Owned<Hashable>` — as one expression, so the conversion needs no statement slot (a `?:` arm, a derived reader's
+// boundary). A block of the value's own layout holding its bytes; the handle's vtable `__dtor` drops the value and
+// releases the block with that same layout. Infallible like `kama_ctrl_new`: out of memory is kama's panic.
+static inline void* kama_box_value(const void* v, size_t n, size_t align) {
+    void* p = kama_alloc(n, align);
+    if (!p) kama_panic(kama_string_lit("out of memory", 13));
+    kama_copy(p, v, n);
+    return p;
+}
+
 // ---- Serialization graph substrate ------------------------------------------
 // The id table / worklist behind the compiler's object-graph walker (a `@generate` type that transitively
 // reaches a `Shared`/`Weak` — see `reachesPointer`). Pure C on purpose: the compiler's own graph machinery

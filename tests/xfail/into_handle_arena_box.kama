@@ -1,0 +1,15 @@
+import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
+// A handle with a stateful allocator frees what it holds through that allocator, so a value boxed into one where
+// it is written — which draws its block from the global heap — would be released into the wrong allocator. The
+// handle is built with `new(allocator: …)`, which draws from the arena (tests/new_arg_shared_arena_iface.kama).
+type contract Shape for value { fn int32 area(); }
+type value Circle implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);
+    Shared<Shape, BumpAllocator> s = Circle.make(r: 3);
+    return s.area();
+}

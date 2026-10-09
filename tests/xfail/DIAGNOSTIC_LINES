@@ -641,6 +641,8 @@ interp_spec_user_type	interp_spec_user_type.kama:11
 interrupt_on_method	interrupt_on_method.kama:9
 interrupt_on_static	interrupt_on_static.kama:2
 intfloat_local	intfloat_local.kama:1
+into_handle_arena_box	into_handle_arena_box.kama:13
+into_handle_ternary_move	into_handle_ternary_move.kama:13
 intrinsic_block_renamed	intrinsic_block_renamed.kama:4
 intrinsic_reserved	intrinsic_reserved.kama:5
 intrinsic_widen_escape	intrinsic_widen_escape.kama:5

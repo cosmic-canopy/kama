@@ -4058,7 +4058,13 @@ type parameters (`generic(b: Box.of(v: x))`, `Box.of(v: 8).get()`). <!-- test: g
 (and `new Geo::Point()` for a payload-less one). <!-- test: new_enum_variant --> A value is never converted into
 a heap handle over its own type: `Shared<Pt> p = Pt.make(x: 1)` and `Shared<Geo> g = Geo::Circle(r: 4)` are
 compile errors that name `new`, in every position a handle is bound. <!-- xfail: heap_handle_bare_value -->
-(Boxing a value into a handle over a **contract** — `Owned<Hashable> h = 20` — is a different operation, and legal.)
+(Boxing a value into a handle over a **contract** — `Owned<Hashable> h = 20`, `Owned<Error> e = ParseError.of(at: 3)`
+— is a different operation, and legal: the value moves onto the heap, or is copied there, as any by-value hand-off
+moves or copies it, and the handle drops it. It happens wherever a handle is bound — a local, an assignment, a
+`return`, a `match` or `?:` arm, a field initializer, an argument, a variant payload. <!-- test: into_handle_every_position -->
+A `?:` arm may not move a named value into the box, as no arm may move one. <!-- xfail: into_handle_ternary_move -->
+A handle with its own allocator is filled with `new(allocator: …)` instead, since a value boxed in place comes from the
+global heap. <!-- xfail: into_handle_arena_box -->)
 
 A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
 declared **`type resource`** and is move-only:
@@ -4688,6 +4694,9 @@ Owned<Circle>  u = new Circle.make();
 Owned<Shape>   o = give u;     // upcast — move (u consumed)
 int32 a = s.describe();          // polymorphic: describe() calls the protected virtual area() -> Circle's
 ```
+
+The widening is not a declaration's alone: a handle widens wherever one is bound — a `return`, an argument, an
+assignment, a field, a payload — and a fresh handle (`shapeOf(c: makeCircle())`) widens as a named one does.
 
 Polymorphism flows through the base's **public surface**, which invokes the `protected virtual` hooks
 (Template Method) — you never call an overridable method through the handle directly. Destruction is
