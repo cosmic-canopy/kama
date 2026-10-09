@@ -1,0 +1,22 @@
+// `copy` of an element reads the element where it lies. For an `InlineArray<string>`, `copy sides[i]` used the
+// by-value getter and then took the address of its result for the deep copy: `kama check` passed, and the C
+// compiler stopped with "cannot take the address of an rvalue". Each position a `copy` can stand in is here:
+// a declaration, an assignment, an argument, a return, a variant payload and a collection argument.
+import { std::collections::DynamicArray };
+type enum Held { One(string s), Nil }
+fn int32 len(string s) { return cast<int32>(s.length()); }
+fn string pick(InlineArray<string>#(2) a, isize i) { return copy a[i]; }
+fn int32 main() {
+    InlineArray<string>#(2) sides = ["Left", "Right"];
+    isize i = 1;
+    string a = copy sides[i];                         // declaration
+    string b = "x";
+    b = copy sides[0];                                // assignment
+    int32 r = len(s: copy sides[i]);                  // argument
+    string c = pick(a: sides, i: 0);                  // return
+    Held h = Held::One(s: copy sides[1]);             // payload
+    DynamicArray<string> xs = DynamicArray.empty();
+    xs.add(item: copy sides[0]);                      // collection argument
+    int32 hl = match (h) { case One(s: s): cast<int32>(s.length()); case Nil: 0; };
+    return cast<int32>(a.length()) + cast<int32>(b.length()) + r + cast<int32>(c.length()) + hl + cast<int32>(xs[0].length());   // 5+4+5+4+5+4
+}

@@ -8106,7 +8106,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
                                              "or use `give` to move)").c_str(), n->line);
-                            else { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
+                            else { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitPlace(init)) << ";\n"; }
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer —
                         // and RECORD the move, which this arm alone forgot to do. Both neighbours (the
@@ -8131,7 +8131,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
-                        if (doCopy) { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
+                        if (doCopy) { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitPlace(init)) << ";\n"; }
                         else if (handoff != 2) { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
                     }
                     // A value/primitive: the plain `=` above IS the hand-off — `copy` and `give` are both
@@ -8708,7 +8708,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     bool ph = _hoistOK; _hoistOK = true;
                     std::string src = tryHoistInlineCtor(rhs, et, n->line);
                     if (src.empty()) src = tryHoistInlineValue(rhs, et, n->line);
-                    if (src.empty()) src = emitExpression(rhs);
+                    if (src.empty()) src = doCopy ? emitPlace(rhs) : emitExpression(rhs);   // a `copy` reads a place
                     _hoistOK = ph;
                     std::string tv = "kama_elv" + std::to_string(_tempCounter++);
                     std::string sp = "kama_esl" + std::to_string(_tempCounter++);
@@ -8754,7 +8754,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // untracked raw-relocate (`nd[i] = od[j]`) and falls through to the generic C store below.
             bool ownedRhs = marked || (tgtField && !rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
             if (ownedRhs) {
-                std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                std::string b = emitExpression(as->unaryExpression);
+                std::string src = (marked && !give) ? emitPlace(rhs) : emitExpression(rhs);   // a `copy` reads a place
                 line(n->line);
                 // `copy` of an owning collection/`string` into the raw slot deep-copies (`__copy`), so the
                 // slot and the source own separate buffers (the source survives). Otherwise blit.
@@ -8861,7 +8862,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
                 if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // write target: clear before emit
                 std::string b   = emitExpression(as->unaryExpression);
-                std::string src = emitExpression(rhs);
+                std::string src = doCopy ? emitPlace(rhs) : emitExpression(rhs);   // a `copy` reads a place
                 line(n->line);
                 if (!bMoved && _classes.count(lty) && _classes[lty].destructible)             // free the old value (if it owns anything)
                     { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
@@ -8959,7 +8960,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported(("`copy` of a `" + lty + "` needs copyable elements — its elements own "
                                          "resources but aren't `Copyable`; use `give` to move").c_str(), n->line);
                         if (!lname.empty() && rname == lname) return;     // self-copy: no-op
-                        std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                        std::string b = emitExpression(as->unaryExpression), src = emitPlace(rhs);   // a `copy` reads a place
                         line(n->line);
                         if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                         indent(depth); *_out << b << " = " << copyCall(lty, src) << ";\n";
@@ -23026,7 +23027,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // (A generic ctor's destination is the one this PARAMETER supplied, not an ancestor's.)
                 std::string pmt = _matchTargetCType, pvt = _variantTargetType;
                 _matchTargetCType.clear(); _variantTargetType = genericCtorDest;
-                val = st.empty() ? emitExpression(argExpr) : st;
+                // A `copy` reads its operand where it lies, so an element is emitted as its PLACE (`*NAME__at`),
+                // not through the by-value getter whose result the copy would then take the address of.
+                val = !st.empty() ? st : handoff == 2 ? emitPlace(argExpr) : emitExpression(argExpr);
                 _matchTargetCType = pmt; _variantTargetType = pvt;
                 valHoisted = !st.empty();   // st => a hoisted string/primitive temp; else a bare rvalue
             }
@@ -26528,7 +26531,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
                             doCopy = cpy; }
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
-        if (doCopy) { indent(depth); *_out << dst << " = " << copyCall(rc, emitExpression(v)) << ";\n"; }
+        if (doCopy) { indent(depth); *_out << dst << " = " << copyCall(rc, emitPlace(v)) << ";\n"; }
         else if (handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
@@ -26538,7 +26541,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             auto ci = _collections.find(dstCType);
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                 unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
-            else { indent(depth); *_out << dst << " = " << copyCall(dstCType, emitExpression(v)) << ";\n"; }
+            else { indent(depth); *_out << dst << " = " << copyCall(dstCType, emitPlace(v)) << ";\n"; }
         } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops —
@@ -27542,7 +27545,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             _matchTargetCType = _variantTargetType = fcls;
             std::string val = tryHoistInlineValue(argExpr, fcls, srcLine);
             if (val.empty()) val = tryHoistInlineCtor(argExpr, fcls, srcLine);
-            if (val.empty()) val = emitExpression(argExpr);
+            if (val.empty()) val = handoff == 2 ? emitPlace(argExpr) : emitExpression(argExpr);   // a `copy` reads a place
             // `return Result::Ok(value: this);` — a fallible ctor handing back the value it built.
             if (ctorThisAsValue(argExpr, fcls)) val = "(*" + val + ")";
             _matchTargetCType = pmt; _variantTargetType = pvt;

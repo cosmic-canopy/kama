@@ -334,14 +334,12 @@ contract before code.**
 
 <a id="s2-check-passes-c-fails"></a>
 
-### Three constructs pass `kama check` and fail in the C compiler (KR-116)
+### Two constructs pass `kama check` and fail in the C compiler (KR-116)
 
 Measured on `0.9.542`. Each program is either valid and must build, or invalid and must be refused by kama.
 Today each does neither.
 - **An `Owned<T>` passed to a `const ref T` parameter:** the auto-deref goes through `deref()`, a `T const*`, and
   the parameter is a `T*`. Valid kama; it needs the cast the read-only place gets everywhere else.
-- **`copy` of an `InlineArray<string>` element** (`copy sides[i]`): "cannot take the address of an rvalue". The
-  copy reads the element through the by-value getter instead of the place.
 - **A function's name used as an operand** (`a * pi`, with `pi` a `fn`): "invalid operands" in C, in any file.
   Invalid kama, and kama must say so; a function is not a value except where an `fnptr` is wanted.
 
