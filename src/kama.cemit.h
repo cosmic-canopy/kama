@@ -873,6 +873,11 @@ public:
     // that the entry TU would define are defined in its first unit instead (emitRuntimeSlotDefinitions).
     // Not for STATIC/OBJECT — an archive member defining them would collide with the app that links it.
     void setSharedModule(bool on) { _sharedModule = on; }
+    // The modules' C is folded into ONE translation unit (a native `--release` build, `kama transpile`), so a
+    // file-scope helper one module defines — an isolate trampoline, an intrinsic target's contract vtbl — is
+    // already defined for every module after it. They are deduped per module so that each separate TU has its
+    // own `static` copy; folded, a second copy is a redefinition. See emitModuleContent.
+    void setOneTranslationUnit(bool on) { _oneTranslationUnit = on; }
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), every triple
@@ -1986,6 +1991,7 @@ private:
         return _externConsts.count(k) ? k : std::string();
     }
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
+    bool _oneTranslationUnit = false;                                // every module folds into one C unit — see setOneTranslationUnit
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one

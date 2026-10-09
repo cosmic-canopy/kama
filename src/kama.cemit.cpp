@@ -38611,7 +38611,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // to _out FIRST — a body takes the address of its trampoline, which C requires defined earlier in the TU.
     std::ostringstream moduleBody;
     std::ostream* savedModuleOut = _out; _out = &moduleBody;
-    _intrinsicVtblsModule.clear();   // a module's intrinsic vtbls are its own `static`s (intrinsicContractVtbl)
+    // A module's intrinsic vtbls are its own `static`s (intrinsicContractVtbl), one copy per translation unit —
+    // so when every module folds into ONE unit, the first module's copy serves the rest.
+    if (!_oneTranslationUnit) _intrinsicVtblsModule.clear();
     // MCU step 1: module-level `static`s into their own buffer — flushed to _out BEFORE bodies, since C
     // requires a file-scope definition to precede its use.
     std::ostringstream moduleStatics;
@@ -38768,7 +38770,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();
-    _moduleHelperKeys.clear();   // every helper is `static`: the next module's TU needs its own definitions
+    // Every helper is `static`: the next module's TU needs its own definitions — unless it is the SAME unit.
+    // A native release build concatenates the modules' C in this order, so a helper an earlier module defined
+    // precedes every later use, and defining it again was "redefinition of '__kama_iso_…'" in clang.
+    if (!_oneTranslationUnit) _moduleHelperKeys.clear();
     *_out << moduleBody.str();
 }
 

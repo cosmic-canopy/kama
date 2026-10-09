@@ -6372,7 +6372,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
                      bool* externsApp = nullptr,     // link hint: did it `extern "kama_app.h";`? (std::app)
                      bool* externsGpu = nullptr,     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
-                     bool* externsIsolate = nullptr) // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
+                     bool* externsIsolate = nullptr, // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
+                     bool oneTranslationUnit = false) // the caller folds every module into one C file
 {
     std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
@@ -6388,6 +6389,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
 
     CEmitter emitter(header, "", emitLines);
     configureEmitter(emitter);
+    emitter.setOneTranslationUnit(oneTranslationUnit);
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
@@ -6430,7 +6432,8 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     for (size_t i = 0; i < units.size(); ++i)
         cPaths.push_back(dir + "/" + stem + "__u" + std::to_string(i) + ".c.tmp");
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
-                         externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate) != 0) return 1;
+                         externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate,
+                         /*oneTranslationUnit=*/true) != 0) return 1;
 
     std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }

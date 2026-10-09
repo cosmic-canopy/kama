@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-114 | **A `type adapter` used from two files fails every release build** — each file that passes a primitive as a contract through an adapter emits its own `static` thunk and vtable; a release build is one C unit, so clang reports a redefinition. Debug builds. Every application that hands an integer to a contract parameter from two files is affected | S | [§2](ROADMAP_DETAIL.md#s2-adapter-vtable-once) |
 | KR-113 | **A `return` in a destructor skips the fields' destructors** — `~Outer() { if (this.done) { return; } … }` never drops `Outer`'s fields on the early path: whatever they own leaks, silently | S | [§2](ROADMAP_DETAIL.md#s2-dtor-return) |
 | KR-115 | **Bounded quantification is enforced only for a generic nobody instantiates** — `fn int32 feed<T>(T w) { return w.get(); }` is refused unused and accepted once `main` calls it, though SPEC makes it an error at the declaration | M | [§2](ROADMAP_DETAIL.md#s2-bounds-on-instances) |
 | KR-116 | **Four constructs pass `kama check` and fail in the C compiler** — an early `return;` in a constructor; an `Owned<T>` passed to a `const ref T`; `copy` of an `InlineArray<string>` element; a function's name used as an operand (`a * pi`) | S | [§2](ROADMAP_DETAIL.md#s2-check-passes-c-fails) |

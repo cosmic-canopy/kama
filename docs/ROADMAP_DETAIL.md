@@ -288,17 +288,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-adapter-vtable-once"></a>
-
-### A `type adapter` used from two files fails every release build (KR-114)
-
-Measured on `0.9.542`. A contract has an adapter for `int32` in its own module, and two files each call a function
-that takes the contract with an `int32`. The debug build runs. The release build stops in clang with
-`redefinition of 'int32__as_adapters__Shown__twice__thunk'` and `… 'int32__as_adapters__Shown'`. Each using file emits
-its own `static` thunk and vtable for the adapter conformance, and a release build is one C unit. **A defect.** A
-program that hands a primitive to a contract parameter from two files cannot be built for release. The vtable and
-thunks are a fact about the conformance, so they are emitted once per program.
-
 <a id="s2-dtor-return"></a>
 
 ### A `return` in a destructor skips the fields' destructors (KR-113)
