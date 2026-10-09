@@ -6432,7 +6432,31 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     SharedStatement last;
     auto* block = dynamic_cast<BlockNode*>(sc->body.get());
     if (block && block->statements) {
-        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
+        const size_t ti = _scopes.size() - 1;
+        for (size_t i = 0; i < block->statements->size(); ++i) {
+            const size_t before = _scopes[ti].childBorrows.size();
+            emitStatement((*block->statements)[i], depth + 1);
+            last = (*block->statements)[i];
+            // A child that took a place by `ref` writes it while this body runs. Every LATER statement of the
+            // scope is checked against it, read or write, until the scope joins the child at its closing
+            // brace: the scope body and the child bumping one counter at once was a data race that built
+            // clean. Checked here, over the AST, because a read is any mention of the place — `c.value()`,
+            // `int64 n = c.n`, `use(x: c)` — at its widest extent, so a disjoint sibling field stays usable.
+            for (size_t b = before; b < _scopes[ti].childBorrows.size(); ++b) {
+                const Scope::ChildBorrow cb = _scopes[ti].childBorrows[b];
+                for (size_t j = i + 1; j < block->statements->size(); ++j)
+                    forEachPlaceUse((*block->statements)[j], [&](const std::vector<std::string>& p, int ln) {
+                        if (placesConflict(cb.place, p)) {
+                            const std::string held = placeText(cb.place), used = placeText(p);
+                            unsupported(("`" + used + "`" + (used == held ? std::string() : " overlaps `" + held + "`, which")
+                                         + " is held by `ref` by " + cb.who + " at line " + std::to_string(cb.line)
+                                         + " until this `scope` joins it — using it here, read or write, races with "
+                                           "the child. Use it before the `spawn` or after the `scope`; a DISJOINT "
+                                           "sibling field stays usable").c_str(), ln);
+                        }
+                    });
+            }
+        }
     }
     // Fall-through: join every child, then drop locals. On a jump exit the unwind path already ran the
     // full cleanup (child joins included) via emitScopeCleanup — the double-destruction guard.
@@ -6440,6 +6464,87 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
         emitScopeCleanup(_scopes.back(), depth + 1);
     indent(depth); *_out << "}\n";
     popScope();
+}
+
+// Every PLACE a statement uses, at its widest nameable extent: `c.f.g` is ONE use of `c.f.g`, not of `c` and
+// `c.f` too, so a disjoint sibling field is told apart. A method call uses its RECEIVER whole (`c.g()` may touch
+// any field of `c`), an element uses its container, and an argument, an index or an operand is a use of its own.
+// A nested `spawn` is skipped: what a second child borrows is judged by the children's disjointness rule.
+void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn)
+{
+    std::function<void(SharedExpression, int)> E;
+    std::function<void(SharedStatement)> S;
+    E = [&](SharedExpression e, int ln) {
+        if (!e) return;
+        ASTNode* n = e.get();
+        if (n->line) ln = n->line;
+        if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) {
+            std::vector<std::string> p = placePath(e);
+            if (!p.empty()) fn(p, ln);
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+            std::vector<std::string> p = placePath(e);
+            if (!p.empty()) fn(p, ln); else E(ma->expression, ln);
+        } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) E(ma->expression, ln);
+            if (inv->args) for (auto& a : *inv->args) if (a) E(a->expression, ln);
+        } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            E(ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier), ln);
+            if (ea->expressionlist) for (auto& x : *ea->expressionlist) E(x, ln);
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) { E(as->unaryExpression, ln); E(as->expression, ln);
+        } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) { E(b->LHS, ln); E(b->RHS, ln);
+        } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) { E(l->LHS, ln); E(l->RHS, ln);
+        } else if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { E(t->condition, ln); E(t->LHS, ln); E(t->RHS, ln);
+        } else if (auto* c = dynamic_cast<CastNode*>(n)) { E(c->unaryExpression, ln);
+        } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) { E(bc->unaryExpression, ln);
+        } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) { E(ad->operand, ln);
+        } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { E(su->expression, ln);
+        } else if (auto* pre = dynamic_cast<PreIncrDecrNode*>(n)) { E(pre->expression, ln);
+        } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { E(po->expression, ln);
+        } else if (auto* h = dynamic_cast<HandoffNode*>(n)) { E(h->value, ln);
+        } else if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+            if (oc->args) for (auto& a : *oc->args) if (a) E(a->expression, ln);
+        } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+            if (al->elements) for (auto& x : *al->elements) E(x, ln);
+            E(al->fillValue, ln);
+        } else if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) {
+            for (auto& h : is->holes) E(h, ln);
+        } else if (auto* m = dynamic_cast<MatchNode*>(n)) {
+            E(m->subject, ln);
+            if (m->arms) for (auto& a : *m->arms) if (a) { E(a->body, ln); if (a->block) S(a->block); }
+        }
+    };
+    S = [&](SharedStatement st) {
+        if (!st) return;
+        ASTNode* n = st.get();
+        const int ln = n->line;
+        if (dynamic_cast<IsolateNode*>(n)) return;   // a second child: the children's disjointness rule
+        if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& x : *blk->statements) S(x);
+        } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            if (d->variables) for (auto& v : *d->variables) if (v) E(v->initializer, ln);
+        } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+            if (cd->variables) for (auto& v : *cd->variables) if (v) E(v->initializer, ln);
+        } else if (auto* r = dynamic_cast<ReturnNode*>(n)) { E(r->expression, ln);
+        } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) { E(av->value, ln);
+        } else if (auto* f = dynamic_cast<IfNode*>(n)) { E(f->booleanExpression, ln); S(f->ifStatement); S(f->elseStatement);
+        } else if (auto* w = dynamic_cast<WhileNode*>(n)) { E(w->booleanExpression, ln); S(w->whileStatement);
+        } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) { E(dw->booleanExpression, ln); S(dw->doWhileStatement);
+        } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
+            if (fr->initializerStatements) for (auto& x : *fr->initializerStatements) S(x);
+            E(fr->booleanExpression, ln);
+            if (fr->iteratorStatements) for (auto& x : *fr->iteratorStatements) S(x);
+            S(fr->body);
+        } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) { E(fe->expression, ln); S(fe->body);
+        } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) { E(pf->expression, ln); S(pf->body);
+        } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) { S(sc->body);
+        } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+            if (bn->bindings) for (auto& b : *bn->bindings) if (b) E(b->host, ln);
+            S(bn->body);
+        } else if (dynamic_cast<ExpressionStatementNode*>(n)) {   // a statement-form `match` included
+            E(std::dynamic_pointer_cast<ExpressionNode>(st), ln);
+        }
+    };
+    S(s);
 }
 
 // `borrow xf as v, ys as w { ... }` — the lexical window a view is minted into (the view model).
@@ -6496,7 +6601,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             if (!hp.empty()) {
                 // An ENCLOSING window already froze this storage. Two windows over one buffer are the
                 // same two mutable views the sibling rule below rejects, merely spelled across statements.
-                if (const Scope::FrozenPlace* outer = frozenConflict(hp)) {
+                const Scope::FrozenPlace* outer = frozenConflict(hp);
+                if (outer && outer->fromChild) {
+                    unsupported(("`" + placeText(hp) + "` is borrowed by the child `spawn`ed at line "
+                                 + std::to_string(outer->line) + " until its `scope` joins it — a mutable "
+                                 "view of it here would race with the child; open the window after the "
+                                 "`scope`").c_str(), bn->line);
+                    continue;
+                } else if (outer) {
                     unsupported(("`" + placeText(hp) + "` is already borrowed by an enclosing `borrow` "
                                  "(opened at line " + std::to_string(outer->line) + " as `" + outer->alias
                                  + "`) — that would be two mutable views of one buffer; derive from `"
@@ -6691,6 +6803,14 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                         "the `if` outside the `scope`", pf->line);
             return;
         }
+        // The workers hold the collection's elements by `ref` and run beside the statements after this one,
+        // exactly as a bare `spawn`'s child does, so the collection is a child borrow of the scope until it
+        // joins (emitScope checks what follows). Through a mint — `workers.view()` — it is the receiver.
+        SharedExpression host = pf->expression;
+        if (auto* inv = dynamic_cast<InvocationNode*>(host.get()))
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) host = ma->expression;
+        std::vector<std::string> cp = placePath(host);
+        if (!cp.empty()) _scopes.back().childBorrows.push_back(Scope::ChildBorrow{ cp, pf->line, "the workers `parallel_spawn` started" });
     }
 
     // The isolate seam header (and its `-lpthread` link) flows in via
@@ -18071,7 +18191,12 @@ void CEmitter::markMoved(const std::string& cVar)
     // `give`ing the host out of the window is as fatal as growing it — the storage leaves with the value
     // and the alias is left watching nothing. The single choke point for every move, so one check covers
     // `a = give b`, `f(d: give a)` and the ctor/return forms alike.
-    if (const Scope::FrozenPlace* f = frozenConflict({ cVar }))
+    const Scope::FrozenPlace* f = frozenConflict({ cVar });
+    if (f && f->fromChild)
+        unsupported(("cannot `give` `" + cVar + "` — the child `spawn`ed at line " + std::to_string(f->line)
+                     + " borrows it until this `scope` joins it, and moving it would take that storage out "
+                       "from under the child; move it after the `scope`").c_str(), _curLine);
+    else if (f)
         unsupported(("cannot `give` `" + cVar + "` — it is frozen by the enclosing `borrow` (opened at "
                      "line " + std::to_string(f->line) + " as `" + f->alias + "`), and moving it would "
                      "take the storage `" + f->alias + "` views with it; move it after the window closes")
@@ -18442,6 +18567,17 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
                     break;
                 }
             ts->borrowedPlaces.push_back(place);
+            // ...and against the scope BODY, which runs beside the child until the closing brace joins it. A
+            // `ref` child may write the place, so the body may not use it at all (checked by emitScope over
+            // the statements that follow); a `const ref` child only reads it, so the body may read it too and
+            // is frozen against writes only — the same freeze a `borrow` window applies to its host.
+            if (p.isConst) {
+                Scope::FrozenPlace fp;
+                fp.place = place; fp.line = iso->line; fp.fromBorrow = false; fp.fromChild = true;
+                ts->frozen.push_back(fp);
+            } else {
+                ts->childBorrows.push_back(Scope::ChildBorrow{ place, iso->line });
+            }
         }
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
@@ -23523,6 +23659,13 @@ bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
     std::vector<std::string> p = placePath(target);
     const Scope::FrozenPlace* f = frozenConflict(p);
     if (!f) return false;
+    if (f->fromChild) {
+        unsupported(("`" + placeText(p) + "` is borrowed by the child `spawn`ed at line " + std::to_string(f->line)
+                     + " until this `scope` joins it — the child reads it, so writing it here races with the "
+                       "child. Write it before the `spawn` or after the `scope`; reading it, and writing a "
+                       "DISJOINT sibling field, stay legal").c_str(), line);
+        return true;
+    }
     unsupported((f->fromBorrow
         ? ("`" + placeText(p) + "` is frozen by the enclosing `borrow` (opened at line "
            + std::to_string(f->line) + " as `" + f->alias + "`) — a view is live over that storage, so "

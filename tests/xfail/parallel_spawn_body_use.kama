@@ -1,0 +1,13 @@
+// A `parallel_spawn`'s workers hold the collection's elements by `ref` and run beside the statements after it.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+type value Cell implements Sendable { public int32 n = 0; public ctor make() { } public fn void bump() { this.n = this.n + 1; } }
+fn int32 main() {
+    DynamicArray<Cell> cells = DynamicArray.empty();
+    cells.add(item: Cell.make()); cells.add(item: Cell.make());
+    scope {
+        parallel_spawn (ref Cell c in cells) { c.bump(); }
+        int32 peek = cells[0].n;          // reads an element a child is writing
+        cells[1].n = 9;                   // writes one
+    }
+    return cells[0].n + cells[1].n;
+}

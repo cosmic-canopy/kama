@@ -1,0 +1,35 @@
+// What the scope body may still do beside a child: use a DISJOINT sibling field of a place a child holds, read a
+// place a child holds by `const ref`, share an `Atomic<T>`, and use anything before the `spawn` or after the
+// `scope`. tests/xfail/scope_child_* are the uses that race.
+import { core::println, std::concurrent::Isolate, std::concurrent::Atomic };
+type value Counter implements Sendable {
+    public int64 n = 0;
+    public ctor make() { }
+    public fn void bump() { this.n = this.n + 1; }
+    public const fn int64 value() { return this.n; }
+}
+type value World implements Sendable {
+    public Counter bodies;
+    public Counter springs;
+    public ctor make() { this.bodies = Counter.make(); this.springs = Counter.make(); }
+}
+fn void worker(ref Counter c) { c.bump(); }
+fn void reader(const ref Counter c) { int64 v = c.value(); }
+fn void tick(ref Atomic<int64> a) { a.fetchAdd(delta: 1i64); }
+fn int32 main() {
+    Counter c = Counter.make();
+    World w = World.make();
+    Atomic<int64> hits = Atomic.make(value: 0i64);
+    c.bump();                                     // before the spawn: fine
+    scope {
+        spawn worker(c: ref w.bodies);
+        w.springs.bump();                         // a disjoint sibling field: fine
+        int64 s = w.springs.value();
+        spawn reader(c: ref c);
+        int64 r = c.value();                      // a const ref child only reads: reading too is fine
+        spawn tick(a: ref hits);
+        hits.fetchAdd(delta: 1i64);               // an Atomic is the sanctioned shared cell
+    }
+    int64 total = c.value() + w.bodies.value() + w.springs.value() + hits.load();   // after the scope: fine
+    return cast<int32>(total);                    // 1 + 1 + 1 + 2
+}

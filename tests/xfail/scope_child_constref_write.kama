@@ -1,0 +1,19 @@
+// A `const ref` child only reads, so the body may read beside it, and may not write.
+import { core::println, std::concurrent::Isolate, std::concurrent::Atomic };
+type value Counter implements Sendable {
+    public int64 n = 0;
+    public ctor make() { }
+    public fn void bump() { this.n = this.n + 1; }
+    public const fn int64 value() { return this.n; }
+}
+type value World implements Sendable {
+    public Counter bodies;
+    public Counter springs;
+    public ctor make() { this.bodies = Counter.make(); this.springs = Counter.make(); }
+}
+fn void worker(ref Counter c) { c.bump(); }
+fn void reader(const ref Counter c) { int64 v = c.value(); }
+fn void tick(ref Atomic<int64> a) { a.fetchAdd(delta: 1i64); }
+fn int32 main() { Counter c = Counter.make(); World w = World.make(); scope {
+    spawn reader(c: ref c); c.n = 5;
+} return 0; }

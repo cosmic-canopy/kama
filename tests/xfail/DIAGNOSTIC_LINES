@@ -898,6 +898,7 @@ override_return_mismatch	override_return_mismatch.kama:15
 owned_contract_string_bare	owned_contract_string_bare.kama:7
 owned_iface_nonimpl	owned_iface_nonimpl.kama:7
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3
+parallel_spawn_body_use	parallel_spawn_body_use.kama:10 parallel_spawn_body_use.kama:9
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
 parallel_spawn_workers	parallel_spawn_workers.kama:15
@@ -1079,6 +1080,9 @@ scope_borrow_escape	scope_borrow_escape.kama:27
 scope_borrow_nested_prefix	scope_borrow_nested_prefix.kama:26
 scope_borrow_same_root	scope_borrow_same_root.kama:25
 scope_borrow_through_shared	scope_borrow_through_shared.kama:29 scope_borrow_through_shared.kama:30
+scope_child_constref_write	scope_child_constref_write.kama:18
+scope_child_ref_use	scope_child_ref_use.kama:18
+scope_child_ref_whole	scope_child_ref_whole.kama:18
 scope_op_field_leak	scope_op_field_leak.kama:8
 scope_op_field_on_type	scope_op_field_on_type.kama:7
 scope_op_on_ctor	scope_op_on_ctor.kama:10

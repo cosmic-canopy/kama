@@ -332,27 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-scope-child-borrows"></a>
-
-### A `scope`'s spawned child and its parent may both use a place it borrows (KR-112)
-
-Measured on `0.9.542`:
-
-```kama
-scope {
-    spawn worker(c: ref c);      // the child bumps `c` 20 M times
-    … c.bump(); …                // and so does the scope body, at the same moment
-}
-```
-
-`kama check` accepts this. The total comes out near 22 M where 40 M is right. **A data race in safe kama**, which
-the concurrency model exists to rule out. **Design:** a `spawn` inside a `scope` that passes `ref x` or `out x` freezes
-`x` in the parent until the scope joins its children: no read, no write, no borrow. A `const ref x` freezes
-writes only, so both sides may read. The freeze is the one a `borrow` window applies to its host, the same
-prefix test over places, so a disjoint sibling field stays usable. This is Rust's scoped-thread rule, expressed
-with what kama already has; no lifetimes. Check `parallel_for` and `parallel_spawn` bodies against the same rule
-in the same change.
-
 <a id="s2-literal-destinations"></a>
 
 ### A literal is not typed by its destination in three positions (KR-118)

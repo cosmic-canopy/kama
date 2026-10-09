@@ -2121,8 +2121,18 @@ private:
                    // introduces an ALIAS that names the view, so only it can be reseated; a `foreach`
                    // binding names an ELEMENT, and writing through it is the point of `ref` iteration.
                    struct FrozenPlace { std::vector<std::string> place; std::string alias; int line = 0;
-                                        bool fromBorrow = true; };
+                                        bool fromBorrow = true;
+                                        // A `spawn`ed child's `const ref` borrow, frozen against WRITES only —
+                                        // the child reads it while the scope body may too (emitScope).
+                                        bool fromChild = false; };
                    std::vector<FrozenPlace> frozen;
+                   // The places this task scope's children borrow by `ref`, with the line of the `spawn`. The
+                   // scope body may not USE an overlapping place after it — read or write — until the scope
+                   // joins the child (emitScope scans the statements that follow). A `const ref` borrow is a
+                   // write-freeze in `frozen` instead.
+                   struct ChildBorrow { std::vector<std::string> place; int line = 0;
+                                        std::string who = "the child `spawn`ed"; };
+                   std::vector<ChildBorrow> childBorrows;
                    // View locals whose root is already lifetime-bounded, so a DERIVE off one is bounded
                    // too (`View<T> mid = whole.slice(…)` where `whole` came from a window).
                    std::set<std::string> boundedViews;
@@ -3737,7 +3747,10 @@ private:
     std::vector<std::string> viewRootPlace(SharedExpression e);   // the place a VIEW expression borrows
     bool viewLocalBounded(SharedExpression init);   // the window rule: is this view's root lifetime-bounded?
     SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
-    bool rejectFrozenWrite(SharedExpression target, int line);   // one sentence for every write shape
+    bool rejectFrozenWrite(SharedExpression target, int line);
+    // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest
+    // nameable extent, so a disjoint sibling field is told apart (see emitScope's child-borrow check).
+    void forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn);   // one sentence for every write shape
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.

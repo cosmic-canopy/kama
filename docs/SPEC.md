@@ -5976,6 +5976,12 @@ the child's writes are ordered against the parent's next read with no atomic at 
 is the domain over which "no two children overlap" is decided. Rows 1 and 4 need no scope because
 they are self-sufficient — one transfers exclusivity, the other removes writing from the picture.
 
+**The scope body is one more party.** It runs beside its children until the closing brace, so a place a
+child holds is out of its reach in the statements after the `spawn`: held by `ref`, it may not be used at all, <!-- xfail: scope_child_ref_use, scope_child_ref_whole -->
+read or write; held by `const ref`, it may be read but not written. The same holds for the collection whose <!-- xfail: scope_child_constref_write -->
+elements a `parallel_spawn` hands its workers. A disjoint sibling field stays usable, and so does an <!-- xfail: parallel_spawn_body_use -->
+`Atomic<T>`. Before the `spawn` and after the `scope`, the place is the parent's as always. <!-- test: scope_child_borrow_ok -->
+
 **Sendability applies to the bundle**, exactly as it does to a channel element: the bundle's type must
 declare `implements Sendable` (see *Channels* below for the whole rule), and a declaration over a
 `Shared`/`Weak` with a **mutable** payload is rejected, naming the offending field, because both <!-- xfail: spawn_bundle_shared -->
