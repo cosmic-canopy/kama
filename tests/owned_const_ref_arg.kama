@@ -1,0 +1,18 @@
+// An `Owned<T>` or a `Shared<T>` borrows its pointee as a `ref T` or `const ref T` argument. The `const ref`
+// half goes through `deref()`, which answers a read-only place (`T const*`), while the parameter is a plain
+// `T*` in C. Without the cast every other read-only place gets, `kama check` passed and clang refused the call
+// under `-Werror` ("discards qualifiers"). A `ref T` argument, which goes through `derefMut()`, always built.
+import { std::memory::Owned, std::memory::Shared };
+type value P { public int32 x; public ctor make(int32 x) { this.x = x; } }
+type contract Sized for value, resource { const fn int32 size(); }
+type resource Q implements Sized { int32 n; public ctor make(int32 n) { this.n = n; } public const fn int32 size() { return this.n; } }
+fn int32 read(const ref P p) { return p.x; }
+fn void bump(ref P p) { p.x = p.x + 1; }
+fn int32 readQ(const ref Q q) { return q.size(); }
+fn int32 main() {
+    Owned<P> b = new P.make(x: 7);
+    bump(p: b);                                   // the writable half, through derefMut()
+    Shared<P> s = new P.make(x: 2);
+    Owned<Q> q = new Q.make(n: 3);
+    return read(p: b) + read(p: s) + readQ(q: q);  // 8 + 2 + 3
+}

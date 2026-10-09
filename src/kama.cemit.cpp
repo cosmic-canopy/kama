@@ -23118,7 +23118,10 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // a library heap-owner (Owned/Shared) borrows its pointee via the Deref contracts —
                 // `derefMut()` (-> T*) for a `ref` parameter, `deref()` (-> T const*) for a `const ref` one —
                 // uniformly with `ref stackValue`; no `.ptr` field is assumed.
-                s += derefFnName(argCls, !p.isConst) + "(&(" + val + "))";
+                // `deref()` answers a READ-ONLY place, `T const*`, and a `const ref T` parameter lowers to a plain
+                // `T*` (`const fn` is ABI-neutral): the cast states the ABI, as at every other read-only place.
+                s += (p.isConst ? "(" + p.className + "*)" : std::string()) + derefFnName(argCls, !p.isConst)
+                     + "(&(" + val + "))";
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
                 // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
                 // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
