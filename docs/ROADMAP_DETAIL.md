@@ -343,6 +343,18 @@ under gcc in the Linux container, and independently under MSYS2 UCRT64 gcc on `0
 computed (`bodyDiverges`), so after a statement kama has proven to diverge, the emitter says so to C:
 `__builtin_unreachable()` in release, and a trap in debug so a broken proof still fails loudly.
 
+<a id="s2-bool-conditions"></a>
+
+### A condition is not checked to be a `bool` (KR-129)
+
+SPEC (*Comparison*) says "there is no implicit truthiness — `if` takes a `bool`". Measured on `0.9.548`, nothing
+enforces it. `if (n)` and `while (n)` with an `int32 n` build, and so do `!n`, `n ? 1 : 2` and `n && true`; C
+reads each as "non-zero". `if (pi)`, with `pi` a function, builds too, and is always true. **A defect against
+SPEC**, and against GOALS §5 (explicit over implicit): each condition position takes a `bool`, and the message
+names the comparison that was meant (`n != 0`). It is a source break for any program relying on C's truthiness,
+which pre-1.0 permits. The fix covers every condition position: `if`, `while`, `do … while`, `for`'s condition,
+`?:`'s condition, and the operands of `!`, `&&` and `||`.
+
 <a id="s2-scope-child-borrows"></a>
 
 ### A `scope`'s spawned child and its parent may both use a place it borrows (KR-112)
