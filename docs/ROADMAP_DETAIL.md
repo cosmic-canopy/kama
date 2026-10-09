@@ -323,7 +323,13 @@ With those, 29 of 2,316 fixtures fail, in three groups:
   would remove a capability. It is already missing for an uninstantiated generic, which the probe refuses with no
   fix available.
 
-**Design:** arithmetic becomes a contract, as comparison already is (`<` calls `Comparable.compareTo`). A prelude
+**Shipped, `0.9.570`: the arithmetic bound.** `Arithmetic<T>` is a prelude contract whose members are the four
+OPERATORS — the spelling a user type already declares, so arithmetic keeps one spelling (rather than `add`/`sub`
+methods beside `operator+`). Every number conforms through an adapter whose body is the primitive operator, and
+`std::num::Fixed` conforms with its own. A type parameter's `+` or `<` without the bound is refused naming it.
+`Additive` under it waits on KR-133. **What remains** is below, from "the walk over every template".
+
+**Design (as filed):** arithmetic becomes a contract, as comparison already is (`<` calls `Comparable.compareTo`). A prelude
 `type contract Arithmetic<T is This> for value, intrinsic` declares `add`/`sub`/`mul`/`div` (and `rem`/`neg` as
 SPEC rules). The numeric primitives conform through a `type adapter` in its home module, and `+ - * /` on a `T`
 bounded by it call those members. Monomorphized, the adapter's `return this + other;` is the primitive operator,
@@ -331,6 +337,33 @@ so the cost is zero. Then the as-written walk covers every template, the corpus 
 using silently, and SPEC's sentence holds. It is a source break for generics that relied on their instances,
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
+
+<a id="s2-refinement-implies"></a>
+
+### A contract's refinement does not make its implementers implement the parent (KR-133)
+
+`type contract Animated for value implements Drawable { fn int32 step(); }` merges `Drawable`'s members into
+`Animated` (linkContracts), so a `Sprite implements Animated` must implement both, and dispatch through an `Animated`
+value reaches `draw`. But the conformance stops there. Measured on `0.9.569`:
+
+```kama fragment
+fn int32 drawIt<T: Drawable>(T x) { return x.draw(); }
+fn int32 viaContract(Drawable d) { return d.draw(); }
+drawIt(x: sprite);        // error: `Sprite` does not satisfy bound `Drawable`
+viaContract(d: sprite);   // error: `Sprite` does not implement `Drawable`
+```
+
+The workaround is to spell both (`implements Animated, Drawable`), as `lib/std/net/stream.kama`'s socket types do
+for `ReliableStream`'s `Reader` and `Writer`. **Scheduled.** SPEC calls refinement "capability layering", and every
+comparable language makes the child imply the parent: Swift's protocol inheritance, C#'s interface inheritance,
+Rust's supertraits (`T: Animated` implies `T: Drawable`). **Design:** an implementer's conformances are closed
+under refinement wherever one is recorded (a type's `implements`, an adapter, an enum, a generic instance, a
+probe's opaque parameter), so bounds, `T__as_Parent` vtables and contract values all follow. A generic contract
+refining a generic one (`Arithmetic<T> implements Additive<T>`) records its parent's type node, so each instance
+substitutes it (`Additive<int32>`) and merges the parent instance's members. An `Animated` VALUE passed as a
+`Drawable` needs a vtable conversion, which is the remaining half. **First consumer:** `Additive<T>` (`+ -`) with
+`Arithmetic<T>` refining it, so a generic sum works over `Vec3` and `Duration`, which add and subtract but do not
+multiply by their own type. `Arithmetic` shipped alone in `0.9.570`, because `Additive` under it needs this row.
 
 <a id="s2-borrow-any-place"></a>
 
@@ -796,14 +829,9 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   guard and force the claim out of all three. Real expression type checking in the front end is a
   campaign, not a fix.
 
-- **Contract refinement — one under-tested edge (clean workaround).** `type contract Child … implements
-  Parent` works for dispatch, but was exercised mainly with scalar-param parents. Remaining: a concrete type
-  implementing the child gets **no parent-contract conformance thunk** — pass it where the parent is expected
-  only if it *also* spells `implements Parent` — and a child-contract-**value** → parent-contract-param upcast
-  is unsupported (dispatch *through* the child to inherited methods works). Trivial workaround, used in
-  `lib/std/net/stream.kama`; the fix is to auto-emit parent thunks for refining-contract implementers.
-  *(The generic-instance param edge is fixed — an inherited slot's signature is now rebound to its
-  parent-resolved absolute spelling in `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
+- **Contract refinement** — its own row now, KR-133 ([below](#s2-refinement-implies)). *(The generic-instance
+  param edge is fixed — an inherited slot's signature is rebound to its parent-resolved absolute spelling in
+  `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace. `std::unicode` exists since `0.9.506` with NORMALIZATION (SCRAM's
   SASLprep needs NFKC), generated from one pinned UCD and held to its NormalizationTest.txt; what remains for it is

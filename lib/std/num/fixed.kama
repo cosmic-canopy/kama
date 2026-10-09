@@ -26,7 +26,7 @@
 import { FixedBacking };
 export { Fixed };
 
-type value Fixed<B: FixedBacking<B>> comptime(int32 F) implements Equatable<This>, Comparable<This> {
+type value Fixed<B: FixedBacking<B>> comptime(int32 F) implements Equatable<This>, Comparable<This>, Arithmetic<This> {
     comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8,
                     msg: "a Q-format's fractional bits must fit its backing and leave the sign bit");
 
@@ -46,12 +46,12 @@ type value Fixed<B: FixedBacking<B>> comptime(int32 F) implements Equatable<This
 
     // Every operator is the same three steps — widen into the accumulator, do the arithmetic at width,
     // narrow back. The narrowing cast inside `fromWide` is the overflow signal.
-    public This operator+(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() + r.raw.wide())); }
-    public This operator-(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() - r.raw.wide())); }
+    public This operator+(This rhs) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() + rhs.raw.wide())); }
+    public This operator-(This rhs) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() - rhs.raw.wide())); }
     public This operator-()       { return Fixed::<B>#(F).of(raw: B.fromWide(v: 0i64 - this.raw.wide())); }
     // mul/div re-scale as well as widen: a product carries 2F fractional bits, a quotient none.
-    public This operator*(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
-    public This operator/(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() << F) / r.raw.wide())); }
+    public This operator*(This rhs) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() * rhs.raw.wide()) >> F)); }
+    public This operator/(This rhs) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() << F) / rhs.raw.wide())); }
 
     // Comparison comes from the contracts, not from `operator==` & co. — `==`/`!=` call `equals`,
     // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Fixed a `Map` key (with `Hashable`)

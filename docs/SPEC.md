@@ -5418,13 +5418,19 @@ fn int32 main() {
   `<T is Widget>` (a subtype bound) is not a thing kama has: inheritance is not a bound axis — substitutability is a contract's job (SPEC § *Inheritance*). Chosen over `Self` to pair with the `this`
   value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
-  arithmetic over any conforming type at zero cost:
+  arithmetic over any conforming type at zero cost. The prelude's is `Arithmetic<T>`, the four operators every
+  number has; a generic that adds, subtracts, multiplies or divides its `T` says so, and is checked where it is
+  declared: <!-- test: arith_bound -->
   ```kama
-  type contract Arithmetic<T is This> for value { T operator+(T rhs); }
-  fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
+  // in the prelude: type contract Arithmetic<T is This> for value, resource, intrinsic {
+  //     T operator+(T rhs); T operator-(T rhs); T operator*(T rhs); T operator/(T rhs); }
+  fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }   // `a + b` -> the primitive `+`, or Concrete__op_add(&a, b)
   ```
-  The concrete type declares `implements Arithmetic<This>` (bounds are nominal), and `a + b` in the monomorphized
-  body lowers to a direct call — no vtable, no boxing.
+  Every number implements it with its own operator, so `sum<int32>` is the bare `+`, overflow check and all;
+  `std::num::Fixed` implements it with the operators it declares, and so does any type that declares the four and
+  `implements Arithmetic<This>` (bounds are nominal). Neither unary `-` (an unsigned number has none) nor `%` (a
+  float's is not an integer's) is in it; a contract of one's own may declare those, or `+` alone
+  (`tests/generic_arith`). `x + x` on an unbounded `T` is refused with the bound to write. <!-- xfail: arith_unbounded -->
 - **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is
   **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator_int32`).
   It has **full value + bound parity** with a plain contract: usable as a static bound

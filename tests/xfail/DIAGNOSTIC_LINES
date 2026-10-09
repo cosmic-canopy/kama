@@ -43,6 +43,7 @@ arg_kind_intrinsic_string	arg_kind_intrinsic_string.kama:7
 arg_label_one_diagnostic	arg_label_one_diagnostic.kama:5
 arg_str_bare	arg_str_bare.kama:3
 arg_unknown	arg_unknown.kama:3
+arith_unbounded	arith_unbounded.kama:3
 as_downcast_uncopyable	as_downcast_uncopyable.kama:11
 asm_outside_unsafe	asm_outside_unsafe.kama:4
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7
@@ -502,7 +503,7 @@ generate_generic_enum_unmet	generate_generic_enum_unmet.kama:16
 generate_generic_unmet	generate_generic_unmet.kama:16
 generate_of_on_enum	generate_of_on_enum.kama:7
 generate_unknown_name	generate_unknown_name.kama:4
-generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2
+generic_arith_unsat	generic_arith_unsat.kama:13
 generic_arity	generic_arity.kama:4
 generic_bare_use	generic_bare_use.kama:4
 generic_bound_unsat	generic_bound_unsat.kama:11

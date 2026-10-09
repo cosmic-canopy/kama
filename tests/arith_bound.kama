@@ -1,0 +1,32 @@
+import { std::num::Fixed };
+// `Arithmetic<T>` is arithmetic as a BOUND: a generic that adds, subtracts, multiplies or divides its `T` says so,
+// and is checked where it is declared — `fn T twice<T>(T x) { return x + x; }` is refused with that advice
+// (tests/xfail/arith_unbounded). Every number satisfies it with its own operator, so an instance still compiles to
+// the bare `+` (overflow check and all); `Fixed` satisfies it with the operators it already had, and so does any
+// type that declares the four. Exit code 42 iff every result is right.
+
+fn T twice<T: Arithmetic<T>>(T x) { return x + x; }
+fn T blend<T: Arithmetic<T>>(T a, T b, T k) { return (a - b) * k / k + b; }   // all four: back to `a`
+
+@generate(of)
+type value Money implements Arithmetic<This> {
+    public int64 cents;
+    public This operator+(This rhs) { return Money.of(cents: this.cents + rhs.cents); }
+    public This operator-(This rhs) { return Money.of(cents: this.cents - rhs.cents); }
+    public This operator*(This rhs) { return Money.of(cents: this.cents * rhs.cents / 100i64); }
+    public This operator/(This rhs) { return Money.of(cents: this.cents * 100i64 / rhs.cents); }
+}
+
+fn int32 main() {
+    int32 ok = 0;
+    if (twice(x: 21) == 42) { ok = ok + 1; }
+    if (twice(x: 100ui8) == 200ui8) { ok = ok + 1; }
+    if (twice(x: 1.25) == 2.5) { ok = ok + 1; }
+    if (blend(a: 7i64, b: 3i64, k: 2i64) == 7i64) { ok = ok + 1; }
+    if (blend(a: 0.5f32, b: 0.25f32, k: 4.0f32) == 0.5f32) { ok = ok + 1; }
+    Fixed<int32>#(16) h = Fixed::<int32>#(16).fromInt(n: 3);
+    if (twice(x: h).toInt() == 6) { ok = ok + 1; }
+    Money m = twice(x: Money.of(cents: 250i64));
+    if (m.cents == 500i64) { ok = ok + 1; }
+    return ok == 7 ? 42 : ok;
+}

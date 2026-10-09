@@ -1,1 +1,1 @@
-needs `implements Equatable`
+needs `Equatable` — declare `implements Equatable<This>` on it

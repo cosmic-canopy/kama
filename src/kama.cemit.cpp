@@ -5028,13 +5028,18 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         }
         if (!cm) {
             const std::string dnote = derivedUnmetNote(lc, need);
-            unsupported((dnote.empty()
-                         ? ("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
-                            + "` — declare `implements " + need + " for " + lc + " { … }`"
-                            + (eq ? " (or `@generate(Equatable)`)" : "")
-                            + "; `" + binaryOperator(token) + "` calls its `" + meth + "`")
-                         : ("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
-                            + "`" + dnote)).c_str(), line);
+            const std::string op = "`" + binaryOperator(token) + "`";
+            // A type PARAMETER has what its bounds promise and nothing else, so the fix is the bound, not a
+            // declaration on a type the generic does not own.
+            auto od = _opaqueDisplay.find(lc);
+            if (od != _opaqueDisplay.end())
+                unsupported((op + " on the type parameter `" + od->second + "` needs a bound — declare `<" + od->second
+                             + ": " + need + "<" + od->second + ">>`; " + op + " calls its `" + meth + "`").c_str(), line);
+            else
+                unsupported((dnote.empty()
+                             ? (op + " on `" + lc + "` needs `" + need + "` — declare `implements " + need + "<This>` on it"
+                                + (eq ? " (or `@generate(Equatable)`)" : "") + "; " + op + " calls its `" + meth + "`")
+                             : (op + " on `" + lc + "` needs `implements " + need + "`" + dnote)).c_str(), line);
             return "0";
         }
         canAccess(&ci->second, cm->visibility, cm->cName, line);
@@ -5059,6 +5064,18 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // A comparison is never an operator declaration in kama — it comes from a contract, and writing
         // `operator==` is itself an error — so the advice names the contract.
         const std::string ty = lUser ? lc : rc;
+        // A type PARAMETER has what its bounds promise: `+ - * /` come from `Arithmetic`, and no prelude bound
+        // declares the rest, so those are written for the concrete type, or declared by a contract of one's own.
+        auto od = _opaqueDisplay.find(ty);
+        if (od != _opaqueDisplay.end()) {
+            const bool arith = token == PLUS || token == MINUS || token == STAR || token == SLASH;
+            const std::string& p = od->second;
+            unsupported(("no operator '" + binaryOperator(token) + "' for the type parameter `" + p + "` — "
+                         + (arith ? "declare `<" + p + ": Arithmetic<" + p + ">>`, which every number and `Fixed` satisfy"
+                                  : "no prelude bound declares `" + binaryOperator(token) + "`; a contract of your own may "
+                                    "(`T operator" + binaryOperator(token) + "(T rhs);`)")).c_str(), line);
+            return "0";
+        }
         const std::string fix = !isComparisonToken(token)
             ? "define `operator" + binaryOperator(token) + "` on the type"
             : (token == EQEQ || token == NOTEQ)

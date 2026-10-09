@@ -224,6 +224,22 @@ type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, u
         return Ordering::Equal;
     }
 }
+// Arithmetic as a BOUND, the way `Comparable` is comparison's: `fn T twice<T: Arithmetic<T>>(T x) { return x + x; }` is
+// checked where it is declared, not per instance, and an instance over a number still compiles to the bare operator.
+// Swift's `Numeric`, C#'s `INumber<T>`. A type conforms with the operators it already declares (`Fixed` has all
+// four). Not unary `-` (an unsigned number has none) and not `%` (a float's is not an integer's).
+type contract Arithmetic<T is This> for value, resource, intrinsic {
+    T operator+(T rhs); T operator-(T rhs); T operator*(T rhs); T operator/(T rhs);
+}
+// Every number, with the language's own operators: an instance's `a + b` is still the primitive `+`, overflow trap and
+// all, because an all-primitive operator never reaches a member.
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64>
+    implements Arithmetic<This> {
+    public This operator+(This rhs) { return this + rhs; }
+    public This operator-(This rhs) { return this - rhs; }
+    public This operator*(This rhs) { return this * rhs; }
+    public This operator/(This rhs) { return this / rhs; }
+}
 // Floats need a TOTAL order here, which IEEE `<`/`>` alone cannot give: with a NaN operand both are false,
 // so a bare three-way fold returns `Equal` and NaN compares equal to EVERYTHING — silently corrupting the
 // `SortedMap`/`SortedSet` B-tree and the `PriorityQueue` heap (lookups become insertion-order dependent).
