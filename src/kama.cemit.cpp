@@ -8153,6 +8153,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         "function — let the loop finish, then return", n->line);
             return;
         }
+        // A constructor RETURNS the value it builds, so a bare `return;` has nothing to hand back. It lowered to
+        // a C `return;` in a function returning the object, which passed `kama check` and then failed in the C
+        // compiler ("non-void function should return a value"). SPEC gives the one early-return form.
+        if (_inNamedCtorBody && !ret->expression) {
+            const bool fallible = !_currentClass || _currentReturnCType != _currentClass->name;
+            unsupported(fallible
+                ? "a fallible constructor returns its `Result` — `return;` has nothing to hand back; return "
+                  "`Result::Ok(value: give this)` early, or the `Err` that says why it stopped"
+                : "a constructor returns the value it builds — `return;` has nothing to hand back; the early "
+                  "return is `return give this;`", n->line);
+            return;
+        }
         // Unwrap a give/copy marker for the place-return check below; the value path passes the original
         // `ret->expression` (marker and all) to emitOwnedValueInto, which re-unwraps + applies the matrix.
         SharedExpression retExpr = ret->expression;

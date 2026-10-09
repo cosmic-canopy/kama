@@ -4131,7 +4131,7 @@ assignment already proves every field is set, a declaration would add ceremony, 
 uninitialized storage *of the type being built* inside its own ctor is therefore an error: `this` is the
 only name it has. (An *initialized* local of the same type is untouched — it is a finished value like any
 other.) Falling off the end returns that value, exactly as a `void` function need spell no return;
-`return give this;` is the **early-return** form.
+`return give this;` is the **early-return** form, and a bare `return;` is refused for naming nothing to return. <!-- xfail: ctor_bare_return, ctor_fallible_bare_return -->
 
 **`self` is reserved inside a type body.** It is the emitted C name of the receiver pointer, so a local or
 parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error <!-- xfail: self_param -->

@@ -334,13 +334,10 @@ contract before code.**
 
 <a id="s2-check-passes-c-fails"></a>
 
-### Four constructs pass `kama check` and fail in the C compiler (KR-116)
+### Three constructs pass `kama check` and fail in the C compiler (KR-116)
 
 Measured on `0.9.542`. Each program is either valid and must build, or invalid and must be refused by kama.
 Today each does neither.
-- **An early `return;` in a constructor:** `if (early) { return; }` lowers to a bare `return` in the C
-  constructor, which returns the object. clang reports "non-void function should return a value". It is valid
-  kama: the fields assigned so far are the object.
 - **An `Owned<T>` passed to a `const ref T` parameter:** the auto-deref goes through `deref()`, a `T const*`, and
   the parameter is a `T*`. Valid kama; it needs the cast the read-only place gets everywhere else.
 - **`copy` of an `InlineArray<string>` element** (`copy sides[i]`): "cannot take the address of an rvalue". The

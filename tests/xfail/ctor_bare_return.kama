@@ -1,0 +1,13 @@
+// A constructor returns the value it builds, so a bare `return;` has nothing to hand back. It lowered to a C
+// `return;` inside a function that returns the object: `kama check` passed and the C compiler stopped with
+// "non-void function should return a value". The early-return form is `return give this;` (SPEC *Construction*).
+type resource R {
+    int32 x;
+    public ctor make(bool early) {
+        this.x = 1;
+        if (early) { return; }
+        this.x = 2;
+    }
+    public const fn int32 get() { return this.x; }
+}
+fn int32 main() { R r = R.make(early: true); return r.get(); }

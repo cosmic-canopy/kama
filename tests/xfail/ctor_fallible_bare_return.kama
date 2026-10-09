@@ -1,0 +1,13 @@
+// The fallible half: a constructor that declares `Result<R, E>` returns its `Result`, so a bare `return;` there
+// names the two things it may return instead.
+type enum Bad implements Error { Nope; public const fn string message() { return "nope"; } }
+type resource R {
+    int32 x;
+    public ctor Result<R, Bad> make(bool early) {
+        this.x = 1;
+        if (early) { return; }
+        this.x = 2;
+        return Result::Ok(value: give this);
+    }
+}
+fn int32 main() { return 0; }
