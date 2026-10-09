@@ -206,6 +206,28 @@ default.
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
 
+### `debug.optimize` — a package at the release level in a debug build
+
+A debug build compiles at `-O0`, and some code cannot run there: a measured DSP took 1.36 ms a frame in debug
+against 14.8 µs in release, about 95 times slower, so a game's audio cannot keep real time while the rest of it
+is being debugged. The root manifest names the packages, or modules, a debug build compiles at the release
+optimization level, as Cargo's `[profile.dev.package.<name>] opt-level` does:
+
+```json
+{ "debug": { "optimize": ["voice", "std::math"] } }
+```
+
+An entry is a package (`voice`, `std`), a module (`voice::dsp`), or a module with everything inside it. Only the
+optimization level changes. `-g` stays, so the code can still be stepped through, and `-DNDEBUG` is not added.
+kama's overflow traps, bounds checks and asserts are in the C it emits, not in `-O`, so they stay as well. A
+package's `csources` follow its package. An entry that names nothing in the build is refused by name
+(`tools/check-debug-optimize.sh`).
+
+**Only the root manifest's applies.** How a program is debugged is the program's choice, so a dependency cannot
+choose it for its consumers. A library's own `debug` applies when the library is the root, for its own tests.
+`--release` already optimizes everything, and the key changes nothing there. It is a level for whole packages:
+a level per function is a non-goal (ROADMAP_DETAIL §2, *Verdicts*).
+
 ### `csources` — your own C, C++ and Objective-C, compiled by `kama build`
 
 A project (or a package) can hand the build its own sources:

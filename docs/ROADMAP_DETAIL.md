@@ -366,7 +366,7 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   put the C-touching code in private `unsafe fn` helpers and make the public methods safe callers of them. Calling
   an `unsafe fn` from safe code is unrestricted.
 - **Per-function optimization (`@optimize`) is a NON-GOAL.** C has no portable spelling: `optimize` is GCC-only and
-  clang offers only `optnone`. KR-128 gives the package granularity instead.
+  clang offers only `optnone`. `debug.optimize` (docs/targets.md, `0.9.564`) gives the package granularity instead.
 - **A workspace member's path dependency on a directory the workspace does not list is refused, BY DESIGN.** A
   member is extractable only when what it path-depends on is declared beside it (docs/packages.md), and the remedy
   is one line in `kama_workspace.json`. A consumer does not restate a dependency's own path dependencies. Measured
@@ -2009,21 +2009,6 @@ Two ways through, a choice for the maintainer:
   member of the viewed type, inside today's model. A scalar receiver is passed by value, so numbers would not
   carry `bytes()`, and `T: Blittable` would not admit them; a byte view of a number array would then be
   `View<T>.bytes()` for a `Blittable` element.
-
-<a id="s5-debug-optimize"></a>
-
-### An optimized package in a debug build (KR-128)
-
-A consumer measured its DSP at 1.36 ms a frame in debug against 14.8 µs in release, about 95×, so a debug build
-of a game cannot keep its audio real-time. A dependency's `cflags` reach the whole program (docs/targets.md), so
-nothing can optimize one package alone. `kama.json` "per-value build settings" were deferred to keep the manifest
-from becoming a build language, and this is the narrow case that deferral did not price. **Design:** the ROOT
-manifest names the packages, or modules, that a debug build compiles at the release optimization level, as
-Cargo's `[profile.dev.package.<name>] opt-level` does: `"debug": { "optimize": ["voice"] }`. kama's own checks
-stay, because overflow traps, bounds checks and asserts are kama-emitted, not `-O`-dependent. Debug info stays
-too. A dependency cannot set it for its consumers, since how a program is debugged is the program's choice. It
-needs the debug build's unit boundary to follow packages; measure that first. Per-function control is a non-goal
-(§2, verdicts).
 
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 

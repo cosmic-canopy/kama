@@ -2563,6 +2563,10 @@ static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).
 static bool g_manifestWebgpu = false, g_manifestNoHeap = false, g_manifestReproFloat = false;
+// KR-128: the ROOT manifest's `debug.optimize` — packages or modules a debug build compiles at the release
+// optimization level. Only the root's: how a program is debugged is the program's choice, as Cargo's profiles are,
+// so a dependency's own `debug` applies only when that package is built as the root.
+static std::vector<std::string> g_debugOptimize;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
 // own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
@@ -3261,6 +3265,7 @@ struct ManifestReader {
     std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
+    std::vector<std::string>* debugOptimizeOut = nullptr; // set to capture `debug.optimize` (KR-128)
     bool* reproFloatOut = nullptr;                        // set to capture `reproducible-float`
     // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
     // rather than a second one. `projects` there is a MAP whose every entry states `optional`, and the
@@ -3978,6 +3983,26 @@ struct ManifestReader {
     // Parse the `log` config object into `*logOut`. { "level": <lvl>, "tags": { <tag>: <lvl> } }, both keys
     // optional. Level names are validated against the same vocabulary the runtime `KAMA_LOG` grammar accepts.
     // Unknown keys are tolerated (forward-compat, e.g. a future compile-strip floor).
+    // `"debug": { "optimize": ["voice", "voice::dsp"] }` — what a DEBUG build compiles at the release optimization
+    // level (KR-128). Closed: an unknown key is a swallowed decision about how the program is built.
+    bool debugObject(std::vector<std::string>& optimize) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`debug` must be a JSON object");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `debug`");
+            ++i; ws();
+            if (k == "optimize") { if (!stringArray(optimize, "debug.optimize")) return false; }
+            else return fail("unknown key `" + k + "` in `debug` — it takes `optimize`, the packages or modules a "
+                             "debug build compiles at the release optimization level");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `debug`");
+        }
+    }
+
     bool logObject() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`log` must be a JSON object");
         ++i; ws();
@@ -4167,6 +4192,10 @@ struct ManifestReader {
             else if (key == "registries") { if (registriesOut) { if (!registriesObject(registriesOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "overrides") { if (overridesOut) { if (!depsObject(overridesOut)) return false; } else if (!skipValue()) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log") { if (logOut) { if (!logObject()) return false; } else if (!skipValue()) return false; }   // baked log default (M5)
+            else if (key == "debug") {   // validated wherever it is read; APPLIED only from the root manifest (KR-128)
+                std::vector<std::string> scratch;
+                if (!debugObject(debugOptimizeOut ? *debugOptimizeOut : scratch)) return false;
+            }
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
@@ -4982,7 +5011,8 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
 // Load a `kama.json` manifest's project-level `link` — the native libraries this artifact links, as bare
 // names (`["m"]` -> `-lm`). Left empty if absent. Returns false + `err` on malformed JSON.
 static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap,
-                                      bool& reproFloat, std::string& err)
+                                      bool& reproFloat, std::string& err,
+                                      std::vector<std::string>* debugOptimize = nullptr)
 {
     std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -4990,6 +5020,7 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.webgpuOut = &webgpu; r.noHeapOut = &noHeap; r.reproFloatOut = &reproFloat;
+    r.debugOptimizeOut = debugOptimize;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -5389,6 +5420,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_rootSettings = BuildSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
+    g_debugOptimize.clear();
     g_strictFlags = false;
     g_logDefault.clear();
     g_target  = TargetSpec();
@@ -5477,7 +5509,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         if (!kamaReqSatisfied(g_rootSettings.kamaReq, "this project", err)) { err = manifest + ": " + err; return false; }
         // Same shape and the same place as `link`: project properties a target may then override.
         if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap,
-                                      g_manifestReproFloat, err)) {
+                                      g_manifestReproFloat, err, &g_debugOptimize)) {
             err = manifest + ": " + err; return false;
         }
 
@@ -12533,6 +12565,7 @@ int main(int argc, char** argv)
         bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
+        std::map<std::string, std::string> cFileUnit;   // a generated `.c` -> the unit it came from (KR-128)
         if (units.size() == 1) {
             // genDir, not the input's directory. The multi-file paths below already did this; this one
             // did not, which is why a bare `kama build x.kama` used to drop an `x.c` beside the source
@@ -12542,6 +12575,7 @@ int main(int argc, char** argv)
             // (partial) .c by the time it reports the error, so registering afterwards — as this
             // did — leaves exactly the file the failure path was supposed to clean up.
             genFiles.push_back(cPath);
+            cFileUnit[cPath] = unitPaths[0];
             if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
         } else if (release && !wasm) {
@@ -12580,6 +12614,7 @@ int main(int argc, char** argv)
                     return 1;
                 }
                 cPaths.push_back(genDir + "/" + stem + ".c");
+                cFileUnit[cPaths.back()] = unitPaths[i];
             }
             genFiles = cPaths;               // before the call that writes them — see the single-unit note
             genFiles.push_back(headerPath);
@@ -12683,6 +12718,7 @@ int main(int argc, char** argv)
         // container wasm leg, never in `./dev check`.
         if (wasm) cmd << "-msimd128 ";
         std::string linkGc;                  // the section-GC LINK flags — appended to the link line only
+        size_t debugOptAt = std::string::npos;   // where a debug build's `-g -O0 ` sits in `cmd`
         if (release) {
             // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
             // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +
@@ -12713,6 +12749,7 @@ int main(int argc, char** argv)
             // not include by default when the `.js` is run under node — only a browser provides them — which
             // crashes bare-node execution (the test harness + CI). The DWARF info still supports in-browser
             // debugging; browser-devtools .kama source-mapping is a deferred nicety if it's ever wanted back.
+            debugOptAt = (size_t)cmd.tellp();   // KR-128: an optimized package swaps exactly this
             cmd << "-g -O0 ";
         }
         // Numeric safety — no arithmetic UB (Rust's model). Divide-by-zero, shift-past-width, and
@@ -12893,10 +12930,39 @@ int main(int argc, char** argv)
         // `lang` is the input's language. Anything but kama's own C compiles with its OWN standard, and
         // `-std=` is not positional — in one invocation the last one applies to every input — so such an
         // input never shares a command with kama's C; see `prefixFor` and the single-invocation arm below.
-        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; };
+        // `optimize`: a debug build compiles this input at the release optimization level (KR-128).
+        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; bool optimize = false; };
         std::vector<CcInput> ccInputs;
-        for (auto& cf : cFiles)
-            ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o" });
+        // KR-128 — the root manifest's `debug.optimize`: a debug build compiles the packages or modules it names at
+        // the release optimization level. A DSP is ~95x slower at -O0, and a dependency's `cflags` reach the
+        // whole program, so nothing else can optimize one package alone. Only the level changes: `-g` stays,
+        // `-DNDEBUG` is not added, and kama's own traps, bounds checks and asserts are kama-emitted, so they
+        // stay too. An entry names a package (`voice`, `std`), a module (`voice::dsp`), or a module and
+        // everything inside it, and one that names nothing in the build is an error.
+        std::set<std::string> optMatched;
+        const std::string rootProject = g_buildConfigRequest.manifest.empty() ? std::string()
+                                      : manifestModulesCached(g_buildConfigRequest.manifest).projectName;
+        auto optimizedPackage = [&](const std::string& pkg) {   // an import name: `voice`, `std`
+            bool hit = false;
+            for (const std::string& e : g_debugOptimize)
+                if (!pkg.empty() && importNameOf(e) == pkg) { optMatched.insert(e); hit = true; }
+            return hit;
+        };
+        auto optimizedUnit = [&](const std::string& unitPath) {
+            if (release || g_debugOptimize.empty() || unitPath.empty() || unitPath[0] == '<') return false;
+            const ModuleId id = moduleIdForFile(unitPath);
+            bool hit = optimizedPackage(id.project);
+            const std::string m = id.full();
+            for (const std::string& e : g_debugOptimize)
+                if (!m.empty() && (m == e || (m.size() > e.size() + 1 && m.compare(0, e.size(), e) == 0
+                                              && m.compare(e.size(), 2, "::") == 0))) { optMatched.insert(e); hit = true; }
+            return hit;
+        };
+        for (auto& cf : cFiles) {
+            auto u = cFileUnit.find(cf);
+            ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o", CLang::Kama,
+                                 u != cFileUnit.end() && optimizedUnit(u->second) });
+        }
         // Native WebGPU seam: the surface TU (Objective-C on macOS — it attaches a CAMetalLayer to the
         // NSWindow). Only when the program externs kama_gpu.h AND targets native (the web seam is
         // header-only static-inline, compiled nowhere).
@@ -12951,7 +13017,8 @@ int main(int argc, char** argv)
                     case CLang::ObjCxx: tok = "-x objective-c++ "; flags(g_target.cxxflags); flags(g_target.objcflags); break;
                     default:            tok = "-x c "; break;
                 }
-                ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang });
+                ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang,
+                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : importNameOf(cs.owner)) });
             }
         }
 
@@ -13305,6 +13372,19 @@ int main(int argc, char** argv)
 #endif
         int rc;
         const std::string base = cmd.str();
+        // KR-128: the same command with the debug build's `-g -O0` at the release level, for what `debug.optimize`
+        // names. `-g` stays so it can still be stepped through; nothing else differs.
+        std::string baseOpt = base;
+        if (debugOptAt != std::string::npos && base.compare(debugOptAt, 7, "-g -O0 ") == 0)
+            baseOpt = base.substr(0, debugOptAt) + (wasm ? "-g -Oz " : "-g -O3 ") + base.substr(debugOptAt + 7);
+        if (!release)
+            for (const std::string& e : g_debugOptimize)
+                if (!optMatched.count(e)) {
+                    fprintf(stderr, "kama: %s: `debug.optimize` names `%s`, which is no package or module of this build "
+                                    "— name a package (`voice`, `std`) or a module (`voice::dsp`) the program imports\n",
+                            g_buildConfigRequest.manifest.c_str(), e.c_str());
+                    return 2;
+                }
         // The object cache lives beside the output, in the directory that already takes every generated
         // file — so it is scoped to this binary, needs no eviction policy, and goes when the user deletes
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
@@ -13333,7 +13413,7 @@ int main(int argc, char** argv)
                 // stderr. They live beside the object, in the directory that already takes generated files.
                 const std::string obj = toolPath(objPath);   // the object AND cmd's two redirections (see toolPath)
                 const std::string cmdStr =
-                    fitCommand(prefixFor(base, in->lang) + dashC
+                    fitCommand(prefixFor(in->optimize ? baseOpt : base, in->lang) + dashC
                                + (useCache ? "-MMD -MF \"" + toolPath(dep) + "\" " : "")
                                + in->tok + "-o \"" + obj + "\""
                                + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles);
@@ -13410,8 +13490,9 @@ int main(int argc, char** argv)
             // full width, and join as objects. Not a partial link (`-r`) of them in one command instead:
             // measured, COFF refuses it (zig → windows) and zig's wasm-ld drops the symbols. And not a
             // loss for zig: libsodium's 120 files are 0.9 s warm this way against 1.7 s for one `-r`.
+            // ...and so can't an input `debug.optimize` names (KR-128): `-O` is not positional either.
             std::vector<const CcInput*> ownStd;
-            for (auto& in : ccInputs) if (in.lang != CLang::Kama) ownStd.push_back(&in);
+            for (auto& in : ccInputs) if (in.lang != CLang::Kama || in.optimize) ownStd.push_back(&in);
             std::vector<std::string> objs;
             rc = ownStd.empty() ? 0 : compileEach(ownStd, poolJobs, objs);
             if (rc == 0) {
@@ -13421,7 +13502,7 @@ int main(int argc, char** argv)
                 oneIns.rsp  = stripExtension(outPath) + ".inputs.rsp";
                 oneObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                 for (auto& in : ccInputs) {
-                    if (in.lang != CLang::Kama) continue;
+                    if (in.lang != CLang::Kama || in.optimize) continue;   // compiled on its own, above
                     if (cxxLinks && in.tok.compare(0, 3, "-x ") != 0) oneIns.add("-x c " + in.tok + "-x none ");
                     else oneIns.add(in.tok);
                 }
